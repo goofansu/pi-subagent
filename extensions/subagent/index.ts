@@ -18,7 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { Message } from "@mariozechner/pi-ai";
-import { StringEnum } from "@mariozechner/pi-ai";
+
 import {
   type ExtensionAPI,
   getMarkdownTheme,
@@ -26,7 +26,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
+import { type AgentConfig, discoverAgents } from "./agents.js";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -171,7 +171,6 @@ interface SingleResult {
 
 interface SubagentDetails {
   mode: "single" | "parallel" | "chain";
-  agentScope: AgentScope;
   projectAgentsDir: string | null;
   results: SingleResult[];
   totalSteps?: number;
@@ -472,12 +471,6 @@ const ChainItem = Type.Object({
   ),
 });
 
-const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
-  description:
-    'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
-  default: "user",
-});
-
 const SubagentParams = Type.Object({
   agent: Type.Optional(
     Type.String({
@@ -497,7 +490,6 @@ const SubagentParams = Type.Object({
       description: "Array of {agent, task} for sequential execution",
     }),
   ),
-  agentScope: Type.Optional(AgentScopeSchema),
   confirmProjectAgents: Type.Optional(
     Type.Boolean({
       description: "Prompt before running project-local agents. Default: true.",
@@ -518,14 +510,12 @@ export default function (pi: ExtensionAPI) {
     description: [
       "Delegate tasks to specialized subagents with isolated context.",
       "Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
-      'Default agent scope is "user" (from ~/.pi/agent/agents).',
-      'To enable project-local agents in .pi/agents, set agentScope: "both" (or "project").',
+      "Project-local agents in .pi/agents are also available and override bundled agents by name.",
     ].join(" "),
     parameters: SubagentParams,
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      const agentScope: AgentScope = params.agentScope ?? "user";
-      const discovery = discoverAgents(ctx.cwd, agentScope);
+      const discovery = discoverAgents(ctx.cwd);
       const agents = discovery.agents;
       const confirmProjectAgents = params.confirmProjectAgents ?? true;
 
@@ -538,7 +528,6 @@ export default function (pi: ExtensionAPI) {
         (mode: "single" | "parallel" | "chain", totalSteps?: number) =>
         (results: SingleResult[]): SubagentDetails => ({
           mode,
-          agentScope,
           projectAgentsDir: discovery.projectAgentsDir,
           results,
           totalSteps,
@@ -558,11 +547,7 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      if (
-        (agentScope === "project" || agentScope === "both") &&
-        confirmProjectAgents &&
-        ctx.hasUI
-      ) {
+      if (confirmProjectAgents && ctx.hasUI) {
         const requestedAgentNames = new Set<string>();
         if (params.chain)
           for (const step of params.chain) requestedAgentNames.add(step.agent);
@@ -831,12 +816,10 @@ export default function (pi: ExtensionAPI) {
     },
 
     renderCall(args, theme, _context) {
-      const scope: AgentScope = args.agentScope ?? "user";
       if (args.chain && args.chain.length > 0) {
         let text =
           theme.fg("toolTitle", theme.bold("subagent ")) +
-          theme.fg("accent", `chain (${args.chain.length} steps)`) +
-          theme.fg("muted", ` [${scope}]`);
+          theme.fg("accent", `chain (${args.chain.length} steps)`);
         for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
           const step = args.chain[i];
           // Clean up {previous} placeholder for display
@@ -857,8 +840,7 @@ export default function (pi: ExtensionAPI) {
       if (args.tasks && args.tasks.length > 0) {
         let text =
           theme.fg("toolTitle", theme.bold("subagent ")) +
-          theme.fg("accent", `parallel (${args.tasks.length} tasks)`) +
-          theme.fg("muted", ` [${scope}]`);
+          theme.fg("accent", `parallel (${args.tasks.length} tasks)`);
         for (const t of args.tasks.slice(0, 3)) {
           const preview =
             t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
@@ -876,8 +858,7 @@ export default function (pi: ExtensionAPI) {
         : "...";
       let text =
         theme.fg("toolTitle", theme.bold("subagent ")) +
-        theme.fg("accent", agentName) +
-        theme.fg("muted", ` [${scope}]`);
+        theme.fg("accent", agentName);
       text += `\n  ${theme.fg("dim", preview)}`;
       return new Text(text, 0, 0);
     },
@@ -951,7 +932,7 @@ export default function (pi: ExtensionAPI) {
           if (displayItems.length === 0 && !finalOutput) {
             container.addChild(
               new Text(
-                theme.fg("muted", isPartial ? "(thinking...)" : "(no output)"),
+                theme.fg("muted", isPartial ? "(running...)" : "(no output)"),
                 0,
                 0,
               ),
@@ -1012,7 +993,7 @@ export default function (pi: ExtensionAPI) {
                 : firstLine;
             text += `\n${theme.fg("dim", preview)}`;
           } else {
-            text += `\n${theme.fg("muted", "(thinking...)")}`;
+            text += `\n${theme.fg("muted", "(running...)")}`;
           }
         } else if (isError) {
           if (r.stopReason)
@@ -1160,7 +1141,7 @@ export default function (pi: ExtensionAPI) {
           const displayItems = getDisplayItems(r.messages);
           text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
           if (displayItems.length === 0)
-            text += `\n${theme.fg("muted", "(no output)")}`;
+            text += `\n${theme.fg("muted", isLastAndRunning ? "(running...)" : "(no output)")}`;
           else text += `\n${renderDisplayItems(displayItems, 5)}`;
         }
         const usageStr = formatUsageStats(aggregateUsage(details.results));
