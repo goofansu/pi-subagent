@@ -1,0 +1,15 @@
+{
+  "name": "pi-subagent",
+  "version": "1.0.0",
+  "description": "Delegate tasks to specialized subagents with isolated context. Supports single, parallel, and chain execution modes.",
+  "keywords": [
+    "pi-package"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+  }
+}

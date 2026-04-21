@@ -4,6 +4,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getAgentDir, parseFrontmatter } from "@mariozechner/pi-coding-agent";
 
 export type AgentScope = "user" | "project" | "both";
@@ -14,7 +15,7 @@ export interface AgentConfig {
 	tools?: string[];
 	model?: string;
 	systemPrompt: string;
-	source: "user" | "project";
+	source: "user" | "project" | "bundled";
 	filePath: string;
 }
 
@@ -23,7 +24,7 @@ export interface AgentDiscoveryResult {
 	projectAgentsDir: string | null;
 }
 
-function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig[] {
+function loadAgentsFromDir(dir: string, source: "user" | "project" | "bundled"): AgentConfig[] {
 	const agents: AgentConfig[] = [];
 
 	if (!fs.existsSync(dir)) {
@@ -82,6 +83,14 @@ function isDirectory(p: string): boolean {
 	}
 }
 
+function loadBundledAgents(): AgentConfig[] {
+	// Resolve the /agents/ directory relative to this file: extensions/subagent/agents.ts
+	// → two levels up from extensions/subagent/ reaches the package root
+	const packageRoot = fileURLToPath(new URL("../..", import.meta.url));
+	const bundledDir = path.join(packageRoot, "agents");
+	return loadAgentsFromDir(bundledDir, "bundled");
+}
+
 function findNearestProjectAgentsDir(cwd: string): string | null {
 	let currentDir = cwd;
 	while (true) {
@@ -98,10 +107,15 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	const userDir = path.join(getAgentDir(), "agents");
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
+	const bundledAgents = loadBundledAgents();
 	const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
 	const projectAgents = scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project");
 
+	// Merge in priority order: bundled (lowest) → user → project (highest)
+	// Higher-priority agents with the same name silently override lower-priority ones.
 	const agentMap = new Map<string, AgentConfig>();
+
+	for (const agent of bundledAgents) agentMap.set(agent.name, agent);
 
 	if (scope === "both") {
 		for (const agent of userAgents) agentMap.set(agent.name, agent);
