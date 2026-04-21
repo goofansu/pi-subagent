@@ -22,15 +22,60 @@ import type { Message } from "@mariozechner/pi-ai";
 import {
   type ExtensionAPI,
   getMarkdownTheme,
+  keyHint,
+  keyText,
+  truncateToVisualLines,
   withFileMutationQueue,
 } from "@mariozechner/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
+import {
+  type Component,
+  Container,
+  Markdown,
+  Spacer,
+  Text,
+  truncateToWidth,
+} from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { type AgentConfig, discoverAgents } from "./agents.js";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
+const COLLAPSED_MAX_LINES = 20;
+
+/**
+ * Creates a Component that renders `text` but truncates to `maxLines` visual
+ * lines in the collapsed view, showing a "… (N more lines, ctrl+o to expand)"
+ * hint above the visible portion.
+ */
+function makeTruncatingText(text: string, maxLines: number): Component {
+  let cachedLines: string[] | undefined;
+  let cachedSkipped = 0;
+  let cachedWidth: number | undefined;
+
+  return {
+    render(width: number): string[] {
+      if (cachedWidth !== width || cachedLines === undefined) {
+        const result = truncateToVisualLines(text, maxLines, width);
+        cachedLines = result.visualLines;
+        cachedSkipped = result.skippedCount;
+        cachedWidth = width;
+      }
+      if (cachedSkipped > 0) {
+        const hint =
+          `... (${cachedSkipped} more lines, ` +
+          keyHint("app.tools.expand", "to expand") +
+          ")";
+        return [truncateToWidth(hint, width, "..."), ...(cachedLines ?? [])];
+      }
+      return cachedLines ?? [];
+    },
+    invalidate() {
+      cachedLines = undefined;
+      cachedWidth = undefined;
+    },
+  };
+}
 
 function formatTokens(count: number): string {
   if (count < 1000) return count.toString();
@@ -913,7 +958,9 @@ export default function (pi: ExtensionAPI) {
 
         if (expanded) {
           const container = new Container();
-          let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
+          let header =
+            `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}` +
+            theme.fg("dim", ` (${keyText("app.tools.expand")} to collapse)`);
           if (isPartial) header += ` ${theme.fg("warning", "(running)")}`;
           else if (isError && r.stopReason)
             header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
@@ -1007,7 +1054,8 @@ export default function (pi: ExtensionAPI) {
         }
         const usageStr = formatUsageStats(r.usage, r.model);
         if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
-        return new Text(text, 0, 0);
+        text += `\n${theme.fg("muted", "... (")}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+        return makeTruncatingText(text, COLLAPSED_MAX_LINES);
       }
 
       const aggregateUsage = (results: SingleResult[]) => {
@@ -1049,7 +1097,11 @@ export default function (pi: ExtensionAPI) {
                 " " +
                 theme.fg("toolTitle", theme.bold("chain ")) +
                 theme.fg("accent", `${successCount}/${total} steps`) +
-                (isPartial ? ` ${theme.fg("warning", "(running)")}` : ""),
+                (isPartial ? ` ${theme.fg("warning", "(running)")}` : "") +
+                theme.fg(
+                  "dim",
+                  ` (${keyText("app.tools.expand")} to collapse)`,
+                ),
               0,
               0,
             ),
@@ -1146,7 +1198,8 @@ export default function (pi: ExtensionAPI) {
         }
         const usageStr = formatUsageStats(aggregateUsage(details.results));
         if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
-        return new Text(text, 0, 0);
+        text += `\n${theme.fg("muted", "... (")}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+        return makeTruncatingText(text, COLLAPSED_MAX_LINES);
       }
 
       if (details.mode === "parallel") {
@@ -1169,7 +1222,11 @@ export default function (pi: ExtensionAPI) {
           const container = new Container();
           container.addChild(
             new Text(
-              `${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}`,
+              `${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}` +
+                theme.fg(
+                  "dim",
+                  ` (${keyText("app.tools.expand")} to collapse)`,
+                ),
               0,
               0,
             ),
@@ -1259,7 +1316,8 @@ export default function (pi: ExtensionAPI) {
           const usageStr = formatUsageStats(aggregateUsage(details.results));
           if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
         }
-        return new Text(text, 0, 0);
+        text += `\n${theme.fg("muted", "... (")}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+        return makeTruncatingText(text, COLLAPSED_MAX_LINES);
       }
 
       const text = result.content[0];

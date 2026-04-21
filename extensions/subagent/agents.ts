@@ -5,9 +5,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAgentDir, parseFrontmatter } from "@mariozechner/pi-coding-agent";
-
-export type AgentScope = "user" | "project" | "both";
+import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
 
 export interface AgentConfig {
   name: string;
@@ -15,7 +13,7 @@ export interface AgentConfig {
   tools?: string[];
   model?: string;
   systemPrompt: string;
-  source: "user" | "project" | "bundled";
+  source: "project" | "bundled";
   filePath: string;
 }
 
@@ -107,35 +105,19 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
   }
 }
 
-export function discoverAgents(
-  cwd: string,
-  scope: AgentScope,
-): AgentDiscoveryResult {
-  const userDir = path.join(getAgentDir(), "agents");
+export function discoverAgents(cwd: string): AgentDiscoveryResult {
   const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
   const bundledAgents = loadBundledAgents();
-  const userAgents =
-    scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
-  const projectAgents =
-    scope === "user" || !projectAgentsDir
-      ? []
-      : loadAgentsFromDir(projectAgentsDir, "project");
+  const projectAgents = projectAgentsDir
+    ? loadAgentsFromDir(projectAgentsDir, "project")
+    : [];
 
-  // Merge in priority order: bundled (lowest) → user → project (highest)
+  // Merge in priority order: bundled (lowest) → project (highest)
   // Higher-priority agents with the same name silently override lower-priority ones.
   const agentMap = new Map<string, AgentConfig>();
-
   for (const agent of bundledAgents) agentMap.set(agent.name, agent);
-
-  if (scope === "both") {
-    for (const agent of userAgents) agentMap.set(agent.name, agent);
-    for (const agent of projectAgents) agentMap.set(agent.name, agent);
-  } else if (scope === "user") {
-    for (const agent of userAgents) agentMap.set(agent.name, agent);
-  } else {
-    for (const agent of projectAgents) agentMap.set(agent.name, agent);
-  }
+  for (const agent of projectAgents) agentMap.set(agent.name, agent);
 
   return { agents: Array.from(agentMap.values()), projectAgentsDir };
 }
