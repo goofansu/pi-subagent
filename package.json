@@ -6,10 +6,16 @@
     "pi-package"
   ],
   "license": "MIT",
+  "scripts": {
+    "lint": "biome check --write ."
+  },
   "peerDependencies": {
     "@mariozechner/pi-agent-core": "*",
     "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "*",
+    "@mariozechner/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.12"
   }
 }
