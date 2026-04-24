@@ -1,0 +1,29 @@
+{
+  "name": "pi-subagent",
+  "version": "1.0.0",
+  "description": "Delegate tasks to specialized subagents with isolated context. Supports single, parallel, and chain execution modes.",
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "lint": "biome check --write .",
+    "prepare": "husky",
+    "test": "node --import tsx --test",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.12",
+    "@types/node": "^22.15.0",
+    "husky": "^9.1.7",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}
