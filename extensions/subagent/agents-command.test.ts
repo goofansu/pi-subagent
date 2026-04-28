@@ -143,6 +143,43 @@ test("runAgentWorkFlow closes the agents UI when task entry is cancelled", async
   assert.deepEqual(notifications, [{ message: "Cancelled", level: "info" }]);
 });
 
+test("runAgentWorkFlow sends message and closes UI when task is provided", async () => {
+  let idleWaited = false;
+  let closeCount = 0;
+  const sentMessages: string[] = [];
+  const notifications: Array<{ message: string; level: string }> = [];
+
+  await runAgentWorkFlow(
+    {
+      sendUserMessage(msg: string) {
+        sentMessages.push(msg);
+      },
+    },
+    {
+      ui: {
+        notify(message: string, level = "info") {
+          notifications.push({ message, level });
+        },
+      },
+      waitForIdle: async () => {
+        idleWaited = true;
+      },
+    },
+    exploreAgent,
+    "  inspect the parser  ",
+    () => {
+      closeCount++;
+    },
+  );
+
+  assert.equal(idleWaited, true, "must wait for idle before sending");
+  assert.equal(closeCount, 1, "must close UI once");
+  assert.deepEqual(notifications, [], "must not notify when task is provided");
+  assert.deepEqual(sentMessages, [
+    'Use the subagent tool with agent "explore" for the task: inspect the parser',
+  ]);
+});
+
 test("registerAgentsCommand registers the agents slash command", () => {
   const calls: RegisteredCommand[] = [];
   const pi: Pick<ExtensionAPI, "registerCommand" | "sendUserMessage"> = {

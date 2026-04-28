@@ -93,10 +93,6 @@ export default function (pi: ExtensionAPI) {
       }
 
       const finalOutput = getFinalOutput(result.messages);
-      if (!finalOutput && result.exitCode !== 0) {
-        const detail = result.stderr.trim() || `exit code ${result.exitCode}`;
-        throw new Error(`Subagent "${params.agent}" failed: ${detail}`);
-      }
 
       return {
         content: [
