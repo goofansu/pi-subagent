@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
 import type { AgentConfig, AgentSource } from "./types.js";
 
@@ -59,7 +60,7 @@ export function parseAgentConfig(
 }
 
 export function getDefaultAgentsDir(moduleUrl: string): string {
-  return path.join(path.dirname(new URL(moduleUrl).pathname), "../../agents");
+  return path.join(path.dirname(fileURLToPath(moduleUrl)), "../../agents");
 }
 
 export function loadAgentConfigsWithDiagnostics(

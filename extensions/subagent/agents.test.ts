@@ -6,6 +6,7 @@ import { afterEach, test } from "node:test";
 import {
   formatAgentGuidelines,
   formatInvalidAgentFilesWarning,
+  getDefaultAgentsDir,
   loadAgentConfigs,
   loadAgentConfigsWithDiagnostics,
   loadMergedAgentConfigs,
@@ -225,6 +226,13 @@ test("formatInvalidAgentFilesWarning renders invalid files for UI notification",
     ]),
     "Invalid subagent files were skipped:\n- agents/missing-description.md: missing required description frontmatter\n- agents/missing-prompt.md: missing required prompt body",
   );
+});
+
+test("getDefaultAgentsDir decodes percent-encoded paths", () => {
+  const url = "file:///home/user/my%20project/extensions/subagent/index.js";
+  const dir = getDefaultAgentsDir(url);
+  assert.ok(!dir.includes("%20"), "path must not contain URL encoding");
+  assert.ok(dir.includes("my project"), "path must decode spaces");
 });
 
 test("loadMergedAgentConfigs tolerates a missing override directory", async () => {

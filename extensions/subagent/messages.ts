@@ -5,9 +5,10 @@ export function getFinalOutput(messages: Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role === "assistant") {
-      for (const part of msg.content) {
-        if (part.type === "text") return part.text;
-      }
+      const parts = msg.content
+        .filter((part) => part.type === "text")
+        .map((part) => (part as { type: "text"; text: string }).text);
+      if (parts.length > 0) return parts.join("");
     }
   }
   return "";

@@ -18,13 +18,13 @@ export function buildPiArgs(
   config: AgentConfig,
   resolvedModel: string | undefined,
   systemPromptPath: string | undefined,
-  prompt: string,
 ): string[] {
   const args: string[] = ["--mode", "json", "-p", "--no-session"];
   if (resolvedModel) args.push("--model", resolvedModel);
   if (config.tools) args.push("--tools", config.tools);
   if (systemPromptPath) args.push("--append-system-prompt", systemPromptPath);
-  args.push(prompt);
+  // Prompt is passed via stdin, not as a CLI arg, to avoid process-listing
+  // exposure of sensitive content and OS argument-length limits (E2BIG).
   return args;
 }
 
@@ -105,12 +105,7 @@ export async function runSingleAgent(
       tmpPromptPath = tmp.filePath;
     }
 
-    const args = buildPiArgs(
-      config,
-      resolvedModel,
-      tmpPromptPath ?? undefined,
-      prompt,
-    );
+    const args = buildPiArgs(config, resolvedModel, tmpPromptPath ?? undefined);
 
     // Emit initial "running" state
     emitUpdate();
@@ -119,8 +114,12 @@ export async function runSingleAgent(
       const invocation = getPiInvocation(args);
       const proc = spawn(invocation.command, invocation.args, {
         shell: false,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
       });
+
+      // Write the prompt to stdin and close it so pi reads it cleanly.
+      proc.stdin.write(prompt, "utf-8");
+      proc.stdin.end();
       let buffer = "";
 
       const processLine = (line: string) => {
@@ -171,7 +170,9 @@ export async function runSingleAgent(
         currentResult.stderr += data.toString();
       });
 
+      let procClosed = false;
       proc.on("close", (code) => {
+        procClosed = true;
         if (buffer.trim()) processLine(buffer);
         resolve(code ?? 0);
       });
@@ -186,11 +187,16 @@ export async function runSingleAgent(
           wasAborted = true;
           proc.kill("SIGTERM");
           setTimeout(() => {
-            if (!proc.killed) proc.kill("SIGKILL");
+            if (!procClosed) proc.kill("SIGKILL");
           }, 5000);
         };
         if (signal.aborted) killProc();
-        else signal.addEventListener("abort", killProc, { once: true });
+        else {
+          signal.addEventListener("abort", killProc, { once: true });
+          // Remove the listener once the process has closed so a late abort
+          // signal doesn't incorrectly mark a successfully completed run as aborted.
+          proc.on("close", () => signal.removeEventListener("abort", killProc));
+        }
       }
     });
 
