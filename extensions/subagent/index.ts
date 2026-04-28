@@ -37,15 +37,28 @@ async function runSingleAgent(
   config: AgentConfig,
   prompt: string,
   signal: AbortSignal | undefined,
-): Promise<{ exitCode: number; output: string }> {
+  parentModel: { provider: string; id: string } | undefined,
+): Promise<{ exitCode: number; output: string; stderr: string }> {
+  // Resolve model:
+  //   "inherit"  → use parent session's provider/id (no flag if parent unknown)
+  //   <explicit> → pass the value as-is to --model
+  //   undefined  → omit --model entirely (pi picks its default)
+  const resolvedModel =
+    config.model === "inherit"
+      ? parentModel
+        ? `${parentModel.provider}/${parentModel.id}`
+        : undefined
+      : config.model;
+
   const args: string[] = ["--mode", "json", "-p", "--no-session"];
-  if (config.model) args.push("--model", config.model);
+  if (resolvedModel) args.push("--model", resolvedModel);
   if (config.systemPrompt)
     args.push("--append-system-prompt", config.systemPrompt);
   args.push(prompt);
 
   let wasAborted = false;
   let output = "";
+  let stderr = "";
 
   const exitCode = await new Promise<number>((resolve) => {
     const invocation = getPiInvocation(args);
@@ -59,11 +72,17 @@ async function runSingleAgent(
       output += data.toString();
     });
 
+    proc.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+
     proc.on("close", (code) => {
       resolve(code ?? 0);
     });
 
-    proc.on("error", () => {
+    proc.on("error", (err) => {
+      // Covers spawn failures (e.g. "pi" binary not found).
+      stderr += err.message;
       resolve(1);
     });
 
@@ -81,7 +100,7 @@ async function runSingleAgent(
   });
 
   if (wasAborted) throw new Error("Subagent was aborted");
-  return { exitCode, output };
+  return { exitCode, output, stderr };
 }
 
 const agentConfigs = new Map<string, AgentConfig>();
@@ -176,13 +195,15 @@ export default function (pi: ExtensionAPI) {
           `Unknown agent: "${params.agent}". Available: ${[...agentConfigs.keys()].join(", ") || "none"}`,
         );
       }
-      const { exitCode, output } = await runSingleAgent(
+
+      const { exitCode, output, stderr } = await runSingleAgent(
         config,
         params.prompt,
         signal,
+        ctx.model,
       );
 
-      // parse JSON output lines and extract final assistant text
+      // Parse JSON output lines and extract the final assistant text.
       let result = "";
       for (const line of output.split("\n")) {
         const trimmed = line.trim();
@@ -200,6 +221,14 @@ export default function (pi: ExtensionAPI) {
         } catch {
           // ignore non-JSON lines
         }
+      }
+
+      // If the subprocess produced no usable output and exited non-zero, surface
+      // the error clearly rather than returning a silent "(exit code N)" result
+      // that would appear as a successful tool call to the LLM.
+      if (!result && exitCode !== 0) {
+        const detail = stderr.trim() || `exit code ${exitCode}`;
+        throw new Error(`Subagent "${params.agent}" failed: ${detail}`);
       }
 
       return {
