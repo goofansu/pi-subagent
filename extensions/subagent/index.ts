@@ -13,6 +13,7 @@ import {
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { formatToolCall, formatUsageStats } from "./formatting.js";
+import { getDisplayItems, getFinalOutput } from "./messages.js";
 import type {
   AgentConfig,
   DisplayItem,
@@ -22,38 +23,6 @@ import type {
 } from "./types.js";
 
 const COLLAPSED_ITEM_COUNT = 10;
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function getFinalOutput(messages: Message[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role === "assistant") {
-      for (const part of msg.content) {
-        if (part.type === "text") return part.text;
-      }
-    }
-  }
-  return "";
-}
-
-function getDisplayItems(messages: Message[]): DisplayItem[] {
-  const items: DisplayItem[] = [];
-  for (const msg of messages) {
-    if (msg.role === "assistant") {
-      for (const part of msg.content) {
-        if (part.type === "text") items.push({ type: "text", text: part.text });
-        else if (part.type === "toolCall")
-          items.push({
-            type: "toolCall",
-            name: part.name,
-            args: part.arguments,
-          });
-      }
-    }
-  }
-  return items;
-}
 
 // ── Agent config ──────────────────────────────────────────────────────────────
 
