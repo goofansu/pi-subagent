@@ -31,12 +31,15 @@ export type DisplayItem =
   | { type: "text"; text: string }
   | { type: "toolCall"; name: string; args: Record<string, unknown> };
 
+export type AgentSource = "default" | "user";
+
 export interface AgentConfig {
   name: string;
   description: string;
   model?: string;
   tools?: string;
   systemPrompt: string;
+  source?: AgentSource;
 }
 
 export type OnUpdateCallback = (

@@ -64,6 +64,7 @@ test("loadAgentConfigs returns markdown agents keyed by name", async () => {
 
   assert.equal(configs.size, 2);
   assert.equal(configs.get("one")?.description, "First");
+  assert.equal(configs.get("one")?.source, "default");
   assert.equal(configs.get("one")?.systemPrompt, "One prompt");
   assert.equal(configs.get("two")?.description, "Second");
   assert.equal(configs.get("two")?.systemPrompt, "Two prompt");
@@ -169,9 +170,12 @@ test("loadMergedAgentConfigs lets override agents replace bundled agents", async
 
   assert.equal(configs.size, 3);
   assert.equal(configs.get("code-reviewer")?.description, "User reviewer");
+  assert.equal(configs.get("code-reviewer")?.source, "user");
   assert.equal(configs.get("code-reviewer")?.model, "custom");
   assert.equal(configs.get("code-reviewer")?.systemPrompt, "User prompt");
+  assert.equal(configs.get("general-purpose")?.source, "default");
   assert.equal(configs.get("general-purpose")?.systemPrompt, "General prompt");
+  assert.equal(configs.get("specialist")?.source, "user");
   assert.equal(configs.get("specialist")?.systemPrompt, "Specialist prompt");
 });
 

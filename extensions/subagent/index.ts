@@ -7,6 +7,7 @@ import {
   getDefaultAgentsDir,
   loadMergedAgentConfigsWithDiagnostics,
 } from "./agents.js";
+import { registerAgentsCommand } from "./agents-command.js";
 import { getFinalOutput } from "./messages.js";
 import { renderSubagentCall, renderSubagentResult } from "./render.js";
 import { runSingleAgent } from "./runner.js";
@@ -34,32 +35,7 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.notify(warning, "warning");
   });
 
-  pi.registerCommand("subagent", {
-    description: "Delegate a task to a subagent.",
-    handler: async (args, ctx) => {
-      let task = args?.trim() || "";
-
-      if (!task) {
-        if (!ctx.hasUI) {
-          ctx.ui.notify("Usage: /subagent <task>", "error");
-          return;
-        }
-
-        const input = await ctx.ui.editor(
-          "What task should the subagent handle?",
-        );
-
-        if (!input?.trim()) {
-          ctx.ui.notify("Cancelled", "info");
-          return;
-        }
-        task = input.trim();
-      }
-
-      await ctx.waitForIdle();
-      pi.sendUserMessage(`Use the subagent tool for the task: ${task}`);
-    },
-  });
+  registerAgentsCommand(pi, agentConfigs);
 
   pi.registerTool({
     name: "subagent",

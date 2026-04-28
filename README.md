@@ -10,7 +10,7 @@ pi install https://github.com/goofansu/pi-subagent
 
 After installation, Pi registers:
 
-- `/subagent <task>` command
+- `/agents` command for listing loaded subagents and viewing their prompts
 - `subagent` tool
 
 ## Agent format

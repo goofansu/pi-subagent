@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
-import type { AgentConfig } from "./types.js";
+import type { AgentConfig, AgentSource } from "./types.js";
 
 export interface InvalidAgentConfig {
   filePath: string;
@@ -23,7 +23,10 @@ export class AgentConfigValidationError extends Error {
   }
 }
 
-export function parseAgentConfig(filePath: string): AgentConfig {
+export function parseAgentConfig(
+  filePath: string,
+  source?: AgentSource,
+): AgentConfig {
   const content = fs.readFileSync(filePath, "utf-8");
   const { frontmatter, body } = parseFrontmatter<{
     description?: string;
@@ -51,6 +54,7 @@ export function parseAgentConfig(filePath: string): AgentConfig {
     model: frontmatter.model,
     tools: frontmatter.tools,
     systemPrompt,
+    ...(source ? { source } : {}),
   };
 }
 
@@ -60,6 +64,7 @@ export function getDefaultAgentsDir(moduleUrl: string): string {
 
 export function loadAgentConfigsWithDiagnostics(
   agentsDir: string,
+  source: AgentSource = "default",
 ): AgentConfigLoadResult {
   const configs = new Map<string, AgentConfig>();
   const invalidFiles: InvalidAgentConfig[] = [];
@@ -68,7 +73,7 @@ export function loadAgentConfigsWithDiagnostics(
     if (!file.endsWith(".md")) continue;
     const filePath = path.join(agentsDir, file);
     try {
-      const config = parseAgentConfig(filePath);
+      const config = parseAgentConfig(filePath, source);
       configs.set(config.name, config);
     } catch (error) {
       invalidFiles.push({
@@ -85,16 +90,19 @@ export function loadAgentConfigsWithDiagnostics(
   return { configs, invalidFiles };
 }
 
-export function loadAgentConfigs(agentsDir: string): Map<string, AgentConfig> {
-  return loadAgentConfigsWithDiagnostics(agentsDir).configs;
+export function loadAgentConfigs(
+  agentsDir: string,
+  source: AgentSource = "default",
+): Map<string, AgentConfig> {
+  return loadAgentConfigsWithDiagnostics(agentsDir, source).configs;
 }
 
 export function loadMergedAgentConfigsWithDiagnostics(
   baseAgentsDir: string,
   overrideAgentsDir: string,
 ): AgentConfigLoadResult {
-  const base = loadAgentConfigsWithDiagnostics(baseAgentsDir);
-  const override = loadAgentConfigsWithDiagnostics(overrideAgentsDir);
+  const base = loadAgentConfigsWithDiagnostics(baseAgentsDir, "default");
+  const override = loadAgentConfigsWithDiagnostics(overrideAgentsDir, "user");
   return {
     configs: new Map([...base.configs, ...override.configs]),
     invalidFiles: [...base.invalidFiles, ...override.invalidFiles],
