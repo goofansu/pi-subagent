@@ -41,7 +41,7 @@ export async function runSingleAgent(
   onUpdate: OnUpdateCallback | undefined,
 ): Promise<SingleResult> {
   const resolvedModel =
-    config.model === "inherit"
+    !config.model || config.model === "inherit"
       ? parentModel
         ? `${parentModel.provider}/${parentModel.id}`
         : undefined
@@ -132,8 +132,7 @@ export async function runSingleAgent(
               currentResult.usage.cost += usage.cost?.total || 0;
               currentResult.usage.contextTokens = usage.totalTokens || 0;
             }
-            if (!currentResult.model && msg.model)
-              currentResult.model = msg.model;
+            currentResult.model = `${msg.provider}/${msg.model}`;
             if (msg.stopReason) currentResult.stopReason = msg.stopReason;
             if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
           }
