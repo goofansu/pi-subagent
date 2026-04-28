@@ -7,11 +7,11 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
   getMarkdownTheme,
   keyHint,
-  parseFrontmatter,
   withFileMutationQueue,
 } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
+import { getDefaultAgentsDir, loadAgentConfigs } from "./agents.js";
 import { formatToolCall, formatUsageStats } from "./formatting.js";
 import { getDisplayItems, getFinalOutput } from "./messages.js";
 import type {
@@ -23,22 +23,6 @@ import type {
 } from "./types.js";
 
 const COLLAPSED_ITEM_COUNT = 10;
-
-// ── Agent config ──────────────────────────────────────────────────────────────
-
-function parseAgentConfig(filePath: string): AgentConfig {
-  const content = fs.readFileSync(filePath, "utf-8");
-  const { frontmatter, body } = parseFrontmatter<{
-    description?: string;
-    model?: string;
-  }>(content);
-  return {
-    name: path.basename(filePath, path.extname(filePath)),
-    description: frontmatter.description ?? "",
-    model: frontmatter.model,
-    systemPrompt: body.trim(),
-  };
-}
 
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
   return { command: "pi", args };
@@ -231,27 +215,11 @@ async function runSingleAgent(
 
 // ── Agent config loading ──────────────────────────────────────────────────────
 
-const agentConfigs = new Map<string, AgentConfig>();
-
-function loadAgentConfigs(): void {
-  const agentsDir = path.join(
-    path.dirname(new URL(import.meta.url).pathname),
-    "../../agents",
-  );
-  agentConfigs.clear();
-  if (!fs.existsSync(agentsDir)) return;
-  for (const file of fs.readdirSync(agentsDir)) {
-    if (!file.endsWith(".md")) continue;
-    const config = parseAgentConfig(path.join(agentsDir, file));
-    agentConfigs.set(config.name, config);
-  }
-}
+const agentConfigs = loadAgentConfigs(getDefaultAgentsDir(import.meta.url));
 
 // ── Extension ─────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-  loadAgentConfigs();
-
   const agentNames =
     agentConfigs.size > 0
       ? [...agentConfigs.keys()].join(", ")
