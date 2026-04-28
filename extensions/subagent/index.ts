@@ -85,6 +85,7 @@ async function runSingleAgent(
 }
 
 const agentConfigs = new Map<string, AgentConfig>();
+let agentConfigsInit: Promise<void> | undefined;
 
 function loadAgentConfigs(): void {
   const agentsDir = path.join(
@@ -100,11 +101,14 @@ function loadAgentConfigs(): void {
   }
 }
 
-export default function (pi: ExtensionAPI) {
-  pi.on("session_start", (_event, _ctx) => {
-    loadAgentConfigs();
-  });
+function ensureAgentConfigs(): Promise<void> {
+  if (!agentConfigsInit) {
+    agentConfigsInit = Promise.resolve().then(loadAgentConfigs);
+  }
+  return agentConfigsInit;
+}
 
+export default function (pi: ExtensionAPI) {
   pi.registerCommand("subagent", {
     description: "Delegate a task to a subagent.",
     handler: async (args, ctx) => {
@@ -165,6 +169,7 @@ export default function (pi: ExtensionAPI) {
     },
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
+      await ensureAgentConfigs();
       const config = agentConfigs.get(params.agent);
       if (!config) {
         throw new Error(
