@@ -1,13 +1,17 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import * as path from "node:path";
+import { type ExtensionAPI, getAgentDir } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
-import { getDefaultAgentsDir, loadAgentConfigs } from "./agents.js";
+import { getDefaultAgentsDir, loadMergedAgentConfigs } from "./agents.js";
 import { getFinalOutput } from "./messages.js";
 import { renderSubagentCall, renderSubagentResult } from "./render.js";
 import { runSingleAgent } from "./runner.js";
 
 // ── Agent config loading ──────────────────────────────────────────────────────
 
-const agentConfigs = loadAgentConfigs(getDefaultAgentsDir(import.meta.url));
+const agentConfigs = loadMergedAgentConfigs(
+  getDefaultAgentsDir(import.meta.url),
+  path.join(getAgentDir(), "agents"),
+);
 
 // ── Extension ─────────────────────────────────────────────────────────────────
 
