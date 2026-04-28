@@ -43,3 +43,15 @@ export function loadMergedAgentConfigs(
     ...loadAgentConfigs(overrideAgentsDir),
   ]);
 }
+
+export function formatAgentGuidelines(
+  agentConfigs: Map<string, AgentConfig>,
+): string[] {
+  if (agentConfigs.size === 0) return ["subagent has no configured agents."];
+
+  return [...agentConfigs.values()].map((config) =>
+    config.description
+      ? `subagent ${config.name}: ${config.description}`
+      : `subagent ${config.name}.`,
+  );
+}

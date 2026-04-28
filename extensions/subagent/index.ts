@@ -1,7 +1,11 @@
 import * as path from "node:path";
 import { type ExtensionAPI, getAgentDir } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
-import { getDefaultAgentsDir, loadMergedAgentConfigs } from "./agents.js";
+import {
+  formatAgentGuidelines,
+  getDefaultAgentsDir,
+  loadMergedAgentConfigs,
+} from "./agents.js";
 import { getFinalOutput } from "./messages.js";
 import { renderSubagentCall, renderSubagentResult } from "./render.js";
 import { runSingleAgent } from "./runner.js";
@@ -16,11 +20,8 @@ const agentConfigs = loadMergedAgentConfigs(
 // ── Extension ─────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-  const agentNames =
-    agentConfigs.size > 0
-      ? [...agentConfigs.keys()].join(", ")
-      : "none configured";
-  const toolDescription = `Delegate a task to a specialized subagent with an isolated context window. Available agents: ${agentNames}.`;
+  const description =
+    "Delegate a task to a specialized subagent with an isolated context window.";
 
   pi.registerCommand("subagent", {
     description: "Delegate a task to a subagent.",
@@ -52,7 +53,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: toolDescription,
+    description,
+    promptSnippet: description,
+    promptGuidelines: formatAgentGuidelines(agentConfigs),
     parameters: Type.Object({
       agent: Type.String({ description: "The agent to run the task" }),
       description: Type.String({ description: "Label for this specific call" }),

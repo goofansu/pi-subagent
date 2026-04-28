@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, test } from "node:test";
 import {
+  formatAgentGuidelines,
   loadAgentConfigs,
   loadMergedAgentConfigs,
   parseAgentConfig,
@@ -99,6 +100,38 @@ test("loadMergedAgentConfigs lets override agents replace bundled agents", async
   assert.equal(configs.get("code-reviewer")?.systemPrompt, "User prompt");
   assert.equal(configs.get("general-purpose")?.systemPrompt, "General prompt");
   assert.equal(configs.get("specialist")?.systemPrompt, "Specialist prompt");
+});
+
+test("formatAgentGuidelines renders available agents as tool-specific guidelines", () => {
+  const configs = new Map([
+    [
+      "explore",
+      {
+        name: "explore",
+        description: "Fast codebase exploration.",
+        systemPrompt: "Explore.",
+      },
+    ],
+    [
+      "custom",
+      {
+        name: "custom",
+        description: "",
+        systemPrompt: "Custom.",
+      },
+    ],
+  ]);
+
+  assert.deepEqual(formatAgentGuidelines(configs), [
+    "subagent explore: Fast codebase exploration.",
+    "subagent custom.",
+  ]);
+});
+
+test("formatAgentGuidelines handles no configured agents", () => {
+  assert.deepEqual(formatAgentGuidelines(new Map()), [
+    "subagent has no configured agents.",
+  ]);
 });
 
 test("loadMergedAgentConfigs tolerates a missing override directory", async () => {
