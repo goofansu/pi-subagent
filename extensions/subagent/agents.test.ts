@@ -3,7 +3,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, test } from "node:test";
-import { loadAgentConfigs, parseAgentConfig } from "./agents.js";
+import {
+  loadAgentConfigs,
+  loadMergedAgentConfigs,
+  parseAgentConfig,
+} from "./agents.js";
 
 const tempDirs: string[] = [];
 
@@ -63,4 +67,49 @@ test("loadAgentConfigs returns an empty map when directory is missing", () => {
   );
 
   assert.equal(configs.size, 0);
+});
+
+test("loadMergedAgentConfigs lets override agents replace bundled agents", async () => {
+  const bundledDir = await makeTempDir();
+  const userDir = await makeTempDir();
+
+  await fs.promises.writeFile(
+    path.join(bundledDir, "code-reviewer.md"),
+    "---\ndescription: Bundled reviewer\n---\n\nBundled prompt\n",
+  );
+  await fs.promises.writeFile(
+    path.join(bundledDir, "general-purpose.md"),
+    "---\ndescription: General\n---\n\nGeneral prompt\n",
+  );
+  await fs.promises.writeFile(
+    path.join(userDir, "code-reviewer.md"),
+    "---\ndescription: User reviewer\nmodel: custom\n---\n\nUser prompt\n",
+  );
+  await fs.promises.writeFile(
+    path.join(userDir, "specialist.md"),
+    "---\ndescription: Specialist\n---\n\nSpecialist prompt\n",
+  );
+
+  const configs = loadMergedAgentConfigs(bundledDir, userDir);
+
+  assert.equal(configs.size, 3);
+  assert.equal(configs.get("code-reviewer")?.description, "User reviewer");
+  assert.equal(configs.get("code-reviewer")?.model, "custom");
+  assert.equal(configs.get("code-reviewer")?.systemPrompt, "User prompt");
+  assert.equal(configs.get("general-purpose")?.systemPrompt, "General prompt");
+  assert.equal(configs.get("specialist")?.systemPrompt, "Specialist prompt");
+});
+
+test("loadMergedAgentConfigs tolerates a missing override directory", async () => {
+  const bundledDir = await makeTempDir();
+  await fs.promises.writeFile(
+    path.join(bundledDir, "general-purpose.md"),
+    "---\ndescription: General\n---\n\nGeneral prompt\n",
+  );
+
+  const missingOverrideDir = path.join(await makeTempDir(), "missing");
+  const configs = loadMergedAgentConfigs(bundledDir, missingOverrideDir);
+
+  assert.equal(configs.size, 1);
+  assert.equal(configs.get("general-purpose")?.description, "General");
 });

@@ -31,3 +31,13 @@ export function loadAgentConfigs(agentsDir: string): Map<string, AgentConfig> {
   }
   return agentConfigs;
 }
+
+export function loadMergedAgentConfigs(
+  baseAgentsDir: string,
+  overrideAgentsDir: string,
+): Map<string, AgentConfig> {
+  return new Map([
+    ...loadAgentConfigs(baseAgentsDir),
+    ...loadAgentConfigs(overrideAgentsDir),
+  ]);
+}
