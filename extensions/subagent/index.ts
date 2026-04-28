@@ -1,19 +1,48 @@
 import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
+
+// ── Agent config ─────────────────────────────────────────────────────────────
+
+interface AgentConfig {
+  name: string;
+  description: string;
+  model?: string;
+  systemPrompt: string;
+}
+
+function parseAgentConfig(filePath: string): AgentConfig {
+  const content = fs.readFileSync(filePath, "utf-8");
+  const { frontmatter, body } = parseFrontmatter<{
+    description?: string;
+    model?: string;
+  }>(content);
+  return {
+    name: path.basename(filePath, path.extname(filePath)),
+    description: frontmatter.description ?? "",
+    model: frontmatter.model,
+    systemPrompt: body.trim(),
+  };
+}
 
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
   return { command: "pi", args };
 }
 
 async function runSingleAgent(
-  agent: string,
-  description: string,
+  config: AgentConfig,
   prompt: string,
   signal: AbortSignal | undefined,
 ): Promise<{ exitCode: number; output: string }> {
-  const args: string[] = ["--mode", "json", "-p", "--no-session", prompt];
+  const args: string[] = ["--mode", "json", "-p", "--no-session"];
+  if (config.model) args.push("--model", config.model);
+  if (config.systemPrompt)
+    args.push("--append-system-prompt", config.systemPrompt);
+  args.push(prompt);
 
   let wasAborted = false;
   let output = "";
@@ -117,9 +146,14 @@ export default function (pi: ExtensionAPI) {
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       // run the agent
+      const config: AgentConfig = {
+        name: params.agent,
+        description: params.description,
+        model: undefined,
+        systemPrompt: "ALWAYS REPLY OK",
+      };
       const { exitCode, output } = await runSingleAgent(
-        params.agent,
-        params.description,
+        config,
         params.prompt,
         signal,
       );
