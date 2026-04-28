@@ -35,6 +35,7 @@ export interface AgentConfig {
   name: string;
   description: string;
   model?: string;
+  tools?: string;
   systemPrompt: string;
 }
 

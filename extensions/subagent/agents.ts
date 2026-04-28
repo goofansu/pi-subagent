@@ -8,11 +8,13 @@ export function parseAgentConfig(filePath: string): AgentConfig {
   const { frontmatter, body } = parseFrontmatter<{
     description?: string;
     model?: string;
+    tools?: string;
   }>(content);
   return {
     name: path.basename(filePath, path.extname(filePath)),
     description: frontmatter.description ?? "",
     model: frontmatter.model,
+    tools: frontmatter.tools,
     systemPrompt: body.trim(),
   };
 }

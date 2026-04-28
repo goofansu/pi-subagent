@@ -32,13 +32,14 @@ test("parseAgentConfig reads name, frontmatter, and system prompt", async () => 
   const filePath = path.join(dir, "reviewer.md");
   await fs.promises.writeFile(
     filePath,
-    "---\ndescription: Reviews code\nmodel: inherit\n---\n\nYou review code.\n",
+    "---\ndescription: Reviews code\nmodel: inherit\ntools: read,grep,find,ls,bash\n---\n\nYou review code.\n",
   );
 
   assert.deepEqual(parseAgentConfig(filePath), {
     name: "reviewer",
     description: "Reviews code",
     model: "inherit",
+    tools: "read,grep,find,ls,bash",
     systemPrompt: "You review code.",
   });
 });

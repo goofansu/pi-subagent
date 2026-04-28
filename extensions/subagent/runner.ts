@@ -14,6 +14,20 @@ export function getPiInvocation(args: string[]): {
   return { command: "pi", args };
 }
 
+export function buildPiArgs(
+  config: AgentConfig,
+  resolvedModel: string | undefined,
+  systemPromptPath: string | undefined,
+  prompt: string,
+): string[] {
+  const args: string[] = ["--mode", "json", "-p", "--no-session"];
+  if (resolvedModel) args.push("--model", resolvedModel);
+  if (config.tools) args.push("--tools", config.tools);
+  if (systemPromptPath) args.push("--append-system-prompt", systemPromptPath);
+  args.push(prompt);
+  return args;
+}
+
 export async function writePromptToTempFile(
   agentName: string,
   prompt: string,
@@ -46,9 +60,6 @@ export async function runSingleAgent(
         ? `${parentModel.provider}/${parentModel.id}`
         : undefined
       : config.model;
-
-  const args: string[] = ["--mode", "json", "-p", "--no-session"];
-  if (resolvedModel) args.push("--model", resolvedModel);
 
   let tmpPromptDir: string | null = null;
   let tmpPromptPath: string | null = null;
@@ -92,10 +103,14 @@ export async function runSingleAgent(
       const tmp = await writePromptToTempFile(config.name, config.systemPrompt);
       tmpPromptDir = tmp.dir;
       tmpPromptPath = tmp.filePath;
-      args.push("--append-system-prompt", tmpPromptPath);
     }
 
-    args.push(prompt);
+    const args = buildPiArgs(
+      config,
+      resolvedModel,
+      tmpPromptPath ?? undefined,
+      prompt,
+    );
 
     // Emit initial "running" state
     emitUpdate();
