@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Box, Text } from "@mariozechner/pi-tui";
+import { Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
@@ -8,10 +8,12 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 }
 
 async function runSingleAgent(
-  task: string,
+  agent: string,
+  description: string,
+  prompt: string,
   signal: AbortSignal | undefined,
 ): Promise<{ exitCode: number; output: string }> {
-  const args: string[] = ["--mode", "json", "-p", "--no-session", task];
+  const args: string[] = ["--mode", "json", "-p", "--no-session", prompt];
 
   let wasAborted = false;
   let output = "";
@@ -55,10 +57,29 @@ async function runSingleAgent(
 
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("subagent", {
-    description: "Delegate task to a subagent.",
+    description: "Delegate a task to a subagent.",
     handler: async (args, ctx) => {
+      let task = args?.trim() || "";
+
+      if (!task) {
+        if (!ctx.hasUI) {
+          ctx.ui.notify("Usage: /subagent <task>", "error");
+          return;
+        }
+
+        const input = await ctx.ui.editor(
+          "What task should the subagent handle?",
+        );
+
+        if (!input?.trim()) {
+          ctx.ui.notify("Cancelled", "info");
+          return;
+        }
+        task = input.trim();
+      }
+
       await ctx.waitForIdle();
-      pi.sendUserMessage("Use subagent tool for the task: greeting!");
+      pi.sendUserMessage(`Use the subagent tool for the task: ${task}`);
     },
   });
 
@@ -67,12 +88,41 @@ export default function (pi: ExtensionAPI) {
     label: "Subagent",
     description: "Spawn a pi process in JSON mode",
     parameters: Type.Object({
-      task: Type.String({ description: "Task to execute" }),
+      agent: Type.String({ description: "The agent to run the task" }),
+      description: Type.String({ description: "Label for this specific call" }),
+      prompt: Type.String({ description: "The full task brief" }),
     }),
+
+    renderCall(args, theme, context) {
+      const text =
+        (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      const header =
+        theme.fg("toolTitle", theme.bold(args.agent)) +
+        " " +
+        theme.fg("muted", args.description);
+      text.setText(`${header}\n${theme.fg("toolOutput", args.prompt)}`);
+      return text;
+    },
+
+    renderResult(result, _options, theme, context) {
+      const text =
+        (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      const resultText = result.content
+        .filter((c) => c.type === "text")
+        .map((c) => (c as { type: "text"; text: string }).text)
+        .join("\n");
+      text.setText(`\n${theme.fg("toolOutput", resultText)}`);
+      return text;
+    },
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       // run the agent
-      const { exitCode, output } = await runSingleAgent(params.task, signal);
+      const { exitCode, output } = await runSingleAgent(
+        params.agent,
+        params.description,
+        params.prompt,
+        signal,
+      );
 
       // parse JSON output lines and extract final assistant text
       let result = "";
