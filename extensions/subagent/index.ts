@@ -84,7 +84,27 @@ async function runSingleAgent(
   return { exitCode, output };
 }
 
+const agentConfigs = new Map<string, AgentConfig>();
+
+function loadAgentConfigs(): void {
+  const agentsDir = path.join(
+    path.dirname(new URL(import.meta.url).pathname),
+    "../../agents",
+  );
+  agentConfigs.clear();
+  if (!fs.existsSync(agentsDir)) return;
+  for (const file of fs.readdirSync(agentsDir)) {
+    if (!file.endsWith(".md")) continue;
+    const config = parseAgentConfig(path.join(agentsDir, file));
+    agentConfigs.set(config.name, config);
+  }
+}
+
 export default function (pi: ExtensionAPI) {
+  pi.on("session_start", (_event, _ctx) => {
+    loadAgentConfigs();
+  });
+
   pi.registerCommand("subagent", {
     description: "Delegate a task to a subagent.",
     handler: async (args, ctx) => {
@@ -145,13 +165,12 @@ export default function (pi: ExtensionAPI) {
     },
 
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      // run the agent
-      const config: AgentConfig = {
-        name: params.agent,
-        description: params.description,
-        model: undefined,
-        systemPrompt: "ALWAYS REPLY OK",
-      };
+      const config = agentConfigs.get(params.agent);
+      if (!config) {
+        throw new Error(
+          `Unknown agent: "${params.agent}". Available: ${[...agentConfigs.keys()].join(", ") || "none"}`,
+        );
+      }
       const { exitCode, output } = await runSingleAgent(
         config,
         params.prompt,
