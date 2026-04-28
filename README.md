@@ -8,7 +8,7 @@ Delegate tasks to specialized subagents with isolated context windows in Pi.
 pi install https://github.com/goofansu/pi-subagent
 ```
 
-After installation, pi registers:
+After installation, Pi registers:
 
 - `/subagent <task>` command
 - `subagent` tool
@@ -26,18 +26,18 @@ tools: read,grep,find,ls
 
 System prompt for the agent.
 
-Describe the agent's role, constraints, workflow, and expected output.
+Describe the agent's role, constraints, workflow, and expected output. The prompt body is required.
 ```
 
 Supported frontmatter fields:
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `description` | No | Describes when to use the agent. |
+| `description` | Yes | When to use the agent. Files without this field are skipped and reported in the UI at session start. |
 | `model` | No | Model override. Use `inherit` to use the caller's model. |
 | `tools` | No | Comma-separated tool allowlist for the agent, e.g. `read,grep,find,ls`. |
 
-This package ships default agents from `agents/`. You can add or override agents by creating Markdown files with the same format in your Pi agent directory:
+This package ships with default agents in the `agents/` directory. You can add or override agents by creating Markdown files with the same format in your Pi agent directory:
 
 ```text
 ~/.pi/agent/agents/<agent-name>.md

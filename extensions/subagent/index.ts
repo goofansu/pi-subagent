@@ -3,8 +3,9 @@ import { type ExtensionAPI, getAgentDir } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import {
   formatAgentGuidelines,
+  formatInvalidAgentFilesWarning,
   getDefaultAgentsDir,
-  loadMergedAgentConfigs,
+  loadMergedAgentConfigsWithDiagnostics,
 } from "./agents.js";
 import { getFinalOutput } from "./messages.js";
 import { renderSubagentCall, renderSubagentResult } from "./render.js";
@@ -12,16 +13,26 @@ import { runSingleAgent } from "./runner.js";
 
 // ── Agent config loading ──────────────────────────────────────────────────────
 
-const agentConfigs = loadMergedAgentConfigs(
+const agentConfigLoadResult = loadMergedAgentConfigsWithDiagnostics(
   getDefaultAgentsDir(import.meta.url),
   path.join(getAgentDir(), "agents"),
 );
+const agentConfigs = agentConfigLoadResult.configs;
 
 // ── Extension ─────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
   const description =
     "Delegate a task to a specialized subagent with an isolated context window.";
+
+  pi.on("session_start", (event, ctx) => {
+    if (event.reason !== "startup" && event.reason !== "reload") return;
+    if (agentConfigLoadResult.invalidFiles.length === 0) return;
+    const warning = formatInvalidAgentFilesWarning(
+      agentConfigLoadResult.invalidFiles,
+    );
+    ctx.ui.notify(warning, "warning");
+  });
 
   pi.registerCommand("subagent", {
     description: "Delegate a task to a subagent.",
