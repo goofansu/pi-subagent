@@ -19,12 +19,12 @@ type SubagentArgs = {
 };
 
 type Theme = ExtensionUIContext["theme"];
-type RenderContext = { lastComponent?: Component };
+type RenderCallContext = { lastComponent?: Component; expanded: boolean };
 
 export function renderSubagentCall(
   args: SubagentArgs,
   theme: Theme,
-  context: RenderContext,
+  context: RenderCallContext,
 ): Component {
   const text =
     (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
@@ -32,7 +32,11 @@ export function renderSubagentCall(
     theme.fg("toolTitle", theme.bold(args.agent)) +
     " " +
     theme.fg("muted", args.description);
-  text.setText(`${header}\n${theme.fg("dim", args.prompt)}`);
+  const promptPreview = context.expanded
+    ? args.prompt
+    : args.prompt.split("\n").slice(0, 3).join("\n");
+  const body = `\n${theme.fg("dim", promptPreview)}`;
+  text.setText(`${header}${body}`);
   return text;
 }
 
