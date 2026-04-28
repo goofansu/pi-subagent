@@ -400,7 +400,6 @@ async function runSingleAgent(
 // ── Agent config loading ──────────────────────────────────────────────────────
 
 const agentConfigs = new Map<string, AgentConfig>();
-let agentConfigsInit: Promise<void> | undefined;
 
 function loadAgentConfigs(): void {
   const agentsDir = path.join(
@@ -416,16 +415,17 @@ function loadAgentConfigs(): void {
   }
 }
 
-function ensureAgentConfigs(): Promise<void> {
-  if (!agentConfigsInit) {
-    agentConfigsInit = Promise.resolve().then(loadAgentConfigs);
-  }
-  return agentConfigsInit;
-}
-
 // ── Extension ─────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+  loadAgentConfigs();
+
+  const agentNames =
+    agentConfigs.size > 0
+      ? [...agentConfigs.keys()].join(", ")
+      : "none configured";
+  const toolDescription = `Delegate a task to a specialized subagent with an isolated context window. Available agents: ${agentNames}.`;
+
   pi.registerCommand("subagent", {
     description: "Delegate a task to a subagent.",
     handler: async (args, ctx) => {
@@ -456,7 +456,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: "Spawn a pi process in JSON mode",
+    description: toolDescription,
     parameters: Type.Object({
       agent: Type.String({ description: "The agent to run the task" }),
       description: Type.String({ description: "Label for this specific call" }),
@@ -592,7 +592,6 @@ export default function (pi: ExtensionAPI) {
     },
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      await ensureAgentConfigs();
       const config = agentConfigs.get(params.agent);
       if (!config) {
         throw new Error(
