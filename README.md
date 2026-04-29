@@ -24,18 +24,18 @@ model: inherit
 tools: read,grep,find,ls
 ---
 
-System prompt for the agent.
-
-Describe the agent's role, constraints, workflow, and expected output. The prompt body is required.
+Describe the agent's role, constraints, workflow, and expected output.
 ```
 
 Supported frontmatter fields:
 
+`description` and the prompt body are required. Agent files missing either are skipped and reported in the UI at session start.
+
 | Field | Required | Description |
 | --- | --- | --- |
-| `description` | Yes | When to use the agent. Files without this field are skipped and reported in the UI at session start. |
-| `model` | No | Model override. Use `inherit` to use the caller's model. |
-| `tools` | No | Comma-separated tool allowlist for the agent, e.g. `read,grep,find,ls`. |
+| `description` | Yes | When to use the agent. |
+| `model` | No | Model override. Omit or use `inherit` to use the caller's model. |
+| `tools` | No | Tools override. Omit to use Pi's user-scoped tools. Any defined value is passed as-is with `--no-tools --tools <tools>`. |
 
 This package ships with default agents in the `agents/` directory. You can add or override agents by creating Markdown files with the same format in your Pi agent directory:
 

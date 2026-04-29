@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { test } from "node:test";
 import { buildPiArgs } from "./runner.js";
 
-test("buildPiArgs passes configured tools directly to pi", () => {
+test("buildPiArgs disables default tools and loads configured tools", () => {
   const args = buildPiArgs(
     {
       name: "explore",
@@ -22,11 +22,26 @@ test("buildPiArgs passes configured tools directly to pi", () => {
     "--no-session",
     "--model",
     "anthropic/claude",
+    "--no-tools",
     "--tools",
     "read,grep,find,ls,bash",
     "--append-system-prompt",
     "/tmp/prompt.md",
   ]);
+});
+
+test("buildPiArgs treats missing tools as no-op to use Pi user config", () => {
+  const args = buildPiArgs(
+    {
+      name: "explore",
+      description: "Explore code",
+      systemPrompt: "Search only.",
+    },
+    undefined,
+    undefined,
+  );
+
+  assert.deepEqual(args, ["--mode", "json", "-p", "--no-session"]);
 });
 
 test("buildPiArgs does not include the prompt in argv", () => {

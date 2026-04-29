@@ -48,7 +48,6 @@ export function parseAgentConfig(
       filePath,
     );
   }
-
   return {
     name: path.basename(filePath, path.extname(filePath)),
     description,

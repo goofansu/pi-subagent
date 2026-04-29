@@ -21,7 +21,9 @@ export function buildPiArgs(
 ): string[] {
   const args: string[] = ["--mode", "json", "-p", "--no-session"];
   if (resolvedModel) args.push("--model", resolvedModel);
-  if (config.tools) args.push("--tools", config.tools);
+  if (config.tools) {
+    args.push("--no-tools", "--tools", config.tools);
+  }
   if (systemPromptPath) args.push("--append-system-prompt", systemPromptPath);
   // Prompt is passed via stdin, not as a CLI arg, to avoid process-listing
   // exposure of sensitive content and OS argument-length limits (E2BIG).
