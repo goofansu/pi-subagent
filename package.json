@@ -9,6 +9,7 @@
   "license": "MIT",
   "scripts": {
     "lint": "biome check --write .",
+    "lint:check": "biome check .",
     "prepare": "husky",
     "test": "node --import tsx --test",
     "typecheck": "tsc --noEmit"
