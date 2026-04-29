@@ -25,6 +25,28 @@ test("buildPiArgs disables default tools and loads configured tools", () => {
     "--no-tools",
     "--tools",
     "read,grep,find,ls,bash",
+    "--system-prompt",
+    "/tmp/prompt.md",
+  ]);
+});
+
+test("buildPiArgs appends system prompt when appendSystemPrompt is true", () => {
+  const args = buildPiArgs(
+    {
+      name: "explore",
+      description: "Explore code",
+      appendSystemPrompt: true,
+      systemPrompt: "Search only.",
+    },
+    undefined,
+    "/tmp/prompt.md",
+  );
+
+  assert.deepEqual(args, [
+    "--mode",
+    "json",
+    "-p",
+    "--no-session",
     "--append-system-prompt",
     "/tmp/prompt.md",
   ]);

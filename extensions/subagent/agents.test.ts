@@ -37,7 +37,7 @@ test("parseAgentConfig reads name, frontmatter, and system prompt", async () => 
   const filePath = path.join(dir, "reviewer.md");
   await fs.promises.writeFile(
     filePath,
-    "---\ndescription: Reviews code\nmodel: inherit\ntools: read,grep,find,ls,bash\n---\n\nYou review code.\n",
+    "---\ndescription: Reviews code\nmodel: inherit\ntools: read,grep,find,ls,bash\nappendSystemPrompt: true\n---\n\nYou review code.\n",
   );
 
   assert.deepEqual(parseAgentConfig(filePath), {
@@ -45,8 +45,26 @@ test("parseAgentConfig reads name, frontmatter, and system prompt", async () => 
     description: "Reviews code",
     model: "inherit",
     tools: "read,grep,find,ls,bash",
+    appendSystemPrompt: true,
     systemPrompt: "You review code.",
   });
+});
+
+test("parseAgentConfig defaults appendSystemPrompt to false", async () => {
+  const dir = await makeTempDir();
+  const filePath = path.join(dir, "reviewer.md");
+  await fs.promises.writeFile(
+    filePath,
+    "---\ndescription: Reviews code\n---\n\nYou review code.\n",
+  );
+
+  assert.equal(parseAgentConfig(filePath).appendSystemPrompt, false);
+});
+
+test("bundled general-purpose agent appends system prompt", () => {
+  const filePath = path.join(process.cwd(), "agents", "general-purpose.md");
+
+  assert.equal(parseAgentConfig(filePath).appendSystemPrompt, true);
 });
 
 test("loadAgentConfigs returns markdown agents keyed by name", async () => {

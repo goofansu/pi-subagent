@@ -33,6 +33,7 @@ export function parseAgentConfig(
     description?: string;
     model?: string;
     tools?: string;
+    appendSystemPrompt?: boolean;
   }>(content);
   const description = frontmatter.description?.trim();
   const systemPrompt = body.trim();
@@ -53,6 +54,7 @@ export function parseAgentConfig(
     description,
     model: frontmatter.model,
     tools: frontmatter.tools,
+    appendSystemPrompt: frontmatter.appendSystemPrompt === true,
     systemPrompt,
     ...(source ? { source } : {}),
   };

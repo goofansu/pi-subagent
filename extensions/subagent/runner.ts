@@ -24,7 +24,12 @@ export function buildPiArgs(
   if (config.tools) {
     args.push("--no-tools", "--tools", config.tools);
   }
-  if (systemPromptPath) args.push("--append-system-prompt", systemPromptPath);
+  if (systemPromptPath) {
+    args.push(
+      config.appendSystemPrompt ? "--append-system-prompt" : "--system-prompt",
+      systemPromptPath,
+    );
+  }
   // Prompt is passed via stdin, not as a CLI arg, to avoid process-listing
   // exposure of sensitive content and OS argument-length limits (E2BIG).
   return args;
