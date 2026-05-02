@@ -4,11 +4,13 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
   buildAgentWorkMessage,
   formatAgentActionHint,
+  formatAgentDetailHint,
   formatAgentListHint,
   formatAgentPromptMarkdown,
   getAgentActionItems,
   getAgentDetailMarkdownText,
   getAgentSelectItems,
+  getFilteredAgentSelectItems,
   registerAgentsCommand,
   runAgentWorkFlow,
 } from "./agents-command.js";
@@ -52,6 +54,30 @@ test("getAgentSelectItems prefixes user agents", () => {
   const items = getAgentSelectItems(new Map([[reviewAgent.name, reviewAgent]]));
 
   assert.deepEqual(items, [
+    {
+      value: "reviewer",
+      label: "reviewer",
+      description: "[u] Review code carefully.",
+    },
+  ]);
+});
+
+test("getFilteredAgentSelectItems filters agents by name and description", () => {
+  const items = getAgentSelectItems(
+    new Map([
+      [exploreAgent.name, exploreAgent],
+      [reviewAgent.name, reviewAgent],
+    ]),
+  );
+
+  assert.deepEqual(getFilteredAgentSelectItems(items, "fast"), [
+    {
+      value: "explore",
+      label: "explore",
+      description: "[d] Fast codebase exploration.",
+    },
+  ]);
+  assert.deepEqual(getFilteredAgentSelectItems(items, "reviewer"), [
     {
       value: "reviewer",
       label: "reviewer",
@@ -107,6 +133,16 @@ test("formatAgentActionHint uses keybinding descriptions", () => {
 
   assert.match(hint, /to confirm/);
   assert.match(hint, /back/);
+});
+
+test("formatAgentDetailHint uses key hint for back and compact arrow labels", () => {
+  assert.equal(
+    formatAgentDetailHint(
+      " • ",
+      (keybinding, description) => `${keybinding} ${description}`,
+    ),
+    "tui.select.cancel back • ↑/↓ scroll • ←/→ page",
+  );
 });
 
 test("buildAgentWorkMessage returns the selected-agent work prompt", () => {

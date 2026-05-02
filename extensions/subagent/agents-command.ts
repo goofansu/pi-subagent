@@ -8,6 +8,8 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import {
   Container,
+  fuzzyFilter,
+  Input,
   Key,
   Markdown,
   matchesKey,
@@ -40,6 +42,20 @@ export function getAgentSelectItems(
     label: agent.name,
     description: formatAgentListDescription(agent),
   }));
+}
+
+export function getFilteredAgentSelectItems(
+  items: SelectItem[],
+  query: string,
+): SelectItem[] {
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery) return items;
+
+  return fuzzyFilter(
+    items,
+    trimmedQuery,
+    (item) => `${item.label} ${item.value} ${item.description ?? ""}`,
+  );
 }
 
 export function getAgentActionItems(): SelectItem[] {
@@ -79,6 +95,17 @@ export function formatAgentActionHint(
   return `${renderKeyHint("tui.select.confirm", "to confirm")}${separator}${renderKeyHint("tui.select.cancel", "back")}`;
 }
 
+export function formatAgentDetailHint(
+  separator: string,
+  renderKeyHint = keyHint,
+): string {
+  return [
+    renderKeyHint("tui.select.cancel", "back"),
+    "↑/↓ scroll",
+    "←/→ page",
+  ].join(separator);
+}
+
 type AgentWorkContext = {
   ui: Pick<ExtensionCommandContext["ui"], "notify">;
   waitForIdle(): Promise<void>;
@@ -104,40 +131,92 @@ export async function runAgentWorkFlow(
 }
 
 class AgentsListComponent extends Container {
-  private selectList: SelectList;
+  private readonly searchInput = new Input();
+  private readonly listContainer = new Container();
+  private selectList: SelectList | null = null;
 
   constructor(
-    theme: Theme,
-    items: SelectItem[],
-    onSelect: (agentName: string) => void | Promise<void>,
-    onCancel: () => void,
+    private theme: Theme,
+    private items: SelectItem[],
+    private onSelect: (agentName: string) => void | Promise<void>,
+    private onCancel: () => void,
+    private keybindings: KeybindingMatcher,
+    private requestRender: () => void,
   ) {
     super();
 
     this.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-    this.addChild(new Text(theme.fg("accent", theme.bold("Agents")), 1, 0));
+    this.addChild(
+      new Text(theme.fg("accent", theme.bold("Select agent")), 1, 0),
+    );
+    this.addChild(this.searchInput);
     this.addChild(new Spacer(1));
-
-    this.selectList = new SelectList(items, Math.min(items.length, 15), {
-      selectedPrefix: (text) => theme.fg("accent", text),
-      selectedText: (text) => theme.fg("accent", text),
-      description: (text) => theme.fg("muted", text),
-      scrollInfo: (text) => theme.fg("dim", text),
-      noMatch: (text) => theme.fg("warning", text),
-    });
-    this.selectList.onSelect = (item) => {
-      void onSelect(String(item.value));
-    };
-    this.selectList.onCancel = onCancel;
-
-    this.addChild(this.selectList);
+    this.addChild(this.listContainer);
     this.addChild(new Spacer(1));
-    this.addChild(new Text(formatAgentListHint(theme.fg("dim", " • ")), 1, 0));
+    this.addChild(
+      new Text(
+        theme.fg("dim", `Type to filter • ${formatAgentListHint(" • ")}`),
+        1,
+        0,
+      ),
+    );
     this.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+
+    this.updateList();
   }
 
   handleInput(keyData: string): void {
-    this.selectList.handleInput(keyData);
+    if (
+      this.keybindings.matches(keyData, "tui.select.up") ||
+      this.keybindings.matches(keyData, "tui.select.down") ||
+      this.keybindings.matches(keyData, "tui.select.confirm") ||
+      this.keybindings.matches(keyData, "tui.select.cancel")
+    ) {
+      if (this.selectList) {
+        this.selectList.handleInput(keyData);
+      } else if (this.keybindings.matches(keyData, "tui.select.cancel")) {
+        this.onCancel();
+      }
+      this.requestRender();
+      return;
+    }
+
+    this.searchInput.handleInput(keyData);
+    this.updateList();
+    this.requestRender();
+  }
+
+  private updateList(): void {
+    this.listContainer.clear();
+    const filteredItems = getFilteredAgentSelectItems(
+      this.items,
+      this.searchInput.getValue(),
+    );
+
+    if (filteredItems.length === 0) {
+      this.selectList = null;
+      this.listContainer.addChild(
+        new Text(this.theme.fg("warning", "  No matching agents"), 0, 0),
+      );
+      return;
+    }
+
+    this.selectList = new SelectList(
+      filteredItems,
+      Math.min(filteredItems.length, 15),
+      {
+        selectedPrefix: (text) => this.theme.fg("accent", text),
+        selectedText: (text) => this.theme.fg("accent", text),
+        description: (text) => this.theme.fg("muted", text),
+        scrollInfo: (text) => this.theme.fg("dim", text),
+        noMatch: (text) => this.theme.fg("warning", text),
+      },
+    );
+    this.selectList.onSelect = (item) => {
+      void this.onSelect(String(item.value));
+    };
+    this.selectList.onCancel = this.onCancel;
+    this.listContainer.addChild(this.selectList);
   }
 }
 
@@ -312,11 +391,11 @@ class AgentDetailOverlayComponent {
   }
 
   private buildActionLine(width: number): string {
-    let line = [
-      this.theme.fg("dim", "esc back"),
-      this.theme.fg("dim", "↑/↓ scroll"),
-      this.theme.fg("dim", "←/→ page"),
-    ].join(this.theme.fg("muted", " • "));
+    let line = formatAgentDetailHint(
+      this.theme.fg("muted", " • "),
+      (action, description) =>
+        this.theme.fg("dim", keyHint(action, description)),
+    );
 
     if (this.totalLines > this.viewHeight) {
       const start = Math.min(this.totalLines, this.scrollOffset + 1);
@@ -376,7 +455,7 @@ export function registerAgentsCommand(
         return;
       }
 
-      await ctx.ui.custom<void>((rootTui, theme, _keybindings, done) => {
+      await ctx.ui.custom<void>((rootTui, theme, keybindings, done) => {
         type ActiveComponent = {
           render(width: number): string[];
           invalidate(): void;
@@ -422,6 +501,8 @@ export function registerAgentsCommand(
             if (agent) openActionMenu(agent);
           },
           () => done(undefined),
+          keybindings,
+          () => rootTui.requestRender(),
         );
 
         activeComponent = agentList;
