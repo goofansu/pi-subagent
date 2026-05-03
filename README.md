@@ -46,3 +46,7 @@ This package ships with default agents in the `agents/` directory. You can add o
 ```
 
 For example, `~/.pi/agent/agents/security-reviewer.md` creates an agent named `security-reviewer`.
+
+## Nesting prevention
+
+Subagents are not allowed to spawn other subagents. A depth guard using the `PI_SUBAGENT_DEPTH` environment variable limits nesting to one level. If a subagent attempts to call the `subagent` tool, the call is rejected with an error.
