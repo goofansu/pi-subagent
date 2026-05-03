@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { test } from "node:test";
-import { buildPiArgs } from "./runner.js";
+import { after, test } from "node:test";
+import { buildPiArgs, getSubagentDepth } from "./runner.js";
 
 test("buildPiArgs disables default tools and loads configured tools", () => {
   const args = buildPiArgs(
@@ -120,6 +120,26 @@ test("abort signal kills child process and rejects with abort error", async () =
     exitCode === "aborted" || typeof exitCode === "number",
     "process should have been terminated",
   );
+});
+
+test("getSubagentDepth returns 0 when env var is not set", () => {
+  const original = process.env.PI_SUBAGENT_DEPTH;
+  delete process.env.PI_SUBAGENT_DEPTH;
+  after(() => {
+    if (original !== undefined) process.env.PI_SUBAGENT_DEPTH = original;
+    else delete process.env.PI_SUBAGENT_DEPTH;
+  });
+  assert.equal(getSubagentDepth(), 0);
+});
+
+test("getSubagentDepth reads depth from env var", () => {
+  const original = process.env.PI_SUBAGENT_DEPTH;
+  process.env.PI_SUBAGENT_DEPTH = "2";
+  after(() => {
+    if (original !== undefined) process.env.PI_SUBAGENT_DEPTH = original;
+    else delete process.env.PI_SUBAGENT_DEPTH;
+  });
+  assert.equal(getSubagentDepth(), 2);
 });
 
 test("stale abort after natural process exit does not mark run as aborted", async () => {

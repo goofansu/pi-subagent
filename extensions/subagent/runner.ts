@@ -7,6 +7,13 @@ import { withFileMutationQueue } from "@mariozechner/pi-coding-agent";
 import { getFinalOutput } from "./messages.js";
 import type { AgentConfig, OnUpdateCallback, SingleResult } from "./types.js";
 
+const DEPTH_ENV_KEY = "PI_SUBAGENT_DEPTH";
+const MAX_SUBAGENT_DEPTH = 1;
+
+export function getSubagentDepth(): number {
+  return parseInt(process.env[DEPTH_ENV_KEY] || "0", 10);
+}
+
 export function getPiInvocation(args: string[]): {
   command: string;
   args: string[];
@@ -61,6 +68,14 @@ export async function runSingleAgent(
   parentModel: { provider: string; id: string } | undefined,
   onUpdate: OnUpdateCallback | undefined,
 ): Promise<SingleResult> {
+  const currentDepth = getSubagentDepth();
+  if (currentDepth >= MAX_SUBAGENT_DEPTH) {
+    throw new Error(
+      `Subagent nesting depth ${currentDepth} reached the limit of ${MAX_SUBAGENT_DEPTH}. ` +
+        `Subagents cannot spawn other subagents.`,
+    );
+  }
+
   const resolvedModel =
     !config.model || config.model === "inherit"
       ? parentModel
@@ -122,6 +137,10 @@ export async function runSingleAgent(
       const proc = spawn(invocation.command, invocation.args, {
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          [DEPTH_ENV_KEY]: String(currentDepth + 1),
+        },
       });
 
       // Write the prompt to stdin and close it so pi reads it cleanly.
