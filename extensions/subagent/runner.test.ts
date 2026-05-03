@@ -132,6 +132,16 @@ test("getSubagentDepth returns 0 when env var is not set", () => {
   assert.equal(getSubagentDepth(), 0);
 });
 
+test("getSubagentDepth returns 0 for non-numeric env var", () => {
+  const original = process.env.PI_SUBAGENT_DEPTH;
+  process.env.PI_SUBAGENT_DEPTH = "garbage";
+  after(() => {
+    if (original !== undefined) process.env.PI_SUBAGENT_DEPTH = original;
+    else delete process.env.PI_SUBAGENT_DEPTH;
+  });
+  assert.equal(getSubagentDepth(), 0);
+});
+
 test("getSubagentDepth reads depth from env var", () => {
   const original = process.env.PI_SUBAGENT_DEPTH;
   process.env.PI_SUBAGENT_DEPTH = "2";

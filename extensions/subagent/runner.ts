@@ -11,7 +11,8 @@ const DEPTH_ENV_KEY = "PI_SUBAGENT_DEPTH";
 const MAX_SUBAGENT_DEPTH = 1;
 
 export function getSubagentDepth(): number {
-  return parseInt(process.env[DEPTH_ENV_KEY] || "0", 10);
+  const depth = parseInt(process.env[DEPTH_ENV_KEY] || "0", 10);
+  return Number.isNaN(depth) ? 0 : depth;
 }
 
 export function getPiInvocation(args: string[]): {
