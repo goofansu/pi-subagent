@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Message } from "@mariozechner/pi-ai";
-import { withFileMutationQueue } from "@mariozechner/pi-coding-agent";
+import type { Message } from "@earendil-works/pi-ai";
+import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { getFinalOutput } from "./messages.js";
 import type { AgentConfig, OnUpdateCallback, SingleResult } from "./types.js";
 

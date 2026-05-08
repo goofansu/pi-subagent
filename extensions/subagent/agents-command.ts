@@ -5,7 +5,7 @@ import {
   getMarkdownTheme,
   keyHint,
   type Theme,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
   Container,
   fuzzyFilter,
@@ -20,7 +20,7 @@ import {
   type TUI,
   truncateToWidth,
   visibleWidth,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import type { AgentConfig } from "./types.js";
 
 type AgentAction = "view" | "work";

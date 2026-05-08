@@ -1,5 +1,8 @@
 import * as path from "node:path";
-import { type ExtensionAPI, getAgentDir } from "@mariozechner/pi-coding-agent";
+import {
+  type ExtensionAPI,
+  getAgentDir,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
   formatAgentGuidelines,
