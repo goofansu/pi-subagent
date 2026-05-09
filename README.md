@@ -36,7 +36,7 @@ Supported frontmatter fields:
 | --- | --- | --- |
 | `description` | Yes | When to use the agent. |
 | `model` | No | Model override. Omit or use `inherit` to use the caller's model. |
-| `tools` | No | Tools override. Omit to use Pi's user-scoped tools. Any defined value is passed as-is with `--no-tools --tools <tools>`. |
+| `tools` | No | Tools override. Omit to use Pi's user-scoped tools. Any defined value is passed as-is with `--tools <tools>`. |
 | `appendSystemPrompt` | No | System prompt override. Omit or use `false` to replace Pi's system prompt with the agent prompt. Use `true` to append the agent prompt to Pi's system prompt. |
 
 This package ships with default agents in the `agents/` directory. You can add or override agents by creating Markdown files with the same format in your Pi agent directory:

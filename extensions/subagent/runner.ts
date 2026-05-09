@@ -30,7 +30,7 @@ export function buildPiArgs(
   const args: string[] = ["--mode", "json", "-p", "--no-session"];
   if (resolvedModel) args.push("--model", resolvedModel);
   if (config.tools) {
-    args.push("--no-tools", "--tools", config.tools);
+    args.push("--tools", config.tools);
   }
   if (systemPromptPath) {
     args.push(

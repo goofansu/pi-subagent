@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { after, test } from "node:test";
 import { buildPiArgs, getSubagentDepth } from "./runner.js";
 
-test("buildPiArgs disables default tools and loads configured tools", () => {
+test("buildPiArgs passes configured tools without disabling tools first", () => {
   const args = buildPiArgs(
     {
       name: "explore",
@@ -22,7 +22,6 @@ test("buildPiArgs disables default tools and loads configured tools", () => {
     "--no-session",
     "--model",
     "anthropic/claude",
-    "--no-tools",
     "--tools",
     "read,grep,find,ls,bash",
     "--system-prompt",
