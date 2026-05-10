@@ -1,2 +1,2 @@
 dev:
-	pi -nbt -ne -ns -np -nc --no-themes -e extensions/subagent
+	pi -ne -ns -np -nc --no-session --offline -e extensions/subagent --tools subagent
