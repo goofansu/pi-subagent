@@ -38,6 +38,7 @@ export interface AgentConfig {
   description: string;
   model?: string;
   tools?: string;
+  skills?: string[];
   appendSystemPrompt?: boolean;
   systemPrompt: string;
   source?: AgentSource;
