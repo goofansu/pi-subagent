@@ -34,6 +34,7 @@ export function parseAgentConfig(
     model?: string;
     tools?: string;
     appendSystemPrompt?: boolean;
+    skills?: string;
   }>(content);
   const description = frontmatter.description?.trim();
   const systemPrompt = body.trim();
@@ -49,6 +50,12 @@ export function parseAgentConfig(
       filePath,
     );
   }
+  const skills = frontmatter.skills
+    ? frontmatter.skills
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+    : undefined;
   return {
     name: path.basename(filePath, path.extname(filePath)),
     description,
@@ -56,6 +63,7 @@ export function parseAgentConfig(
     tools: frontmatter.tools,
     appendSystemPrompt: frontmatter.appendSystemPrompt === true,
     systemPrompt,
+    ...(skills ? { skills } : {}),
     ...(source ? { source } : {}),
   };
 }

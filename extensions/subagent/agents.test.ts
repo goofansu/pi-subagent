@@ -288,3 +288,39 @@ test("loadMergedAgentConfigsWithDiagnostics combines invalid bundled and overrid
     ["bad-base.md", "bad-user.md"],
   );
 });
+
+test("parseAgentConfig parses skills from frontmatter", async () => {
+  const dir = await makeTempDir();
+  const filePath = path.join(dir, "worker.md");
+  await fs.promises.writeFile(
+    filePath,
+    "---\ndescription: Worker agent\nskills: safe-bash, tdd\n---\n\nYou implement code.\n",
+  );
+
+  const config = parseAgentConfig(filePath);
+  assert.deepEqual(config.skills, ["safe-bash", "tdd"]);
+});
+
+test("parseAgentConfig omits skills when not in frontmatter", async () => {
+  const dir = await makeTempDir();
+  const filePath = path.join(dir, "scout.md");
+  await fs.promises.writeFile(
+    filePath,
+    "---\ndescription: Scout agent\n---\n\nYou explore code.\n",
+  );
+
+  const config = parseAgentConfig(filePath);
+  assert.equal(config.skills, undefined);
+});
+
+test("parseAgentConfig handles a single skill without commas", async () => {
+  const dir = await makeTempDir();
+  const filePath = path.join(dir, "focused.md");
+  await fs.promises.writeFile(
+    filePath,
+    "---\ndescription: Focused agent\nskills: safe-bash\n---\n\nYou do one thing.\n",
+  );
+
+  const config = parseAgentConfig(filePath);
+  assert.deepEqual(config.skills, ["safe-bash"]);
+});
