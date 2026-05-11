@@ -9,6 +9,7 @@ import {
   formatInvalidAgentFilesWarning,
   getDefaultAgentsDir,
   loadMergedAgentConfigsWithDiagnostics,
+  validateAgentSkills,
 } from "./agents.js";
 import { registerAgentsCommand } from "./agents-command.js";
 import { getFinalOutput } from "./messages.js";
@@ -31,11 +32,18 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (event, ctx) => {
     if (event.reason !== "startup" && event.reason !== "reload") return;
-    if (agentConfigLoadResult.invalidFiles.length === 0) return;
-    const warning = formatInvalidAgentFilesWarning(
-      agentConfigLoadResult.invalidFiles,
-    );
-    ctx.ui.notify(warning, "warning");
+
+    if (agentConfigLoadResult.invalidFiles.length > 0) {
+      const warning = formatInvalidAgentFilesWarning(
+        agentConfigLoadResult.invalidFiles,
+      );
+      ctx.ui.notify(warning, "warning");
+    }
+
+    const skillWarnings = validateAgentSkills(agentConfigs, process.cwd());
+    for (const warning of skillWarnings) {
+      ctx.ui.notify(warning, "warning");
+    }
   });
 
   registerAgentsCommand(pi, agentConfigs);
