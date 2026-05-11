@@ -3,7 +3,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
-import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import {
+  getAgentDir,
+  loadSkills,
+  withFileMutationQueue,
+} from "@earendil-works/pi-coding-agent";
 import { getFinalOutput } from "./messages.js";
 import type { AgentConfig, OnUpdateCallback, SingleResult } from "./types.js";
 
@@ -26,6 +30,7 @@ export function buildPiArgs(
   config: AgentConfig,
   resolvedModel: string | undefined,
   systemPromptPath: string | undefined,
+  skillPaths?: string[],
 ): string[] {
   const args: string[] = ["--mode", "json", "-p", "--no-session"];
   if (resolvedModel) args.push("--model", resolvedModel);
@@ -38,9 +43,42 @@ export function buildPiArgs(
       systemPromptPath,
     );
   }
+  if (skillPaths !== undefined) {
+    args.push("--no-skills");
+    for (const skillPath of skillPaths) {
+      args.push("--skill", skillPath);
+    }
+  }
   // Prompt is passed via stdin, not as a CLI arg, to avoid process-listing
   // exposure of sensitive content and OS argument-length limits (E2BIG).
   return args;
+}
+
+export function resolveSkillPaths(
+  skillNames: string[],
+  cwd: string,
+): { resolved: Array<{ name: string; path: string }>; missing: string[] } {
+  const { skills: discovered } = loadSkills({
+    cwd,
+    agentDir: getAgentDir(),
+    skillPaths: [],
+    includeDefaults: true,
+  });
+  const skillMap = new Map(discovered.map((s) => [s.name, s.filePath]));
+
+  const resolved: Array<{ name: string; path: string }> = [];
+  const missing: string[] = [];
+
+  for (const name of skillNames) {
+    const filePath = skillMap.get(name);
+    if (filePath) {
+      resolved.push({ name, path: filePath });
+    } else {
+      missing.push(name);
+    }
+  }
+
+  return { resolved, missing };
 }
 
 export async function writePromptToTempFile(
@@ -83,6 +121,19 @@ export async function runSingleAgent(
         ? `${parentModel.provider}/${parentModel.id}`
         : undefined
       : config.model;
+
+  // Resolve skill paths if skills are configured
+  let skillPaths: string[] | undefined;
+  if (config.skills) {
+    const cwd = process.cwd();
+    const result = resolveSkillPaths(config.skills, cwd);
+    if (result.missing.length > 0) {
+      throw new Error(
+        `Agent '${config.name}': unknown skills: ${result.missing.join(", ")}`,
+      );
+    }
+    skillPaths = result.resolved.map((s) => s.path);
+  }
 
   let tmpPromptDir: string | null = null;
   let tmpPromptPath: string | null = null;
@@ -128,7 +179,12 @@ export async function runSingleAgent(
       tmpPromptPath = tmp.filePath;
     }
 
-    const args = buildPiArgs(config, resolvedModel, tmpPromptPath ?? undefined);
+    const args = buildPiArgs(
+      config,
+      resolvedModel,
+      tmpPromptPath ?? undefined,
+      skillPaths,
+    );
 
     // Emit initial "running" state
     emitUpdate();

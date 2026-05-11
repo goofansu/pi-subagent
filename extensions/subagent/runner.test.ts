@@ -1,7 +1,28 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { after, test } from "node:test";
-import { buildPiArgs, getSubagentDepth } from "./runner.js";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { after, afterEach, test } from "node:test";
+import { buildPiArgs, getSubagentDepth, resolveSkillPaths } from "./runner.js";
+
+const tempDirs: string[] = [];
+
+async function makeTempDir(): Promise<string> {
+  const dir = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), "pi-subagent-runner-test-"),
+  );
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirs
+      .splice(0)
+      .map((dir) => fs.promises.rm(dir, { recursive: true, force: true })),
+  );
+});
 
 test("buildPiArgs passes configured tools without disabling tools first", () => {
   const args = buildPiArgs(
@@ -195,4 +216,104 @@ test("stale abort after natural process exit does not mark run as aborted", asyn
     false,
     "abort after natural exit must not mark run as aborted",
   );
+});
+
+test("buildPiArgs passes --no-skills and --skill flags when skillPaths provided", () => {
+  const args = buildPiArgs(
+    {
+      name: "worker",
+      description: "Worker",
+      systemPrompt: "Work.",
+    },
+    undefined,
+    undefined,
+    ["/path/to/safe-bash/SKILL.md", "/path/to/tdd/SKILL.md"],
+  );
+
+  assert.deepEqual(args, [
+    "--mode",
+    "json",
+    "-p",
+    "--no-session",
+    "--no-skills",
+    "--skill",
+    "/path/to/safe-bash/SKILL.md",
+    "--skill",
+    "/path/to/tdd/SKILL.md",
+  ]);
+});
+
+test("buildPiArgs passes --no-skills with no --skill flags when skillPaths is empty", () => {
+  const args = buildPiArgs(
+    {
+      name: "worker",
+      description: "Worker",
+      systemPrompt: "Work.",
+    },
+    undefined,
+    undefined,
+    [],
+  );
+
+  assert.deepEqual(args, [
+    "--mode",
+    "json",
+    "-p",
+    "--no-session",
+    "--no-skills",
+  ]);
+});
+
+test("buildPiArgs omits skill flags when skillPaths is undefined", () => {
+  const args = buildPiArgs(
+    {
+      name: "scout",
+      description: "Scout",
+      systemPrompt: "Explore.",
+    },
+    undefined,
+    undefined,
+    undefined,
+  );
+
+  assert.deepEqual(args, ["--mode", "json", "-p", "--no-session"]);
+});
+
+test("resolveSkillPaths resolves known skill names to file paths", async () => {
+  const dir = await makeTempDir();
+  const skillDir = path.join(dir, ".pi", "skills", "my-skill");
+  await fs.promises.mkdir(skillDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(skillDir, "SKILL.md"),
+    "---\nname: my-skill\ndescription: A test skill\n---\n\nContent.\n",
+  );
+
+  const result = resolveSkillPaths(["my-skill"], dir);
+  assert.equal(result.resolved.length, 1);
+  assert.equal(result.resolved[0].name, "my-skill");
+  assert.ok(result.resolved[0].path.endsWith("SKILL.md"));
+  assert.deepEqual(result.missing, []);
+});
+
+test("resolveSkillPaths reports missing skill names", async () => {
+  const dir = await makeTempDir();
+
+  const result = resolveSkillPaths(["nonexistent"], dir);
+  assert.deepEqual(result.resolved, []);
+  assert.deepEqual(result.missing, ["nonexistent"]);
+});
+
+test("resolveSkillPaths separates found and missing skills", async () => {
+  const dir = await makeTempDir();
+  const skillDir = path.join(dir, ".pi", "skills", "real-skill");
+  await fs.promises.mkdir(skillDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(skillDir, "SKILL.md"),
+    "---\nname: real-skill\ndescription: A real skill\n---\n\nContent.\n",
+  );
+
+  const result = resolveSkillPaths(["real-skill", "fake-skill"], dir);
+  assert.equal(result.resolved.length, 1);
+  assert.equal(result.resolved[0].name, "real-skill");
+  assert.deepEqual(result.missing, ["fake-skill"]);
 });
