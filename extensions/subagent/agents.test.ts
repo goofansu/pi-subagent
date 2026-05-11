@@ -12,7 +12,9 @@ import {
   loadMergedAgentConfigs,
   loadMergedAgentConfigsWithDiagnostics,
   parseAgentConfig,
+  validateAgentSkills,
 } from "./agents.js";
+import type { AgentConfig } from "./types.js";
 
 const tempDirs: string[] = [];
 
@@ -323,4 +325,68 @@ test("parseAgentConfig handles a single skill without commas", async () => {
 
   const config = parseAgentConfig(filePath);
   assert.deepEqual(config.skills, ["safe-bash"]);
+});
+
+test("validateAgentSkills returns no warnings when all skills exist", async () => {
+  const dir = await makeTempDir();
+  const skillDir = path.join(dir, ".pi", "skills", "my-skill");
+  await fs.promises.mkdir(skillDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(skillDir, "SKILL.md"),
+    "---\nname: my-skill\ndescription: A test skill\n---\n\nSkill content.\n",
+  );
+
+  const configs = new Map<string, AgentConfig>([
+    [
+      "worker",
+      {
+        name: "worker",
+        description: "Worker",
+        skills: ["my-skill"],
+        systemPrompt: "Work.",
+      },
+    ],
+  ]);
+
+  const warnings = validateAgentSkills(configs, dir);
+  assert.deepEqual(warnings, []);
+});
+
+test("validateAgentSkills returns warnings for missing skills", async () => {
+  const dir = await makeTempDir();
+
+  const configs = new Map<string, AgentConfig>([
+    [
+      "worker",
+      {
+        name: "worker",
+        description: "Worker",
+        skills: ["nonexistent"],
+        systemPrompt: "Work.",
+      },
+    ],
+  ]);
+
+  const warnings = validateAgentSkills(configs, dir);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Agent 'worker'/);
+  assert.match(warnings[0], /nonexistent/);
+});
+
+test("validateAgentSkills skips agents without skills defined", async () => {
+  const dir = await makeTempDir();
+
+  const configs = new Map<string, AgentConfig>([
+    [
+      "scout",
+      {
+        name: "scout",
+        description: "Scout",
+        systemPrompt: "Explore.",
+      },
+    ],
+  ]);
+
+  const warnings = validateAgentSkills(configs, dir);
+  assert.deepEqual(warnings, []);
 });

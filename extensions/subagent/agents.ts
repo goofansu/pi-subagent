@@ -1,7 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import {
+  getAgentDir,
+  loadSkills,
+  parseFrontmatter,
+} from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, AgentSource } from "./types.js";
 
 export interface InvalidAgentConfig {
@@ -137,6 +141,32 @@ export function formatAgentGuidelines(
       ? `subagent ${config.name}: ${config.description}`
       : `subagent ${config.name}.`,
   );
+}
+
+export function validateAgentSkills(
+  configs: Map<string, AgentConfig>,
+  cwd: string,
+): string[] {
+  const { skills: discovered } = loadSkills({
+    cwd,
+    agentDir: getAgentDir(),
+    skillPaths: [],
+    includeDefaults: true,
+  });
+  const availableNames = new Set(discovered.map((s) => s.name));
+  const warnings: string[] = [];
+
+  for (const [, config] of configs) {
+    if (!config.skills) continue;
+    const missing = config.skills.filter((name) => !availableNames.has(name));
+    if (missing.length > 0) {
+      warnings.push(
+        `Agent '${config.name}': unknown skills: ${missing.join(", ")}`,
+      );
+    }
+  }
+
+  return warnings;
 }
 
 export function formatInvalidAgentFilesWarning(
