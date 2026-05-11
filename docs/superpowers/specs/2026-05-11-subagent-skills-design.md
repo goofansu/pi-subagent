@@ -73,8 +73,8 @@ Skills are matched by name (the `name` field from the skill's frontmatter, or th
 
 ## Error Handling
 
-- **Startup**: warn per agent — `"Agent 'worker': skills not found: nonexistent-skill"`. Does not prevent agent from being listed or used.
-- **Runtime**: fail the tool call with thrown error — `"Cannot run agent 'worker': skills not found: nonexistent-skill"`. Child process is not launched.
+- **Startup**: warn per agent — `"Agent 'worker': unknown skills: nonexistent-skill"`. Does not prevent agent from being listed or used.
+- **Runtime**: fail the tool call with thrown error — `"Agent 'worker': unknown skills: nonexistent-skill"`. Child process is not launched.
 
 ## Scope Boundaries
 
