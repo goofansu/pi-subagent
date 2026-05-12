@@ -41,13 +41,17 @@ Supported frontmatter fields:
 | `skills` | No | Comma-separated skill names. When set, only the listed skills are available to the child process. When omitted, the child discovers skills normally. Skills are resolved from user and project scope. | `summarize, commit` |
 | `appendSystemPrompt` | No | When `true`, the agent prompt is appended to Pi's base system prompt. When `false` or omitted, the agent prompt replaces it. | `true`, `false` |
 
+## Implementation
+
+### Agent loading priority
+
 This package ships with default agents in the `agents/` directory. You can add or override agents by creating Markdown files with the same format in your Pi agent directory:
 
 ```text
 ~/.pi/agent/agents/<agent-name>.md
 ```
 
-For example, `~/.pi/agent/agents/security-reviewer.md` creates an agent named `security-reviewer`.
+For example, `~/.pi/agent/agents/security-reviewer.md` creates an agent named `security-reviewer`. If you create `~/.pi/agent/agents/general-purpose.md`, it overrides the bundled `general-purpose` agent.
 
 ## Nesting prevention
 
