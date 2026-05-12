@@ -6,6 +6,7 @@ import {
   loadSkills,
   parseFrontmatter,
 } from "@earendil-works/pi-coding-agent";
+import { buildSkillPaths } from "./runner.js";
 import type { AgentConfig, AgentSource } from "./types.js";
 
 export interface InvalidAgentConfig {
@@ -147,11 +148,12 @@ export function validateAgentSkills(
   configs: Map<string, AgentConfig>,
   cwd: string,
 ): string[] {
+  const skillPaths = buildSkillPaths(cwd);
   const { skills: discovered } = loadSkills({
     cwd,
     agentDir: getAgentDir(),
-    skillPaths: [],
-    includeDefaults: true,
+    skillPaths,
+    includeDefaults: false,
   });
   const availableNames = new Set(discovered.map((s) => s.name));
   const warnings: string[] = [];

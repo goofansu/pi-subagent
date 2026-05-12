@@ -317,3 +317,89 @@ test("resolveSkillPaths separates found and missing skills", async () => {
   assert.equal(result.resolved[0].name, "real-skill");
   assert.deepEqual(result.missing, ["fake-skill"]);
 });
+
+test("resolveSkillPaths resolves skills from project .agents/skills", async () => {
+  const dir = await makeTempDir();
+  const skillDir = path.join(dir, ".agents", "skills", "agents-skill");
+  await fs.promises.mkdir(skillDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(skillDir, "SKILL.md"),
+    "---\nname: agents-skill\ndescription: A skill in .agents/skills\n---\n\nContent.\n",
+  );
+
+  const result = resolveSkillPaths(["agents-skill"], dir);
+  assert.equal(result.resolved.length, 1);
+  assert.equal(result.resolved[0].name, "agents-skill");
+  assert.ok(result.resolved[0].path.endsWith("SKILL.md"));
+  assert.deepEqual(result.missing, []);
+});
+
+test("resolveSkillPaths resolves skills from both .pi/skills and .agents/skills", async () => {
+  const dir = await makeTempDir();
+
+  const piSkillDir = path.join(dir, ".pi", "skills", "pi-skill");
+  await fs.promises.mkdir(piSkillDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(piSkillDir, "SKILL.md"),
+    "---\nname: pi-skill\ndescription: A skill in .pi/skills\n---\n\nContent.\n",
+  );
+
+  const agentsSkillDir = path.join(dir, ".agents", "skills", "agents-skill");
+  await fs.promises.mkdir(agentsSkillDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(agentsSkillDir, "SKILL.md"),
+    "---\nname: agents-skill\ndescription: A skill in .agents/skills\n---\n\nContent.\n",
+  );
+
+  const result = resolveSkillPaths(["pi-skill", "agents-skill"], dir);
+  assert.equal(result.resolved.length, 2);
+  const names = result.resolved.map((s) => s.name).sort();
+  assert.deepEqual(names, ["agents-skill", "pi-skill"]);
+  assert.deepEqual(result.missing, []);
+});
+
+test("resolveSkillPaths: project .pi/skills takes priority over project .agents/skills on name collision", async () => {
+  const dir = await makeTempDir();
+
+  const piSkillDir = path.join(dir, ".pi", "skills", "shared");
+  await fs.promises.mkdir(piSkillDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(piSkillDir, "SKILL.md"),
+    "---\nname: shared\ndescription: pi version\n---\n\nFrom .pi/skills.\n",
+  );
+
+  const agentsSkillDir = path.join(dir, ".agents", "skills", "shared");
+  await fs.promises.mkdir(agentsSkillDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(agentsSkillDir, "SKILL.md"),
+    "---\nname: shared\ndescription: agents version\n---\n\nFrom .agents/skills.\n",
+  );
+
+  const result = resolveSkillPaths(["shared"], dir);
+  assert.equal(result.resolved.length, 1);
+  assert.ok(
+    result.resolved[0].path.includes(path.join(".pi", "skills")),
+    `expected .pi/skills to win, got ${result.resolved[0].path}`,
+  );
+});
+
+test("resolveSkillPaths: finds skills in .agents/skills within project scope", async () => {
+  const dir = await makeTempDir();
+
+  // Project .agents/skills has the skill
+  const projectSkillDir = path.join(dir, ".agents", "skills", "shared");
+  await fs.promises.mkdir(projectSkillDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(projectSkillDir, "SKILL.md"),
+    "---\nname: shared\ndescription: project version\n---\n\nProject.\n",
+  );
+
+  // User .pi/agent/skills also has it — but project should win
+  // .agents/skills is used when .pi/skills doesn't have the skill.
+  const result = resolveSkillPaths(["shared"], dir);
+  assert.equal(result.resolved.length, 1);
+  assert.ok(
+    result.resolved[0].path.includes(path.join(".agents", "skills")),
+    `expected project .agents/skills to win, got ${result.resolved[0].path}`,
+  );
+});

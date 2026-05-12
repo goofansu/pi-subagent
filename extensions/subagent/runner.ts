@@ -54,15 +54,30 @@ export function buildPiArgs(
   return args;
 }
 
+/**
+ * Build the ordered list of skill paths matching pi's discovery priority:
+ * project .pi > project .agents > user .pi > user .agents.
+ */
+export function buildSkillPaths(cwd: string): string[] {
+  const agentDir = getAgentDir();
+  return [
+    path.join(cwd, ".pi", "skills"),
+    path.join(cwd, ".agents", "skills"),
+    path.join(agentDir, "skills"),
+    path.join(os.homedir(), ".agents", "skills"),
+  ];
+}
+
 export function resolveSkillPaths(
   skillNames: string[],
   cwd: string,
 ): { resolved: Array<{ name: string; path: string }>; missing: string[] } {
+  const skillPaths = buildSkillPaths(cwd);
   const { skills: discovered } = loadSkills({
     cwd,
     agentDir: getAgentDir(),
-    skillPaths: [],
-    includeDefaults: true,
+    skillPaths,
+    includeDefaults: false,
   });
   const skillMap = new Map(discovered.map((s) => [s.name, s.filePath]));
 
