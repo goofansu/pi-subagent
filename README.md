@@ -20,8 +20,9 @@ Agents are Markdown files in an `agents/` directory. The agent name is the filen
 ```markdown
 ---
 description: Describes when to use this agent.
-model: inherit
-tools: read,grep,find,ls
+model: openai-codex/gpt-5.5:high
+tools: read, grep, find, ls
+skills: summarize, commit
 appendSystemPrompt: false
 ---
 
@@ -32,12 +33,13 @@ Supported frontmatter fields:
 
 `description` and the prompt body are required. Agent files missing either are skipped and reported in the UI at session start.
 
-| Field | Required | Description |
-| --- | --- | --- |
-| `description` | Yes | When to use the agent. |
-| `model` | No | Model override. Omit or use `inherit` to use the caller's model. |
-| `tools` | No | Tools override. Omit to use Pi's user-scoped tools. Any defined value is passed as-is with `--tools <tools>`. |
-| `appendSystemPrompt` | No | System prompt override. Omit or use `false` to replace Pi's system prompt with the agent prompt. Use `true` to append the agent prompt to Pi's system prompt. |
+| Field | Required | Description | Example |
+| --- | --- | --- | --- |
+| `description` | Yes | When to use the agent. Free-form text. | `Fast codebase exploration` |
+| `model` | No | Model override. Omit or use `inherit` to use the caller's model. | `inherit`, `openai-codex/gpt-5.5:high`, `anthropic/claude-opus-4-7` |
+| `tools` | No | Tools the agent can use. Omit to inherit Pi's default tools. | `read, grep, find, ls, bash`, `read, bash, edit, write` |
+| `skills` | No | Comma-separated skill names. When set, only the listed skills are available to the child process. When omitted, the child discovers skills normally. Skills are resolved from user and project scope. | `summarize, commit` |
+| `appendSystemPrompt` | No | When `true`, the agent prompt is appended to Pi's base system prompt. When `false` or omitted, the agent prompt replaces it. | `true`, `false` |
 
 This package ships with default agents in the `agents/` directory. You can add or override agents by creating Markdown files with the same format in your Pi agent directory:
 
