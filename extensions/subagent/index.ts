@@ -28,8 +28,7 @@ const agentConfigs = agentConfigLoadResult.configs;
 // ── Extension ─────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-  const description =
-    "Delegate a task to a specialized subagent with an isolated context window.";
+  const description = "Run a task in a specialized subagent";
 
   pi.on("session_start", (event, ctx) => {
     if (event.reason !== "startup" && event.reason !== "reload") return;
