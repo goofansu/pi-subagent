@@ -45,12 +45,15 @@ Supported frontmatter fields:
 
 ### Agents
 
-This package ships with default agents in the `agents/` directory. You can add or override agents by creating Markdown files with the same format in your Pi agent directory. For example, `~/.pi/agent/agents/security-reviewer.md` creates an agent named `security-reviewer`. If you create `~/.pi/agent/agents/general-purpose.md`, it overrides the bundled `general-purpose` agent.
+This package ships with default agents in the `agents/` directory. You can add or override agents at the user or project level by creating Markdown files with the same format. Higher-priority agents override lower-priority ones with the same name.
 
 | Priority | Scope | Location |
 | --- | --- | --- |
-| 1 | user | `~/.pi/agent/agents/` |
-| 2 | bundled | `agents/` |
+| 1 | project | `.pi/agents/` |
+| 2 | user | `~/.pi/agent/agents/` |
+| 3 | bundled | `agents/` |
+
+For example, `~/.pi/agent/agents/security-reviewer.md` creates a user-scoped agent named `security-reviewer`. If you create `.pi/agents/general-purpose.md` in a project, it overrides both the user and bundled `general-purpose` agent for that project.
 
 ### Skills
 
