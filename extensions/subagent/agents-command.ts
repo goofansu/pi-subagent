@@ -30,7 +30,12 @@ type KeybindingMatcher = {
 };
 
 function formatAgentListDescription(agent: AgentConfig): string {
-  const prefix = agent.source === "user" ? "[u]" : "[d]";
+  const prefix =
+    agent.source === "project"
+      ? "[p]"
+      : agent.source === "user"
+        ? "[u]"
+        : "[d]";
   return `${prefix} ${agent.description}`;
 }
 

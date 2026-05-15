@@ -8,7 +8,7 @@ import {
   formatAgentGuidelines,
   formatInvalidAgentFilesWarning,
   getDefaultAgentsDir,
-  loadMergedAgentConfigsWithDiagnostics,
+  loadLayeredAgentConfigsWithDiagnostics,
   validateAgentSkills,
 } from "./agents.js";
 import { registerAgentsCommand } from "./agents-command.js";
@@ -18,10 +18,11 @@ import { runSingleAgent } from "./runner.js";
 
 // ── Agent config loading ──────────────────────────────────────────────────────
 
-const agentConfigLoadResult = loadMergedAgentConfigsWithDiagnostics(
-  getDefaultAgentsDir(import.meta.url),
-  path.join(getAgentDir(), "agents"),
-);
+const agentConfigLoadResult = loadLayeredAgentConfigsWithDiagnostics([
+  { dir: getDefaultAgentsDir(import.meta.url), source: "default" },
+  { dir: path.join(getAgentDir(), "agents"), source: "user" },
+  { dir: path.join(process.cwd(), ".pi", "agents"), source: "project" },
+]);
 const agentConfigs = agentConfigLoadResult.configs;
 
 // ── Extension ─────────────────────────────────────────────────────────────────

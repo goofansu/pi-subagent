@@ -36,6 +36,13 @@ const reviewAgent: AgentConfig = {
   source: "user",
 };
 
+const projectAgent: AgentConfig = {
+  name: "deployer",
+  description: "Deploy the project.",
+  systemPrompt: "Deploy to production.",
+  source: "project",
+};
+
 test("getAgentSelectItems lists names and descriptions only", () => {
   const items = getAgentSelectItems(
     new Map([[exploreAgent.name, exploreAgent]]),
@@ -58,6 +65,20 @@ test("getAgentSelectItems prefixes user agents", () => {
       value: "reviewer",
       label: "reviewer",
       description: "[u] Review code carefully.",
+    },
+  ]);
+});
+
+test("getAgentSelectItems prefixes project agents", () => {
+  const items = getAgentSelectItems(
+    new Map([[projectAgent.name, projectAgent]]),
+  );
+
+  assert.deepEqual(items, [
+    {
+      value: "deployer",
+      label: "deployer",
+      description: "[p] Deploy the project.",
     },
   ]);
 });

@@ -112,16 +112,40 @@ export function loadAgentConfigs(
   return loadAgentConfigsWithDiagnostics(agentsDir, source).configs;
 }
 
+export interface AgentLayer {
+  dir: string;
+  source: AgentSource;
+}
+
+export function loadLayeredAgentConfigsWithDiagnostics(
+  layers: AgentLayer[],
+): AgentConfigLoadResult {
+  const configs = new Map<string, AgentConfig>();
+  const invalidFiles: InvalidAgentConfig[] = [];
+  for (const layer of layers) {
+    const result = loadAgentConfigsWithDiagnostics(layer.dir, layer.source);
+    for (const [name, config] of result.configs) {
+      configs.set(name, config);
+    }
+    invalidFiles.push(...result.invalidFiles);
+  }
+  return { configs, invalidFiles };
+}
+
+export function loadLayeredAgentConfigs(
+  layers: AgentLayer[],
+): Map<string, AgentConfig> {
+  return loadLayeredAgentConfigsWithDiagnostics(layers).configs;
+}
+
 export function loadMergedAgentConfigsWithDiagnostics(
   baseAgentsDir: string,
   overrideAgentsDir: string,
 ): AgentConfigLoadResult {
-  const base = loadAgentConfigsWithDiagnostics(baseAgentsDir, "default");
-  const override = loadAgentConfigsWithDiagnostics(overrideAgentsDir, "user");
-  return {
-    configs: new Map([...base.configs, ...override.configs]),
-    invalidFiles: [...base.invalidFiles, ...override.invalidFiles],
-  };
+  return loadLayeredAgentConfigsWithDiagnostics([
+    { dir: baseAgentsDir, source: "default" },
+    { dir: overrideAgentsDir, source: "user" },
+  ]);
 }
 
 export function loadMergedAgentConfigs(

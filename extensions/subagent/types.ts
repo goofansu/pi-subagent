@@ -31,7 +31,7 @@ export type DisplayItem =
   | { type: "text"; text: string }
   | { type: "toolCall"; name: string; args: Record<string, unknown> };
 
-export type AgentSource = "default" | "user";
+export type AgentSource = "default" | "user" | "project";
 
 export interface AgentConfig {
   name: string;

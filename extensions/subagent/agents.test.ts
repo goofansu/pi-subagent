@@ -9,6 +9,8 @@ import {
   getDefaultAgentsDir,
   loadAgentConfigs,
   loadAgentConfigsWithDiagnostics,
+  loadLayeredAgentConfigs,
+  loadLayeredAgentConfigsWithDiagnostics,
   loadMergedAgentConfigs,
   loadMergedAgentConfigsWithDiagnostics,
   parseAgentConfig,
@@ -289,6 +291,106 @@ test("loadMergedAgentConfigsWithDiagnostics combines invalid bundled and overrid
     result.invalidFiles.map((invalid) => path.basename(invalid.filePath)),
     ["bad-base.md", "bad-user.md"],
   );
+});
+
+test("loadLayeredAgentConfigs merges three layers with correct priority", async () => {
+  const bundledDir = await makeTempDir();
+  const userDir = await makeTempDir();
+  const projectDir = await makeTempDir();
+
+  await fs.promises.writeFile(
+    path.join(bundledDir, "general-purpose.md"),
+    "---\ndescription: Bundled general\n---\n\nBundled general prompt\n",
+  );
+  await fs.promises.writeFile(
+    path.join(bundledDir, "code-reviewer.md"),
+    "---\ndescription: Bundled reviewer\n---\n\nBundled reviewer prompt\n",
+  );
+  await fs.promises.writeFile(
+    path.join(userDir, "code-reviewer.md"),
+    "---\ndescription: User reviewer\n---\n\nUser reviewer prompt\n",
+  );
+  await fs.promises.writeFile(
+    path.join(userDir, "user-only.md"),
+    "---\ndescription: User only\n---\n\nUser only prompt\n",
+  );
+  await fs.promises.writeFile(
+    path.join(projectDir, "code-reviewer.md"),
+    "---\ndescription: Project reviewer\n---\n\nProject reviewer prompt\n",
+  );
+  await fs.promises.writeFile(
+    path.join(projectDir, "project-only.md"),
+    "---\ndescription: Project only\n---\n\nProject only prompt\n",
+  );
+
+  const configs = loadLayeredAgentConfigs([
+    { dir: bundledDir, source: "default" },
+    { dir: userDir, source: "user" },
+    { dir: projectDir, source: "project" },
+  ]);
+
+  assert.equal(configs.size, 4);
+  // Project wins over user and bundled
+  assert.equal(configs.get("code-reviewer")?.description, "Project reviewer");
+  assert.equal(configs.get("code-reviewer")?.source, "project");
+  // Bundled agent survives when not overridden
+  assert.equal(configs.get("general-purpose")?.source, "default");
+  // User-only agent survives
+  assert.equal(configs.get("user-only")?.source, "user");
+  // Project-only agent present
+  assert.equal(configs.get("project-only")?.source, "project");
+});
+
+test("loadLayeredAgentConfigsWithDiagnostics aggregates invalid files across all layers", async () => {
+  const bundledDir = await makeTempDir();
+  const userDir = await makeTempDir();
+  const projectDir = await makeTempDir();
+
+  await fs.promises.writeFile(
+    path.join(bundledDir, "valid.md"),
+    "---\ndescription: Valid\n---\n\nValid prompt\n",
+  );
+  await fs.promises.writeFile(path.join(bundledDir, "bad-base.md"), "Prompt\n");
+  await fs.promises.writeFile(
+    path.join(userDir, "bad-user.md"),
+    "---\ndescription: Bad user\n---\n\n",
+  );
+  await fs.promises.writeFile(
+    path.join(projectDir, "bad-project.md"),
+    "No frontmatter\n",
+  );
+
+  const result = loadLayeredAgentConfigsWithDiagnostics([
+    { dir: bundledDir, source: "default" },
+    { dir: userDir, source: "user" },
+    { dir: projectDir, source: "project" },
+  ]);
+
+  assert.equal(result.configs.size, 1);
+  assert.deepEqual(
+    result.invalidFiles.map((invalid) => path.basename(invalid.filePath)),
+    ["bad-base.md", "bad-user.md", "bad-project.md"],
+  );
+});
+
+test("loadLayeredAgentConfigs tolerates missing directories in any layer", async () => {
+  const bundledDir = await makeTempDir();
+  await fs.promises.writeFile(
+    path.join(bundledDir, "general-purpose.md"),
+    "---\ndescription: General\n---\n\nGeneral prompt\n",
+  );
+
+  const missingUser = path.join(await makeTempDir(), "missing-user");
+  const missingProject = path.join(await makeTempDir(), "missing-project");
+
+  const configs = loadLayeredAgentConfigs([
+    { dir: bundledDir, source: "default" },
+    { dir: missingUser, source: "user" },
+    { dir: missingProject, source: "project" },
+  ]);
+
+  assert.equal(configs.size, 1);
+  assert.equal(configs.get("general-purpose")?.description, "General");
 });
 
 test("parseAgentConfig parses skills from frontmatter", async () => {
