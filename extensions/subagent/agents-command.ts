@@ -160,7 +160,7 @@ class AgentsListComponent extends Container {
     this.addChild(new Spacer(1));
     this.addChild(
       new Text(
-        theme.fg("dim", `Type to filter • ${formatAgentListHint(" • ")}`),
+        theme.fg("dim", `Type to search • ${formatAgentListHint(" • ")}`),
         1,
         0,
       ),
