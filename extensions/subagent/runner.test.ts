@@ -4,7 +4,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, test } from "node:test";
-import { buildPiArgs, getSubagentDepth, resolveSkillPaths } from "./runner.js";
+import {
+  buildPiArgs,
+  getSubagentDepth,
+  resolveSkillPaths,
+  resolveSubagentModel,
+} from "./runner.js";
 
 const tempDirs: string[] = [];
 
@@ -96,6 +101,50 @@ test("buildPiArgs does not include the prompt in argv", () => {
   assert.ok(
     !args.some((a) => a.includes("Do stuff")),
     "prompt must not appear in argv",
+  );
+});
+
+test("resolveSubagentModel appends parent thinking level for omitted model", () => {
+  assert.equal(
+    resolveSubagentModel(
+      {
+        name: "worker",
+        description: "Worker",
+        systemPrompt: "Work.",
+      },
+      { provider: "openai-codex", id: "gpt-5.5", thinkingLevel: "high" },
+    ),
+    "openai-codex/gpt-5.5:high",
+  );
+});
+
+test("resolveSubagentModel appends parent thinking level for inherit model", () => {
+  assert.equal(
+    resolveSubagentModel(
+      {
+        name: "worker",
+        description: "Worker",
+        model: "inherit",
+        systemPrompt: "Work.",
+      },
+      { provider: "anthropic", id: "claude-sonnet-4-5", thinkingLevel: "low" },
+    ),
+    "anthropic/claude-sonnet-4-5:low",
+  );
+});
+
+test("resolveSubagentModel leaves explicit configured models unchanged", () => {
+  assert.equal(
+    resolveSubagentModel(
+      {
+        name: "worker",
+        description: "Worker",
+        model: "openai-codex/gpt-5.5",
+        systemPrompt: "Work.",
+      },
+      { provider: "anthropic", id: "claude-sonnet-4-5", thinkingLevel: "high" },
+    ),
+    "openai-codex/gpt-5.5",
   );
 });
 

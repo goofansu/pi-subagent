@@ -14,6 +14,12 @@ import type { AgentConfig, OnUpdateCallback, SingleResult } from "./types.js";
 const DEPTH_ENV_KEY = "PI_SUBAGENT_DEPTH";
 const MAX_SUBAGENT_DEPTH = 1;
 
+export interface ParentModel {
+  provider: string;
+  id: string;
+  thinkingLevel?: string;
+}
+
 export function getSubagentDepth(): number {
   const depth = parseInt(process.env[DEPTH_ENV_KEY] || "0", 10);
   return Number.isNaN(depth) ? 0 : depth;
@@ -52,6 +58,19 @@ export function buildPiArgs(
   // Prompt is passed via stdin, not as a CLI arg, to avoid process-listing
   // exposure of sensitive content and OS argument-length limits (E2BIG).
   return args;
+}
+
+export function resolveSubagentModel(
+  config: AgentConfig,
+  parentModel: ParentModel | undefined,
+): string | undefined {
+  if (config.model && config.model !== "inherit") return config.model;
+  if (!parentModel) return undefined;
+
+  const model = `${parentModel.provider}/${parentModel.id}`;
+  return parentModel.thinkingLevel
+    ? `${model}:${parentModel.thinkingLevel}`
+    : model;
 }
 
 /**
@@ -119,7 +138,7 @@ export async function runSingleAgent(
   description: string,
   prompt: string,
   signal: AbortSignal | undefined,
-  parentModel: { provider: string; id: string } | undefined,
+  parentModel: ParentModel | undefined,
   onUpdate: OnUpdateCallback | undefined,
 ): Promise<SingleResult> {
   const currentDepth = getSubagentDepth();
@@ -130,12 +149,7 @@ export async function runSingleAgent(
     );
   }
 
-  const resolvedModel =
-    !config.model || config.model === "inherit"
-      ? parentModel
-        ? `${parentModel.provider}/${parentModel.id}`
-        : undefined
-      : config.model;
+  const resolvedModel = resolveSubagentModel(config, parentModel);
 
   // Resolve skill paths if skills are configured
   let skillPaths: string[] | undefined;

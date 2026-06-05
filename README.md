@@ -36,7 +36,7 @@ Supported frontmatter fields:
 | Field | Required | Description | Example |
 | --- | --- | --- | --- |
 | `description` | Yes | When to use the agent. Free-form text. | `Fast codebase exploration` |
-| `model` | No | Model override. Omit or use `inherit` to use the caller's model. | `inherit`, `openai-codex/gpt-5.5:high`, `anthropic/claude-opus-4-7` |
+| `model` | No | Model override. Omit or use `inherit` to use the caller's model and thinking level. Add `:<thinkingLevel>` to override the inherited thinking level. | `inherit`, `openai-codex/gpt-5.5:high`, `anthropic/claude-opus-4-7` |
 | `tools` | No | Tools the agent can use. Omit to inherit Pi's default tools. | `read, grep, find, ls, bash`, `read, bash, edit, write` |
 | `skills` | No | Comma-separated skill names. When set, only the listed skills are available to the child process. When omitted, the agent discovers skills normally. Skills are resolved from project and user scope. | `summarize, commit` |
 | `appendSystemPrompt` | No | When `true`, the agent prompt is appended to Pi's base system prompt. When `false` or omitted, the agent prompt replaces it. | `true`, `false` |

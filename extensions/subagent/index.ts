@@ -76,7 +76,13 @@ export default function (pi: ExtensionAPI) {
         params.description,
         params.prompt,
         signal,
-        ctx.model,
+        ctx.model
+          ? {
+              provider: ctx.model.provider,
+              id: ctx.model.id,
+              thinkingLevel: pi.getThinkingLevel(),
+            }
+          : undefined,
         onUpdate,
       );
 
