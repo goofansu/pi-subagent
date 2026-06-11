@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Message } from "@earendil-works/pi-ai";
-import { getDisplayItems, getFinalOutput } from "./messages.js";
+import { getDisplayItems, getFinalOutput } from "./messages.ts";
 
 const assistantMessage = (content: Message["content"]): Message =>
   ({ role: "assistant", content }) as Message;

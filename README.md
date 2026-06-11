@@ -57,7 +57,7 @@ For example, `~/.pi/agent/agents/security-reviewer.md` creates a user-scoped age
 
 ### Skills
 
-When an agent declares a `skills` field, the named skills are resolved before the subagent is spawned. Skills are discovered from directories containing `SKILL.md`. If a skill name appears in multiple locations, the highest-priority location wins.
+When an agent declares a `skills` field, the named skills are resolved before the subagent is spawned. Skills are discovered from directories containing `SKILL.md` under project and user scope. If a skill name appears in multiple locations, the highest-priority location wins.
 
 | Priority | Scope | Location |
 | --- | --- | --- |
@@ -69,3 +69,48 @@ When an agent declares a `skills` field, the named skills are resolved before th
 ## Nesting prevention
 
 Subagents are not allowed to spawn other subagents — this prevents runaway context growth, infinite delegation loops, and unpredictable tool costs. A depth guard using the `PI_SUBAGENT_DEPTH` environment variable limits nesting to one level. If a subagent attempts to call the `subagent` tool, the call is rejected with an error.
+
+## Using with the Pi SDK
+
+Most users do not need this section. It is for programs that import `pi-subagent` and register it with a Pi SDK session.
+
+```ts
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  getAgentDir,
+} from "@earendil-works/pi-coding-agent";
+import { createSubagentExtension } from "pi-subagent";
+
+const cwd = process.env.PI_PROJECT_DIR ?? process.cwd();
+const agentDir = getAgentDir();
+
+const resourceLoader = new DefaultResourceLoader({
+  cwd,
+  agentDir,
+  extensionFactories: [
+    // Choose one:
+    //
+    // Use this when the target project owns its own .pi/agents and .pi/skills.
+    createSubagentExtension({ cwd, agentDir }),
+
+    // Or use this when another directory owns the agents and skills.
+    // The child subagent works in cwd, but project agents are loaded from
+    // /path/to/another/directory/.pi/agents and project skills are loaded from
+    // /path/to/another/directory/.pi/skills and .agents/skills.
+    // createSubagentExtension({
+    //   cwd,
+    //   agentDir,
+    //   configCwd: "/path/to/another/directory",
+    // }),
+  ],
+});
+
+const { session } = await createAgentSession({
+  cwd,
+  agentDir,
+  resourceLoader,
+});
+
+await session.prompt("Use the subagent tool to review this project.");
+```

@@ -1,5 +1,5 @@
 import type { Message } from "@earendil-works/pi-ai";
-import type { DisplayItem } from "./types.js";
+import type { DisplayItem } from "./types.ts";
 
 export function getFinalOutput(messages: Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {

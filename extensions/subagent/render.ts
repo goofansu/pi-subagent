@@ -6,9 +6,9 @@ import type {
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import { formatToolCall, formatUsageStats } from "./formatting.js";
-import { getDisplayItems, getFinalOutput } from "./messages.js";
-import type { DisplayItem, SubagentDetails } from "./types.js";
+import { formatToolCall, formatUsageStats } from "./formatting.ts";
+import { getDisplayItems, getFinalOutput } from "./messages.ts";
+import type { DisplayItem, SubagentDetails } from "./types.ts";
 
 export const COLLAPSED_ITEM_COUNT = 10;
 

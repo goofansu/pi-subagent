@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "description": "Delegate tasks to specialized subagents with isolated context. Supports single, parallel, and chain execution modes.",
   "type": "module",
+  "exports": {
+    ".": "./extensions/subagent/index.ts",
+    "./subagent": "./extensions/subagent/index.ts"
+  },
   "keywords": [
     "pi-package"
   ],

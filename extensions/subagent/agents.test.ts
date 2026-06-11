@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, test } from "node:test";
 import {
+  buildAgentConfigLayers,
   formatAgentGuidelines,
   formatInvalidAgentFilesWarning,
   getDefaultAgentsDir,
@@ -15,8 +16,8 @@ import {
   loadMergedAgentConfigsWithDiagnostics,
   parseAgentConfig,
   validateAgentSkills,
-} from "./agents.js";
-import type { AgentConfig } from "./types.js";
+} from "./agents.ts";
+import type { AgentConfig } from "./types.ts";
 
 const tempDirs: string[] = [];
 
@@ -255,6 +256,41 @@ test("getDefaultAgentsDir decodes percent-encoded paths", () => {
   const dir = getDefaultAgentsDir(url);
   assert.ok(!dir.includes("%20"), "path must not contain URL encoding");
   assert.ok(dir.includes("my project"), "path must decode spaces");
+});
+
+test("buildAgentConfigLayers anchors project and user agents to configured directories", () => {
+  const moduleUrl = new URL("./index.js", import.meta.url).href;
+
+  assert.deepEqual(
+    buildAgentConfigLayers(
+      "/tmp/customer-project",
+      "/tmp/user-agent",
+      moduleUrl,
+    ),
+    [
+      { dir: getDefaultAgentsDir(moduleUrl), source: "default" },
+      { dir: "/tmp/user-agent/agents", source: "user" },
+      { dir: "/tmp/customer-project/.pi/agents", source: "project" },
+    ],
+  );
+});
+
+test("buildAgentConfigLayers can load project agents from config cwd", () => {
+  const moduleUrl = new URL("./index.js", import.meta.url).href;
+
+  assert.deepEqual(
+    buildAgentConfigLayers(
+      "/tmp/customer-project",
+      "/tmp/user-agent",
+      moduleUrl,
+      "/tmp/host-project",
+    ),
+    [
+      { dir: getDefaultAgentsDir(moduleUrl), source: "default" },
+      { dir: "/tmp/user-agent/agents", source: "user" },
+      { dir: "/tmp/host-project/.pi/agents", source: "project" },
+    ],
+  );
 });
 
 test("loadMergedAgentConfigs tolerates a missing override directory", async () => {

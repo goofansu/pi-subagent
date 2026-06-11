@@ -4,12 +4,18 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, test } from "node:test";
+import { getFinalOutput } from "./messages.ts";
 import {
+  applyPiJsonEvent,
   buildPiArgs,
+  buildSkillPaths,
+  getSpawnOptions,
   getSubagentDepth,
+  resolveAgentSkillPaths,
   resolveSkillPaths,
   resolveSubagentModel,
-} from "./runner.js";
+} from "./runner.ts";
+import type { SingleResult } from "./types.ts";
 
 const tempDirs: string[] = [];
 
@@ -28,6 +34,25 @@ afterEach(async () => {
       .map((dir) => fs.promises.rm(dir, { recursive: true, force: true })),
   );
 });
+
+function result(): SingleResult {
+  return {
+    agent: "general-purpose",
+    description: "test",
+    exitCode: -1,
+    messages: [],
+    stderr: "",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      contextTokens: 0,
+      turns: 0,
+    },
+  };
+}
 
 test("buildPiArgs passes configured tools without disabling tools first", () => {
   const args = buildPiArgs(
@@ -328,6 +353,50 @@ test("buildPiArgs omits skill flags when skillPaths is undefined", () => {
   assert.deepEqual(args, ["--mode", "json", "-p", "--no-session"]);
 });
 
+test("buildSkillPaths uses configured project cwd and agentDir", () => {
+  assert.deepEqual(
+    buildSkillPaths("/tmp/customer-project", "/tmp/user-agent"),
+    [
+      "/tmp/customer-project/.pi/skills",
+      "/tmp/customer-project/.agents/skills",
+      "/tmp/user-agent/skills",
+      path.join(os.homedir(), ".agents", "skills"),
+    ],
+  );
+});
+
+test("getSpawnOptions runs child pi in configured project cwd", () => {
+  const options = getSpawnOptions("/tmp/customer-project", 0);
+
+  assert.equal(options.cwd, "/tmp/customer-project");
+  assert.equal(options.env?.PI_SUBAGENT_DEPTH, "1");
+});
+
+test("applyPiJsonEvent collects final messages from agent_end events", () => {
+  const currentResult = result();
+
+  assert.equal(
+    applyPiJsonEvent(
+      {
+        type: "agent_end",
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "final from agent_end" }],
+            stopReason: "stop",
+          },
+        ],
+      },
+      currentResult,
+    ),
+    true,
+  );
+
+  assert.equal(getFinalOutput(currentResult.messages), "final from agent_end");
+  assert.equal(currentResult.stopReason, "stop");
+  assert.equal(currentResult.usage.turns, 1);
+});
+
 test("resolveSkillPaths resolves known skill names to file paths", async () => {
   const dir = await makeTempDir();
   const skillDir = path.join(dir, ".pi", "skills", "my-skill");
@@ -450,5 +519,35 @@ test("resolveSkillPaths: finds skills in .agents/skills within project scope", a
   assert.ok(
     result.resolved[0].path.includes(path.join(".agents", "skills")),
     `expected project .agents/skills to win, got ${result.resolved[0].path}`,
+  );
+});
+
+test("resolveAgentSkillPaths uses config cwd for agent-declared skills", async () => {
+  const workspaceCwd = await makeTempDir();
+  const configCwd = await makeTempDir();
+  const skillDir = path.join(configCwd, ".pi", "skills", "host-skill");
+  await fs.promises.mkdir(skillDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(skillDir, "SKILL.md"),
+    "---\nname: host-skill\ndescription: A host app skill\n---\n\nContent.\n",
+  );
+
+  const skillPaths = resolveAgentSkillPaths(
+    {
+      name: "host-agent",
+      description: "Host agent",
+      systemPrompt: "Use host skills.",
+      skills: ["host-skill"],
+    },
+    configCwd,
+  );
+
+  assert.equal(
+    skillPaths?.[0],
+    path.join(configCwd, ".pi", "skills", "host-skill", "SKILL.md"),
+  );
+  assert.deepEqual(
+    resolveSkillPaths(["host-skill"], workspaceCwd).resolved,
+    [],
   );
 });

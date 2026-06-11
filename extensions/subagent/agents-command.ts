@@ -21,7 +21,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import type { AgentConfig } from "./types.js";
+import type { AgentConfig } from "./types.ts";
 
 type AgentAction = "view" | "work";
 
@@ -138,17 +138,29 @@ export async function runAgentWorkFlow(
 class AgentsListComponent extends Container {
   private readonly searchInput = new Input();
   private readonly listContainer = new Container();
+  private theme: Theme;
+  private items: SelectItem[];
+  private onSelect: (agentName: string) => void | Promise<void>;
+  private onCancel: () => void;
+  private keybindings: KeybindingMatcher;
+  private requestRender: () => void;
   private selectList: SelectList | null = null;
 
   constructor(
-    private theme: Theme,
-    private items: SelectItem[],
-    private onSelect: (agentName: string) => void | Promise<void>,
-    private onCancel: () => void,
-    private keybindings: KeybindingMatcher,
-    private requestRender: () => void,
+    theme: Theme,
+    items: SelectItem[],
+    onSelect: (agentName: string) => void | Promise<void>,
+    onCancel: () => void,
+    keybindings: KeybindingMatcher,
+    requestRender: () => void,
   ) {
     super();
+    this.theme = theme;
+    this.items = items;
+    this.onSelect = onSelect;
+    this.onCancel = onCancel;
+    this.keybindings = keybindings;
+    this.requestRender = requestRender;
 
     this.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
     this.addChild(
@@ -276,18 +288,28 @@ class AgentActionMenuComponent extends Container {
 }
 
 class AgentDetailOverlayComponent {
+  private tui: TUI;
+  private theme: Theme;
+  private keybindings: KeybindingMatcher;
+  private agent: AgentConfig;
+  private onBack: () => void;
   private markdown: Markdown;
   private scrollOffset = 0;
   private viewHeight = 0;
   private totalLines = 0;
 
   constructor(
-    private tui: TUI,
-    private theme: Theme,
-    private keybindings: KeybindingMatcher,
-    private agent: AgentConfig,
-    private onBack: () => void,
+    tui: TUI,
+    theme: Theme,
+    keybindings: KeybindingMatcher,
+    agent: AgentConfig,
+    onBack: () => void,
   ) {
+    this.tui = tui;
+    this.theme = theme;
+    this.keybindings = keybindings;
+    this.agent = agent;
+    this.onBack = onBack;
     this.markdown = new Markdown(
       getAgentDetailMarkdownText(agent),
       1,

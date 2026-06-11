@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type SpawnOptions, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,8 +8,8 @@ import {
   loadSkills,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import { getFinalOutput } from "./messages.js";
-import type { AgentConfig, OnUpdateCallback, SingleResult } from "./types.js";
+import { getFinalOutput } from "./messages.ts";
+import type { AgentConfig, OnUpdateCallback, SingleResult } from "./types.ts";
 
 const DEPTH_ENV_KEY = "PI_SUBAGENT_DEPTH";
 const MAX_SUBAGENT_DEPTH = 1;
@@ -77,8 +77,10 @@ export function resolveSubagentModel(
  * Build the ordered list of skill paths matching pi's discovery priority:
  * project .pi > project .agents > user .pi > user .agents.
  */
-export function buildSkillPaths(cwd: string): string[] {
-  const agentDir = getAgentDir();
+export function buildSkillPaths(
+  cwd: string,
+  agentDir = getAgentDir(),
+): string[] {
   return [
     path.join(cwd, ".pi", "skills"),
     path.join(cwd, ".agents", "skills"),
@@ -90,11 +92,12 @@ export function buildSkillPaths(cwd: string): string[] {
 export function resolveSkillPaths(
   skillNames: string[],
   cwd: string,
+  agentDir = getAgentDir(),
 ): { resolved: Array<{ name: string; path: string }>; missing: string[] } {
-  const skillPaths = buildSkillPaths(cwd);
+  const skillPaths = buildSkillPaths(cwd, agentDir);
   const { skills: discovered } = loadSkills({
     cwd,
-    agentDir: getAgentDir(),
+    agentDir,
     skillPaths,
     includeDefaults: false,
   });
@@ -113,6 +116,108 @@ export function resolveSkillPaths(
   }
 
   return { resolved, missing };
+}
+
+export function resolveAgentSkillPaths(
+  config: AgentConfig,
+  configCwd: string,
+  agentDir = getAgentDir(),
+): string[] | undefined {
+  if (!config.skills) return undefined;
+
+  const result = resolveSkillPaths(config.skills, configCwd, agentDir);
+  if (result.missing.length > 0) {
+    throw new Error(
+      `Agent '${config.name}': unknown skills: ${result.missing.join(", ")}`,
+    );
+  }
+  return result.resolved.map((s) => s.path);
+}
+
+export function getSpawnOptions(
+  cwd: string,
+  currentDepth: number,
+): SpawnOptions {
+  return {
+    shell: false,
+    stdio: ["pipe", "pipe", "pipe"],
+    cwd,
+    env: {
+      ...process.env,
+      [DEPTH_ENV_KEY]: String(currentDepth + 1),
+    },
+  };
+}
+
+function recordAssistantUsage(result: SingleResult, msg: Message): void {
+  const assistant = msg as Message & {
+    usage?: {
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      totalTokens?: number;
+      cost?: { total?: number };
+    };
+    provider?: string;
+    model?: string;
+    stopReason?: string;
+    errorMessage?: string;
+  };
+  result.usage.turns++;
+  const usage = assistant.usage;
+  if (usage) {
+    result.usage.input += usage.input || 0;
+    result.usage.output += usage.output || 0;
+    result.usage.cacheRead += usage.cacheRead || 0;
+    result.usage.cacheWrite += usage.cacheWrite || 0;
+    result.usage.cost += usage.cost?.total || 0;
+    result.usage.contextTokens = usage.totalTokens || 0;
+  }
+  if (assistant.provider && assistant.model) {
+    result.model = `${assistant.provider}/${assistant.model}`;
+  }
+  if (assistant.stopReason) result.stopReason = assistant.stopReason;
+  if (assistant.errorMessage) result.errorMessage = assistant.errorMessage;
+}
+
+function appendMessage(result: SingleResult, msg: Message): void {
+  result.messages.push(msg);
+  if (msg.role === "assistant") recordAssistantUsage(result, msg);
+}
+
+export function applyPiJsonEvent(
+  event: Record<string, unknown>,
+  result: SingleResult,
+): boolean {
+  if (event.type === "message_end" && event.message) {
+    appendMessage(result, event.message as Message);
+    return true;
+  }
+
+  if (event.type === "tool_result_end" && event.message) {
+    result.messages.push(event.message as Message);
+    return true;
+  }
+
+  if (event.type === "agent_end" && Array.isArray(event.messages)) {
+    result.messages = [];
+    result.usage = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      contextTokens: 0,
+      turns: 0,
+    };
+    for (const msg of event.messages as Message[]) {
+      appendMessage(result, msg);
+    }
+    return true;
+  }
+
+  return false;
 }
 
 export async function writePromptToTempFile(
@@ -140,6 +245,9 @@ export async function runSingleAgent(
   signal: AbortSignal | undefined,
   parentModel: ParentModel | undefined,
   onUpdate: OnUpdateCallback | undefined,
+  cwd = process.cwd(),
+  agentDir = getAgentDir(),
+  configCwd = cwd,
 ): Promise<SingleResult> {
   const currentDepth = getSubagentDepth();
   if (currentDepth >= MAX_SUBAGENT_DEPTH) {
@@ -151,18 +259,7 @@ export async function runSingleAgent(
 
   const resolvedModel = resolveSubagentModel(config, parentModel);
 
-  // Resolve skill paths if skills are configured
-  let skillPaths: string[] | undefined;
-  if (config.skills) {
-    const cwd = process.cwd();
-    const result = resolveSkillPaths(config.skills, cwd);
-    if (result.missing.length > 0) {
-      throw new Error(
-        `Agent '${config.name}': unknown skills: ${result.missing.join(", ")}`,
-      );
-    }
-    skillPaths = result.resolved.map((s) => s.path);
-  }
+  const skillPaths = resolveAgentSkillPaths(config, configCwd, agentDir);
 
   let tmpPromptDir: string | null = null;
   let tmpPromptPath: string | null = null;
@@ -220,19 +317,22 @@ export async function runSingleAgent(
 
     const exitCode = await new Promise<number>((resolve) => {
       const invocation = getPiInvocation(args);
-      const proc = spawn(invocation.command, invocation.args, {
-        shell: false,
-        stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          [DEPTH_ENV_KEY]: String(currentDepth + 1),
-        },
-      });
+      const proc = spawn(
+        invocation.command,
+        invocation.args,
+        getSpawnOptions(cwd, currentDepth),
+      );
+      if (!proc.stdin || !proc.stdout || !proc.stderr) {
+        currentResult.stderr += "Failed to open child pi stdio pipes";
+        resolve(1);
+        return;
+      }
 
       // Write the prompt to stdin and close it so pi reads it cleanly.
       proc.stdin.write(prompt, "utf-8");
       proc.stdin.end();
       let buffer = "";
+      let rawStdoutTail = "";
 
       const processLine = (line: string) => {
         if (!line.trim()) return;
@@ -243,36 +343,15 @@ export async function runSingleAgent(
           return;
         }
 
-        if (event.type === "message_end" && event.message) {
-          const msg = event.message as Message;
-          currentResult.messages.push(msg);
-
-          if (msg.role === "assistant") {
-            currentResult.usage.turns++;
-            const usage = msg.usage;
-            if (usage) {
-              currentResult.usage.input += usage.input || 0;
-              currentResult.usage.output += usage.output || 0;
-              currentResult.usage.cacheRead += usage.cacheRead || 0;
-              currentResult.usage.cacheWrite += usage.cacheWrite || 0;
-              currentResult.usage.cost += usage.cost?.total || 0;
-              currentResult.usage.contextTokens = usage.totalTokens || 0;
-            }
-            currentResult.model = `${msg.provider}/${msg.model}`;
-            if (msg.stopReason) currentResult.stopReason = msg.stopReason;
-            if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
-          }
-          emitUpdate();
-        }
-
-        if (event.type === "tool_result_end" && event.message) {
-          currentResult.messages.push(event.message as Message);
+        if (applyPiJsonEvent(event, currentResult)) {
           emitUpdate();
         }
       };
 
       proc.stdout.on("data", (data) => {
-        buffer += data.toString();
+        const chunk = data.toString();
+        rawStdoutTail = (rawStdoutTail + chunk).slice(-2000);
+        buffer += chunk;
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
         for (const line of lines) processLine(line);
@@ -286,6 +365,17 @@ export async function runSingleAgent(
       proc.on("close", (code) => {
         procClosed = true;
         if (buffer.trim()) processLine(buffer);
+        if (
+          (code ?? 0) !== 0 &&
+          !currentResult.stderr &&
+          !currentResult.errorMessage
+        ) {
+          currentResult.errorMessage =
+            `Child pi exited with code ${code ?? "unknown"} without stderr` +
+            (rawStdoutTail.trim()
+              ? `. Last stdout: ${rawStdoutTail.trim()}`
+              : ".");
+        }
         resolve(code ?? 0);
       });
 

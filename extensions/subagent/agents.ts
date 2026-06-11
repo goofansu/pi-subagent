@@ -6,8 +6,8 @@ import {
   loadSkills,
   parseFrontmatter,
 } from "@earendil-works/pi-coding-agent";
-import { buildSkillPaths } from "./runner.js";
-import type { AgentConfig, AgentSource } from "./types.js";
+import { buildSkillPaths } from "./runner.ts";
+import type { AgentConfig, AgentSource } from "./types.ts";
 
 export interface InvalidAgentConfig {
   filePath: string;
@@ -20,12 +20,12 @@ export interface AgentConfigLoadResult {
 }
 
 export class AgentConfigValidationError extends Error {
-  constructor(
-    message: string,
-    readonly filePath: string,
-  ) {
+  readonly filePath: string;
+
+  constructor(message: string, filePath: string) {
     super(message);
     this.name = "AgentConfigValidationError";
+    this.filePath = filePath;
   }
 }
 
@@ -117,6 +117,19 @@ export interface AgentLayer {
   source: AgentSource;
 }
 
+export function buildAgentConfigLayers(
+  projectCwd: string,
+  agentDir: string,
+  moduleUrl: string,
+  configCwd = projectCwd,
+): AgentLayer[] {
+  return [
+    { dir: getDefaultAgentsDir(moduleUrl), source: "default" },
+    { dir: path.join(agentDir, "agents"), source: "user" },
+    { dir: path.join(configCwd, ".pi", "agents"), source: "project" },
+  ];
+}
+
 export function loadLayeredAgentConfigsWithDiagnostics(
   layers: AgentLayer[],
 ): AgentConfigLoadResult {
@@ -171,11 +184,12 @@ export function formatAgentGuidelines(
 export function validateAgentSkills(
   configs: Map<string, AgentConfig>,
   cwd: string,
+  agentDir = getAgentDir(),
 ): string[] {
-  const skillPaths = buildSkillPaths(cwd);
+  const skillPaths = buildSkillPaths(cwd, agentDir);
   const { skills: discovered } = loadSkills({
     cwd,
-    agentDir: getAgentDir(),
+    agentDir,
     skillPaths,
     includeDefaults: false,
   });

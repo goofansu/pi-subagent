@@ -13,8 +13,8 @@ import {
   getFilteredAgentSelectItems,
   registerAgentsCommand,
   runAgentWorkFlow,
-} from "./agents-command.js";
-import type { AgentConfig } from "./types.js";
+} from "./agents-command.ts";
+import type { AgentConfig } from "./types.ts";
 
 type CommandOptions = Parameters<ExtensionAPI["registerCommand"]>[1];
 type RegisteredCommand = { name: string; options: CommandOptions };

@@ -4,8 +4,8 @@ import {
   formatTokens,
   formatToolCall,
   formatUsageStats,
-} from "./formatting.js";
-import type { UsageStats } from "./types.js";
+} from "./formatting.ts";
+import type { UsageStats } from "./types.ts";
 
 const plainFg = (_color: unknown, text: string) => text;
 
