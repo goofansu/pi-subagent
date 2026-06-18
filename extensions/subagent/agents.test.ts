@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterEach, test } from "node:test";
 import {
   buildAgentConfigLayers,
+  buildPackageAgentLayers,
   formatAgentGuidelines,
   formatInvalidAgentFilesWarning,
   getDefaultAgentsDir,
@@ -256,6 +257,51 @@ test("getDefaultAgentsDir decodes percent-encoded paths", () => {
   const dir = getDefaultAgentsDir(url);
   assert.ok(!dir.includes("%20"), "path must not contain URL encoding");
   assert.ok(dir.includes("my project"), "path must decode spaces");
+});
+
+test("buildPackageAgentLayers maps installed package roots to package agent layers", () => {
+  const layers = buildPackageAgentLayers([
+    {
+      source: "git:github.com/example/one",
+      scope: "user",
+      installedPath: "/tmp/pi-packages/one",
+    },
+    {
+      source: "git:github.com/example/missing",
+      scope: "user",
+    },
+    {
+      source: "npm:two",
+      scope: "project",
+      installedPath: "/tmp/pi-packages/two",
+    },
+  ]);
+
+  assert.deepEqual(layers, [
+    { dir: path.join("/tmp/pi-packages/one", "agents"), source: "package" },
+    { dir: path.join("/tmp/pi-packages/two", "agents"), source: "package" },
+  ]);
+});
+
+test("buildAgentConfigLayers inserts package layers between default and user layers", () => {
+  const layers = buildAgentConfigLayers(
+    "/tmp/customer-project",
+    "/tmp/user-agent",
+    "file:///tmp/pi-subagent/extensions/subagent/index.ts",
+    "/tmp/config-project",
+    [
+      { dir: "/tmp/pkg-one/agents", source: "package" },
+      { dir: "/tmp/pkg-two/agents", source: "package" },
+    ],
+  );
+
+  assert.deepEqual(layers, [
+    { dir: "/tmp/pi-subagent/agents", source: "default" },
+    { dir: "/tmp/pkg-one/agents", source: "package" },
+    { dir: "/tmp/pkg-two/agents", source: "package" },
+    { dir: "/tmp/user-agent/agents", source: "user" },
+    { dir: "/tmp/config-project/.pi/agents", source: "project" },
+  ]);
 });
 
 test("buildAgentConfigLayers anchors project and user agents to configured directories", () => {

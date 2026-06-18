@@ -2,9 +2,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  DefaultPackageManager,
   getAgentDir,
   loadSkills,
   parseFrontmatter,
+  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { buildSkillPaths } from "./runner.ts";
 import type { AgentConfig, AgentSource } from "./types.ts";
@@ -117,14 +119,50 @@ export interface AgentLayer {
   source: AgentSource;
 }
 
+export interface PackageAgentPackage {
+  source: string;
+  scope: "user" | "project";
+  installedPath?: string;
+}
+
+export function buildPackageAgentLayers(
+  packages: PackageAgentPackage[],
+): AgentLayer[] {
+  return packages
+    .filter((pkg) => typeof pkg.installedPath === "string")
+    .map((pkg) => ({
+      dir: path.join(pkg.installedPath as string, "agents"),
+      source: "package" as const,
+    }));
+}
+
+export function getInstalledPackageAgentLayers(
+  cwd: string,
+  agentDir = getAgentDir(),
+): AgentLayer[] {
+  const settingsManager = SettingsManager.create(cwd, agentDir);
+  const packageManager = new DefaultPackageManager({
+    cwd,
+    agentDir,
+    settingsManager,
+  });
+
+  return buildPackageAgentLayers(packageManager.listConfiguredPackages());
+}
+
 export function buildAgentConfigLayers(
   projectCwd: string,
   agentDir: string,
   moduleUrl: string,
   configCwd = projectCwd,
+  packageLayers: AgentLayer[] = getInstalledPackageAgentLayers(
+    configCwd,
+    agentDir,
+  ),
 ): AgentLayer[] {
   return [
     { dir: getDefaultAgentsDir(moduleUrl), source: "default" },
+    ...packageLayers,
     { dir: path.join(agentDir, "agents"), source: "user" },
     { dir: path.join(configCwd, ".pi", "agents"), source: "project" },
   ];
