@@ -272,27 +272,40 @@ test("getDefaultAgentsDir decodes percent-encoded paths", () => {
   assert.ok(dir.includes("my project"), "path must decode spaces");
 });
 
-test("buildPackageAgentLayers maps installed package roots to package agent layers", () => {
+test("buildPackageAgentLayers maps installed package roots with agents directories to package agent layers", async () => {
+  const dir = await makeTempDir();
+  const packageOne = path.join(dir, "one");
+  const packageTwo = path.join(dir, "two");
+  const packageWithoutAgents = path.join(dir, "without-agents");
+  await fs.promises.mkdir(path.join(packageOne, "agents"), { recursive: true });
+  await fs.promises.mkdir(path.join(packageTwo, "agents"), { recursive: true });
+  await fs.promises.mkdir(packageWithoutAgents, { recursive: true });
+
   const layers = buildPackageAgentLayers([
     {
       source: "git:github.com/example/one",
       scope: "user",
-      installedPath: "/tmp/pi-packages/one",
+      installedPath: packageOne,
     },
     {
       source: "git:github.com/example/missing",
       scope: "user",
     },
     {
+      source: "npm:without-agents",
+      scope: "user",
+      installedPath: packageWithoutAgents,
+    },
+    {
       source: "npm:two",
       scope: "project",
-      installedPath: "/tmp/pi-packages/two",
+      installedPath: packageTwo,
     },
   ]);
 
   assert.deepEqual(layers, [
-    { dir: path.join("/tmp/pi-packages/one", "agents"), source: "package" },
-    { dir: path.join("/tmp/pi-packages/two", "agents"), source: "package" },
+    { dir: path.join(packageOne, "agents"), source: "package" },
+    { dir: path.join(packageTwo, "agents"), source: "package" },
   ]);
 });
 
@@ -312,6 +325,29 @@ test("buildAgentConfigLayers inserts package layers between default and user lay
     { dir: "/tmp/pi-subagent/agents", source: "default" },
     { dir: "/tmp/pkg-one/agents", source: "package" },
     { dir: "/tmp/pkg-two/agents", source: "package" },
+    { dir: "/tmp/user-agent/agents", source: "user" },
+    { dir: "/tmp/config-project/.pi/agents", source: "project" },
+  ]);
+});
+
+test("buildAgentConfigLayers excludes package layer matching the default agents directory", () => {
+  const moduleUrl = "file:///tmp/pi-subagent/extensions/subagent/index.ts";
+  const defaultDir = getDefaultAgentsDir(moduleUrl);
+
+  const layers = buildAgentConfigLayers(
+    "/tmp/customer-project",
+    "/tmp/user-agent",
+    moduleUrl,
+    "/tmp/config-project",
+    [
+      { dir: "/tmp/pkg-one/agents", source: "package" },
+      { dir: defaultDir, source: "package" },
+    ],
+  );
+
+  assert.deepEqual(layers, [
+    { dir: defaultDir, source: "default" },
+    { dir: "/tmp/pkg-one/agents", source: "package" },
     { dir: "/tmp/user-agent/agents", source: "user" },
     { dir: "/tmp/config-project/.pi/agents", source: "project" },
   ]);

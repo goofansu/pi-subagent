@@ -125,15 +125,23 @@ export interface PackageAgentPackage {
   installedPath?: string;
 }
 
+function resolveExistingPath(filePath: string): string {
+  return fs.existsSync(filePath)
+    ? fs.realpathSync.native(filePath)
+    : path.resolve(filePath);
+}
+
 export function buildPackageAgentLayers(
   packages: PackageAgentPackage[],
 ): AgentLayer[] {
-  return packages
-    .filter((pkg) => typeof pkg.installedPath === "string")
-    .map((pkg) => ({
-      dir: path.join(pkg.installedPath as string, "agents"),
-      source: "package" as const,
-    }));
+  return packages.flatMap((pkg) => {
+    if (typeof pkg.installedPath !== "string") return [];
+
+    const agentsDir = path.join(pkg.installedPath, "agents");
+    if (!fs.existsSync(agentsDir)) return [];
+
+    return [{ dir: agentsDir, source: "package" as const }];
+  });
 }
 
 export function getInstalledPackageAgentLayers(
@@ -160,9 +168,15 @@ export function buildAgentConfigLayers(
     agentDir,
   ),
 ): AgentLayer[] {
+  const defaultAgentsDir = getDefaultAgentsDir(moduleUrl);
+  const resolvedDefaultAgentsDir = resolveExistingPath(defaultAgentsDir);
+  const deduplicatedPackageLayers = packageLayers.filter(
+    (layer) => resolveExistingPath(layer.dir) !== resolvedDefaultAgentsDir,
+  );
+
   return [
-    { dir: getDefaultAgentsDir(moduleUrl), source: "default" },
-    ...packageLayers,
+    { dir: defaultAgentsDir, source: "default" },
+    ...deduplicatedPackageLayers,
     { dir: path.join(agentDir, "agents"), source: "user" },
     { dir: path.join(configCwd, ".pi", "agents"), source: "project" },
   ];
