@@ -30,6 +30,19 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+async function writeAgent(
+  dir: string,
+  name: string,
+  description: string,
+  prompt: string,
+): Promise<void> {
+  await fs.promises.mkdir(dir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(dir, `${name}.md`),
+    `---\ndescription: ${description}\n---\n\n${prompt}\n`,
+  );
+}
+
 afterEach(async () => {
   await Promise.all(
     tempDirs
@@ -372,6 +385,96 @@ test("loadMergedAgentConfigsWithDiagnostics combines invalid bundled and overrid
   assert.deepEqual(
     result.invalidFiles.map((invalid) => path.basename(invalid.filePath)),
     ["bad-base.md", "bad-user.md"],
+  );
+});
+
+test("loadLayeredAgentConfigsWithDiagnostics loads package agents between default and user agents", async () => {
+  const dir = await makeTempDir();
+  const defaultDir = path.join(dir, "default", "agents");
+  const packageDir = path.join(dir, "pkg", "agents");
+  const userDir = path.join(dir, "user", "agents");
+  const projectDir = path.join(dir, "project", ".pi", "agents");
+
+  await writeAgent(defaultDir, "shared", "default shared", "Default prompt");
+  await writeAgent(packageDir, "shared", "package shared", "Package prompt");
+  await writeAgent(
+    packageDir,
+    "package-only",
+    "package only",
+    "Package-only prompt",
+  );
+  await writeAgent(userDir, "shared", "user shared", "User prompt");
+  await writeAgent(
+    projectDir,
+    "project-only",
+    "project only",
+    "Project prompt",
+  );
+
+  const result = loadLayeredAgentConfigsWithDiagnostics([
+    { dir: defaultDir, source: "default" },
+    { dir: packageDir, source: "package" },
+    { dir: userDir, source: "user" },
+    { dir: projectDir, source: "project" },
+  ]);
+
+  assert.equal(result.invalidFiles.length, 0);
+  assert.equal(result.configs.get("shared")?.source, "user");
+  assert.equal(result.configs.get("shared")?.description, "user shared");
+  assert.equal(result.configs.get("package-only")?.source, "package");
+  assert.equal(
+    result.configs.get("package-only")?.systemPrompt,
+    "Package-only prompt",
+  );
+  assert.equal(result.configs.get("project-only")?.source, "project");
+});
+
+test("later package agent layers override earlier package agent layers", async () => {
+  const dir = await makeTempDir();
+  const packageOneDir = path.join(dir, "pkg-one", "agents");
+  const packageTwoDir = path.join(dir, "pkg-two", "agents");
+
+  await writeAgent(packageOneDir, "duplicate", "first package", "First prompt");
+  await writeAgent(
+    packageTwoDir,
+    "duplicate",
+    "second package",
+    "Second prompt",
+  );
+
+  const result = loadLayeredAgentConfigsWithDiagnostics([
+    { dir: packageOneDir, source: "package" },
+    { dir: packageTwoDir, source: "package" },
+  ]);
+
+  assert.equal(result.invalidFiles.length, 0);
+  assert.equal(result.configs.get("duplicate")?.source, "package");
+  assert.equal(result.configs.get("duplicate")?.description, "second package");
+  assert.equal(result.configs.get("duplicate")?.systemPrompt, "Second prompt");
+});
+
+test("invalid package agent files are reported through diagnostics", async () => {
+  const dir = await makeTempDir();
+  const packageDir = path.join(dir, "pkg", "agents");
+  await fs.promises.mkdir(packageDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(packageDir, "broken.md"),
+    "---\nmodel: inherit\n---\n\nMissing a description.\n",
+  );
+
+  const result = loadLayeredAgentConfigsWithDiagnostics([
+    { dir: packageDir, source: "package" },
+  ]);
+
+  assert.equal(result.configs.size, 0);
+  assert.equal(result.invalidFiles.length, 1);
+  assert.equal(
+    result.invalidFiles[0]?.reason,
+    "missing required description frontmatter",
+  );
+  assert.equal(
+    result.invalidFiles[0]?.filePath,
+    path.join(packageDir, "broken.md"),
   );
 });
 
