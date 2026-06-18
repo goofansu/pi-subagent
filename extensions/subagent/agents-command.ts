@@ -35,7 +35,9 @@ function formatAgentListDescription(agent: AgentConfig): string {
       ? "[p]"
       : agent.source === "user"
         ? "[u]"
-        : "[d]";
+        : agent.source === "package"
+          ? "[t]"
+          : "[d]";
   return `${prefix} ${agent.description}`;
 }
 

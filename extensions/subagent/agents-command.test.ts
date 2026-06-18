@@ -43,6 +43,13 @@ const projectAgent: AgentConfig = {
   source: "project",
 };
 
+const packageAgent: AgentConfig = {
+  name: "packaged",
+  description: "Installed package agent.",
+  systemPrompt: "Run from installed package.",
+  source: "package",
+};
+
 test("getAgentSelectItems lists names and descriptions only", () => {
   const items = getAgentSelectItems(
     new Map([[exploreAgent.name, exploreAgent]]),
@@ -79,6 +86,20 @@ test("getAgentSelectItems prefixes project agents", () => {
       value: "deployer",
       label: "deployer",
       description: "[p] Deploy the project.",
+    },
+  ]);
+});
+
+test("getAgentSelectItems labels package agents with [t]", () => {
+  const items = getAgentSelectItems(
+    new Map([[packageAgent.name, packageAgent]]),
+  );
+
+  assert.deepEqual(items, [
+    {
+      value: "packaged",
+      label: "packaged",
+      description: "[t] Installed package agent.",
     },
   ]);
 });
