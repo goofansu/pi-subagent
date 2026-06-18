@@ -54,7 +54,7 @@ This package ships with default agents in the `agents/` directory. It also loads
 | 3 | package | installed package `agents/` directories, for example `~/.pi/agent/git/github.com/goofansu/pi-stuff/agents/` |
 | 4 | bundled | `agents/` |
 
-For example, `~/.pi/agent/agents/security-reviewer.md` creates a user-scoped agent named `security-reviewer`. If you create `.pi/agents/general-purpose.md` in a project, it overrides both the user and bundled `general-purpose` agent for that project.
+For example, `~/.pi/agent/agents/security-reviewer.md` creates a user-scoped agent named `security-reviewer`. If you create `.pi/agents/general-purpose.md` in a project, it overrides the user, package, and bundled `general-purpose` agents for that project.
 
 ### Skills
 
