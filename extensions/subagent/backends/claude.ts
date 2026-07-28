@@ -29,7 +29,6 @@ import type {
 import type { SubagentBackend, SubagentRunContext } from "../backend.ts";
 import { appendStderr, DEPTH_ENV_KEY, settleAborted } from "../backend.ts";
 import type { AgentConfig, ReasoningEffort, SingleResult } from "../types.ts";
-import { REASONING_EFFORTS } from "../types.ts";
 
 const SDK_PACKAGE = "@anthropic-ai/claude-agent-sdk";
 
@@ -240,62 +239,24 @@ function isOnPath(command: string): boolean {
 // ── Profile → SDK options ─────────────────────────────────────────────────────
 
 /**
- * Split a `provider/id:level` model string into the parts Claude Code needs.
- * A leading pi provider segment is dropped, and a trailing `:level` is a
- * pi-style thinking suffix rather than part of the id.
+ * The model to pin, or `undefined` to let Claude Code choose. Passed exactly as
+ * written: a bare id, a Bedrock id, or an inference-profile ARN are all things
+ * Claude Code accepts, and nothing here is in a position to tell them apart.
  *
- * Only a *recognizable* provider segment goes. Pi provider names are bare words
- * — `anthropic`, `openai-codex`, `bedrock` — so a segment carrying a colon is
- * not one: Claude Code accepts an opaque Bedrock application-inference-profile
- * ARN (`arn:aws:bedrock:…:application-inference-profile/name`) as a whole model
- * id, and stripping it to `name` would silently pin a different model.
- */
-export function parseClaudeModel(model: string): {
-  id: string;
-  thinkingLevel?: string;
-} {
-  const slash = model.indexOf("/");
-  const withoutProvider =
-    slash > 0 && !model.slice(0, slash).includes(":")
-      ? model.slice(slash + 1)
-      : model;
-  const colon = withoutProvider.lastIndexOf(":");
-  if (colon === -1) return { id: withoutProvider };
-
-  // Only a known reasoning effort is a thinking suffix. Model ids legitimately
-  // contain colons — a Bedrock id ends in a version like `…-v1:0` — and eating
-  // one would pin a nonexistent model and pass junk as the effort.
-  const suffix = withoutProvider.slice(colon + 1);
-  if (!(REASONING_EFFORTS as readonly string[]).includes(suffix)) {
-    return { id: withoutProvider };
-  }
-  return {
-    id: withoutProvider.slice(0, colon),
-    thinkingLevel: suffix,
-  };
-}
-
-/**
- * The model to pin, or `undefined` to let Claude Code choose. `inherit` does
- * not forward the caller's pi model: the caller may be on a different provider
- * entirely, and Claude Code's own default is the only safe neutral choice.
+ * `inherit` does not forward the caller's pi model: the caller may be on a
+ * different provider entirely, so Claude Code's own default is the only safe
+ * neutral choice.
  */
 export function resolveClaudeModel(config: AgentConfig): string | undefined {
   if (!config.model || config.model === "inherit") return undefined;
-  return parseClaudeModel(config.model).id || undefined;
+  return config.model;
 }
 
-/**
- * Reasoning depth, read from the `:<effort>` the model string carries. `inherit`
- * and an omitted model take Claude Code's own configured effort instead, the same
- * way they take its model.
- */
+/** Reasoning depth. Its own field, so there is nothing to derive. */
 export function resolveClaudeEffort(
   config: AgentConfig,
 ): ReasoningEffort | undefined {
-  if (!config.model || config.model === "inherit") return undefined;
-  const level = parseClaudeModel(config.model).thinkingLevel;
-  return level as ReasoningEffort | undefined;
+  return config.effort;
 }
 
 /** Map the backend-neutral effort onto the SDK's thinking/effort options. */

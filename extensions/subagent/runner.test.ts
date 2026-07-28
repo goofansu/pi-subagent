@@ -130,7 +130,7 @@ test("buildPiArgs does not include the prompt in argv", () => {
   );
 });
 
-test("resolveSubagentModel appends parent thinking level for omitted model", () => {
+test("resolveSubagentModel inherits the parent model for an omitted model", () => {
   assert.equal(
     resolveSubagentModel(
       {
@@ -140,11 +140,12 @@ test("resolveSubagentModel appends parent thinking level for omitted model", () 
       },
       { provider: "openai-codex", id: "gpt-5.5", thinkingLevel: "high" },
     ),
-    "openai-codex/gpt-5.5:high",
+    // The level travels on --thinking now, not spliced into the id.
+    "openai-codex/gpt-5.5",
   );
 });
 
-test("resolveSubagentModel appends parent thinking level for inherit model", () => {
+test("resolveSubagentModel inherits the parent model for an inherit model", () => {
   assert.equal(
     resolveSubagentModel(
       {
@@ -155,7 +156,7 @@ test("resolveSubagentModel appends parent thinking level for inherit model", () 
       },
       { provider: "anthropic", id: "claude-sonnet-4-5", thinkingLevel: "low" },
     ),
-    "anthropic/claude-sonnet-4-5:low",
+    "anthropic/claude-sonnet-4-5",
   );
 });
 

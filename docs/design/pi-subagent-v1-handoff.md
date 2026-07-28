@@ -16,9 +16,10 @@ its decisions have since changed, and the README is the current source of truth:
 - Concurrent runs are capped at four. There is deliberately no wall-clock
   deadline: the tool blocks the calling turn, so a run going nowhere is visible
   and cancellable. See "Limits" in the README.
-- `reasoningEffort` is gone as a field. Effort is a suffix on `model`
-  (`claude-opus-4-5:high`), and `inherit` takes model and effort together. See
-  "Reasoning effort" in the README.
+- `reasoningEffort` is now `effort`, and `model` is handed to the harness exactly
+  as written — no provider stripping, no suffix parsing. pi takes the level via
+  `--thinking`, so nothing is spliced into a model id. See "Reasoning effort" in
+  the README.
 - Settings isolation is no longer unconditional. What a claude subagent loads
   from disk follows pi's trust decision for the directory: a trusted one loads
   normally, an untrusted one gets user scope and no MCP. See "Isolation" in the
@@ -51,7 +52,7 @@ and — on pi — tools and skills:
 description: Implements approved plans and verifies changes
 harness: claude
 model: claude-opus-4-5
-reasoningEffort: high
+effort: high
 ---
 You are an implementation agent.
 Follow the approved plan and verify your work.
@@ -84,7 +85,7 @@ subagent({
 });
 ```
 
-`harness`, `model`, `reasoningEffort`, `tools`, and `skills` are
+`harness`, `model`, `effort`, `tools`, and `skills` are
 deliberately *not* invocation parameters.
 
 ---
@@ -157,7 +158,7 @@ A missing SDK is reported at session start naming the affected agents.
 | Agent setting | Claude Code |
 | --- | --- |
 | `model` | `options.model` (provider prefix and `:level` suffix stripped) |
-| effort suffix on `model` | `options.effort`, or `options.thinking` for `off`/`minimal` |
+| `effort` | `options.effort`, or `options.thinking` for `off`/`minimal` |
 | `systemPrompt` | `options.systemPrompt` (string, or `claude_code` preset + append) |
 | — | `permissionMode: bypassPermissions` + `allowDangerouslySkipPermissions`, always |
 | `tools` | not mapped — a pi-only field; a claude subagent runs Claude Code's own tool set |
@@ -179,7 +180,7 @@ its own skills. `tools`
 and `skills` are therefore pi-only fields, and setting either on a claude profile
 is rejected rather than silently ignored — reading as a restriction, or as a
 pinned skill set, while being neither is the misreading most likely to matter.
-Only `model` and `reasoningEffort` shape a claude agent; everything else about
+Only `model` and `effort` shape a claude agent; everything else about
 how it works is Claude Code's.
 
 A delegated subagent's tokens are still billed to the run if one ever appears,

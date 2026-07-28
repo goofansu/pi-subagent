@@ -11,7 +11,12 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { createEmptyResult } from "../backend.ts";
 import type { AgentConfig } from "../types.ts";
-import { piBackend, resolveSubagentModel, splitThinkingSuffix } from "./pi.ts";
+import {
+  buildPiArgs,
+  piBackend,
+  resolveSubagentModel,
+  resolveSubagentThinking,
+} from "./pi.ts";
 
 function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
@@ -22,48 +27,6 @@ function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
   };
 }
 
-test("splitThinkingSuffix separates a trailing thinking level", () => {
-  assert.deepEqual(splitThinkingSuffix("openai-codex/gpt-5.5:high"), [
-    "openai-codex/gpt-5.5",
-    "high",
-  ]);
-});
-
-test("splitThinkingSuffix leaves a model with no level alone", () => {
-  assert.deepEqual(splitThinkingSuffix("anthropic/claude-opus-4-5"), [
-    "anthropic/claude-opus-4-5",
-    undefined,
-  ]);
-});
-
-test("splitThinkingSuffix ignores a colon that sits before the provider slash", () => {
-  assert.deepEqual(splitThinkingSuffix("http://host/model"), [
-    "http://host/model",
-    undefined,
-  ]);
-});
-
-test("splitThinkingSuffix keeps a colon that belongs to the model id", () => {
-  // Real ids from `pi --list-models`: OpenRouter marks variants with a colon
-  // suffix, and neither `free` nor `thinking` is an effort.
-  assert.deepEqual(
-    splitThinkingSuffix("openrouter/google/gemma-4-31b-it:free"),
-    ["openrouter/google/gemma-4-31b-it:free", undefined],
-  );
-  assert.deepEqual(
-    splitThinkingSuffix("openrouter/qwen/qwen-plus-2025-07-28:thinking"),
-    ["openrouter/qwen/qwen-plus-2025-07-28:thinking", undefined],
-  );
-});
-
-test("splitThinkingSuffix takes an effort stacked on a variant suffix", () => {
-  // Both colons are meaningful, and only the last one is the effort.
-  assert.deepEqual(
-    splitThinkingSuffix("openrouter/google/gemma-4-31b-it:free:high"),
-    ["openrouter/google/gemma-4-31b-it:free", "high"],
-  );
-});
-
 test("resolveSubagentModel passes a variant-suffixed id through untouched", () => {
   assert.equal(
     resolveSubagentModel(
@@ -71,40 +34,6 @@ test("resolveSubagentModel passes a variant-suffixed id through untouched", () =
       undefined,
     ),
     "openrouter/google/gemma-4-31b-it:free",
-  );
-});
-
-test("resolveSubagentModel carries the effort the model string names", () => {
-  assert.equal(
-    resolveSubagentModel(
-      agent({ model: "openai-codex/gpt-5.5:high" }),
-      undefined,
-    ),
-    "openai-codex/gpt-5.5:high",
-  );
-});
-
-test("resolveSubagentModel inherits the caller's level along with its model", () => {
-  // `inherit` takes both. There is no way to keep one and replace the other,
-  // which is the point: two knobs meant two spellings of the same thing.
-  assert.equal(
-    resolveSubagentModel(agent({ model: "inherit" }), {
-      provider: "anthropic",
-      id: "claude-opus-4-5",
-      thinkingLevel: "low",
-    }),
-    "anthropic/claude-opus-4-5:low",
-  );
-});
-
-test("resolveSubagentModel keeps inheriting the parent thinking level without reasoningEffort", () => {
-  assert.equal(
-    resolveSubagentModel(agent(), {
-      provider: "anthropic",
-      id: "claude-opus-4-5",
-      thinkingLevel: "low",
-    }),
-    "anthropic/claude-opus-4-5:low",
   );
 });
 
@@ -162,4 +91,74 @@ test("pi backend settles a cancelled run instead of rejecting", async () => {
   } finally {
     shadow.restore();
   }
+});
+
+test("resolveSubagentModel hands pi the model exactly as written", () => {
+  for (const model of [
+    "openai-codex/gpt-5.5",
+    "openrouter/google/gemma-4-31b-it:free",
+    "sonnet",
+  ]) {
+    assert.equal(
+      resolveSubagentModel(agent({ model }), undefined),
+      model,
+      model,
+    );
+  }
+});
+
+test("resolveSubagentModel inherits the caller's model without its level", () => {
+  // The level travels separately now, so nothing is spliced into the id.
+  assert.equal(
+    resolveSubagentModel(agent({ model: "inherit" }), {
+      provider: "anthropic",
+      id: "claude-opus-4-5",
+      thinkingLevel: "low",
+    }),
+    "anthropic/claude-opus-4-5",
+  );
+});
+
+test("resolveSubagentThinking prefers the profile's effort", () => {
+  assert.equal(
+    resolveSubagentThinking(agent({ model: "sonnet", effort: "high" }), {
+      provider: "anthropic",
+      id: "claude-opus-4-5",
+      thinkingLevel: "low",
+    }),
+    "high",
+  );
+});
+
+test("resolveSubagentThinking inherits the caller's level only with the model", () => {
+  const parent = {
+    provider: "anthropic",
+    id: "claude-opus-4-5",
+    thinkingLevel: "low",
+  };
+  assert.equal(resolveSubagentThinking(agent(), parent), "low");
+  assert.equal(
+    resolveSubagentThinking(agent({ model: "inherit" }), parent),
+    "low",
+  );
+  // A pinned model with no effort means pi's default, not the caller's level.
+  assert.equal(
+    resolveSubagentThinking(agent({ model: "sonnet" }), parent),
+    undefined,
+  );
+});
+
+test("buildPiArgs passes the thinking level as its own flag", () => {
+  const args = buildPiArgs(agent(), "sonnet", undefined, undefined, "high");
+
+  assert.ok(args.includes("--thinking"));
+  assert.equal(args[args.indexOf("--thinking") + 1], "high");
+  // And never spliced into the model, which is what made a colon ambiguous.
+  assert.equal(args[args.indexOf("--model") + 1], "sonnet");
+});
+
+test("buildPiArgs omits the thinking flag when no level applies", () => {
+  const args = buildPiArgs(agent(), "sonnet", undefined, undefined, undefined);
+
+  assert.equal(args.includes("--thinking"), false);
 });

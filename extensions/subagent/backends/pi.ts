@@ -40,14 +40,34 @@ export function getPiInvocation(args: string[]): {
   return { command: "pi", args };
 }
 
+/**
+ * The thinking level to pass, or `undefined` to leave pi's default alone.
+ *
+ * A profile's `effort` wins. Failing that, only an inherited model brings the
+ * caller's level with it: a pinned model with no `effort` means "this model at
+ * whatever pi would normally use", not "this model at the caller's level".
+ */
+export function resolveSubagentThinking(
+  config: AgentConfig,
+  parentModel: ParentModel | undefined,
+): string | undefined {
+  if (config.effort) return config.effort;
+  if (config.model && config.model !== "inherit") return undefined;
+  return parentModel?.thinkingLevel;
+}
+
 export function buildPiArgs(
   config: AgentConfig,
   resolvedModel: string | undefined,
   systemPromptPath: string | undefined,
   skillPaths?: string[],
+  thinkingLevel?: string,
 ): string[] {
   const args: string[] = ["--mode", "json", "-p", "--no-session"];
   if (resolvedModel) args.push("--model", resolvedModel);
+  // pi takes the thinking level as its own flag, so nothing has to be spliced
+  // into the model string — which is what made a colon ambiguous before.
+  if (thinkingLevel) args.push("--thinking", thinkingLevel);
   if (config.tools) {
     args.push("--tools", config.tools);
   }
@@ -77,38 +97,10 @@ export function resolveSubagentModel(
   config: AgentConfig,
   parentModel: ParentModel | undefined,
 ): string | undefined {
-  // A pinned model carries its own `:level` when it wants one, so it passes
-  // through untouched.
+  // Verbatim. Whatever `pi --model` accepts is between the author and pi.
   if (config.model && config.model !== "inherit") return config.model;
   if (!parentModel) return undefined;
-
-  // `inherit` takes the caller's model and its thinking level together.
-  const model = `${parentModel.provider}/${parentModel.id}`;
-  return parentModel.thinkingLevel
-    ? `${model}:${parentModel.thinkingLevel}`
-    : model;
-}
-
-/**
- * Split a `provider/id:level` model string into its base and thinking level.
- * Only a trailing colon followed by a recognized thinking level counts: bare
- * provider-qualified ids and colons that belong to the id itself are left alone.
- * Those are not hypothetical — `pi --list-models` carries OpenRouter variant
- * suffixes like `google/gemma-4-31b-it:free` and
- * `qwen/qwen-plus-2025-07-28:thinking`, and eating one asks pi for a model that
- * does not exist.
- */
-export function splitThinkingSuffix(
-  model: string,
-): [base: string, level: string | undefined] {
-  const slash = model.lastIndexOf("/");
-  const colon = model.lastIndexOf(":");
-  if (colon <= slash) return [model, undefined];
-  const level = model.slice(colon + 1);
-  if (!(PI_THINKING_LEVELS as readonly string[]).includes(level)) {
-    return [model, undefined];
-  }
-  return [model.slice(0, colon), level];
+  return `${parentModel.provider}/${parentModel.id}`;
 }
 
 export function getSpawnOptions(
@@ -238,6 +230,7 @@ async function runPiAgent(ctx: SubagentRunContext): Promise<SingleResult> {
       resolvedModel,
       tmpPromptPath ?? undefined,
       task.skillPaths,
+      resolveSubagentThinking(config, task.parentModel),
     );
 
     // Emit initial "running" state

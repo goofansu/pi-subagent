@@ -26,7 +26,6 @@ import {
   createClaudeTranslationState,
   findClaudeBinary,
   hasClaudeBinary,
-  parseClaudeModel,
   resolveClaudeCommand,
   resolveClaudeEffort,
   resolveClaudeModel,
@@ -262,50 +261,9 @@ function fakeQuery(
 
 // ── Model and effort resolution ───────────────────────────────────────────────
 
-test("parseClaudeModel keeps a bare model id intact", () => {
-  assert.deepEqual(parseClaudeModel("claude-opus-4-5"), {
-    id: "claude-opus-4-5",
-  });
-});
-
-test("parseClaudeModel drops a provider prefix and splits a thinking suffix", () => {
-  assert.deepEqual(parseClaudeModel("anthropic/claude-opus-4-5:high"), {
-    id: "claude-opus-4-5",
-    thinkingLevel: "high",
-  });
-});
-
 test("resolveClaudeModel returns undefined for omitted and inherited models", () => {
   assert.equal(resolveClaudeModel(agent()), undefined);
   assert.equal(resolveClaudeModel(agent({ model: "inherit" })), undefined);
-});
-
-test("resolveClaudeModel strips the pi thinking suffix from the model id", () => {
-  assert.equal(
-    resolveClaudeModel(agent({ model: "claude-opus-4-5:xhigh" })),
-    "claude-opus-4-5",
-  );
-});
-
-test("resolveClaudeEffort reads the effort the model string names", () => {
-  assert.equal(
-    resolveClaudeEffort(agent({ model: "claude-opus-4-5:low" })),
-    "low",
-  );
-});
-
-test("resolveClaudeEffort falls back to the model thinking suffix", () => {
-  assert.equal(
-    resolveClaudeEffort(agent({ model: "claude-opus-4-5:xhigh" })),
-    "xhigh",
-  );
-});
-
-test("resolveClaudeEffort is undefined when neither is configured", () => {
-  assert.equal(
-    resolveClaudeEffort(agent({ model: "claude-opus-4-5" })),
-    undefined,
-  );
 });
 
 test("buildThinkingOptions leaves the CLI default alone when effort is unset", () => {
@@ -1418,40 +1376,20 @@ test("claude backend turns a synchronous query failure into a result", async () 
 
 // ── Regressions found in review ───────────────────────────────────────────────
 
-test("parseClaudeModel keeps a slash that is part of the model id", () => {
-  // Claude Code accepts an opaque Bedrock inference-profile ARN as a whole
-  // model id; treating its slash as a pi provider separator would pin a
-  // different model.
-  const arn =
-    "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-profile";
-  assert.deepEqual(parseClaudeModel(arn), { id: arn });
-});
-
-test("parseClaudeModel still drops a bare pi provider prefix", () => {
-  assert.deepEqual(
-    parseClaudeModel("bedrock/us.anthropic.claude-opus-4-5-v1"),
-    {
-      id: "us.anthropic.claude-opus-4-5-v1",
-    },
-  );
-});
-
-test("parseClaudeModel keeps a colon that is part of the model id", () => {
-  // Bedrock ids end in a version like `:0`; eating it would pin a nonexistent
-  // model and pass "0" as the reasoning effort.
-  assert.deepEqual(
-    parseClaudeModel("us.anthropic.claude-opus-4-5-20251101-v1:0"),
-    { id: "us.anthropic.claude-opus-4-5-20251101-v1:0" },
-  );
-  assert.equal(
-    resolveClaudeModel(agent({ model: "claude-opus-4-5:banana" })),
-    "claude-opus-4-5:banana",
-  );
-  assert.equal(
-    resolveClaudeEffort(agent({ model: "claude-opus-4-5:banana" })),
-    undefined,
-    "an unrecognized suffix is part of the id, not an effort",
-  );
+test("resolveClaudeModel hands every accepted shape to the SDK unchanged", () => {
+  // Claude Code takes bare ids, Bedrock ids with a `:<version>`, and opaque
+  // inference-profile ARNs. Nothing here can tell them apart, and it no longer
+  // tries: a provider prefix that does not belong reaches the SDK and is refused
+  // there, rather than being silently rewritten into a different model.
+  for (const model of [
+    "claude-opus-4-5",
+    "us.anthropic.claude-opus-4-5-20251101-v1:0",
+    "bedrock/us.anthropic.claude-opus-4-5-v1",
+    "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-profile",
+    "opencode/claude-opus-5",
+  ]) {
+    assert.equal(resolveClaudeModel(agent({ model })), model, model);
+  }
 });
 
 test("applyClaudeMessage counts one API response once, however many frames it spans", () => {
@@ -2612,4 +2550,32 @@ test("a cancelled run reports the cancellation, not an error it recovered from",
 
   assert.equal(settled.stopReason, "aborted");
   assert.equal(settled.errorMessage, "Subagent was aborted");
+});
+
+test("resolveClaudeEffort reads the profile's own field", () => {
+  assert.equal(resolveClaudeEffort(agent({ effort: "high" })), "high");
+  assert.equal(resolveClaudeEffort(agent({ model: "sonnet" })), undefined);
+});
+
+test("buildClaudeOptions carries effort and model independently", () => {
+  const options = buildClaudeOptions({
+    config: agent({ model: "claude-opus-4-5", effort: "low" }),
+    cwd: "/tmp/project",
+    depth: 0,
+  });
+
+  // Two separate options, so neither has to be recovered from the other.
+  assert.equal(options.model, "claude-opus-4-5");
+  assert.equal(options.effort, "low");
+});
+
+test("buildClaudeOptions maps 'off' onto disabled thinking, not an effort", () => {
+  const options = buildClaudeOptions({
+    config: agent({ model: "claude-opus-4-5", effort: "off" }),
+    cwd: "/tmp/project",
+    depth: 0,
+  });
+
+  assert.equal(options.effort, undefined);
+  assert.deepEqual(options.thinking, { type: "disabled" });
 });

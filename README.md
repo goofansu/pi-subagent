@@ -31,7 +31,8 @@ Agents are Markdown files in an `agents/` directory. The agent name is the filen
 ---
 description: Describes when to use this agent.
 harness: pi
-model: openai-codex/gpt-5.5:high
+model: openai-codex/gpt-5.5
+effort: high
 tools: read, grep, find, ls
 skills: summarize, commit
 appendSystemPrompt: false
@@ -48,7 +49,8 @@ Supported frontmatter fields:
 | --- | --- | --- | --- |
 | `description` | Yes | When to use the agent. Free-form text. | `Fast codebase exploration` |
 | `harness` | No | Execution backend. Defaults to `pi`. | `pi`, `claude` |
-| `model` | No | `<model-id>[:<effort>]`, or `inherit`. Omit or use `inherit` to take both the model and the effort from the caller — on `pi`, the calling agent's; on `claude`, your own Claude Code's. | `inherit`, `openai-codex/gpt-5.5:high`, `claude-opus-4-5` |
+| `model` | No | The model id, handed to the harness **exactly as written** — nothing is stripped or parsed. `inherit` is the one reserved value. | `inherit`, `openai-codex/gpt-5.5`, `claude-opus-4-5`, `arn:aws:bedrock:…` |
+| `effort` | No | Reasoning depth. Independent of `model`; both harnesses take it separately. | `off`, `low`, `high`, `max` |
 | `tools` | No | Tools the agent can use. **`pi` only** — a `claude` agent runs the fixed set in [Tools](#tools), so the field is rejected there. Omit to inherit Pi's defaults. | `read, grep, find, ls, bash` |
 | `skills` | No | Comma-separated skill names. **`pi` only** — a `claude` agent manages its own skills, so the field is rejected there. When set, the agent sees exactly these skills; when omitted, it discovers skills normally. | `summarize, commit` |
 | `appendSystemPrompt` | No | When `true`, the agent prompt is appended to the harness's base system prompt. When `false` or omitted, the agent prompt replaces it. | `true`, `false` |
@@ -69,7 +71,8 @@ A Claude Code implementer agent, for example:
 ---
 description: Implements approved plans and verifies changes
 harness: claude
-model: claude-opus-4-5:high
+model: claude-opus-4-5
+effort: high
 ---
 
 You are an implementation agent. Follow the approved plan and verify your work.
@@ -81,7 +84,9 @@ tool call.
 
 ### Reasoning effort
 
-Effort is a suffix on `model`, not a field of its own: `claude-opus-4-5:high`. One scale works on both harnesses, and every value is accepted on either — if the model you picked does not support a level, the harness settles for the nearest one it does.
+`effort` is one scale that works on both harnesses. Every value is accepted on either; if the model you picked does not support a level, the harness settles for the nearest one it does.
+
+It is a field of its own rather than a `model` suffix, because only a field can be validated. `effort: turbo` is rejected naming the scale; a `:turbo` in a model string could not be, since nothing distinguishes a misspelled effort from a variant suffix a provider really uses — OpenRouter has `google/gemma-4-31b-it:free`, and Bedrock ids end in `-v1:0`. A `:<effort>` on `model` is therefore rejected too, pointing at the field.
 
 | Value | `pi` | `claude` |
 | --- | --- | --- |
@@ -90,11 +95,11 @@ Effort is a suffix on `model`, not a field of its own: `claude-opus-4-5:high`. O
 | `low`, `medium`, `high`, `xhigh` | matching thinking level | matching effort level |
 | `max` | thinking level `max` | effort `max` |
 
-**A profile always wins.** The model and effort go to the harness as explicit options, so they outrank whatever your `~/.claude/settings.json` says. A profile pinning `model: sonnet:low` runs Sonnet at low effort even when your own Claude Code is set to Opus at medium.
+**A profile always wins.** Both go to the harness as explicit options — `pi --model` and `pi --thinking`, or the SDK's `model` and `effort` — so they outrank whatever your `~/.claude/settings.json` says.
 
-**`inherit` takes both, never one.** There is deliberately no way to inherit the model but pin the effort, or the reverse — that is what a second field bought, at the cost of two spellings for one thing. `inherit` or an omitted `model` means: on `claude`, the `model` and `effortLevel` from your `~/.claude/settings.json` (falling back to Claude Code's built-in defaults, and true in trusted and untrusted directories alike since those are user scope); on `pi`, the calling agent's model and thinking level.
+**`model` reaches the harness untouched.** No provider prefix is stripped and no suffix is parsed, so `arn:aws:bedrock:…`, `bedrock/us.anthropic.…-v1:0`, and `openrouter/google/gemma-4-31b-it:free` all arrive intact. A model the harness does not accept is refused by the harness, which is a clearer answer than a rewritten id that resolves to something else.
 
-**A misspelled effort reads as part of the model id.** `opus:turbo` pins a model called `opus:turbo` rather than erroring, because nothing distinguishes it from an id that really contains a colon — OpenRouter marks variants that way, as in `openrouter/google/gemma-4-31b-it:free`. An effort can stack on top of one (`…:free:high`). Check the model shown on a finished run if a profile behaves unexpectedly.
+**`inherit` and an omitted `model` take the caller's.** On `pi`, the calling agent's model, and its thinking level unless `effort` overrides it. On `claude`, the `model` and `effortLevel` from your `~/.claude/settings.json`, falling back to Claude Code's built-in defaults — true in trusted and untrusted directories alike, since those settings are user scope. Check the model shown on a finished run if a profile behaves unexpectedly.
 
 ### Limits
 

@@ -737,20 +737,6 @@ test("parseAgentConfig defaults an agent without a harness to pi", async () => {
   assert.equal(parseAgentConfig(filePath).harness, "pi");
 });
 
-test("parseAgentConfig reads the claude harness with its effort", async () => {
-  const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(
-    dir,
-    "harness: claude\nmodel: claude-opus-4-5:high",
-  );
-
-  const config = parseAgentConfig(filePath);
-  assert.equal(config.harness, "claude");
-  // Kept whole. Splitting the effort out is each backend's job, since they map
-  // it onto different things — a thinking level on pi, an effort option on claude.
-  assert.equal(config.model, "claude-opus-4-5:high");
-});
-
 test("parseAgentConfig rejects a harness that is planned but not implemented", async () => {
   const dir = await makeTempDir();
   const filePath = await writeAgentWithFrontmatter(dir, "harness: codex");
@@ -769,31 +755,6 @@ test("parseAgentConfig rejects an unknown harness", async () => {
     () => parseAgentConfig(filePath),
     /unknown harness 'gemini'; expected one of pi, claude/,
   );
-});
-
-test("parseAgentConfig leaves an unrecognized suffix as part of the model id", async () => {
-  // The cost of carrying effort in the model string: nothing distinguishes a
-  // misspelled effort from an id that really contains a colon, so `turbo` stays
-  // in the id rather than becoming an error. OpenRouter variant suffixes —
-  // `google/gemma-4-31b-it:free` — are why the parser cannot simply reject what
-  // it does not recognize.
-  const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(dir, "model: opus:turbo");
-
-  assert.equal(parseAgentConfig(filePath).model, "opus:turbo");
-});
-
-test("parseAgentConfig accepts every effort in the scale as a model suffix", async () => {
-  // The whole neutral scale, `off` and `max` included, on either harness.
-  const dir = await makeTempDir();
-
-  for (const effort of REASONING_EFFORTS) {
-    const filePath = await writeAgentWithFrontmatter(
-      dir,
-      `model: opus:${effort}`,
-    );
-    assert.equal(parseAgentConfig(filePath).model, `opus:${effort}`);
-  }
 });
 
 test("parseAgentConfig names the field when frontmatter is not a string", async () => {
@@ -891,22 +852,39 @@ test("parseAgentConfig still accepts skills on the pi harness", async () => {
   assert.deepEqual(parseAgentConfig(filePath).skills, ["commit", "tdd"]);
 });
 
-test("parseAgentConfig rejects reasoningEffort, pointing at the model suffix", async () => {
+test("parseAgentConfig reads effort as its own field", async () => {
   const dir = await makeTempDir();
   const filePath = await writeAgentWithFrontmatter(
     dir,
-    "model: claude-opus-4-5\nreasoningEffort: high",
+    "harness: claude\nmodel: claude-opus-4-5\neffort: high",
   );
 
-  // One way to say a thing. Accepting the field and folding it in would leave two
-  // spellings with a precedence rule to remember.
+  const config = parseAgentConfig(filePath);
+  assert.equal(config.model, "claude-opus-4-5");
+  assert.equal(config.effort, "high");
+});
+
+test("parseAgentConfig accepts every effort in the scale", async () => {
+  const dir = await makeTempDir();
+  for (const effort of REASONING_EFFORTS) {
+    const filePath = await writeAgentWithFrontmatter(dir, `effort: ${effort}`);
+    assert.equal(parseAgentConfig(filePath).effort, effort);
+  }
+});
+
+test("parseAgentConfig rejects an unknown effort", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(dir, "effort: turbo");
+
+  // The validation a model suffix could never do: `effort` is a closed scale, so
+  // a typo is an error rather than something indistinguishable from an id.
   assert.throws(
     () => parseAgentConfig(filePath),
-    /reasoningEffort is no longer a field; write the effort into model as 'claude-opus-4-5:high'/,
+    /unknown effort 'turbo'; expected one of off, minimal, low, medium, high, xhigh, max/,
   );
 });
 
-test("parseAgentConfig names the effort scale when reasoningEffort has no model to move into", async () => {
+test("parseAgentConfig rejects reasoningEffort under its old name", async () => {
   const dir = await makeTempDir();
   const filePath = await writeAgentWithFrontmatter(
     dir,
@@ -915,28 +893,36 @@ test("parseAgentConfig names the effort scale when reasoningEffort has no model 
 
   assert.throws(
     () => parseAgentConfig(filePath),
-    /reasoningEffort is no longer a field; write the effort into model as '<model>:high'/,
+    /reasoningEffort is now called effort/,
   );
 });
 
-test("parseAgentConfig rejects an effort suffix on inherit", async () => {
+test("parseAgentConfig passes a model through exactly as written", async () => {
   const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(dir, "model: inherit:high");
-
-  // `inherit` takes the caller's model *and* its thinking level, so a suffix
-  // contradicts it. Left through, it became a model id nothing could resolve.
-  assert.throws(
-    () => parseAgentConfig(filePath),
-    /model 'inherit' takes no effort suffix: it inherits the caller's model and effort together/,
-  );
+  // No provider stripping, no suffix splitting. Whatever the harness accepts is
+  // between the author and the harness.
+  for (const model of [
+    "claude-opus-4-5",
+    "openai-codex/gpt-5.5",
+    "openrouter/google/gemma-4-31b-it:free",
+    "bedrock/us.anthropic.claude-opus-4-5-v1:0",
+    "arn:aws:bedrock:us-east-1:1234:application-inference-profile/mine",
+  ]) {
+    const filePath = await writeAgentWithFrontmatter(dir, `model: ${model}`);
+    assert.equal(parseAgentConfig(filePath).model, model, model);
+  }
 });
 
-test("parseAgentConfig keeps an effort suffix on a pinned model", async () => {
+test("parseAgentConfig rejects an effort suffix on the model", async () => {
   const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(
-    dir,
-    "model: claude-opus-4-5:high",
-  );
-
-  assert.equal(parseAgentConfig(filePath).model, "claude-opus-4-5:high");
+  for (const model of ["sonnet:high", "inherit:high"]) {
+    const filePath = await writeAgentWithFrontmatter(dir, `model: ${model}`);
+    // The model is handed to the harness verbatim, so a `:high` it carries would
+    // reach it as part of the id. One place to say effort, and this is not it.
+    assert.throws(
+      () => parseAgentConfig(filePath),
+      /model is passed to the harness as written; set 'effort: high' instead of the ':high' suffix/,
+      model,
+    );
+  }
 });
