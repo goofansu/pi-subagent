@@ -19,6 +19,7 @@ import {
   validateAgentSkills,
 } from "./agents.ts";
 import type { AgentConfig } from "./types.ts";
+import { REASONING_EFFORTS } from "./types.ts";
 
 const tempDirs: string[] = [];
 
@@ -62,6 +63,7 @@ test("parseAgentConfig reads name, frontmatter, and system prompt", async () => 
   assert.deepEqual(parseAgentConfig(filePath), {
     name: "reviewer",
     description: "Reviews code",
+    harness: "pi",
     model: "inherit",
     tools: "read,grep,find,ls,bash",
     appendSystemPrompt: true,
@@ -712,4 +714,190 @@ test("validateAgentSkills skips agents without skills defined", async () => {
 
   const warnings = validateAgentSkills(configs, dir);
   assert.deepEqual(warnings, []);
+});
+
+// ── Harness and reasoning effort frontmatter ─────────────────────────────────
+
+async function writeAgentWithFrontmatter(
+  dir: string,
+  frontmatter: string,
+): Promise<string> {
+  const filePath = path.join(dir, "worker.md");
+  await fs.promises.writeFile(
+    filePath,
+    `---\ndescription: Does work\n${frontmatter}\n---\n\nWork.\n`,
+  );
+  return filePath;
+}
+
+test("parseAgentConfig defaults an agent without a harness to pi", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(dir, "model: inherit");
+
+  assert.equal(parseAgentConfig(filePath).harness, "pi");
+});
+
+test("parseAgentConfig reads the claude harness with its effort", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(
+    dir,
+    "harness: claude\nmodel: claude-opus-4-5\nreasoningEffort: high",
+  );
+
+  const config = parseAgentConfig(filePath);
+  assert.equal(config.harness, "claude");
+  assert.equal(config.model, "claude-opus-4-5");
+  assert.equal(config.reasoningEffort, "high");
+});
+
+test("parseAgentConfig rejects a harness that is planned but not implemented", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(dir, "harness: codex");
+
+  assert.throws(
+    () => parseAgentConfig(filePath),
+    /harness 'codex' is not supported yet; this version supports pi, claude/,
+  );
+});
+
+test("parseAgentConfig rejects an unknown harness", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(dir, "harness: gemini");
+
+  assert.throws(
+    () => parseAgentConfig(filePath),
+    /unknown harness 'gemini'; expected one of pi, claude/,
+  );
+});
+
+test("parseAgentConfig rejects an unknown reasoningEffort", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(
+    dir,
+    "harness: claude\nreasoningEffort: turbo",
+  );
+
+  assert.throws(
+    () => parseAgentConfig(filePath),
+    /unknown reasoningEffort 'turbo'/,
+  );
+});
+
+test("parseAgentConfig accepts every reasoningEffort pi's CLI accepts", async () => {
+  // pi's VALID_THINKING_LEVELS covers the whole neutral scale, `off` and `max`
+  // included, so no value is rejected for being a pi profile.
+  const dir = await makeTempDir();
+
+  for (const effort of REASONING_EFFORTS) {
+    const filePath = await writeAgentWithFrontmatter(
+      dir,
+      `reasoningEffort: ${effort}`,
+    );
+    assert.equal(parseAgentConfig(filePath).reasoningEffort, effort);
+  }
+});
+
+test("parseAgentConfig accepts pi thinking levels as reasoningEffort", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(
+    dir,
+    "reasoningEffort: xhigh",
+  );
+
+  assert.equal(parseAgentConfig(filePath).reasoningEffort, "xhigh");
+});
+
+test("parseAgentConfig names the field when frontmatter is not a string", async () => {
+  // YAML types the value, so nothing stops an author writing a list or a map.
+  // The diagnostic has to name the field, not read `raw?.trim is not a
+  // function` out of a crash.
+  const dir = await makeTempDir();
+  for (const [frontmatter, expected] of [
+    ["harness: []", /harness must be a string, not a list/],
+    ["reasoningEffort: {a: 1}", /reasoningEffort must be a string, not a map/],
+    ["tools: 12", /tools must be a string, not a number/],
+    ["model: []", /model must be a string, not a list/],
+    ["skills: 3", /skills must be a string, not a number/],
+    [
+      "appendSystemPrompt: yes please",
+      /appendSystemPrompt must be true or false, not a string/,
+    ],
+  ] as const) {
+    const filePath = await writeAgentWithFrontmatter(dir, frontmatter);
+    assert.throws(() => parseAgentConfig(filePath), expected, frontmatter);
+  }
+});
+
+test("parseAgentConfig names description when it is not a string", async () => {
+  const dir = await makeTempDir();
+  const filePath = path.join(dir, "worker.md");
+  await fs.promises.writeFile(filePath, "---\ndescription: []\n---\n\nWork.\n");
+
+  assert.throws(
+    () => parseAgentConfig(filePath),
+    /description must be a string, not a list/,
+  );
+});
+
+test("parseAgentConfig accepts an omitted optional field as absent", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(dir, "model:");
+
+  const config = parseAgentConfig(filePath);
+  assert.equal(config.model, undefined);
+  assert.equal(config.appendSystemPrompt, false);
+});
+
+test("loadAgentConfigsWithDiagnostics reports an invalid harness instead of throwing", async () => {
+  const dir = await makeTempDir();
+  await writeAgentWithFrontmatter(dir, "harness: codex");
+
+  const { configs, invalidFiles } = loadAgentConfigsWithDiagnostics(dir);
+  assert.equal(configs.size, 0);
+  assert.equal(invalidFiles.length, 1);
+  assert.match(invalidFiles[0].reason, /harness 'codex' is not supported yet/);
+});
+
+test("parseAgentConfig rejects tools on the claude harness", async () => {
+  // Accepting it would read as a restriction while silently not being one — an
+  // author would believe they had built a read-only agent.
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(
+    dir,
+    "harness: claude\ntools: Read, Grep",
+  );
+
+  assert.throws(
+    () => parseAgentConfig(filePath),
+    /tools is only supported on harness 'pi'/,
+  );
+});
+
+test("parseAgentConfig still accepts tools on the pi harness", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(dir, "tools: read, grep");
+
+  assert.equal(parseAgentConfig(filePath).tools, "read, grep");
+});
+
+test("parseAgentConfig rejects skills on the claude harness", async () => {
+  // Claude Code manages its own skills, as it does its own tools. Accepting the
+  // field would read as pinning the skill set while doing nothing.
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(
+    dir,
+    "harness: claude\nskills: commit",
+  );
+
+  assert.throws(
+    () => parseAgentConfig(filePath),
+    /skills is only supported on harness 'pi'/,
+  );
+});
+
+test("parseAgentConfig still accepts skills on the pi harness", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(dir, "skills: commit, tdd");
+
+  assert.deepEqual(parseAgentConfig(filePath).skills, ["commit", "tdd"]);
 });

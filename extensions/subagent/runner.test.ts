@@ -39,6 +39,7 @@ function result(): SingleResult {
   return {
     agent: "general-purpose",
     description: "test",
+    harness: "pi",
     exitCode: -1,
     messages: [],
     stderr: "",

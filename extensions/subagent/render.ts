@@ -6,9 +6,15 @@ import type {
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import { formatToolCall, formatUsageStats } from "./formatting.ts";
+import {
+  formatHarnessBadge,
+  formatResumeHint,
+  formatToolCall,
+  formatUsageStats,
+} from "./formatting.ts";
 import { getDisplayItems, getFinalOutput } from "./messages.ts";
-import type { DisplayItem, SubagentDetails } from "./types.ts";
+import type { DisplayItem, PersistedSubagentDetails } from "./types.ts";
+import { resolveResultHarness } from "./types.ts";
 
 export const COLLAPSED_ITEM_COUNT = 10;
 
@@ -41,18 +47,20 @@ export function renderSubagentCall(
 }
 
 export function renderSubagentResult(
-  result: AgentToolResult<SubagentDetails | undefined>,
+  result: AgentToolResult<PersistedSubagentDetails | undefined>,
   { expanded }: ToolRenderResultOptions,
   theme: Theme,
   _context: unknown,
 ): Component {
-  const details = result.details as SubagentDetails | undefined;
+  const details = result.details as PersistedSubagentDetails | undefined;
   if (!details || details.results.length === 0) {
     const text = result.content[0];
     return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
   }
 
-  const r = details.results[0];
+  // Reopening an old session replays results that predate the harness field, so
+  // fill in the default here — every consumer below can then rely on it.
+  const r = resolveResultHarness(details.results[0]);
   const isRunning = r.exitCode === -1;
   const isError =
     !isRunning &&
@@ -90,6 +98,7 @@ export function renderSubagentResult(
   if (expanded) {
     const container = new Container();
     let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}`;
+    header += formatHarnessBadge(r.harness, theme.fg.bind(theme));
     if (r.description) header += ` ${theme.fg("muted", r.description)}`;
     if (isError && r.stopReason)
       header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
@@ -131,11 +140,17 @@ export function renderSubagentResult(
       container.addChild(new Spacer(1));
       container.addChild(new Text(theme.fg("dim", usageStr), 0, 0));
     }
+
+    const resumeHint = formatResumeHint(r);
+    if (resumeHint) {
+      container.addChild(new Text(theme.fg("dim", resumeHint), 0, 0));
+    }
     return container;
   }
 
   // Collapsed / running view
   let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}`;
+  text += formatHarnessBadge(r.harness, theme.fg.bind(theme));
   if (r.description) text += ` ${theme.fg("muted", r.description)}`;
   if (isError && r.stopReason)
     text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;

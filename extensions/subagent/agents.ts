@@ -8,8 +8,19 @@ import {
   parseFrontmatter,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { buildSkillPaths } from "./runner.ts";
-import type { AgentConfig, AgentSource } from "./types.ts";
+import { buildSkillPaths } from "./skills.ts";
+import type {
+  AgentConfig,
+  AgentSource,
+  Harness,
+  ReasoningEffort,
+} from "./types.ts";
+import {
+  DEFAULT_HARNESS,
+  HARNESSES,
+  PLANNED_HARNESSES,
+  REASONING_EFFORTS,
+} from "./types.ts";
 
 export interface InvalidAgentConfig {
   filePath: string;
@@ -31,19 +42,171 @@ export class AgentConfigValidationError extends Error {
   }
 }
 
+function oneOf(values: readonly string[]): string {
+  return values.join(", ");
+}
+
+/** What a rejected frontmatter value is, for a diagnostic that names it. */
+function describeType(value: unknown): string {
+  if (Array.isArray(value)) return "a list";
+  if (typeof value === "object") return "a map";
+  return `a ${typeof value}`;
+}
+
+/**
+ * A frontmatter field as a trimmed string, or `undefined` when absent or empty.
+ *
+ * YAML types the value, and nothing constrains an author to a string:
+ * `harness: []` parses to an array. Rejecting it here is what turns
+ * `raw?.trim is not a function` into a diagnostic naming the field.
+ */
+function stringField(
+  raw: unknown,
+  field: string,
+  filePath: string,
+): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string") {
+    throw new AgentConfigValidationError(
+      `${field} must be a string, not ${describeType(raw)}`,
+      filePath,
+    );
+  }
+  return raw.trim() || undefined;
+}
+
+/**
+ * A frontmatter field as a boolean, or `undefined` when absent. A non-boolean
+ * is rejected rather than read as false: `appendSystemPrompt: "yes"` means the
+ * opposite of what it silently would have done.
+ */
+function booleanField(
+  raw: unknown,
+  field: string,
+  filePath: string,
+): boolean | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "boolean") {
+    throw new AgentConfigValidationError(
+      `${field} must be true or false, not ${describeType(raw)}`,
+      filePath,
+    );
+  }
+  return raw;
+}
+
+function parseHarness(raw: string | undefined, filePath: string): Harness {
+  const value = raw?.trim();
+  if (!value) return DEFAULT_HARNESS;
+  if ((HARNESSES as readonly string[]).includes(value)) return value as Harness;
+  if ((PLANNED_HARNESSES as readonly string[]).includes(value)) {
+    throw new AgentConfigValidationError(
+      `harness '${value}' is not supported yet; this version supports ${oneOf(HARNESSES)}`,
+      filePath,
+    );
+  }
+  throw new AgentConfigValidationError(
+    `unknown harness '${value}'; expected one of ${oneOf(HARNESSES)}`,
+    filePath,
+  );
+}
+
+/**
+ * Both harnesses express the whole neutral scale — pi as a `model:<level>`
+ * thinking suffix, Claude Code as an effort or thinking budget — so there is no
+ * per-harness restriction here. Whether a specific *model* supports a level is
+ * the harness's business: pi clamps it, and rejecting it here would deny a
+ * profile that the harness would have run.
+ */
+function parseReasoningEffort(
+  raw: string | undefined,
+  filePath: string,
+): ReasoningEffort | undefined {
+  const value = raw?.trim();
+  if (!value) return undefined;
+  if (!(REASONING_EFFORTS as readonly string[]).includes(value)) {
+    throw new AgentConfigValidationError(
+      `unknown reasoningEffort '${value}'; expected one of ${oneOf(REASONING_EFFORTS)}`,
+      filePath,
+    );
+  }
+  return value as ReasoningEffort;
+}
+
+/**
+ * Reject a field the profile cannot control on this harness.
+ *
+ * Delegating to another harness means letting it work the way it works: a
+ * claude subagent runs Claude Code's own tools and its own skills, and the
+ * extension configures neither. Accepting the field and quietly not honoring it
+ * is the misreading most likely to matter — an author would believe they had
+ * built a read-only agent, or pinned its skill set, and be wrong.
+ */
+function assertPiOnlyField(
+  field: string,
+  detail: string,
+  harness: Harness,
+  filePath: string,
+): void {
+  if (harness === "pi") return;
+  throw new AgentConfigValidationError(
+    `${field} is only supported on harness 'pi'; harness '${harness}' ${detail}`,
+    filePath,
+  );
+}
+
+function parseTools(
+  raw: string | undefined,
+  harness: Harness,
+  filePath: string,
+): string | undefined {
+  const value = raw?.trim();
+  if (!value) return undefined;
+  assertPiOnlyField(
+    "tools",
+    "runs with a fixed tool set this backend controls",
+    harness,
+    filePath,
+  );
+  return value;
+}
+
+function parseSkills(
+  raw: string | undefined,
+  harness: Harness,
+  filePath: string,
+): string[] | undefined {
+  const value = raw?.trim();
+  if (!value) return undefined;
+  assertPiOnlyField("skills", "manages its own skills", harness, filePath);
+  const names = value
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+  return names.length > 0 ? names : undefined;
+}
+
 export function parseAgentConfig(
   filePath: string,
   source?: AgentSource,
 ): AgentConfig {
   const content = fs.readFileSync(filePath, "utf-8");
+  // Every field is `unknown`: these are YAML values, not strings, and each one
+  // is narrowed by the parser that reads it.
   const { frontmatter, body } = parseFrontmatter<{
-    description?: string;
-    model?: string;
-    tools?: string;
-    appendSystemPrompt?: boolean;
-    skills?: string;
+    description?: unknown;
+    harness?: unknown;
+    model?: unknown;
+    reasoningEffort?: unknown;
+    tools?: unknown;
+    appendSystemPrompt?: unknown;
+    skills?: unknown;
   }>(content);
-  const description = frontmatter.description?.trim();
+  const description = stringField(
+    frontmatter.description,
+    "description",
+    filePath,
+  );
   const systemPrompt = body.trim();
   if (!description) {
     throw new AgentConfigValidationError(
@@ -57,19 +220,39 @@ export function parseAgentConfig(
       filePath,
     );
   }
-  const skills = frontmatter.skills
-    ? frontmatter.skills
-        .split(",")
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0)
-    : undefined;
+  const harness = parseHarness(
+    stringField(frontmatter.harness, "harness", filePath),
+    filePath,
+  );
+  const reasoningEffort = parseReasoningEffort(
+    stringField(frontmatter.reasoningEffort, "reasoningEffort", filePath),
+    filePath,
+  );
+  const tools = parseTools(
+    stringField(frontmatter.tools, "tools", filePath),
+    harness,
+    filePath,
+  );
+  const model = stringField(frontmatter.model, "model", filePath);
+  const skills = parseSkills(
+    stringField(frontmatter.skills, "skills", filePath),
+    harness,
+    filePath,
+  );
   return {
     name: path.basename(filePath, path.extname(filePath)),
     description,
-    model: frontmatter.model,
-    tools: frontmatter.tools,
-    appendSystemPrompt: frontmatter.appendSystemPrompt === true,
+    harness,
+    model,
+    ...(tools ? { tools } : {}),
+    appendSystemPrompt:
+      booleanField(
+        frontmatter.appendSystemPrompt,
+        "appendSystemPrompt",
+        filePath,
+      ) === true,
     systemPrompt,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(skills ? { skills } : {}),
     ...(source ? { source } : {}),
   };

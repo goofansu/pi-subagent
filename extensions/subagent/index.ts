@@ -11,9 +11,12 @@ import {
   validateAgentSkills,
 } from "./agents.ts";
 import { registerAgentsCommand } from "./agents-command.ts";
+import type { BackendRegistry } from "./backend.ts";
 import { getFinalOutput } from "./messages.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
-import { runSingleAgent } from "./runner.ts";
+import { defaultBackendRegistry, runSubagent } from "./runner.ts";
+import type { AgentConfig, Harness } from "./types.ts";
+import { resolveHarness } from "./types.ts";
 
 export interface SubagentExtensionOptions {
   cwd?: string;
@@ -25,6 +28,38 @@ export interface SubagentExtensionOptions {
 // peer-dependency instance so embedders can use their own Pi version.
 // biome-ignore lint/suspicious/noExplicitAny: Extension hosts provide the concrete Pi API at runtime.
 export type SubagentExtension = (pi: any) => void;
+
+/**
+ * Report harnesses that configured agents ask for but that cannot run here —
+ * an unregistered harness, or one whose SDK or binary is missing. Surfacing
+ * this at session start beats failing the first delegation.
+ */
+export async function findUnavailableHarnessWarnings(
+  agentConfigs: ReadonlyMap<string, AgentConfig>,
+  registry: BackendRegistry,
+): Promise<string[]> {
+  const agentsByHarness = new Map<Harness, string[]>();
+  for (const config of agentConfigs.values()) {
+    const harness = resolveHarness(config);
+    const names = agentsByHarness.get(harness) ?? [];
+    names.push(config.name);
+    agentsByHarness.set(harness, names);
+  }
+
+  const warnings: string[] = [];
+  for (const [harness, names] of agentsByHarness) {
+    const backend = registry.get(harness);
+    const available = backend ? await backend.isAvailable() : false;
+    if (available) continue;
+    warnings.push(
+      `Harness '${harness}' is not available; these agents cannot run: ${names.join(", ")}.` +
+        (harness === "claude"
+          ? ` '@anthropic-ai/claude-agent-sdk' and the per-platform CLI binary it drives are optional dependencies of pi-subagent; reinstall the package, without '--omit=optional', to restore them.`
+          : ""),
+    );
+  }
+  return warnings;
+}
 
 // ── Extension ─────────────────────────────────────────────────────────────────
 
@@ -46,8 +81,15 @@ export function createSubagentExtension(
     const agentConfigs = agentConfigLoadResult.configs;
     const description = "Run a task in a specialized subagent";
 
-    pi.on("session_start", (event, ctx) => {
+    pi.on("session_start", async (event, ctx) => {
       if (event.reason !== "startup" && event.reason !== "reload") return;
+
+      for (const warning of await findUnavailableHarnessWarnings(
+        agentConfigs,
+        defaultBackendRegistry,
+      )) {
+        ctx.ui.notify(warning, "warning");
+      }
 
       if (agentConfigLoadResult.invalidFiles.length > 0) {
         const warning = formatInvalidAgentFilesWarning(
@@ -93,12 +135,18 @@ export function createSubagentExtension(
           );
         }
 
-        const result = await runSingleAgent(
+        const result = await runSubagent({
           config,
-          params.description,
-          params.prompt,
+          description: params.description,
+          prompt: params.prompt,
           signal,
-          ctx.model
+          // Pi already decided whether this directory is trusted, and asked the
+          // person if it had to. Reusing that decision is what keeps delegating
+          // from granting a directory more than working in it already did.
+          // Optional call: a host too old to report trust must read as
+          // untrusted, not as trusting.
+          projectTrusted: ctx.isProjectTrusted?.() ?? false,
+          parentModel: ctx.model
             ? {
                 provider: ctx.model.provider,
                 id: ctx.model.id,
@@ -106,10 +154,10 @@ export function createSubagentExtension(
               }
             : undefined,
           onUpdate,
-          projectCwd,
-          configuredAgentDir,
+          cwd: projectCwd,
+          agentDir: configuredAgentDir,
           configCwd,
-        );
+        });
 
         const isError =
           result.exitCode !== 0 ||

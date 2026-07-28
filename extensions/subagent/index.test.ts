@@ -3,7 +3,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, test } from "node:test";
-import { createSubagentExtension } from "./index.ts";
+import type { SubagentBackend } from "./backend.ts";
+import { createBackendRegistry } from "./backend.ts";
+import {
+  createSubagentExtension,
+  findUnavailableHarnessWarnings,
+} from "./index.ts";
+import type { AgentConfig, Harness } from "./types.ts";
 
 const tempDirs: string[] = [];
 
@@ -88,4 +94,66 @@ test("createSubagentExtension defaults configCwd to cwd", async () => {
     ),
     "expected project agent from cwd to be listed when configCwd is omitted",
   );
+});
+
+// ── Harness availability diagnostics ─────────────────────────────────────────
+
+function backend(name: Harness, available: boolean): SubagentBackend {
+  return {
+    name,
+    isAvailable: async () => available,
+    run: async (ctx) => ctx.result,
+  };
+}
+
+function agentConfig(name: string, harness?: Harness): AgentConfig {
+  return {
+    name,
+    description: `${name} agent`,
+    systemPrompt: "Work.",
+    ...(harness ? { harness } : {}),
+  };
+}
+
+test("findUnavailableHarnessWarnings stays quiet when every harness is available", async () => {
+  const warnings = await findUnavailableHarnessWarnings(
+    new Map([
+      ["a", agentConfig("a")],
+      ["b", agentConfig("b", "claude")],
+    ]),
+    createBackendRegistry([backend("pi", true), backend("claude", true)]),
+  );
+
+  assert.deepEqual(warnings, []);
+});
+
+test("findUnavailableHarnessWarnings names the agents blocked by a missing harness", async () => {
+  const warnings = await findUnavailableHarnessWarnings(
+    new Map([
+      ["reviewer", agentConfig("reviewer", "claude")],
+      ["implementer", agentConfig("implementer", "claude")],
+      ["scout", agentConfig("scout")],
+    ]),
+    createBackendRegistry([backend("pi", true), backend("claude", false)]),
+  );
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Harness 'claude' is not available/);
+  assert.match(warnings[0], /reviewer, implementer/);
+  assert.ok(
+    !warnings[0].includes("scout"),
+    "an agent on an available harness must not be reported",
+  );
+  // The warning has to say how to fix it, not just that it is broken.
+  assert.match(warnings[0], /@anthropic-ai\/claude-agent-sdk/);
+});
+
+test("findUnavailableHarnessWarnings reports a harness with no registered backend", async () => {
+  const warnings = await findUnavailableHarnessWarnings(
+    new Map([["worker", agentConfig("worker", "claude")]]),
+    createBackendRegistry([backend("pi", true)]),
+  );
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Harness 'claude' is not available/);
 });

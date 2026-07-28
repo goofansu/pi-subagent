@@ -22,6 +22,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { AgentConfig } from "./types.ts";
+import { DEFAULT_HARNESS, resolveHarness } from "./types.ts";
 
 type AgentAction = "view" | "work";
 
@@ -38,7 +39,12 @@ function formatAgentListDescription(agent: AgentConfig): string {
         : agent.source === "package"
           ? "[t]"
           : "[d]";
-  return `${prefix} ${agent.description}`;
+  // Only non-default harnesses are tagged, so pi-only setups read unchanged.
+  const harness =
+    resolveHarness(agent) === DEFAULT_HARNESS
+      ? ""
+      : ` [${resolveHarness(agent)}]`;
+  return `${prefix}${harness} ${agent.description}`;
 }
 
 export function getAgentSelectItems(
