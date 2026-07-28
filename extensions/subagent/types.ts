@@ -46,7 +46,7 @@ export const PLANNED_HARNESSES = ["codex"] as const;
  * Backend-neutral reasoning depth. Backends map this onto their own knob:
  * pi onto a model thinking level, Claude Code onto its effort setting.
  */
-export const REASONING_EFFORTS = [
+export const EFFORTS = [
   "off",
   "minimal",
   "low",
@@ -55,7 +55,7 @@ export const REASONING_EFFORTS = [
   "xhigh",
   "max",
 ] as const;
-export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+export type Effort = (typeof EFFORTS)[number];
 
 export interface SingleResult {
   agent: string;
@@ -126,7 +126,7 @@ export interface AgentConfig {
    */
   model?: string;
   /** Reasoning depth. Independent of `model`; both harnesses take it separately. */
-  effort?: ReasoningEffort;
+  effort?: Effort;
   /** pi only: a claude subagent runs Claude Code's own tool set. */
   tools?: string;
   /** pi only: a claude subagent manages its own skills. */

@@ -28,7 +28,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import type { SubagentBackend, SubagentRunContext } from "../backend.ts";
 import { appendStderr, DEPTH_ENV_KEY, settleAborted } from "../backend.ts";
-import type { AgentConfig, ReasoningEffort, SingleResult } from "../types.ts";
+import type { AgentConfig, Effort, SingleResult } from "../types.ts";
 
 const SDK_PACKAGE = "@anthropic-ai/claude-agent-sdk";
 
@@ -253,15 +253,13 @@ export function resolveClaudeModel(config: AgentConfig): string | undefined {
 }
 
 /** Reasoning depth. Its own field, so there is nothing to derive. */
-export function resolveClaudeEffort(
-  config: AgentConfig,
-): ReasoningEffort | undefined {
+export function resolveClaudeEffort(config: AgentConfig): Effort | undefined {
   return config.effort;
 }
 
 /** Map the backend-neutral effort onto the SDK's thinking/effort options. */
 export function buildThinkingOptions(
-  effort: ReasoningEffort | undefined,
+  effort: Effort | undefined,
 ): Pick<ClaudeOptions, "effort" | "thinking"> {
   switch (effort) {
     case undefined:

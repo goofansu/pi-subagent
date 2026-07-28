@@ -9,17 +9,12 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { buildSkillPaths } from "./skills.ts";
-import type {
-  AgentConfig,
-  AgentSource,
-  Harness,
-  ReasoningEffort,
-} from "./types.ts";
+import type { AgentConfig, AgentSource, Effort, Harness } from "./types.ts";
 import {
   DEFAULT_HARNESS,
+  EFFORTS,
   HARNESSES,
   PLANNED_HARNESSES,
-  REASONING_EFFORTS,
 } from "./types.ts";
 
 export interface InvalidAgentConfig {
@@ -122,25 +117,16 @@ function parseHarness(raw: string | undefined, filePath: string): Harness {
 function parseEffort(
   raw: string | undefined,
   filePath: string,
-): ReasoningEffort | undefined {
+): Effort | undefined {
   const value = raw?.trim();
   if (!value) return undefined;
-  if (!(REASONING_EFFORTS as readonly string[]).includes(value)) {
+  if (!(EFFORTS as readonly string[]).includes(value)) {
     throw new AgentConfigValidationError(
-      `unknown effort '${value}'; expected one of ${oneOf(REASONING_EFFORTS)}`,
+      `unknown effort '${value}'; expected one of ${oneOf(EFFORTS)}`,
       filePath,
     );
   }
-  return value as ReasoningEffort;
-}
-
-/** Point the old name at the new one rather than ignoring it. */
-function rejectReasoningEffort(raw: unknown, filePath: string): void {
-  if (raw === undefined || raw === null) return;
-  throw new AgentConfigValidationError(
-    `reasoningEffort is now called effort`,
-    filePath,
-  );
+  return value as Effort;
 }
 
 /**
@@ -160,7 +146,7 @@ function assertNoEffortSuffix(
   const colon = model.lastIndexOf(":");
   if (colon === -1) return;
   const suffix = model.slice(colon + 1);
-  if (!(REASONING_EFFORTS as readonly string[]).includes(suffix)) return;
+  if (!(EFFORTS as readonly string[]).includes(suffix)) return;
   throw new AgentConfigValidationError(
     `model is passed to the harness as written; set 'effort: ${suffix}' instead of the ':${suffix}' suffix`,
     filePath,
@@ -232,7 +218,6 @@ export function parseAgentConfig(
     harness?: unknown;
     model?: unknown;
     effort?: unknown;
-    reasoningEffort?: unknown;
     tools?: unknown;
     appendSystemPrompt?: unknown;
     skills?: unknown;
@@ -266,7 +251,6 @@ export function parseAgentConfig(
   );
   const model = stringField(frontmatter.model, "model", filePath);
   assertNoEffortSuffix(model, filePath);
-  rejectReasoningEffort(frontmatter.reasoningEffort, filePath);
   const effort = parseEffort(
     stringField(frontmatter.effort, "effort", filePath),
     filePath,

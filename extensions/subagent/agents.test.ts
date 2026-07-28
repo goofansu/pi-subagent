@@ -19,7 +19,7 @@ import {
   validateAgentSkills,
 } from "./agents.ts";
 import type { AgentConfig } from "./types.ts";
-import { REASONING_EFFORTS } from "./types.ts";
+import { EFFORTS } from "./types.ts";
 
 const tempDirs: string[] = [];
 
@@ -866,7 +866,7 @@ test("parseAgentConfig reads effort as its own field", async () => {
 
 test("parseAgentConfig accepts every effort in the scale", async () => {
   const dir = await makeTempDir();
-  for (const effort of REASONING_EFFORTS) {
+  for (const effort of EFFORTS) {
     const filePath = await writeAgentWithFrontmatter(dir, `effort: ${effort}`);
     assert.equal(parseAgentConfig(filePath).effort, effort);
   }
@@ -881,19 +881,6 @@ test("parseAgentConfig rejects an unknown effort", async () => {
   assert.throws(
     () => parseAgentConfig(filePath),
     /unknown effort 'turbo'; expected one of off, minimal, low, medium, high, xhigh, max/,
-  );
-});
-
-test("parseAgentConfig rejects reasoningEffort under its old name", async () => {
-  const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(
-    dir,
-    "reasoningEffort: high",
-  );
-
-  assert.throws(
-    () => parseAgentConfig(filePath),
-    /reasoningEffort is now called effort/,
   );
 });
 

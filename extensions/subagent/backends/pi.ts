@@ -90,7 +90,7 @@ export function buildPiArgs(
 
 /**
  * Resolve the `provider/id[:thinkingLevel]` string pi's `--model` expects.
- * `reasoningEffort` is the backend-neutral spelling of the thinking level and
+ * `effort` is the backend-neutral spelling of the thinking level and
  * wins over a level baked into the model string.
  */
 export function resolveSubagentModel(

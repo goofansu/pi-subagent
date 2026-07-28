@@ -16,7 +16,7 @@ its decisions have since changed, and the README is the current source of truth:
 - Concurrent runs are capped at four. There is deliberately no wall-clock
   deadline: the tool blocks the calling turn, so a run going nowhere is visible
   and cancellable. See "Limits" in the README.
-- `reasoningEffort` is now `effort`, and `model` is handed to the harness exactly
+- Reasoning depth is the `effort` field, and `model` is handed to the harness exactly
   as written — no provider stripping, no suffix parsing. pi takes the level via
   `--thinking`, so nothing is spliced into a model id. See "Reasoning effort" in
   the README.
