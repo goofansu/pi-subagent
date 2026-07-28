@@ -49,7 +49,7 @@ Supported frontmatter fields:
 | --- | --- | --- | --- |
 | `description` | Yes | When to use the agent. Free-form text. | `Fast codebase exploration` |
 | `harness` | No | Execution backend. Defaults to `pi`. | `pi`, `claude` |
-| `model` | No | The model id, handed to the harness **exactly as written** — nothing is stripped or parsed. `inherit` is the one reserved value: on `pi` it takes the calling agent's model, on `claude` your own Claude Code's. | `inherit`, `openai-codex/gpt-5.5`, `claude-opus-4-5`, `arn:aws:bedrock:…` |
+| `model` | No | The model id, handed to the harness **exactly as written** — nothing is stripped or parsed. `inherit` is the one reserved value: on `pi` it takes the calling agent's model, on `claude` your own Claude Code's. | `inherit`, `opus`, `openai-codex/gpt-5.5`, `claude-opus-4-5`, `arn:aws:bedrock:…` |
 | `effort` | No | Reasoning depth, independent of `model`. Every value works on either harness; if the model cannot do the level, the harness settles for the nearest one it can. | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `tools` | No | Tools the agent can use. **`pi` only** — a `claude` agent runs the fixed set in [Tools](#tools), so the field is rejected there. Omit to inherit Pi's defaults. | `read, grep, find, ls, bash` |
 | `skills` | No | Comma-separated skill names. **`pi` only** — a `claude` agent manages its own skills, so the field is rejected there. When set, the agent sees exactly these skills; when omitted, it discovers skills normally. | `summarize, commit` |
@@ -71,12 +71,16 @@ A Claude Code implementer agent, for example:
 ---
 description: Implements approved plans and verifies changes
 harness: claude
-model: claude-opus-4-5
+model: opus
 effort: high
 ---
 
 You are an implementation agent. Follow the approved plan and verify your work.
 ```
+
+On `claude`, `opus`, `sonnet`, and `haiku` are accepted and track the newest of
+each — `opus` resolved to `claude-opus-5` at the time of writing. Name a full id
+instead when you want a specific version pinned.
 
 The calling agent invokes it the same way as any other agent — `subagent` takes
 only `agent`, `description`, and `prompt`, so backend choice never leaks into the
