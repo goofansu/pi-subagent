@@ -44,54 +44,56 @@ test("splitThinkingSuffix ignores a colon that sits before the provider slash", 
 });
 
 test("splitThinkingSuffix keeps a colon that belongs to the model id", () => {
-  // Bedrock ids carry a `:<version>` suffix that is part of the id, not a level.
+  // Real ids from `pi --list-models`: OpenRouter marks variants with a colon
+  // suffix, and neither `free` nor `thinking` is an effort.
   assert.deepEqual(
-    splitThinkingSuffix("amazon-bedrock/anthropic.claude-opus-4-5-v1:0"),
-    ["amazon-bedrock/anthropic.claude-opus-4-5-v1:0", undefined],
+    splitThinkingSuffix("openrouter/google/gemma-4-31b-it:free"),
+    ["openrouter/google/gemma-4-31b-it:free", undefined],
+  );
+  assert.deepEqual(
+    splitThinkingSuffix("openrouter/qwen/qwen-plus-2025-07-28:thinking"),
+    ["openrouter/qwen/qwen-plus-2025-07-28:thinking", undefined],
   );
 });
 
-test("resolveSubagentModel keeps a versioned id intact when adding a level", () => {
+test("splitThinkingSuffix takes an effort stacked on a variant suffix", () => {
+  // Both colons are meaningful, and only the last one is the effort.
+  assert.deepEqual(
+    splitThinkingSuffix("openrouter/google/gemma-4-31b-it:free:high"),
+    ["openrouter/google/gemma-4-31b-it:free", "high"],
+  );
+});
+
+test("resolveSubagentModel passes a variant-suffixed id through untouched", () => {
   assert.equal(
     resolveSubagentModel(
-      agent({
-        model: "amazon-bedrock/anthropic.claude-opus-4-5-v1:0",
-        reasoningEffort: "high",
-      }),
+      agent({ model: "openrouter/google/gemma-4-31b-it:free" }),
       undefined,
     ),
-    "amazon-bedrock/anthropic.claude-opus-4-5-v1:0:high",
+    "openrouter/google/gemma-4-31b-it:free",
   );
 });
 
-test("resolveSubagentModel applies reasoningEffort as the thinking level", () => {
+test("resolveSubagentModel carries the effort the model string names", () => {
   assert.equal(
     resolveSubagentModel(
-      agent({ model: "openai-codex/gpt-5.5", reasoningEffort: "high" }),
+      agent({ model: "openai-codex/gpt-5.5:high" }),
       undefined,
     ),
     "openai-codex/gpt-5.5:high",
   );
 });
 
-test("resolveSubagentModel lets reasoningEffort override a level in the model string", () => {
+test("resolveSubagentModel inherits the caller's level along with its model", () => {
+  // `inherit` takes both. There is no way to keep one and replace the other,
+  // which is the point: two knobs meant two spellings of the same thing.
   assert.equal(
-    resolveSubagentModel(
-      agent({ model: "openai-codex/gpt-5.5:low", reasoningEffort: "xhigh" }),
-      undefined,
-    ),
-    "openai-codex/gpt-5.5:xhigh",
-  );
-});
-
-test("resolveSubagentModel applies reasoningEffort to an inherited model", () => {
-  assert.equal(
-    resolveSubagentModel(agent({ reasoningEffort: "medium" }), {
+    resolveSubagentModel(agent({ model: "inherit" }), {
       provider: "anthropic",
       id: "claude-opus-4-5",
       thinkingLevel: "low",
     }),
-    "anthropic/claude-opus-4-5:medium",
+    "anthropic/claude-opus-4-5:low",
   );
 });
 

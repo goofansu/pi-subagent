@@ -286,14 +286,13 @@ export function resolveClaudeModel(config: AgentConfig): string | undefined {
 }
 
 /**
- * Effective reasoning depth: the explicit field wins, otherwise a thinking
- * level carried in the model string is honored so `model: opus:high` behaves
- * the same on both harnesses.
+ * Reasoning depth, read from the `:<effort>` the model string carries. `inherit`
+ * and an omitted model take Claude Code's own configured effort instead, the same
+ * way they take its model.
  */
 export function resolveClaudeEffort(
   config: AgentConfig,
 ): ReasoningEffort | undefined {
-  if (config.reasoningEffort) return config.reasoningEffort;
   if (!config.model || config.model === "inherit") return undefined;
   const level = parseClaudeModel(config.model).thinkingLevel;
   return level as ReasoningEffort | undefined;

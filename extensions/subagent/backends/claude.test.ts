@@ -287,12 +287,10 @@ test("resolveClaudeModel strips the pi thinking suffix from the model id", () =>
   );
 });
 
-test("resolveClaudeEffort prefers the explicit field over the model suffix", () => {
+test("resolveClaudeEffort reads the effort the model string names", () => {
   assert.equal(
-    resolveClaudeEffort(
-      agent({ model: "claude-opus-4-5:low", reasoningEffort: "high" }),
-    ),
-    "high",
+    resolveClaudeEffort(agent({ model: "claude-opus-4-5:low" })),
+    "low",
   );
 });
 

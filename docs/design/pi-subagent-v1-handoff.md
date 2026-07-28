@@ -16,6 +16,9 @@ its decisions have since changed, and the README is the current source of truth:
 - Concurrent runs are capped at four. There is deliberately no wall-clock
   deadline: the tool blocks the calling turn, so a run going nowhere is visible
   and cancellable. See "Limits" in the README.
+- `reasoningEffort` is gone as a field. Effort is a suffix on `model`
+  (`claude-opus-4-5:high`), and `inherit` takes model and effort together. See
+  "Reasoning effort" in the README.
 - Settings isolation is no longer unconditional. What a claude subagent loads
   from disk follows pi's trust decision for the directory: a trusted one loads
   normally, an untrusted one gets user scope and no MCP. See "Isolation" in the
@@ -154,7 +157,7 @@ A missing SDK is reported at session start naming the affected agents.
 | Agent setting | Claude Code |
 | --- | --- |
 | `model` | `options.model` (provider prefix and `:level` suffix stripped) |
-| `reasoningEffort` | `options.effort`, or `options.thinking` for `off`/`minimal` |
+| effort suffix on `model` | `options.effort`, or `options.thinking` for `off`/`minimal` |
 | `systemPrompt` | `options.systemPrompt` (string, or `claude_code` preset + append) |
 | — | `permissionMode: bypassPermissions` + `allowDangerouslySkipPermissions`, always |
 | `tools` | not mapped — a pi-only field; a claude subagent runs Claude Code's own tool set |

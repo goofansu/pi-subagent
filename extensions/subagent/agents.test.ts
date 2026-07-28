@@ -741,13 +741,14 @@ test("parseAgentConfig reads the claude harness with its effort", async () => {
   const dir = await makeTempDir();
   const filePath = await writeAgentWithFrontmatter(
     dir,
-    "harness: claude\nmodel: claude-opus-4-5\nreasoningEffort: high",
+    "harness: claude\nmodel: claude-opus-4-5:high",
   );
 
   const config = parseAgentConfig(filePath);
   assert.equal(config.harness, "claude");
-  assert.equal(config.model, "claude-opus-4-5");
-  assert.equal(config.reasoningEffort, "high");
+  // Kept whole. Splitting the effort out is each backend's job, since they map
+  // it onto different things — a thinking level on pi, an effort option on claude.
+  assert.equal(config.model, "claude-opus-4-5:high");
 });
 
 test("parseAgentConfig rejects a harness that is planned but not implemented", async () => {
@@ -770,41 +771,29 @@ test("parseAgentConfig rejects an unknown harness", async () => {
   );
 });
 
-test("parseAgentConfig rejects an unknown reasoningEffort", async () => {
+test("parseAgentConfig leaves an unrecognized suffix as part of the model id", async () => {
+  // The cost of carrying effort in the model string: nothing distinguishes a
+  // misspelled effort from an id that really contains a colon, so `turbo` stays
+  // in the id rather than becoming an error. OpenRouter variant suffixes —
+  // `google/gemma-4-31b-it:free` — are why the parser cannot simply reject what
+  // it does not recognize.
   const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(
-    dir,
-    "harness: claude\nreasoningEffort: turbo",
-  );
+  const filePath = await writeAgentWithFrontmatter(dir, "model: opus:turbo");
 
-  assert.throws(
-    () => parseAgentConfig(filePath),
-    /unknown reasoningEffort 'turbo'/,
-  );
+  assert.equal(parseAgentConfig(filePath).model, "opus:turbo");
 });
 
-test("parseAgentConfig accepts every reasoningEffort pi's CLI accepts", async () => {
-  // pi's VALID_THINKING_LEVELS covers the whole neutral scale, `off` and `max`
-  // included, so no value is rejected for being a pi profile.
+test("parseAgentConfig accepts every effort in the scale as a model suffix", async () => {
+  // The whole neutral scale, `off` and `max` included, on either harness.
   const dir = await makeTempDir();
 
   for (const effort of REASONING_EFFORTS) {
     const filePath = await writeAgentWithFrontmatter(
       dir,
-      `reasoningEffort: ${effort}`,
+      `model: opus:${effort}`,
     );
-    assert.equal(parseAgentConfig(filePath).reasoningEffort, effort);
+    assert.equal(parseAgentConfig(filePath).model, `opus:${effort}`);
   }
-});
-
-test("parseAgentConfig accepts pi thinking levels as reasoningEffort", async () => {
-  const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(
-    dir,
-    "reasoningEffort: xhigh",
-  );
-
-  assert.equal(parseAgentConfig(filePath).reasoningEffort, "xhigh");
 });
 
 test("parseAgentConfig names the field when frontmatter is not a string", async () => {
@@ -814,7 +803,7 @@ test("parseAgentConfig names the field when frontmatter is not a string", async 
   const dir = await makeTempDir();
   for (const [frontmatter, expected] of [
     ["harness: []", /harness must be a string, not a list/],
-    ["reasoningEffort: {a: 1}", /reasoningEffort must be a string, not a map/],
+    ["model: {a: 1}", /model must be a string, not a map/],
     ["tools: 12", /tools must be a string, not a number/],
     ["model: []", /model must be a string, not a list/],
     ["skills: 3", /skills must be a string, not a number/],
@@ -900,4 +889,54 @@ test("parseAgentConfig still accepts skills on the pi harness", async () => {
   const filePath = await writeAgentWithFrontmatter(dir, "skills: commit, tdd");
 
   assert.deepEqual(parseAgentConfig(filePath).skills, ["commit", "tdd"]);
+});
+
+test("parseAgentConfig rejects reasoningEffort, pointing at the model suffix", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(
+    dir,
+    "model: claude-opus-4-5\nreasoningEffort: high",
+  );
+
+  // One way to say a thing. Accepting the field and folding it in would leave two
+  // spellings with a precedence rule to remember.
+  assert.throws(
+    () => parseAgentConfig(filePath),
+    /reasoningEffort is no longer a field; write the effort into model as 'claude-opus-4-5:high'/,
+  );
+});
+
+test("parseAgentConfig names the effort scale when reasoningEffort has no model to move into", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(
+    dir,
+    "reasoningEffort: high",
+  );
+
+  assert.throws(
+    () => parseAgentConfig(filePath),
+    /reasoningEffort is no longer a field; write the effort into model as '<model>:high'/,
+  );
+});
+
+test("parseAgentConfig rejects an effort suffix on inherit", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(dir, "model: inherit:high");
+
+  // `inherit` takes the caller's model *and* its thinking level, so a suffix
+  // contradicts it. Left through, it became a model id nothing could resolve.
+  assert.throws(
+    () => parseAgentConfig(filePath),
+    /model 'inherit' takes no effort suffix: it inherits the caller's model and effort together/,
+  );
+});
+
+test("parseAgentConfig keeps an effort suffix on a pinned model", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(
+    dir,
+    "model: claude-opus-4-5:high",
+  );
+
+  assert.equal(parseAgentConfig(filePath).model, "claude-opus-4-5:high");
 });

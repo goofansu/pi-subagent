@@ -77,25 +77,26 @@ export function resolveSubagentModel(
   config: AgentConfig,
   parentModel: ParentModel | undefined,
 ): string | undefined {
-  const effort = config.reasoningEffort;
-
-  if (config.model && config.model !== "inherit") {
-    if (!effort) return config.model;
-    const [base] = splitThinkingSuffix(config.model);
-    return `${base}:${effort}`;
-  }
+  // A pinned model carries its own `:level` when it wants one, so it passes
+  // through untouched.
+  if (config.model && config.model !== "inherit") return config.model;
   if (!parentModel) return undefined;
 
+  // `inherit` takes the caller's model and its thinking level together.
   const model = `${parentModel.provider}/${parentModel.id}`;
-  const level = effort ?? parentModel.thinkingLevel;
-  return level ? `${model}:${level}` : model;
+  return parentModel.thinkingLevel
+    ? `${model}:${parentModel.thinkingLevel}`
+    : model;
 }
 
 /**
  * Split a `provider/id:level` model string into its base and thinking level.
  * Only a trailing colon followed by a recognized thinking level counts: bare
- * provider-qualified ids and colons that belong to the id itself — Bedrock's
- * `...-v1:0` version suffix, for one — are left alone.
+ * provider-qualified ids and colons that belong to the id itself are left alone.
+ * Those are not hypothetical — `pi --list-models` carries OpenRouter variant
+ * suffixes like `google/gemma-4-31b-it:free` and
+ * `qwen/qwen-plus-2025-07-28:thinking`, and eating one asks pi for a model that
+ * does not exist.
  */
 export function splitThinkingSuffix(
   model: string,

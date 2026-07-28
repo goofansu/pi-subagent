@@ -120,9 +120,12 @@ export interface AgentConfig {
   description: string;
   /** Execution backend. Omitted means {@link DEFAULT_HARNESS}. */
   harness?: Harness;
+  /**
+   * `provider/id:effort`, or `inherit`. Effort rides here rather than in a field
+   * of its own — see the README. Kept whole: each backend maps the effort onto a
+   * different knob, so splitting is theirs to do.
+   */
   model?: string;
-  /** Backend-neutral reasoning depth; overrides a model's thinking suffix. */
-  reasoningEffort?: ReasoningEffort;
   /** pi only: a claude subagent runs Claude Code's own tool set. */
   tools?: string;
   /** pi only: a claude subagent manages its own skills. */

@@ -32,7 +32,6 @@ Agents are Markdown files in an `agents/` directory. The agent name is the filen
 description: Describes when to use this agent.
 harness: pi
 model: openai-codex/gpt-5.5:high
-reasoningEffort: high
 tools: read, grep, find, ls
 skills: summarize, commit
 appendSystemPrompt: false
@@ -49,8 +48,7 @@ Supported frontmatter fields:
 | --- | --- | --- | --- |
 | `description` | Yes | When to use the agent. Free-form text. | `Fast codebase exploration` |
 | `harness` | No | Execution backend. Defaults to `pi`. | `pi`, `claude` |
-| `model` | No | Model override. Omit or use `inherit` to take the harness default — on `pi`, the calling agent's model and thinking level; on `claude`, whatever your own Claude Code is set to. Add `:<thinkingLevel>` to set the thinking level inline. | `inherit`, `openai-codex/gpt-5.5:high`, `claude-opus-4-5` |
-| `reasoningEffort` | No | Backend-neutral reasoning depth; overrides a `:<thinkingLevel>` in `model`. | `low`, `high`, `max` |
+| `model` | No | `<model-id>[:<effort>]`, or `inherit`. Omit or use `inherit` to take both the model and the effort from the caller — on `pi`, the calling agent's; on `claude`, your own Claude Code's. | `inherit`, `openai-codex/gpt-5.5:high`, `claude-opus-4-5` |
 | `tools` | No | Tools the agent can use. **`pi` only** — a `claude` agent runs the fixed set in [Tools](#tools), so the field is rejected there. Omit to inherit Pi's defaults. | `read, grep, find, ls, bash` |
 | `skills` | No | Comma-separated skill names. **`pi` only** — a `claude` agent manages its own skills, so the field is rejected there. When set, the agent sees exactly these skills; when omitted, it discovers skills normally. | `summarize, commit` |
 | `appendSystemPrompt` | No | When `true`, the agent prompt is appended to the harness's base system prompt. When `false` or omitted, the agent prompt replaces it. | `true`, `false` |
@@ -71,8 +69,7 @@ A Claude Code implementer agent, for example:
 ---
 description: Implements approved plans and verifies changes
 harness: claude
-model: claude-opus-4-5
-reasoningEffort: high
+model: claude-opus-4-5:high
 ---
 
 You are an implementation agent. Follow the approved plan and verify your work.
@@ -84,7 +81,7 @@ tool call.
 
 ### Reasoning effort
 
-`reasoningEffort` is one scale that works on both harnesses. Every value is accepted on either; if the model you picked does not support a level, the harness settles for the nearest one it does.
+Effort is a suffix on `model`, not a field of its own: `claude-opus-4-5:high`. One scale works on both harnesses, and every value is accepted on either — if the model you picked does not support a level, the harness settles for the nearest one it does.
 
 | Value | `pi` | `claude` |
 | --- | --- | --- |
@@ -93,9 +90,11 @@ tool call.
 | `low`, `medium`, `high`, `xhigh` | matching thinking level | matching effort level |
 | `max` | thinking level `max` | effort `max` |
 
-**A profile always wins.** `model` and `reasoningEffort` are passed to the harness as explicit options, so they outrank whatever your `~/.claude/settings.json` says. A profile pinning `model: sonnet` runs Sonnet even when your own Claude Code is set to Opus.
+**A profile always wins.** The model and effort go to the harness as explicit options, so they outrank whatever your `~/.claude/settings.json` says. A profile pinning `model: sonnet:low` runs Sonnet at low effort even when your own Claude Code is set to Opus at medium.
 
-**Omitting them defers to your own setup.** On `claude`, a profile with no `model` and no `reasoningEffort` takes the `model` and `effortLevel` from your `~/.claude/settings.json`, falling back to Claude Code's built-in defaults when those are unset. This holds in trusted and untrusted directories alike, since those settings are user scope. On `pi`, omitting them inherits the calling agent's model and thinking level instead.
+**`inherit` takes both, never one.** There is deliberately no way to inherit the model but pin the effort, or the reverse — that is what a second field bought, at the cost of two spellings for one thing. `inherit` or an omitted `model` means: on `claude`, the `model` and `effortLevel` from your `~/.claude/settings.json` (falling back to Claude Code's built-in defaults, and true in trusted and untrusted directories alike since those are user scope); on `pi`, the calling agent's model and thinking level.
+
+**A misspelled effort reads as part of the model id.** `opus:turbo` pins a model called `opus:turbo` rather than erroring, because nothing distinguishes it from an id that really contains a colon — OpenRouter marks variants that way, as in `openrouter/google/gemma-4-31b-it:free`. An effort can stack on top of one (`…:free:high`). Check the model shown on a finished run if a profile behaves unexpectedly.
 
 ### Limits
 
@@ -109,7 +108,7 @@ A `claude` subagent always runs with approvals bypassed, and this is not configu
 
 A headless subagent has nobody to ask, so anything needing approval would simply be refused. Bypassing is the only setting that leaves it able to work.
 
-**So a `claude` agent can change things.** It reads, writes, edits, searches, runs commands, browses, and uses its own skills — `Write`, `Edit`, and `Bash` included. Only `model` and `reasoningEffort` shape it; how it does the work is Claude Code's business, which is the point of delegating to another harness. If you need a subagent that cannot change anything, use `harness: pi` with a read-only `tools` list.
+**So a `claude` agent can change things.** It reads, writes, edits, searches, runs commands, browses, and uses its own skills — `Write`, `Edit`, and `Bash` included. Only `model` — and the effort it carries — shape it; how it does the work is Claude Code's business, which is the point of delegating to another harness. If you need a subagent that cannot change anything, use `harness: pi` with a read-only `tools` list.
 
 What it cannot do is start or reach another agent — see [Tools](#tools).
 

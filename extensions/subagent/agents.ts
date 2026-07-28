@@ -9,12 +9,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { buildSkillPaths } from "./skills.ts";
-import type {
-  AgentConfig,
-  AgentSource,
-  Harness,
-  ReasoningEffort,
-} from "./types.ts";
+import type { AgentConfig, AgentSource, Harness } from "./types.ts";
 import {
   DEFAULT_HARNESS,
   HARNESSES,
@@ -112,25 +107,71 @@ function parseHarness(raw: string | undefined, filePath: string): Harness {
 }
 
 /**
- * Both harnesses express the whole neutral scale — pi as a `model:<level>`
- * thinking suffix, Claude Code as an effort or thinking budget — so there is no
- * per-harness restriction here. Whether a specific *model* supports a level is
- * the harness's business: pi clamps it, and rejecting it here would deny a
- * profile that the harness would have run.
+ * Reject `reasoningEffort`, naming where the effort belongs now.
+ *
+ * Effort rides in the model string as `<model>:<effort>`, which is pi's own
+ * idiom and the one spelling both harnesses already parse. Keeping a second
+ * field meant two ways to say the same thing with a precedence rule between
+ * them, and a profile could set both and disagree with itself.
  */
-function parseReasoningEffort(
-  raw: string | undefined,
+function rejectReasoningEffort(
+  raw: unknown,
+  model: string | undefined,
   filePath: string,
-): ReasoningEffort | undefined {
-  const value = raw?.trim();
-  if (!value) return undefined;
-  if (!(REASONING_EFFORTS as readonly string[]).includes(value)) {
+): void {
+  if (raw === undefined || raw === null) return;
+  const effort = typeof raw === "string" ? raw.trim() : "";
+  const suffix = effort || "<effort>";
+  // Name the exact line to write when there is a model to attach it to.
+  const base = model ? splitEffortSuffix(model)[0] : "<model>";
+  throw new AgentConfigValidationError(
+    `reasoningEffort is no longer a field; write the effort into model as '${base}:${suffix}'`,
+    filePath,
+  );
+}
+
+/**
+ * Split a trailing `:<effort>` off a model string.
+ *
+ * Only a recognized effort counts as a suffix. Model ids legitimately contain
+ * colons: `pi --list-models` carries OpenRouter variant suffixes like
+ * `google/gemma-4-31b-it:free`, and on Claude Code a Bedrock id ends in a version
+ * like `…-v1:0`. Anything unrecognized is therefore left as part of the id, and an
+ * effort can stack on top of a variant (`…:free:high`).
+ *
+ * The consequence worth knowing: a misspelled effort (`opus:turbo`) reads as an id
+ * rather than an error, because nothing distinguishes it from `…:free`.
+ */
+function splitEffortSuffix(
+  model: string,
+): [base: string, effort: string | undefined] {
+  const slash = model.lastIndexOf("/");
+  const colon = model.lastIndexOf(":");
+  if (colon <= slash) return [model, undefined];
+  const effort = model.slice(colon + 1);
+  if (!(REASONING_EFFORTS as readonly string[]).includes(effort)) {
+    return [model, undefined];
+  }
+  return [model.slice(0, colon), effort];
+}
+
+/**
+ * `inherit` takes the caller's model *and* its effort, so a suffix contradicts
+ * it. Rejected rather than ignored: left through it became a literal
+ * `inherit:high` model id that no harness could resolve.
+ */
+function assertNoEffortOnInherit(
+  model: string | undefined,
+  filePath: string,
+): void {
+  if (!model) return;
+  const [base, effort] = splitEffortSuffix(model);
+  if (base === "inherit" && effort) {
     throw new AgentConfigValidationError(
-      `unknown reasoningEffort '${value}'; expected one of ${oneOf(REASONING_EFFORTS)}`,
+      `model 'inherit' takes no effort suffix: it inherits the caller's model and effort together`,
       filePath,
     );
   }
-  return value as ReasoningEffort;
 }
 
 /**
@@ -224,16 +265,14 @@ export function parseAgentConfig(
     stringField(frontmatter.harness, "harness", filePath),
     filePath,
   );
-  const reasoningEffort = parseReasoningEffort(
-    stringField(frontmatter.reasoningEffort, "reasoningEffort", filePath),
-    filePath,
-  );
   const tools = parseTools(
     stringField(frontmatter.tools, "tools", filePath),
     harness,
     filePath,
   );
   const model = stringField(frontmatter.model, "model", filePath);
+  assertNoEffortOnInherit(model, filePath);
+  rejectReasoningEffort(frontmatter.reasoningEffort, model, filePath);
   const skills = parseSkills(
     stringField(frontmatter.skills, "skills", filePath),
     harness,
@@ -252,7 +291,6 @@ export function parseAgentConfig(
         filePath,
       ) === true,
     systemPrompt,
-    ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(skills ? { skills } : {}),
     ...(source ? { source } : {}),
   };
