@@ -49,8 +49,8 @@ Supported frontmatter fields:
 | --- | --- | --- | --- |
 | `description` | Yes | When to use the agent. Free-form text. | `Fast codebase exploration` |
 | `harness` | No | Execution backend. Defaults to `pi`. | `pi`, `claude` |
-| `model` | No | The model id, handed to the harness **exactly as written** — nothing is stripped or parsed. `inherit` is the one reserved value. | `inherit`, `openai-codex/gpt-5.5`, `claude-opus-4-5`, `arn:aws:bedrock:…` |
-| `effort` | No | Reasoning depth. Independent of `model`; both harnesses take it separately. | `off`, `low`, `high`, `max` |
+| `model` | No | The model id, handed to the harness **exactly as written** — nothing is stripped or parsed. `inherit` is the one reserved value: on `pi` it takes the calling agent's model, on `claude` your own Claude Code's. | `inherit`, `openai-codex/gpt-5.5`, `claude-opus-4-5`, `arn:aws:bedrock:…` |
+| `effort` | No | Reasoning depth, independent of `model`. Every value works on either harness; if the model cannot do the level, the harness settles for the nearest one it can. | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `tools` | No | Tools the agent can use. **`pi` only** — a `claude` agent runs the fixed set in [Tools](#tools), so the field is rejected there. Omit to inherit Pi's defaults. | `read, grep, find, ls, bash` |
 | `skills` | No | Comma-separated skill names. **`pi` only** — a `claude` agent manages its own skills, so the field is rejected there. When set, the agent sees exactly these skills; when omitted, it discovers skills normally. | `summarize, commit` |
 | `appendSystemPrompt` | No | When `true`, the agent prompt is appended to the harness's base system prompt. When `false` or omitted, the agent prompt replaces it. | `true`, `false` |
@@ -82,25 +82,6 @@ The calling agent invokes it the same way as any other agent — `subagent` take
 only `agent`, `description`, and `prompt`, so backend choice never leaks into the
 tool call.
 
-### Reasoning effort
-
-`effort` is one scale that works on both harnesses. Every value is accepted on either; if the model you picked does not support a level, the harness settles for the nearest one it does.
-
-It is a field of its own rather than a `model` suffix, because only a field can be validated. `effort: turbo` is rejected naming the scale; a `:turbo` in a model string could not be, since nothing distinguishes a misspelled effort from a variant suffix a provider really uses — OpenRouter has `google/gemma-4-31b-it:free`, and Bedrock ids end in `-v1:0`. A `:<effort>` on `model` is therefore rejected too, pointing at the field.
-
-| Value | `pi` | `claude` |
-| --- | --- | --- |
-| `off` | thinking level `off` | thinking disabled |
-| `minimal` | thinking level `minimal` | minimal thinking budget |
-| `low`, `medium`, `high`, `xhigh` | matching thinking level | matching effort level |
-| `max` | thinking level `max` | effort `max` |
-
-**A profile always wins.** Both go to the harness as explicit options — `pi --model` and `pi --thinking`, or the SDK's `model` and `effort` — so they outrank whatever your `~/.claude/settings.json` says.
-
-**`model` reaches the harness untouched.** No provider prefix is stripped and no suffix is parsed, so `arn:aws:bedrock:…`, `bedrock/us.anthropic.…-v1:0`, and `openrouter/google/gemma-4-31b-it:free` all arrive intact. A model the harness does not accept is refused by the harness, which is a clearer answer than a rewritten id that resolves to something else.
-
-**`inherit` and an omitted `model` take the caller's.** On `pi`, the calling agent's model, and its thinking level unless `effort` overrides it. On `claude`, the `model` and `effortLevel` from your `~/.claude/settings.json`, falling back to Claude Code's built-in defaults — true in trusted and untrusted directories alike, since those settings are user scope. Check the model shown on a finished run if a profile behaves unexpectedly.
-
 ### Limits
 
 **At most four subagents run at once.** Pi executes a turn's tool calls concurrently, so a parent that asks for six subagents in one turn starts six — each a full harness process with its own model traffic. Beyond the fourth, runs queue and start as slots free; they show up straight away as pending rather than appearing only once they begin. Cancelling a queued run drops it from the queue without ever starting it.
@@ -113,7 +94,7 @@ A `claude` subagent always runs with approvals bypassed, and this is not configu
 
 A headless subagent has nobody to ask, so anything needing approval would simply be refused. Bypassing is the only setting that leaves it able to work.
 
-**So a `claude` agent can change things.** It reads, writes, edits, searches, runs commands, browses, and uses its own skills — `Write`, `Edit`, and `Bash` included. Only `model` — and the effort it carries — shape it; how it does the work is Claude Code's business, which is the point of delegating to another harness. If you need a subagent that cannot change anything, use `harness: pi` with a read-only `tools` list.
+**So a `claude` agent can change things.** It reads, writes, edits, searches, runs commands, browses, and uses its own skills — `Write`, `Edit`, and `Bash` included. Only `model` and `effort` shape it; how it does the work is Claude Code's business, which is the point of delegating to another harness. If you need a subagent that cannot change anything, use `harness: pi` with a read-only `tools` list.
 
 What it cannot do is start or reach another agent — see [Tools](#tools).
 
