@@ -82,8 +82,13 @@ test("parseAgentConfig defaults appendSystemPrompt to false", async () => {
   assert.equal(parseAgentConfig(filePath).appendSystemPrompt, false);
 });
 
-test("bundled general-purpose agent appends system prompt", () => {
-  const filePath = path.join(process.cwd(), "agents", "general-purpose.md");
+test("example general-purpose project agent appends system prompt", () => {
+  const filePath = path.join(
+    process.cwd(),
+    ".pi",
+    "agents",
+    "general-purpose.md",
+  );
 
   assert.equal(parseAgentConfig(filePath).appendSystemPrompt, true);
 });

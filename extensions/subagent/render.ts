@@ -11,6 +11,7 @@ import {
   formatResumeHint,
   formatToolCall,
   formatUsageStats,
+  TOOL_CALL_ARROW_PREFIX,
 } from "./formatting.ts";
 import { getDisplayItems, getFinalOutput } from "./messages.ts";
 import type { DisplayItem, PersistedSubagentDetails } from "./types.ts";
@@ -84,12 +85,15 @@ export function renderSubagentResult(
       text += theme.fg("muted", `... ${skipped} earlier items\n`);
     for (const item of toShow) {
       if (item.type === "text") {
-        const preview = expanded
-          ? item.text
-          : item.text.split("\n").slice(0, 3).join("\n");
+        const preview = item.text.split("\n").slice(0, 3).join("\n");
         text += `${theme.fg("toolOutput", preview)}\n`;
       } else {
-        text += `${theme.fg("muted", "→ ")}${formatToolCall(item.name, item.args, theme.fg.bind(theme))}\n`;
+        text += `${theme.fg("muted", TOOL_CALL_ARROW_PREFIX)}${formatToolCall(
+          item.name,
+          item.args,
+          theme.fg.bind(theme),
+          "collapsed",
+        )}\n`;
       }
     }
     return text.trimEnd();
@@ -117,8 +121,13 @@ export function renderSubagentResult(
         if (item.type === "toolCall") {
           container.addChild(
             new Text(
-              theme.fg("muted", "→ ") +
-                formatToolCall(item.name, item.args, theme.fg.bind(theme)),
+              theme.fg("muted", TOOL_CALL_ARROW_PREFIX) +
+                formatToolCall(
+                  item.name,
+                  item.args,
+                  theme.fg.bind(theme),
+                  "expanded",
+                ),
               0,
               0,
             ),
