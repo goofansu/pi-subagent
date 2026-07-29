@@ -1,6 +1,6 @@
 /**
- * The backend seam. One `SubagentBackend` per execution harness (pi today,
- * Claude Code alongside it, Codex later), each turning the same `SubagentTask`
+ * The backend seam. One `SubagentBackend` per execution harness (Pi, Claude
+ * Code, or Codex), each turning the same `SubagentTask`
  * into the same normalized `SingleResult` the tool result and TUI already read.
  *
  * Backends own everything harness-specific: process or SDK lifecycle, argument

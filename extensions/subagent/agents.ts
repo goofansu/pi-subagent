@@ -10,12 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { buildSkillPaths } from "./skills.ts";
 import type { AgentConfig, AgentSource, Effort, Harness } from "./types.ts";
-import {
-  DEFAULT_HARNESS,
-  EFFORTS,
-  HARNESSES,
-  PLANNED_HARNESSES,
-} from "./types.ts";
+import { DEFAULT_HARNESS, EFFORTS, HARNESSES } from "./types.ts";
 
 export interface InvalidAgentConfig {
   filePath: string;
@@ -94,12 +89,6 @@ function parseHarness(raw: string | undefined, filePath: string): Harness {
   const value = raw?.trim();
   if (!value) return DEFAULT_HARNESS;
   if ((HARNESSES as readonly string[]).includes(value)) return value as Harness;
-  if ((PLANNED_HARNESSES as readonly string[]).includes(value)) {
-    throw new AgentConfigValidationError(
-      `harness '${value}' is not supported yet; this version supports ${oneOf(HARNESSES)}`,
-      filePath,
-    );
-  }
   throw new AgentConfigValidationError(
     `unknown harness '${value}'; expected one of ${oneOf(HARNESSES)}`,
     filePath,
@@ -157,7 +146,7 @@ function assertNoEffortSuffix(
  * Reject a field the profile cannot control on this harness.
  *
  * Delegating to another harness means letting it work the way it works: a
- * claude subagent runs Claude Code's own tools and its own skills, and the
+ * external subagent runs its harness's own tools and skills, and the
  * extension configures neither. Accepting the field and quietly not honoring it
  * is the misreading most likely to matter — an author would believe they had
  * built a read-only agent, or pinned its skill set, and be wrong.

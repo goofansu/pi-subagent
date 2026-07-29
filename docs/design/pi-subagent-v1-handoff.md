@@ -2,8 +2,8 @@
 
 ## Status
 
-Implemented. Version 1 ships the `pi` and `claude` harnesses; `codex` is
-recognized and reported as not-yet-supported.
+Implemented. The backend seam introduced in version 1 now ships the `pi`,
+`claude`, and `codex` harnesses.
 
 **Partly superseded.** This document records the v1 design as handed off. Two of
 its decisions have since changed, and the README is the current source of truth:
@@ -103,9 +103,9 @@ deliberately *not* invocation parameters.
                    |
         +----------+----------+    extensions/subagent/backend.ts
         |          |          |
-        v          v          v
+       v          v          v
        Pi       Claude     Codex    extensions/subagent/backends/*.ts
-        |          |          |     (later)
+        |          |          |
         +----------+----------+
                    |
             Normalized Result      SingleResult in types.ts
@@ -135,8 +135,8 @@ drift between backends:
 ### Normalized result
 
 `SingleResult` is the single result shape, extended with `harness`. It keeps
-`messages: Message[]` rather than collapsing to a final string, so a Claude run
-renders in the existing transcript UI identically to a pi run.
+`messages: Message[]` rather than collapsing to a final string, so external
+harness runs render in the existing transcript UI identically to a pi run.
 
 ---
 
@@ -157,7 +157,7 @@ A missing SDK is reported at session start naming the affected agents.
 
 | Agent setting | Claude Code |
 | --- | --- |
-| `model` | `options.model` (provider prefix and `:level` suffix stripped) |
+| `model` | `options.model`, passed exactly as written |
 | `effort` | `options.effort`, or `options.thinking` for `off`/`minimal` |
 | `systemPrompt` | `options.systemPrompt` (string, or `claude_code` preset + append) |
 | — | `permissionMode: bypassPermissions` + `allowDangerouslySkipPermissions`, always |
@@ -197,17 +197,36 @@ This is settings isolation, not total isolation. Claude Code's own skills load
 from disk, and so do slash commands — both verified. Neither executes on its
 own, so the code-execution path is closed.
 
-### Codex (later)
+### Codex
 
-`codex app-server --stdio`, with `approvalPolicy=never` +
-`sandbox=danger-full-access` for the same reason the claude harness bypasses.
-Recognized today only so a future-facing agent file produces a clear diagnostic.
+`backends/codex.ts` runs `codex app-server --stdio`, with
+`approvalPolicy=never` + `sandbox=danger-full-access` for the same reason the
+claude harness bypasses. It maps base versus appended system instructions onto
+`baseInstructions`/`developerInstructions`, maps effort on `turn/start`, folds
+structured app-server items into the common transcript, and records the thread
+id for `codex resume`.
+
+The process starts with both `multi_agent` and `multi_agent_v2` disabled,
+keeping native Codex delegation under the same one-level guard. Pi's trust
+decision is forwarded as a process-local Codex project trust level. For an
+untrusted task the child process starts in the task directory, but
+`thread/start` omits its optional `cwd`; app-server otherwise persists an
+explicit full-access cwd as trusted. Untrusted runs also disable hooks, plugins,
+and apps at startup, then use `config/read` to enumerate and explicitly disable
+every effective MCP server and app. An empty `mcp_servers` overlay is not
+sufficient because Codex merges tables across layers.
+
+The availability probe requires app server and both multi-agent feature names,
+so an older CLI is reported before delegation instead of failing when the
+backend supplies an unknown `--disable` value.
 
 ---
 
 ## Approvals
 
-Not configurable. A `claude` subagent always runs `bypassPermissions`.
+Not configurable. A `claude` subagent always runs `bypassPermissions`; a
+`codex` subagent always runs with `approvalPolicy=never` and
+`sandbox=danger-full-access`.
 
 There is no interactive channel to a headless child, so Claude Code cannot ask
 anyone: an operation needing approval is denied outright, so any other mode means
@@ -224,7 +243,7 @@ agent-spawning tools. It now has one: the backend's own allowlist, which is not
 author-configurable. See Status.
 
 A `permissions` field was designed and briefly implemented, then removed: its
-only non-default value was not a useful shape for a subagent. Codex will map its
+only non-default value was not a useful shape for a subagent. Codex maps its
 `approvalPolicy`/`sandbox` pair the same way — bypassed, not configurable.
 
 ---
@@ -233,14 +252,14 @@ only non-default value was not a useful shape for a subagent. Codex will map its
 
 One neutral scale, `off … max`, mapped per harness:
 
-| Neutral | Pi | Claude Code |
-| --- | --- | --- |
-| `off` | `:off` | `thinking: { type: "disabled" }` |
-| `minimal` | `:minimal` | `thinking: { type: "enabled", budgetTokens: 1024 }` |
-| `low`–`xhigh` | `:<level>` | `effort: <level>` |
-| `max` | `:max` | `effort: "max"` |
+| Neutral | Pi | Claude Code | Codex |
+| --- | --- | --- | --- |
+| `off` | `:off` | `thinking: { type: "disabled" }` | `effort: "none"` |
+| `minimal` | `:minimal` | `thinking: { type: "enabled", budgetTokens: 1024 }` | `effort: "minimal"` |
+| `low`–`xhigh` | `:<level>` | `effort: <level>` | `effort: <level>` |
+| `max` | `:max` | `effort: "max"` | `effort: "max"` |
 
-Both harnesses cover the whole scale: pi's `model:<level>` suffix accepts every
+All harnesses cover the whole scale: pi's `model:<level>` suffix accepts every
 level in `PI_THINKING_LEVELS`, and pi clamps a level the chosen model does not
 support. A value outside the scale is rejected at load time with a reason naming
 the accepted set, so an agent file never silently means something else.
@@ -254,12 +273,12 @@ dispatcher, and reach the child as `--no-skills` plus one `--skill <path>` per
 resolved skill. Declaring `skills` means the extension owns the pi child's skill
 set exactly; omitting it leaves pi's native discovery in place.
 
-A claude subagent manages its own skills. The extension neither injects skill
-content nor sets `options.skills`, for the same reason it does not set `tools`:
-delegating to another harness means letting it work the way it works. An earlier
-version treated skills as backend-neutral and injected them; that was the wrong
-assumption and was removed. (Note `settingSources` governs `settings.json`, not
-skills — it is set for isolation, and was never the skill switch.)
+External-harness subagents manage their own skills. The extension neither
+injects skill content nor sets backend skill options, for the same reason it
+does not set `tools`: delegating to another harness means letting it work the
+way it works. An earlier version treated skills as backend-neutral and injected
+them; that was the wrong assumption and was removed. (For Claude Code,
+`settingSources` governs `settings.json`, not skills.)
 
 ---
 
@@ -276,16 +295,18 @@ synchronous, and the parent model decides each delegation step.
 | Criterion | Where it holds |
 | --- | --- |
 | Existing Pi agents work unchanged | `backends/pi.ts`, `runner.test.ts` |
-| Profiles select `pi` or `claude` | `agents.ts`, `dispatch.test.ts` |
+| Profiles select `pi`, `claude`, or `codex` | `agents.ts`, `dispatch.test.ts` |
 | Parent still uses only the `subagent` tool | `index.ts` |
 | Backend config stays inside profiles | `index.ts` tool parameters |
 | Claude agents run without permission prompts | `buildPermissionOptions` (always bypassed) |
 | A Claude agent cannot spawn further agents | `buildClaudeOptions` (`tools` allowlist + `disallowedTools`) |
-| `tools` is rejected rather than silently ignored on `claude` | `parseTools` (pi-only field) |
+| A Codex agent cannot spawn further agents | `buildCodexAppServerArgs` (`multi_agent` and `multi_agent_v2` disabled) |
+| `tools` is rejected rather than silently ignored on external harnesses | `parseTools` (pi-only field) |
 | No configuration is loaded from an untrusted checkout | `buildClaudeOptions` (`settingSources: ["user"]` + `strictMcpConfig` when untrusted) |
 | All backends return a common result | `SingleResult`, `createEmptyResult` |
 | Skill loading controlled by the extension, on pi | `skills.ts`, `buildPiArgs` |
-| `skills` is rejected rather than silently ignored on `claude` | `parseSkills` (pi-only field) |
+| `skills` is rejected rather than silently ignored on external harnesses | `parseSkills` (pi-only field) |
+| Codex streams into the common result and can be cancelled | `backends/codex.ts`, `backends/codex.test.ts` |
 | `/agents` discovery keeps working | `agents-command.ts` |
 
 ---
@@ -294,9 +315,8 @@ synchronous, and the parent model decides each delegation step.
 
 - **Background runs** — `subagent(action=run|status|wait|cancel)`.
 - **Persistent sessions** — Claude conversation continuation, Codex thread
-  continuation, pi session reuse. Version 1 already records Claude's
-  `sessionId`, which is the input `options.resume` needs; nothing is resumed
-  automatically today.
+  continuation, pi session reuse. Claude and Codex results already record the
+  native session/thread id; nothing is resumed automatically today.
 - **Supervisor communication** — child agents requesting decisions from the
   parent.
 

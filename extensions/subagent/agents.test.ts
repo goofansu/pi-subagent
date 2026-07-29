@@ -737,14 +737,11 @@ test("parseAgentConfig defaults an agent without a harness to pi", async () => {
   assert.equal(parseAgentConfig(filePath).harness, "pi");
 });
 
-test("parseAgentConfig rejects a harness that is planned but not implemented", async () => {
+test("parseAgentConfig accepts the codex harness", async () => {
   const dir = await makeTempDir();
   const filePath = await writeAgentWithFrontmatter(dir, "harness: codex");
 
-  assert.throws(
-    () => parseAgentConfig(filePath),
-    /harness 'codex' is not supported yet; this version supports pi, claude/,
-  );
+  assert.equal(parseAgentConfig(filePath).harness, "codex");
 });
 
 test("parseAgentConfig rejects an unknown harness", async () => {
@@ -753,7 +750,7 @@ test("parseAgentConfig rejects an unknown harness", async () => {
 
   assert.throws(
     () => parseAgentConfig(filePath),
-    /unknown harness 'gemini'; expected one of pi, claude/,
+    /unknown harness 'gemini'; expected one of pi, claude, codex/,
   );
 });
 
@@ -798,14 +795,13 @@ test("parseAgentConfig accepts an omitted optional field as absent", async () =>
   assert.equal(config.appendSystemPrompt, false);
 });
 
-test("loadAgentConfigsWithDiagnostics reports an invalid harness instead of throwing", async () => {
+test("loadAgentConfigsWithDiagnostics loads a codex agent", async () => {
   const dir = await makeTempDir();
   await writeAgentWithFrontmatter(dir, "harness: codex");
 
   const { configs, invalidFiles } = loadAgentConfigsWithDiagnostics(dir);
-  assert.equal(configs.size, 0);
-  assert.equal(invalidFiles.length, 1);
-  assert.match(invalidFiles[0].reason, /harness 'codex' is not supported yet/);
+  assert.equal(configs.get("worker")?.harness, "codex");
+  assert.deepEqual(invalidFiles, []);
 });
 
 test("parseAgentConfig rejects tools on the claude harness", async () => {
@@ -815,6 +811,19 @@ test("parseAgentConfig rejects tools on the claude harness", async () => {
   const filePath = await writeAgentWithFrontmatter(
     dir,
     "harness: claude\ntools: Read, Grep",
+  );
+
+  assert.throws(
+    () => parseAgentConfig(filePath),
+    /tools is only supported on harness 'pi'/,
+  );
+});
+
+test("parseAgentConfig rejects tools on the codex harness", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(
+    dir,
+    "harness: codex\ntools: read, grep",
   );
 
   assert.throws(
@@ -837,6 +846,19 @@ test("parseAgentConfig rejects skills on the claude harness", async () => {
   const filePath = await writeAgentWithFrontmatter(
     dir,
     "harness: claude\nskills: commit",
+  );
+
+  assert.throws(
+    () => parseAgentConfig(filePath),
+    /skills is only supported on harness 'pi'/,
+  );
+});
+
+test("parseAgentConfig rejects skills on the codex harness", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(
+    dir,
+    "harness: codex\nskills: commit",
   );
 
   assert.throws(

@@ -14,6 +14,7 @@ import {
   settleAborted,
 } from "./backend.ts";
 import { claudeBackend } from "./backends/claude.ts";
+import { codexBackend } from "./backends/codex.ts";
 import { piBackend } from "./backends/pi.ts";
 import type { ReleaseSlot, SubagentLimiter } from "./concurrency.ts";
 import { QueueAbortedError, subagentLimiter } from "./concurrency.ts";
@@ -27,6 +28,7 @@ const MAX_SUBAGENT_DEPTH = 1;
 export const defaultBackendRegistry: BackendRegistry = createBackendRegistry([
   piBackend,
   claudeBackend,
+  codexBackend,
 ]);
 
 export function getSubagentDepth(): number {

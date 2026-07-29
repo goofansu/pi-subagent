@@ -157,3 +157,17 @@ test("findUnavailableHarnessWarnings reports a harness with no registered backen
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /Harness 'claude' is not available/);
 });
+
+test("findUnavailableHarnessWarnings tells Codex agents how to restore the CLI", async () => {
+  const warnings = await findUnavailableHarnessWarnings(
+    new Map([["worker", agentConfig("worker", "codex")]]),
+    createBackendRegistry([backend("pi", true), backend("codex", false)]),
+  );
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Harness 'codex' is not available/);
+  assert.match(warnings[0], /Install or update the Codex CLI/);
+  assert.match(warnings[0], /on PATH/);
+  assert.match(warnings[0], /app server/);
+  assert.match(warnings[0], /multi_agent_v2/);
+});

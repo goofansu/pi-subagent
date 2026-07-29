@@ -162,8 +162,27 @@ test("formatResumeHint quotes an executable path the shell would mangle", () => 
   );
 });
 
+test("formatResumeHint reopens a Codex thread", () => {
+  assert.equal(
+    formatResumeHint(
+      { harness: "codex", sessionId: "thread-123", cwd: "/repo" },
+      "/repo",
+      "codex",
+    ),
+    "codex resume thread-123",
+  );
+  assert.equal(
+    formatResumeHint(
+      { harness: "codex", sessionId: "thread-123", cwd: "/repo" },
+      "/elsewhere",
+      "/opt/Codex CLI/codex",
+    ),
+    "(cd /repo && '/opt/Codex CLI/codex' resume thread-123)",
+  );
+});
+
 test("formatResumeHint is absent when there is no session to resume", () => {
-  // pi runs with --no-session, and a claude run that died before init has no id.
+  // pi runs with --no-session, and an external harness can die before init.
   assert.equal(
     formatResumeHint(
       { harness: "pi", sessionId: "abc", cwd: "/repo" },

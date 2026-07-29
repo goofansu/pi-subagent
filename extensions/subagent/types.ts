@@ -30,17 +30,10 @@ export interface UsageStats {
 }
 
 /** Execution backends an agent profile can select. */
-export const HARNESSES = ["pi", "claude"] as const;
+export const HARNESSES = ["pi", "claude", "codex"] as const;
 export type Harness = (typeof HARNESSES)[number];
 
 export const DEFAULT_HARNESS: Harness = "pi";
-
-/**
- * Harness names from the multi-backend design that this version recognizes but
- * cannot run yet. Naming them explicitly turns a future-facing agent file into
- * a clear diagnostic instead of a generic "unknown harness".
- */
-export const PLANNED_HARNESSES = ["codex"] as const;
 
 /**
  * Backend-neutral reasoning depth. Backends map this onto their own knob:
@@ -71,15 +64,15 @@ export interface SingleResult {
   stopReason?: string;
   errorMessage?: string;
   /**
-   * The harness's own session identifier, when it keeps one. Claude Code
-   * persists a transcript per session, so this is what makes a finished
-   * subagent run inspectable with `claude -r <sessionId>`. The pi harness runs
-   * with `--no-session` and reports none.
+   * The harness's own session/thread identifier, when it keeps one. This makes
+   * a finished external-harness run inspectable with `claude -r <sessionId>` or
+   * `codex resume <sessionId>`. The pi harness runs with `--no-session` and
+   * reports none.
    */
   sessionId?: string;
   /**
-   * Directory the subagent ran in. Recorded because Claude Code resolves
-   * sessions per project directory, so reopening one requires being there.
+   * Directory the subagent ran in. Recorded so a resume hint restores the same
+   * project context before reopening the external-harness session.
    */
   cwd?: string;
 }
@@ -125,11 +118,11 @@ export interface AgentConfig {
    * stripping, no suffix parsing. `inherit` is the one reserved value.
    */
   model?: string;
-  /** Reasoning depth. Independent of `model`; both harnesses take it separately. */
+  /** Reasoning depth. Independent of `model`; every harness takes it separately. */
   effort?: Effort;
-  /** pi only: a claude subagent runs Claude Code's own tool set. */
+  /** pi only: external harnesses run their own tool sets. */
   tools?: string;
-  /** pi only: a claude subagent manages its own skills. */
+  /** pi only: external harnesses manage their own skills. */
   skills?: string[];
   appendSystemPrompt?: boolean;
   systemPrompt: string;

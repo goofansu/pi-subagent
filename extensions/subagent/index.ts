@@ -55,7 +55,9 @@ export async function findUnavailableHarnessWarnings(
       `Harness '${harness}' is not available; these agents cannot run: ${names.join(", ")}.` +
         (harness === "claude"
           ? ` '@anthropic-ai/claude-agent-sdk' and the per-platform CLI binary it drives are optional dependencies of pi-subagent; reinstall the package, without '--omit=optional', to restore them.`
-          : ""),
+          : harness === "codex"
+            ? ` Install or update the Codex CLI, make sure the 'codex' command is on PATH, and verify it supports app server plus the 'multi_agent' and 'multi_agent_v2' feature gates.`
+            : ""),
     );
   }
   return warnings;

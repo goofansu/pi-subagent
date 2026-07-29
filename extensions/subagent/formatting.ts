@@ -43,9 +43,9 @@ export function formatUsageStats(usage: UsageStats, model?: string): string {
 }
 
 /**
- * The command that reopens a finished subagent's transcript. Claude Code
- * resolves sessions per project directory, so this only works from the
- * directory the subagent ran in.
+ * The command that reopens a finished external-harness transcript. Both Claude
+ * Code and Codex restore the run's working directory context, so the hint hops
+ * there first when necessary.
  *
  * The executable is resolved rather than assumed: the SDK drives a bundled
  * binary that declares no npm `bin`, so a setup can run claude subagents with
@@ -55,10 +55,22 @@ export function formatUsageStats(usage: UsageStats, model?: string): string {
 export function formatResumeHint(
   result: { harness: Harness; sessionId?: string; cwd?: string },
   currentCwd: string = process.cwd(),
-  claudeCommand: string = resolveClaudeCommand(),
+  commandOverride?: string,
 ): string | undefined {
-  if (result.harness !== "claude" || !result.sessionId) return undefined;
-  const command = `${shellQuote(claudeCommand)} -r ${result.sessionId}`;
+  if (
+    (result.harness !== "claude" && result.harness !== "codex") ||
+    !result.sessionId
+  ) {
+    return undefined;
+  }
+  const executable =
+    commandOverride ??
+    (result.harness === "claude" ? resolveClaudeCommand() : "codex");
+  const resumeArgs =
+    result.harness === "claude"
+      ? `-r ${result.sessionId}`
+      : `resume ${result.sessionId}`;
+  const command = `${shellQuote(executable)} ${resumeArgs}`;
   // Resuming only finds the session from the directory it ran in, so include
   // the hop when that is somewhere else.
   if (result.cwd && result.cwd !== currentCwd) {
