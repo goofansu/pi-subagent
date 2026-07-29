@@ -50,7 +50,7 @@ const packageAgent: AgentConfig = {
   source: "package",
 };
 
-test("getAgentSelectItems lists names and descriptions only", () => {
+test("getAgentSelectItems includes the resolved default harness", () => {
   const items = getAgentSelectItems(
     new Map([[exploreAgent.name, exploreAgent]]),
   );
@@ -59,7 +59,7 @@ test("getAgentSelectItems lists names and descriptions only", () => {
     {
       value: "explore",
       label: "explore",
-      description: "[d] Fast codebase exploration.",
+      description: "[d] [pi] Fast codebase exploration.",
     },
   ]);
 });
@@ -71,7 +71,7 @@ test("getAgentSelectItems prefixes user agents", () => {
     {
       value: "reviewer",
       label: "reviewer",
-      description: "[u] Review code carefully.",
+      description: "[u] [pi] Review code carefully.",
     },
   ]);
 });
@@ -85,7 +85,7 @@ test("getAgentSelectItems prefixes project agents", () => {
     {
       value: "deployer",
       label: "deployer",
-      description: "[p] Deploy the project.",
+      description: "[p] [pi] Deploy the project.",
     },
   ]);
 });
@@ -99,7 +99,7 @@ test("getAgentSelectItems labels package agents with [t]", () => {
     {
       value: "packaged",
       label: "packaged",
-      description: "[t] Installed package agent.",
+      description: "[t] [pi] Installed package agent.",
     },
   ]);
 });
@@ -116,14 +116,14 @@ test("getFilteredAgentSelectItems filters agents by name and description", () =>
     {
       value: "explore",
       label: "explore",
-      description: "[d] Fast codebase exploration.",
+      description: "[d] [pi] Fast codebase exploration.",
     },
   ]);
   assert.deepEqual(getFilteredAgentSelectItems(items, "reviewer"), [
     {
       value: "reviewer",
       label: "reviewer",
-      description: "[u] Review code carefully.",
+      description: "[u] [pi] Review code carefully.",
     },
   ]);
 });
