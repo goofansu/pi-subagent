@@ -29,6 +29,7 @@ import type {
 import type { SubagentBackend, SubagentRunContext } from "../backend.ts";
 import { appendStderr, DEPTH_ENV_KEY, settleAborted } from "../backend.ts";
 import type { AgentConfig, Effort, SingleResult } from "../types.ts";
+import { resolveAppendSystemPrompt } from "../types.ts";
 
 const SDK_PACKAGE = "@anthropic-ai/claude-agent-sdk";
 
@@ -305,7 +306,7 @@ export function buildClaudeSystemPrompt(
 ): ClaudeOptions["systemPrompt"] {
   const parts = config.systemPrompt.trim();
 
-  if (config.appendSystemPrompt) {
+  if (resolveAppendSystemPrompt(config)) {
     // The preset already describes the environment, including the directory.
     return { type: "preset", preset: "claude_code", append: parts };
   }

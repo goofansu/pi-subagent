@@ -34,6 +34,7 @@ export const HARNESSES = ["pi", "claude", "codex"] as const;
 export type Harness = (typeof HARNESSES)[number];
 
 export const DEFAULT_HARNESS: Harness = "pi";
+export const DEFAULT_APPEND_SYSTEM_PROMPT = true;
 
 /**
  * Backend-neutral reasoning depth. Backends map this onto their own knob:
@@ -124,6 +125,7 @@ export interface AgentConfig {
   tools?: string;
   /** pi only: external harnesses manage their own skills. */
   skills?: string[];
+  /** Append to native instructions. Omitted means the shared default. */
   appendSystemPrompt?: boolean;
   systemPrompt: string;
   source?: AgentSource;
@@ -132,6 +134,11 @@ export interface AgentConfig {
 /** The harness an agent runs on, resolving the documented default. */
 export function resolveHarness(config: AgentConfig): Harness {
   return config.harness ?? DEFAULT_HARNESS;
+}
+
+/** Whether to append an agent prompt, resolving the documented default. */
+export function resolveAppendSystemPrompt(config: AgentConfig): boolean {
+  return config.appendSystemPrompt ?? DEFAULT_APPEND_SYSTEM_PROMPT;
 }
 
 export type OnUpdateCallback = (

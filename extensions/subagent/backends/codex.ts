@@ -22,6 +22,7 @@ import type {
 } from "../backend.ts";
 import { appendStderr, DEPTH_ENV_KEY, settleAborted } from "../backend.ts";
 import type { AgentConfig, Effort, SingleResult } from "../types.ts";
+import { resolveAppendSystemPrompt } from "../types.ts";
 
 type JsonObject = Record<string, unknown>;
 type RequestId = string | number;
@@ -172,7 +173,7 @@ export function buildCodexThreadStartParams(
   if (task.projectTrusted) params.cwd = task.cwd;
   const model = resolveCodexModel(task.config);
   if (model) params.model = model;
-  if (task.config.appendSystemPrompt) {
+  if (resolveAppendSystemPrompt(task.config)) {
     params.developerInstructions = task.config.systemPrompt;
   } else {
     params.baseInstructions = task.config.systemPrompt;

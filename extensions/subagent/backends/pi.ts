@@ -17,6 +17,7 @@ import type {
 } from "../backend.ts";
 import { appendStderr, DEPTH_ENV_KEY, settleAborted } from "../backend.ts";
 import type { AgentConfig, SingleResult } from "../types.ts";
+import { resolveAppendSystemPrompt } from "../types.ts";
 
 /**
  * Thinking levels pi's `model:<level>` suffix accepts, mirroring the CLI's own
@@ -73,7 +74,9 @@ export function buildPiArgs(
   }
   if (systemPromptPath) {
     args.push(
-      config.appendSystemPrompt ? "--append-system-prompt" : "--system-prompt",
+      resolveAppendSystemPrompt(config)
+        ? "--append-system-prompt"
+        : "--system-prompt",
       systemPromptPath,
     );
   }

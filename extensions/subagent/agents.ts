@@ -10,7 +10,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { buildSkillPaths } from "./skills.ts";
 import type { AgentConfig, AgentSource, Effort, Harness } from "./types.ts";
-import { DEFAULT_HARNESS, EFFORTS, HARNESSES } from "./types.ts";
+import {
+  DEFAULT_APPEND_SYSTEM_PROMPT,
+  DEFAULT_HARNESS,
+  EFFORTS,
+  HARNESSES,
+} from "./types.ts";
 
 export interface InvalidAgentConfig {
   filePath: string;
@@ -67,8 +72,8 @@ function stringField(
 
 /**
  * A frontmatter field as a boolean, or `undefined` when absent. A non-boolean
- * is rejected rather than read as false: `appendSystemPrompt: "yes"` means the
- * opposite of what it silently would have done.
+ * is rejected rather than treated as absent and silently given the field's
+ * default.
  */
 function booleanField(
   raw: unknown,
@@ -260,7 +265,7 @@ export function parseAgentConfig(
         frontmatter.appendSystemPrompt,
         "appendSystemPrompt",
         filePath,
-      ) === true,
+      ) ?? DEFAULT_APPEND_SYSTEM_PROMPT,
     systemPrompt,
     ...(effort ? { effort } : {}),
     ...(skills ? { skills } : {}),

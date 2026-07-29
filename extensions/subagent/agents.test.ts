@@ -71,7 +71,7 @@ test("parseAgentConfig reads name, frontmatter, and system prompt", async () => 
   });
 });
 
-test("parseAgentConfig defaults appendSystemPrompt to false", async () => {
+test("parseAgentConfig defaults appendSystemPrompt to true", async () => {
   const dir = await makeTempDir();
   const filePath = path.join(dir, "reviewer.md");
   await fs.promises.writeFile(
@@ -79,10 +79,21 @@ test("parseAgentConfig defaults appendSystemPrompt to false", async () => {
     "---\ndescription: Reviews code\n---\n\nYou review code.\n",
   );
 
+  assert.equal(parseAgentConfig(filePath).appendSystemPrompt, true);
+});
+
+test("parseAgentConfig preserves explicit appendSystemPrompt false", async () => {
+  const dir = await makeTempDir();
+  const filePath = path.join(dir, "reviewer.md");
+  await fs.promises.writeFile(
+    filePath,
+    "---\ndescription: Reviews code\nappendSystemPrompt: false\n---\n\nYou review code.\n",
+  );
+
   assert.equal(parseAgentConfig(filePath).appendSystemPrompt, false);
 });
 
-test("example general-purpose project agent appends system prompt", () => {
+test("example general-purpose project agent uses the append default", () => {
   const filePath = path.join(
     process.cwd(),
     ".pi",
@@ -791,13 +802,13 @@ test("parseAgentConfig names description when it is not a string", async () => {
   );
 });
 
-test("parseAgentConfig accepts an omitted optional field as absent", async () => {
+test("parseAgentConfig treats an empty optional string field as absent", async () => {
   const dir = await makeTempDir();
   const filePath = await writeAgentWithFrontmatter(dir, "model:");
 
   const config = parseAgentConfig(filePath);
   assert.equal(config.model, undefined);
-  assert.equal(config.appendSystemPrompt, false);
+  assert.equal(config.appendSystemPrompt, true);
 });
 
 test("loadAgentConfigsWithDiagnostics loads a codex agent", async () => {

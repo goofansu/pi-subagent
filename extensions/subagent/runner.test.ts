@@ -55,12 +55,13 @@ function result(): SingleResult {
   };
 }
 
-test("buildPiArgs passes configured tools without disabling tools first", () => {
+test("buildPiArgs passes tools and explicitly replaces native instructions", () => {
   const args = buildPiArgs(
     {
       name: "explore",
       description: "Explore code",
       tools: "read,grep,find,ls,bash",
+      appendSystemPrompt: false,
       systemPrompt: "Search only.",
     },
     "anthropic/claude",
@@ -81,12 +82,11 @@ test("buildPiArgs passes configured tools without disabling tools first", () => 
   ]);
 });
 
-test("buildPiArgs appends system prompt when appendSystemPrompt is true", () => {
+test("buildPiArgs appends system prompt when appendSystemPrompt is omitted", () => {
   const args = buildPiArgs(
     {
       name: "explore",
       description: "Explore code",
-      appendSystemPrompt: true,
       systemPrompt: "Search only.",
     },
     undefined,

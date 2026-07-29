@@ -182,23 +182,25 @@ test("Codex advances the harness-neutral nesting depth", () => {
   assert.equal(options.shell, false);
 });
 
-test("Codex replaces or appends system instructions as configured", () => {
-  const replaced = buildCodexThreadStartParams(task());
-  assert.equal(replaced.cwd, "/tmp/a.project");
-  assert.equal(replaced.baseInstructions, "You are the worker.");
-  assert.equal(replaced.developerInstructions, undefined);
-  assert.equal(replaced.approvalPolicy, "never");
-  assert.equal(replaced.sandbox, "danger-full-access");
-  assert.deepEqual(replaced.config.features, {
+test("Codex appends system instructions when the field is omitted", () => {
+  const appended = buildCodexThreadStartParams(task());
+  assert.equal(appended.cwd, "/tmp/a.project");
+  assert.equal(appended.baseInstructions, undefined);
+  assert.equal(appended.developerInstructions, "You are the worker.");
+  assert.equal(appended.approvalPolicy, "never");
+  assert.equal(appended.sandbox, "danger-full-access");
+  assert.deepEqual(appended.config.features, {
     multi_agent: false,
     multi_agent_v2: false,
   });
+});
 
-  const appended = buildCodexThreadStartParams(
-    task({ config: { appendSystemPrompt: true } }),
+test("Codex replaces system instructions when explicitly configured", () => {
+  const replaced = buildCodexThreadStartParams(
+    task({ config: { appendSystemPrompt: false } }),
   );
-  assert.equal(appended.baseInstructions, undefined);
-  assert.equal(appended.developerInstructions, "You are the worker.");
+  assert.equal(replaced.baseInstructions, "You are the worker.");
+  assert.equal(replaced.developerInstructions, undefined);
 });
 
 test("an untrusted Codex thread disables inherited integrations without an explicit cwd", () => {
@@ -523,7 +525,10 @@ test("untrusted Codex lifecycle disables layered integrations before starting", 
   const result = createEmptyResult("worker", "Implement", "codex");
   const completed = await runCodexAgent(
     {
-      task: task({ projectTrusted: false }),
+      task: task({
+        projectTrusted: false,
+        config: { appendSystemPrompt: false },
+      }),
       result,
       // A host callback failure must not strand the app-server turn.
       emit: () => {

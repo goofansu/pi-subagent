@@ -42,10 +42,14 @@ reported at session start.
 | `effort` | No | Reasoning depth, independent of `model`. | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `tools` | No | **Pi only.** Comma-separated tool names. Omit to use Pi's defaults. | `read, grep, find, ls` |
 | `skills` | No | **Pi only.** Exact comma-separated skill set. Omit for normal discovery. | `summarize, commit` |
-| `appendSystemPrompt` | No | Append the prompt to native instructions when `true`; replace them when `false` or omitted. | `true` |
+| `appendSystemPrompt` | No | Append the prompt to native instructions. Defaults to `true`; set to `false` to replace them. | `false` |
 
 Declaring `tools` or `skills` on a Claude or Codex profile makes the file
 invalid.
+
+Profile prompts append to the harness's native instructions by default. Set
+`appendSystemPrompt: false` only when the profile prompt should replace those
+native instructions.
 
 ### Harnesses
 
@@ -68,7 +72,6 @@ description: Implements approved plans and verifies changes
 harness: pi
 model: openai-codex/gpt-5.5
 effort: high
-appendSystemPrompt: true
 ---
 
 You are an implementation agent. Follow the approved plan and verify your work.
@@ -82,7 +85,6 @@ description: Implements approved plans and verifies changes
 harness: claude
 model: opus
 effort: high
-appendSystemPrompt: true
 ---
 
 You are an implementation agent. Follow the approved plan and verify your work.
@@ -99,7 +101,6 @@ description: Implements approved plans and verifies changes
 harness: codex
 model: gpt-5.6-sol
 effort: high
-appendSystemPrompt: true
 ---
 
 You are an implementation agent. Follow the approved plan and verify your work.
