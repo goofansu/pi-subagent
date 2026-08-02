@@ -30,6 +30,22 @@ test("resolveResultHarness treats an omitted harness as pi", () => {
   );
 });
 
+test("resolveResultHarness restores legacy results without effort", () => {
+  const { harness: _dropped, ...legacy } = createEmptyResult(
+    "worker",
+    "task",
+    "pi",
+  );
+
+  assert.equal(Object.hasOwn(legacy, "effort"), false);
+
+  const restored = resolveResultHarness(legacy as PersistedSingleResult);
+
+  assert.equal(restored.harness, "pi");
+  assert.equal(Object.hasOwn(restored, "effort"), false);
+  assert.equal(restored.effort, undefined);
+});
+
 test("resolveResultHarness leaves the rest of the result untouched", () => {
   const { harness: _dropped, ...legacy } = createEmptyResult(
     "worker",
