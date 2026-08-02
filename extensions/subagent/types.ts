@@ -62,6 +62,8 @@ export interface SingleResult {
   stderr: string;
   usage: UsageStats;
   model?: string;
+  /** Explicit reasoning effort configured by the profile. */
+  effort?: Effort;
   stopReason?: string;
   errorMessage?: string;
   /**

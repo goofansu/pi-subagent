@@ -52,6 +52,20 @@ test("formatUsageStats includes only non-zero usage parts and model", () => {
   );
 });
 
+test("formatUsageStats appends configured effort after the model", () => {
+  assert.equal(
+    formatUsageStats(usage({ turns: 1 }), "openai/gpt-5.6-sol", "high"),
+    "1 turn openai/gpt-5.6-sol effort:high",
+  );
+});
+
+test("formatUsageStats omits effort when it is not configured", () => {
+  assert.equal(
+    formatUsageStats(usage({ turns: 1 }), "openai/gpt-5.6-sol"),
+    "1 turn openai/gpt-5.6-sol",
+  );
+});
+
 test("formatToolCall shortens home paths for read calls", () => {
   const home = process.env.HOME || "";
   const result = formatToolCall(

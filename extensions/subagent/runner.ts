@@ -84,6 +84,7 @@ export async function runSubagent({
   const skillPaths = resolveAgentSkillPaths(config, configCwd, agentDir);
 
   const result = createEmptyResult(config.name, description, harness);
+  if (config.effort) result.effort = config.effort;
   result.cwd = cwd;
 
   const task: SubagentTask = {

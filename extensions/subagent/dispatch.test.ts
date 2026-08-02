@@ -311,8 +311,8 @@ test("runSubagent forwards progress updates carrying the running result", async 
   const updates: AgentToolResult<SubagentDetails>[] = [];
   const claude = recordingBackend("claude");
 
-  await runSubagent({
-    config: agent({ harness: "claude" }),
+  const reported = await runSubagent({
+    config: agent({ harness: "claude", effort: "high" }),
     description: "task",
     prompt: "do it",
     onUpdate: (partial) => updates.push(partial),
@@ -331,9 +331,24 @@ test("runSubagent forwards progress updates carrying the running result", async 
     last.content[0].type === "text" ? last.content[0].text : "",
     "ran on claude",
   );
-  const reported: SingleResult = last.details.results[0];
-  assert.equal(reported.harness, "claude");
-  assert.equal(reported.exitCode, 0);
+  const lastResult: SingleResult = last.details.results[0];
+  assert.equal(lastResult.harness, "claude");
+  assert.equal(lastResult.exitCode, 0);
+  assert.equal(updates[0].details.results[0].effort, "high");
+  assert.equal(reported.effort, "high");
+});
+
+test("runSubagent omits effort when the profile does not configure it", async () => {
+  const pi = recordingBackend("pi");
+  const result = await runSubagent({
+    config: agent({ harness: "pi" }),
+    description: "task",
+    prompt: "do it",
+    registry: createBackendRegistry([pi.backend]),
+  });
+
+  assert.equal(result.effort, undefined);
+  assert.equal("effort" in result, false);
 });
 
 // ── Concurrency cap ───────────────────────────────────────────────────────────

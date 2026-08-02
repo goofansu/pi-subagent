@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
 import { resolveClaudeCommand } from "./backends/claude.ts";
-import type { Harness, ThemeForeground, UsageStats } from "./types.ts";
+import type { Effort, Harness, ThemeForeground, UsageStats } from "./types.ts";
 import { DEFAULT_HARNESS } from "./types.ts";
 
 // Tool renderers do not receive the terminal width until the returned
@@ -38,7 +38,11 @@ export function formatTokens(count: number): string {
   return `${(count / 1000000).toFixed(1)}M`;
 }
 
-export function formatUsageStats(usage: UsageStats, model?: string): string {
+export function formatUsageStats(
+  usage: UsageStats,
+  model?: string,
+  effort?: Effort,
+): string {
   const parts: string[] = [];
   if (usage.turns)
     parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
@@ -55,6 +59,7 @@ export function formatUsageStats(usage: UsageStats, model?: string): string {
     parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
   }
   if (model) parts.push(model);
+  if (effort) parts.push(`effort:${effort}`);
   return parts.join(" ");
 }
 
