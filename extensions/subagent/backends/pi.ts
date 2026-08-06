@@ -1,7 +1,7 @@
 /**
- * Pi backend — spawns `pi` in headless JSON mode and folds its NDJSON event
+ * Pi backend — spawns Pi in headless JSON mode and folds its NDJSON event
  * stream into the normalized result. This is the original subagent runner,
- * moved behind the backend seam without behavior change.
+ * moved behind the backend seam.
  */
 
 import { type SpawnOptions, spawn } from "node:child_process";
@@ -9,7 +9,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
-import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import {
+  getPackageDir,
+  withFileMutationQueue,
+} from "@earendil-works/pi-coding-agent";
 import type {
   ParentModel,
   SubagentBackend,
@@ -34,10 +37,88 @@ export const PI_THINKING_LEVELS = [
   "max",
 ] as const;
 
-export function getPiInvocation(args: string[]): {
-  command: string;
-  args: string[];
-} {
+export interface PiInvocationRuntime {
+  execPath: string;
+  argv: readonly string[];
+  packageDir: string;
+  isPiCli: boolean;
+}
+
+const PI_CLI_SCRIPT_PATHS = [
+  ["dist", "cli.js"],
+  ["dist", "bun", "cli.js"],
+  ["src", "cli.ts"],
+  ["src", "bun", "cli.ts"],
+] as const;
+
+function executableName(executablePath: string): string {
+  // Splitting both separators also keeps the resolver testable across platforms.
+  return executablePath.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+}
+
+function isGenericScriptRuntime(executablePath: string): boolean {
+  return /^(?:node|nodejs|bun)(?:\.exe)?$/.test(executableName(executablePath));
+}
+
+function isNativePiRuntime(executablePath: string): boolean {
+  return /^pi(?:\.exe)?$/.test(executableName(executablePath));
+}
+
+function resolveExistingPath(filePath: string): string | undefined {
+  if (!fs.existsSync(filePath)) return undefined;
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    // A path can disappear or become inaccessible between exists and realpath.
+    return undefined;
+  }
+}
+
+function isPiCliScript(scriptPath: string, packageDir: string): boolean {
+  const resolvedScript = resolveExistingPath(scriptPath);
+  if (!resolvedScript) return false;
+
+  // The CLI entrypoint must belong to the same Pi package that loaded this
+  // extension. This prevents SDK embedding hosts from being mistaken for Pi.
+  return PI_CLI_SCRIPT_PATHS.some((segments) => {
+    const candidate = resolveExistingPath(path.join(packageDir, ...segments));
+    return candidate === resolvedScript;
+  });
+}
+
+/**
+ * Resolve the active Pi installation without constructing a shell command.
+ *
+ * The CLI's process marker distinguishes it from SDK hosts. Node/Bun script
+ * launches are then reused only when argv[1] resolves to a known CLI entrypoint
+ * in the Pi package that loaded the extension. Standalone releases are reused
+ * only when the active executable is named `pi`; all ambiguous SDK embedding
+ * hosts fall back to normal PATH resolution.
+ */
+export function getPiInvocation(
+  args: string[],
+  runtime: PiInvocationRuntime = {
+    execPath: process.execPath,
+    argv: process.argv,
+    packageDir: getPackageDir(),
+    isPiCli: process.env.PI_CODING_AGENT === "true",
+  },
+): { command: string; args: string[] } {
+  if (!runtime.isPiCli) return { command: "pi", args };
+
+  if (isNativePiRuntime(runtime.execPath)) {
+    return { command: runtime.execPath, args };
+  }
+
+  const scriptPath = runtime.argv[1];
+  if (
+    scriptPath &&
+    isGenericScriptRuntime(runtime.execPath) &&
+    isPiCliScript(scriptPath, runtime.packageDir)
+  ) {
+    return { command: runtime.execPath, args: [scriptPath, ...args] };
+  }
+
   return { command: "pi", args };
 }
 
@@ -350,7 +431,8 @@ async function runPiAgent(ctx: SubagentRunContext): Promise<SingleResult> {
 export const piBackend: SubagentBackend = {
   name: "pi",
   // The extension itself runs inside pi, so the harness is available by
-  // construction; a missing `pi` on PATH surfaces as a spawn error instead.
+  // construction. Ambiguous SDK hosts may still use the PATH fallback, where a
+  // missing `pi` surfaces as a spawn error instead.
   isAvailable: async () => true,
   run: runPiAgent,
 };

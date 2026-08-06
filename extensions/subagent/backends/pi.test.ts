@@ -13,6 +13,8 @@ import { createEmptyResult } from "../backend.ts";
 import type { AgentConfig } from "../types.ts";
 import {
   buildPiArgs,
+  getPiInvocation,
+  type PiInvocationRuntime,
   piBackend,
   resolveSubagentModel,
   resolveSubagentThinking,
@@ -26,6 +28,145 @@ function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
     ...overrides,
   };
 }
+
+function createPiScriptRuntime(
+  relativeScriptPath: string[],
+  execPath: string,
+): { runtime: PiInvocationRuntime; cleanup: () => void } {
+  const packageDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi runtime with spaces-"),
+  );
+  const scriptPath = path.join(packageDir, ...relativeScriptPath);
+  fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+  fs.writeFileSync(scriptPath, "// Pi CLI fixture\n");
+
+  return {
+    runtime: {
+      execPath,
+      argv: [execPath, scriptPath],
+      packageDir,
+      isPiCli: true,
+    },
+    cleanup: () => fs.rmSync(packageDir, { recursive: true, force: true }),
+  };
+}
+
+test("getPiInvocation reuses the active Node Pi CLI script", (t) => {
+  const fixture = createPiScriptRuntime(
+    ["dist", "cli.js"],
+    path.join(os.tmpdir(), "Node Runtime", "node"),
+  );
+  t.after(fixture.cleanup);
+
+  const invocation = getPiInvocation(["--mode", "json"], fixture.runtime);
+
+  assert.equal(invocation.command, fixture.runtime.execPath);
+  assert.deepEqual(invocation.args, [
+    fixture.runtime.argv[1],
+    "--mode",
+    "json",
+  ]);
+});
+
+test("getPiInvocation reuses a Bun-hosted Pi CLI script", (t) => {
+  const fixture = createPiScriptRuntime(
+    ["src", "bun", "cli.ts"],
+    path.join(os.tmpdir(), "Bun Runtime", "bun"),
+  );
+  t.after(fixture.cleanup);
+
+  const invocation = getPiInvocation(["-p"], fixture.runtime);
+
+  assert.equal(invocation.command, fixture.runtime.execPath);
+  assert.deepEqual(invocation.args, [fixture.runtime.argv[1], "-p"]);
+});
+
+test("getPiInvocation reuses a native Pi runtime", () => {
+  const args = ["--mode", "json"];
+  const execPath = path.join(os.tmpdir(), "Pi Native Runtime", "pi.exe");
+
+  const invocation = getPiInvocation(args, {
+    execPath,
+    argv: [execPath, "/$bunfs/root/pi/dist/bun/cli.js"],
+    packageDir: path.dirname(execPath),
+    isPiCli: true,
+  });
+
+  assert.equal(invocation.command, execPath);
+  assert.strictEqual(invocation.args, args);
+});
+
+test("getPiInvocation does not respawn an SDK embedding host", (t) => {
+  const packageDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sdk-package-"));
+  const hostPath = path.join(packageDir, "embedding host.js");
+  fs.writeFileSync(hostPath, "// Application embedding Pi through the SDK\n");
+  t.after(() => fs.rmSync(packageDir, { recursive: true, force: true }));
+
+  const args = ["--mode", "json"];
+  const invocation = getPiInvocation(args, {
+    execPath: "/usr/bin/node",
+    argv: ["/usr/bin/node", hostPath],
+    packageDir,
+    isPiCli: false,
+  });
+
+  assert.equal(invocation.command, "pi");
+  assert.strictEqual(invocation.args, args);
+
+  // Even an inherited marker is not enough to trust an arbitrary host.
+  const nativeHostInvocation = getPiInvocation(args, {
+    execPath: "/Applications/embedding-host",
+    argv: ["/Applications/embedding-host"],
+    packageDir,
+    isPiCli: true,
+  });
+  assert.equal(nativeHostInvocation.command, "pi");
+  assert.strictEqual(nativeHostInvocation.args, args);
+});
+
+test("getPiInvocation falls back when the argv script is absent or missing", (t) => {
+  const packageDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-missing-script-"),
+  );
+  t.after(() => fs.rmSync(packageDir, { recursive: true, force: true }));
+  const execPath = "/usr/bin/node";
+  const args = ["-p"];
+
+  for (const argv of [
+    [execPath],
+    [execPath, path.join(packageDir, "dist", "cli.js")],
+  ]) {
+    const invocation = getPiInvocation(args, {
+      execPath,
+      argv,
+      packageDir,
+      isPiCli: true,
+    });
+    assert.equal(invocation.command, "pi");
+    assert.strictEqual(invocation.args, args);
+  }
+});
+
+test("getPiInvocation preserves child arguments and command boundaries", (t) => {
+  const fixture = createPiScriptRuntime(
+    ["dist", "cli.js"],
+    path.join(os.tmpdir(), "Node Runtime With Spaces", "node"),
+  );
+  t.after(fixture.cleanup);
+  const args = [
+    "--model",
+    "provider/model with spaces",
+    "",
+    "$(not-a-shell-command)",
+  ];
+  const originalArgs = [...args];
+
+  const invocation = getPiInvocation(args, fixture.runtime);
+
+  assert.equal(invocation.command, fixture.runtime.execPath);
+  assert.deepEqual(invocation.args, [fixture.runtime.argv[1], ...originalArgs]);
+  assert.deepEqual(args, originalArgs);
+});
 
 test("resolveSubagentModel passes a variant-suffixed id through untouched", () => {
   assert.equal(
