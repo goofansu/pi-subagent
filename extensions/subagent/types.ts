@@ -51,12 +51,33 @@ export const EFFORTS = [
 ] as const;
 export type Effort = (typeof EFFORTS)[number];
 
+export const LIFECYCLE_STATUSES = [
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "aborted",
+] as const;
+export type LifecycleStatus = (typeof LIFECYCLE_STATUSES)[number];
+export type TerminalLifecycleStatus = Exclude<
+  LifecycleStatus,
+  "queued" | "running"
+>;
+
 export interface SingleResult {
   agent: string;
   description: string;
   /** Backend that produced this result. */
   harness: Harness;
-  /** -1 while running, 0 on success, non-zero on failure. */
+  /** Backend-neutral lifecycle state. */
+  status: LifecycleStatus;
+  /** Epoch milliseconds when the run entered the concurrency queue. */
+  queuedAt: number;
+  /** Epoch milliseconds when the limiter admitted the run to its backend. */
+  startedAt?: number;
+  /** Epoch milliseconds when the run reached a terminal state. */
+  finishedAt?: number;
+  /** -1 while pending, 0 on success, non-zero on failure. */
   exitCode: number;
   messages: Message[];
   stderr: string;
@@ -85,24 +106,49 @@ export interface SubagentDetails {
 }
 
 /**
- * A result as it comes back out of a persisted session. Results written before
- * the harness field existed carry none, and every one of those was a pi run —
- * so an omitted harness means {@link DEFAULT_HARNESS}.
+ * A result as it comes back out of a persisted session. Older results can omit
+ * both the harness (all such runs used pi) and the explicit lifecycle status.
+ * Lifecycle timestamps are optional in persisted data because they cannot be
+ * truthfully reconstructed for those sessions.
  */
-export type PersistedSingleResult = Omit<SingleResult, "harness"> & {
+export type PersistedSingleResult = Omit<
+  SingleResult,
+  "harness" | "status" | "queuedAt"
+> & {
   harness?: Harness;
+  status?: LifecycleStatus;
+  queuedAt?: number;
+};
+
+/** A current or restored result; only legacy data can lack its queue time. */
+export type ResolvedPersistedResult = Omit<SingleResult, "queuedAt"> & {
+  queuedAt?: number;
 };
 
 export interface PersistedSubagentDetails {
   results: PersistedSingleResult[];
 }
 
-/** Restore the harness an older persisted result was written without. */
-export function resolveResultHarness(
+/** Infer the lifecycle state recorded implicitly by an older result. */
+export function inferLegacyLifecycleStatus(
+  result: Pick<SingleResult, "exitCode" | "stopReason">,
+): LifecycleStatus {
+  if (result.exitCode === -1) return "running";
+  if (result.stopReason === "aborted") return "aborted";
+  if (result.exitCode !== 0 || result.stopReason === "error") return "failed";
+  return "completed";
+}
+
+/** Restore fields omitted from an older persisted result without mutating it. */
+export function resolvePersistedResult(
   result: PersistedSingleResult,
-): SingleResult {
-  if (result.harness) return result as SingleResult;
-  return { ...result, harness: DEFAULT_HARNESS };
+): ResolvedPersistedResult {
+  if (result.harness && result.status) return result as ResolvedPersistedResult;
+  return {
+    ...result,
+    harness: result.harness ?? DEFAULT_HARNESS,
+    status: result.status ?? inferLegacyLifecycleStatus(result),
+  };
 }
 
 export type DisplayItem =

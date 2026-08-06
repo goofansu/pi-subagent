@@ -162,9 +162,7 @@ export function createSubagentExtension(
         });
 
         const isError =
-          result.exitCode !== 0 ||
-          result.stopReason === "error" ||
-          result.stopReason === "aborted";
+          result.status === "failed" || result.status === "aborted";
 
         if (isError) {
           const errorMsg =

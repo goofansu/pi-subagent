@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, test } from "node:test";
+import { createEmptyResult } from "./backend.ts";
 import { getFinalOutput } from "./messages.ts";
 import {
   applyPiJsonEvent,
@@ -36,23 +37,7 @@ afterEach(async () => {
 });
 
 function result(): SingleResult {
-  return {
-    agent: "general-purpose",
-    description: "test",
-    harness: "pi",
-    exitCode: -1,
-    messages: [],
-    stderr: "",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      cost: 0,
-      contextTokens: 0,
-      turns: 0,
-    },
-  };
+  return createEmptyResult("general-purpose", "test", "pi", 0);
 }
 
 test("buildPiArgs passes tools and explicitly replaces native instructions", () => {

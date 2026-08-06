@@ -7,55 +7,80 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createEmptyResult } from "./backend.ts";
 import type { PersistedSingleResult } from "./types.ts";
-import { resolveResultHarness } from "./types.ts";
+import { resolvePersistedResult } from "./types.ts";
 
-test("resolveResultHarness reads back a result that records its harness", () => {
-  const stored = createEmptyResult("implementer", "task", "claude");
+function legacyResult(
+  exitCode: number,
+  stopReason?: string,
+): PersistedSingleResult {
+  const {
+    harness: _harness,
+    status: _status,
+    queuedAt: _queuedAt,
+    startedAt: _startedAt,
+    finishedAt: _finishedAt,
+    ...legacy
+  } = createEmptyResult("worker", "task", "pi", 100);
+  return {
+    ...legacy,
+    exitCode,
+    ...(stopReason ? { stopReason } : {}),
+  };
+}
 
-  assert.equal(resolveResultHarness(stored).harness, "claude");
+test("resolvePersistedResult returns current results unchanged", () => {
+  const stored = createEmptyResult("implementer", "task", "claude", 100);
+
+  assert.equal(resolvePersistedResult(stored), stored);
 });
 
-test("resolveResultHarness treats an omitted harness as pi", () => {
+test("resolvePersistedResult treats an omitted harness as pi", () => {
   // Results persisted before the harness field existed carry none, and every
   // one of those runs was pi.
-  const { harness: _dropped, ...legacy } = createEmptyResult(
-    "worker",
-    "task",
-    "pi",
-  );
-
-  assert.equal(
-    resolveResultHarness(legacy as PersistedSingleResult).harness,
-    "pi",
-  );
+  assert.equal(resolvePersistedResult(legacyResult(0, "stop")).harness, "pi");
 });
 
-test("resolveResultHarness restores legacy results without effort", () => {
-  const { harness: _dropped, ...legacy } = createEmptyResult(
-    "worker",
-    "task",
-    "pi",
-  );
+test("resolvePersistedResult infers every legacy lifecycle terminal state", () => {
+  const cases = [
+    { exitCode: -1, stopReason: undefined, expected: "running" },
+    { exitCode: 0, stopReason: "stop", expected: "completed" },
+    { exitCode: 1, stopReason: "error", expected: "failed" },
+    { exitCode: 1, stopReason: "aborted", expected: "aborted" },
+  ] as const;
 
+  for (const { exitCode, stopReason, expected } of cases) {
+    assert.equal(
+      resolvePersistedResult(legacyResult(exitCode, stopReason)).status,
+      expected,
+    );
+  }
+});
+
+test("resolvePersistedResult does not invent timestamps or mutate legacy data", () => {
+  const legacy = legacyResult(0, "stop");
+  assert.equal(Object.hasOwn(legacy, "status"), false);
+  assert.equal(Object.hasOwn(legacy, "queuedAt"), false);
   assert.equal(Object.hasOwn(legacy, "effort"), false);
 
-  const restored = resolveResultHarness(legacy as PersistedSingleResult);
+  const restored = resolvePersistedResult(legacy);
 
+  assert.notEqual(restored, legacy);
   assert.equal(restored.harness, "pi");
+  assert.equal(restored.status, "completed");
+  assert.equal(restored.queuedAt, undefined);
+  assert.equal(restored.startedAt, undefined);
+  assert.equal(restored.finishedAt, undefined);
+  assert.equal(Object.hasOwn(legacy, "status"), false);
   assert.equal(Object.hasOwn(restored, "effort"), false);
-  assert.equal(restored.effort, undefined);
 });
 
-test("resolveResultHarness leaves the rest of the result untouched", () => {
-  const { harness: _dropped, ...legacy } = createEmptyResult(
-    "worker",
-    "a task",
-    "pi",
-  );
-  const restored = resolveResultHarness(legacy as PersistedSingleResult);
+test("resolvePersistedResult leaves the rest of a legacy result untouched", () => {
+  const legacy = legacyResult(-1);
+  const restored = resolvePersistedResult(legacy);
 
   assert.equal(restored.agent, "worker");
-  assert.equal(restored.description, "a task");
+  assert.equal(restored.description, "task");
   assert.equal(restored.exitCode, -1);
+  assert.equal(restored.status, "running");
   assert.deepEqual(restored.messages, []);
 });

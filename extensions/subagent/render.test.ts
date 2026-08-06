@@ -5,8 +5,12 @@ import type { Message } from "@earendil-works/pi-ai";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { COLLAPSED_TOOL_CALL_LINE_WIDTH } from "./formatting.ts";
-import { renderSubagentResult } from "./render.ts";
-import type { PersistedSubagentDetails, UsageStats } from "./types.ts";
+import { formatLifecycleStatus, renderSubagentResult } from "./render.ts";
+import type {
+  PersistedSubagentDetails,
+  SingleResult,
+  UsageStats,
+} from "./types.ts";
 
 initTheme(undefined, false);
 
@@ -31,6 +35,23 @@ function assistantMessage(content: Message["content"]): Message {
   return { role: "assistant", content } as Message;
 }
 
+function singleResult(overrides: Partial<SingleResult> = {}): SingleResult {
+  return {
+    agent: "worker",
+    description: "",
+    harness: "pi",
+    status: "completed",
+    queuedAt: 1_000,
+    startedAt: 2_000,
+    finishedAt: 3_000,
+    exitCode: 0,
+    messages: [],
+    stderr: "",
+    usage: emptyUsage(),
+    ...overrides,
+  };
+}
+
 function resultWithCommand(
   command: string,
 ): AgentToolResult<PersistedSubagentDetails> {
@@ -49,19 +70,99 @@ function resultWithCommand(
     content: [{ type: "text", text: "" }],
     details: {
       results: [
-        {
-          agent: "worker",
+        singleResult({
           description: "test command rendering",
-          harness: "pi",
-          exitCode: 0,
           messages,
-          stderr: "",
-          usage: emptyUsage(),
-        },
+        }),
       ],
     },
   };
 }
+
+test("formatLifecycleStatus reports queue time, run time, and terminal duration", () => {
+  const queued = singleResult({
+    status: "queued",
+    queuedAt: 1_000,
+    startedAt: undefined,
+    finishedAt: undefined,
+    exitCode: -1,
+  });
+  const running = singleResult({
+    status: "running",
+    startedAt: 2_000,
+    finishedAt: undefined,
+    exitCode: -1,
+  });
+
+  assert.equal(formatLifecycleStatus(queued, 4_000), "queued for 3.0s");
+  assert.equal(formatLifecycleStatus(running, 4_000), "running for 2.0s");
+  assert.equal(
+    formatLifecycleStatus(singleResult({ finishedAt: 7_000 }), 100_000),
+    "completed in 5.0s",
+  );
+  assert.equal(
+    formatLifecycleStatus(
+      singleResult({ status: "failed", exitCode: 1, finishedAt: 7_000 }),
+      100_000,
+    ),
+    "failed after 5.0s",
+  );
+  assert.equal(
+    formatLifecycleStatus(
+      singleResult({
+        status: "aborted",
+        queuedAt: 1_000,
+        startedAt: undefined,
+        finishedAt: 4_000,
+        exitCode: 1,
+      }),
+      100_000,
+    ),
+    "aborted while queued after 3.0s",
+  );
+});
+
+test("renderSubagentResult distinguishes queued and running placeholders", () => {
+  const render = (single: SingleResult, expanded: boolean) =>
+    renderSubagentResult(
+      {
+        content: [{ type: "text", text: "" }],
+        details: { results: [single] },
+      },
+      { expanded, isPartial: true },
+      plainTheme,
+      {},
+    )
+      .render(120)
+      .map((line) => line.trimEnd());
+
+  const now = Date.now();
+  const queued = render(
+    singleResult({
+      status: "queued",
+      queuedAt: now,
+      startedAt: undefined,
+      finishedAt: undefined,
+      exitCode: -1,
+    }),
+    false,
+  );
+  const running = render(
+    singleResult({
+      status: "running",
+      queuedAt: now,
+      startedAt: now,
+      finishedAt: undefined,
+      exitCode: -1,
+    }),
+    true,
+  );
+
+  assert.match(queued[0], /^○ worker \[queued for \d+\.\ds\]$/);
+  assert.ok(queued.includes("(queued...)"));
+  assert.match(running[0], /^⏳ worker \[running for \d+\.\ds\]$/);
+  assert.ok(running.includes("(running...)"));
+});
 
 test("renderSubagentResult uses single-line collapsed and readable expanded command views", () => {
   const result = resultWithCommand("printf 'one'\n\n  npm    test");

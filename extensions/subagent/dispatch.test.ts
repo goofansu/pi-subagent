@@ -122,9 +122,13 @@ test("resolveBackend names the registered harnesses when one is missing", () => 
   );
 });
 
-test("createEmptyResult starts a run in the running state with zeroed usage", () => {
-  const result = createEmptyResult("worker", "a task", "claude");
+test("createEmptyResult starts a run queued with its entry time", () => {
+  const result = createEmptyResult("worker", "a task", "claude", 1_000);
 
+  assert.equal(result.status, "queued");
+  assert.equal(result.queuedAt, 1_000);
+  assert.equal(result.startedAt, undefined);
+  assert.equal(result.finishedAt, undefined);
   assert.equal(result.exitCode, -1);
   assert.equal(result.harness, "claude");
   assert.deepEqual(result.messages, []);
@@ -307,26 +311,47 @@ test("runSubagent fails a profile that names an unknown skill", async () => {
   assert.equal(pi.calls.length, 0);
 });
 
-test("runSubagent forwards progress updates carrying the running result", async () => {
+test("runSubagent reports queued, running, and centrally settled progress", async () => {
   const updates: AgentToolResult<SubagentDetails>[] = [];
+  const statuses: Array<{
+    status: SingleResult["status"];
+    queuedAt?: number;
+    startedAt?: number;
+    finishedAt?: number;
+  }> = [];
   const claude = recordingBackend("claude");
+  const times = [1_000, 1_500, 4_500];
 
   const reported = await runSubagent({
     config: agent({ harness: "claude", effort: "high" }),
     description: "task",
     prompt: "do it",
-    onUpdate: (partial) => updates.push(partial),
+    onUpdate: (partial) => {
+      updates.push(partial);
+      const current = partial.details.results[0];
+      statuses.push({
+        status: current.status,
+        queuedAt: current.queuedAt,
+        startedAt: current.startedAt,
+        finishedAt: current.finishedAt,
+      });
+    },
     registry: createBackendRegistry([claude.backend]),
+    now: () => times.shift() ?? assert.fail("unexpected clock read"),
   });
 
-  // Three: the dispatcher's own report before the run may queue, then the
-  // backend's initial state, then its result.
-  assert.equal(updates.length, 3);
+  // The dispatcher publishes both lifecycle boundaries. The recording backend
+  // also emits its initial and final legacy progress snapshots.
+  assert.deepEqual(
+    statuses.map(({ status }) => status),
+    ["queued", "running", "running", "running", "completed"],
+  );
   assert.equal(
     updates[0].content[0].type === "text" ? updates[0].content[0].text : "",
-    "(running...)",
+    "(queued...)",
   );
-  const last = updates[2];
+  const last = updates.at(-1);
+  assert.ok(last);
   assert.equal(
     last.content[0].type === "text" ? last.content[0].text : "",
     "ran on claude",
@@ -334,8 +359,49 @@ test("runSubagent forwards progress updates carrying the running result", async 
   const lastResult: SingleResult = last.details.results[0];
   assert.equal(lastResult.harness, "claude");
   assert.equal(lastResult.exitCode, 0);
+  assert.equal(lastResult.status, "completed");
+  assert.equal(lastResult.queuedAt, 1_000);
+  assert.equal(lastResult.startedAt, 1_500);
+  assert.equal(lastResult.finishedAt, 4_500);
   assert.equal(updates[0].details.results[0].effort, "high");
   assert.equal(reported.effort, "high");
+});
+
+test("runSubagent centrally maps every backend outcome to a terminal state", async () => {
+  const cases = [
+    { exitCode: 0, stopReason: "stop", expected: "completed" },
+    { exitCode: 1, stopReason: "error", expected: "failed" },
+    { exitCode: 1, stopReason: "aborted", expected: "aborted" },
+  ] as const;
+
+  for (const outcome of cases) {
+    let stateSeenByBackend: SingleResult["status"] | undefined;
+    const backend: SubagentBackend = {
+      name: "pi",
+      isAvailable: async () => true,
+      async run(ctx) {
+        stateSeenByBackend = ctx.result.status;
+        ctx.result.exitCode = outcome.exitCode;
+        ctx.result.stopReason = outcome.stopReason;
+        return ctx.result;
+      },
+    };
+    const times = [100, 200, 700];
+
+    const result = await runSubagent({
+      config: agent(),
+      description: outcome.expected,
+      prompt: "go",
+      registry: createBackendRegistry([backend]),
+      now: () => times.shift() ?? assert.fail("unexpected clock read"),
+    });
+
+    assert.equal(stateSeenByBackend, "running");
+    assert.equal(result.status, outcome.expected);
+    assert.equal(result.queuedAt, 100);
+    assert.equal(result.startedAt, 200);
+    assert.equal(result.finishedAt, 700);
+  }
 });
 
 test("runSubagent omits effort when the profile does not configure it", async () => {
@@ -427,6 +493,7 @@ test("a run cancelled while queued never starts its backend", {
     limiter,
   });
   const controller = new AbortController();
+  const queuedTimes = [1_000, 4_000];
   const queued = runSubagent({
     config: agent(),
     description: "waits",
@@ -434,6 +501,8 @@ test("a run cancelled while queued never starts its backend", {
     signal: controller.signal,
     registry,
     limiter,
+    now: () =>
+      queuedTimes.shift() ?? assert.fail("unexpected queued clock read"),
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(gated.started(), 1);
@@ -444,6 +513,10 @@ test("a run cancelled while queued never starts its backend", {
   assert.equal(gated.started(), 1, "the queued run must not start after all");
   assert.equal(result.exitCode, 1);
   assert.equal(result.stopReason, "aborted");
+  assert.equal(result.status, "aborted");
+  assert.equal(result.queuedAt, 1_000);
+  assert.equal(result.startedAt, undefined);
+  assert.equal(result.finishedAt, 4_000);
 
   gated.finishAll();
   await holding;
@@ -507,6 +580,11 @@ test("a queued run reports itself before it holds a slot", {
   assert.equal(limiter.queued(), 1);
   assert.equal(updates.length, 1);
   assert.equal(updates[0].details.results[0].exitCode, -1);
+  assert.equal(updates[0].details.results[0].status, "queued");
+  assert.equal(
+    updates[0].content[0].type === "text" ? updates[0].content[0].text : "",
+    "(queued...)",
+  );
 
   // Releasing the slot admits the waiter, which then starts a run of its own —
   // so the gate has to be opened again for it.

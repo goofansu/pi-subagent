@@ -10,7 +10,12 @@
  * plumbing — stays in the dispatcher so it cannot drift between backends.
  */
 
-import type { AgentConfig, Harness, SingleResult } from "./types.ts";
+import type {
+  AgentConfig,
+  Harness,
+  SingleResult,
+  TerminalLifecycleStatus,
+} from "./types.ts";
 
 /**
  * Environment variable carrying the subagent nesting depth. The guard is
@@ -50,7 +55,9 @@ export function appendStderr(existing: string, chunk: string): string {
 export const ABORTED_MESSAGE = "Subagent was aborted";
 
 /**
- * Settle a result as cancelled by the host.
+ * Record that a result was cancelled by the host.
+ *
+ * The dispatcher separately settles the lifecycle state and finish timestamp.
  *
  * Cancellation is a resolved result rather than a rejection — see `run` below.
  * The distinction is not cosmetic: the host turns a thrown tool error into an
@@ -68,6 +75,51 @@ export function settleAborted(result: SingleResult): void {
   result.exitCode = 1;
   result.stopReason = "aborted";
   result.errorMessage = ABORTED_MESSAGE;
+}
+
+/** Mark the limiter handoff where queued work actually starts its backend. */
+export function markResultRunning(
+  result: SingleResult,
+  startedAt: number = Date.now(),
+): void {
+  if (result.status !== "queued") {
+    throw new Error(
+      `Cannot start a subagent result in '${result.status}' state`,
+    );
+  }
+  result.status = "running";
+  result.startedAt = startedAt;
+}
+
+/** Derive one terminal lifecycle state from the backend-neutral outcome fields. */
+function terminalStatus(result: SingleResult): TerminalLifecycleStatus {
+  if (result.stopReason === "aborted") return "aborted";
+  if (result.exitCode === 0 && result.stopReason !== "error")
+    return "completed";
+  return "failed";
+}
+
+/**
+ * Settle lifecycle state after a backend resolves. Backends continue to own
+ * their existing exit-code and stop-reason translation; the dispatcher calls
+ * this once so lifecycle semantics and finish timestamps cannot drift between
+ * harnesses.
+ */
+export function settleResultLifecycle(
+  result: SingleResult,
+  finishedAt: number = Date.now(),
+): void {
+  if (result.status !== "queued" && result.status !== "running") {
+    throw new Error(
+      `Cannot settle a subagent result in '${result.status}' state`,
+    );
+  }
+  const status = terminalStatus(result);
+  if (result.status === "queued" && status !== "aborted") {
+    throw new Error(`A queued subagent result cannot settle as '${status}'`);
+  }
+  result.status = status;
+  result.finishedAt = finishedAt;
 }
 
 /** The caller's model, used when an agent inherits instead of pinning one. */
@@ -160,12 +212,15 @@ export function createEmptyResult(
   agent: string,
   description: string,
   harness: Harness,
+  queuedAt: number = Date.now(),
 ): SingleResult {
   return {
     agent,
     description,
     harness,
-    exitCode: -1, // -1 = running
+    status: "queued",
+    queuedAt,
+    exitCode: -1, // -1 = pending
     messages: [],
     stderr: "",
     usage: {

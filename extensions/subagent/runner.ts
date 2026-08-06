@@ -10,8 +10,10 @@ import {
   createBackendRegistry,
   createEmptyResult,
   DEPTH_ENV_KEY,
+  markResultRunning,
   resolveBackend,
   settleAborted,
+  settleResultLifecycle,
 } from "./backend.ts";
 import { claudeBackend } from "./backends/claude.ts";
 import { codexBackend } from "./backends/codex.ts";
@@ -60,6 +62,8 @@ export interface RunSubagentOptions {
   registry?: BackendRegistry;
   /** Injected for tests; defaults to the process-wide cap. */
   limiter?: SubagentLimiter;
+  /** Injected for deterministic lifecycle timestamps in tests. */
+  now?: () => number;
 }
 
 export async function runSubagent({
@@ -75,6 +79,7 @@ export async function runSubagent({
   configCwd = cwd,
   registry = defaultBackendRegistry,
   limiter = subagentLimiter,
+  now = Date.now,
 }: RunSubagentOptions): Promise<SingleResult> {
   const currentDepth = getSubagentDepth();
   assertSubagentDepthAvailable(currentDepth);
@@ -83,7 +88,7 @@ export async function runSubagent({
   const backend = resolveBackend(registry, harness);
   const skillPaths = resolveAgentSkillPaths(config, configCwd, agentDir);
 
-  const result = createEmptyResult(config.name, description, harness);
+  const result = createEmptyResult(config.name, description, harness, now());
   if (config.effort) result.effort = config.effort;
   result.cwd = cwd;
 
@@ -102,11 +107,19 @@ export async function runSubagent({
 
   const emit = () => {
     if (!onUpdate) return;
+    const emptyOutput =
+      result.status === "queued"
+        ? "(queued...)"
+        : result.status === "running"
+          ? "(running...)"
+          : result.status === "aborted"
+            ? "(aborted)"
+            : "(no output)";
     onUpdate({
       content: [
         {
           type: "text",
-          text: getFinalOutput(result.messages) || "(running...)",
+          text: getFinalOutput(result.messages) || emptyOutput,
         },
       ],
       details: { results: [result] },
@@ -126,6 +139,7 @@ export async function runSubagent({
     // other — resolved, not thrown — and its backend never started.
     if (cause instanceof QueueAbortedError) {
       settleAborted(result);
+      settleResultLifecycle(result, now());
       emit();
       return result;
     }
@@ -133,7 +147,12 @@ export async function runSubagent({
   }
 
   try {
-    return await backend.run({ task, result, emit, signal });
+    markResultRunning(result, now());
+    emit();
+    const settled = await backend.run({ task, result, emit, signal });
+    settleResultLifecycle(settled, now());
+    emit();
+    return settled;
   } finally {
     release();
   }
