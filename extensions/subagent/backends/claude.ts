@@ -345,8 +345,7 @@ export function buildClaudeOptions({
     ...(model ? { model } : {}),
     // `skills` is deliberately not set. Claude Code manages its own skills, the
     // same way it manages its own tools — a claude subagent is delegated to, not
-    // configured. A profile's `skills` field is a pi-only field, rejected at
-    // load time rather than injected here.
+    // configured.
     ...(abortController ? { abortController } : {}),
   };
 }

@@ -4,11 +4,9 @@ import { fileURLToPath } from "node:url";
 import {
   DefaultPackageManager,
   getAgentDir,
-  loadSkills,
   parseFrontmatter,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { buildSkillPaths } from "./skills.ts";
 import type { AgentConfig, AgentSource, Effort, Harness } from "./types.ts";
 import {
   DEFAULT_APPEND_SYSTEM_PROMPT,
@@ -150,11 +148,11 @@ function assertNoEffortSuffix(
 /**
  * Reject a field the profile cannot control on this harness.
  *
- * Delegating to another harness means letting it work the way it works: a
- * external subagent runs its harness's own tools and skills, and the
- * extension configures neither. Accepting the field and quietly not honoring it
- * is the misreading most likely to matter — an author would believe they had
- * built a read-only agent, or pinned its skill set, and be wrong.
+ * Delegating to another harness means letting it work the way it works: an
+ * external subagent runs its harness's own tools, and the extension does not
+ * configure them. Accepting the field and quietly not honoring it is the
+ * misreading most likely to matter — an author would believe they had built a
+ * read-only agent and be wrong.
  */
 function assertPiOnlyField(
   field: string,
@@ -185,21 +183,6 @@ function parseTools(
   return value;
 }
 
-function parseSkills(
-  raw: string | undefined,
-  harness: Harness,
-  filePath: string,
-): string[] | undefined {
-  const value = raw?.trim();
-  if (!value) return undefined;
-  assertPiOnlyField("skills", "manages its own skills", harness, filePath);
-  const names = value
-    .split(",")
-    .map((name) => name.trim())
-    .filter((name) => name.length > 0);
-  return names.length > 0 ? names : undefined;
-}
-
 export function parseAgentConfig(
   filePath: string,
   source?: AgentSource,
@@ -214,7 +197,6 @@ export function parseAgentConfig(
     effort?: unknown;
     tools?: unknown;
     appendSystemPrompt?: unknown;
-    skills?: unknown;
   }>(content);
   const description = stringField(
     frontmatter.description,
@@ -249,11 +231,6 @@ export function parseAgentConfig(
     stringField(frontmatter.effort, "effort", filePath),
     filePath,
   );
-  const skills = parseSkills(
-    stringField(frontmatter.skills, "skills", filePath),
-    harness,
-    filePath,
-  );
   return {
     name: path.basename(filePath, path.extname(filePath)),
     description,
@@ -268,7 +245,6 @@ export function parseAgentConfig(
       ) ?? DEFAULT_APPEND_SYSTEM_PROMPT,
     systemPrompt,
     ...(effort ? { effort } : {}),
-    ...(skills ? { skills } : {}),
     ...(source ? { source } : {}),
   };
 }
@@ -429,34 +405,6 @@ export function formatAgentGuidelines(
       ? `subagent ${config.name}: ${config.description}`
       : `subagent ${config.name}.`,
   );
-}
-
-export function validateAgentSkills(
-  configs: Map<string, AgentConfig>,
-  cwd: string,
-  agentDir = getAgentDir(),
-): string[] {
-  const skillPaths = buildSkillPaths(cwd, agentDir);
-  const { skills: discovered } = loadSkills({
-    cwd,
-    agentDir,
-    skillPaths,
-    includeDefaults: false,
-  });
-  const availableNames = new Set(discovered.map((s) => s.name));
-  const warnings: string[] = [];
-
-  for (const [, config] of configs) {
-    if (!config.skills) continue;
-    const missing = config.skills.filter((name) => !availableNames.has(name));
-    if (missing.length > 0) {
-      warnings.push(
-        `Agent '${config.name}': unknown skills: ${missing.join(", ")}`,
-      );
-    }
-  }
-
-  return warnings;
 }
 
 export function formatInvalidAgentFilesWarning(

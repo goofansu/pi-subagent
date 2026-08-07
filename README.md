@@ -41,11 +41,9 @@ reported at session start.
 | `model` | No | Passed exactly to the selected harness. `inherit` uses the parent model on Pi and the harness default on Claude or Codex. | `inherit`, `opus`, `gpt-5.6-sol` |
 | `effort` | No | Reasoning depth, independent of `model`. | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `tools` | No | **Pi only.** Comma-separated tool names. Omit to use Pi's defaults. | `read, grep, find, ls` |
-| `skills` | No | **Pi only.** Exact comma-separated skill set. Omit for normal discovery. | `summarize, commit` |
 | `appendSystemPrompt` | No | Append the prompt to native instructions. Defaults to `true`; set to `false` to replace them. | `false` |
 
-Declaring `tools` or `skills` on a Claude or Codex profile makes the file
-invalid.
+Declaring `tools` on a Claude or Codex profile makes the file invalid.
 
 Profile prompts append to the harness's native instructions by default. Set
 `appendSystemPrompt: false` only when the profile prompt should replace those
@@ -55,7 +53,7 @@ native instructions.
 
 | Harness | Runs on | Notes |
 | --- | --- | --- |
-| `pi` | Pi itself | Default; supports profile-controlled tools and skills. |
+| `pi` | Pi itself | Default; supports profile-controlled tools. |
 | `claude` | Claude Code | Native Claude tools with approvals bypassed. |
 | `codex` | Codex CLI | Native Codex tools with approvals and sandboxing bypassed. |
 
@@ -179,13 +177,7 @@ overrides it.
 
 ### Skills
 
-`skills` is a Pi-only field. Declaring it selects the exact skill set; omitting
-it uses normal discovery. Claude and Codex manage their own skills, so
-declaring `skills` on those profiles is an error.
-
-| Priority | Scope | Location |
-| --- | --- | --- |
-| 1 | project | `.pi/skills/` |
-| 2 | project | `.agents/skills/` |
-| 3 | user | `~/.pi/agent/skills/` |
-| 4 | user | `~/.agents/skills/` |
+Each harness discovers skills natively. Pi subagents receive the parent's trust
+decision: user skills are always available, while project skills are discovered
+only when the project is trusted. The extension does not scan, validate, or
+select skills itself.

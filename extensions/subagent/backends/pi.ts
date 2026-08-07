@@ -146,7 +146,6 @@ export function buildPiArgs(
   config: AgentConfig,
   resolvedModel: string | undefined,
   systemPromptPath: string | undefined,
-  skillPaths?: string[],
   thinkingLevel?: string,
   projectTrusted = false,
 ): string[] {
@@ -174,12 +173,6 @@ export function buildPiArgs(
         : "--system-prompt",
       systemPromptPath,
     );
-  }
-  if (skillPaths !== undefined) {
-    args.push("--no-skills");
-    for (const skillPath of skillPaths) {
-      args.push("--skill", skillPath);
-    }
   }
   // Prompt is passed via stdin, not as a CLI arg, to avoid process-listing
   // exposure of sensitive content and OS argument-length limits (E2BIG).
@@ -333,7 +326,6 @@ async function runPiAgent(ctx: SubagentRunContext): Promise<SingleResult> {
       config,
       resolvedModel,
       tmpPromptPath ?? undefined,
-      task.skillPaths,
       resolveSubagentThinking(config, task.parentModel),
       task.projectTrusted ?? false,
     );

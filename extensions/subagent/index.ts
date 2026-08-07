@@ -8,7 +8,6 @@ import {
   formatAgentGuidelines,
   formatInvalidAgentFilesWarning,
   loadLayeredAgentConfigsWithDiagnostics,
-  validateAgentSkills,
 } from "./agents.ts";
 import { registerAgentsCommand } from "./agents-command.ts";
 import type { BackendRegistry } from "./backend.ts";
@@ -84,15 +83,6 @@ export default function subagentExtension(pi: ExtensionAPI) {
       );
       ctx.ui.notify(warning, "warning");
     }
-
-    const skillWarnings = validateAgentSkills(
-      agentConfigs,
-      projectCwd,
-      configuredAgentDir,
-    );
-    for (const warning of skillWarnings) {
-      ctx.ui.notify(warning, "warning");
-    }
   });
 
   registerAgentsCommand(pi, agentConfigs);
@@ -143,7 +133,6 @@ export default function subagentExtension(pi: ExtensionAPI) {
         onUpdate,
         cwd: projectCwd,
         agentDir: configuredAgentDir,
-        configCwd: projectCwd,
       });
 
       const isError = result.status === "failed" || result.status === "aborted";

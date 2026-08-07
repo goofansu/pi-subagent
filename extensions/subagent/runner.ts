@@ -1,7 +1,7 @@
 /**
  * The harness-neutral dispatcher. It resolves an agent profile to a backend,
- * enforces the nesting depth guard, resolves skills once, and plumbs progress
- * updates — so those rules cannot drift between backends.
+ * enforces the nesting depth guard and plumbs progress updates — so those
+ * rules cannot drift between backends.
  */
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -21,7 +21,6 @@ import { piBackend } from "./backends/pi.ts";
 import type { ReleaseSlot, SubagentLimiter } from "./concurrency.ts";
 import { QueueAbortedError, subagentLimiter } from "./concurrency.ts";
 import { getFinalOutput } from "./messages.ts";
-import { resolveAgentSkillPaths } from "./skills.ts";
 import type { AgentConfig, OnUpdateCallback, SingleResult } from "./types.ts";
 import { resolveHarness } from "./types.ts";
 
@@ -58,7 +57,6 @@ export interface RunSubagentOptions {
   onUpdate?: OnUpdateCallback;
   cwd?: string;
   agentDir?: string;
-  configCwd?: string;
   registry?: BackendRegistry;
   /** Injected for tests; defaults to the process-wide cap. */
   limiter?: SubagentLimiter;
@@ -76,7 +74,6 @@ export async function runSubagent({
   onUpdate,
   cwd = process.cwd(),
   agentDir = getAgentDir(),
-  configCwd = cwd,
   registry = defaultBackendRegistry,
   limiter = subagentLimiter,
   now = Date.now,
@@ -86,7 +83,6 @@ export async function runSubagent({
 
   const harness = resolveHarness(config);
   const backend = resolveBackend(registry, harness);
-  const skillPaths = resolveAgentSkillPaths(config, configCwd, agentDir);
 
   const result = createEmptyResult(config.name, description, harness, now());
   if (config.effort) result.effort = config.effort;
@@ -97,11 +93,9 @@ export async function runSubagent({
     prompt,
     cwd,
     agentDir,
-    configCwd,
     depth: currentDepth,
     projectTrusted,
     ...(parentModel ? { parentModel } : {}),
-    ...(skillPaths ? { skillPaths } : {}),
   };
 
   const emit = () => {
@@ -169,8 +163,3 @@ export {
   resolveSubagentModel,
   writePromptToTempFile,
 } from "./backends/pi.ts";
-export {
-  buildSkillPaths,
-  resolveAgentSkillPaths,
-  resolveSkillPaths,
-} from "./skills.ts";

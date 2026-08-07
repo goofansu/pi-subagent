@@ -159,8 +159,6 @@ export interface AgentConfig {
   effort?: Effort;
   /** pi only: external harnesses run their own tool sets. */
   tools?: string;
-  /** pi only: external harnesses manage their own skills. */
-  skills?: string[];
   /** Append to native instructions. Omitted means the shared default. */
   appendSystemPrompt?: boolean;
   systemPrompt: string;

@@ -67,7 +67,6 @@ function task(overrides: Partial<SubagentTask> = {}): SubagentTask {
     prompt: "Implement the approved design.",
     cwd: "/tmp/project",
     agentDir: "/tmp/agent",
-    configCwd: "/tmp/project",
     depth: 0,
     ...overrides,
   };
@@ -232,7 +231,6 @@ function initMessage(model = "claude-opus-4-5"): SDKMessage {
     tools: [],
     mcp_servers: [],
     slash_commands: [],
-    skills: [],
     plugins: [],
     output_style: "default",
     apiKeySource: "oauth",
@@ -406,8 +404,7 @@ test("buildClaudeOptions bounds an untrusted directory's MCP to servers passed p
 
 test("buildClaudeOptions leaves Claude Code to manage its own skills", () => {
   // Claude Code discovers and invokes its own skills, the same way it does its
-  // own tools. The extension does not configure them: `skills` is a pi-only
-  // field, rejected at load time rather than injected here.
+  // own tools. The extension does not configure them.
   const options = buildClaudeOptions({
     config: agent(),
     cwd: "/tmp/project",

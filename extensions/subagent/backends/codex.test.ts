@@ -39,7 +39,6 @@ function task(
     prompt: "Implement the change.",
     cwd: "/tmp/a.project",
     agentDir: "/tmp/agent",
-    configCwd: "/tmp/a.project",
     depth: 0,
     projectTrusted: true,
     ...taskOverrides,

@@ -4,9 +4,6 @@
  */
 
 import assert from "node:assert/strict";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { SubagentBackend, SubagentRunContext } from "./backend.ts";
@@ -24,8 +21,6 @@ import type {
   SubagentDetails,
 } from "./types.ts";
 
-const tempDirs: string[] = [];
-
 // The depth guard reads the environment, so an inherited depth — these tests run
 // from inside a subagent often enough — would fail every test that is not about
 // nesting. Each test starts at depth 0 and sets the variable itself if it cares.
@@ -40,22 +35,6 @@ afterEach(() => {
   if (inheritedDepth !== undefined)
     process.env.PI_SUBAGENT_DEPTH = inheritedDepth;
   else delete process.env.PI_SUBAGENT_DEPTH;
-});
-
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.promises.mkdtemp(
-    path.join(os.tmpdir(), "pi-subagent-dispatch-test-"),
-  );
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(async () => {
-  await Promise.all(
-    tempDirs
-      .splice(0)
-      .map((dir) => fs.promises.rm(dir, { recursive: true, force: true })),
-  );
 });
 
 /** A backend that records what it was handed and reports a canned success. */
@@ -172,7 +151,7 @@ test("runSubagent defaults to the pi harness when a profile omits it", async () 
   assert.equal(result.harness, "pi");
 });
 
-test("runSubagent hands the backend the task's cwd, dirs, and parent model", async () => {
+test("runSubagent hands the backend the task's cwd, agent dir, and parent model", async () => {
   const claude = recordingBackend("claude");
   const registry = createBackendRegistry([claude.backend]);
 
@@ -183,14 +162,12 @@ test("runSubagent hands the backend the task's cwd, dirs, and parent model", asy
     parentModel: { provider: "anthropic", id: "claude-opus-4-5" },
     cwd: "/tmp/workspace",
     agentDir: "/tmp/agent",
-    configCwd: "/tmp/host",
     registry,
   });
 
   const { task } = claude.calls[0];
   assert.equal(task.cwd, "/tmp/workspace");
   assert.equal(task.agentDir, "/tmp/agent");
-  assert.equal(task.configCwd, "/tmp/host");
   assert.equal(task.prompt, "do it");
   assert.deepEqual(task.parentModel, {
     provider: "anthropic",
@@ -231,85 +208,6 @@ test("runSubagent refuses to nest a subagent inside a subagent, on any harness",
 });
 
 // ── Skills and progress ───────────────────────────────────────────────────────
-
-test("runSubagent resolves declared skills once, before the backend runs", async () => {
-  const dir = await makeTempDir();
-  const skillDir = path.join(dir, ".pi", "skills", "commit");
-  await fs.promises.mkdir(skillDir, { recursive: true });
-  await fs.promises.writeFile(
-    path.join(skillDir, "SKILL.md"),
-    "---\nname: commit\ndescription: Commit carefully\n---\n\nBody.\n",
-  );
-
-  const pi = recordingBackend("pi");
-  await runSubagent({
-    config: agent({ harness: "pi", skills: ["commit"] }),
-    description: "task",
-    prompt: "do it",
-    cwd: dir,
-    registry: createBackendRegistry([pi.backend]),
-  });
-
-  assert.deepEqual(pi.calls[0].task.skillPaths, [
-    path.join(skillDir, "SKILL.md"),
-  ]);
-});
-
-test("runSubagent resolves skills from configCwd, not the working directory", async () => {
-  // An embedder can point configCwd at a different project than cwd; resolving
-  // against cwd would silently miss the host's skills.
-  const workspace = await makeTempDir();
-  const configHome = await makeTempDir();
-  const skillDir = path.join(configHome, ".pi", "skills", "host-skill");
-  await fs.promises.mkdir(skillDir, { recursive: true });
-  await fs.promises.writeFile(
-    path.join(skillDir, "SKILL.md"),
-    "---\nname: host-skill\ndescription: A host skill\n---\n\nBody.\n",
-  );
-
-  const pi = recordingBackend("pi");
-  await runSubagent({
-    config: agent({ harness: "pi", skills: ["host-skill"] }),
-    description: "task",
-    prompt: "do it",
-    cwd: workspace,
-    configCwd: configHome,
-    registry: createBackendRegistry([pi.backend]),
-  });
-
-  assert.deepEqual(pi.calls[0].task.skillPaths, [
-    path.join(skillDir, "SKILL.md"),
-  ]);
-});
-
-test("runSubagent leaves skillPaths unset when a profile declares no skills", async () => {
-  const claude = recordingBackend("claude");
-  await runSubagent({
-    config: agent({ harness: "claude" }),
-    description: "task",
-    prompt: "do it",
-    registry: createBackendRegistry([claude.backend]),
-  });
-
-  assert.equal(claude.calls[0].task.skillPaths, undefined);
-});
-
-test("runSubagent fails a profile that names an unknown skill", async () => {
-  const dir = await makeTempDir();
-  const pi = recordingBackend("pi");
-
-  await assert.rejects(
-    runSubagent({
-      config: agent({ harness: "pi", skills: ["nonexistent"] }),
-      description: "task",
-      prompt: "do it",
-      cwd: dir,
-      registry: createBackendRegistry([pi.backend]),
-    }),
-    /unknown skills: nonexistent/,
-  );
-  assert.equal(pi.calls.length, 0);
-});
 
 test("runSubagent reports queued, running, and centrally settled progress", async () => {
   const updates: AgentToolResult<SubagentDetails>[] = [];

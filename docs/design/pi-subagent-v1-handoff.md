@@ -45,7 +45,7 @@ execution backend.
 ### Agent profiles define identity
 
 A profile defines role, system instructions, backend, model, reasoning effort,
-and — on pi — tools and skills:
+and — on pi — tools:
 
 ```yaml
 ---
@@ -85,8 +85,8 @@ subagent({
 });
 ```
 
-`harness`, `model`, `effort`, `tools`, and `skills` are
-deliberately *not* invocation parameters.
+`harness`, `model`, `effort`, and `tools` are deliberately *not* invocation
+parameters.
 
 ---
 
@@ -98,7 +98,7 @@ deliberately *not* invocation parameters.
              subagent tool          extensions/subagent/index.ts
                    |
               Dispatcher           extensions/subagent/runner.ts
-                   |               (depth guard, skill resolution, progress)
+                   |               (depth guard, progress)
              Agent Profile         extensions/subagent/agents.ts
                    |
         +----------+----------+    extensions/subagent/backend.ts
@@ -129,7 +129,6 @@ mapping, permission wiring, and translation of native events into pi
 drift between backends:
 
 - the `PI_SUBAGENT_DEPTH` nesting guard
-- skill-name resolution to `SKILL.md` paths (consumed by the pi backend only)
 - progress emission to the TUI
 
 ### Normalized result
@@ -162,7 +161,6 @@ A missing SDK is reported at session start naming the affected agents.
 | `systemPrompt` | `options.systemPrompt` (string, or `claude_code` preset + append) |
 | — | `permissionMode: bypassPermissions` + `allowDangerouslySkipPermissions`, always |
 | `tools` | not mapped — a pi-only field; a claude subagent runs Claude Code's own tool set |
-| `skills` | not mapped — a pi-only field; a claude subagent manages its own skills |
 | `cwd` | `options.cwd` |
 | — | `persistSession: false`, so the one-shot run is not written to Claude's session store |
 
@@ -176,12 +174,10 @@ implementation blocks only the first two. Matching is exact, so the unrelated
 
 Otherwise v1 left the tool set unrestricted (since superseded — see Status): the
 point of delegating to another harness is to let it work with its own tools and
-its own skills. `tools`
-and `skills` are therefore pi-only fields, and setting either on a claude profile
-is rejected rather than silently ignored — reading as a restriction, or as a
-pinned skill set, while being neither is the misreading most likely to matter.
-Only `model` and `effort` shape a claude agent; everything else about
-how it works is Claude Code's.
+skills. `tools` is therefore a pi-only field, and setting it on a claude profile
+is rejected rather than silently ignored — reading as a restriction while being
+none is the misreading most likely to matter. Only `model` and `effort` shape a
+claude agent; everything else about how it works is Claude Code's.
 
 A delegated subagent's tokens are still billed to the run if one ever appears,
 but its messages stay out of the transcript and out of occupancy.
@@ -268,17 +264,11 @@ the accepted set, so an agent file never silently means something else.
 
 ## Skill handling
 
-`skills` is a pi-only field. Skill names resolve to `SKILL.md` paths once, in the
-dispatcher, and reach the child as `--no-skills` plus one `--skill <path>` per
-resolved skill. Declaring `skills` means the extension owns the pi child's skill
-set exactly; omitting it leaves pi's native discovery in place.
-
-External-harness subagents manage their own skills. The extension neither
-injects skill content nor sets backend skill options, for the same reason it
-does not set `tools`: delegating to another harness means letting it work the
-way it works. An earlier version treated skills as backend-neutral and injected
-them; that was the wrong assumption and was removed. (For Claude Code,
-`settingSources` governs `settings.json`, not skills.)
+Every harness manages its own skills. The extension does not discover, validate,
+select, or inject them. Pi children receive the parent's trust decision through
+`--approve` or `--no-approve`, then Pi's native discovery loads user skills and
+loads project skills only for trusted projects. External harnesses similarly use
+the trust-gated configuration described above.
 
 ---
 
@@ -304,8 +294,7 @@ synchronous, and the parent model decides each delegation step.
 | `tools` is rejected rather than silently ignored on external harnesses | `parseTools` (pi-only field) |
 | No configuration is loaded from an untrusted checkout | `buildClaudeOptions` (`settingSources: ["user"]` + `strictMcpConfig` when untrusted) |
 | All backends return a common result | `SingleResult`, `createEmptyResult` |
-| Skill loading controlled by the extension, on pi | `skills.ts`, `buildPiArgs` |
-| `skills` is rejected rather than silently ignored on external harnesses | `parseSkills` (pi-only field) |
+| Pi skill discovery follows project trust | `buildPiArgs` (`--approve` / `--no-approve`, no skill flags) |
 | Codex streams into the common result and can be cancelled | `backends/codex.ts`, `backends/codex.test.ts` |
 | `/agents` discovery keeps working | `agents-command.ts` |
 

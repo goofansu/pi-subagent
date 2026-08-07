@@ -215,7 +215,6 @@ async function runPiFixture(
         prompt: "do it",
         cwd: os.tmpdir(),
         agentDir: os.tmpdir(),
-        configCwd: os.tmpdir(),
         depth: 0,
       },
       result,
@@ -406,20 +405,14 @@ test("resolveSubagentThinking inherits the caller's level only with the model", 
 });
 
 test("buildPiArgs forwards the parent's project trust decision", () => {
-  const trusted = buildPiArgs(
-    agent(),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    true,
-  );
+  const trusted = buildPiArgs(agent(), undefined, undefined, undefined, true);
   assert.equal(trusted.includes("--approve"), true);
   assert.equal(trusted.includes("--no-approve"), false);
+  assert.equal(trusted.includes("--no-skills"), false);
+  assert.equal(trusted.includes("--skill"), false);
 
   const untrusted = buildPiArgs(
     agent(),
-    undefined,
     undefined,
     undefined,
     undefined,
@@ -427,6 +420,9 @@ test("buildPiArgs forwards the parent's project trust decision", () => {
   );
   assert.equal(untrusted.includes("--approve"), false);
   assert.equal(untrusted.includes("--no-approve"), true);
+  // Pi's native discovery uses this trust decision to exclude project skills.
+  assert.equal(untrusted.includes("--no-skills"), false);
+  assert.equal(untrusted.includes("--skill"), false);
 
   // Unknown trust must fail closed.
   const unknown = buildPiArgs(agent(), undefined, undefined);
@@ -435,7 +431,7 @@ test("buildPiArgs forwards the parent's project trust decision", () => {
 });
 
 test("buildPiArgs passes the thinking level as its own flag", () => {
-  const args = buildPiArgs(agent(), "sonnet", undefined, undefined, "high");
+  const args = buildPiArgs(agent(), "sonnet", undefined, "high");
 
   assert.ok(args.includes("--thinking"));
   assert.equal(args[args.indexOf("--thinking") + 1], "high");
@@ -444,7 +440,7 @@ test("buildPiArgs passes the thinking level as its own flag", () => {
 });
 
 test("buildPiArgs omits the thinking flag when no level applies", () => {
-  const args = buildPiArgs(agent(), "sonnet", undefined, undefined, undefined);
+  const args = buildPiArgs(agent(), "sonnet", undefined, undefined);
 
   assert.equal(args.includes("--thinking"), false);
 });

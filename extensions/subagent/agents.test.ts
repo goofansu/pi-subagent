@@ -16,9 +16,7 @@ import {
   loadMergedAgentConfigs,
   loadMergedAgentConfigsWithDiagnostics,
   parseAgentConfig,
-  validateAgentSkills,
 } from "./agents.ts";
-import type { AgentConfig } from "./types.ts";
 import { EFFORTS } from "./types.ts";
 
 const tempDirs: string[] = [];
@@ -632,108 +630,6 @@ test("loadLayeredAgentConfigs tolerates missing directories in any layer", async
   assert.equal(configs.get("general-purpose")?.description, "General");
 });
 
-test("parseAgentConfig parses skills from frontmatter", async () => {
-  const dir = await makeTempDir();
-  const filePath = path.join(dir, "worker.md");
-  await fs.promises.writeFile(
-    filePath,
-    "---\ndescription: Worker agent\nskills: safe-bash, tdd\n---\n\nYou implement code.\n",
-  );
-
-  const config = parseAgentConfig(filePath);
-  assert.deepEqual(config.skills, ["safe-bash", "tdd"]);
-});
-
-test("parseAgentConfig omits skills when not in frontmatter", async () => {
-  const dir = await makeTempDir();
-  const filePath = path.join(dir, "scout.md");
-  await fs.promises.writeFile(
-    filePath,
-    "---\ndescription: Scout agent\n---\n\nYou explore code.\n",
-  );
-
-  const config = parseAgentConfig(filePath);
-  assert.equal(config.skills, undefined);
-});
-
-test("parseAgentConfig handles a single skill without commas", async () => {
-  const dir = await makeTempDir();
-  const filePath = path.join(dir, "focused.md");
-  await fs.promises.writeFile(
-    filePath,
-    "---\ndescription: Focused agent\nskills: safe-bash\n---\n\nYou do one thing.\n",
-  );
-
-  const config = parseAgentConfig(filePath);
-  assert.deepEqual(config.skills, ["safe-bash"]);
-});
-
-test("validateAgentSkills returns no warnings when all skills exist", async () => {
-  const dir = await makeTempDir();
-  const skillDir = path.join(dir, ".pi", "skills", "my-skill");
-  await fs.promises.mkdir(skillDir, { recursive: true });
-  await fs.promises.writeFile(
-    path.join(skillDir, "SKILL.md"),
-    "---\nname: my-skill\ndescription: A test skill\n---\n\nSkill content.\n",
-  );
-
-  const configs = new Map<string, AgentConfig>([
-    [
-      "worker",
-      {
-        name: "worker",
-        description: "Worker",
-        skills: ["my-skill"],
-        systemPrompt: "Work.",
-      },
-    ],
-  ]);
-
-  const warnings = validateAgentSkills(configs, dir);
-  assert.deepEqual(warnings, []);
-});
-
-test("validateAgentSkills returns warnings for missing skills", async () => {
-  const dir = await makeTempDir();
-
-  const configs = new Map<string, AgentConfig>([
-    [
-      "worker",
-      {
-        name: "worker",
-        description: "Worker",
-        skills: ["nonexistent"],
-        systemPrompt: "Work.",
-      },
-    ],
-  ]);
-
-  const warnings = validateAgentSkills(configs, dir);
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /Agent 'worker'/);
-  assert.match(warnings[0], /nonexistent/);
-});
-
-test("validateAgentSkills skips agents without skills defined", async () => {
-  const dir = await makeTempDir();
-
-  const configs = new Map<string, AgentConfig>([
-    [
-      "scout",
-      {
-        name: "scout",
-        description: "Scout",
-        systemPrompt: "Explore.",
-      },
-    ],
-  ]);
-
-  const warnings = validateAgentSkills(configs, dir);
-  assert.deepEqual(warnings, []);
-});
-
-// ── Harness and reasoning effort frontmatter ─────────────────────────────────
-
 async function writeAgentWithFrontmatter(
   dir: string,
   frontmatter: string,
@@ -780,7 +676,6 @@ test("parseAgentConfig names the field when frontmatter is not a string", async 
     ["model: {a: 1}", /model must be a string, not a map/],
     ["tools: 12", /tools must be a string, not a number/],
     ["model: []", /model must be a string, not a list/],
-    ["skills: 3", /skills must be a string, not a number/],
     [
       "appendSystemPrompt: yes please",
       /appendSystemPrompt must be true or false, not a string/,
@@ -853,41 +748,6 @@ test("parseAgentConfig still accepts tools on the pi harness", async () => {
   const filePath = await writeAgentWithFrontmatter(dir, "tools: read, grep");
 
   assert.equal(parseAgentConfig(filePath).tools, "read, grep");
-});
-
-test("parseAgentConfig rejects skills on the claude harness", async () => {
-  // Claude Code manages its own skills, as it does its own tools. Accepting the
-  // field would read as pinning the skill set while doing nothing.
-  const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(
-    dir,
-    "harness: claude\nskills: commit",
-  );
-
-  assert.throws(
-    () => parseAgentConfig(filePath),
-    /skills is only supported on harness 'pi'/,
-  );
-});
-
-test("parseAgentConfig rejects skills on the codex harness", async () => {
-  const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(
-    dir,
-    "harness: codex\nskills: commit",
-  );
-
-  assert.throws(
-    () => parseAgentConfig(filePath),
-    /skills is only supported on harness 'pi'/,
-  );
-});
-
-test("parseAgentConfig still accepts skills on the pi harness", async () => {
-  const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(dir, "skills: commit, tdd");
-
-  assert.deepEqual(parseAgentConfig(filePath).skills, ["commit", "tdd"]);
 });
 
 test("parseAgentConfig reads effort as its own field", async () => {

@@ -139,8 +139,6 @@ export interface SubagentTask {
   readonly cwd: string;
   /** Pi's agent directory, used for user-scope resource lookups. */
   readonly agentDir: string;
-  /** Directory that owns agent and skill configuration (often === cwd). */
-  readonly configCwd: string;
   readonly parentModel?: ParentModel;
   /** Depth of the *parent*; children must run at `depth + 1`. */
   readonly depth: number;
@@ -151,12 +149,6 @@ export interface SubagentTask {
    * untrusted.
    */
   readonly projectTrusted?: boolean;
-  /**
-   * Resolved SKILL.md paths. `undefined` means the agent declared no skills and
-   * the backend may use its native discovery; an array means this extension
-   * owns the skill set exactly.
-   */
-  readonly skillPaths?: string[];
 }
 
 /**
