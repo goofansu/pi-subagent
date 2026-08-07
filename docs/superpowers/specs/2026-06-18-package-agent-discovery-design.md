@@ -51,6 +51,10 @@ The concrete directories to support include git package installs such as:
 
 The same discovery concept should also apply to npm and local path packages if their resolved package roots contain `agents/`.
 
+## Project trust
+
+Agent discovery follows Pi's effective trust decision for the session. User-scoped packages and user agents remain available in untrusted projects. Project `.pi/agents/` and project-scoped package agents are loaded only when the project is trusted. Unknown trust is treated as untrusted, and project settings are not read merely to filter their results afterward.
+
 ## Error handling
 
 Package agent files use the same parser and validation as other agents:

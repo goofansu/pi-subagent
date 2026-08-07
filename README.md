@@ -162,7 +162,8 @@ not expose session or thread IDs.
 
 Pi loads bundled agents, agents contributed by installed packages, and your
 user and project agents. A higher-priority file replaces a lower-priority file
-with the same name.
+with the same name. Project agents and agents from project-scoped packages are
+loaded only when Pi trusts the working directory; unknown trust fails closed.
 
 | Priority | Scope | Location |
 | --- | --- | --- |

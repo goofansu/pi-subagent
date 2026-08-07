@@ -53,40 +53,15 @@ export async function findUnavailableHarnessWarnings(
 
 // ── Extension ─────────────────────────────────────────────────────────────────
 
-export default function subagentExtension(pi: ExtensionAPI) {
-  const projectCwd = process.cwd();
-  const configuredAgentDir = getAgentDir();
-  const agentConfigLoadResult = loadLayeredAgentConfigsWithDiagnostics(
-    buildAgentConfigLayers(
-      projectCwd,
-      configuredAgentDir,
-      import.meta.url,
-      projectCwd,
-    ),
-  );
-  const agentConfigs = agentConfigLoadResult.configs;
-  const description = "Run a task in a specialized subagent";
-
-  pi.on("session_start", async (event, ctx) => {
-    if (event.reason !== "startup" && event.reason !== "reload") return;
-
-    for (const warning of await findUnavailableHarnessWarnings(
-      agentConfigs,
-      defaultBackendRegistry,
-    )) {
-      ctx.ui.notify(warning, "warning");
-    }
-
-    if (agentConfigLoadResult.invalidFiles.length > 0) {
-      const warning = formatInvalidAgentFilesWarning(
-        agentConfigLoadResult.invalidFiles,
-      );
-      ctx.ui.notify(warning, "warning");
-    }
-  });
-
+function registerSubagentFeatures(
+  pi: ExtensionAPI,
+  projectCwd: string,
+  configuredAgentDir: string,
+  agentConfigs: Map<string, AgentConfig>,
+): void {
   registerAgentsCommand(pi, agentConfigs);
 
+  const description = "Run a task in a specialized subagent";
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
@@ -167,5 +142,43 @@ export default function subagentExtension(pi: ExtensionAPI) {
         details: { results: [result] },
       };
     },
+  });
+}
+
+export default function subagentExtension(pi: ExtensionAPI) {
+  const configuredAgentDir = getAgentDir();
+
+  // Project trust is resolved before session_start. Defer every discovery read
+  // until then so an unknown host fails closed and an untrusted checkout cannot
+  // contribute either .pi/agents or project-scoped package agents.
+  pi.on("session_start", async (_event, ctx) => {
+    const projectCwd = ctx.cwd;
+    const projectTrusted = ctx.isProjectTrusted?.() ?? false;
+    const agentConfigLoadResult = loadLayeredAgentConfigsWithDiagnostics(
+      buildAgentConfigLayers(
+        projectCwd,
+        configuredAgentDir,
+        import.meta.url,
+        projectCwd,
+        projectTrusted,
+      ),
+    );
+    const agentConfigs = agentConfigLoadResult.configs;
+
+    registerSubagentFeatures(pi, projectCwd, configuredAgentDir, agentConfigs);
+
+    for (const warning of await findUnavailableHarnessWarnings(
+      agentConfigs,
+      defaultBackendRegistry,
+    )) {
+      ctx.ui.notify(warning, "warning");
+    }
+
+    if (agentConfigLoadResult.invalidFiles.length > 0) {
+      ctx.ui.notify(
+        formatInvalidAgentFilesWarning(agentConfigLoadResult.invalidFiles),
+        "warning",
+      );
+    }
   });
 }

@@ -307,8 +307,10 @@ function resolveExistingPath(filePath: string): string {
 
 export function buildPackageAgentLayers(
   packages: PackageAgentPackage[],
+  projectTrusted = false,
 ): AgentLayer[] {
   return packages.flatMap((pkg) => {
+    if (pkg.scope === "project" && !projectTrusted) return [];
     if (typeof pkg.installedPath !== "string") return [];
 
     const agentsDir = path.join(pkg.installedPath, "agents");
@@ -321,15 +323,24 @@ export function buildPackageAgentLayers(
 export function getInstalledPackageAgentLayers(
   cwd: string,
   agentDir = getAgentDir(),
+  projectTrusted = false,
 ): AgentLayer[] {
-  const settingsManager = SettingsManager.create(cwd, agentDir);
+  // SettingsManager itself must receive the effective session decision. Merely
+  // filtering its result would still read configuration from an untrusted
+  // checkout.
+  const settingsManager = SettingsManager.create(cwd, agentDir, {
+    projectTrusted,
+  });
   const packageManager = new DefaultPackageManager({
     cwd,
     agentDir,
     settingsManager,
   });
 
-  return buildPackageAgentLayers(packageManager.listConfiguredPackages());
+  return buildPackageAgentLayers(
+    packageManager.listConfiguredPackages(),
+    projectTrusted,
+  );
 }
 
 export function buildAgentConfigLayers(
@@ -337,9 +348,11 @@ export function buildAgentConfigLayers(
   agentDir: string,
   moduleUrl: string,
   configCwd = projectCwd,
+  projectTrusted = false,
   packageLayers: AgentLayer[] = getInstalledPackageAgentLayers(
     configCwd,
     agentDir,
+    projectTrusted,
   ),
 ): AgentLayer[] {
   const defaultAgentsDir = getDefaultAgentsDir(moduleUrl);
@@ -352,7 +365,14 @@ export function buildAgentConfigLayers(
     { dir: defaultAgentsDir, source: "default" },
     ...deduplicatedPackageLayers,
     { dir: path.join(agentDir, "agents"), source: "user" },
-    { dir: path.join(configCwd, ".pi", "agents"), source: "project" },
+    ...(projectTrusted
+      ? [
+          {
+            dir: path.join(configCwd, ".pi", "agents"),
+            source: "project" as const,
+          },
+        ]
+      : []),
   ];
 }
 

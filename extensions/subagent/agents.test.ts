@@ -297,32 +297,59 @@ test("buildPackageAgentLayers maps installed package roots with agents directori
   await fs.promises.mkdir(path.join(packageTwo, "agents"), { recursive: true });
   await fs.promises.mkdir(packageWithoutAgents, { recursive: true });
 
-  const layers = buildPackageAgentLayers([
-    {
-      source: "git:github.com/example/one",
-      scope: "user",
-      installedPath: packageOne,
-    },
-    {
-      source: "git:github.com/example/missing",
-      scope: "user",
-    },
-    {
-      source: "npm:without-agents",
-      scope: "user",
-      installedPath: packageWithoutAgents,
-    },
-    {
-      source: "npm:two",
-      scope: "project",
-      installedPath: packageTwo,
-    },
-  ]);
+  const layers = buildPackageAgentLayers(
+    [
+      {
+        source: "git:github.com/example/one",
+        scope: "user",
+        installedPath: packageOne,
+      },
+      {
+        source: "git:github.com/example/missing",
+        scope: "user",
+      },
+      {
+        source: "npm:without-agents",
+        scope: "user",
+        installedPath: packageWithoutAgents,
+      },
+      {
+        source: "npm:two",
+        scope: "project",
+        installedPath: packageTwo,
+      },
+    ],
+    true,
+  );
 
   assert.deepEqual(layers, [
     { dir: path.join(packageOne, "agents"), source: "package" },
     { dir: path.join(packageTwo, "agents"), source: "package" },
   ]);
+});
+
+test("buildPackageAgentLayers excludes project packages when the project is untrusted", async () => {
+  const dir = await makeTempDir();
+  const userPackage = path.join(dir, "user-package");
+  const projectPackage = path.join(dir, "project-package");
+  await fs.promises.mkdir(path.join(userPackage, "agents"), {
+    recursive: true,
+  });
+  await fs.promises.mkdir(path.join(projectPackage, "agents"), {
+    recursive: true,
+  });
+
+  assert.deepEqual(
+    buildPackageAgentLayers([
+      { source: "npm:user", scope: "user", installedPath: userPackage },
+      {
+        source: "npm:project",
+        scope: "project",
+        installedPath: projectPackage,
+      },
+    ]),
+    [{ dir: path.join(userPackage, "agents"), source: "package" }],
+  );
 });
 
 test("buildAgentConfigLayers inserts package layers between default and user layers", () => {
@@ -331,6 +358,7 @@ test("buildAgentConfigLayers inserts package layers between default and user lay
     "/tmp/user-agent",
     "file:///tmp/pi-subagent/extensions/subagent/index.ts",
     "/tmp/config-project",
+    true,
     [
       { dir: "/tmp/pkg-one/agents", source: "package" },
       { dir: "/tmp/pkg-two/agents", source: "package" },
@@ -355,6 +383,7 @@ test("buildAgentConfigLayers excludes package layer matching the default agents 
     "/tmp/user-agent",
     moduleUrl,
     "/tmp/config-project",
+    true,
     [
       { dir: "/tmp/pkg-one/agents", source: "package" },
       { dir: defaultDir, source: "package" },
@@ -377,11 +406,32 @@ test("buildAgentConfigLayers anchors project and user agents to configured direc
       "/tmp/customer-project",
       "/tmp/user-agent",
       moduleUrl,
+      "/tmp/customer-project",
+      true,
     ),
     [
       { dir: getDefaultAgentsDir(moduleUrl), source: "default" },
       { dir: "/tmp/user-agent/agents", source: "user" },
       { dir: "/tmp/customer-project/.pi/agents", source: "project" },
+    ],
+  );
+});
+
+test("buildAgentConfigLayers excludes project agents when the project is untrusted", () => {
+  const moduleUrl = new URL("./index.js", import.meta.url).href;
+
+  assert.deepEqual(
+    buildAgentConfigLayers(
+      "/tmp/customer-project",
+      "/tmp/user-agent",
+      moduleUrl,
+      "/tmp/customer-project",
+      false,
+      [],
+    ),
+    [
+      { dir: getDefaultAgentsDir(moduleUrl), source: "default" },
+      { dir: "/tmp/user-agent/agents", source: "user" },
     ],
   );
 });
@@ -395,6 +445,7 @@ test("buildAgentConfigLayers can load project agents from config cwd", () => {
       "/tmp/user-agent",
       moduleUrl,
       "/tmp/host-project",
+      true,
     ),
     [
       { dir: getDefaultAgentsDir(moduleUrl), source: "default" },
