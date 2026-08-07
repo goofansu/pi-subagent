@@ -1,9 +1,38 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { SubagentBackend } from "./backend.ts";
 import { createBackendRegistry } from "./backend.ts";
-import { findUnavailableHarnessWarnings } from "./index.ts";
+import subagentExtension, { findUnavailableHarnessWarnings } from "./index.ts";
 import type { AgentConfig, Harness } from "./types.ts";
+
+// ── Extension registration ───────────────────────────────────────────────────
+
+test("the extension is not exposed inside a subagent Pi process", () => {
+  const originalDepth = process.env.PI_SUBAGENT_DEPTH;
+  try {
+    const nestedEvents: string[] = [];
+    process.env.PI_SUBAGENT_DEPTH = "1";
+    subagentExtension({
+      on(event: string) {
+        nestedEvents.push(event);
+      },
+    } as unknown as ExtensionAPI);
+    assert.deepEqual(nestedEvents, []);
+
+    const parentEvents: string[] = [];
+    delete process.env.PI_SUBAGENT_DEPTH;
+    subagentExtension({
+      on(event: string) {
+        parentEvents.push(event);
+      },
+    } as unknown as ExtensionAPI);
+    assert.deepEqual(parentEvents, ["session_start"]);
+  } finally {
+    if (originalDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
+    else process.env.PI_SUBAGENT_DEPTH = originalDepth;
+  }
+});
 
 // ── Harness availability diagnostics ─────────────────────────────────────────
 

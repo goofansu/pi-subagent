@@ -13,7 +13,11 @@ import { registerAgentsCommand } from "./agents-command.ts";
 import type { BackendRegistry } from "./backend.ts";
 import { getFinalOutput } from "./messages.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
-import { defaultBackendRegistry, runSubagent } from "./runner.ts";
+import {
+  defaultBackendRegistry,
+  getSubagentDepth,
+  runSubagent,
+} from "./runner.ts";
 import type { AgentConfig, Harness } from "./types.ts";
 import { resolveHarness } from "./types.ts";
 
@@ -146,6 +150,12 @@ function registerSubagentFeatures(
 }
 
 export default function subagentExtension(pi: ExtensionAPI) {
+  // A Pi child loads installed extensions just like its parent. Keep this
+  // extension entirely inert there so the model cannot see and repeatedly
+  // attempt a tool that the dispatcher would reject anyway. The dispatcher's
+  // depth check remains the backstop for external harnesses and direct calls.
+  if (getSubagentDepth() > 0) return;
+
   const configuredAgentDir = getAgentDir();
 
   // Project trust is resolved before session_start. Defer every discovery read

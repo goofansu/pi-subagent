@@ -126,10 +126,11 @@ full-access sandbox mode. They can read and modify files, execute commands, and
 use their native coding tools. Use a `pi` profile with a read-only `tools` list
 when you need a restricted agent.
 
-Claude receives an explicit working-tool allowlist, with agent-spawning and
-deferred tool discovery excluded. Codex's native multi-agent delegation is
-disabled. Every harness also enforces the extension's one-level nesting guard,
-so a subagent cannot call the `subagent` tool.
+A child Pi process does not register this extension's tool or commands. Claude
+receives an explicit working-tool allowlist, with agent-spawning and deferred
+tool discovery excluded. Codex's native multi-agent delegation is disabled.
+Every harness also enforces the extension's one-level nesting guard as a
+backstop, so a subagent cannot call the `subagent` tool.
 
 This prevents accidental delegation loops, not adversarial recursion: an agent
 with shell access can still invoke another CLI directly.
