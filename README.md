@@ -3,8 +3,8 @@
 Delegate tasks to specialized subagents with isolated context windows in Pi.
 
 Each agent runs on a **harness** — Pi itself, Claude Code, or Codex. The harness
-is part of the agent's profile, so the calling agent picks a role to delegate
-and never has to configure a backend.
+is part of the agent's profile, so the calling agent picks a role to delegate to
+without having to configure a backend.
 
 ## Install
 
@@ -18,7 +18,7 @@ After installation, Pi registers:
 - `subagent` tool
 
 `claude` agents use the Claude Agent SDK bundled with this package; reinstall
-pi-subagent if Pi reports that it is missing. A separately installed global
+pi-subagent if Pi reports that the SDK is missing. A separately installed global
 Claude Code CLI is not used.
 
 `codex` agents require a current `codex` CLI on `PATH`, authenticated and
@@ -29,10 +29,8 @@ configured as usual. Pi reports incompatible or missing CLIs at session start.
 Agents are Markdown files in an `agents/` directory. The filename without
 `.md` is the name passed to the `subagent` tool.
 
-Supported frontmatter fields:
-
-`description` and the prompt body are required. Invalid files are skipped and
-reported at session start.
+The supported frontmatter fields are listed below. `description` and the prompt
+body are required. Invalid files are skipped and reported at session start.
 
 | Field | Required | Description | Example |
 | --- | --- | --- | --- |
@@ -127,8 +125,9 @@ use their native coding tools. Use a `pi` profile with a read-only `tools` list
 when you need a restricted agent.
 
 A child Pi process does not register this extension's tool or commands. Claude
-receives an explicit working-tool allowlist, with agent-spawning and deferred
-tool discovery excluded. Codex's native multi-agent delegation is disabled.
+receives an explicit allowlist of working tools, with agent-spawning and
+deferred tool discovery excluded. Codex's native multi-agent delegation is
+disabled.
 Every harness also enforces the extension's one-level nesting guard as a
 backstop, so a subagent cannot call the `subagent` tool.
 
@@ -137,34 +136,29 @@ with shell access can still invoke another CLI directly.
 
 ### Project trust
 
-External harnesses follow Pi's trust decision for the working directory:
+Subagents use Pi's trust decision for the working directory; unknown trust is
+treated as untrusted.
 
-- **Trusted:** user and project instructions, skills, settings, hooks, plugins,
-  and configured integrations may load normally.
-- **Untrusted or unknown:** project configuration and executable integrations
-  are excluded. User instructions and skills remain available, but MCP servers
-  and apps are disabled.
+- **Trusted:** the selected harness loads its project settings and resources
+  normally.
+- **Untrusted:** project settings and executable integrations are not loaded.
 
-This matters because external harnesses bypass approvals. Delegating from an
-untrusted checkout must not execute a project hook or launch a project-defined
-MCP server. For untrusted Codex runs, the backend also avoids persisting the
-directory as trusted while retaining the requested working directory.
+Project context differs by harness. Pi still loads context files such as
+`AGENTS.md` and `CLAUDE.md`, and Codex still loads `AGENTS.md`. Claude excludes
+project `CLAUDE.md` along with its project settings source.
 
-### Transcripts
+Trust controls automatic loading only. It does not restrict file access, tools,
+commands, or network access.
 
-Every harness runs as an ephemeral one-shot. Pi uses `--no-session`, Claude
-disables SDK session persistence, and Codex starts an ephemeral app-server
-thread. Native transcripts are not retained for later resume, and results do
-not expose session or thread IDs.
+### Session persistence
 
-## Discovery rules
+Every harness runs one-shot tasks with no session to resume.
 
-### Agents
+## Agent discovery
 
-Pi loads bundled agents, agents contributed by installed packages, and your
-user and project agents. A higher-priority file replaces a lower-priority file
-with the same name. Project agents and agents from project-scoped packages are
-loaded only when Pi trusts the working directory; unknown trust fails closed.
+Pi discovers bundled agents, agents from installed packages, and user and
+project agents. A higher-priority file replaces a lower-priority file with the
+same name.
 
 | Priority | Scope | Location |
 | --- | --- | --- |
@@ -173,13 +167,7 @@ loaded only when Pi trusts the working directory; unknown trust fails closed.
 | 3 | package | installed package `agents/` directories |
 | 4 | bundled | `agents/` |
 
-For example, `~/.pi/agent/agents/security-reviewer.md` defines a user agent
-named `security-reviewer`. A project file at `.pi/agents/security-reviewer.md`
-overrides it.
-
-### Skills
-
-Each harness discovers skills natively. Pi subagents receive the parent's trust
-decision: user skills are always available, while project skills are discovered
-only when the project is trusted. The extension does not scan, validate, or
-select skills itself.
+Project agents and project-scoped package agents are discovered only when Pi
+trusts the working directory. For example,
+`~/.pi/agent/agents/security-reviewer.md` defines a user agent, which a trusted
+project can override with `.pi/agents/security-reviewer.md`.
