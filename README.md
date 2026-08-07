@@ -191,36 +191,3 @@ declaring `skills` on those profiles is an error.
 | 2 | project | `.agents/skills/` |
 | 3 | user | `~/.pi/agent/skills/` |
 | 4 | user | `~/.agents/skills/` |
-
-## Using with the Pi SDK
-
-Applications embedding Pi can register the extension directly:
-
-```ts
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  getAgentDir,
-} from "@earendil-works/pi-coding-agent";
-import { createSubagentExtension } from "pi-subagent";
-
-const cwd = process.env.PI_PROJECT_DIR ?? process.cwd();
-const agentDir = getAgentDir();
-
-const resourceLoader = new DefaultResourceLoader({
-  cwd,
-  agentDir,
-  extensionFactories: [createSubagentExtension({ cwd, agentDir })],
-});
-
-const { session } = await createAgentSession({
-  cwd,
-  agentDir,
-  resourceLoader,
-});
-
-await session.prompt("Use the subagent tool to review this project.");
-```
-
-Set `configCwd` in `createSubagentExtension` when agents and skills belong to a
-different directory from the child's working directory.

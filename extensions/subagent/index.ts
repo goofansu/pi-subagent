@@ -18,17 +18,6 @@ import { defaultBackendRegistry, runSubagent } from "./runner.ts";
 import type { AgentConfig, Harness } from "./types.ts";
 import { resolveHarness } from "./types.ts";
 
-export interface SubagentExtensionOptions {
-  cwd?: string;
-  agentDir?: string;
-  configCwd?: string;
-}
-
-// Keep the public factory boundary independent of this package's local
-// peer-dependency instance so embedders can use their own Pi version.
-// biome-ignore lint/suspicious/noExplicitAny: Extension hosts provide the concrete Pi API at runtime.
-export type SubagentExtension = (pi: any) => void;
-
 /**
  * Report harnesses that configured agents ask for but that cannot run here —
  * an unregistered harness, or one whose SDK or binary is missing. Surfacing
@@ -65,137 +54,129 @@ export async function findUnavailableHarnessWarnings(
 
 // ── Extension ─────────────────────────────────────────────────────────────────
 
-export function createSubagentExtension(
-  options: SubagentExtensionOptions = {},
-): SubagentExtension {
-  return function subagentExtension(pi: ExtensionAPI) {
-    const projectCwd = options.cwd ?? process.cwd();
-    const configCwd = options.configCwd ?? projectCwd;
-    const configuredAgentDir = options.agentDir ?? getAgentDir();
-    const agentConfigLoadResult = loadLayeredAgentConfigsWithDiagnostics(
-      buildAgentConfigLayers(
-        projectCwd,
-        configuredAgentDir,
-        import.meta.url,
-        configCwd,
-      ),
-    );
-    const agentConfigs = agentConfigLoadResult.configs;
-    const description = "Run a task in a specialized subagent";
+export default function subagentExtension(pi: ExtensionAPI) {
+  const projectCwd = process.cwd();
+  const configuredAgentDir = getAgentDir();
+  const agentConfigLoadResult = loadLayeredAgentConfigsWithDiagnostics(
+    buildAgentConfigLayers(
+      projectCwd,
+      configuredAgentDir,
+      import.meta.url,
+      projectCwd,
+    ),
+  );
+  const agentConfigs = agentConfigLoadResult.configs;
+  const description = "Run a task in a specialized subagent";
 
-    pi.on("session_start", async (event, ctx) => {
-      if (event.reason !== "startup" && event.reason !== "reload") return;
+  pi.on("session_start", async (event, ctx) => {
+    if (event.reason !== "startup" && event.reason !== "reload") return;
 
-      for (const warning of await findUnavailableHarnessWarnings(
-        agentConfigs,
-        defaultBackendRegistry,
-      )) {
-        ctx.ui.notify(warning, "warning");
-      }
+    for (const warning of await findUnavailableHarnessWarnings(
+      agentConfigs,
+      defaultBackendRegistry,
+    )) {
+      ctx.ui.notify(warning, "warning");
+    }
 
-      if (agentConfigLoadResult.invalidFiles.length > 0) {
-        const warning = formatInvalidAgentFilesWarning(
-          agentConfigLoadResult.invalidFiles,
-        );
-        ctx.ui.notify(warning, "warning");
-      }
-
-      const skillWarnings = validateAgentSkills(
-        agentConfigs,
-        configCwd,
-        configuredAgentDir,
+    if (agentConfigLoadResult.invalidFiles.length > 0) {
+      const warning = formatInvalidAgentFilesWarning(
+        agentConfigLoadResult.invalidFiles,
       );
-      for (const warning of skillWarnings) {
-        ctx.ui.notify(warning, "warning");
-      }
-    });
+      ctx.ui.notify(warning, "warning");
+    }
 
-    registerAgentsCommand(pi, agentConfigs);
+    const skillWarnings = validateAgentSkills(
+      agentConfigs,
+      projectCwd,
+      configuredAgentDir,
+    );
+    for (const warning of skillWarnings) {
+      ctx.ui.notify(warning, "warning");
+    }
+  });
 
-    pi.registerTool({
-      name: "subagent",
-      label: "Subagent",
-      description,
-      promptSnippet: description,
-      promptGuidelines: formatAgentGuidelines(agentConfigs),
-      parameters: Type.Object({
-        agent: Type.String({ description: "The agent to run the task" }),
-        description: Type.String({
-          description: "Label for this specific call",
-        }),
-        prompt: Type.String({ description: "The full task brief" }),
+  registerAgentsCommand(pi, agentConfigs);
+
+  pi.registerTool({
+    name: "subagent",
+    label: "Subagent",
+    description,
+    promptSnippet: description,
+    promptGuidelines: formatAgentGuidelines(agentConfigs),
+    parameters: Type.Object({
+      agent: Type.String({ description: "The agent to run the task" }),
+      description: Type.String({
+        description: "Label for this specific call",
       }),
+      prompt: Type.String({ description: "The full task brief" }),
+    }),
 
-      renderCall: renderSubagentCall,
-      renderResult: renderSubagentResult,
+    renderCall: renderSubagentCall,
+    renderResult: renderSubagentResult,
 
-      async execute(_toolCallId, params, signal, onUpdate, ctx) {
-        const config = agentConfigs.get(params.agent);
-        if (!config) {
-          throw new Error(
-            `Unknown agent: "${params.agent}". Available: ${[...agentConfigs.keys()].join(", ") || "none"}`,
-          );
-        }
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      const config = agentConfigs.get(params.agent);
+      if (!config) {
+        throw new Error(
+          `Unknown agent: "${params.agent}". Available: ${[...agentConfigs.keys()].join(", ") || "none"}`,
+        );
+      }
 
-        const result = await runSubagent({
-          config,
-          description: params.description,
-          prompt: params.prompt,
-          signal,
-          // Pi already decided whether this directory is trusted, and asked the
-          // person if it had to. Reusing that decision is what keeps delegating
-          // from granting a directory more than working in it already did.
-          // Optional call: a host too old to report trust must read as
-          // untrusted, not as trusting.
-          projectTrusted: ctx.isProjectTrusted?.() ?? false,
-          parentModel: ctx.model
-            ? {
-                provider: ctx.model.provider,
-                id: ctx.model.id,
-                thinkingLevel: pi.getThinkingLevel(),
-              }
-            : undefined,
-          onUpdate,
-          cwd: projectCwd,
-          agentDir: configuredAgentDir,
-          configCwd,
-        });
+      const result = await runSubagent({
+        config,
+        description: params.description,
+        prompt: params.prompt,
+        signal,
+        // Pi already decided whether this directory is trusted, and asked the
+        // person if it had to. Reusing that decision is what keeps delegating
+        // from granting a directory more than working in it already did.
+        // Optional call: a host too old to report trust must read as
+        // untrusted, not as trusting.
+        projectTrusted: ctx.isProjectTrusted?.() ?? false,
+        parentModel: ctx.model
+          ? {
+              provider: ctx.model.provider,
+              id: ctx.model.id,
+              thinkingLevel: pi.getThinkingLevel(),
+            }
+          : undefined,
+        onUpdate,
+        cwd: projectCwd,
+        agentDir: configuredAgentDir,
+        configCwd: projectCwd,
+      });
 
-        const isError =
-          result.status === "failed" || result.status === "aborted";
+      const isError = result.status === "failed" || result.status === "aborted";
 
-        if (isError) {
-          const errorMsg =
-            result.errorMessage ||
-            result.stderr ||
-            getFinalOutput(result.messages) ||
-            "(no output)";
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Agent ${result.stopReason || "failed"}: ${errorMsg}`,
-              },
-            ],
-            details: { results: [result] },
-            isError: true,
-          };
-        }
-
-        const finalOutput = getFinalOutput(result.messages);
-
+      if (isError) {
+        const errorMsg =
+          result.errorMessage ||
+          result.stderr ||
+          getFinalOutput(result.messages) ||
+          "(no output)";
         return {
           content: [
             {
               type: "text",
-              text: finalOutput || `(exit code ${result.exitCode})`,
+              text: `Agent ${result.stopReason || "failed"}: ${errorMsg}`,
             },
           ],
           details: { results: [result] },
+          isError: true,
         };
-      },
-    });
-  };
-}
+      }
 
-export default createSubagentExtension();
+      const finalOutput = getFinalOutput(result.messages);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: finalOutput || `(exit code ${result.exitCode})`,
+          },
+        ],
+        details: { results: [result] },
+      };
+    },
+  });
+}

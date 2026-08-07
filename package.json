@@ -3,10 +3,6 @@
   "version": "1.0.0",
   "description": "Delegate tasks to specialized subagents with isolated context, running on Pi, Claude Code, or Codex. At most four run at a time, and any run can be cancelled.",
   "type": "module",
-  "exports": {
-    ".": "./extensions/subagent/index.ts",
-    "./subagent": "./extensions/subagent/index.ts"
-  },
   "keywords": [
     "pi-package"
   ],
