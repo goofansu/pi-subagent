@@ -10,7 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 import { createEmptyResult } from "../backend.ts";
-import type { AgentConfig } from "../types.ts";
+import type { AgentConfig, SingleResult } from "../types.ts";
 import {
   buildPiArgs,
   getPiInvocation,
@@ -197,18 +197,20 @@ function shadowPiBinary(script: string): { dir: string; restore: () => void } {
   };
 }
 
-test("pi backend settles a cancelled run instead of rejecting", async () => {
-  // The backend contract: cancellation is a resolved result. Rejecting would
-  // strip `details` on the way through the host and take the partial transcript
-  // with it, so this asserts the resolution rather than a throw.
-  const shadow = shadowPiBinary("#!/bin/sh\nsleep 30\n");
-  const controller = new AbortController();
+async function runPiFixture(
+  script: string,
+  options: {
+    signal?: AbortSignal;
+    onEmit?: (result: SingleResult) => void;
+  } = {},
+): Promise<SingleResult> {
+  const shadow = shadowPiBinary(script);
+  const result = createEmptyResult("worker", "Work", "pi");
 
   try {
-    const result = createEmptyResult("worker", "Work", "pi");
-    const run = piBackend.run({
+    return await piBackend.run({
       task: {
-        config: agent(),
+        config: agent({ systemPrompt: "" }),
         description: "Work",
         prompt: "do it",
         cwd: os.tmpdir(),
@@ -217,21 +219,135 @@ test("pi backend settles a cancelled run instead of rejecting", async () => {
         depth: 0,
       },
       result,
-      emit: () => {},
-      signal: controller.signal,
+      emit: () => options.onEmit?.(result),
+      signal: options.signal,
     });
-
-    // Let the child get going, then cancel it.
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    controller.abort();
-
-    const settled = await run;
-    assert.equal(settled.exitCode, 1);
-    assert.equal(settled.stopReason, "aborted");
-    assert.match(settled.errorMessage ?? "", /Subagent was aborted/);
   } finally {
     shadow.restore();
   }
+}
+
+test("pi backend accepts exit 0 after a valid agent_end event", async () => {
+  const terminalEvent = JSON.stringify({
+    type: "agent_end",
+    messages: [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "fixture completed" }],
+        provider: "fixture-provider",
+        model: "fixture-model",
+        stopReason: "stop",
+      },
+    ],
+  });
+
+  const settled = await runPiFixture(
+    `#!/bin/sh\nprintf '%s\\n' '${terminalEvent}'\n`,
+  );
+
+  assert.equal(settled.exitCode, 0);
+  assert.equal(settled.stopReason, "stop");
+  assert.equal(settled.errorMessage, undefined);
+  assert.equal(settled.messages.length, 1);
+});
+
+test("pi backend fails exit 0 without an agent_end event", async () => {
+  const nonterminalEvent = JSON.stringify({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "partial output" }],
+      stopReason: "stop",
+    },
+  });
+
+  const settled = await runPiFixture(
+    `#!/bin/sh\nprintf '%s\\n' '${nonterminalEvent}'\n`,
+  );
+
+  assert.equal(settled.exitCode, 1);
+  assert.equal(settled.stopReason, "error");
+  assert.equal(settled.messages.length, 1);
+  assert.match(settled.errorMessage ?? "", /valid terminal agent_end event/);
+  assert.match(settled.errorMessage ?? "", /"type":"message_end"/);
+});
+
+test("pi backend rejects a structurally invalid agent_end event", async () => {
+  const fakeTerminalEvent = JSON.stringify({
+    type: "agent_end",
+    messages: { role: "assistant" },
+  });
+
+  const settled = await runPiFixture(
+    `#!/bin/sh\nprintf '%s\\n' '${fakeTerminalEvent}'\n`,
+  );
+
+  assert.equal(settled.exitCode, 1);
+  assert.equal(settled.stopReason, "error");
+  assert.equal(settled.messages.length, 0);
+  assert.match(settled.errorMessage ?? "", /valid terminal agent_end event/);
+  assert.match(settled.errorMessage ?? "", /"messages":\{"role"/);
+});
+
+test("pi backend retains a bounded malformed stdout tail", async () => {
+  const malformedOutput = `malformed-${"x".repeat(3000)}-diagnostic-tail`;
+
+  const settled = await runPiFixture(
+    `#!/bin/sh\nprintf '%s\\n' '${malformedOutput}'\n`,
+  );
+
+  assert.equal(settled.exitCode, 1);
+  assert.equal(settled.stopReason, "error");
+  assert.match(settled.errorMessage ?? "", /Last stdout:/);
+  assert.match(settled.errorMessage ?? "", /diagnostic-tail/);
+  assert.doesNotMatch(settled.errorMessage ?? "", /malformed-/);
+  assert.ok((settled.errorMessage?.length ?? 0) < 2500);
+});
+
+test("pi backend preserves a nonzero child exit", async () => {
+  const settled = await runPiFixture(
+    "#!/bin/sh\nprintf '%s\\n' '{not-json}'\nprintf '%s\\n' 'fixture failure' >&2\nexit 7\n",
+  );
+
+  assert.equal(settled.exitCode, 7);
+  assert.equal(settled.stopReason, undefined);
+  assert.equal(settled.errorMessage, undefined);
+  assert.match(settled.stderr, /fixture failure/);
+});
+
+test("pi backend keeps cancellation authoritative over a missing agent_end", async () => {
+  // The backend contract: cancellation is a resolved result. Rejecting would
+  // strip `details` on the way through the host and take the partial transcript
+  // with it, so this asserts the resolution rather than a throw.
+  const controller = new AbortController();
+  let abortedAfterOutput = false;
+  const partialEvent = JSON.stringify({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "partial before cancellation" }],
+      stopReason: "stop",
+    },
+  });
+
+  const settled = await runPiFixture(
+    `#!/bin/sh\nprintf '%s\\n' '${partialEvent}'\nexec sleep 30\n`,
+    {
+      signal: controller.signal,
+      onEmit: (result) => {
+        if (result.messages.length > 0 && !controller.signal.aborted) {
+          abortedAfterOutput = true;
+          controller.abort();
+        }
+      },
+    },
+  );
+
+  assert.equal(abortedAfterOutput, true);
+  assert.equal(settled.exitCode, 1);
+  assert.equal(settled.stopReason, "aborted");
+  assert.match(settled.errorMessage ?? "", /Subagent was aborted/);
+  assert.doesNotMatch(settled.errorMessage ?? "", /agent_end/);
 });
 
 test("resolveSubagentModel hands pi the model exactly as written", () => {

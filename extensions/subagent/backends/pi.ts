@@ -51,6 +51,10 @@ const PI_CLI_SCRIPT_PATHS = [
   ["src", "bun", "cli.ts"],
 ] as const;
 
+const RAW_STDOUT_TAIL_LIMIT = 2000;
+const MISSING_AGENT_END_ERROR =
+  "Child pi exited with code 0 without a valid terminal agent_end event (with a messages array).";
+
 function executableName(executablePath: string): string {
   // Splitting both separators also keeps the resolver testable across platforms.
   return executablePath.split(/[\\/]/).pop()?.toLowerCase() ?? "";
@@ -239,6 +243,10 @@ function appendMessage(result: SingleResult, msg: Message): void {
   if (msg.role === "assistant") recordAssistantUsage(result, msg);
 }
 
+function isValidAgentEndEvent(event: Record<string, unknown>): boolean {
+  return event.type === "agent_end" && Array.isArray(event.messages);
+}
+
 export function applyPiJsonEvent(
   event: Record<string, unknown>,
   result: SingleResult,
@@ -253,7 +261,7 @@ export function applyPiJsonEvent(
     return true;
   }
 
-  if (event.type === "agent_end" && Array.isArray(event.messages)) {
+  if (isValidAgentEndEvent(event)) {
     result.messages = [];
     result.usage = {
       input: 0,
@@ -301,6 +309,8 @@ async function runPiAgent(ctx: SubagentRunContext): Promise<SingleResult> {
   let tmpPromptDir: string | null = null;
   let tmpPromptPath: string | null = null;
   let wasAborted = false;
+  let sawValidAgentEnd = false;
+  let rawStdoutTail = "";
 
   try {
     if (config.systemPrompt) {
@@ -340,25 +350,30 @@ async function runPiAgent(ctx: SubagentRunContext): Promise<SingleResult> {
       proc.stdin.write(task.prompt, "utf-8");
       proc.stdin.end();
       let buffer = "";
-      let rawStdoutTail = "";
 
       const processLine = (line: string) => {
         if (!line.trim()) return;
-        let event: Record<string, unknown>;
+        let parsed: unknown;
         try {
-          event = JSON.parse(line);
+          parsed = JSON.parse(line);
         } catch {
           return;
         }
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return;
+        }
 
+        const event = parsed as Record<string, unknown>;
+        const isValidAgentEnd = isValidAgentEndEvent(event);
         if (applyPiJsonEvent(event, result)) {
+          if (isValidAgentEnd) sawValidAgentEnd = true;
           emit();
         }
       };
 
       proc.stdout.on("data", (data) => {
         const chunk = data.toString();
-        rawStdoutTail = (rawStdoutTail + chunk).slice(-2000);
+        rawStdoutTail = (rawStdoutTail + chunk).slice(-RAW_STDOUT_TAIL_LIMIT);
         buffer += chunk;
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
@@ -410,7 +425,16 @@ async function runPiAgent(ctx: SubagentRunContext): Promise<SingleResult> {
     // Cancellation is a resolved result, not a rejection — see the backend
     // contract and {@link settleAborted}. A killed child's exit code says
     // nothing useful, so the abort overrides whatever it reported.
-    if (wasAborted) settleAborted(result);
+    if (wasAborted) {
+      settleAborted(result);
+    } else if (exitCode === 0 && !sawValidAgentEnd) {
+      result.exitCode = 1;
+      result.stopReason = "error";
+      const stdoutTail = rawStdoutTail.trim();
+      result.errorMessage = stdoutTail
+        ? `${MISSING_AGENT_END_ERROR} Last stdout:\n${stdoutTail}`
+        : `${MISSING_AGENT_END_ERROR} No stdout was captured.`;
+    }
     return result;
   } finally {
     if (tmpPromptPath)
