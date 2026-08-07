@@ -164,7 +164,7 @@ A missing SDK is reported at session start naming the affected agents.
 | `tools` | not mapped — a pi-only field; a claude subagent runs Claude Code's own tool set |
 | `skills` | not mapped — a pi-only field; a claude subagent manages its own skills |
 | `cwd` | `options.cwd` |
-| — | `session_id` from the init message is recorded on the result so a finished run can be reopened with `claude -r <id>` from its cwd. The executable is resolved, not assumed: the SDK's bundled binary declares no npm `bin`, so `claude` need not be on PATH |
+| — | `persistSession: false`, so the one-shot run is not written to Claude's session store |
 
 `Agent`, `Task`, and `Workflow` are withheld unconditionally, keeping delegation
 under this extension. `Agent` and `Task` are two names for the one tool that
@@ -203,8 +203,8 @@ own, so the code-execution path is closed.
 `approvalPolicy=never` + `sandbox=danger-full-access` for the same reason the
 claude harness bypasses. It maps base versus appended system instructions onto
 `baseInstructions`/`developerInstructions`, maps effort on `turn/start`, folds
-structured app-server items into the common transcript, and records the thread
-id for `codex resume`.
+structured app-server items into the common transcript, and starts the thread
+with `ephemeral: true` so it is not retained for resume.
 
 The process starts with both `multi_agent` and `multi_agent_v2` disabled,
 keeping native Codex delegation under the same one-level guard. Pi's trust
@@ -314,9 +314,8 @@ synchronous, and the parent model decides each delegation step.
 ## Future direction
 
 - **Background runs** — `subagent(action=run|status|wait|cancel)`.
-- **Persistent sessions** — Claude conversation continuation, Codex thread
-  continuation, pi session reuse. Claude and Codex results already record the
-  native session/thread id; nothing is resumed automatically today.
+- **Persistent sessions** — intentionally unsupported: every backend is an
+  ephemeral one-shot and normalized results expose no native session identity.
 - **Supervisor communication** — child agents requesting decisions from the
   parent.
 

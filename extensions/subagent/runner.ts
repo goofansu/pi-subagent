@@ -90,7 +90,6 @@ export async function runSubagent({
 
   const result = createEmptyResult(config.name, description, harness, now());
   if (config.effort) result.effort = config.effort;
-  result.cwd = cwd;
 
   const task: SubagentTask = {
     config,

@@ -5,7 +5,6 @@ import {
   COLLAPSED_TOOL_CALL_PREVIEW_WIDTH,
   EXPANDED_TOOL_CALL_PREVIEW_LENGTH,
   formatHarnessBadge,
-  formatResumeHint,
   formatTokens,
   formatToolCall,
   formatUsageStats,
@@ -370,17 +369,6 @@ test("formatHarnessBadge tags a non-default harness and leaves pi bare", () => {
   assert.equal(formatHarnessBadge("claude", plain), " [claude]");
 });
 
-test("formatResumeHint gives a bare command when already in the subagent's directory", () => {
-  assert.equal(
-    formatResumeHint(
-      { harness: "claude", sessionId: "abc-123", cwd: "/repo" },
-      "/repo",
-      "claude",
-    ),
-    "claude -r abc-123",
-  );
-});
-
 function hasUnpairedSurrogate(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const unit = value.charCodeAt(index);
@@ -394,89 +382,6 @@ function hasUnpairedSurrogate(value: string): boolean {
   }
   return false;
 }
-
-test("formatResumeHint includes the directory hop when elsewhere", () => {
-  // Claude Code resolves sessions per project directory, so `claude -r` finds
-  // nothing unless it runs where the subagent ran.
-  assert.equal(
-    formatResumeHint(
-      { harness: "claude", sessionId: "abc-123", cwd: "/repo" },
-      "/somewhere/else",
-      "claude",
-    ),
-    "(cd /repo && claude -r abc-123)",
-  );
-});
-
-test("formatResumeHint quotes a directory the shell would mangle", () => {
-  assert.equal(
-    formatResumeHint(
-      { harness: "claude", sessionId: "abc-123", cwd: "/tmp/my project" },
-      "/somewhere/else",
-      "claude",
-    ),
-    "(cd '/tmp/my project' && claude -r abc-123)",
-  );
-});
-
-test("formatResumeHint uses the bundled binary when claude is not on PATH", () => {
-  // Neither the SDK nor its platform package declares an npm `bin`, so a setup
-  // can run claude subagents with no `claude` command anywhere. A hint that
-  // assumed one would only ever print "command not found".
-  assert.equal(
-    formatResumeHint(
-      { harness: "claude", sessionId: "abc-123", cwd: "/repo" },
-      "/repo",
-      "/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude",
-    ),
-    "/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude -r abc-123",
-  );
-});
-
-test("formatResumeHint quotes an executable path the shell would mangle", () => {
-  assert.equal(
-    formatResumeHint(
-      { harness: "claude", sessionId: "abc-123", cwd: "/repo" },
-      "/repo",
-      "/opt/my tools/claude",
-    ),
-    "'/opt/my tools/claude' -r abc-123",
-  );
-});
-
-test("formatResumeHint reopens a Codex thread", () => {
-  assert.equal(
-    formatResumeHint(
-      { harness: "codex", sessionId: "thread-123", cwd: "/repo" },
-      "/repo",
-      "codex",
-    ),
-    "codex resume thread-123",
-  );
-  assert.equal(
-    formatResumeHint(
-      { harness: "codex", sessionId: "thread-123", cwd: "/repo" },
-      "/elsewhere",
-      "/opt/Codex CLI/codex",
-    ),
-    "(cd /repo && '/opt/Codex CLI/codex' resume thread-123)",
-  );
-});
-
-test("formatResumeHint is absent when there is no session to resume", () => {
-  // pi runs with --no-session, and an external harness can die before init.
-  assert.equal(
-    formatResumeHint(
-      { harness: "pi", sessionId: "abc", cwd: "/repo" },
-      "/repo",
-    ),
-    undefined,
-  );
-  assert.equal(
-    formatResumeHint({ harness: "claude", cwd: "/repo" }, "/repo"),
-    undefined,
-  );
-});
 
 test("formatUsageStats withholds an output count the run never reported", () => {
   // A run cut short never delivers the result frame carrying its real totals,

@@ -153,12 +153,10 @@ directory as trusted while retaining the requested working directory.
 
 ### Transcripts
 
-Claude and Codex persist their native sessions, including prompts and system
-instructions in plaintext. The expanded result prints a copy-pasteable resume
-command such as `claude -r <session-id>` or `codex resume <thread-id>`, including
-a directory change when required. Runs are never resumed automatically.
-
-Pi runs without a persistent session.
+Every harness runs as an ephemeral one-shot. Pi uses `--no-session`, Claude
+disables SDK session persistence, and Codex starts an ephemeral app-server
+thread. Native transcripts are not retained for later resume, and results do
+not expose session or thread IDs.
 
 ## Discovery rules
 

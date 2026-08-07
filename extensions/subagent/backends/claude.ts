@@ -12,7 +12,6 @@
 
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
-import * as path from "node:path";
 import type {
   Options as ClaudeOptions,
   SDKAssistantMessage,
@@ -190,53 +189,6 @@ export function hasClaudeBinary(
   return findClaudeBinary(...args) !== undefined;
 }
 
-/**
- * The command a person can run to reopen a Claude session — `claude` when a
- * Claude Code install put it on PATH, otherwise the absolute path to the SDK's
- * bundled binary.
- *
- * The bundled binary is not a real fallback so much as the common case: neither
- * the SDK nor its platform package declares an npm `bin`, so an install can run
- * claude subagents perfectly well with no `claude` on PATH at all — and a resume
- * hint printed there would only ever say "command not found".
- *
- * Resolved once. Nothing here changes within a session, and this runs per
- * rendered result.
- */
-let cachedResumeCommand: string | undefined;
-
-export function resolveClaudeCommand(
-  onPath: (command: string) => boolean = isOnPath,
-  findBinary: () => string | undefined = () => findClaudeBinary(),
-  useCache = true,
-): string {
-  if (useCache && cachedResumeCommand) return cachedResumeCommand;
-  const command = onPath("claude") ? "claude" : (findBinary() ?? "claude");
-  if (useCache) cachedResumeCommand = command;
-  return command;
-}
-
-function isOnPath(command: string): boolean {
-  const entries = (process.env.PATH ?? "").split(path.delimiter);
-  const names =
-    process.platform === "win32"
-      ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT")
-          .split(";")
-          .map((extension) => command + extension.toLowerCase())
-      : [command];
-  return entries.some((entry) =>
-    names.some((name) => {
-      if (!entry) return false;
-      try {
-        fs.accessSync(path.join(entry, name), fs.constants.X_OK);
-        return true;
-      } catch {
-        return false;
-      }
-    }),
-  );
-}
-
 // ── Profile → SDK options ─────────────────────────────────────────────────────
 
 /**
@@ -354,6 +306,8 @@ export function buildClaudeOptions({
 
   return {
     cwd,
+    // Native SDK switch: do not write the transcript under ~/.claude/projects.
+    persistSession: false,
     systemPrompt: buildClaudeSystemPrompt(config, cwd),
     ...buildPermissionOptions(),
     ...buildThinkingOptions(resolveClaudeEffort(config)),
@@ -1049,9 +1003,8 @@ export function applyClaudeMessage(
     case "system":
       if (message.subtype === "init") {
         result.model = message.model || result.model;
-        // Claude Code persists a transcript per session, so recording the id is
-        // what lets a finished run be reopened with `claude -r <id>`.
-        result.sessionId = message.session_id || result.sessionId;
+        // The protocol still identifies this in-memory run, but the backend
+        // deliberately neither persists nor exposes that identifier.
         return true;
       }
       if (message.subtype === "model_refusal_fallback") {

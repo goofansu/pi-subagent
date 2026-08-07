@@ -189,6 +189,7 @@ test("Codex appends system instructions when the field is omitted", () => {
   assert.equal(appended.developerInstructions, "You are the worker.");
   assert.equal(appended.approvalPolicy, "never");
   assert.equal(appended.sandbox, "danger-full-access");
+  assert.equal(appended.ephemeral, true);
   assert.deepEqual(appended.config.features, {
     multi_agent: false,
     multi_agent_v2: false,
@@ -540,7 +541,7 @@ test("untrusted Codex lifecycle disables layered integrations before starting", 
   );
 
   assert.equal(completed.exitCode, 0);
-  assert.equal(completed.sessionId, "thread-1");
+  assert.equal(Object.hasOwn(completed, "sessionId"), false);
   assert.equal(completed.model, "gpt-test");
   assert.equal(completed.usage.turns, 1);
   assert.match(completed.stderr, /progress callback failed/);
@@ -567,7 +568,7 @@ test("untrusted Codex lifecycle disables layered integrations before starting", 
     approvalPolicy: "never",
     sandbox: "danger-full-access",
     baseInstructions: "You are the worker.",
-    ephemeral: false,
+    ephemeral: true,
     config: {
       features: {
         multi_agent: false,

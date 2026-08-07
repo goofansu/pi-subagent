@@ -8,7 +8,6 @@ import type { Component } from "@earendil-works/pi-tui";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import {
   formatHarnessBadge,
-  formatResumeHint,
   formatToolCall,
   formatUsageStats,
   TOOL_CALL_ARROW_PREFIX,
@@ -219,11 +218,6 @@ export function renderSubagentResult(
     if (usageStr) {
       container.addChild(new Spacer(1));
       container.addChild(new Text(theme.fg("dim", usageStr), 0, 0));
-    }
-
-    const resumeHint = formatResumeHint(r);
-    if (resumeHint) {
-      container.addChild(new Text(theme.fg("dim", resumeHint), 0, 0));
     }
     return container;
   }

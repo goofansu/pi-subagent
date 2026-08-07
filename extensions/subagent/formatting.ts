@@ -1,6 +1,5 @@
 import * as os from "node:os";
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
-import { resolveClaudeCommand } from "./backends/claude.ts";
 import type { Effort, Harness, ThemeForeground, UsageStats } from "./types.ts";
 import { DEFAULT_HARNESS } from "./types.ts";
 
@@ -61,52 +60,6 @@ export function formatUsageStats(
   if (model) parts.push(model);
   if (effort) parts.push(`effort:${effort}`);
   return parts.join(" ");
-}
-
-/**
- * The command that reopens a finished external-harness transcript. Both Claude
- * Code and Codex restore the run's working directory context, so the hint hops
- * there first when necessary.
- *
- * The executable is resolved rather than assumed: the SDK drives a bundled
- * binary that declares no npm `bin`, so a setup can run claude subagents with
- * nothing named `claude` on PATH, and a hint that assumed otherwise would only
- * ever print "command not found".
- */
-export function formatResumeHint(
-  result: { harness: Harness; sessionId?: string; cwd?: string },
-  currentCwd: string = process.cwd(),
-  commandOverride?: string,
-): string | undefined {
-  if (
-    (result.harness !== "claude" && result.harness !== "codex") ||
-    !result.sessionId
-  ) {
-    return undefined;
-  }
-  const executable =
-    commandOverride ??
-    (result.harness === "claude" ? resolveClaudeCommand() : "codex");
-  const resumeArgs =
-    result.harness === "claude"
-      ? `-r ${result.sessionId}`
-      : `resume ${result.sessionId}`;
-  const command = `${shellQuote(executable)} ${resumeArgs}`;
-  // Resuming only finds the session from the directory it ran in, so include
-  // the hop when that is somewhere else.
-  if (result.cwd && result.cwd !== currentCwd) {
-    return `(cd ${shellQuote(result.cwd)} && ${command})`;
-  }
-  return command;
-}
-
-/**
- * Single-quote a path for a copy-pasteable shell command. Spaces and shell
- * metacharacters in a project directory would otherwise break the hint.
- */
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9_./:@%+=-]+$/.test(value)) return value;
-  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 export function formatToolCall(

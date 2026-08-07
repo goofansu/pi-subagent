@@ -26,7 +26,6 @@ import {
   createClaudeTranslationState,
   findClaudeBinary,
   hasClaudeBinary,
-  resolveClaudeCommand,
   resolveClaudeEffort,
   resolveClaudeModel,
 } from "./claude.ts";
@@ -322,6 +321,7 @@ test("buildClaudeOptions withholds the agent-spawning tools, and nothing else", 
     depth: 0,
   });
 
+  assert.equal(options.persistSession, false);
   // Only the agent-spawning tools: both names of the native delegation tool, so
   // the guard holds across CLI versions, plus scripted fan-out.
   assert.deepEqual(options.disallowedTools, ["Agent", "Task", "Workflow"]);
@@ -1028,34 +1028,6 @@ test("claude backend turns a stream failure into a failed result", async () => {
   assert.equal(runResult.exitCode, 1);
   assert.equal(runResult.stopReason, "error");
   assert.equal(runResult.errorMessage, "CLI crashed");
-});
-
-test("resolveClaudeCommand prefers claude on PATH, else the bundled binary", () => {
-  assert.equal(
-    resolveClaudeCommand(
-      () => true,
-      () => "/pkgs/claude",
-      false,
-    ),
-    "claude",
-  );
-  assert.equal(
-    resolveClaudeCommand(
-      () => false,
-      () => "/pkgs/claude",
-      false,
-    ),
-    "/pkgs/claude",
-  );
-  // Nothing found anywhere: name the command, so the hint at least reads right.
-  assert.equal(
-    resolveClaudeCommand(
-      () => false,
-      () => undefined,
-      false,
-    ),
-    "claude",
-  );
 });
 
 test("findClaudeBinary returns the first candidate that exists", () => {
@@ -2028,11 +2000,11 @@ test("contextOccupancyTokens tolerates the null cache counts the API can send", 
   );
 });
 
-test("applyClaudeMessage records the session id so a run can be reopened", () => {
+test("applyClaudeMessage does not expose the ephemeral run's session id", () => {
   const current = result();
   applyClaudeMessage(initMessage(), current, createClaudeTranslationState());
 
-  assert.equal(current.sessionId, "session");
+  assert.equal(Object.hasOwn(current, "sessionId"), false);
 });
 
 test("buildClaudeSystemPrompt tells a replaced prompt where it is", () => {

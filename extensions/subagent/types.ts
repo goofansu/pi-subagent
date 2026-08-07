@@ -87,18 +87,6 @@ export interface SingleResult {
   effort?: Effort;
   stopReason?: string;
   errorMessage?: string;
-  /**
-   * The harness's own session/thread identifier, when it keeps one. This makes
-   * a finished external-harness run inspectable with `claude -r <sessionId>` or
-   * `codex resume <sessionId>`. The pi harness runs with `--no-session` and
-   * reports none.
-   */
-  sessionId?: string;
-  /**
-   * Directory the subagent ran in. Recorded so a resume hint restores the same
-   * project context before reopening the external-harness session.
-   */
-  cwd?: string;
 }
 
 export interface SubagentDetails {

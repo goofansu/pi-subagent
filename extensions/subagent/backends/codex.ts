@@ -3,7 +3,7 @@
  *
  * App server is used instead of `codex exec --json` because its protocol has
  * first-class fields for base/developer instructions, reasoning effort,
- * approvals, sandboxing, and persisted thread ids. That keeps profile fields
+ * approvals, sandboxing, and ephemeral threads. That keeps profile fields
  * out of shell arguments and lets the existing subagent UI receive structured
  * tool calls and progress.
  */
@@ -134,7 +134,7 @@ export interface CodexThreadStartParams extends JsonObject {
   sandbox: "danger-full-access";
   baseInstructions?: string;
   developerInstructions?: string;
-  ephemeral: false;
+  ephemeral: true;
   config: JsonObject;
 }
 
@@ -145,7 +145,7 @@ export function buildCodexThreadStartParams(
   const params: CodexThreadStartParams = {
     approvalPolicy: "never",
     sandbox: "danger-full-access",
-    ephemeral: false,
+    ephemeral: true,
     // Defense in depth for versions that read feature values from thread
     // config after process startup.
     config: task.projectTrusted
@@ -872,8 +872,6 @@ export async function runCodexAgent(
     const thread = asObject(started.thread);
     threadId = asString(thread.id);
     if (!threadId) throw new Error("Codex thread/start returned no thread id");
-    result.sessionId = threadId;
-    result.cwd = task.cwd;
     result.model =
       asString(started.model) ?? resolveCodexModel(task.config) ?? "codex";
     publish();
