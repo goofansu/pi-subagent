@@ -405,6 +405,35 @@ test("resolveSubagentThinking inherits the caller's level only with the model", 
   );
 });
 
+test("buildPiArgs forwards the parent's project trust decision", () => {
+  const trusted = buildPiArgs(
+    agent(),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    true,
+  );
+  assert.equal(trusted.includes("--approve"), true);
+  assert.equal(trusted.includes("--no-approve"), false);
+
+  const untrusted = buildPiArgs(
+    agent(),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    false,
+  );
+  assert.equal(untrusted.includes("--approve"), false);
+  assert.equal(untrusted.includes("--no-approve"), true);
+
+  // Unknown trust must fail closed.
+  const unknown = buildPiArgs(agent(), undefined, undefined);
+  assert.equal(unknown.includes("--approve"), false);
+  assert.equal(unknown.includes("--no-approve"), true);
+});
+
 test("buildPiArgs passes the thinking level as its own flag", () => {
   const args = buildPiArgs(agent(), "sonnet", undefined, undefined, "high");
 

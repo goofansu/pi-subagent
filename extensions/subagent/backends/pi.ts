@@ -148,8 +148,18 @@ export function buildPiArgs(
   systemPromptPath: string | undefined,
   skillPaths?: string[],
   thinkingLevel?: string,
+  projectTrusted = false,
 ): string[] {
-  const args: string[] = ["--mode", "json", "-p", "--no-session"];
+  // The child runs non-interactively, so it cannot inherit a session-only
+  // decision by prompting. Forward Pi's authoritative decision explicitly;
+  // otherwise saved/global trust could disagree with the parent session.
+  const args: string[] = [
+    "--mode",
+    "json",
+    "-p",
+    "--no-session",
+    projectTrusted ? "--approve" : "--no-approve",
+  ];
   if (resolvedModel) args.push("--model", resolvedModel);
   // pi takes the thinking level as its own flag, so nothing has to be spliced
   // into the model string — which is what made a colon ambiguous before.
@@ -325,6 +335,7 @@ async function runPiAgent(ctx: SubagentRunContext): Promise<SingleResult> {
       tmpPromptPath ?? undefined,
       task.skillPaths,
       resolveSubagentThinking(config, task.parentModel),
+      task.projectTrusted ?? false,
     );
 
     // Emit initial "running" state

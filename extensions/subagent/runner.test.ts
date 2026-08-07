@@ -58,6 +58,7 @@ test("buildPiArgs passes tools and explicitly replaces native instructions", () 
     "json",
     "-p",
     "--no-session",
+    "--no-approve",
     "--model",
     "anthropic/claude",
     "--tools",
@@ -83,6 +84,7 @@ test("buildPiArgs appends system prompt when appendSystemPrompt is omitted", () 
     "json",
     "-p",
     "--no-session",
+    "--no-approve",
     "--append-system-prompt",
     "/tmp/prompt.md",
   ]);
@@ -99,7 +101,13 @@ test("buildPiArgs treats missing tools as no-op to use Pi user config", () => {
     undefined,
   );
 
-  assert.deepEqual(args, ["--mode", "json", "-p", "--no-session"]);
+  assert.deepEqual(args, [
+    "--mode",
+    "json",
+    "-p",
+    "--no-session",
+    "--no-approve",
+  ]);
 });
 
 test("buildPiArgs does not include the prompt in argv", () => {
@@ -296,6 +304,7 @@ test("buildPiArgs passes --no-skills and --skill flags when skillPaths provided"
     "json",
     "-p",
     "--no-session",
+    "--no-approve",
     "--no-skills",
     "--skill",
     "/path/to/safe-bash/SKILL.md",
@@ -321,6 +330,7 @@ test("buildPiArgs passes --no-skills with no --skill flags when skillPaths is em
     "json",
     "-p",
     "--no-session",
+    "--no-approve",
     "--no-skills",
   ]);
 });
@@ -337,7 +347,13 @@ test("buildPiArgs omits skill flags when skillPaths is undefined", () => {
     undefined,
   );
 
-  assert.deepEqual(args, ["--mode", "json", "-p", "--no-session"]);
+  assert.deepEqual(args, [
+    "--mode",
+    "json",
+    "-p",
+    "--no-session",
+    "--no-approve",
+  ]);
 });
 
 test("buildSkillPaths uses configured project cwd and agentDir", () => {
