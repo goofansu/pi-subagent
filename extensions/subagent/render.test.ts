@@ -122,6 +122,21 @@ test("formatLifecycleStatus reports queue time, run time, and terminal duration"
   );
 });
 
+test("formatLifecycleStatus uses minutes and hours for longer durations", () => {
+  const completedAfter = (milliseconds: number) =>
+    formatLifecycleStatus(
+      singleResult({ startedAt: 0, finishedAt: milliseconds }),
+      999_999_999,
+    );
+
+  assert.equal(completedAfter(59_900), "completed in 59.9s");
+  assert.equal(completedAfter(60_000), "completed in 1m 0s");
+  assert.equal(completedAfter(125_000), "completed in 2m 5s");
+  assert.equal(completedAfter(3_599_000), "completed in 59m 59s");
+  assert.equal(completedAfter(3_600_000), "completed in 1h 0m");
+  assert.equal(completedAfter(4_320_000), "completed in 1h 12m");
+});
+
 test("renderSubagentResult distinguishes queued and running placeholders", () => {
   const render = (single: SingleResult, expanded: boolean) =>
     renderSubagentResult(

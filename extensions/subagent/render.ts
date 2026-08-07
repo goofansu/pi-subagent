@@ -33,7 +33,18 @@ type Theme = ExtensionUIContext["theme"];
 type RenderCallContext = { lastComponent?: Component; expanded: boolean };
 
 function formatDuration(milliseconds: number): string {
-  return `${(Math.max(0, milliseconds) / 1000).toFixed(1)}s`;
+  const clampedMilliseconds = Math.max(0, milliseconds);
+  const tenths = Math.round(clampedMilliseconds / 100);
+  if (tenths < 60 * 10) return `${(tenths / 10).toFixed(1)}s`;
+
+  const wholeSeconds = Math.round(clampedMilliseconds / 1000);
+  if (wholeSeconds < 60 * 60) {
+    return `${Math.floor(wholeSeconds / 60)}m ${wholeSeconds % 60}s`;
+  }
+
+  const hours = Math.floor(wholeSeconds / (60 * 60));
+  const minutes = Math.floor((wholeSeconds % (60 * 60)) / 60);
+  return `${hours}h ${minutes}m`;
 }
 
 function elapsed(start: number | undefined, end: number): string | undefined {
