@@ -6,6 +6,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   buildAgentWorkMessage,
   formatAgentActionHint,
+  formatAgentActionTitle,
   formatAgentDetailHint,
   formatAgentListHint,
   formatAgentPromptMarkdown,
@@ -150,15 +151,18 @@ test("formatAgentPromptMarkdown renders the selected agent prompt", () => {
   );
 });
 
-test("getAgentActionItems returns the agent action menu", () => {
+test("getAgentActionItems returns action names without descriptions", () => {
   assert.deepEqual(getAgentActionItems(), [
-    { value: "view", label: "view", description: "View agent" },
-    {
-      value: "work",
-      label: "work",
-      description: "Work on task with this agent",
-    },
+    { value: "view", label: "View" },
+    { value: "work", label: "Work" },
   ]);
+});
+
+test("formatAgentActionTitle names the selected agent", () => {
+  assert.equal(
+    formatAgentActionTitle("reviewer"),
+    "Choose action for reviewer",
+  );
 });
 
 test("getAgentsTrustStatus describes available agent sources", () => {

@@ -67,13 +67,13 @@ export function getFilteredAgentSelectItems(
 
 export function getAgentActionItems(): SelectItem[] {
   return [
-    { value: "view", label: "view", description: "View agent" },
-    {
-      value: "work",
-      label: "work",
-      description: "Work on task with this agent",
-    },
+    { value: "view", label: "View" },
+    { value: "work", label: "Work" },
   ];
+}
+
+export function formatAgentActionTitle(agentName: string): string {
+  return `Choose action for ${agentName}`;
 }
 
 export function formatAgentPromptMarkdown(agent: AgentConfig): string {
@@ -333,7 +333,7 @@ class AgentActionMenuComponent extends Container {
     this.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
     this.addChild(
       new Text(
-        theme.fg("accent", theme.bold(`Actions for ${agent.name}`)),
+        theme.fg("accent", theme.bold(formatAgentActionTitle(agent.name))),
         1,
         0,
       ),
