@@ -12,17 +12,22 @@ without having to configure a backend.
 pi install https://github.com/goofansu/pi-subagent
 ```
 
-After installation, Pi registers:
-
-- `/agents` command for listing loaded subagents and viewing their prompts
-- `subagent` tool
-
 `claude` agents use the Claude Agent SDK bundled with this package; reinstall
 pi-subagent if Pi reports that the SDK is missing. A separately installed global
 Claude Code CLI is not used.
 
 `codex` agents require a current `codex` CLI on `PATH`, authenticated and
 configured as usual. Pi reports incompatible or missing CLIs at session start.
+
+## Command and tool
+
+The extension provides:
+
+- `/agents`, a command for listing loaded agent profiles, viewing their prompts,
+  and asking an agent to handle a task.
+- `subagent`, a tool for running a task with a selected agent profile. It accepts
+  only `agent`, `description`, and `prompt`; the profile determines the harness,
+  model, effort, and tools.
 
 ## Agent format
 
@@ -47,7 +52,25 @@ Profile prompts append to the harness's native instructions by default. Set
 `appendSystemPrompt: false` only when the profile prompt should replace those
 native instructions.
 
-### Harnesses
+## Agent discovery
+
+Pi discovers bundled agents, agents from installed packages, and user and
+project agents. A higher-priority file replaces a lower-priority file with the
+same name.
+
+| Priority | Scope | Location |
+| --- | --- | --- |
+| 1 | project | `.pi/agents/` |
+| 2 | user | `~/.pi/agent/agents/` |
+| 3 | package | installed package `agents/` directories |
+| 4 | bundled | `agents/` |
+
+Project agents and project-scoped package agents are discovered only when Pi
+trusts the working directory. For example,
+`~/.pi/agent/agents/security-reviewer.md` defines a user agent, which a trusted
+project can override with `.pi/agents/security-reviewer.md`.
+
+## Agent profiles
 
 | Harness | Runs on | Notes |
 | --- | --- | --- |
@@ -102,20 +125,26 @@ effort: high
 You are an implementation agent. Follow the approved plan and verify your work.
 ```
 
-Every profile is invoked the same way: the `subagent` tool accepts only
-`agent`, `description`, and `prompt`. Use `/agents` to inspect the profiles Pi
-loaded.
+## User experience
 
-## Runtime and safety
-
-### Scheduling and cancellation
+### Concurrency
 
 At most four subagents run concurrently. Additional runs remain visible as
-queued work and start when a slot opens. Cancelling a queued run prevents it
-from starting.
+queued work and start when a slot opens.
 
-Runs have no automatic time limit. Cancel a stuck run manually; cancellation
-keeps any transcript already produced.
+Runs have no automatic time limit.
+
+### Cancellation
+
+Press `Esc` to cancel the current Pi turn. This cancels all of its running and
+queued subagent calls; there is no per-subagent cancellation control. A queued
+run that is cancelled never starts.
+
+Cancel a stuck run with `Esc`. Output produced before cancellation remains in
+the subagent tool result in the parent Pi session. A run cancelled while still
+queued has no output to retain.
+
+## Technique details
 
 ### Permissions and tools
 
@@ -134,7 +163,7 @@ backstop, so a subagent cannot call the `subagent` tool.
 This prevents accidental delegation loops, not adversarial recursion: an agent
 with shell access can still invoke another CLI directly.
 
-### Project trust
+### Trust mechanism
 
 Subagents use Pi's trust decision for the working directory; unknown trust is
 treated as untrusted.
@@ -152,22 +181,5 @@ commands, or network access.
 
 ### Session persistence
 
-Every harness runs one-shot tasks with no session to resume.
-
-## Agent discovery
-
-Pi discovers bundled agents, agents from installed packages, and user and
-project agents. A higher-priority file replaces a lower-priority file with the
-same name.
-
-| Priority | Scope | Location |
-| --- | --- | --- |
-| 1 | project | `.pi/agents/` |
-| 2 | user | `~/.pi/agent/agents/` |
-| 3 | package | installed package `agents/` directories |
-| 4 | bundled | `agents/` |
-
-Project agents and project-scoped package agents are discovered only when Pi
-trusts the working directory. For example,
-`~/.pi/agent/agents/security-reviewer.md` defines a user agent, which a trusted
-project can override with `.pi/agents/security-reviewer.md`.
+Every harness runs one-shot tasks with no session to resume. Subagent runs are
+ephemeral and do not save separate child transcripts.
