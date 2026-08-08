@@ -11,17 +11,6 @@ picks a role to delegate to without having to configure a backend.
 pi install https://github.com/goofansu/pi-subagent
 ```
 
-Harness requirements:
-
-- `pi`: uses the current Pi installation.
-- `claude`: uses the Claude Agent SDK bundled with this package. Reinstall
-  pi-subagent if Pi reports that the SDK is missing. A separately installed
-  global Claude Code CLI is not used.
-- `codex`: requires a current `codex` CLI on `PATH`, authenticated and configured
-  as usual.
-
-Pi reports incompatible or missing harnesses at session start.
-
 ## Command and tool
 
 The extension provides:
@@ -44,18 +33,18 @@ body are required. Invalid files are skipped and reported at session start.
 | --- | --- | --- | --- |
 | `description` | Yes | When to use the agent. | `Implement and verify a scoped change` |
 | `harness` | No | Execution backend. Defaults to `pi`. | `pi`, `claude`, `codex` |
-| `model` | No | Passed exactly to the selected harness. See `inherit` behavior below. | `inherit`, `opus`, `gpt-5.6-sol` |
+| `model` | No | Passed exactly to the selected harness. See omitted behavior below. | `opus`, `gpt-5.6-sol` |
 | `effort` | No | Reasoning depth, independent of `model`. | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `tools` | No | Comma-separated tool names. Harness behavior is listed below. | `read, grep, find, ls` |
 | `appendSystemPrompt` | No | Append the prompt to native instructions. Defaults to `true`; set to `false` to replace them. | `false` |
 
 Harness-specific field behavior:
 
-- `pi`: `model: inherit` uses the parent model. `tools` controls the available
+- `pi`: omitting `model` uses the parent model. `tools` controls the available
   Pi tools; omit it to use Pi's defaults.
-- `claude`: `model: inherit` uses Claude Code's default model. Declaring `tools`
+- `claude`: omitting `model` uses Claude Code's default model. Declaring `tools`
   makes the profile invalid.
-- `codex`: `model: inherit` uses Codex's default model. Declaring `tools` makes
+- `codex`: omitting `model` uses Codex's default model. Declaring `tools` makes
   the profile invalid.
 
 Profile prompts append to the harness's native instructions by default. Set
@@ -65,31 +54,28 @@ native instructions.
 ## Agent discovery
 
 Pi discovers user and project agents. A project file replaces a user file with
-the same name.
+the same name. Here, **project** means Pi's current working directory.
 
 | Priority | Scope | Location |
 | --- | --- | --- |
 | 1 | project | `.pi/agents/` |
 | 2 | user | `~/.pi/agent/agents/` |
 
-Project agents are discovered only when Pi trusts the working directory. For
-example, `~/.pi/agent/agents/security-reviewer.md` defines a user agent, which a
-trusted project can override with `.pi/agents/security-reviewer.md`.
+Project agents are discovered only when Pi trusts the project. For example,
+`~/.pi/agent/agents/security-reviewer.md` defines a user agent, which a trusted
+project can override with `.pi/agents/security-reviewer.md`.
 
 ## Agent profiles
 
-- `pi`: runs on Pi itself. This is the default harness and supports
-  profile-controlled tools.
-- `claude`: runs on Claude Code with its native tools and approvals bypassed.
-- `codex`: runs on Codex CLI with its native tools, approvals bypassed, and
-  full-access sandbox mode.
+The profiles below use the same role and prompt to highlight harness-specific
+configuration and runtime behavior. Pi reports incompatible or missing
+harnesses at session start.
 
-### Examples
+### Pi
 
-The examples use the same role and prompt so the harness-specific differences
-are easy to see.
-
-#### Pi
+- Runs on Pi itself.
+- Uses the current Pi installation.
+- Is the default harness and supports profile-controlled tools.
 
 ```markdown
 ---
@@ -102,7 +88,14 @@ effort: high
 You are an implementation agent. Follow the approved plan and verify your work.
 ```
 
-#### Claude
+### Claude
+
+- Runs on Claude Code with its native tools and approvals bypassed.
+- Uses the Claude Agent SDK bundled with this package. Reinstall pi-subagent if
+  Pi reports that the SDK is missing; a separately installed global Claude Code
+  CLI is not used.
+- Accepts aliases such as `opus`, `sonnet`, and `haiku`; use a full model ID when
+  you need a fixed version.
 
 ```markdown
 ---
@@ -115,10 +108,12 @@ effort: high
 You are an implementation agent. Follow the approved plan and verify your work.
 ```
 
-Claude also accepts aliases such as `opus`, `sonnet`, and `haiku`; use a full
-model ID when you need a fixed version.
+### Codex
 
-#### Codex
+- Runs on Codex CLI with its native tools, approvals bypassed, and full-access
+  sandbox mode.
+- Requires a current `codex` CLI on `PATH`, authenticated and configured as
+  usual.
 
 ```markdown
 ---
@@ -174,18 +169,20 @@ with shell access can still invoke another CLI directly.
 
 ### Trust mechanism
 
-Subagents use Pi's trust decision for the working directory; unknown trust is
-treated as untrusted.
+Subagents use Pi's trust decision for the project; unknown trust is treated as
+untrusted.
 
 - **Trusted:** the selected harness loads its project settings and resources
   normally.
-- **Untrusted:** project settings and executable integrations are not loaded.
+- **Untrusted:** behavior differs by harness:
 
-Project context differs by harness:
-
-- `pi`: still loads context files such as `AGENTS.md` and `CLAUDE.md`.
-- `claude`: excludes project `CLAUDE.md` along with its project settings source.
-- `codex`: still loads `AGENTS.md`.
+  - `pi`: does not load project settings or executable integrations, but still
+    loads context files such as `AGENTS.md` and `CLAUDE.md`.
+  - `claude`: does not load project `CLAUDE.md` or project/local settings, and
+    disables all inherited MCP servers.
+  - `codex`: marks the project as untrusted and still loads its `AGENTS.md`. It
+    also disables hooks, plugins, apps, and all inherited MCP servers across
+    configuration scopes.
 
 Trust controls automatic loading only. It does not restrict file access, tools,
 commands, or network access.
