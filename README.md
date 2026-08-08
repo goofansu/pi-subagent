@@ -2,9 +2,8 @@
 
 Delegate tasks to specialized subagents with isolated context windows in Pi.
 
-Each agent runs on a **harness** — Pi itself, Claude Code, or Codex. The harness
-is part of the agent's profile, so the calling agent picks a role to delegate to
-without having to configure a backend.
+Each agent runs on a **harness** selected by its profile, so the calling agent
+picks a role to delegate to without having to configure a backend.
 
 ## Install
 
@@ -12,12 +11,16 @@ without having to configure a backend.
 pi install https://github.com/goofansu/pi-subagent
 ```
 
-`claude` agents use the Claude Agent SDK bundled with this package; reinstall
-pi-subagent if Pi reports that the SDK is missing. A separately installed global
-Claude Code CLI is not used.
+Harness requirements:
 
-`codex` agents require a current `codex` CLI on `PATH`, authenticated and
-configured as usual. Pi reports incompatible or missing CLIs at session start.
+- `pi`: uses the current Pi installation.
+- `claude`: uses the Claude Agent SDK bundled with this package. Reinstall
+  pi-subagent if Pi reports that the SDK is missing. A separately installed
+  global Claude Code CLI is not used.
+- `codex`: requires a current `codex` CLI on `PATH`, authenticated and configured
+  as usual.
+
+Pi reports incompatible or missing harnesses at session start.
 
 ## Command and tool
 
@@ -41,12 +44,19 @@ body are required. Invalid files are skipped and reported at session start.
 | --- | --- | --- | --- |
 | `description` | Yes | When to use the agent. | `Implement and verify a scoped change` |
 | `harness` | No | Execution backend. Defaults to `pi`. | `pi`, `claude`, `codex` |
-| `model` | No | Passed exactly to the selected harness. `inherit` uses the parent model on Pi and the harness default on Claude or Codex. | `inherit`, `opus`, `gpt-5.6-sol` |
+| `model` | No | Passed exactly to the selected harness. See `inherit` behavior below. | `inherit`, `opus`, `gpt-5.6-sol` |
 | `effort` | No | Reasoning depth, independent of `model`. | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
-| `tools` | No | **Pi only.** Comma-separated tool names. Omit to use Pi's defaults. | `read, grep, find, ls` |
+| `tools` | No | Comma-separated tool names. Harness behavior is listed below. | `read, grep, find, ls` |
 | `appendSystemPrompt` | No | Append the prompt to native instructions. Defaults to `true`; set to `false` to replace them. | `false` |
 
-Declaring `tools` on a Claude or Codex profile makes the file invalid.
+Harness-specific field behavior:
+
+- `pi`: `model: inherit` uses the parent model. `tools` controls the available
+  Pi tools; omit it to use Pi's defaults.
+- `claude`: `model: inherit` uses Claude Code's default model. Declaring `tools`
+  makes the profile invalid.
+- `codex`: `model: inherit` uses Codex's default model. Declaring `tools` makes
+  the profile invalid.
 
 Profile prompts append to the harness's native instructions by default. Set
 `appendSystemPrompt: false` only when the profile prompt should replace those
@@ -68,11 +78,11 @@ trusted project can override with `.pi/agents/security-reviewer.md`.
 
 ## Agent profiles
 
-| Harness | Runs on | Notes |
-| --- | --- | --- |
-| `pi` | Pi itself | Default; supports profile-controlled tools. |
-| `claude` | Claude Code | Native Claude tools with approvals bypassed. |
-| `codex` | Codex CLI | Native Codex tools with approvals and sandboxing bypassed. |
+- `pi`: runs on Pi itself. This is the default harness and supports
+  profile-controlled tools.
+- `claude`: runs on Claude Code with its native tools and approvals bypassed.
+- `codex`: runs on Codex CLI with its native tools, approvals bypassed, and
+  full-access sandbox mode.
 
 ### Examples
 
@@ -144,15 +154,18 @@ queued has no output to retain.
 
 ### Permissions and tools
 
-`claude` and `codex` run headlessly with approvals bypassed; Codex also uses
-full-access sandbox mode. They can read and modify files, execute commands, and
-use their native coding tools. Use a `pi` profile with a read-only `tools` list
-when you need a restricted agent.
+- `pi`: supports a profile-defined `tools` list. Use a read-only list when you
+  need a restricted agent. A child Pi process does not register this extension's
+  tool or commands.
+- `claude`: runs headlessly with approvals bypassed and receives an explicit
+  allowlist of working tools. Agent-spawning tools and deferred tool discovery
+  are excluded.
+- `codex`: runs headlessly with approvals bypassed and full-access sandbox mode.
+  Native multi-agent delegation is disabled.
 
-A child Pi process does not register this extension's tool or commands. Claude
-receives an explicit allowlist of working tools, with agent-spawning and
-deferred tool discovery excluded. Codex's native multi-agent delegation is
-disabled.
+All harnesses can read and modify files or execute commands when their available
+tools allow it.
+
 Every harness also enforces the extension's one-level nesting guard as a
 backstop, so a subagent cannot call the `subagent` tool.
 
@@ -168,9 +181,11 @@ treated as untrusted.
   normally.
 - **Untrusted:** project settings and executable integrations are not loaded.
 
-Project context differs by harness. Pi still loads context files such as
-`AGENTS.md` and `CLAUDE.md`, and Codex still loads `AGENTS.md`. Claude excludes
-project `CLAUDE.md` along with its project settings source.
+Project context differs by harness:
+
+- `pi`: still loads context files such as `AGENTS.md` and `CLAUDE.md`.
+- `claude`: excludes project `CLAUDE.md` along with its project settings source.
+- `codex`: still loads `AGENTS.md`.
 
 Trust controls automatic loading only. It does not restrict file access, tools,
 commands, or network access.
