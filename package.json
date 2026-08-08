@@ -11,7 +11,7 @@
     "lint": "biome check --write .",
     "lint:check": "biome check .",
     "prepare": "node .husky/install.mjs",
-    "test": "node --import tsx --test",
+    "test": "node --import tsx --import ./extensions/subagent/suite-setup.ts --test",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {

@@ -155,8 +155,10 @@ export async function runSubagent({
 }
 
 // Re-exported for convenience: this module was the single entry point before
-// the backend extraction. Note that package consumers cannot reach it — the
-// `exports` map publishes only index.ts — so these are for in-tree use.
+// the backend extraction. These are for in-tree use. Nothing outside the
+// package can import them: pi loads `extensions/subagent/index.ts` by path and
+// the package publishes no `main` or `exports` entry, so there is no specifier
+// that resolves here from another package.
 export type { ParentModel } from "./backend.ts";
 export {
   applyPiJsonEvent,
