@@ -26,6 +26,11 @@ import { resolveHarness } from "./types.ts";
 
 type AgentAction = "view" | "work";
 
+const AGENT_SELECT_LIST_LAYOUT = {
+  minPrimaryColumnWidth: 12,
+  maxPrimaryColumnWidth: 32,
+};
+
 type KeybindingMatcher = {
   matches(data: string, action: string): boolean;
 };
@@ -262,6 +267,7 @@ class AgentsListComponent extends Container {
         scrollInfo: (text) => this.theme.fg("dim", text),
         noMatch: (text) => this.theme.fg("warning", text),
       },
+      AGENT_SELECT_LIST_LAYOUT,
     );
     this.selectList.onSelect = (item) => {
       void this.onSelect(String(item.value));

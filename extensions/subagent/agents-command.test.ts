@@ -390,7 +390,7 @@ test("agents command opens a selector when agents are loaded", async () => {
           { matches: () => false },
           () => {},
         );
-        rendered = component.render(40);
+        rendered = component.render(100);
         return undefined;
       },
     },
@@ -398,10 +398,19 @@ test("agents command opens a selector when agents are loaded", async () => {
 
   assert.equal(customCalled, true);
   const renderedText = rendered.join("\n");
+  const plainLines = stripVTControlCharacters(renderedText).split("\n");
   assert.ok(renderedText.includes("\u001b[32m✓ Project trusted"));
   assert.match(
-    stripVTControlCharacters(renderedText).replace(/\s+/g, " "),
+    plainLines.join(" ").replace(/\s+/g, " "),
     /\[u\] User agents • \[p\] Project agents/,
   );
-  assert.ok(rendered.every((line) => visibleWidth(line) <= 40));
+  const exploreLine = plainLines.find(
+    (line) => line.includes("explore") && line.includes("Fast codebase"),
+  );
+  assert.ok(exploreLine);
+  const descriptionGap =
+    exploreLine.indexOf("[u]") -
+    (exploreLine.indexOf("explore") + "explore".length);
+  assert.ok(descriptionGap >= 1 && descriptionGap < 10);
+  assert.ok(rendered.every((line) => visibleWidth(line) <= 100));
 });
