@@ -143,12 +143,13 @@ export interface SubagentTask {
   /** Depth of the *parent*; children must run at `depth + 1`. */
   readonly depth: number;
   /**
-   * Whether pi trusts `cwd`. Backends that load configuration from disk must
-   * gate it on this, so delegating never grants a directory more than working in
-   * it already did. Absent means unknown, which every backend treats as
-   * untrusted.
+   * Whether this child may load project-controlled configuration from `cwd`.
+   * Derived conservatively from Pi's trust decision — see
+   * `project-config-policy.ts` — so delegating never grants a directory more
+   * than working in it already did. Absent means unknown, which every backend
+   * treats as denied.
    */
-  readonly projectTrusted?: boolean;
+  readonly allowProjectConfig?: boolean;
 }
 
 /**

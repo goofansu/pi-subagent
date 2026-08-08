@@ -13,7 +13,7 @@ import {
   getAgentActionItems,
   getAgentDetailMarkdownText,
   getAgentSelectItems,
-  getAgentsTrustStatus,
+  getAgentsProjectConfigStatus,
   getFilteredAgentSelectItems,
   registerAgentsCommand,
   runAgentWorkFlow,
@@ -165,14 +165,15 @@ test("formatAgentActionTitle names the selected agent", () => {
   );
 });
 
-test("getAgentsTrustStatus describes available agent sources", () => {
-  assert.deepEqual(getAgentsTrustStatus(true), {
-    primary: "✓ Project trusted",
+test("getAgentsProjectConfigStatus describes available agent sources", () => {
+  assert.deepEqual(getAgentsProjectConfigStatus(true), {
+    primary: "✓ Project configuration enabled",
     secondary: "[u] User agents • [p] Project agents",
   });
-  assert.deepEqual(getAgentsTrustStatus(false), {
-    primary: "⚠ Project untrusted — [p] project agents excluded",
-    secondary: "[u] User agents remain available",
+  assert.deepEqual(getAgentsProjectConfigStatus(false), {
+    primary: "⚠ Project configuration disabled — [p] project agents excluded",
+    secondary:
+      "[u] User agents remain available • /trust and restart Pi to load project agents",
   });
 });
 
@@ -321,7 +322,7 @@ test("agents command notifies when no agents are configured", async () => {
   ]);
 });
 
-test("untrusted empty agents open an explanatory width-safe TUI", async () => {
+test("configuration-disabled empty agents open an explanatory width-safe TUI", async () => {
   const calls: RegisteredCommand[] = [];
   const notifications: string[] = [];
   let rendered: string[] = [];
@@ -354,7 +355,7 @@ test("untrusted empty agents open an explanatory width-safe TUI", async () => {
   const rawText = rendered.join("\n");
   const text = stripVTControlCharacters(rawText).replace(/\s+/g, " ");
   assert.deepEqual(notifications, []);
-  assert.ok(rawText.includes("\u001b[33m⚠ Project untrusted"));
+  assert.ok(rawText.includes("\u001b[33m⚠ Project configuration"));
   assert.ok(rawText.includes("\u001b[90m"));
   assert.match(text, /project agents excluded/);
   assert.match(text, /User agents remain available/);
@@ -403,7 +404,7 @@ test("agents command opens a selector when agents are loaded", async () => {
   assert.equal(customCalled, true);
   const renderedText = rendered.join("\n");
   const plainLines = stripVTControlCharacters(renderedText).split("\n");
-  assert.ok(renderedText.includes("\u001b[32m✓ Project trusted"));
+  assert.ok(renderedText.includes("\u001b[32m✓ Project configuration enabled"));
   assert.match(
     plainLines.join(" ").replace(/\s+/g, " "),
     /\[u\] User agents • \[p\] Project agents/,

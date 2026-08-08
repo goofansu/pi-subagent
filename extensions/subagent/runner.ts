@@ -52,8 +52,11 @@ export interface RunSubagentOptions {
   prompt: string;
   signal?: AbortSignal;
   parentModel?: ParentModel;
-  /** Whether pi trusts `cwd`; unknown is treated as untrusted. */
-  projectTrusted?: boolean;
+  /**
+   * Whether the child may load project-controlled configuration from `cwd`;
+   * unknown is treated as denied.
+   */
+  allowProjectConfig?: boolean;
   onUpdate?: OnUpdateCallback;
   cwd?: string;
   agentDir?: string;
@@ -70,7 +73,7 @@ export async function runSubagent({
   prompt,
   signal,
   parentModel,
-  projectTrusted = false,
+  allowProjectConfig = false,
   onUpdate,
   cwd = process.cwd(),
   agentDir = getAgentDir(),
@@ -94,7 +97,7 @@ export async function runSubagent({
     cwd,
     agentDir,
     depth: currentDepth,
-    projectTrusted,
+    allowProjectConfig,
     ...(parentModel ? { parentModel } : {}),
   };
 

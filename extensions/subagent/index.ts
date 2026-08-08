@@ -12,6 +12,7 @@ import {
 import { registerAgentsCommand } from "./agents-command.ts";
 import type { BackendRegistry } from "./backend.ts";
 import { getFinalOutput } from "./messages.ts";
+import { resolveProjectConfigPolicy } from "./project-config-policy.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
 import {
   defaultBackendRegistry,
@@ -62,10 +63,10 @@ export function registerSubagentFeatures(
   projectCwd: string,
   configuredAgentDir: string,
   agentConfigs: Map<string, AgentConfig>,
-  projectTrusted: boolean,
+  allowProjectConfig: boolean,
   runner: typeof runSubagent = runSubagent,
 ): void {
-  registerAgentsCommand(pi, agentConfigs, projectTrusted);
+  registerAgentsCommand(pi, agentConfigs, allowProjectConfig);
 
   const description = "Run a task in a specialized subagent";
   pi.registerTool({
@@ -98,10 +99,10 @@ export function registerSubagentFeatures(
         description: params.description,
         prompt: params.prompt,
         signal,
-        // Pi already decided whether this directory is trusted, and asked the
-        // person if it had to. Reusing that decision is what keeps delegating
-        // from granting a directory more than working in it already did.
-        projectTrusted,
+        // Resolved once at session start from Pi's trust decision. Reusing that
+        // snapshot is what keeps delegating from granting a directory more than
+        // working in it already did.
+        allowProjectConfig,
         parentModel: ctx.model
           ? {
               provider: ctx.model.provider,
@@ -160,12 +161,23 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
   // Project trust is resolved before session_start. Defer every discovery read
   // until then so an unknown host fails closed and an untrusted checkout cannot
-  // contribute .pi/agents.
+  // contribute .pi/agents. The permission is snapshotted here and never
+  // recomputed: rechecking mid-session would let configuration that appeared
+  // after startup grant itself approval.
   pi.on("session_start", async (_event, ctx) => {
     const projectCwd = ctx.cwd;
-    const projectTrusted = ctx.isProjectTrusted?.() ?? false;
+    const policy = resolveProjectConfigPolicy({
+      cwd: projectCwd,
+      agentDir: configuredAgentDir,
+      piProjectTrusted: ctx.isProjectTrusted?.() ?? false,
+    });
+    const allowProjectConfig = policy.allowProjectConfig;
     const agentConfigLoadResult = loadLayeredAgentConfigsWithDiagnostics(
-      buildAgentConfigLayers(projectCwd, configuredAgentDir, projectTrusted),
+      buildAgentConfigLayers(
+        projectCwd,
+        configuredAgentDir,
+        allowProjectConfig,
+      ),
     );
     const agentConfigs = agentConfigLoadResult.configs;
 
@@ -174,8 +186,10 @@ export default function subagentExtension(pi: ExtensionAPI) {
       projectCwd,
       configuredAgentDir,
       agentConfigs,
-      projectTrusted,
+      allowProjectConfig,
     );
+
+    if (policy.warning) ctx.ui.notify(policy.warning, "warning");
 
     for (const warning of await findUnavailableHarnessWarnings(
       agentConfigs,

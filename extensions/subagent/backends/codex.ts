@@ -80,13 +80,14 @@ function tomlString(value: string): string {
  * discouraged in the prompt, so Codex cannot hide another generation of
  * delegation below the extension's one-level nesting guard.
  *
- * Pi's trust decision is authoritative. For an untrusted checkout, hooks,
+ * The configuration permission derived from Pi's trust decision is
+ * authoritative. When it is denied, hooks,
  * plugins, and apps are disabled before the project is loaded. MCP servers and
  * app entries are disabled individually in the thread config after reading the
  * effective config, because an empty table is only a merge overlay in Codex.
  */
 export function buildCodexAppServerArgs(task: SubagentTask): string[] {
-  const trust = task.projectTrusted ? "trusted" : "untrusted";
+  const trust = task.allowProjectConfig ? "trusted" : "untrusted";
   const args = [
     "app-server",
     "--stdio",
@@ -97,7 +98,7 @@ export function buildCodexAppServerArgs(task: SubagentTask): string[] {
     "-c",
     `projects.${tomlString(task.cwd)}.trust_level=${tomlString(trust)}`,
   ];
-  if (!task.projectTrusted) {
+  if (!task.allowProjectConfig) {
     args.push(
       "--disable",
       "hooks",
@@ -143,7 +144,7 @@ export function buildCodexThreadStartParams(
     ephemeral: true,
     // Defense in depth for versions that read feature values from thread
     // config after process startup.
-    config: task.projectTrusted
+    config: task.allowProjectConfig
       ? { features: { multi_agent: false, multi_agent_v2: false } }
       : {
           features: {
@@ -165,7 +166,7 @@ export function buildCodexThreadStartParams(
   // workspace-write or full access. The child process already starts in this
   // directory, so omitting cwd preserves the runtime cwd without mutating the
   // user's trust config for an untrusted task.
-  if (task.projectTrusted) params.cwd = task.cwd;
+  if (task.allowProjectConfig) params.cwd = task.cwd;
   const model = resolveCodexModel(task.config);
   if (model) params.model = model;
   if (resolveAppendSystemPrompt(task.config)) {
@@ -852,7 +853,7 @@ export async function runCodexAgent(
     void initialized;
     write({ method: "initialized" });
 
-    const inherited = task.projectTrusted
+    const inherited = task.allowProjectConfig
       ? { mcpServers: [], apps: [] }
       : collectCodexInheritedIntegrations(
           await request("config/read", {

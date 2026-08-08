@@ -61,9 +61,9 @@ the same name. Here, **project** means Pi's current working directory.
 | 1 | project | `.pi/agents/` |
 | 2 | user | `~/.pi/agent/agents/` |
 
-Project agents are discovered only when Pi trusts the project. For example,
-`~/.pi/agent/agents/security-reviewer.md` defines a user agent, which a trusted
-project can override with `.pi/agents/security-reviewer.md`.
+Project agents are discovered only when [project configuration](#project-configuration-gating)
+is enabled. For example, `~/.pi/agent/agents/security-reviewer.md` defines a user
+agent, which such a project can override with `.pi/agents/security-reviewer.md`.
 
 ## Agent profiles
 
@@ -167,14 +167,26 @@ backstop, so a subagent cannot call the `subagent` tool.
 This prevents accidental delegation loops, not adversarial recursion: an agent
 with shell access can still invoke another CLI directly.
 
-### Trust mechanism
+### Project configuration gating
 
-Subagents use Pi's trust decision for the project; unknown trust is treated as
-untrusted.
+Subagents derive a conservative **project configuration permission** from Pi's
+trust decision. The permission is resolved once at session start and reused by
+every subagent that session; unknown state is treated as denied.
 
-- **Trusted:** the selected harness loads its project settings and resources
-  normally.
-- **Untrusted:** behavior differs by harness:
+It is enabled when Pi trusts the project **and** either:
+
+- the directory holds resources that made Pi actually gate on trust, or
+- Pi's trust store records a positive decision for the directory or an ancestor.
+
+Pi reports a project as trusted without asking anyone when there is nothing to
+gate. That vacuous answer is not forwarded to children as approval: a checkout
+or generator could add project configuration after the session started, and a
+child spawned later would pick it up without anyone having decided.
+
+- **Enabled:** the selected harness loads its project settings and resources
+  normally, and `.pi/agents` profiles are discovered.
+- **Disabled:** `.pi/agents` profiles are skipped — `/agents` says so, and
+  `/trust` plus a Pi restart enables them — and harness behavior differs:
 
   - `pi`: does not load project settings or executable integrations, but still
     loads context files such as `AGENTS.md` and `CLAUDE.md`.
@@ -184,8 +196,9 @@ untrusted.
     also disables hooks, plugins, apps, and all inherited MCP servers across
     configuration scopes.
 
-Trust controls automatic loading only. It does not restrict file access, tools,
-commands, or network access.
+This controls automatic loading of project-controlled configuration only. It is
+not a sandbox: it does not restrict file access, tools, commands, or network
+access, and context files still load according to each harness.
 
 ### Session persistence
 

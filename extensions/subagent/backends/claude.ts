@@ -281,10 +281,11 @@ export interface BuildClaudeOptionsInput {
   cwd: string;
   depth: number;
   /**
-   * Whether pi trusts this directory. Absent means unknown, which is treated as
-   * untrusted — see the settings comment in the returned options.
+   * Whether this child may load project-controlled configuration. Absent means
+   * unknown, which is treated as denied — see the settings comment in the
+   * returned options.
    */
-  projectTrusted?: boolean;
+  allowProjectConfig?: boolean;
   abortController?: AbortController;
   env?: NodeJS.ProcessEnv;
 }
@@ -293,7 +294,7 @@ export function buildClaudeOptions({
   config,
   cwd,
   depth,
-  projectTrusted = false,
+  allowProjectConfig = false,
   abortController,
   env = process.env,
 }: BuildClaudeOptionsInput): ClaudeOptions {
@@ -316,25 +317,25 @@ export function buildClaudeOptions({
     // SDK replaces the child environment with this object rather than merging,
     // so process.env has to be spread in.
     env: { ...env, [DEPTH_ENV_KEY]: String(depth + 1) },
-    // What a subagent may load from disk follows pi's own trust decision for
-    // this directory, so delegating never grants a directory more than working
-    // in it already did.
+    // What a subagent may load from disk follows the configuration permission
+    // derived from pi's trust decision for this directory, so delegating never
+    // grants a directory more than working in it already did.
     //
-    // Trusted: nothing is set, so Claude Code loads what it normally would —
+    // Allowed: nothing is set, so Claude Code loads what it normally would —
     // your settings, your skills and plugins, your CLAUDE.md, your MCP servers.
     // That is the point of delegating on your own machine; a subagent that
     // cannot see your skills is a worse version of you.
     //
-    // Untrusted: user scope only, and MCP restricted to servers passed
+    // Denied: user scope only, and MCP restricted to servers passed
     // programmatically (none are). A subagent runs with approvals bypassed, and
     // a checkout you have not trusted can register hooks in its
     // .claude/settings.json — arbitrary commands no tool policy intercepts — or
     // name a stdio server in .mcp.json, which is itself a command to launch.
     // `project` is also what would load its CLAUDE.md.
     //
-    // Absent trust information the guarded shape applies: a host that cannot
-    // say must not be read as saying yes.
-    ...(projectTrusted
+    // Absent a permission the guarded shape applies: a host that cannot say
+    // must not be read as saying yes.
+    ...(allowProjectConfig
       ? {}
       : { settingSources: ["user" as const], strictMcpConfig: true }),
     ...(model ? { model } : {}),
@@ -1125,7 +1126,7 @@ export function createClaudeBackend(
         config: task.config,
         cwd: task.cwd,
         depth: task.depth,
-        projectTrusted: task.projectTrusted ?? false,
+        allowProjectConfig: task.allowProjectConfig ?? false,
         abortController,
       });
 

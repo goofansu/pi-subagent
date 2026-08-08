@@ -492,7 +492,7 @@ test("a queued run reports itself before it holds a slot", {
   await Promise.all([holding, queued]);
 });
 
-test("runSubagent forwards pi's trust decision to the backend", async () => {
+test("runSubagent forwards the project configuration permission to the backend", async () => {
   const claude = recordingBackend("claude");
   const registry = createBackendRegistry([claude.backend]);
 
@@ -500,14 +500,14 @@ test("runSubagent forwards pi's trust decision to the backend", async () => {
     config: agent({ harness: "claude" }),
     description: "task",
     prompt: "do it",
-    projectTrusted: true,
+    allowProjectConfig: true,
     registry,
   });
 
-  assert.equal(claude.calls[0].task.projectTrusted, true);
+  assert.equal(claude.calls[0].task.allowProjectConfig, true);
 });
 
-test("runSubagent treats an unreported trust decision as untrusted", async () => {
+test("runSubagent denies project configuration when the permission is unreported", async () => {
   const claude = recordingBackend("claude");
   const registry = createBackendRegistry([claude.backend]);
 
@@ -519,5 +519,5 @@ test("runSubagent treats an unreported trust decision as untrusted", async () =>
   });
 
   // A caller that says nothing must not be read as trusting the directory.
-  assert.equal(claude.calls[0].task.projectTrusted, false);
+  assert.equal(claude.calls[0].task.allowProjectConfig, false);
 });

@@ -147,17 +147,18 @@ export function buildPiArgs(
   resolvedModel: string | undefined,
   systemPromptPath: string | undefined,
   thinkingLevel?: string,
-  projectTrusted = false,
+  allowProjectConfig = false,
 ): string[] {
   // The child runs non-interactively, so it cannot inherit a session-only
-  // decision by prompting. Forward Pi's authoritative decision explicitly;
-  // otherwise saved/global trust could disagree with the parent session.
+  // decision by prompting. Forward the resolved configuration permission
+  // explicitly; otherwise saved/global trust could disagree with the parent
+  // session, in either direction.
   const args: string[] = [
     "--mode",
     "json",
     "-p",
     "--no-session",
-    projectTrusted ? "--approve" : "--no-approve",
+    allowProjectConfig ? "--approve" : "--no-approve",
   ];
   if (resolvedModel) args.push("--model", resolvedModel);
   // pi takes the thinking level as its own flag, so nothing has to be spliced
@@ -327,7 +328,7 @@ async function runPiAgent(ctx: SubagentRunContext): Promise<SingleResult> {
       resolvedModel,
       tmpPromptPath ?? undefined,
       resolveSubagentThinking(config, task.parentModel),
-      task.projectTrusted ?? false,
+      task.allowProjectConfig ?? false,
     );
 
     // Emit initial "running" state

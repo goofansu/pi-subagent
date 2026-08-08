@@ -299,11 +299,11 @@ export interface AgentLayer {
 export function buildAgentConfigLayers(
   projectCwd: string,
   agentDir: string,
-  projectTrusted = false,
+  allowProjectConfig = false,
 ): AgentLayer[] {
   return [
     { dir: path.join(agentDir, "agents"), source: "user" },
-    ...(projectTrusted
+    ...(allowProjectConfig
       ? [
           {
             dir: path.join(projectCwd, ".pi", "agents"),

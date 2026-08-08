@@ -371,7 +371,7 @@ test("buildClaudeOptions loads no project settings from an untrusted directory",
     config: agent(),
     cwd: "/tmp/project",
     depth: 0,
-    projectTrusted: false,
+    allowProjectConfig: false,
   });
 
   assert.deepEqual(
@@ -394,7 +394,7 @@ test("buildClaudeOptions bounds an untrusted directory's MCP to servers passed p
     config: agent(),
     cwd: "/tmp/project",
     depth: 0,
-    projectTrusted: false,
+    allowProjectConfig: false,
   });
 
   assert.equal(options.strictMcpConfig, true);
@@ -2399,7 +2399,7 @@ test("a trusted project loads settings and skills as Claude Code normally would"
     config: agent(),
     cwd: "/tmp/project",
     depth: 0,
-    projectTrusted: true,
+    allowProjectConfig: true,
   });
 
   // Omitted, not []: the point is your own skills, plugins, and CLAUDE.md are
@@ -2414,7 +2414,7 @@ test("an untrusted project cannot reconfigure the child", () => {
     config: agent(),
     cwd: "/tmp/somebody-elses-checkout",
     depth: 0,
-    projectTrusted: false,
+    allowProjectConfig: false,
   });
 
   // User scope only. A checkout's .claude/settings.json can register hooks —

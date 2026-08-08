@@ -40,7 +40,7 @@ function task(
     cwd: "/tmp/a.project",
     agentDir: "/tmp/agent",
     depth: 0,
-    projectTrusted: true,
+    allowProjectConfig: true,
     ...taskOverrides,
   };
 }
@@ -144,7 +144,7 @@ test("Codex availability rejects a missing binary and spawn errors", async () =>
   );
 });
 
-test("Codex app-server args disable native delegation and forward trust", () => {
+test("Codex app-server args disable native delegation and forward the permission", () => {
   assert.deepEqual(buildCodexAppServerArgs(task()), [
     "app-server",
     "--stdio",
@@ -157,8 +157,8 @@ test("Codex app-server args disable native delegation and forward trust", () => 
   ]);
 });
 
-test("an untrusted Codex run disables executable project integrations", () => {
-  const args = buildCodexAppServerArgs(task({ projectTrusted: false }));
+test("a configuration-denied Codex run disables executable project integrations", () => {
+  const args = buildCodexAppServerArgs(task({ allowProjectConfig: false }));
   assert.deepEqual(args.slice(-6), [
     "--disable",
     "hooks",
@@ -199,11 +199,14 @@ test("Codex replaces system instructions when explicitly configured", () => {
   assert.equal(replaced.developerInstructions, undefined);
 });
 
-test("an untrusted Codex thread disables inherited integrations without an explicit cwd", () => {
-  const params = buildCodexThreadStartParams(task({ projectTrusted: false }), {
-    mcpServers: ["computer-use", "node.repl"],
-    apps: ["github", "linear"],
-  });
+test("a configuration-denied Codex thread disables inherited integrations without an explicit cwd", () => {
+  const params = buildCodexThreadStartParams(
+    task({ allowProjectConfig: false }),
+    {
+      mcpServers: ["computer-use", "node.repl"],
+      apps: ["github", "linear"],
+    },
+  );
   assert.equal(params.cwd, undefined);
   assert.deepEqual(params.config.mcp_servers, {
     "computer-use": { enabled: false },
@@ -421,7 +424,7 @@ test("Codex turn completion settles success and failure", () => {
   assert.equal(failure.errorMessage, "model unavailable");
 });
 
-test("untrusted Codex lifecycle disables layered integrations before starting", async () => {
+test("a configuration-denied Codex lifecycle disables layered integrations before starting", async () => {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
   const stderr = new PassThrough();
@@ -522,7 +525,7 @@ test("untrusted Codex lifecycle disables layered integrations before starting", 
   const completed = await runCodexAgent(
     {
       task: task({
-        projectTrusted: false,
+        allowProjectConfig: false,
         config: { appendSystemPrompt: false },
       }),
       result,
