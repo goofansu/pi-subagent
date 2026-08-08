@@ -122,7 +122,7 @@ export function settleResultLifecycle(
   result.finishedAt = finishedAt;
 }
 
-/** The caller's model, used when an agent inherits instead of pinning one. */
+/** The caller's model, used when a Pi agent does not pin one. */
 export interface ParentModel {
   provider: string;
   id: string;

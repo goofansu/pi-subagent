@@ -23,7 +23,6 @@ type CommandContext = Parameters<CommandOptions["handler"]>[1];
 const exploreAgent: AgentConfig = {
   name: "explore",
   description: "Fast codebase exploration.",
-  model: "inherit",
   tools: "read,rg",
   systemPrompt: "# Explore\n\nRead files and report findings.",
   source: "user",

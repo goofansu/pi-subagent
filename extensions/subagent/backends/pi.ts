@@ -129,7 +129,7 @@ export function getPiInvocation(
 /**
  * The thinking level to pass, or `undefined` to leave pi's default alone.
  *
- * A profile's `effort` wins. Failing that, only an inherited model brings the
+ * A profile's `effort` wins. Failing that, only an omitted model brings the
  * caller's level with it: a pinned model with no `effort` means "this model at
  * whatever pi would normally use", not "this model at the caller's level".
  */
@@ -138,7 +138,7 @@ export function resolveSubagentThinking(
   parentModel: ParentModel | undefined,
 ): string | undefined {
   if (config.effort) return config.effort;
-  if (config.model && config.model !== "inherit") return undefined;
+  if (config.model) return undefined;
   return parentModel?.thinkingLevel;
 }
 
@@ -189,7 +189,7 @@ export function resolveSubagentModel(
   parentModel: ParentModel | undefined,
 ): string | undefined {
   // Verbatim. Whatever `pi --model` accepts is between the author and pi.
-  if (config.model && config.model !== "inherit") return config.model;
+  if (config.model) return config.model;
   if (!parentModel) return undefined;
   return `${parentModel.provider}/${parentModel.id}`;
 }

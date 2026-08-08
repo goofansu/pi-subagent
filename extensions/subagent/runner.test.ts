@@ -114,21 +114,6 @@ test("resolveSubagentModel inherits the parent model for an omitted model", () =
   );
 });
 
-test("resolveSubagentModel inherits the parent model for an inherit model", () => {
-  assert.equal(
-    resolveSubagentModel(
-      {
-        name: "worker",
-        description: "Worker",
-        model: "inherit",
-        systemPrompt: "Work.",
-      },
-      { provider: "anthropic", id: "claude-sonnet-4-5", thinkingLevel: "low" },
-    ),
-    "anthropic/claude-sonnet-4-5",
-  );
-});
-
 test("resolveSubagentModel leaves explicit configured models unchanged", () => {
   assert.equal(
     resolveSubagentModel(

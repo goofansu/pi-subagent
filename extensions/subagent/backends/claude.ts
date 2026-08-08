@@ -195,13 +195,8 @@ export function hasClaudeBinary(
  * The model to pin, or `undefined` to let Claude Code choose. Passed exactly as
  * written: a bare id, a Bedrock id, or an inference-profile ARN are all things
  * Claude Code accepts, and nothing here is in a position to tell them apart.
- *
- * `inherit` does not forward the caller's pi model: the caller may be on a
- * different provider entirely, so Claude Code's own default is the only safe
- * neutral choice.
  */
 export function resolveClaudeModel(config: AgentConfig): string | undefined {
-  if (!config.model || config.model === "inherit") return undefined;
   return config.model;
 }
 

@@ -150,10 +150,7 @@ export interface AgentConfig {
   description: string;
   /** Execution backend. Omitted means {@link DEFAULT_HARNESS}. */
   harness?: Harness;
-  /**
-   * The model id, handed to the harness exactly as written — no provider
-   * stripping, no suffix parsing. `inherit` is the one reserved value.
-   */
+  /** Model id, handed to the harness exactly as written. */
   model?: string;
   /** Reasoning depth. Independent of `model`; every harness takes it separately. */
   effort?: Effort;

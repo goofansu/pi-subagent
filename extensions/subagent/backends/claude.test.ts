@@ -258,9 +258,8 @@ function fakeQuery(
 
 // ── Model and effort resolution ───────────────────────────────────────────────
 
-test("resolveClaudeModel returns undefined for omitted and inherited models", () => {
+test("resolveClaudeModel returns undefined for an omitted model", () => {
   assert.equal(resolveClaudeModel(agent()), undefined);
-  assert.equal(resolveClaudeModel(agent({ model: "inherit" })), undefined);
 });
 
 test("buildThinkingOptions leaves the CLI default alone when effort is unset", () => {
@@ -419,10 +418,10 @@ test("buildClaudeOptions leaves Claude Code to manage its own skills", () => {
   });
 });
 
-test("buildClaudeOptions omits the model when the profile inherits", () => {
+test("buildClaudeOptions omits the model when the profile does not pin one", () => {
   assert.equal(
     buildClaudeOptions({
-      config: agent({ model: "inherit" }),
+      config: agent(),
       cwd: "/tmp/project",
       depth: 0,
     }).model,

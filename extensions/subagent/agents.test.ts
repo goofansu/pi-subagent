@@ -51,14 +51,14 @@ test("parseAgentConfig reads name, frontmatter, and system prompt", async () => 
   const filePath = path.join(dir, "reviewer.md");
   await fs.promises.writeFile(
     filePath,
-    "---\ndescription: Reviews code\nmodel: inherit\ntools: read,grep,find,ls,bash\nappendSystemPrompt: true\n---\n\nYou review code.\n",
+    "---\ndescription: Reviews code\nmodel: custom\ntools: read,grep,find,ls,bash\nappendSystemPrompt: true\n---\n\nYou review code.\n",
   );
 
   assert.deepEqual(parseAgentConfig(filePath), {
     name: "reviewer",
     description: "Reviews code",
     harness: "pi",
-    model: "inherit",
+    model: "custom",
     tools: "read,grep,find,ls,bash",
     appendSystemPrompt: true,
     systemPrompt: "You review code.",
@@ -338,9 +338,19 @@ async function writeAgentWithFrontmatter(
 
 test("parseAgentConfig defaults an agent without a harness to pi", async () => {
   const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(dir, "model: inherit");
+  const filePath = await writeAgentWithFrontmatter(dir, "");
 
   assert.equal(parseAgentConfig(filePath).harness, "pi");
+});
+
+test("parseAgentConfig rejects the removed inherit model value", async () => {
+  const dir = await makeTempDir();
+  const filePath = await writeAgentWithFrontmatter(dir, "model: inherit");
+
+  assert.throws(
+    () => parseAgentConfig(filePath),
+    /model 'inherit' is not supported; omit model instead/,
+  );
 });
 
 test("parseAgentConfig accepts the codex harness", async () => {

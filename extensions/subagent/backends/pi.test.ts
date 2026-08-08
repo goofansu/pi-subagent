@@ -363,10 +363,10 @@ test("resolveSubagentModel hands pi the model exactly as written", () => {
   }
 });
 
-test("resolveSubagentModel inherits the caller's model without its level", () => {
+test("resolveSubagentModel uses the caller's model when the profile omits one", () => {
   // The level travels separately now, so nothing is spliced into the id.
   assert.equal(
-    resolveSubagentModel(agent({ model: "inherit" }), {
+    resolveSubagentModel(agent(), {
       provider: "anthropic",
       id: "claude-opus-4-5",
       thinkingLevel: "low",
@@ -386,17 +386,13 @@ test("resolveSubagentThinking prefers the profile's effort", () => {
   );
 });
 
-test("resolveSubagentThinking inherits the caller's level only with the model", () => {
+test("resolveSubagentThinking uses the caller's level only when model is omitted", () => {
   const parent = {
     provider: "anthropic",
     id: "claude-opus-4-5",
     thinkingLevel: "low",
   };
   assert.equal(resolveSubagentThinking(agent(), parent), "low");
-  assert.equal(
-    resolveSubagentThinking(agent({ model: "inherit" }), parent),
-    "low",
-  );
   // A pinned model with no effort means pi's default, not the caller's level.
   assert.equal(
     resolveSubagentThinking(agent({ model: "sonnet" }), parent),

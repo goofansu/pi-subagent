@@ -64,12 +64,7 @@ export function resolveCodexEffort(
   return effort === "off" ? "none" : effort;
 }
 
-/**
- * `inherit` means the selected harness's own default. A Pi parent model may be
- * from another provider, so it must not be handed to Codex.
- */
 export function resolveCodexModel(config: AgentConfig): string | undefined {
-  if (!config.model || config.model === "inherit") return undefined;
   return config.model;
 }
 

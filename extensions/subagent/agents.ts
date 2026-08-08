@@ -139,6 +139,18 @@ function assertNoEffortSuffix(
   );
 }
 
+/** Reject the removed inheritance marker instead of passing it as a model id. */
+function assertNoInheritModel(
+  model: string | undefined,
+  filePath: string,
+): void {
+  if (model !== "inherit") return;
+  throw new AgentConfigValidationError(
+    "model 'inherit' is not supported; omit model instead",
+    filePath,
+  );
+}
+
 /**
  * Reject a field the profile cannot control on this harness.
  *
@@ -220,6 +232,7 @@ export function parseAgentConfig(
     filePath,
   );
   const model = stringField(frontmatter.model, "model", filePath);
+  assertNoInheritModel(model, filePath);
   assertNoEffortSuffix(model, filePath);
   const effort = parseEffort(
     stringField(frontmatter.effort, "effort", filePath),

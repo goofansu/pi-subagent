@@ -45,12 +45,8 @@ function task(
   };
 }
 
-test("resolveCodexModel leaves inherit to Codex and passes pins verbatim", () => {
+test("resolveCodexModel leaves an omitted model to Codex and passes pins verbatim", () => {
   assert.equal(resolveCodexModel(task().config), undefined);
-  assert.equal(
-    resolveCodexModel(task({ config: { model: "inherit" } }).config),
-    undefined,
-  );
   assert.equal(
     resolveCodexModel(task({ config: { model: "gpt-5.6-sol" } }).config),
     "gpt-5.6-sol",
