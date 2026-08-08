@@ -83,6 +83,21 @@ export function buildAgentWorkMessage(agentName: string, task: string): string {
   return `Use the subagent tool with agent "${agentName}" for the task: ${task}`;
 }
 
+export function getAgentsTrustStatus(projectTrusted: boolean): {
+  primary: string;
+  secondary?: string;
+} {
+  return projectTrusted
+    ? {
+        primary: "✓ Project trusted",
+        secondary: "[u] User agents • [p] Project agents",
+      }
+    : {
+        primary: "⚠ Project untrusted — [p] project agents excluded",
+        secondary: "[u] User agents remain available",
+      };
+}
+
 export function formatAgentListHint(
   separator: string,
   renderKeyHint = keyHint,
@@ -132,6 +147,24 @@ export async function runAgentWorkFlow(
   closeAgentsUi();
 }
 
+function addTrustStatus(
+  container: Container,
+  theme: Theme,
+  projectTrusted: boolean,
+): void {
+  const status = getAgentsTrustStatus(projectTrusted);
+  const text = theme.fg(projectTrusted ? "success" : "warning", status.primary);
+  container.addChild(
+    new Text(
+      status.secondary
+        ? `${text}${theme.fg("muted", ` • ${status.secondary}`)}`
+        : text,
+      1,
+      0,
+    ),
+  );
+}
+
 class AgentsListComponent extends Container {
   private readonly searchInput = new Input();
   private readonly listContainer = new Container();
@@ -150,6 +183,7 @@ class AgentsListComponent extends Container {
     onCancel: () => void,
     keybindings: KeybindingMatcher,
     requestRender: () => void,
+    projectTrusted: boolean,
   ) {
     super();
     this.theme = theme;
@@ -163,6 +197,7 @@ class AgentsListComponent extends Container {
     this.addChild(
       new Text(theme.fg("accent", theme.bold("Select agent")), 1, 0),
     );
+    addTrustStatus(this, theme, projectTrusted);
     this.addChild(this.searchInput);
     this.addChild(new Spacer(1));
     this.addChild(this.listContainer);
@@ -233,6 +268,48 @@ class AgentsListComponent extends Container {
     };
     this.selectList.onCancel = this.onCancel;
     this.listContainer.addChild(this.selectList);
+  }
+}
+
+class EmptyAgentsComponent extends Container {
+  private readonly keybindings: KeybindingMatcher;
+  private readonly onCancel: () => void;
+
+  constructor(
+    theme: Theme,
+    projectTrusted: boolean,
+    keybindings: KeybindingMatcher,
+    onCancel: () => void,
+  ) {
+    super();
+    this.keybindings = keybindings;
+    this.onCancel = onCancel;
+    this.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    this.addChild(
+      new Text(theme.fg("accent", theme.bold("Select agent")), 1, 0),
+    );
+    addTrustStatus(this, theme, projectTrusted);
+    this.addChild(new Spacer(1));
+    this.addChild(
+      new Text(
+        theme.fg("warning", "No user agents are configured.") +
+          theme.fg(
+            "muted",
+            " Use /trust and restart Pi to load project agents.",
+          ),
+        1,
+        0,
+      ),
+    );
+    this.addChild(new Spacer(1));
+    this.addChild(
+      new Text(theme.fg("dim", keyHint("tui.select.cancel", "close")), 1, 0),
+    );
+    this.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+  }
+
+  handleInput(data: string): void {
+    if (this.keybindings.matches(data, "tui.select.cancel")) this.onCancel();
   }
 }
 
@@ -471,17 +548,27 @@ async function openAgentDetail(
 export function registerAgentsCommand(
   pi: Pick<ExtensionAPI, "registerCommand" | "sendUserMessage">,
   agentConfigs: ReadonlyMap<string, AgentConfig>,
+  projectTrusted: boolean,
 ) {
   pi.registerCommand("agents", {
     description: "List loaded subagents and view their prompts.",
     handler: async (_args, ctx) => {
       const items = getAgentSelectItems(agentConfigs);
-      if (items.length === 0) {
+      if (items.length === 0 && projectTrusted) {
         ctx.ui.notify("No subagents are configured.", "info");
         return;
       }
 
       await ctx.ui.custom<void>((rootTui, theme, keybindings, done) => {
+        if (items.length === 0) {
+          return new EmptyAgentsComponent(
+            theme,
+            projectTrusted,
+            keybindings,
+            () => done(undefined),
+          );
+        }
+
         type ActiveComponent = {
           render(width: number): string[];
           invalidate(): void;
@@ -529,6 +616,7 @@ export function registerAgentsCommand(
           () => done(undefined),
           keybindings,
           () => rootTui.requestRender(),
+          projectTrusted,
         );
 
         activeComponent = agentList;

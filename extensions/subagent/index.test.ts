@@ -96,6 +96,46 @@ test("subagent executions use the trust captured at session start", async () => 
   }
 });
 
+test("the agents command receives the trust captured at session start", async () => {
+  for (const sessionTrust of [true, false]) {
+    let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+    let customCalled = false;
+    const notifications: string[] = [];
+    const pi = {
+      registerCommand(_name: string, options: unknown) {
+        command = options as Parameters<ExtensionAPI["registerCommand"]>[1];
+      },
+      registerTool() {},
+    } as unknown as ExtensionAPI;
+
+    registerSubagentFeatures(
+      pi,
+      "/project",
+      "/agent-dir",
+      new Map(),
+      sessionTrust,
+    );
+
+    assert.ok(command);
+    await command.handler("", {
+      ui: {
+        notify(message: string) {
+          notifications.push(message);
+        },
+        custom: async () => {
+          customCalled = true;
+        },
+      },
+    } as unknown as Parameters<typeof command.handler>[1]);
+
+    assert.equal(customCalled, !sessionTrust);
+    assert.deepEqual(
+      notifications,
+      sessionTrust ? ["No subagents are configured."] : [],
+    );
+  }
+});
+
 // ── Harness availability diagnostics ─────────────────────────────────────────
 
 function backend(name: Harness, available: boolean): SubagentBackend {

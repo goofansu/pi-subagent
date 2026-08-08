@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { stripVTControlCharacters } from "node:util";
+import { type ExtensionAPI, initTheme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   buildAgentWorkMessage,
   formatAgentActionHint,
@@ -10,6 +12,7 @@ import {
   getAgentActionItems,
   getAgentDetailMarkdownText,
   getAgentSelectItems,
+  getAgentsTrustStatus,
   getFilteredAgentSelectItems,
   registerAgentsCommand,
   runAgentWorkFlow,
@@ -19,6 +22,29 @@ import type { AgentConfig } from "./types.ts";
 type CommandOptions = Parameters<ExtensionAPI["registerCommand"]>[1];
 type RegisteredCommand = { name: string; options: CommandOptions };
 type CommandContext = Parameters<CommandOptions["handler"]>[1];
+type CustomFactory = (
+  tui: { requestRender(): void },
+  theme: {
+    fg(color: string, text: string): string;
+    bold(text: string): string;
+  },
+  keybindings: { matches(data: string, action: string): boolean },
+  done: (value: undefined) => void,
+) => {
+  render(width: number): string[];
+};
+
+initTheme(undefined, false);
+
+const testTheme = {
+  fg(color: string, text: string) {
+    const code = color === "success" ? 32 : color === "warning" ? 33 : 90;
+    return `\u001b[${code}m${text}\u001b[0m`;
+  },
+  bold(text: string) {
+    return `\u001b[1m${text}\u001b[22m`;
+  },
+};
 
 const exploreAgent: AgentConfig = {
   name: "explore",
@@ -135,6 +161,17 @@ test("getAgentActionItems returns the agent action menu", () => {
   ]);
 });
 
+test("getAgentsTrustStatus describes available agent sources", () => {
+  assert.deepEqual(getAgentsTrustStatus(true), {
+    primary: "✓ Project trusted",
+    secondary: "[u] User agents • [p] Project agents",
+  });
+  assert.deepEqual(getAgentsTrustStatus(false), {
+    primary: "⚠ Project untrusted — [p] project agents excluded",
+    secondary: "[u] User agents remain available",
+  });
+});
+
 test("formatAgentListHint uses keybinding descriptions", () => {
   const hint = formatAgentListHint(
     " • ",
@@ -245,7 +282,7 @@ test("registerAgentsCommand registers the agents slash command", () => {
     sendUserMessage: () => {},
   };
 
-  registerAgentsCommand(pi, new Map([[exploreAgent.name, exploreAgent]]));
+  registerAgentsCommand(pi, new Map([[exploreAgent.name, exploreAgent]]), true);
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].name, "agents");
@@ -265,7 +302,7 @@ test("agents command notifies when no agents are configured", async () => {
     sendUserMessage: () => {},
   };
 
-  registerAgentsCommand(pi, new Map());
+  registerAgentsCommand(pi, new Map(), true);
 
   await calls[0].options.handler("", {
     ui: {
@@ -280,9 +317,52 @@ test("agents command notifies when no agents are configured", async () => {
   ]);
 });
 
+test("untrusted empty agents open an explanatory width-safe TUI", async () => {
+  const calls: RegisteredCommand[] = [];
+  const notifications: string[] = [];
+  let rendered: string[] = [];
+  const pi: Pick<ExtensionAPI, "registerCommand" | "sendUserMessage"> = {
+    registerCommand(name, options) {
+      calls.push({ name, options });
+    },
+    sendUserMessage: () => {},
+  };
+
+  registerAgentsCommand(pi, new Map(), false);
+
+  await calls[0].options.handler("", {
+    ui: {
+      notify(message: string) {
+        notifications.push(message);
+      },
+      custom: async (factory: unknown) => {
+        const component = (factory as CustomFactory)(
+          { requestRender() {} },
+          testTheme,
+          { matches: () => false },
+          () => {},
+        );
+        rendered = component.render(32);
+      },
+    },
+  } as unknown as CommandContext);
+
+  const rawText = rendered.join("\n");
+  const text = stripVTControlCharacters(rawText).replace(/\s+/g, " ");
+  assert.deepEqual(notifications, []);
+  assert.ok(rawText.includes("\u001b[33m⚠ Project untrusted"));
+  assert.ok(rawText.includes("\u001b[90m"));
+  assert.match(text, /project agents excluded/);
+  assert.match(text, /User agents remain available/);
+  assert.match(text, /No user agents are configured/);
+  assert.match(text, /\/trust and restart Pi/);
+  assert.ok(rendered.every((line) => visibleWidth(line) <= 32));
+});
+
 test("agents command opens a selector when agents are loaded", async () => {
   const calls: RegisteredCommand[] = [];
   let customCalled = false;
+  let rendered: string[] = [];
   const pi: Pick<ExtensionAPI, "registerCommand" | "sendUserMessage"> = {
     registerCommand(name, options) {
       calls.push({ name, options });
@@ -296,17 +376,32 @@ test("agents command opens a selector when agents are loaded", async () => {
       [exploreAgent.name, exploreAgent],
       [reviewAgent.name, reviewAgent],
     ]),
+    true,
   );
 
   await calls[0].options.handler("", {
     ui: {
       notify: () => {},
-      custom: async () => {
+      custom: async (factory: unknown) => {
         customCalled = true;
+        const component = (factory as CustomFactory)(
+          { requestRender() {} },
+          testTheme,
+          { matches: () => false },
+          () => {},
+        );
+        rendered = component.render(40);
         return undefined;
       },
     },
   } as unknown as CommandContext);
 
   assert.equal(customCalled, true);
+  const renderedText = rendered.join("\n");
+  assert.ok(renderedText.includes("\u001b[32m✓ Project trusted"));
+  assert.match(
+    stripVTControlCharacters(renderedText).replace(/\s+/g, " "),
+    /\[u\] User agents • \[p\] Project agents/,
+  );
+  assert.ok(rendered.every((line) => visibleWidth(line) <= 40));
 });

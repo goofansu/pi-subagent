@@ -65,7 +65,7 @@ export function registerSubagentFeatures(
   projectTrusted: boolean,
   runner: typeof runSubagent = runSubagent,
 ): void {
-  registerAgentsCommand(pi, agentConfigs);
+  registerAgentsCommand(pi, agentConfigs, projectTrusted);
 
   const description = "Run a task in a specialized subagent";
   pi.registerTool({
