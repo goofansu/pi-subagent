@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { SubagentBackend } from "./backend.ts";
-import { createBackendRegistry } from "./backend.ts";
-import subagentExtension, { findUnavailableHarnessWarnings } from "./index.ts";
+import { createBackendRegistry, createEmptyResult } from "./backend.ts";
+import subagentExtension, {
+  findUnavailableHarnessWarnings,
+  registerSubagentFeatures,
+} from "./index.ts";
+import type { RunSubagentOptions } from "./runner.ts";
 import type { AgentConfig, Harness } from "./types.ts";
 
 // ── Extension registration ───────────────────────────────────────────────────
@@ -31,6 +35,64 @@ test("the extension is not exposed inside a subagent Pi process", () => {
   } finally {
     if (originalDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
     else process.env.PI_SUBAGENT_DEPTH = originalDepth;
+  }
+});
+
+test("subagent executions use the trust captured at session start", async () => {
+  for (const sessionTrust of [true, false]) {
+    let registeredTool: unknown;
+    let executeTrustChecks = 0;
+    let forwardedTrust: boolean | undefined;
+    const pi = {
+      registerCommand() {},
+      registerTool(tool: unknown) {
+        registeredTool = tool;
+      },
+      getThinkingLevel() {
+        return "off";
+      },
+    } as unknown as ExtensionAPI;
+    const runner = async (options: RunSubagentOptions) => {
+      forwardedTrust = options.projectTrusted;
+      const result = createEmptyResult("worker", "task", "pi", 0);
+      result.status = "completed";
+      result.exitCode = 0;
+      return result;
+    };
+
+    registerSubagentFeatures(
+      pi,
+      "/project",
+      "/agent-dir",
+      new Map([["worker", agentConfig("worker")]]),
+      sessionTrust,
+      runner,
+    );
+
+    const tool = registeredTool as {
+      execute(
+        toolCallId: string,
+        params: { agent: string; description: string; prompt: string },
+        signal: AbortSignal,
+        onUpdate: undefined,
+        ctx: unknown,
+      ): Promise<unknown>;
+    };
+    await tool.execute(
+      "call-1",
+      { agent: "worker", description: "task", prompt: "work" },
+      new AbortController().signal,
+      undefined,
+      {
+        isProjectTrusted() {
+          executeTrustChecks++;
+          return !sessionTrust;
+        },
+      },
+    );
+
+    assert.equal(forwardedTrust, sessionTrust);
+    assert.equal(executeTrustChecks, 0);
   }
 });
 

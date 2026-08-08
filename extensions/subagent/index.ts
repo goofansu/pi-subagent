@@ -57,11 +57,13 @@ export async function findUnavailableHarnessWarnings(
 
 // ── Extension ─────────────────────────────────────────────────────────────────
 
-function registerSubagentFeatures(
+export function registerSubagentFeatures(
   pi: ExtensionAPI,
   projectCwd: string,
   configuredAgentDir: string,
   agentConfigs: Map<string, AgentConfig>,
+  projectTrusted: boolean,
+  runner: typeof runSubagent = runSubagent,
 ): void {
   registerAgentsCommand(pi, agentConfigs);
 
@@ -91,7 +93,7 @@ function registerSubagentFeatures(
         );
       }
 
-      const result = await runSubagent({
+      const result = await runner({
         config,
         description: params.description,
         prompt: params.prompt,
@@ -99,9 +101,7 @@ function registerSubagentFeatures(
         // Pi already decided whether this directory is trusted, and asked the
         // person if it had to. Reusing that decision is what keeps delegating
         // from granting a directory more than working in it already did.
-        // Optional call: a host too old to report trust must read as
-        // untrusted, not as trusting.
-        projectTrusted: ctx.isProjectTrusted?.() ?? false,
+        projectTrusted,
         parentModel: ctx.model
           ? {
               provider: ctx.model.provider,
@@ -169,7 +169,13 @@ export default function subagentExtension(pi: ExtensionAPI) {
     );
     const agentConfigs = agentConfigLoadResult.configs;
 
-    registerSubagentFeatures(pi, projectCwd, configuredAgentDir, agentConfigs);
+    registerSubagentFeatures(
+      pi,
+      projectCwd,
+      configuredAgentDir,
+      agentConfigs,
+      projectTrusted,
+    );
 
     for (const warning of await findUnavailableHarnessWarnings(
       agentConfigs,
