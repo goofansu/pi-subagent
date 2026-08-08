@@ -10,8 +10,19 @@ import subagentExtension, {
   findUnavailableHarnessWarnings,
   registerSubagentFeatures,
 } from "./index.ts";
+import type { ProjectConfigPolicy } from "./project-config-policy.ts";
 import type { RunSubagentOptions } from "./runner.ts";
 import type { AgentConfig, Harness } from "./types.ts";
+
+function policyFor(allowProjectConfig: boolean): ProjectConfigPolicy {
+  return {
+    piProjectTrusted: allowProjectConfig,
+    allowProjectConfig,
+    reason: allowProjectConfig
+      ? "trust-required-and-approved"
+      : "vacuous-trust",
+  };
+}
 
 // ── Extension registration ───────────────────────────────────────────────────
 
@@ -68,7 +79,7 @@ test("subagent executions use the permission captured at session start", async (
       "/project",
       "/agent-dir",
       new Map([["worker", agentConfig("worker")]]),
-      sessionPermission,
+      policyFor(sessionPermission),
       runner,
     );
 
@@ -116,7 +127,7 @@ test("the agents command receives the permission captured at session start", asy
       "/project",
       "/agent-dir",
       new Map(),
-      sessionPermission,
+      policyFor(sessionPermission),
     );
 
     assert.ok(command);

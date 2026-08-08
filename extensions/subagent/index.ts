@@ -12,7 +12,10 @@ import {
 import { registerAgentsCommand } from "./agents-command.ts";
 import type { BackendRegistry } from "./backend.ts";
 import { getFinalOutput } from "./messages.ts";
-import { resolveProjectConfigPolicy } from "./project-config-policy.ts";
+import {
+  type ProjectConfigPolicy,
+  resolveProjectConfigPolicy,
+} from "./project-config-policy.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
 import {
   defaultBackendRegistry,
@@ -63,10 +66,11 @@ export function registerSubagentFeatures(
   projectCwd: string,
   configuredAgentDir: string,
   agentConfigs: Map<string, AgentConfig>,
-  allowProjectConfig: boolean,
+  policy: ProjectConfigPolicy,
   runner: typeof runSubagent = runSubagent,
 ): void {
-  registerAgentsCommand(pi, agentConfigs, allowProjectConfig);
+  const { allowProjectConfig } = policy;
+  registerAgentsCommand(pi, agentConfigs, policy);
 
   const description = "Run a task in a specialized subagent";
   pi.registerTool({
@@ -171,12 +175,11 @@ export default function subagentExtension(pi: ExtensionAPI) {
       agentDir: configuredAgentDir,
       piProjectTrusted: ctx.isProjectTrusted?.() ?? false,
     });
-    const allowProjectConfig = policy.allowProjectConfig;
     const agentConfigLoadResult = loadLayeredAgentConfigsWithDiagnostics(
       buildAgentConfigLayers(
         projectCwd,
         configuredAgentDir,
-        allowProjectConfig,
+        policy.allowProjectConfig,
       ),
     );
     const agentConfigs = agentConfigLoadResult.configs;
@@ -186,7 +189,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       projectCwd,
       configuredAgentDir,
       agentConfigs,
-      allowProjectConfig,
+      policy,
     );
 
     if (policy.warning) ctx.ui.notify(policy.warning, "warning");

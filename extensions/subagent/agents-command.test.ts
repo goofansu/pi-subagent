@@ -18,7 +18,20 @@ import {
   registerAgentsCommand,
   runAgentWorkFlow,
 } from "./agents-command.ts";
+import type { ProjectConfigPolicy } from "./project-config-policy.ts";
 import type { AgentConfig } from "./types.ts";
+
+const allowedPolicy: ProjectConfigPolicy = {
+  piProjectTrusted: true,
+  allowProjectConfig: true,
+  reason: "trust-required-and-approved",
+};
+
+const deniedPolicy: ProjectConfigPolicy = {
+  piProjectTrusted: true,
+  allowProjectConfig: false,
+  reason: "vacuous-trust",
+};
 
 type CommandOptions = Parameters<ExtensionAPI["registerCommand"]>[1];
 type RegisteredCommand = { name: string; options: CommandOptions };
@@ -166,15 +179,26 @@ test("formatAgentActionTitle names the selected agent", () => {
 });
 
 test("getAgentsProjectConfigStatus describes available agent sources", () => {
-  assert.deepEqual(getAgentsProjectConfigStatus(true), {
+  assert.deepEqual(getAgentsProjectConfigStatus(allowedPolicy), {
     primary: "✓ Project configuration enabled",
     secondary: "[u] User agents • [p] Project agents",
   });
-  assert.deepEqual(getAgentsProjectConfigStatus(false), {
+  assert.deepEqual(getAgentsProjectConfigStatus(deniedPolicy), {
     primary: "⚠ Project configuration disabled — [p] project agents excluded",
     secondary:
       "[u] User agents remain available • /trust and restart Pi to load project agents",
   });
+});
+
+test("getAgentsProjectConfigStatus does not send a broken trust store to /trust", () => {
+  const status = getAgentsProjectConfigStatus({
+    piProjectTrusted: true,
+    allowProjectConfig: false,
+    reason: "trust-store-error",
+  });
+
+  assert.match(String(status.secondary), /trust store could not be read/);
+  assert.ok(!String(status.secondary).includes("/trust and restart"));
 });
 
 test("formatAgentListHint uses keybinding descriptions", () => {
@@ -287,7 +311,11 @@ test("registerAgentsCommand registers the agents slash command", () => {
     sendUserMessage: () => {},
   };
 
-  registerAgentsCommand(pi, new Map([[exploreAgent.name, exploreAgent]]), true);
+  registerAgentsCommand(
+    pi,
+    new Map([[exploreAgent.name, exploreAgent]]),
+    allowedPolicy,
+  );
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].name, "agents");
@@ -307,7 +335,7 @@ test("agents command notifies when no agents are configured", async () => {
     sendUserMessage: () => {},
   };
 
-  registerAgentsCommand(pi, new Map(), true);
+  registerAgentsCommand(pi, new Map(), allowedPolicy);
 
   await calls[0].options.handler("", {
     ui: {
@@ -333,7 +361,7 @@ test("configuration-disabled empty agents open an explanatory width-safe TUI", a
     sendUserMessage: () => {},
   };
 
-  registerAgentsCommand(pi, new Map(), false);
+  registerAgentsCommand(pi, new Map(), deniedPolicy);
 
   await calls[0].options.handler("", {
     ui: {
@@ -381,7 +409,7 @@ test("agents command opens a selector when agents are loaded", async () => {
       [exploreAgent.name, exploreAgent],
       [reviewAgent.name, reviewAgent],
     ]),
-    true,
+    allowedPolicy,
   );
 
   await calls[0].options.handler("", {
