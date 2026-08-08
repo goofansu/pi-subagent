@@ -160,18 +160,12 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
   // Project trust is resolved before session_start. Defer every discovery read
   // until then so an unknown host fails closed and an untrusted checkout cannot
-  // contribute either .pi/agents or project-scoped package agents.
+  // contribute .pi/agents.
   pi.on("session_start", async (_event, ctx) => {
     const projectCwd = ctx.cwd;
     const projectTrusted = ctx.isProjectTrusted?.() ?? false;
     const agentConfigLoadResult = loadLayeredAgentConfigsWithDiagnostics(
-      buildAgentConfigLayers(
-        projectCwd,
-        configuredAgentDir,
-        import.meta.url,
-        projectCwd,
-        projectTrusted,
-      ),
+      buildAgentConfigLayers(projectCwd, configuredAgentDir, projectTrusted),
     );
     const agentConfigs = agentConfigLoadResult.configs;
 

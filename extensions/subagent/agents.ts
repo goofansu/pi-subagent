@@ -1,12 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
-import {
-  DefaultPackageManager,
-  getAgentDir,
-  parseFrontmatter,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, AgentSource, Effort, Harness } from "./types.ts";
 import {
   DEFAULT_APPEND_SYSTEM_PROMPT,
@@ -249,13 +243,9 @@ export function parseAgentConfig(
   };
 }
 
-export function getDefaultAgentsDir(moduleUrl: string): string {
-  return path.join(path.dirname(fileURLToPath(moduleUrl)), "../../agents");
-}
-
 export function loadAgentConfigsWithDiagnostics(
   agentsDir: string,
-  source: AgentSource = "default",
+  source?: AgentSource,
 ): AgentConfigLoadResult {
   const configs = new Map<string, AgentConfig>();
   const invalidFiles: InvalidAgentConfig[] = [];
@@ -283,7 +273,7 @@ export function loadAgentConfigsWithDiagnostics(
 
 export function loadAgentConfigs(
   agentsDir: string,
-  source: AgentSource = "default",
+  source?: AgentSource,
 ): Map<string, AgentConfig> {
   return loadAgentConfigsWithDiagnostics(agentsDir, source).configs;
 }
@@ -293,82 +283,17 @@ export interface AgentLayer {
   source: AgentSource;
 }
 
-export interface PackageAgentPackage {
-  source: string;
-  scope: "user" | "project";
-  installedPath?: string;
-}
-
-function resolveExistingPath(filePath: string): string {
-  return fs.existsSync(filePath)
-    ? fs.realpathSync.native(filePath)
-    : path.resolve(filePath);
-}
-
-export function buildPackageAgentLayers(
-  packages: PackageAgentPackage[],
-  projectTrusted = false,
-): AgentLayer[] {
-  return packages.flatMap((pkg) => {
-    if (pkg.scope === "project" && !projectTrusted) return [];
-    if (typeof pkg.installedPath !== "string") return [];
-
-    const agentsDir = path.join(pkg.installedPath, "agents");
-    if (!fs.existsSync(agentsDir)) return [];
-
-    return [{ dir: agentsDir, source: "package" as const }];
-  });
-}
-
-export function getInstalledPackageAgentLayers(
-  cwd: string,
-  agentDir = getAgentDir(),
-  projectTrusted = false,
-): AgentLayer[] {
-  // SettingsManager itself must receive the effective session decision. Merely
-  // filtering its result would still read configuration from an untrusted
-  // checkout.
-  const settingsManager = SettingsManager.create(cwd, agentDir, {
-    projectTrusted,
-  });
-  const packageManager = new DefaultPackageManager({
-    cwd,
-    agentDir,
-    settingsManager,
-  });
-
-  return buildPackageAgentLayers(
-    packageManager.listConfiguredPackages(),
-    projectTrusted,
-  );
-}
-
 export function buildAgentConfigLayers(
   projectCwd: string,
   agentDir: string,
-  moduleUrl: string,
-  configCwd = projectCwd,
   projectTrusted = false,
-  packageLayers: AgentLayer[] = getInstalledPackageAgentLayers(
-    configCwd,
-    agentDir,
-    projectTrusted,
-  ),
 ): AgentLayer[] {
-  const defaultAgentsDir = getDefaultAgentsDir(moduleUrl);
-  const resolvedDefaultAgentsDir = resolveExistingPath(defaultAgentsDir);
-  const deduplicatedPackageLayers = packageLayers.filter(
-    (layer) => resolveExistingPath(layer.dir) !== resolvedDefaultAgentsDir,
-  );
-
   return [
-    { dir: defaultAgentsDir, source: "default" },
-    ...deduplicatedPackageLayers,
     { dir: path.join(agentDir, "agents"), source: "user" },
     ...(projectTrusted
       ? [
           {
-            dir: path.join(configCwd, ".pi", "agents"),
+            dir: path.join(projectCwd, ".pi", "agents"),
             source: "project" as const,
           },
         ]
@@ -395,24 +320,6 @@ export function loadLayeredAgentConfigs(
   layers: AgentLayer[],
 ): Map<string, AgentConfig> {
   return loadLayeredAgentConfigsWithDiagnostics(layers).configs;
-}
-
-export function loadMergedAgentConfigsWithDiagnostics(
-  baseAgentsDir: string,
-  overrideAgentsDir: string,
-): AgentConfigLoadResult {
-  return loadLayeredAgentConfigsWithDiagnostics([
-    { dir: baseAgentsDir, source: "default" },
-    { dir: overrideAgentsDir, source: "user" },
-  ]);
-}
-
-export function loadMergedAgentConfigs(
-  baseAgentsDir: string,
-  overrideAgentsDir: string,
-): Map<string, AgentConfig> {
-  return loadMergedAgentConfigsWithDiagnostics(baseAgentsDir, overrideAgentsDir)
-    .configs;
 }
 
 export function formatAgentGuidelines(

@@ -5,16 +5,12 @@ import * as path from "node:path";
 import { afterEach, test } from "node:test";
 import {
   buildAgentConfigLayers,
-  buildPackageAgentLayers,
   formatAgentGuidelines,
   formatInvalidAgentFilesWarning,
-  getDefaultAgentsDir,
   loadAgentConfigs,
   loadAgentConfigsWithDiagnostics,
   loadLayeredAgentConfigs,
   loadLayeredAgentConfigsWithDiagnostics,
-  loadMergedAgentConfigs,
-  loadMergedAgentConfigsWithDiagnostics,
   parseAgentConfig,
 } from "./agents.ts";
 import { EFFORTS } from "./types.ts";
@@ -118,7 +114,7 @@ test("loadAgentConfigs returns markdown agents keyed by name", async () => {
 
   assert.equal(configs.size, 2);
   assert.equal(configs.get("one")?.description, "First");
-  assert.equal(configs.get("one")?.source, "default");
+  assert.equal(configs.get("one")?.source, undefined);
   assert.equal(configs.get("one")?.systemPrompt, "One prompt");
   assert.equal(configs.get("two")?.description, "Second");
   assert.equal(configs.get("two")?.systemPrompt, "Two prompt");
@@ -199,40 +195,6 @@ test("loadAgentConfigs returns an empty map when directory is missing", () => {
   assert.equal(configs.size, 0);
 });
 
-test("loadMergedAgentConfigs lets override agents replace bundled agents", async () => {
-  const bundledDir = await makeTempDir();
-  const userDir = await makeTempDir();
-
-  await fs.promises.writeFile(
-    path.join(bundledDir, "code-reviewer.md"),
-    "---\ndescription: Bundled reviewer\n---\n\nBundled prompt\n",
-  );
-  await fs.promises.writeFile(
-    path.join(bundledDir, "general-purpose.md"),
-    "---\ndescription: General\n---\n\nGeneral prompt\n",
-  );
-  await fs.promises.writeFile(
-    path.join(userDir, "code-reviewer.md"),
-    "---\ndescription: User reviewer\nmodel: custom\n---\n\nUser prompt\n",
-  );
-  await fs.promises.writeFile(
-    path.join(userDir, "specialist.md"),
-    "---\ndescription: Specialist\n---\n\nSpecialist prompt\n",
-  );
-
-  const configs = loadMergedAgentConfigs(bundledDir, userDir);
-
-  assert.equal(configs.size, 3);
-  assert.equal(configs.get("code-reviewer")?.description, "User reviewer");
-  assert.equal(configs.get("code-reviewer")?.source, "user");
-  assert.equal(configs.get("code-reviewer")?.model, "custom");
-  assert.equal(configs.get("code-reviewer")?.systemPrompt, "User prompt");
-  assert.equal(configs.get("general-purpose")?.source, "default");
-  assert.equal(configs.get("general-purpose")?.systemPrompt, "General prompt");
-  assert.equal(configs.get("specialist")?.source, "user");
-  assert.equal(configs.get("specialist")?.systemPrompt, "Specialist prompt");
-});
-
 test("formatAgentGuidelines renders available agents as tool-specific guidelines", () => {
   const configs = new Map([
     [
@@ -281,136 +243,10 @@ test("formatInvalidAgentFilesWarning renders invalid files for UI notification",
   );
 });
 
-test("getDefaultAgentsDir decodes percent-encoded paths", () => {
-  const url = "file:///home/user/my%20project/extensions/subagent/index.js";
-  const dir = getDefaultAgentsDir(url);
-  assert.ok(!dir.includes("%20"), "path must not contain URL encoding");
-  assert.ok(dir.includes("my project"), "path must decode spaces");
-});
-
-test("buildPackageAgentLayers maps installed package roots with agents directories to package agent layers", async () => {
-  const dir = await makeTempDir();
-  const packageOne = path.join(dir, "one");
-  const packageTwo = path.join(dir, "two");
-  const packageWithoutAgents = path.join(dir, "without-agents");
-  await fs.promises.mkdir(path.join(packageOne, "agents"), { recursive: true });
-  await fs.promises.mkdir(path.join(packageTwo, "agents"), { recursive: true });
-  await fs.promises.mkdir(packageWithoutAgents, { recursive: true });
-
-  const layers = buildPackageAgentLayers(
-    [
-      {
-        source: "git:github.com/example/one",
-        scope: "user",
-        installedPath: packageOne,
-      },
-      {
-        source: "git:github.com/example/missing",
-        scope: "user",
-      },
-      {
-        source: "npm:without-agents",
-        scope: "user",
-        installedPath: packageWithoutAgents,
-      },
-      {
-        source: "npm:two",
-        scope: "project",
-        installedPath: packageTwo,
-      },
-    ],
-    true,
-  );
-
-  assert.deepEqual(layers, [
-    { dir: path.join(packageOne, "agents"), source: "package" },
-    { dir: path.join(packageTwo, "agents"), source: "package" },
-  ]);
-});
-
-test("buildPackageAgentLayers excludes project packages when the project is untrusted", async () => {
-  const dir = await makeTempDir();
-  const userPackage = path.join(dir, "user-package");
-  const projectPackage = path.join(dir, "project-package");
-  await fs.promises.mkdir(path.join(userPackage, "agents"), {
-    recursive: true,
-  });
-  await fs.promises.mkdir(path.join(projectPackage, "agents"), {
-    recursive: true,
-  });
-
-  assert.deepEqual(
-    buildPackageAgentLayers([
-      { source: "npm:user", scope: "user", installedPath: userPackage },
-      {
-        source: "npm:project",
-        scope: "project",
-        installedPath: projectPackage,
-      },
-    ]),
-    [{ dir: path.join(userPackage, "agents"), source: "package" }],
-  );
-});
-
-test("buildAgentConfigLayers inserts package layers between default and user layers", () => {
-  const layers = buildAgentConfigLayers(
-    "/tmp/customer-project",
-    "/tmp/user-agent",
-    "file:///tmp/pi-subagent/extensions/subagent/index.ts",
-    "/tmp/config-project",
-    true,
-    [
-      { dir: "/tmp/pkg-one/agents", source: "package" },
-      { dir: "/tmp/pkg-two/agents", source: "package" },
-    ],
-  );
-
-  assert.deepEqual(layers, [
-    { dir: "/tmp/pi-subagent/agents", source: "default" },
-    { dir: "/tmp/pkg-one/agents", source: "package" },
-    { dir: "/tmp/pkg-two/agents", source: "package" },
-    { dir: "/tmp/user-agent/agents", source: "user" },
-    { dir: "/tmp/config-project/.pi/agents", source: "project" },
-  ]);
-});
-
-test("buildAgentConfigLayers excludes package layer matching the default agents directory", () => {
-  const moduleUrl = "file:///tmp/pi-subagent/extensions/subagent/index.ts";
-  const defaultDir = getDefaultAgentsDir(moduleUrl);
-
-  const layers = buildAgentConfigLayers(
-    "/tmp/customer-project",
-    "/tmp/user-agent",
-    moduleUrl,
-    "/tmp/config-project",
-    true,
-    [
-      { dir: "/tmp/pkg-one/agents", source: "package" },
-      { dir: defaultDir, source: "package" },
-    ],
-  );
-
-  assert.deepEqual(layers, [
-    { dir: defaultDir, source: "default" },
-    { dir: "/tmp/pkg-one/agents", source: "package" },
-    { dir: "/tmp/user-agent/agents", source: "user" },
-    { dir: "/tmp/config-project/.pi/agents", source: "project" },
-  ]);
-});
-
 test("buildAgentConfigLayers anchors project and user agents to configured directories", () => {
-  const moduleUrl = new URL("./index.js", import.meta.url).href;
-
   assert.deepEqual(
-    buildAgentConfigLayers(
-      "/tmp/customer-project",
-      "/tmp/user-agent",
-      moduleUrl,
-      "/tmp/customer-project",
-      true,
-    ),
+    buildAgentConfigLayers("/tmp/customer-project", "/tmp/user-agent", true),
     [
-      { dir: getDefaultAgentsDir(moduleUrl), source: "default" },
       { dir: "/tmp/user-agent/agents", source: "user" },
       { dir: "/tmp/customer-project/.pi/agents", source: "project" },
     ],
@@ -418,95 +254,20 @@ test("buildAgentConfigLayers anchors project and user agents to configured direc
 });
 
 test("buildAgentConfigLayers excludes project agents when the project is untrusted", () => {
-  const moduleUrl = new URL("./index.js", import.meta.url).href;
-
   assert.deepEqual(
-    buildAgentConfigLayers(
-      "/tmp/customer-project",
-      "/tmp/user-agent",
-      moduleUrl,
-      "/tmp/customer-project",
-      false,
-      [],
-    ),
-    [
-      { dir: getDefaultAgentsDir(moduleUrl), source: "default" },
-      { dir: "/tmp/user-agent/agents", source: "user" },
-    ],
+    buildAgentConfigLayers("/tmp/customer-project", "/tmp/user-agent", false),
+    [{ dir: "/tmp/user-agent/agents", source: "user" }],
   );
 });
 
-test("buildAgentConfigLayers can load project agents from config cwd", () => {
-  const moduleUrl = new URL("./index.js", import.meta.url).href;
-
-  assert.deepEqual(
-    buildAgentConfigLayers(
-      "/tmp/customer-project",
-      "/tmp/user-agent",
-      moduleUrl,
-      "/tmp/host-project",
-      true,
-    ),
-    [
-      { dir: getDefaultAgentsDir(moduleUrl), source: "default" },
-      { dir: "/tmp/user-agent/agents", source: "user" },
-      { dir: "/tmp/host-project/.pi/agents", source: "project" },
-    ],
-  );
-});
-
-test("loadMergedAgentConfigs tolerates a missing override directory", async () => {
-  const bundledDir = await makeTempDir();
-  await fs.promises.writeFile(
-    path.join(bundledDir, "general-purpose.md"),
-    "---\ndescription: General\n---\n\nGeneral prompt\n",
-  );
-
-  const missingOverrideDir = path.join(await makeTempDir(), "missing");
-  const configs = loadMergedAgentConfigs(bundledDir, missingOverrideDir);
-
-  assert.equal(configs.size, 1);
-  assert.equal(configs.get("general-purpose")?.description, "General");
-});
-
-test("loadMergedAgentConfigsWithDiagnostics combines invalid bundled and override files", async () => {
-  const bundledDir = await makeTempDir();
-  const userDir = await makeTempDir();
-  await fs.promises.writeFile(
-    path.join(bundledDir, "valid.md"),
-    "---\ndescription: Valid\n---\n\nValid prompt\n",
-  );
-  await fs.promises.writeFile(path.join(bundledDir, "bad-base.md"), "Prompt\n");
-  await fs.promises.writeFile(
-    path.join(userDir, "bad-user.md"),
-    "---\ndescription: Bad user\n---\n\n",
-  );
-
-  const result = loadMergedAgentConfigsWithDiagnostics(bundledDir, userDir);
-
-  assert.equal(result.configs.size, 1);
-  assert.deepEqual(
-    result.invalidFiles.map((invalid) => path.basename(invalid.filePath)),
-    ["bad-base.md", "bad-user.md"],
-  );
-});
-
-test("loadLayeredAgentConfigsWithDiagnostics loads package agents between default and user agents", async () => {
+test("loadLayeredAgentConfigs lets project agents override user agents", async () => {
   const dir = await makeTempDir();
-  const defaultDir = path.join(dir, "default", "agents");
-  const packageDir = path.join(dir, "pkg", "agents");
   const userDir = path.join(dir, "user", "agents");
   const projectDir = path.join(dir, "project", ".pi", "agents");
 
-  await writeAgent(defaultDir, "shared", "default shared", "Default prompt");
-  await writeAgent(packageDir, "shared", "package shared", "Package prompt");
-  await writeAgent(
-    packageDir,
-    "package-only",
-    "package only",
-    "Package-only prompt",
-  );
   await writeAgent(userDir, "shared", "user shared", "User prompt");
+  await writeAgent(userDir, "user-only", "user only", "User-only prompt");
+  await writeAgent(projectDir, "shared", "project shared", "Project prompt");
   await writeAgent(
     projectDir,
     "project-only",
@@ -514,131 +275,22 @@ test("loadLayeredAgentConfigsWithDiagnostics loads package agents between defaul
     "Project prompt",
   );
 
-  const result = loadLayeredAgentConfigsWithDiagnostics([
-    { dir: defaultDir, source: "default" },
-    { dir: packageDir, source: "package" },
-    { dir: userDir, source: "user" },
-    { dir: projectDir, source: "project" },
-  ]);
-
-  assert.equal(result.invalidFiles.length, 0);
-  assert.equal(result.configs.get("shared")?.source, "user");
-  assert.equal(result.configs.get("shared")?.description, "user shared");
-  assert.equal(result.configs.get("package-only")?.source, "package");
-  assert.equal(
-    result.configs.get("package-only")?.systemPrompt,
-    "Package-only prompt",
-  );
-  assert.equal(result.configs.get("project-only")?.source, "project");
-});
-
-test("later package agent layers override earlier package agent layers", async () => {
-  const dir = await makeTempDir();
-  const packageOneDir = path.join(dir, "pkg-one", "agents");
-  const packageTwoDir = path.join(dir, "pkg-two", "agents");
-
-  await writeAgent(packageOneDir, "duplicate", "first package", "First prompt");
-  await writeAgent(
-    packageTwoDir,
-    "duplicate",
-    "second package",
-    "Second prompt",
-  );
-
-  const result = loadLayeredAgentConfigsWithDiagnostics([
-    { dir: packageOneDir, source: "package" },
-    { dir: packageTwoDir, source: "package" },
-  ]);
-
-  assert.equal(result.invalidFiles.length, 0);
-  assert.equal(result.configs.get("duplicate")?.source, "package");
-  assert.equal(result.configs.get("duplicate")?.description, "second package");
-  assert.equal(result.configs.get("duplicate")?.systemPrompt, "Second prompt");
-});
-
-test("invalid package agent files are reported through diagnostics", async () => {
-  const dir = await makeTempDir();
-  const packageDir = path.join(dir, "pkg", "agents");
-  await fs.promises.mkdir(packageDir, { recursive: true });
-  await fs.promises.writeFile(
-    path.join(packageDir, "broken.md"),
-    "---\nmodel: inherit\n---\n\nMissing a description.\n",
-  );
-
-  const result = loadLayeredAgentConfigsWithDiagnostics([
-    { dir: packageDir, source: "package" },
-  ]);
-
-  assert.equal(result.configs.size, 0);
-  assert.equal(result.invalidFiles.length, 1);
-  assert.equal(
-    result.invalidFiles[0]?.reason,
-    "missing required description frontmatter",
-  );
-  assert.equal(
-    result.invalidFiles[0]?.filePath,
-    path.join(packageDir, "broken.md"),
-  );
-});
-
-test("loadLayeredAgentConfigs merges three layers with correct priority", async () => {
-  const bundledDir = await makeTempDir();
-  const userDir = await makeTempDir();
-  const projectDir = await makeTempDir();
-
-  await fs.promises.writeFile(
-    path.join(bundledDir, "general-purpose.md"),
-    "---\ndescription: Bundled general\n---\n\nBundled general prompt\n",
-  );
-  await fs.promises.writeFile(
-    path.join(bundledDir, "code-reviewer.md"),
-    "---\ndescription: Bundled reviewer\n---\n\nBundled reviewer prompt\n",
-  );
-  await fs.promises.writeFile(
-    path.join(userDir, "code-reviewer.md"),
-    "---\ndescription: User reviewer\n---\n\nUser reviewer prompt\n",
-  );
-  await fs.promises.writeFile(
-    path.join(userDir, "user-only.md"),
-    "---\ndescription: User only\n---\n\nUser only prompt\n",
-  );
-  await fs.promises.writeFile(
-    path.join(projectDir, "code-reviewer.md"),
-    "---\ndescription: Project reviewer\n---\n\nProject reviewer prompt\n",
-  );
-  await fs.promises.writeFile(
-    path.join(projectDir, "project-only.md"),
-    "---\ndescription: Project only\n---\n\nProject only prompt\n",
-  );
-
   const configs = loadLayeredAgentConfigs([
-    { dir: bundledDir, source: "default" },
     { dir: userDir, source: "user" },
     { dir: projectDir, source: "project" },
   ]);
 
-  assert.equal(configs.size, 4);
-  // Project wins over user and bundled
-  assert.equal(configs.get("code-reviewer")?.description, "Project reviewer");
-  assert.equal(configs.get("code-reviewer")?.source, "project");
-  // Bundled agent survives when not overridden
-  assert.equal(configs.get("general-purpose")?.source, "default");
-  // User-only agent survives
+  assert.equal(configs.size, 3);
+  assert.equal(configs.get("shared")?.description, "project shared");
+  assert.equal(configs.get("shared")?.source, "project");
   assert.equal(configs.get("user-only")?.source, "user");
-  // Project-only agent present
   assert.equal(configs.get("project-only")?.source, "project");
 });
 
-test("loadLayeredAgentConfigsWithDiagnostics aggregates invalid files across all layers", async () => {
-  const bundledDir = await makeTempDir();
+test("loadLayeredAgentConfigsWithDiagnostics aggregates invalid user and project files", async () => {
   const userDir = await makeTempDir();
   const projectDir = await makeTempDir();
 
-  await fs.promises.writeFile(
-    path.join(bundledDir, "valid.md"),
-    "---\ndescription: Valid\n---\n\nValid prompt\n",
-  );
-  await fs.promises.writeFile(path.join(bundledDir, "bad-base.md"), "Prompt\n");
   await fs.promises.writeFile(
     path.join(userDir, "bad-user.md"),
     "---\ndescription: Bad user\n---\n\n",
@@ -649,36 +301,27 @@ test("loadLayeredAgentConfigsWithDiagnostics aggregates invalid files across all
   );
 
   const result = loadLayeredAgentConfigsWithDiagnostics([
-    { dir: bundledDir, source: "default" },
     { dir: userDir, source: "user" },
     { dir: projectDir, source: "project" },
   ]);
 
-  assert.equal(result.configs.size, 1);
+  assert.equal(result.configs.size, 0);
   assert.deepEqual(
     result.invalidFiles.map((invalid) => path.basename(invalid.filePath)),
-    ["bad-base.md", "bad-user.md", "bad-project.md"],
+    ["bad-user.md", "bad-project.md"],
   );
 });
 
 test("loadLayeredAgentConfigs tolerates missing directories in any layer", async () => {
-  const bundledDir = await makeTempDir();
-  await fs.promises.writeFile(
-    path.join(bundledDir, "general-purpose.md"),
-    "---\ndescription: General\n---\n\nGeneral prompt\n",
-  );
-
   const missingUser = path.join(await makeTempDir(), "missing-user");
   const missingProject = path.join(await makeTempDir(), "missing-project");
 
   const configs = loadLayeredAgentConfigs([
-    { dir: bundledDir, source: "default" },
     { dir: missingUser, source: "user" },
     { dir: missingProject, source: "project" },
   ]);
 
-  assert.equal(configs.size, 1);
-  assert.equal(configs.get("general-purpose")?.description, "General");
+  assert.equal(configs.size, 0);
 });
 
 async function writeAgentWithFrontmatter(

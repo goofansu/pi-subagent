@@ -54,21 +54,17 @@ native instructions.
 
 ## Agent discovery
 
-Pi discovers bundled agents, agents from installed packages, and user and
-project agents. A higher-priority file replaces a lower-priority file with the
-same name.
+Pi discovers user and project agents. A project file replaces a user file with
+the same name.
 
 | Priority | Scope | Location |
 | --- | --- | --- |
 | 1 | project | `.pi/agents/` |
 | 2 | user | `~/.pi/agent/agents/` |
-| 3 | package | installed package `agents/` directories |
-| 4 | bundled | `agents/` |
 
-Project agents and project-scoped package agents are discovered only when Pi
-trusts the working directory. For example,
-`~/.pi/agent/agents/security-reviewer.md` defines a user agent, which a trusted
-project can override with `.pi/agents/security-reviewer.md`.
+Project agents are discovered only when Pi trusts the working directory. For
+example, `~/.pi/agent/agents/security-reviewer.md` defines a user agent, which a
+trusted project can override with `.pi/agents/security-reviewer.md`.
 
 ## Agent profiles
 

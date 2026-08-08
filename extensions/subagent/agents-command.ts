@@ -31,14 +31,7 @@ type KeybindingMatcher = {
 };
 
 function formatAgentListDescription(agent: AgentConfig): string {
-  const prefix =
-    agent.source === "project"
-      ? "[p]"
-      : agent.source === "user"
-        ? "[u]"
-        : agent.source === "package"
-          ? "[t]"
-          : "[d]";
+  const prefix = agent.source === "project" ? "[p]" : "[u]";
   const harness = ` [${resolveHarness(agent)}]`;
   return `${prefix}${harness} ${agent.description}`;
 }

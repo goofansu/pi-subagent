@@ -143,7 +143,7 @@ export type DisplayItem =
   | { type: "text"; text: string }
   | { type: "toolCall"; name: string; args: Record<string, unknown> };
 
-export type AgentSource = "default" | "package" | "user" | "project";
+export type AgentSource = "user" | "project";
 
 export interface AgentConfig {
   name: string;

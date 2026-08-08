@@ -26,7 +26,7 @@ const exploreAgent: AgentConfig = {
   model: "inherit",
   tools: "read,rg",
   systemPrompt: "# Explore\n\nRead files and report findings.",
-  source: "default",
+  source: "user",
 };
 
 const reviewAgent: AgentConfig = {
@@ -43,13 +43,6 @@ const projectAgent: AgentConfig = {
   source: "project",
 };
 
-const packageAgent: AgentConfig = {
-  name: "packaged",
-  description: "Installed package agent.",
-  systemPrompt: "Run from installed package.",
-  source: "package",
-};
-
 test("getAgentSelectItems includes the resolved default harness", () => {
   const items = getAgentSelectItems(
     new Map([[exploreAgent.name, exploreAgent]]),
@@ -59,7 +52,7 @@ test("getAgentSelectItems includes the resolved default harness", () => {
     {
       value: "explore",
       label: "explore",
-      description: "[d] [pi] Fast codebase exploration.",
+      description: "[u] [pi] Fast codebase exploration.",
     },
   ]);
 });
@@ -90,20 +83,6 @@ test("getAgentSelectItems prefixes project agents", () => {
   ]);
 });
 
-test("getAgentSelectItems labels package agents with [t]", () => {
-  const items = getAgentSelectItems(
-    new Map([[packageAgent.name, packageAgent]]),
-  );
-
-  assert.deepEqual(items, [
-    {
-      value: "packaged",
-      label: "packaged",
-      description: "[t] [pi] Installed package agent.",
-    },
-  ]);
-});
-
 test("getFilteredAgentSelectItems filters agents by name and description", () => {
   const items = getAgentSelectItems(
     new Map([
@@ -116,7 +95,7 @@ test("getFilteredAgentSelectItems filters agents by name and description", () =>
     {
       value: "explore",
       label: "explore",
-      description: "[d] [pi] Fast codebase exploration.",
+      description: "[u] [pi] Fast codebase exploration.",
     },
   ]);
   assert.deepEqual(getFilteredAgentSelectItems(items, "reviewer"), [
