@@ -1,6 +1,6 @@
 # pi-subagent
 
-Delegate tasks to specialized subagents with isolated context windows in Pi.
+Delegate tasks to specialized subagents with isolated context windows in pi.
 
 Each agent runs on a **harness** selected by its profile, so the calling agent
 picks a role to delegate to without having to configure a backend.
@@ -41,7 +41,7 @@ body are required. Invalid files are skipped and reported at session start.
 Harness-specific field behavior:
 
 - `pi`: omitting `model` uses the parent model. `tools` controls the available
-  Pi tools; omit it to use Pi's defaults.
+  pi tools; omit it to use pi's defaults.
 - `claude`: omitting `model` uses Claude Code's default model. Declaring `tools`
   makes the profile invalid.
 - `codex`: omitting `model` uses Codex's default model. Declaring `tools` makes
@@ -54,7 +54,7 @@ native instructions.
 ## Agent discovery
 
 Pi discovers user and project agents. A project file replaces a user file with
-the same name. Here, **project** means Pi's current working directory.
+the same name. Here, **project** means pi's current working directory.
 
 | Priority | Scope | Location |
 | --- | --- | --- |
@@ -71,10 +71,10 @@ The profiles below use the same role and prompt to highlight harness-specific
 configuration and runtime behavior. Pi reports incompatible or missing
 harnesses at session start.
 
-### Pi
+### pi
 
-- Runs on Pi itself.
-- Uses the current Pi installation.
+- Runs on pi itself.
+- Uses the current pi installation.
 - Is the default harness and supports profile-controlled tools.
 
 ```markdown
@@ -92,7 +92,7 @@ You are an implementation agent. Follow the approved plan and verify your work.
 
 - Runs on Claude Code with its native tools and approvals bypassed.
 - Uses the Claude Agent SDK bundled with this package. Reinstall pi-subagent if
-  Pi reports that the SDK is missing; a separately installed global Claude Code
+  pi reports that the SDK is missing; a separately installed global Claude Code
   CLI is not used.
 - Accepts aliases such as `opus`, `sonnet`, and `haiku`; use a full model ID when
   you need a fixed version.
@@ -137,12 +137,12 @@ Runs have no automatic time limit.
 
 ### Cancellation
 
-Press `Esc` to cancel the current Pi turn. This cancels all of its running and
+Press `Esc` to cancel the current pi turn. This cancels all of its running and
 queued subagent calls; there is no per-subagent cancellation control. A queued
 run that is cancelled never starts.
 
 Cancel a stuck run with `Esc`. Output produced before cancellation remains in
-the subagent tool result in the parent Pi session. A run cancelled while still
+the subagent tool result in the parent pi session. A run cancelled while still
 queued has no output to retain.
 
 ## Technique details
@@ -150,7 +150,7 @@ queued has no output to retain.
 ### Permissions and tools
 
 - `pi`: supports a profile-defined `tools` list. Use a read-only list when you
-  need a restricted agent. A child Pi process does not register this extension's
+  need a restricted agent. A child pi process does not register this extension's
   tool or commands.
 - `claude`: runs headlessly with approvals bypassed and receives an explicit
   allowlist of working tools. Agent-spawning tools and deferred tool discovery
@@ -169,14 +169,14 @@ with shell access can still invoke another CLI directly.
 
 ### Project configuration gating
 
-Subagents derive a conservative **project configuration permission** from Pi's
+Subagents derive a conservative **project configuration permission** from pi's
 trust decision. The permission is resolved once at session start and reused by
 every subagent that session; unknown state is treated as denied.
 
-It is enabled when Pi trusts the project **and** either:
+It is enabled when pi trusts the project **and** either:
 
-- the directory holds resources that made Pi actually gate on trust, or
-- Pi's trust store records a positive decision for the directory or an ancestor.
+- the directory holds resources that made pi actually gate on trust, or
+- pi's trust store records a positive decision for the directory or an ancestor.
 
 Pi reports a project as trusted without asking anyone when there is nothing to
 gate. That vacuous answer is not forwarded to children as approval: a checkout
@@ -186,7 +186,7 @@ child spawned later would pick it up without anyone having decided.
 - **Enabled:** the selected harness loads its project settings and resources
   normally, and `.pi/agents` profiles are discovered.
 - **Disabled:** `.pi/agents` profiles are skipped — `/agents` says so, and
-  `/trust` plus a Pi restart enables them — and harness behavior differs:
+  `/trust` plus a pi restart enables them — and harness behavior differs:
 
   - `pi`: does not load project settings or executable integrations, but still
     loads context files such as `AGENTS.md` and `CLAUDE.md`.
