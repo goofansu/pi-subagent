@@ -6,6 +6,7 @@
 
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
+import type { Message } from "@earendil-works/pi-ai";
 import type { SubagentExecutor, SubagentRun } from "./run.ts";
 import { createEmptyResult } from "./run.ts";
 import type { RunSubagentOptions } from "./runner.ts";
@@ -33,6 +34,26 @@ afterEach(() => {
   else delete process.env.PI_SUBAGENT_DEPTH;
 });
 
+function assistantMessage(): Message {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "ran the agent" }],
+    api: "anthropic-messages",
+    provider: "test-provider",
+    model: "test-model",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 0,
+  } as Message;
+}
+
 /** An executor that records what it was handed and reports a canned success. */
 function recordingExecutor(): {
   execute: SubagentExecutor;
@@ -41,27 +62,8 @@ function recordingExecutor(): {
   const calls: SubagentRun[] = [];
   const execute: SubagentExecutor = async (run) => {
     calls.push(run);
-    run.emit();
-    run.result.messages.push({
-      role: "assistant",
-      content: [{ type: "text", text: "ran the agent" }],
-      api: "anthropic-messages",
-      provider: "test-provider",
-      model: "test-model",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
-      timestamp: 0,
-    });
-    run.result.exitCode = 0;
-    run.emit();
-    return run.result;
+    run.report.message(assistantMessage());
+    return { exitCode: 0 };
   };
   return { execute, calls };
 }
@@ -221,29 +223,74 @@ test("startSubagent centrally maps every outcome to a terminal state", async () 
     { exitCode: 1, stopReason: "aborted", expected: "aborted" },
   ] as const;
 
-  for (const outcome of cases) {
-    let stateSeenByExecutor: SingleResult["status"] | undefined;
-    const execute: SubagentExecutor = async (run) => {
-      stateSeenByExecutor = run.result.status;
-      run.result.exitCode = outcome.exitCode;
-      run.result.stopReason = outcome.stopReason;
-      return run.result;
-    };
+  for (const { expected, ...outcome } of cases) {
+    const execute: SubagentExecutor = async () => outcome;
     const times = [100, 700];
 
     const result = await startAndSettle({
       config: agent(),
-      description: outcome.expected,
+      description: expected,
       prompt: "go",
       execute,
       now: () => times.shift() ?? assert.fail("unexpected clock read"),
     });
 
-    assert.equal(stateSeenByExecutor, "running");
-    assert.equal(result.status, outcome.expected);
+    assert.equal(result.status, expected);
     assert.equal(result.startedAt, 100);
     assert.equal(result.finishedAt, 700);
   }
+});
+
+test("the fold derives usage and activity from reported messages", async () => {
+  const execute: SubagentExecutor = async (run) => {
+    run.report.message({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call-1",
+          name: "grep",
+          arguments: { pattern: "TODO" },
+        },
+      ],
+      usage: { input: 7, cost: { total: 0.5 } },
+      // biome-ignore lint/suspicious/noExplicitAny: a partial message is enough
+    } as any);
+    return { exitCode: 0 };
+  };
+
+  const result = await startAndSettle({
+    config: agent(),
+    description: "task",
+    prompt: "go",
+    execute,
+  });
+
+  // Derived, not reported: the executor named a message, and the dispatcher's
+  // fold worked out what it means for usage and activity.
+  assert.equal(result.usage.turns, 1);
+  assert.equal(result.usage.input, 7);
+  assert.equal(result.usage.cost, 0.5);
+  assert.equal(result.activity, "grep: TODO");
+});
+
+test("a transcript snapshot replaces the streamed fold, healing usage", async () => {
+  const execute: SubagentExecutor = async (run) => {
+    run.report.message(assistantMessage());
+    run.report.message(assistantMessage());
+    run.report.transcript([assistantMessage()]);
+    return { exitCode: 0 };
+  };
+
+  const result = await startAndSettle({
+    config: agent(),
+    description: "task",
+    prompt: "go",
+    execute,
+  });
+
+  assert.equal(result.messages.length, 1);
+  assert.equal(result.usage.turns, 1, "the snapshot is authoritative");
 });
 
 test("startSubagent omits effort when the profile does not configure it", async () => {
@@ -263,9 +310,9 @@ test("startSubagent omits effort when the profile does not configure it", async 
 
 test("a run cancelled before it starts never spawns a child", async () => {
   let executorCalls = 0;
-  const execute: SubagentExecutor = async (run) => {
+  const execute: SubagentExecutor = async () => {
     executorCalls++;
-    return run.result;
+    return { exitCode: 0 };
   };
   const controller = new AbortController();
   controller.abort();
@@ -290,10 +337,9 @@ test("a run cancelled before it starts never spawns a child", async () => {
 test("a started run stays tracked after it settles, until its delivery", async () => {
   const runs = createSubagentRuns();
   const seen: number[] = [];
-  const execute: SubagentExecutor = async (run) => {
+  const execute: SubagentExecutor = async () => {
     seen.push(runs.size());
-    run.result.exitCode = 0;
-    return run.result;
+    return { exitCode: 0 };
   };
 
   const started = startSubagent({
@@ -318,9 +364,7 @@ test("the registry can cancel one run without touching the turn", async () => {
     const [id] = runs.list().map((view) => view.id);
     runs.cancel([id]);
     sawAbort = run.signal?.aborted ?? false;
-    run.result.exitCode = 1;
-    run.result.stopReason = "aborted";
-    return run.result;
+    return { exitCode: 1, stopReason: "aborted" };
   };
 
   const started = startSubagent({

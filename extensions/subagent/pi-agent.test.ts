@@ -10,7 +10,6 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { getFinalOutput } from "./messages.ts";
 import {
-  applyPiJsonEvent,
   buildPiArgs,
   createNdjsonBuffer,
   getPiInvocation,
@@ -19,8 +18,9 @@ import {
   resolveSubagentModel,
   resolveSubagentThinking,
   runPiAgent,
+  translatePiJsonEvent,
 } from "./pi-agent.ts";
-import { createEmptyResult } from "./run.ts";
+import { applyOutcome, createEmptyResult, createRunReporter } from "./run.ts";
 import type { AgentConfig, SingleResult } from "./types.ts";
 
 function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -211,9 +211,10 @@ async function runPiFixture(
 ): Promise<SingleResult> {
   const shadow = shadowPiBinary(script);
   const result = createEmptyResult("worker", "Work", 0);
+  const report = createRunReporter(result, () => options.onEmit?.(result));
 
   try {
-    return await runPiAgent(
+    const outcome = await runPiAgent(
       {
         task: {
           config: agent({ systemPrompt: "" }),
@@ -223,14 +224,17 @@ async function runPiFixture(
           depth: 0,
           projectTrusted: false,
         },
-        result,
-        emit: () => options.onEmit?.(result),
+        report,
         signal: options.signal,
       },
       options.killEscalationMs === undefined
         ? {}
         : { killEscalationMs: options.killEscalationMs },
     );
+    // What the dispatcher does with the outcome, so assertions stay written
+    // in result terms.
+    applyOutcome(result, outcome);
+    return result;
   } finally {
     shadow.restore();
   }
@@ -555,11 +559,12 @@ test("getSpawnOptions runs child pi in the configured project cwd", () => {
   assert.equal(options.env?.PI_SUBAGENT_DEPTH, "1");
 });
 
-test("applyPiJsonEvent collects final messages from agent_end events", () => {
+test("an agent_end event reaches the record as the transcript fact", () => {
   const current = createEmptyResult("general-purpose", "test", 0);
+  const report = createRunReporter(current, () => {});
 
   assert.equal(
-    applyPiJsonEvent(
+    translatePiJsonEvent(
       {
         type: "agent_end",
         messages: [
@@ -570,7 +575,7 @@ test("applyPiJsonEvent collects final messages from agent_end events", () => {
           },
         ],
       },
-      current,
+      report,
     ),
     true,
   );

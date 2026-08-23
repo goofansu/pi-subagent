@@ -1,18 +1,19 @@
 /**
- * The dispatcher. It enforces the nesting depth guard, settles lifecycle state,
- * and plumbs progress updates — the rules that apply to a subagent run whatever
- * it does.
+ * The dispatcher. It enforces the nesting depth guard, owns the run record —
+ * the executor reports facts, the fold here writes them — and settles
+ * lifecycle state: the rules that apply to a subagent run whatever it does.
  *
  * It deliberately imposes no concurrency cap; see
  * docs/adr/0001-unbounded-subagent-concurrency.md.
  */
 
-import { runPiAgent } from "./pi-agent.ts";
+import { resolveSubagentModel, runPiAgent } from "./pi-agent.ts";
 import type { ParentModel, SubagentExecutor, SubagentTask } from "./run.ts";
 import {
+  applyOutcome,
   createEmptyResult,
+  createRunReporter,
   DEPTH_ENV_KEY,
-  settleAborted,
   settleResultLifecycle,
 } from "./run.ts";
 import type { SubagentRuns } from "./runs.ts";
@@ -85,6 +86,10 @@ export function startSubagent({
 
   const result = createEmptyResult(config.name, description, now());
   if (config.effort) result.effort = config.effort;
+  // The model the run is headed for, before its child has said anything; the
+  // fold refines it from each assistant message once the child speaks.
+  const resolvedModel = resolveSubagentModel(config, parentModel);
+  if (resolvedModel) result.model = resolvedModel;
 
   const task: SubagentTask = {
     config,
@@ -113,6 +118,9 @@ export function startSubagent({
   // It cannot go back into the transcript: a detached run's tool-call row is
   // already final by the time its child says anything.
   const emit = () => handle.changed();
+  // The executor reports facts; the fold behind this reporter is the only
+  // writer of the record, and it emits after every fact it folds.
+  const report = createRunReporter(result, emit);
 
   const settled = (async (): Promise<SingleResult> => {
     try {
@@ -122,21 +130,21 @@ export function startSubagent({
       // A run cancelled before it starts must not spawn a child at all. The
       // executor would otherwise spawn one and kill it a moment later.
       if (controller.signal.aborted) {
-        settleAborted(result);
+        applyOutcome(result, { exitCode: 1, stopReason: "aborted" });
         settleResultLifecycle(result, now());
         emit();
         return result;
       }
 
-      const finished = await execute({
+      const outcome = await execute({
         task,
-        result,
-        emit,
+        report,
         signal: controller.signal,
       });
-      settleResultLifecycle(finished, now());
+      applyOutcome(result, outcome);
+      settleResultLifecycle(result, now());
       emit();
-      return finished;
+      return result;
     } finally {
       signal?.removeEventListener("abort", forwardAbort);
     }

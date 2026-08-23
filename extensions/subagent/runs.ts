@@ -15,7 +15,6 @@
  * the transcript holds it from then on.
  */
 
-import { deriveActivity } from "./messages.ts";
 import type { LifecycleStatus, SingleResult } from "./types.ts";
 
 /** How often elapsed times are republished while a run is unfinished. */
@@ -146,7 +145,6 @@ export function createSubagentRuns(
   const project = (run: TrackedRun): RunView => {
     const { result } = run;
     const end = result.finishedAt ?? clock.now();
-    const activity = deriveActivity(result.messages);
     return {
       id: run.id,
       agent: result.agent,
@@ -154,7 +152,9 @@ export function createSubagentRuns(
       status: result.status,
       elapsedMs: Math.max(0, end - result.startedAt),
       cost: result.usage.cost,
-      ...(activity ? { activity } : {}),
+      // Recorded by the dispatcher's fold as messages arrive; the registry
+      // never looks inside a transcript.
+      ...(result.activity ? { activity: result.activity } : {}),
     };
   };
 

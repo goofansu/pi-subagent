@@ -4,7 +4,7 @@ Date: 2026-08-24
 
 ## Status
 
-Accepted.
+Superseded by [ADR-0005](0005-executor-reports-facts.md).
 
 ## Context
 

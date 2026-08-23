@@ -232,25 +232,16 @@ test("a colliding id is drawn again instead of orphaning a run", () => {
   assert.equal(runs.size(), 2);
 });
 
-test("a run's most recent tool call is projected as its activity", () => {
+test("a run's recorded activity is projected, and nothing else is derived", () => {
   const runs = createSubagentRuns(fakeClock(), sequentialIds());
   const result = runningResult();
   runs.track(result, () => {});
 
   assert.equal(runs.list()[0].activity, undefined);
 
-  result.messages.push({
-    role: "assistant",
-    content: [
-      {
-        type: "toolCall",
-        id: "call-1",
-        name: "grep",
-        arguments: { pattern: "TODO" },
-      },
-    ],
-    // biome-ignore lint/suspicious/noExplicitAny: a partial message is enough
-  } as any);
+  // The dispatcher's fold records activity on the run; the registry projects
+  // the field without looking inside the transcript.
+  result.activity = "grep: TODO";
 
   assert.equal(runs.list()[0].activity, "grep: TODO");
 });

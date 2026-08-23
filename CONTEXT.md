@@ -66,10 +66,16 @@ clock.
 Callers never touch the mutable run record.
 
 **Dispatcher** (`runner.ts`) — the rules that hold for every run whatever it
-does: the nesting guard, lifecycle settlement, delivery.
+does: the nesting guard, lifecycle settlement, and sole ownership of the run
+record — executors report facts, and the fold in `run.ts`, invoked only by
+the dispatcher, is what writes them.
 
-**Executor** (`pi-agent.ts`) — the child pi process itself. Substitutable at the
-seam defined in `run.ts`.
+**Executor** (`pi-agent.ts`) — the child pi process itself. It witnesses what
+the child did: it reports facts (a message, a terminal transcript snapshot, a
+stderr chunk) through the reporter defined in `run.ts` and resolves to an
+outcome; it never touches the run record. Substitutable at that seam. Wire
+format stops here — everything derived from the facts (usage, activity, the
+per-message model) is computed in the fold.
 
 **Presentation** (`presentation.ts`) — how a run and its report read to a
 human: status glyphs, tones, verbs, phrases, and the report text with its
@@ -77,7 +83,9 @@ trims. The only module that interprets a lifecycle status for display; the
 delivery module does bookkeeping and asks this one what a report says.
 
 **Activity** — the one-line summary of what a run is doing right now, derived
-from its most recent tool call. Display only.
+from its most recent tool call by the dispatcher's fold and recorded on the
+run. Display only; the registry projects the field without reading the
+transcript.
 
 ## Constraints
 

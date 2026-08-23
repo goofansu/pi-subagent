@@ -1,17 +1,27 @@
 /**
- * The run contract: everything the dispatcher hands a child run, and the
- * result bookkeeping both sides share.
+ * The run contract: the record, the facts an executor reports into it, and
+ * the outcome that settles it.
  *
- * `runner.ts` owns the rules that hold for every run — the nesting guard,
- * lifecycle transitions and progress plumbing — and
- * `pi-agent.ts` owns the child pi process itself. This module is what they
- * agree on, and the seam tests substitute a stand-in executor at.
+ * The dispatcher (`runner.ts`) is the run record's only writer. An executor
+ * never holds the record: it witnesses what the child did and reports facts —
+ * a transcript message, a terminal transcript snapshot, a stderr chunk —
+ * through the {@link RunReporter} this module defines, and resolves to a
+ * {@link SubagentOutcome}. The fold from facts to record lives here, beside
+ * the record it writes, and the dispatcher is the only module that invokes
+ * it. Everything derived — usage, activity, the per-message model — is
+ * computed in the fold, so a terminal snapshot heals any drift the streamed
+ * facts accumulated.
+ *
+ * See docs/adr/0005-executor-reports-facts.md.
  */
 
+import type { Message } from "@earendil-works/pi-ai";
+import { deriveActivity } from "./messages.ts";
 import type {
   AgentConfig,
   SingleResult,
   TerminalLifecycleStatus,
+  UsageStats,
 } from "./types.ts";
 
 /**
@@ -51,28 +61,6 @@ export function appendStderr(existing: string, chunk: string): string {
 /** The message an aborted run reports. */
 const ABORTED_MESSAGE = "Subagent was aborted";
 
-/**
- * Record that a result was cancelled by the host.
- *
- * The dispatcher separately settles the lifecycle state and finish timestamp.
- *
- * Cancellation is a resolved result rather than a rejection — see
- * {@link SubagentExecutor}. The distinction is not cosmetic: the host turns a
- * thrown tool error into an error string with no `details` attached, so
- * rejecting discards the partial transcript the run had already produced and a
- * cancelled agent renders as a bare message instead of the work it got through.
- *
- * The message is replaced rather than defaulted. A frame can report an error the
- * child then recovered from, and leaving it in place makes a cancelled run name
- * a cause that is not what ended it. The cancellation is what ended it, and the
- * transcript still holds the rest.
- */
-export function settleAborted(result: SingleResult): void {
-  result.exitCode = 1;
-  result.stopReason = "aborted";
-  result.errorMessage = ABORTED_MESSAGE;
-}
-
 /** Derive one terminal lifecycle state from the recorded outcome fields. */
 function terminalStatus(result: SingleResult): TerminalLifecycleStatus {
   if (result.stopReason === "aborted") return "aborted";
@@ -82,9 +70,9 @@ function terminalStatus(result: SingleResult): TerminalLifecycleStatus {
 }
 
 /**
- * Settle lifecycle state after a run resolves. The executor owns its exit-code
- * and stop-reason translation; the dispatcher calls this once so lifecycle
- * semantics and finish timestamps live in a single place.
+ * Settle lifecycle state after a run resolves. The executor reports its
+ * outcome; the dispatcher calls this once so lifecycle semantics and finish
+ * timestamps live in a single place.
  */
 export function settleResultLifecycle(
   result: SingleResult,
@@ -127,24 +115,70 @@ export interface SubagentTask {
 }
 
 /**
- * A run in progress. `result` is pre-initialized by the dispatcher and mutated
- * in place by the executor; `emit` publishes the current snapshot to the TUI.
+ * The facts an executor may report while its child works. This is the whole
+ * of the executor's write access to a run: it names what happened, and the
+ * fold behind these callbacks decides what the record says.
+ */
+export interface RunReporter {
+  /** One transcript message the child produced. */
+  message(msg: Message): void;
+  /**
+   * The child's terminal transcript snapshot, replacing everything streamed
+   * so far. The authoritative copy: whatever drift the streamed messages
+   * accumulated, this heals it.
+   */
+  transcript(messages: Message[]): void;
+  /** A chunk of the child's stderr. */
+  stderr(chunk: string): void;
+}
+
+/**
+ * How a run ended, as the executor witnessed it.
+ *
+ * `stopReason: "aborted"` is the abort marker: only the executor knows
+ * whether a cancellation actually killed the child (a late abort after a
+ * clean exit must not count), so it travels in the outcome rather than being
+ * inferred from the signal. `stopReason` and `errorMessage` are written only
+ * when present, so facts already folded from the transcript stand unless the
+ * ending says otherwise.
+ */
+export interface SubagentOutcome {
+  exitCode: number;
+  stopReason?: string;
+  errorMessage?: string;
+}
+
+/**
+ * A run in progress, as the executor sees it: what to do, where to report,
+ * and the signal that cancels it. The executor never sees the run record.
  */
 export interface SubagentRun {
   readonly task: SubagentTask;
-  readonly result: SingleResult;
-  readonly emit: () => void;
+  readonly report: RunReporter;
   readonly signal?: AbortSignal;
 }
 
 /**
- * Run the task to completion, mutating `run.result` and calling `run.emit` as
- * output arrives. Rejects only when the run could not be represented as a
- * result at all — an aborted or failed agent is a resolved `SingleResult` with
- * a non-zero `exitCode`. See {@link settleAborted} for why cancellation in
- * particular must resolve.
+ * Run the task to completion, reporting facts as output arrives and
+ * resolving to the outcome. Rejects only when the run could not be
+ * represented as an outcome at all — an aborted or failed agent resolves,
+ * with `stopReason: "aborted"` or a non-zero `exitCode`. Cancellation in
+ * particular must resolve: the host turns a thrown tool error into a bare
+ * error string, discarding the partial transcript the run already reported.
  */
-export type SubagentExecutor = (run: SubagentRun) => Promise<SingleResult>;
+export type SubagentExecutor = (run: SubagentRun) => Promise<SubagentOutcome>;
+
+function emptyUsage(): UsageStats {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+    contextTokens: 0,
+    turns: 0,
+  };
+}
 
 export function createEmptyResult(
   agent: string,
@@ -159,14 +193,100 @@ export function createEmptyResult(
     exitCode: -1, // -1 = pending
     messages: [],
     stderr: "",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      cost: 0,
-      contextTokens: 0,
-      turns: 0,
+    usage: emptyUsage(),
+  };
+}
+
+function recordAssistantUsage(result: SingleResult, msg: Message): void {
+  const assistant = msg as Message & {
+    usage?: {
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      totalTokens?: number;
+      cost?: { total?: number };
+    };
+    provider?: string;
+    model?: string;
+    stopReason?: string;
+    errorMessage?: string;
+  };
+  result.usage.turns++;
+  const usage = assistant.usage;
+  if (usage) {
+    result.usage.input += usage.input || 0;
+    result.usage.output += usage.output || 0;
+    result.usage.cacheRead += usage.cacheRead || 0;
+    result.usage.cacheWrite += usage.cacheWrite || 0;
+    result.usage.cost += usage.cost?.total || 0;
+    result.usage.contextTokens = usage.totalTokens || 0;
+  }
+  if (assistant.provider && assistant.model) {
+    result.model = `${assistant.provider}/${assistant.model}`;
+  }
+  if (assistant.stopReason) result.stopReason = assistant.stopReason;
+  if (assistant.errorMessage) result.errorMessage = assistant.errorMessage;
+}
+
+/**
+ * The fold from reported facts to record writes, plus a change signal per
+ * fact so whatever is on screen follows along. Usage, activity, and the
+ * per-message model refinement are derived here rather than reported, so an
+ * executor cannot get them wrong and the transcript snapshot heals them.
+ */
+export function createRunReporter(
+  result: SingleResult,
+  changed: () => void,
+): RunReporter {
+  const fold = (msg: Message): void => {
+    result.messages.push(msg);
+    if (msg.role === "assistant") recordAssistantUsage(result, msg);
+  };
+  const refreshActivity = (): void => {
+    const activity = deriveActivity(result.messages);
+    if (activity) result.activity = activity;
+    else delete result.activity;
+  };
+
+  return {
+    message(msg) {
+      fold(msg);
+      refreshActivity();
+      changed();
+    },
+    transcript(messages) {
+      result.messages = [];
+      result.usage = emptyUsage();
+      for (const msg of messages) fold(msg);
+      refreshActivity();
+      changed();
+    },
+    stderr(chunk) {
+      result.stderr = appendStderr(result.stderr, chunk);
+      changed();
     },
   };
+}
+
+/**
+ * Write an outcome onto the record. An aborted outcome is normalized rather
+ * than copied: a killed child's exit code says nothing useful, and a frame
+ * can report an error the child then recovered from, so the cancellation —
+ * not whatever ending the stream happened to hold — is what the run says
+ * ended it. The transcript already folded still stands either way.
+ */
+export function applyOutcome(
+  result: SingleResult,
+  outcome: SubagentOutcome,
+): void {
+  if (outcome.stopReason === "aborted") {
+    result.exitCode = 1;
+    result.stopReason = "aborted";
+    result.errorMessage = ABORTED_MESSAGE;
+    return;
+  }
+  result.exitCode = outcome.exitCode;
+  if (outcome.stopReason) result.stopReason = outcome.stopReason;
+  if (outcome.errorMessage) result.errorMessage = outcome.errorMessage;
 }

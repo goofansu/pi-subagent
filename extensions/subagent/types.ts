@@ -44,6 +44,11 @@ export interface SingleResult {
   messages: Message[];
   stderr: string;
   usage: UsageStats;
+  /**
+   * What the run is doing right now, derived from its most recent tool call
+   * as messages fold in. Display only; absent before the first tool call.
+   */
+  activity?: string;
   model?: string;
   /** Explicit reasoning effort configured by the profile. */
   effort?: Effort;
