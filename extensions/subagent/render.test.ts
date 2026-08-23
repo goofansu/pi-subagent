@@ -55,19 +55,24 @@ function renderCall(prompt: string, expanded: boolean, width = 80): string {
 test("the prompt wears a quote gutter that the result below does not", () => {
   const rendered = renderCall("Say hello.", false);
 
-  assert.equal(rendered, "librarian Say hello\n│ Say hello.");
+  // The trailing blank line is air between the brief and the tool result the
+  // host paints directly below this row.
+  assert.equal(rendered, "librarian Say hello\n│ Say hello.\n");
 });
 
 test("a cut prompt preview keeps the gutter and says it was cut", () => {
   const rendered = renderCall("one\ntwo\nthree\nfour\nfive", false);
 
-  assert.equal(rendered, "librarian Say hello\n│ one\n│ two\n│ three\n│ …");
+  assert.equal(rendered, "librarian Say hello\n│ one\n│ two\n│ three\n│ …\n");
 });
 
 test("an expanded call shows the whole brief, every line quoted", () => {
   const rendered = renderCall("one\ntwo\nthree\nfour", true);
 
-  assert.equal(rendered, "librarian Say hello\n│ one\n│ two\n│ three\n│ four");
+  assert.equal(
+    rendered,
+    "librarian Say hello\n│ one\n│ two\n│ three\n│ four\n",
+  );
 });
 
 test("a brief that soft-wraps keeps its gutter on every wrapped row", () => {
@@ -78,8 +83,10 @@ test("a brief that soft-wraps keeps its gutter on every wrapped row", () => {
   );
 
   const [, ...promptRows] = rendered.split("\n");
-  assert.ok(promptRows.length > 1, "the brief must actually wrap");
-  for (const row of promptRows) {
+  assert.equal(promptRows.at(-1), "", "the row ends with breathing room");
+  const quoted = promptRows.slice(0, -1);
+  assert.ok(quoted.length > 1, "the brief must actually wrap");
+  for (const row of quoted) {
     assert.match(row, /^│ /, `every wrapped row wears the gutter: "${row}"`);
   }
 });

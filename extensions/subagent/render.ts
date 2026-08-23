@@ -4,7 +4,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { Container, Markdown, Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { formatCharacterCount, runStatusTone } from "./presentation.ts";
 import type { LifecycleStatus } from "./types.ts";
 
@@ -55,6 +55,9 @@ export function renderSubagentCall(
   row.clear();
   row.addChild(new Text(header, 0, 0));
   row.addChild(new Markdown(quote, 0, 0, getMarkdownTheme()));
+  // Air between the brief and whatever the host paints below it — the tool
+  // result otherwise sits flush against the quote and reads as its last line.
+  row.addChild(new Spacer(1));
   return row;
 }
 
