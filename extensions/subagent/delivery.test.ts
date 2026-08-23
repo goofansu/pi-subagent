@@ -340,6 +340,64 @@ test("an unknown id recalls nothing rather than throwing", () => {
   assert.equal(delivery.recall("never-existed"), undefined);
 });
 
+test("retention past its budget evicts the oldest output, which still answers", async () => {
+  const runs = createSubagentRuns();
+  const delivery = createSubagentDelivery({
+    push: () => {},
+    runs,
+    retentionBudget: 20,
+  });
+  const first = deferredRun();
+  const second = deferredRun("reviewer");
+  delivery.register("run-1", first.settled);
+  delivery.register("run-2", second.settled);
+
+  first.finish("x".repeat(15));
+  await flush();
+  second.finish("y".repeat(15));
+  await flush();
+
+  assert.deepEqual(delivery.recall("run-1"), {
+    id: "run-1",
+    agent: "explore",
+    status: "completed",
+    output: "",
+    evicted: true,
+  });
+  assert.equal(
+    delivery.recall("run-2")?.output,
+    "y".repeat(15),
+    "the newest output survives",
+  );
+});
+
+test("a single over-budget output survives until something newer lands", async () => {
+  const runs = createSubagentRuns();
+  const delivery = createSubagentDelivery({
+    push: () => {},
+    runs,
+    retentionBudget: 20,
+  });
+  const huge = deferredRun();
+  delivery.register("run-1", huge.settled);
+  huge.finish("x".repeat(50));
+  await flush();
+
+  assert.equal(
+    delivery.recall("run-1")?.output,
+    "x".repeat(50),
+    "the newest entry is never evicted, even alone over budget",
+  );
+
+  const next = deferredRun("reviewer");
+  delivery.register("run-2", next.settled);
+  next.finish("small");
+  await flush();
+
+  assert.equal(delivery.recall("run-1")?.evicted, true);
+  assert.equal(delivery.recall("run-2")?.output, "small");
+});
+
 // ── Id diagnostics ───────────────────────────────────────────────────────────
 
 test("a wait tells a delivered report apart from an id that never existed", async () => {

@@ -99,18 +99,37 @@ export function createSessionPush(): SessionPush {
  * The invariant is delivered ⇒ recallable, for the session that asked:
  * `shutdown` clears retention, because a report belongs to the conversation
  * that asked for it and the next session's model never started these runs.
+ * Within a session, whole outputs are held only up to a budget — see
+ * {@link RETENTION_CHARACTER_BUDGET} — and an entry whose output was evicted
+ * still answers, saying so.
  */
 export interface RetainedReport {
   id: string;
   agent: string;
   status: LifecycleStatus;
-  /** The run's full final output, untrimmed. */
+  /** The run's full final output, untrimmed. Empty once evicted. */
   output: string;
+  /** True when the output was dropped to keep retention under budget. */
+  evicted?: boolean;
 }
+
+/**
+ * Cap on the total characters retention holds across all runs.
+ *
+ * Retention keeps every delivered run's whole output in memory for the rest
+ * of the session, and nothing else bounds it — a long session of large
+ * reports would grow without limit. This is a backstop against that, not a
+ * working budget: it is roughly eighty reports at the pushed-report cap, and
+ * eviction takes the oldest outputs first. The newest entry always survives,
+ * so a report that says it was trimmed can always be read back whole.
+ */
+export const RETENTION_CHARACTER_BUDGET = 2_000_000;
 
 export interface DeliveryOptions {
   push: PushMessage;
   runs?: SubagentRuns;
+  /** Injected for tests; defaults to {@link RETENTION_CHARACTER_BUDGET}. */
+  retentionBudget?: number;
 }
 
 export interface WaitOutcome {
@@ -184,6 +203,7 @@ interface Pending {
 export function createSubagentDelivery({
   push,
   runs = subagentRuns,
+  retentionBudget = RETENTION_CHARACTER_BUDGET,
 }: DeliveryOptions): SubagentDelivery {
   const pending = new Map<string, Pending>();
   const retained = new Map<string, RetainedReport>();
@@ -196,6 +216,27 @@ export function createSubagentDelivery({
    */
   const inlineDelivered = new Set<Pending>();
 
+  /**
+   * Evict the oldest whole outputs until retention fits its budget. The
+   * entries stay — id, agent, status — so an evicted run still answers
+   * rather than reading like an id that never existed; only the heavy string
+   * goes. The newest entry is never evicted: the report that just landed is
+   * the one whose trim note points here.
+   */
+  const enforceRetentionBudget = (): void => {
+    let total = 0;
+    for (const report of retained.values()) total += report.output.length;
+    const ids = [...retained.keys()];
+    const newest = ids.at(-1);
+    for (const id of ids) {
+      if (total <= retentionBudget || id === newest) break;
+      const report = retained.get(id);
+      if (!report?.output) continue;
+      total -= report.output.length;
+      retained.set(id, { ...report, output: "", evicted: true });
+    }
+  };
+
   /** Keep the run's whole answer addressable by id for `recall`. */
   const retain = (entry: Pending, result: SingleResult): void => {
     retained.set(entry.id, {
@@ -204,6 +245,7 @@ export function createSubagentDelivery({
       status: result.status,
       output: fullOutput(result),
     });
+    enforceRetentionBudget();
   };
 
   /**

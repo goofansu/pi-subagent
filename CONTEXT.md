@@ -46,7 +46,9 @@ releases the claim and the run pushes normally.
 **Retention** — what a delivered run said, kept whole and addressable by id so
 `agent_result` can hand back what a report's cap trimmed. Delivered means
 recallable — a run the model cancelled included, once its child dies. Scoped to
-the session that asked: shutdown clears it.
+the session that asked: shutdown clears it. Whole outputs are held only up to
+a character budget; past it the oldest outputs are evicted, and an evicted run
+still answers by id, saying its output is gone.
 
 **Session push** — the process-lifetime push target reports go through
 (`createSessionPush`). A session's own `sendMessage` throws once that session

@@ -259,9 +259,13 @@ export function registerSubagentFeatures(
 
       const body =
         report.output ||
-        (report.status === "aborted"
-          ? "The run was cancelled before it produced output."
-          : "The run finished without output.");
+        (report.evicted
+          ? "This run's full output is no longer retained; it was evicted " +
+            "to bound memory. What its delivered report said is all that " +
+            "remains."
+          : report.status === "aborted"
+            ? "The run was cancelled before it produced output."
+            : "The run finished without output.");
 
       return {
         content: [
