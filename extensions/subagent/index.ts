@@ -66,12 +66,22 @@ export interface SubagentFeatureDeps {
   widgetHost?: WidgetHost;
 }
 
+/**
+ * The session facts a run inherits, held mutably so the tools — registered
+ * once per runtime — always read the live session's answer rather than the
+ * one captured when the first session registered them. Refilled on every
+ * `session_start`, like the agent map.
+ */
+export interface SessionContext {
+  cwd: string;
+  projectTrusted: boolean;
+}
+
 export function registerSubagentFeatures(
   pi: ExtensionAPI,
-  projectCwd: string,
+  session: SessionContext,
   agentsDir: string,
   agentConfigs: Map<string, AgentConfig>,
-  projectTrusted: boolean,
   deps: SubagentFeatureDeps = {},
 ): void {
   registerAgentsCommand(pi, agentConfigs, agentsDir);
@@ -124,8 +134,8 @@ export function registerSubagentFeatures(
         config,
         description: params.description,
         prompt: params.prompt,
-        projectTrusted,
-        cwd: projectCwd,
+        projectTrusted: session.projectTrusted,
+        cwd: session.cwd,
         runs,
         parentModel: ctx.model
           ? {
@@ -341,6 +351,16 @@ export default function subagentExtension(pi: ExtensionAPI) {
   // One map per runtime, refilled rather than replaced, so the tool and
   // command closures registered below keep seeing current profiles.
   const agentConfigs = new Map<string, AgentConfig>();
+  // Same discipline for the session facts a run inherits: the tools are
+  // registered once per runtime, but sessions replace each other under them,
+  // so cwd and trust are re-read from every session rather than captured from
+  // whichever one happened to register the tools. Trust starts denied — a run
+  // somehow started before the first session_start must not be the trusted
+  // one.
+  const sessionContext: SessionContext = {
+    cwd: process.cwd(),
+    projectTrusted: false,
+  };
   let registered = false;
 
   // Agents come only from user scope, so discovery reads nothing a working
@@ -365,8 +385,12 @@ export default function subagentExtension(pi: ExtensionAPI) {
       agentConfigs.set(name, config);
     }
 
-    // Re-aim reports at this session and flush anything that parked while the
-    // previous one was being torn down; put the widget on this session's UI.
+    // This session's answers, not the first one's. A host that cannot report
+    // trust at all fails closed.
+    sessionContext.cwd = ctx.cwd;
+    sessionContext.projectTrusted = ctx.isProjectTrusted?.() ?? false;
+
+    // Re-aim reports at this session; put the widget on this session's UI.
     sessionPush.bind(reportPusher(pi));
     uninstallWidget?.();
     uninstallWidget = installRunsWidget(
@@ -378,14 +402,9 @@ export default function subagentExtension(pi: ExtensionAPI) {
     // install a second copy of every tool.
     if (!registered) {
       registered = true;
-      registerSubagentFeatures(
-        pi,
-        ctx.cwd,
-        agentsDir,
-        agentConfigs,
-        ctx.isProjectTrusted?.() ?? false,
-        { delivery: getProcessDelivery() },
-      );
+      registerSubagentFeatures(pi, sessionContext, agentsDir, agentConfigs, {
+        delivery: getProcessDelivery(),
+      });
     }
 
     const invalidFiles = [

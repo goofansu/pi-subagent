@@ -104,41 +104,56 @@ function fakeStart(onOptions: (options: RunSubagentOptions) => void) {
   return { start, settle: () => settle?.() };
 }
 
-test("agent_start uses the trust decision captured at session start", async () => {
-  for (const sessionTrust of [true, false]) {
-    let executeTrustChecks = 0;
-    let forwardedTrust: boolean | undefined;
-    const { pi, tools } = collectTools();
-    const started = fakeStart((options) => {
-      forwardedTrust = options.projectTrusted;
-    });
+test("agent_start reads the live session's trust and cwd at execute time", async () => {
+  let executeTrustChecks = 0;
+  let forwardedTrust: boolean | undefined;
+  let forwardedCwd: string | undefined;
+  const { pi, tools } = collectTools();
+  const started = fakeStart((options) => {
+    forwardedTrust = options.projectTrusted;
+    forwardedCwd = options.cwd;
+  });
+  const session = { cwd: "/project", projectTrusted: false };
 
-    registerSubagentFeatures(
-      pi,
-      "/project",
-      "/agent-dir",
-      new Map([["worker", agentConfig("worker")]]),
-      sessionTrust,
-      { start: started.start },
-    );
+  registerSubagentFeatures(
+    pi,
+    session,
+    "/agent-dir",
+    new Map([["worker", agentConfig("worker")]]),
+    { start: started.start },
+  );
 
-    await tools.agent_start.execute(
+  const execute = () =>
+    tools.agent_start.execute(
       "call-1",
       { agent: "worker", description: "task", prompt: "work" },
       new AbortController().signal,
       undefined,
       {
+        // The execute-time ctx must never be consulted for trust; the session
+        // context is the one source, so lying here must change nothing.
         isProjectTrusted() {
           executeTrustChecks++;
-          return !sessionTrust;
+          return !session.projectTrusted;
         },
       },
     );
-    started.settle();
 
-    assert.equal(forwardedTrust, sessionTrust);
-    assert.equal(executeTrustChecks, 0);
-  }
+  await execute();
+  started.settle();
+  assert.equal(forwardedTrust, false);
+  assert.equal(forwardedCwd, "/project");
+
+  // A later session_start refills the context; the tools registered by the
+  // first session must follow it rather than keep what they were born with.
+  session.projectTrusted = true;
+  session.cwd = "/elsewhere";
+  await execute();
+  started.settle();
+
+  assert.equal(forwardedTrust, true);
+  assert.equal(forwardedCwd, "/elsewhere");
+  assert.equal(executeTrustChecks, 0);
 });
 
 test("agent_start returns a run id instead of the answer", async () => {
@@ -147,10 +162,9 @@ test("agent_start returns a run id instead of the answer", async () => {
 
   registerSubagentFeatures(
     pi,
-    "/project",
+    { cwd: "/project", projectTrusted: true },
     "/agent-dir",
     new Map([["worker", agentConfig("worker")]]),
-    true,
     { start: started.start },
   );
 
@@ -170,9 +184,15 @@ test("agent_start returns a run id instead of the answer", async () => {
 test("agent_start refuses an unknown agent", async () => {
   const { pi, tools } = collectTools();
 
-  registerSubagentFeatures(pi, "/project", "/agent-dir", new Map(), true, {
-    start: fakeStart(() => {}).start,
-  });
+  registerSubagentFeatures(
+    pi,
+    { cwd: "/project", projectTrusted: true },
+    "/agent-dir",
+    new Map(),
+    {
+      start: fakeStart(() => {}).start,
+    },
+  );
 
   await assert.rejects(
     () =>
@@ -190,9 +210,15 @@ test("agent_start refuses an unknown agent", async () => {
 test("the orchestration primitives are registered", () => {
   const { pi, tools } = collectTools();
 
-  registerSubagentFeatures(pi, "/project", "/agent-dir", new Map(), true, {
-    start: fakeStart(() => {}).start,
-  });
+  registerSubagentFeatures(
+    pi,
+    { cwd: "/project", projectTrusted: true },
+    "/agent-dir",
+    new Map(),
+    {
+      start: fakeStart(() => {}).start,
+    },
+  );
 
   assert.deepEqual(Object.keys(tools).sort(), [
     "agent_cancel",
@@ -217,10 +243,9 @@ test("the agents command is told where agents live", async () => {
 
   registerSubagentFeatures(
     pi,
-    "/project",
+    { cwd: "/project", projectTrusted: true },
     "/agent-dir/agents",
     new Map(),
-    true,
   );
 
   assert.ok(command);
@@ -468,10 +493,9 @@ test("a delivered report reaches the model and lets it respond", async () => {
 
   registerSubagentFeatures(
     pi,
-    "/project",
+    { cwd: "/project", projectTrusted: true },
     "/agent-dir",
     new Map([["worker", agentConfig("worker")]]),
-    true,
     { start: started.start },
   );
 
