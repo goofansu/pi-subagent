@@ -184,17 +184,86 @@ test("a cancelled run pushes a cancellation notice when nobody asked", async () 
   assert.match(pushed[0], /was cancelled/);
 });
 
-test("deliverInline suppresses the push for runs the model cancelled itself", async () => {
-  const { pushed, delivery } = harness();
+test("a cancel stops the run and suppresses its push", async () => {
+  const { pushed, delivery, runs } = harness();
   const run = deferredRun();
-  delivery.register("run-1", run.settled);
+  const handle = runs.track(run.result, run.cancel);
+  delivery.register(handle.id, run.settled);
 
-  delivery.deliverInline(["run-1"]);
-  run.cancel();
+  const outcome = delivery.cancel([handle.id]);
   await flush();
 
+  assert.deepEqual(outcome.cancelled, [handle.id]);
   assert.deepEqual(pushed, [], "the tool result already said so");
-  assert.equal(delivery.has("run-1"), false);
+  assert.equal(delivery.has(handle.id), false);
+  assert.equal(runs.size(), 0, "the cancel is the delivery");
+});
+
+test("a cancelled run's outcome is still recallable once its child dies", async () => {
+  const { delivery, runs } = harness();
+  const run = deferredRun();
+  const handle = runs.track(run.result, run.cancel);
+  delivery.register(handle.id, run.settled);
+
+  delivery.cancel([handle.id]);
+  await flush();
+
+  assert.deepEqual(delivery.recall(handle.id), {
+    id: handle.id,
+    agent: "explore",
+    status: "aborted",
+    output: "",
+  });
+});
+
+test("a cancel tells a finished run apart from an id that never existed", async () => {
+  const { delivery, runs } = harness();
+  const run = deferredRun();
+  const handle = runs.track(run.result, run.cancel);
+  delivery.register(handle.id, run.settled);
+  run.finish();
+  await flush();
+
+  const outcome = delivery.cancel([handle.id, "never-existed"]);
+
+  assert.deepEqual(outcome.cancelled, []);
+  assert.deepEqual(outcome.finished, [handle.id]);
+  assert.deepEqual(outcome.unknown, ["never-existed"]);
+});
+
+// ── Shutdown ─────────────────────────────────────────────────────────────────
+
+test("shutdown stops what is running and delivers nothing anywhere", async () => {
+  const { pushed, delivery, runs } = harness();
+  const run = deferredRun();
+  const handle = runs.track(run.result, run.cancel);
+  delivery.register(handle.id, run.settled);
+
+  delivery.shutdown();
+  await flush();
+
+  assert.deepEqual(pushed, [], "no notice follows into the next session");
+  assert.equal(runs.size(), 0, "the registry starts the next session empty");
+  assert.equal(delivery.has(handle.id), false);
+  assert.equal(
+    delivery.recall(handle.id),
+    undefined,
+    "a run the session never heard from is not recallable in the next one",
+  );
+});
+
+test("shutdown clears retention: a report belongs to the session that asked", async () => {
+  const { delivery, runs } = harness();
+  const run = deferredRun();
+  const handle = runs.track(run.result, run.cancel);
+  delivery.register(handle.id, run.settled);
+  run.finish("the answer");
+  await flush();
+  assert.ok(delivery.recall(handle.id), "delivered, so recallable");
+
+  delivery.shutdown();
+
+  assert.equal(delivery.recall(handle.id), undefined);
 });
 
 test("a delivered run is released from the registry", async () => {
@@ -411,44 +480,41 @@ function report(id: string): PushedReport {
   };
 }
 
-test("reports park while no session is bound and flush in order when one is", () => {
+test("a report with no session bound is dropped, not queued for the next one", () => {
   const sessionPush = createSessionPush();
   const delivered: string[] = [];
 
-  sessionPush.push(report("first"));
-  sessionPush.push(report("second"));
-  assert.equal(delivered.length, 0, "nothing to deliver into yet");
+  sessionPush.push(report("orphan"));
 
   sessionPush.bind((pushed) => delivered.push(pushed.id));
-  assert.deepEqual(delivered, ["first", "second"]);
+  assert.deepEqual(delivered, [], "the orphan belongs to no conversation");
 
-  sessionPush.push(report("third"));
-  assert.deepEqual(delivered, ["first", "second", "third"]);
+  sessionPush.push(report("current"));
+  assert.deepEqual(delivered, ["current"]);
 });
 
-test("a session that went stale re-parks the report for the next one", () => {
+test("a session that went stale drops the report instead of crashing", () => {
   const sessionPush = createSessionPush();
   const delivered: string[] = [];
 
   sessionPush.bind(() => {
     throw new Error("this extension ctx is stale");
   });
-  sessionPush.push(report("orphan"));
-  assert.equal(delivered.length, 0);
+  assert.doesNotThrow(() => sessionPush.push(report("orphan")));
 
   sessionPush.bind((pushed) => delivered.push(pushed.id));
-  assert.deepEqual(delivered, ["orphan"], "the report waited out the gap");
+  sessionPush.push(report("current"));
+  assert.deepEqual(delivered, ["current"], "the orphan never resurfaces");
 });
 
-test("unbinding parks what settles between sessions", () => {
+test("unbinding drops what settles between sessions", () => {
   const sessionPush = createSessionPush();
   const delivered: string[] = [];
   sessionPush.bind((pushed) => delivered.push(pushed.id));
 
   sessionPush.unbind();
   sessionPush.push(report("between"));
-  assert.equal(delivered.length, 0);
 
   sessionPush.bind((pushed) => delivered.push(pushed.id));
-  assert.deepEqual(delivered, ["between"]);
+  assert.deepEqual(delivered, [], "nothing crosses the session divide");
 });

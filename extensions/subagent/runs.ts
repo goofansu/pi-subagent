@@ -6,7 +6,8 @@
  * call and pushed at one consumer, the host's tool renderer. Nothing could
  * enumerate runs, so nothing else could show them. This module owns that set
  * instead, and everything that displays or acts on runs reads it. The
- * dispatcher is its only writer.
+ * dispatcher is the only module that adds runs; the delivery module is the
+ * only one that releases them.
  *
  * A run lives here from the moment it starts until its report is delivered.
  * Delivery is the point at which the result has entered the conversation, so

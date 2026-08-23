@@ -12,6 +12,10 @@
  * releases the claim and the run pushes as it normally would. The invariant is
  * one delivery per run, never zero and never two.
  *
+ * Cancellation is the third delivery form: `cancel`'s outcome is the delivery
+ * for the runs it stops, and `shutdown` delivers everything left by cancelling
+ * it, so no notice follows the operator into the next session.
+ *
  * See docs/adr/0002-push-only-result-delivery.md.
  */
 
@@ -60,37 +64,37 @@ export type PushMessage = (report: PushedReport) => void;
  *
  * Detached runs belong to the pi process, but the `sendMessage` a report is
  * pushed through belongs to one session's ExtensionAPI, and every method on it
- * throws once that session is replaced. This seam is what lets a run started
- * in one session report into whichever session is live when it settles: the
- * delivery is built once over `push`, and each session start re-aims it.
+ * throws once that session is replaced. This seam is what lets the delivery be
+ * built once over `push` while each session start re-aims it at the live
+ * session.
+ *
+ * A report that arrives with no session bound is dropped, not queued: it
+ * belongs to the conversation that started its run, and that conversation is
+ * gone. Delivering it into the next session would hand a model an answer to a
+ * question it never asked. The drop is a crash guard for the teardown race —
+ * settling through a stale API must not throw through an otherwise-unobserved
+ * promise chain — never a cross-session delivery channel.
  */
 export interface SessionPush {
   /** The stable target to build the delivery with. */
   push: PushMessage;
-  /** Aim at a live session and flush anything that parked while unbound. */
+  /** Aim at a live session. */
   bind(push: PushMessage): void;
-  /** Drop the target; reports park until the next bind. */
+  /** Drop the target; reports that settle before the next bind are dropped. */
   unbind(): void;
 }
 
 export function createSessionPush(): SessionPush {
   let live: PushMessage | null = null;
-  /** Reports that settled while no session was live, oldest first. */
-  const parked: PushedReport[] = [];
 
   const push: PushMessage = (report) => {
-    if (!live) {
-      parked.push(report);
-      return;
-    }
+    if (!live) return;
     try {
       live(report);
     } catch {
-      // The backstop for a session that went stale before its shutdown event
-      // reached us: park the report instead of losing it — or crashing the
-      // otherwise-unobserved promise chain it is delivered on.
+      // A session that went stale before its shutdown event reached us. Stop
+      // pushing through it; the reports it can no longer take are dropped.
       live = null;
-      parked.push(report);
     }
   };
 
@@ -98,10 +102,6 @@ export function createSessionPush(): SessionPush {
     push,
     bind(target) {
       live = target;
-      while (parked.length > 0 && live) {
-        const report = parked.shift();
-        if (report) push(report);
-      }
     },
     unbind() {
       live = null;
@@ -110,12 +110,16 @@ export function createSessionPush(): SessionPush {
 }
 
 /**
- * What a finished run said, kept for the life of the session.
+ * What a delivered run said, kept for the rest of the session.
  *
  * A pushed report is capped so a runaway agent cannot swamp the parent's
  * context, and before this existed the trimmed remainder was simply lost —
  * work that had already been paid for. Retention keeps the whole thing
  * addressable by id, so `agent_result` can hand back what the cap left out.
+ *
+ * The invariant is delivered ⇒ recallable, for the session that asked:
+ * `shutdown` clears retention, because a report belongs to the conversation
+ * that asked for it and the next session's model never started these runs.
  */
 export interface RetainedReport {
   id: string;
@@ -143,6 +147,15 @@ export interface WaitOutcome {
   unknown: string[];
 }
 
+export interface CancelOutcome {
+  /** Ids this call stopped. Their cancellation is delivered by the caller. */
+  cancelled: string[];
+  /** Ids that settled before the cancel arrived; their reports stand. */
+  finished: string[];
+  /** Ids that name no run this delivery has ever seen. */
+  unknown: string[];
+}
+
 export interface SubagentDelivery {
   /** Take responsibility for a started run's report. */
   register(id: string, settled: Promise<SingleResult>): void;
@@ -157,11 +170,19 @@ export interface SubagentDelivery {
     options?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<WaitOutcome>;
   /**
-   * Mark runs as delivered by the caller's own tool result, suppressing their
-   * push. Used by `agent_cancel`: the model asked, so the answer belongs in
-   * the answer to its request rather than in a message of its own.
+   * Stop the named runs and mark the stopped ones delivered, suppressing
+   * their push: the model asked, so the answer belongs in the answer to its
+   * request rather than in a message of its own. The stopped runs' outcomes
+   * are still retained once they settle, so `recall` can answer for them.
    */
-  deliverInline(ids: readonly string[]): void;
+  cancel(ids: readonly string[]): CancelOutcome;
+  /**
+   * The session is over: stop everything still running, mark every
+   * undelivered run delivered so no notice follows the operator into the
+   * next session, and clear retention — a report belongs to the conversation
+   * that asked for it.
+   */
+  shutdown(): void;
   /** What a run said, whole, after it has been delivered. */
   recall(id: string): RetainedReport | undefined;
 }
@@ -239,6 +260,24 @@ export function createSubagentDelivery({
 }: DeliveryOptions): SubagentDelivery {
   const pending = new Map<string, Pending>();
   const retained = new Map<string, RetainedReport>();
+  /**
+   * Runs cancelled by the model, delivered by that tool result but not yet
+   * settled — the child is still dying. Membership means "write retention
+   * when the settle arrives, push nothing". A shutdown empties the set so a
+   * child that dies after the session cannot write into the next one's
+   * retention.
+   */
+  const inlineDelivered = new Set<Pending>();
+
+  /** Keep the run's whole answer addressable by id for `recall`. */
+  const retain = (entry: Pending, result: SingleResult): void => {
+    retained.set(entry.id, {
+      id: entry.id,
+      agent: result.agent,
+      status: result.status,
+      output: fullOutput(result),
+    });
+  };
 
   /**
    * Push without letting a throw escape. Delivery runs inside promise chains
@@ -269,17 +308,12 @@ export function createSubagentDelivery({
     if (!entry.result) return;
 
     const result = entry.result;
-    const output = fullOutput(result);
     // Retained before the cap is applied, so what `agent_result` returns is
     // the run's whole answer rather than the copy that fitted in a message.
-    retained.set(entry.id, {
-      id: entry.id,
-      agent: result.agent,
-      status: result.status,
-      output,
-    });
+    retain(entry, result);
 
     if (!byPush) return;
+    const output = fullOutput(result);
     const text = formatReport(entry.id, result);
     safePush({
       id: entry.id,
@@ -306,9 +340,12 @@ export function createSubagentDelivery({
         } catch (error: unknown) {
           // The executor contract says a failed run resolves; a rejection is a
           // bug, and swallowing it would leave a row on screen forever.
+          const alreadyDelivered = entry.delivered;
           entry.delivered = true;
+          inlineDelivered.delete(entry);
           pending.delete(id);
           runs.release(id);
+          if (alreadyDelivered) return;
           safePush({
             id,
             agent: "unknown",
@@ -318,6 +355,13 @@ export function createSubagentDelivery({
             }`,
             truncated: false,
           });
+          return;
+        }
+        // Delivered before it settled — a run the model cancelled. Its tool
+        // result already said so; all that is left is to make the outcome
+        // recallable.
+        if (entry.delivered) {
+          if (inlineDelivered.delete(entry)) retain(entry, entry.result);
           return;
         }
         // A claimed run is the waiter's to deliver.
@@ -374,14 +418,50 @@ export function createSubagentDelivery({
 
     recall: (id) => retained.get(id),
 
-    deliverInline(ids) {
-      for (const id of ids) {
+    cancel(ids) {
+      const requested = [...new Set(ids)];
+      const cancelled = runs.cancel(requested);
+      for (const id of cancelled) {
         const entry = pending.get(id);
         if (!entry) continue;
+        // This tool result is the delivery; the settle callback writes
+        // retention when the child actually dies.
         entry.delivered = true;
         pending.delete(id);
         runs.release(id);
+        inlineDelivered.add(entry);
       }
+
+      const finished: string[] = [];
+      const unknown: string[] = [];
+      for (const id of requested) {
+        if (cancelled.includes(id)) continue;
+        // Settled but undelivered, or already recallable: either way the run
+        // beat the cancel and its report stands.
+        if (pending.has(id) || retained.has(id)) finished.push(id);
+        else unknown.push(id);
+      }
+      return { cancelled, finished, unknown };
+    },
+
+    shutdown() {
+      runs.cancel(
+        runs
+          .list()
+          .filter((run) => run.status === "running")
+          .map((run) => run.id),
+      );
+      // Every undelivered run is marked delivered so nothing pushes into the
+      // next session, and released so the registry starts the next session
+      // empty. A child that settles after this finds its entry delivered and
+      // no longer retained-on-settle, so it writes nothing anywhere.
+      for (const entry of pending.values()) {
+        entry.delivered = true;
+        runs.release(entry.id);
+      }
+      pending.clear();
+      inlineDelivered.clear();
+      retained.clear();
     },
   };
 }

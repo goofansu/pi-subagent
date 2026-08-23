@@ -276,30 +276,20 @@ export function registerSubagentFeatures(
     parameters: Type.Object({ ids: ID_LIST }),
 
     async execute(_toolCallId, params) {
-      const requested = [...new Set(params.ids)];
-      const cancelled = runs.cancel(requested);
-      // The model asked, so this tool result is the delivery for these runs;
-      // a pushed "was cancelled" message would just repeat it back.
-      delivery.deliverInline(cancelled);
-
-      const finished: string[] = [];
-      const unknown: string[] = [];
-      for (const id of requested) {
-        if (cancelled.includes(id)) continue;
-        // Settled but undelivered, or already recallable: either way the run
-        // beat the cancel and its report stands.
-        if (delivery.has(id) || delivery.recall(id)) finished.push(id);
-        else unknown.push(id);
-      }
+      // The model asked, so this tool result is the delivery for the runs it
+      // stops; a pushed "was cancelled" message would just repeat it back.
+      const outcome = delivery.cancel(params.ids);
 
       const parts: string[] = [];
-      if (cancelled.length > 0)
-        parts.push(`Cancelled: ${cancelled.join(", ")}.`);
-      if (finished.length > 0) {
-        parts.push(`Already finished, report kept: ${finished.join(", ")}.`);
+      if (outcome.cancelled.length > 0)
+        parts.push(`Cancelled: ${outcome.cancelled.join(", ")}.`);
+      if (outcome.finished.length > 0) {
+        parts.push(
+          `Already finished, report kept: ${outcome.finished.join(", ")}.`,
+        );
       }
-      if (unknown.length > 0) {
-        parts.push(`Unknown run ids: ${unknown.join(", ")}.`);
+      if (outcome.unknown.length > 0) {
+        parts.push(`Unknown run ids: ${outcome.unknown.join(", ")}.`);
       }
       if (parts.length === 0) parts.push("Nothing to cancel.");
 
@@ -319,8 +309,8 @@ export function registerSubagentFeatures(
 // replacement (resume, fork, /new), so this module instance — and the state
 // below — outlives any one session. The session push exists for the seams
 // that creates: a report that settles while a session is being torn down must
-// park rather than throw through a stale ExtensionAPI (whose every method
-// throws once its session is replaced) and get lost.
+// be dropped rather than thrown through a stale ExtensionAPI (whose every
+// method throws once its session is replaced).
 
 /** Where pushed reports go: the live session, or parked between sessions. */
 const sessionPush = createSessionPush();
@@ -409,24 +399,17 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", (_event) => {
     // This runtime's ExtensionAPI is about to start throwing. Reports that
-    // settle from here on park until the next session binds; the widget stops
-    // following a registry it can no longer draw.
+    // settle from here on are dropped; the widget stops following a registry
+    // it can no longer draw.
     sessionPush.unbind();
     uninstallWidget?.();
     uninstallWidget = null;
 
-    // Every shutdown — quit, reload, new, resume, fork — cancels what is
-    // still running. A report belongs to the conversation that asked for it:
-    // the next session's model never started these runs and has no context to
-    // act on their answers, and after quit or reload nothing could deliver
-    // them at all. Marking the cancellations delivered keeps their notices
-    // from following the operator into the next session as noise.
-    const cancelled = subagentRuns.cancel(
-      subagentRuns
-        .list()
-        .filter((run) => run.status === "running")
-        .map((run) => run.id),
-    );
-    getProcessDelivery().deliverInline(cancelled);
+    // Every shutdown — quit, reload, new, resume, fork — is the delivery
+    // module's shutdown: it stops what is still running, marks everything
+    // undelivered as delivered, and clears retention. A report belongs to the
+    // conversation that asked for it; the next session's model never started
+    // these runs and has no context to act on their answers.
+    getProcessDelivery().shutdown();
   });
 }

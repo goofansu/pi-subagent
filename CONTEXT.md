@@ -43,17 +43,24 @@ message when the run settles. The default path.
 their push so they return through the tool result instead. Abandoning the wait
 releases the claim and the run pushes normally.
 
+**Retention** — what a delivered run said, kept whole and addressable by id so
+`agent_result` can hand back what a report's cap trimmed. Delivered means
+recallable — a run the model cancelled included, once its child dies. Scoped to
+the session that asked: shutdown clears it.
+
 **Session push** — the process-lifetime push target reports go through
 (`createSessionPush`). A session's own `sendMessage` throws once that session
 is replaced, so each `session_start` re-aims the target. A report that settles
-mid-teardown parks instead of throwing through the stale API — a crash guard
-for the race, not a cross-session delivery channel.
+with no live session is dropped rather than thrown through the stale API — a
+crash guard for the teardown race, never a cross-session delivery channel.
 
 ## Modules
 
 **Registry** — the module owning the set of live runs and their lifetime.
-Everything that displays or acts on runs reads it; the dispatcher is its only
-writer. It also owns the redraw clock.
+Everything that displays or acts on runs reads it; the dispatcher is the only
+module that adds runs, and delivery is the only module that releases them — a
+run leaves the registry at its delivery, nowhere else. It also owns the redraw
+clock.
 
 **Projection** (`RunView`) — an immutable row derived from a run for display.
 Callers never touch the mutable run record.
@@ -75,8 +82,9 @@ from its most recent tool call. Display only.
 **Trust** — pi's project-trust decision for the working directory, resolved by
 the session and forwarded to every child. The extension never derives its own.
 
-**Shutdown** — every `session_shutdown` stops every running run and marks the
-cancellations delivered, so no notice follows the operator into the next
-session. The next session's model never started these runs and has no context
-to act on their answers; after quit or reload nothing could deliver them at
-all.
+**Shutdown** — every `session_shutdown` stops every running run, marks
+everything undelivered as delivered, and clears retention, so neither a notice
+nor a recallable report follows the operator into the next session. The next
+session's model never started these runs and has no context to act on their
+answers; after quit or reload nothing could deliver them at all. The delivery
+module owns this as one operation (`shutdown`).
