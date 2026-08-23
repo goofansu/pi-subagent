@@ -4,73 +4,26 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
-  buildAgentConfigLayers,
   formatAgentGuidelines,
   formatInvalidAgentFilesWarning,
-  loadLayeredAgentConfigsWithDiagnostics,
+  getAgentsDir,
+  loadAgentConfigsWithDiagnostics,
 } from "./agents.ts";
 import { registerAgentsCommand } from "./agents-command.ts";
-import type { BackendRegistry } from "./backend.ts";
 import { getFinalOutput } from "./messages.ts";
-import {
-  type ProjectConfigPolicy,
-  resolveProjectConfigPolicy,
-} from "./project-config-policy.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
-import {
-  defaultBackendRegistry,
-  getSubagentDepth,
-  runSubagent,
-} from "./runner.ts";
-import type { AgentConfig, Harness } from "./types.ts";
-import { resolveHarness } from "./types.ts";
-
-/**
- * Report harnesses that configured agents ask for but that cannot run here —
- * an unregistered harness, or one whose SDK or binary is missing. Surfacing
- * this at session start beats failing the first delegation.
- */
-export async function findUnavailableHarnessWarnings(
-  agentConfigs: ReadonlyMap<string, AgentConfig>,
-  registry: BackendRegistry,
-): Promise<string[]> {
-  const agentsByHarness = new Map<Harness, string[]>();
-  for (const config of agentConfigs.values()) {
-    const harness = resolveHarness(config);
-    const names = agentsByHarness.get(harness) ?? [];
-    names.push(config.name);
-    agentsByHarness.set(harness, names);
-  }
-
-  const warnings: string[] = [];
-  for (const [harness, names] of agentsByHarness) {
-    const backend = registry.get(harness);
-    const available = backend ? await backend.isAvailable() : false;
-    if (available) continue;
-    warnings.push(
-      `Harness '${harness}' is not available; these agents cannot run: ${names.join(", ")}.` +
-        (harness === "claude"
-          ? ` '@anthropic-ai/claude-agent-sdk' and the per-platform CLI binary it drives are optional dependencies of pi-subagent; reinstall the package, without '--omit=optional', to restore them.`
-          : harness === "codex"
-            ? ` Install or update the Codex CLI, make sure the 'codex' command is on PATH, and verify it supports app server plus the 'multi_agent' and 'multi_agent_v2' feature gates.`
-            : ""),
-    );
-  }
-  return warnings;
-}
-
-// ── Extension ─────────────────────────────────────────────────────────────────
+import { getSubagentDepth, runSubagent } from "./runner.ts";
+import type { AgentConfig } from "./types.ts";
 
 export function registerSubagentFeatures(
   pi: ExtensionAPI,
   projectCwd: string,
-  configuredAgentDir: string,
+  agentsDir: string,
   agentConfigs: Map<string, AgentConfig>,
-  policy: ProjectConfigPolicy,
+  projectTrusted: boolean,
   runner: typeof runSubagent = runSubagent,
 ): void {
-  const { allowProjectConfig } = policy;
-  registerAgentsCommand(pi, agentConfigs, policy);
+  registerAgentsCommand(pi, agentConfigs, agentsDir);
 
   const description = "Run a task in a specialized subagent";
   pi.registerTool({
@@ -103,10 +56,10 @@ export function registerSubagentFeatures(
         description: params.description,
         prompt: params.prompt,
         signal,
-        // Resolved once at session start from Pi's trust decision. Reusing that
-        // snapshot is what keeps delegating from granting a directory more than
-        // working in it already did.
-        allowProjectConfig,
+        // Pi's own trust decision for this directory, taken once at session
+        // start. Forwarding it is what makes a subagent see the project exactly
+        // as the session that delegated to it does.
+        projectTrusted,
         parentModel: ctx.model
           ? {
               provider: ctx.model.provider,
@@ -116,7 +69,6 @@ export function registerSubagentFeatures(
           : undefined,
         onUpdate,
         cwd: projectCwd,
-        agentDir: configuredAgentDir,
       });
 
       const isError = result.status === "failed" || result.status === "aborted";
@@ -158,48 +110,36 @@ export default function subagentExtension(pi: ExtensionAPI) {
   // A Pi child loads installed extensions just like its parent. Keep this
   // extension entirely inert there so the model cannot see and repeatedly
   // attempt a tool that the dispatcher would reject anyway. The dispatcher's
-  // depth check remains the backstop for external harnesses and direct calls.
+  // depth check remains the backstop for direct calls.
   if (getSubagentDepth() > 0) return;
 
   const configuredAgentDir = getAgentDir();
 
-  // Project trust is resolved before session_start. Defer every discovery read
-  // until then so an unknown host fails closed and an untrusted checkout cannot
-  // contribute .pi/agents. The permission is snapshotted here and never
-  // recomputed: rechecking mid-session would let configuration that appeared
-  // after startup grant itself approval.
-  pi.on("session_start", async (_event, ctx) => {
-    const projectCwd = ctx.cwd;
-    const policy = resolveProjectConfigPolicy({
-      cwd: projectCwd,
-      agentDir: configuredAgentDir,
-      piProjectTrusted: ctx.isProjectTrusted?.() ?? false,
-    });
-    const agentConfigLoadResult = loadLayeredAgentConfigsWithDiagnostics(
-      buildAgentConfigLayers(
-        projectCwd,
-        configuredAgentDir,
-        policy.allowProjectConfig,
-      ),
-    );
+  const agentsDir = getAgentsDir(configuredAgentDir);
+
+  // Agents come only from user scope, so discovery reads nothing a working
+  // directory controls and needs no trust decision of its own.
+  //
+  // A child pi is a different matter: it runs in the project directory and
+  // resolves its own settings, resources, and packages there. Pi has already
+  // decided whether this directory is trusted — see
+  // https://pi.dev/docs/latest/security#project-trust — so read its answer and
+  // forward it rather than deriving a second one. A child runs
+  // non-interactively and could neither prompt nor see a session-only decision
+  // on its own. A host that cannot report at all fails closed.
+  //
+  // The answer is taken once, here, and reused for the session.
+  pi.on("session_start", (_event, ctx) => {
+    const agentConfigLoadResult = loadAgentConfigsWithDiagnostics(agentsDir);
     const agentConfigs = agentConfigLoadResult.configs;
 
     registerSubagentFeatures(
       pi,
-      projectCwd,
-      configuredAgentDir,
+      ctx.cwd,
+      agentsDir,
       agentConfigs,
-      policy,
+      ctx.isProjectTrusted?.() ?? false,
     );
-
-    if (policy.warning) ctx.ui.notify(policy.warning, "warning");
-
-    for (const warning of await findUnavailableHarnessWarnings(
-      agentConfigs,
-      defaultBackendRegistry,
-    )) {
-      ctx.ui.notify(warning, "warning");
-    }
 
     if (agentConfigLoadResult.invalidFiles.length > 0) {
       ctx.ui.notify(

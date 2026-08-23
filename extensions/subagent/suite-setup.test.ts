@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEPTH_ENV_KEY } from "./backend.ts";
+import { DEPTH_ENV_KEY } from "./run.ts";
 
 // Read at module load, before any `beforeEach` in any file can touch it.
 const depthAtLoad = process.env[DEPTH_ENV_KEY];

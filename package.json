@@ -1,7 +1,7 @@
 {
   "name": "pi-subagent",
   "version": "1.0.0",
-  "description": "Delegate tasks to specialized subagents with isolated context, running on Pi, Claude Code, or Codex. At most four run at a time, and any run can be cancelled.",
+  "description": "Delegate tasks to specialized Pi subagents with isolated context. At most four run at a time, and any run can be cancelled.",
   "type": "module",
   "keywords": [
     "pi-package"
@@ -33,8 +33,5 @@
   },
   "dependencies": {
     "typebox": "^1.1.38"
-  },
-  "optionalDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.220"
   }
 }

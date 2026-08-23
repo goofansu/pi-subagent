@@ -10,28 +10,16 @@ import {
   formatAgentDetailHint,
   formatAgentListHint,
   formatAgentPromptMarkdown,
+  formatNoAgentsMessage,
   getAgentActionItems,
-  getAgentDetailMarkdownText,
   getAgentSelectItems,
-  getAgentsProjectConfigStatus,
   getFilteredAgentSelectItems,
   registerAgentsCommand,
   runAgentWorkFlow,
 } from "./agents-command.ts";
-import type { ProjectConfigPolicy } from "./project-config-policy.ts";
 import type { AgentConfig } from "./types.ts";
 
-const allowedPolicy: ProjectConfigPolicy = {
-  piProjectTrusted: true,
-  allowProjectConfig: true,
-  reason: "trust-required-and-approved",
-};
-
-const deniedPolicy: ProjectConfigPolicy = {
-  piProjectTrusted: true,
-  allowProjectConfig: false,
-  reason: "vacuous-trust",
-};
+const AGENTS_DIR = "/tmp/user-agent/agents";
 
 type CommandOptions = Parameters<ExtensionAPI["registerCommand"]>[1];
 type RegisteredCommand = { name: string; options: CommandOptions };
@@ -65,24 +53,15 @@ const exploreAgent: AgentConfig = {
   description: "Fast codebase exploration.",
   tools: "read,rg",
   systemPrompt: "# Explore\n\nRead files and report findings.",
-  source: "user",
 };
 
 const reviewAgent: AgentConfig = {
   name: "reviewer",
   description: "Review code carefully.",
   systemPrompt: "Review the implementation.",
-  source: "user",
 };
 
-const projectAgent: AgentConfig = {
-  name: "deployer",
-  description: "Deploy the project.",
-  systemPrompt: "Deploy to production.",
-  source: "project",
-};
-
-test("getAgentSelectItems includes the resolved default harness", () => {
+test("getAgentSelectItems lists each agent by name and description", () => {
   const items = getAgentSelectItems(
     new Map([[exploreAgent.name, exploreAgent]]),
   );
@@ -91,33 +70,7 @@ test("getAgentSelectItems includes the resolved default harness", () => {
     {
       value: "explore",
       label: "explore",
-      description: "[u] [pi] Fast codebase exploration.",
-    },
-  ]);
-});
-
-test("getAgentSelectItems prefixes user agents", () => {
-  const items = getAgentSelectItems(new Map([[reviewAgent.name, reviewAgent]]));
-
-  assert.deepEqual(items, [
-    {
-      value: "reviewer",
-      label: "reviewer",
-      description: "[u] [pi] Review code carefully.",
-    },
-  ]);
-});
-
-test("getAgentSelectItems prefixes project agents", () => {
-  const items = getAgentSelectItems(
-    new Map([[projectAgent.name, projectAgent]]),
-  );
-
-  assert.deepEqual(items, [
-    {
-      value: "deployer",
-      label: "deployer",
-      description: "[p] [pi] Deploy the project.",
+      description: "Fast codebase exploration.",
     },
   ]);
 });
@@ -134,25 +87,25 @@ test("getFilteredAgentSelectItems filters agents by name and description", () =>
     {
       value: "explore",
       label: "explore",
-      description: "[u] [pi] Fast codebase exploration.",
+      description: "Fast codebase exploration.",
     },
   ]);
   assert.deepEqual(getFilteredAgentSelectItems(items, "reviewer"), [
     {
       value: "reviewer",
       label: "reviewer",
-      description: "[u] [pi] Review code carefully.",
+      description: "Review code carefully.",
     },
   ]);
 });
 
-test("getAgentDetailMarkdownText renders only the prompt without description", () => {
+test("the detail view renders only the prompt, without the description", () => {
   assert.equal(
-    getAgentDetailMarkdownText(exploreAgent),
+    formatAgentPromptMarkdown(exploreAgent),
     "# Explore\n\nRead files and report findings.",
   );
   assert.equal(
-    getAgentDetailMarkdownText(exploreAgent).includes(exploreAgent.description),
+    formatAgentPromptMarkdown(exploreAgent).includes(exploreAgent.description),
     false,
   );
 });
@@ -178,27 +131,11 @@ test("formatAgentActionTitle names the selected agent", () => {
   );
 });
 
-test("getAgentsProjectConfigStatus describes available agent sources", () => {
-  assert.deepEqual(getAgentsProjectConfigStatus(allowedPolicy), {
-    primary: "✓ Project configuration enabled",
-    secondary: "[u] User agents • [p] Project agents",
-  });
-  assert.deepEqual(getAgentsProjectConfigStatus(deniedPolicy), {
-    primary: "⚠ Project configuration disabled — [p] project agents excluded",
-    secondary:
-      "[u] User agents remain available • /trust and restart Pi to load project agents",
-  });
-});
-
-test("getAgentsProjectConfigStatus does not send a broken trust store to /trust", () => {
-  const status = getAgentsProjectConfigStatus({
-    piProjectTrusted: true,
-    allowProjectConfig: false,
-    reason: "trust-store-error",
-  });
-
-  assert.match(String(status.secondary), /trust store could not be read/);
-  assert.ok(!String(status.secondary).includes("/trust and restart"));
+test("formatNoAgentsMessage names the directory to create a profile in", () => {
+  assert.equal(
+    formatNoAgentsMessage(AGENTS_DIR),
+    `No subagents are configured. Add a profile to ${AGENTS_DIR}.`,
+  );
 });
 
 test("formatAgentListHint uses keybinding descriptions", () => {
@@ -314,7 +251,7 @@ test("registerAgentsCommand registers the agents slash command", () => {
   registerAgentsCommand(
     pi,
     new Map([[exploreAgent.name, exploreAgent]]),
-    allowedPolicy,
+    AGENTS_DIR,
   );
 
   assert.equal(calls.length, 1);
@@ -325,9 +262,10 @@ test("registerAgentsCommand registers the agents slash command", () => {
   );
 });
 
-test("agents command notifies when no agents are configured", async () => {
+test("agents command points at the agents directory when none are configured", async () => {
   const calls: RegisteredCommand[] = [];
   const notifications: Array<{ message: string; level: string }> = [];
+  let customCalled = false;
   const pi: Pick<ExtensionAPI, "registerCommand" | "sendUserMessage"> = {
     registerCommand(name, options) {
       calls.push({ name, options });
@@ -335,61 +273,23 @@ test("agents command notifies when no agents are configured", async () => {
     sendUserMessage: () => {},
   };
 
-  registerAgentsCommand(pi, new Map(), allowedPolicy);
+  registerAgentsCommand(pi, new Map(), AGENTS_DIR);
 
   await calls[0].options.handler("", {
     ui: {
       notify(message: string, level: string) {
         notifications.push({ message, level });
       },
+      custom: async () => {
+        customCalled = true;
+      },
     },
   } as unknown as CommandContext);
 
+  assert.equal(customCalled, false);
   assert.deepEqual(notifications, [
-    { message: "No subagents are configured.", level: "info" },
+    { message: formatNoAgentsMessage(AGENTS_DIR), level: "info" },
   ]);
-});
-
-test("configuration-disabled empty agents open an explanatory width-safe TUI", async () => {
-  const calls: RegisteredCommand[] = [];
-  const notifications: string[] = [];
-  let rendered: string[] = [];
-  const pi: Pick<ExtensionAPI, "registerCommand" | "sendUserMessage"> = {
-    registerCommand(name, options) {
-      calls.push({ name, options });
-    },
-    sendUserMessage: () => {},
-  };
-
-  registerAgentsCommand(pi, new Map(), deniedPolicy);
-
-  await calls[0].options.handler("", {
-    ui: {
-      notify(message: string) {
-        notifications.push(message);
-      },
-      custom: async (factory: unknown) => {
-        const component = (factory as CustomFactory)(
-          { requestRender() {} },
-          testTheme,
-          { matches: () => false },
-          () => {},
-        );
-        rendered = component.render(32);
-      },
-    },
-  } as unknown as CommandContext);
-
-  const rawText = rendered.join("\n");
-  const text = stripVTControlCharacters(rawText).replace(/\s+/g, " ");
-  assert.deepEqual(notifications, []);
-  assert.ok(rawText.includes("\u001b[33m⚠ Project configuration"));
-  assert.ok(rawText.includes("\u001b[90m"));
-  assert.match(text, /project agents excluded/);
-  assert.match(text, /User agents remain available/);
-  assert.match(text, /No user agents are configured/);
-  assert.match(text, /\/trust and restart Pi/);
-  assert.ok(rendered.every((line) => visibleWidth(line) <= 32));
 });
 
 test("agents command opens a selector when agents are loaded", async () => {
@@ -409,7 +309,7 @@ test("agents command opens a selector when agents are loaded", async () => {
       [exploreAgent.name, exploreAgent],
       [reviewAgent.name, reviewAgent],
     ]),
-    allowedPolicy,
+    AGENTS_DIR,
   );
 
   await calls[0].options.handler("", {
@@ -430,19 +330,13 @@ test("agents command opens a selector when agents are loaded", async () => {
   } as unknown as CommandContext);
 
   assert.equal(customCalled, true);
-  const renderedText = rendered.join("\n");
-  const plainLines = stripVTControlCharacters(renderedText).split("\n");
-  assert.ok(renderedText.includes("\u001b[32m✓ Project configuration enabled"));
-  assert.match(
-    plainLines.join(" ").replace(/\s+/g, " "),
-    /\[u\] User agents • \[p\] Project agents/,
-  );
+  const plainLines = stripVTControlCharacters(rendered.join("\n")).split("\n");
   const exploreLine = plainLines.find(
     (line) => line.includes("explore") && line.includes("Fast codebase"),
   );
   assert.ok(exploreLine);
   const descriptionGap =
-    exploreLine.indexOf("[u]") -
+    exploreLine.indexOf("Fast codebase") -
     (exploreLine.indexOf("explore") + "explore".length);
   assert.ok(descriptionGap >= 1 && descriptionGap < 10);
   assert.ok(rendered.every((line) => visibleWidth(line) <= 100));

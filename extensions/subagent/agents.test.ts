@@ -4,16 +4,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, test } from "node:test";
 import {
-  buildAgentConfigLayers,
   formatAgentGuidelines,
   formatInvalidAgentFilesWarning,
+  getAgentsDir,
   loadAgentConfigs,
   loadAgentConfigsWithDiagnostics,
-  loadLayeredAgentConfigs,
-  loadLayeredAgentConfigsWithDiagnostics,
   parseAgentConfig,
 } from "./agents.ts";
-import { EFFORTS } from "./types.ts";
+import { EFFORTS, resolveAppendSystemPrompt } from "./types.ts";
 
 const tempDirs: string[] = [];
 
@@ -23,19 +21,6 @@ async function makeTempDir(): Promise<string> {
   );
   tempDirs.push(dir);
   return dir;
-}
-
-async function writeAgent(
-  dir: string,
-  name: string,
-  description: string,
-  prompt: string,
-): Promise<void> {
-  await fs.promises.mkdir(dir, { recursive: true });
-  await fs.promises.writeFile(
-    path.join(dir, `${name}.md`),
-    `---\ndescription: ${description}\n---\n\n${prompt}\n`,
-  );
 }
 
 afterEach(async () => {
@@ -57,7 +42,6 @@ test("parseAgentConfig reads name, frontmatter, and system prompt", async () => 
   assert.deepEqual(parseAgentConfig(filePath), {
     name: "reviewer",
     description: "Reviews code",
-    harness: "pi",
     model: "custom",
     tools: "read,grep,find,ls,bash",
     appendSystemPrompt: true,
@@ -65,7 +49,9 @@ test("parseAgentConfig reads name, frontmatter, and system prompt", async () => 
   });
 });
 
-test("parseAgentConfig defaults appendSystemPrompt to true", async () => {
+test("parseAgentConfig leaves an unset appendSystemPrompt absent", async () => {
+  // The default belongs to resolveAppendSystemPrompt, so the parsed profile
+  // records what the file says and nothing more.
   const dir = await makeTempDir();
   const filePath = path.join(dir, "reviewer.md");
   await fs.promises.writeFile(
@@ -73,7 +59,10 @@ test("parseAgentConfig defaults appendSystemPrompt to true", async () => {
     "---\ndescription: Reviews code\n---\n\nYou review code.\n",
   );
 
-  assert.equal(parseAgentConfig(filePath).appendSystemPrompt, true);
+  const config = parseAgentConfig(filePath);
+  assert.equal(config.appendSystemPrompt, undefined);
+  assert.equal(Object.hasOwn(config, "appendSystemPrompt"), false);
+  assert.equal(resolveAppendSystemPrompt(config), true);
 });
 
 test("parseAgentConfig preserves explicit appendSystemPrompt false", async () => {
@@ -85,17 +74,6 @@ test("parseAgentConfig preserves explicit appendSystemPrompt false", async () =>
   );
 
   assert.equal(parseAgentConfig(filePath).appendSystemPrompt, false);
-});
-
-test("example general-purpose project agent uses the append default", () => {
-  const filePath = path.join(
-    process.cwd(),
-    ".pi",
-    "agents",
-    "general-purpose.md",
-  );
-
-  assert.equal(parseAgentConfig(filePath).appendSystemPrompt, true);
 });
 
 test("loadAgentConfigs returns markdown agents keyed by name", async () => {
@@ -114,7 +92,6 @@ test("loadAgentConfigs returns markdown agents keyed by name", async () => {
 
   assert.equal(configs.size, 2);
   assert.equal(configs.get("one")?.description, "First");
-  assert.equal(configs.get("one")?.source, undefined);
   assert.equal(configs.get("one")?.systemPrompt, "One prompt");
   assert.equal(configs.get("two")?.description, "Second");
   assert.equal(configs.get("two")?.systemPrompt, "Two prompt");
@@ -209,7 +186,7 @@ test("formatAgentGuidelines renders available agents as tool-specific guidelines
       "custom",
       {
         name: "custom",
-        description: "",
+        description: "Runs a custom check.",
         systemPrompt: "Custom.",
       },
     ],
@@ -217,7 +194,7 @@ test("formatAgentGuidelines renders available agents as tool-specific guidelines
 
   assert.deepEqual(formatAgentGuidelines(configs), [
     "subagent explore: Fast codebase exploration.",
-    "subagent custom.",
+    "subagent custom: Runs a custom check.",
   ]);
 });
 
@@ -243,85 +220,17 @@ test("formatInvalidAgentFilesWarning renders invalid files for UI notification",
   );
 });
 
-test("buildAgentConfigLayers anchors project and user agents to configured directories", () => {
-  assert.deepEqual(
-    buildAgentConfigLayers("/tmp/customer-project", "/tmp/user-agent", true),
-    [
-      { dir: "/tmp/user-agent/agents", source: "user" },
-      { dir: "/tmp/customer-project/.pi/agents", source: "project" },
-    ],
-  );
+test("getAgentsDir reads agents from user scope only", () => {
+  // No project directory is involved at all: a repository cannot contribute a
+  // system prompt, a model, a tool list, or a description that reaches the
+  // calling model's tool guidelines.
+  assert.equal(getAgentsDir("/tmp/user-agent"), "/tmp/user-agent/agents");
 });
 
-test("buildAgentConfigLayers excludes project agents when the project is untrusted", () => {
-  assert.deepEqual(
-    buildAgentConfigLayers("/tmp/customer-project", "/tmp/user-agent", false),
-    [{ dir: "/tmp/user-agent/agents", source: "user" }],
-  );
-});
+test("loadAgentConfigs returns nothing for a missing agents directory", async () => {
+  const missing = path.join(await makeTempDir(), "missing");
 
-test("loadLayeredAgentConfigs lets project agents override user agents", async () => {
-  const dir = await makeTempDir();
-  const userDir = path.join(dir, "user", "agents");
-  const projectDir = path.join(dir, "project", ".pi", "agents");
-
-  await writeAgent(userDir, "shared", "user shared", "User prompt");
-  await writeAgent(userDir, "user-only", "user only", "User-only prompt");
-  await writeAgent(projectDir, "shared", "project shared", "Project prompt");
-  await writeAgent(
-    projectDir,
-    "project-only",
-    "project only",
-    "Project prompt",
-  );
-
-  const configs = loadLayeredAgentConfigs([
-    { dir: userDir, source: "user" },
-    { dir: projectDir, source: "project" },
-  ]);
-
-  assert.equal(configs.size, 3);
-  assert.equal(configs.get("shared")?.description, "project shared");
-  assert.equal(configs.get("shared")?.source, "project");
-  assert.equal(configs.get("user-only")?.source, "user");
-  assert.equal(configs.get("project-only")?.source, "project");
-});
-
-test("loadLayeredAgentConfigsWithDiagnostics aggregates invalid user and project files", async () => {
-  const userDir = await makeTempDir();
-  const projectDir = await makeTempDir();
-
-  await fs.promises.writeFile(
-    path.join(userDir, "bad-user.md"),
-    "---\ndescription: Bad user\n---\n\n",
-  );
-  await fs.promises.writeFile(
-    path.join(projectDir, "bad-project.md"),
-    "No frontmatter\n",
-  );
-
-  const result = loadLayeredAgentConfigsWithDiagnostics([
-    { dir: userDir, source: "user" },
-    { dir: projectDir, source: "project" },
-  ]);
-
-  assert.equal(result.configs.size, 0);
-  assert.deepEqual(
-    result.invalidFiles.map((invalid) => path.basename(invalid.filePath)),
-    ["bad-user.md", "bad-project.md"],
-  );
-});
-
-test("loadLayeredAgentConfigs tolerates missing directories in any layer", async () => {
-  const missingUser = path.join(await makeTempDir(), "missing-user");
-  const missingProject = path.join(await makeTempDir(), "missing-project");
-
-  const configs = loadLayeredAgentConfigs([
-    { dir: missingUser, source: "user" },
-    { dir: missingProject, source: "project" },
-  ]);
-
-  assert.equal(configs.size, 0);
+  assert.equal(loadAgentConfigs(missing).size, 0);
 });
 
 async function writeAgentWithFrontmatter(
@@ -336,47 +245,12 @@ async function writeAgentWithFrontmatter(
   return filePath;
 }
 
-test("parseAgentConfig defaults an agent without a harness to pi", async () => {
-  const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(dir, "");
-
-  assert.equal(parseAgentConfig(filePath).harness, "pi");
-});
-
-test("parseAgentConfig rejects the removed inherit model value", async () => {
-  const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(dir, "model: inherit");
-
-  assert.throws(
-    () => parseAgentConfig(filePath),
-    /model 'inherit' is not supported; omit model instead/,
-  );
-});
-
-test("parseAgentConfig accepts the codex harness", async () => {
-  const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(dir, "harness: codex");
-
-  assert.equal(parseAgentConfig(filePath).harness, "codex");
-});
-
-test("parseAgentConfig rejects an unknown harness", async () => {
-  const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(dir, "harness: gemini");
-
-  assert.throws(
-    () => parseAgentConfig(filePath),
-    /unknown harness 'gemini'; expected one of pi, claude, codex/,
-  );
-});
-
 test("parseAgentConfig names the field when frontmatter is not a string", async () => {
   // YAML types the value, so nothing stops an author writing a list or a map.
   // The diagnostic has to name the field, not read `raw?.trim is not a
   // function` out of a crash.
   const dir = await makeTempDir();
   for (const [frontmatter, expected] of [
-    ["harness: []", /harness must be a string, not a list/],
     ["model: {a: 1}", /model must be a string, not a map/],
     ["tools: 12", /tools must be a string, not a number/],
     ["model: []", /model must be a string, not a list/],
@@ -407,47 +281,9 @@ test("parseAgentConfig treats an empty optional string field as absent", async (
 
   const config = parseAgentConfig(filePath);
   assert.equal(config.model, undefined);
-  assert.equal(config.appendSystemPrompt, true);
 });
 
-test("loadAgentConfigsWithDiagnostics loads a codex agent", async () => {
-  const dir = await makeTempDir();
-  await writeAgentWithFrontmatter(dir, "harness: codex");
-
-  const { configs, invalidFiles } = loadAgentConfigsWithDiagnostics(dir);
-  assert.equal(configs.get("worker")?.harness, "codex");
-  assert.deepEqual(invalidFiles, []);
-});
-
-test("parseAgentConfig rejects tools on the claude harness", async () => {
-  // Accepting it would read as a restriction while silently not being one — an
-  // author would believe they had built a read-only agent.
-  const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(
-    dir,
-    "harness: claude\ntools: Read, Grep",
-  );
-
-  assert.throws(
-    () => parseAgentConfig(filePath),
-    /tools is only supported on harness 'pi'/,
-  );
-});
-
-test("parseAgentConfig rejects tools on the codex harness", async () => {
-  const dir = await makeTempDir();
-  const filePath = await writeAgentWithFrontmatter(
-    dir,
-    "harness: codex\ntools: read, grep",
-  );
-
-  assert.throws(
-    () => parseAgentConfig(filePath),
-    /tools is only supported on harness 'pi'/,
-  );
-});
-
-test("parseAgentConfig still accepts tools on the pi harness", async () => {
+test("parseAgentConfig accepts a comma-separated tools list", async () => {
   const dir = await makeTempDir();
   const filePath = await writeAgentWithFrontmatter(dir, "tools: read, grep");
 
@@ -458,11 +294,11 @@ test("parseAgentConfig reads effort as its own field", async () => {
   const dir = await makeTempDir();
   const filePath = await writeAgentWithFrontmatter(
     dir,
-    "harness: claude\nmodel: claude-opus-4-5\neffort: high",
+    "model: openai-codex/gpt-5.6-sol\neffort: high",
   );
 
   const config = parseAgentConfig(filePath);
-  assert.equal(config.model, "claude-opus-4-5");
+  assert.equal(config.model, "openai-codex/gpt-5.6-sol");
   assert.equal(config.effort, "high");
 });
 
@@ -488,30 +324,17 @@ test("parseAgentConfig rejects an unknown effort", async () => {
 
 test("parseAgentConfig passes a model through exactly as written", async () => {
   const dir = await makeTempDir();
-  // No provider stripping, no suffix splitting. Whatever the harness accepts is
-  // between the author and the harness.
+  // No provider stripping, no suffix splitting. Whatever pi accepts is between
+  // the author and pi.
   for (const model of [
     "claude-opus-4-5",
     "openai-codex/gpt-5.5",
     "openrouter/google/gemma-4-31b-it:free",
     "bedrock/us.anthropic.claude-opus-4-5-v1:0",
     "arn:aws:bedrock:us-east-1:1234:application-inference-profile/mine",
+    "sonnet:high",
   ]) {
     const filePath = await writeAgentWithFrontmatter(dir, `model: ${model}`);
     assert.equal(parseAgentConfig(filePath).model, model, model);
-  }
-});
-
-test("parseAgentConfig rejects an effort suffix on the model", async () => {
-  const dir = await makeTempDir();
-  for (const model of ["sonnet:high", "inherit:high"]) {
-    const filePath = await writeAgentWithFrontmatter(dir, `model: ${model}`);
-    // The model is handed to the harness verbatim, so a `:high` it carries would
-    // reach it as part of the id. One place to say effort, and this is not it.
-    assert.throws(
-      () => parseAgentConfig(filePath),
-      /model is passed to the harness as written; set 'effort: high' instead of the ':high' suffix/,
-      model,
-    );
   }
 });

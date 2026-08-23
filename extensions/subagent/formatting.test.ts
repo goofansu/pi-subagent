@@ -4,7 +4,6 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   COLLAPSED_TOOL_CALL_PREVIEW_WIDTH,
   EXPANDED_TOOL_CALL_PREVIEW_LENGTH,
-  formatHarnessBadge,
   formatTokens,
   formatToolCall,
   formatUsageStats,
@@ -164,107 +163,12 @@ test("formatToolCall truncates without splitting surrogate pairs", () => {
   assert.equal(hasUnpairedSurrogate(collapsed), false);
 });
 
-test("formatToolCall renders Claude Code's capitalized tool names", () => {
-  // Backends name the same tools differently; without case-insensitive
-  // matching every Claude tool call falls back to a raw JSON preview.
-  const plain: ThemeForeground = (_color, text) => text;
-
-  assert.equal(
-    formatToolCall("Read", { file_path: "/a.ts" }, plain, "collapsed"),
-    "read /a.ts",
-  );
-  assert.equal(
-    formatToolCall("Bash", { command: "ls -la" }, plain, "collapsed"),
-    "$ ls -la",
-  );
-  assert.equal(
-    formatToolCall(
-      "Grep",
-      { pattern: "foo", path: "/src" },
-      plain,
-      "collapsed",
-    ),
-    "grep /foo/ in /src",
-  );
-  assert.equal(
-    formatToolCall(
-      "Glob",
-      { pattern: "*.ts", path: "/src" },
-      plain,
-      "collapsed",
-    ),
-    "find *.ts in /src",
-  );
-});
-
 test("formatToolCall keeps the original casing for an unknown tool", () => {
   const plain: ThemeForeground = (_color, text) => text;
 
   assert.equal(
     formatToolCall("CustomTool", { value: "ok" }, plain, "collapsed"),
     'CustomTool {"value":"ok"}',
-  );
-});
-
-test("formatToolCall keeps collapsed high-volume summaries count-focused", () => {
-  assert.equal(
-    formatToolCall(
-      "TodoWrite",
-      {
-        todos: [
-          { content: "one", status: "completed" },
-          { content: "two", status: "pending" },
-        ],
-      },
-      plainFg,
-      "collapsed",
-    ),
-    "TodoWrite (2 todos)",
-  );
-  assert.equal(
-    formatToolCall(
-      "apply_patch",
-      { changes: [{ path: "/a.ts" }] },
-      plainFg,
-      "collapsed",
-    ),
-    "apply_patch (1 change)",
-  );
-});
-
-test("formatToolCall adds concise todo and changed-path detail when expanded", () => {
-  assert.equal(
-    formatToolCall(
-      "TodoWrite",
-      {
-        todos: [
-          {
-            content: "fix  spaced\nsummary",
-            status: "completed",
-            activeForm: "fixing",
-          },
-          { content: "run tests", status: "pending" },
-        ],
-      },
-      plainFg,
-      "expanded",
-    ),
-    "TodoWrite (2 todos: [x] fix  spaced summary; [ ] run tests)",
-  );
-  assert.equal(
-    formatToolCall(
-      "apply_patch",
-      {
-        changes: [
-          { path: "/src/a  b.ts" },
-          { path: "/src/c\n.ts" },
-          { path: 42 },
-        ],
-      },
-      plainFg,
-      "expanded",
-    ),
-    "apply_patch (3 changes: /src/a  b.ts, /src/c .ts)",
   );
 });
 
@@ -324,17 +228,6 @@ test("formatToolCall preserves ordinary spaces in collapsed generic arguments", 
   );
 });
 
-test("formatToolCall falls through when structured summary args are absent", () => {
-  assert.equal(
-    formatToolCall("TodoWrite", { todos: "not an array" }, plainFg, "expanded"),
-    'TodoWrite {"todos":"not an array"}',
-  );
-  assert.equal(
-    formatToolCall("apply_patch", { changes: null }, plainFg, "expanded"),
-    'apply_patch {"changes":null}',
-  );
-});
-
 test("formatToolCall handles circular and otherwise unserializable arguments", () => {
   const circular: Record<string, unknown> = {};
   circular.self = circular;
@@ -362,13 +255,6 @@ test("formatToolCall bounds large generic arguments in expanded view", () => {
   assert.match(result, /\n… \[truncated\]$/);
 });
 
-test("formatHarnessBadge tags a non-default harness and leaves pi bare", () => {
-  const plain: ThemeForeground = (_color, text) => text;
-
-  assert.equal(formatHarnessBadge("pi", plain), "");
-  assert.equal(formatHarnessBadge("claude", plain), " [claude]");
-});
-
 function hasUnpairedSurrogate(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const unit = value.charCodeAt(index);
@@ -382,36 +268,3 @@ function hasUnpairedSurrogate(value: string): boolean {
   }
   return false;
 }
-
-test("formatUsageStats withholds an output count the run never reported", () => {
-  // A run cut short never delivers the result frame carrying its real totals,
-  // and the per-frame `output_tokens` accumulated in the meantime is a
-  // placeholder — 4 against a true 667 in one measured run. Printing it in the
-  // same shape as an exact figure asserts a number the wire never gave.
-  assert.equal(
-    formatUsageStats(
-      usage({
-        turns: 6,
-        input: 12,
-        output: 186,
-        cacheRead: 130013,
-        cacheWrite: 31067,
-        contextTokens: 44559,
-        outputUnreported: true,
-      }),
-      "claude-sonnet-5",
-    ),
-    // Prompt-side counts settle before generation, so they are real — just
-    // missing whatever request was in flight. Only ↓ goes.
-    "6 turns ↑12 R130k W31k ctx:45k claude-sonnet-5",
-  );
-});
-
-test("formatUsageStats shows the output count of a run that reported one", () => {
-  // The flag is absent on every result written before it existed, and on every
-  // run that settled normally, so an omitted flag must keep the old rendering.
-  assert.equal(
-    formatUsageStats(usage({ turns: 1, output: 667 })),
-    "1 turn ↓667",
-  );
-});

@@ -7,20 +7,14 @@ import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import {
-  formatHarnessBadge,
   formatToolCall,
   formatUsageStats,
   TOOL_CALL_ARROW_PREFIX,
 } from "./formatting.ts";
 import { getDisplayItems, getFinalOutput } from "./messages.ts";
-import type {
-  DisplayItem,
-  PersistedSubagentDetails,
-  ResolvedPersistedResult,
-} from "./types.ts";
-import { resolvePersistedResult } from "./types.ts";
+import type { DisplayItem, SingleResult, SubagentDetails } from "./types.ts";
 
-export const COLLAPSED_ITEM_COUNT = 10;
+const COLLAPSED_ITEM_COUNT = 10;
 
 type SubagentArgs = {
   agent: string;
@@ -47,15 +41,12 @@ function formatDuration(milliseconds: number): string {
 }
 
 function elapsed(start: number | undefined, end: number): string | undefined {
-  if (start === undefined || !Number.isFinite(start) || !Number.isFinite(end)) {
-    return undefined;
-  }
-  return formatDuration(end - start);
+  return start === undefined ? undefined : formatDuration(end - start);
 }
 
 /** Human-readable lifecycle state with queue or backend time where known. */
 export function formatLifecycleStatus(
-  result: ResolvedPersistedResult,
+  result: SingleResult,
   now: number = Date.now(),
 ): string {
   switch (result.status) {
@@ -107,20 +98,18 @@ export function renderSubagentCall(
 }
 
 export function renderSubagentResult(
-  result: AgentToolResult<PersistedSubagentDetails | undefined>,
+  result: AgentToolResult<SubagentDetails | undefined>,
   { expanded }: ToolRenderResultOptions,
   theme: Theme,
   _context: unknown,
 ): Component {
-  const details = result.details as PersistedSubagentDetails | undefined;
+  const details = result.details as SubagentDetails | undefined;
   if (!details || details.results.length === 0) {
     const text = result.content[0];
     return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
   }
 
-  // Reopening an old session can replay results that predate both the harness
-  // and lifecycle fields. Resolve them on a copy before rendering.
-  const r = resolvePersistedResult(details.results[0]);
+  const r = details.results[0];
   const isQueued = r.status === "queued";
   const isRunning = r.status === "running";
   const isError = r.status === "failed" || r.status === "aborted";
@@ -171,7 +160,6 @@ export function renderSubagentResult(
   if (expanded) {
     const container = new Container();
     let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}`;
-    header += formatHarnessBadge(r.harness, theme.fg.bind(theme));
     if (r.description) header += ` ${theme.fg("muted", r.description)}`;
     header += ` ${lifecycleLabel}`;
     if (isError && r.stopReason && r.stopReason !== r.status)
@@ -224,7 +212,6 @@ export function renderSubagentResult(
 
   // Collapsed / running view
   let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}`;
-  text += formatHarnessBadge(r.harness, theme.fg.bind(theme));
   if (r.description) text += ` ${theme.fg("muted", r.description)}`;
   text += ` ${lifecycleLabel}`;
   if (isError && r.stopReason && r.stopReason !== r.status)

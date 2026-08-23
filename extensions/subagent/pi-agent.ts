@@ -1,7 +1,6 @@
 /**
- * Pi backend — spawns Pi in headless JSON mode and folds its NDJSON event
- * stream into the normalized result. This is the original subagent runner,
- * moved behind the backend seam.
+ * The child pi driver — spawns pi in headless JSON mode and folds its NDJSON
+ * event stream into the normalized result the tool result and TUI read.
  */
 
 import { type SpawnOptions, spawn } from "node:child_process";
@@ -13,29 +12,10 @@ import {
   getPackageDir,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import type {
-  ParentModel,
-  SubagentBackend,
-  SubagentRunContext,
-} from "../backend.ts";
-import { appendStderr, DEPTH_ENV_KEY, settleAborted } from "../backend.ts";
-import type { AgentConfig, SingleResult } from "../types.ts";
-import { resolveAppendSystemPrompt } from "../types.ts";
-
-/**
- * Thinking levels pi's `model:<level>` suffix accepts, mirroring the CLI's own
- * VALID_THINKING_LEVELS. It covers the whole backend-neutral scale; which levels
- * a given model actually supports is pi's business, and pi clamps them itself.
- */
-export const PI_THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
+import type { ParentModel, SubagentRun } from "./run.ts";
+import { appendStderr, DEPTH_ENV_KEY, settleAborted } from "./run.ts";
+import type { AgentConfig, SingleResult } from "./types.ts";
+import { resolveAppendSystemPrompt } from "./types.ts";
 
 export interface PiInvocationRuntime {
   execPath: string;
@@ -147,18 +127,18 @@ export function buildPiArgs(
   resolvedModel: string | undefined,
   systemPromptPath: string | undefined,
   thinkingLevel?: string,
-  allowProjectConfig = false,
+  projectTrusted = false,
 ): string[] {
   // The child runs non-interactively, so it cannot inherit a session-only
-  // decision by prompting. Forward the resolved configuration permission
-  // explicitly; otherwise saved/global trust could disagree with the parent
-  // session, in either direction.
+  // decision by prompting. Forward the parent's resolved trust explicitly;
+  // otherwise saved or default trust could disagree with the parent session,
+  // in either direction.
   const args: string[] = [
     "--mode",
     "json",
     "-p",
     "--no-session",
-    allowProjectConfig ? "--approve" : "--no-approve",
+    projectTrusted ? "--approve" : "--no-approve",
   ];
   if (resolvedModel) args.push("--model", resolvedModel);
   // pi takes the thinking level as its own flag, so nothing has to be spliced
@@ -180,11 +160,7 @@ export function buildPiArgs(
   return args;
 }
 
-/**
- * Resolve the `provider/id[:thinkingLevel]` string pi's `--model` expects.
- * `effort` is the backend-neutral spelling of the thinking level and
- * wins over a level baked into the model string.
- */
+/** Resolve the model id pi's `--model` expects, if any applies. */
 export function resolveSubagentModel(
   config: AgentConfig,
   parentModel: ParentModel | undefined,
@@ -285,7 +261,7 @@ export function applyPiJsonEvent(
   return false;
 }
 
-export async function writePromptToTempFile(
+async function writePromptToTempFile(
   agentName: string,
   prompt: string,
 ): Promise<{ dir: string; filePath: string }> {
@@ -303,8 +279,13 @@ export async function writePromptToTempFile(
   return { dir: tmpDir, filePath };
 }
 
-async function runPiAgent(ctx: SubagentRunContext): Promise<SingleResult> {
-  const { task, result, emit, signal } = ctx;
+/**
+ * Run one agent in a child pi process. This is the dispatcher's default
+ * executor; see `SubagentExecutor` in `run.ts` for the contract it satisfies,
+ * cancellation included.
+ */
+export async function runPiAgent(run: SubagentRun): Promise<SingleResult> {
+  const { task, result, emit, signal } = run;
   const { config } = task;
 
   const resolvedModel = resolveSubagentModel(config, task.parentModel);
@@ -328,7 +309,7 @@ async function runPiAgent(ctx: SubagentRunContext): Promise<SingleResult> {
       resolvedModel,
       tmpPromptPath ?? undefined,
       resolveSubagentThinking(config, task.parentModel),
-      task.allowProjectConfig ?? false,
+      task.projectTrusted,
     );
 
     // Emit initial "running" state
@@ -426,7 +407,7 @@ async function runPiAgent(ctx: SubagentRunContext): Promise<SingleResult> {
     });
 
     result.exitCode = exitCode;
-    // Cancellation is a resolved result, not a rejection — see the backend
+    // Cancellation is a resolved result, not a rejection — see the executor
     // contract and {@link settleAborted}. A killed child's exit code says
     // nothing useful, so the abort overrides whatever it reported.
     if (wasAborted) {
@@ -455,12 +436,3 @@ async function runPiAgent(ctx: SubagentRunContext): Promise<SingleResult> {
       }
   }
 }
-
-export const piBackend: SubagentBackend = {
-  name: "pi",
-  // The extension itself runs inside pi, so the harness is available by
-  // construction. Ambiguous SDK hosts may still use the PATH fallback, where a
-  // missing `pi` surfaces as a spawn error instead.
-  isAvailable: async () => true,
-  run: runPiAgent,
-};

@@ -1,7 +1,6 @@
 /**
- * Pi-backend tests for the pieces added by the multi-backend work. The original
- * argument-building and event-folding coverage lives in ../runner.test.ts, which
- * exercises the same functions through the re-exports.
+ * Child pi driver tests: how the CLI is located, what argv it is given, how its
+ * NDJSON stream folds into a result, and how the process itself is settled.
  */
 
 import assert from "node:assert/strict";
@@ -9,16 +8,19 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
-import { createEmptyResult } from "../backend.ts";
-import type { AgentConfig, SingleResult } from "../types.ts";
+import { getFinalOutput } from "./messages.ts";
 import {
+  applyPiJsonEvent,
   buildPiArgs,
   getPiInvocation,
+  getSpawnOptions,
   type PiInvocationRuntime,
-  piBackend,
   resolveSubagentModel,
   resolveSubagentThinking,
-} from "./pi.ts";
+  runPiAgent,
+} from "./pi-agent.ts";
+import { createEmptyResult } from "./run.ts";
+import type { AgentConfig, SingleResult } from "./types.ts";
 
 function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
@@ -205,17 +207,17 @@ async function runPiFixture(
   } = {},
 ): Promise<SingleResult> {
   const shadow = shadowPiBinary(script);
-  const result = createEmptyResult("worker", "Work", "pi");
+  const result = createEmptyResult("worker", "Work", 0);
 
   try {
-    return await piBackend.run({
+    return await runPiAgent({
       task: {
         config: agent({ systemPrompt: "" }),
         description: "Work",
         prompt: "do it",
         cwd: os.tmpdir(),
-        agentDir: os.tmpdir(),
         depth: 0,
+        projectTrusted: false,
       },
       result,
       emit: () => options.onEmit?.(result),
@@ -226,7 +228,7 @@ async function runPiFixture(
   }
 }
 
-test("pi backend accepts exit 0 after a valid agent_end event", async () => {
+test("the child pi driver accepts exit 0 after a valid agent_end event", async () => {
   const terminalEvent = JSON.stringify({
     type: "agent_end",
     messages: [
@@ -250,7 +252,7 @@ test("pi backend accepts exit 0 after a valid agent_end event", async () => {
   assert.equal(settled.messages.length, 1);
 });
 
-test("pi backend fails exit 0 without an agent_end event", async () => {
+test("the child pi driver fails exit 0 without an agent_end event", async () => {
   const nonterminalEvent = JSON.stringify({
     type: "message_end",
     message: {
@@ -271,7 +273,7 @@ test("pi backend fails exit 0 without an agent_end event", async () => {
   assert.match(settled.errorMessage ?? "", /"type":"message_end"/);
 });
 
-test("pi backend rejects a structurally invalid agent_end event", async () => {
+test("the child pi driver rejects a structurally invalid agent_end event", async () => {
   const fakeTerminalEvent = JSON.stringify({
     type: "agent_end",
     messages: { role: "assistant" },
@@ -288,7 +290,7 @@ test("pi backend rejects a structurally invalid agent_end event", async () => {
   assert.match(settled.errorMessage ?? "", /"messages":\{"role"/);
 });
 
-test("pi backend retains a bounded malformed stdout tail", async () => {
+test("the child pi driver retains a bounded malformed stdout tail", async () => {
   const malformedOutput = `malformed-${"x".repeat(3000)}-diagnostic-tail`;
 
   const settled = await runPiFixture(
@@ -303,7 +305,7 @@ test("pi backend retains a bounded malformed stdout tail", async () => {
   assert.ok((settled.errorMessage?.length ?? 0) < 2500);
 });
 
-test("pi backend preserves a nonzero child exit", async () => {
+test("the child pi driver preserves a nonzero child exit", async () => {
   const settled = await runPiFixture(
     "#!/bin/sh\nprintf '%s\\n' '{not-json}'\nprintf '%s\\n' 'fixture failure' >&2\nexit 7\n",
   );
@@ -314,7 +316,7 @@ test("pi backend preserves a nonzero child exit", async () => {
   assert.match(settled.stderr, /fixture failure/);
 });
 
-test("pi backend keeps cancellation authoritative over a missing agent_end", async () => {
+test("the child pi driver keeps cancellation authoritative over a missing agent_end", async () => {
   // The backend contract: cancellation is a resolved result. Rejecting would
   // strip `details` on the way through the host and take the partial transcript
   // with it, so this asserts the resolution rather than a throw.
@@ -439,4 +441,130 @@ test("buildPiArgs omits the thinking flag when no level applies", () => {
   const args = buildPiArgs(agent(), "sonnet", undefined, undefined);
 
   assert.equal(args.includes("--thinking"), false);
+});
+
+test("buildPiArgs passes tools and explicitly replaces native instructions", () => {
+  const args = buildPiArgs(
+    agent({
+      name: "explore",
+      description: "Explore code",
+      tools: "read,grep,find,ls,bash",
+      appendSystemPrompt: false,
+      systemPrompt: "Search only.",
+    }),
+    "anthropic/claude",
+    "/tmp/prompt.md",
+  );
+
+  assert.deepEqual(args, [
+    "--mode",
+    "json",
+    "-p",
+    "--no-session",
+    "--no-approve",
+    "--model",
+    "anthropic/claude",
+    "--tools",
+    "read,grep,find,ls,bash",
+    "--system-prompt",
+    "/tmp/prompt.md",
+  ]);
+});
+
+test("buildPiArgs appends the system prompt when appendSystemPrompt is omitted", () => {
+  const args = buildPiArgs(agent(), undefined, "/tmp/prompt.md");
+
+  assert.deepEqual(args, [
+    "--mode",
+    "json",
+    "-p",
+    "--no-session",
+    "--no-approve",
+    "--append-system-prompt",
+    "/tmp/prompt.md",
+  ]);
+});
+
+test("buildPiArgs omits tools so a profile without them uses pi's own defaults", () => {
+  assert.deepEqual(buildPiArgs(agent(), undefined, undefined), [
+    "--mode",
+    "json",
+    "-p",
+    "--no-session",
+    "--no-approve",
+  ]);
+});
+
+test("buildPiArgs does not include the prompt in argv", () => {
+  // The prompt goes over stdin: argv is visible in process listings and is
+  // bounded by the OS argument limit.
+  const args = buildPiArgs(
+    agent({ systemPrompt: "Do stuff." }),
+    undefined,
+    undefined,
+  );
+
+  assert.ok(
+    !args.some((a) => a.includes("Do stuff")),
+    "prompt must not appear in argv",
+  );
+});
+
+test("getSpawnOptions runs child pi in the configured project cwd", () => {
+  const options = getSpawnOptions("/tmp/customer-project", 0);
+
+  assert.equal(options.cwd, "/tmp/customer-project");
+  assert.equal(options.env?.PI_SUBAGENT_DEPTH, "1");
+});
+
+test("applyPiJsonEvent collects final messages from agent_end events", () => {
+  const current = createEmptyResult("general-purpose", "test", 0);
+
+  assert.equal(
+    applyPiJsonEvent(
+      {
+        type: "agent_end",
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "final from agent_end" }],
+            stopReason: "stop",
+          },
+        ],
+      },
+      current,
+    ),
+    true,
+  );
+
+  assert.equal(getFinalOutput(current.messages), "final from agent_end");
+  assert.equal(current.stopReason, "stop");
+  assert.equal(current.usage.turns, 1);
+});
+
+test("the child pi driver ignores an abort that arrives after a clean exit", async () => {
+  const controller = new AbortController();
+  const terminalEvent = JSON.stringify({
+    type: "agent_end",
+    messages: [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "finished before the abort" }],
+        stopReason: "stop",
+      },
+    ],
+  });
+
+  const settled = await runPiFixture(
+    `#!/bin/sh\nprintf '%s\\n' '${terminalEvent}'\n`,
+    { signal: controller.signal },
+  );
+  // A late cancellation must not retroactively fail a run that already
+  // completed, which is what an abort listener left attached would do.
+  controller.abort();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(settled.exitCode, 0);
+  assert.equal(settled.stopReason, "stop");
+  assert.equal(settled.errorMessage, undefined);
 });

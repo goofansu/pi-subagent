@@ -1,9 +1,6 @@
 # pi-subagent
 
-Delegate tasks to specialized subagents with isolated context windows in pi.
-
-Each agent runs on a **harness** selected by its profile, so the calling agent
-picks a role to delegate to without having to configure a backend.
+Delegate tasks to specialized subagents with isolated context windows in pi. Each subagent runs in its own child pi process and follows [pi's project-trust model](https://pi.dev/docs/latest/security#project-trust).
 
 ## Install
 
@@ -13,194 +10,58 @@ pi install https://github.com/goofansu/pi-subagent
 
 ## Command and tool
 
-The extension provides:
+- `/agents` lists loaded agent profiles, shows their prompts, and hands one a task. With no agents configured, it prints the directory to add one to.
+- `subagent` runs a task with a selected profile. It takes only `agent`, `description`, and `prompt`; the profile decides the model, effort, and tools.
 
-- `/agents`, a command for listing loaded agent profiles, viewing their prompts,
-  and asking an agent to handle a task.
-- `subagent`, a tool for running a task with a selected agent profile. It accepts
-  only `agent`, `description`, and `prompt`; the profile determines the harness,
-  model, effort, and tools.
+## Usage
 
-## Agent format
+### Agent format
 
-Agents are Markdown files in an `agents/` directory. The filename without
-`.md` is the name passed to the `subagent` tool.
+An agent is a Markdown file named after the agent, so `implementer.md` is the agent `implementer`:
 
-The supported frontmatter fields are listed below. `description` and the prompt
-body are required. Invalid files are skipped and reported at session start.
+```markdown
+---
+description: Implements approved plans and verifies changes
+model: openai-codex/gpt-5.6-sol
+effort: high
+---
+
+You are an implementation agent. Follow the approved plan and verify your work.
+```
+
+The frontmatter configures the run and the body is the prompt. Only `description` and the body are required; a file missing either is skipped and reported at session start.
 
 | Field | Required | Description | Example |
 | --- | --- | --- | --- |
 | `description` | Yes | When to use the agent. | `Implement and verify a scoped change` |
-| `harness` | No | Execution backend. Defaults to `pi`. | `pi`, `claude`, `codex` |
-| `model` | No | Passed exactly to the selected harness. See omitted behavior below. | `opus`, `gpt-5.6-sol` |
+| `model` | No | Passed to pi exactly as written. Omit it to use the calling session's model. | `openai-codex/gpt-5.6-sol` |
 | `effort` | No | Reasoning depth, independent of `model`. | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
-| `tools` | No | Comma-separated tool names. Harness behavior is listed below. | `read, grep, find, ls` |
-| `appendSystemPrompt` | No | Append the prompt to native instructions. Defaults to `true`; set to `false` to replace them. | `false` |
+| `tools` | No | Comma-separated pi tool names. Omit it to use pi's defaults. | `read, grep, find, ls` |
+| `appendSystemPrompt` | No | Append the prompt to pi's own instructions. Defaults to `true`; `false` replaces them. | `false` |
 
-Harness-specific field behavior:
+`model` reaches pi untouched, so reasoning depth belongs in `effort`, which pi takes as its thinking level. The two fields resolve independently:
 
-- `pi`: omitting `model` uses the parent model. `tools` controls the available
-  pi tools; omit it to use pi's defaults.
-- `claude`: omitting `model` uses Claude Code's default model. Declaring `tools`
-  makes the profile invalid.
-- `codex`: omitting `model` uses Codex's default model. Declaring `tools` makes
-  the profile invalid.
-
-Profile prompts append to the harness's native instructions by default. Set
-`appendSystemPrompt: false` only when the profile prompt should replace those
-native instructions.
-
-## Agent discovery
-
-Pi discovers user and project agents. A project file replaces a user file with
-the same name. Here, **project** means pi's current working directory.
-
-| Priority | Scope | Location |
+| Profile | Model the subagent runs | Thinking level it runs at |
 | --- | --- | --- |
-| 1 | project | `.pi/agents/` |
-| 2 | user | `~/.pi/agent/agents/` |
+| neither field | the calling session's | the calling session's |
+| `effort` only | the calling session's | `effort` |
+| `model` only | `model` | pi's own `defaultThinkingLevel` |
+| both fields | `model` | `effort` |
 
-Project agents are discovered only when [project configuration](#project-configuration-gating)
-is enabled. For example, `~/.pi/agent/agents/security-reviewer.md` defines a user
-agent, which such a project can override with `.pi/agents/security-reviewer.md`.
+Pinning a `model` therefore drops the caller's thinking level instead of carrying it over, since a level chosen for one model is not a level for another. Set `effort` whenever the depth matters. Pi clamps either to what the chosen model supports.
 
-## Agent profiles
+### Agent lookup
 
-The profiles below use the same role and prompt to highlight harness-specific
-configuration and runtime behavior. Pi reports incompatible or missing
-harnesses at session start.
-
-### pi
-
-- Runs on pi itself.
-- Uses the current pi installation.
-- Is the default harness and supports profile-controlled tools.
-
-```markdown
----
-description: Implements approved plans and verifies changes
-harness: pi
-model: openai-codex/gpt-5.5
-effort: high
----
-
-You are an implementation agent. Follow the approved plan and verify your work.
-```
-
-### Claude
-
-- Runs on Claude Code with its native tools and approvals bypassed.
-- Uses the Claude Agent SDK bundled with this package. Reinstall pi-subagent if
-  pi reports that the SDK is missing; a separately installed global Claude Code
-  CLI is not used.
-- Accepts aliases such as `opus`, `sonnet`, and `haiku`; use a full model ID when
-  you need a fixed version.
-
-```markdown
----
-description: Implements approved plans and verifies changes
-harness: claude
-model: opus
-effort: high
----
-
-You are an implementation agent. Follow the approved plan and verify your work.
-```
-
-### Codex
-
-- Runs on Codex CLI with its native tools, approvals bypassed, and full-access
-  sandbox mode.
-- Requires a current `codex` CLI on `PATH`, authenticated and configured as
-  usual.
-
-```markdown
----
-description: Implements approved plans and verifies changes
-harness: codex
-model: gpt-5.6-sol
-effort: high
----
-
-You are an implementation agent. Follow the approved plan and verify your work.
-```
-
-## User experience
-
-### Concurrency
-
-At most four subagents run concurrently. Additional runs remain visible as
-queued work and start when a slot opens.
-
-Runs have no automatic time limit.
-
-### Cancellation
-
-Press `Esc` to cancel the current pi turn. This cancels all of its running and
-queued subagent calls; there is no per-subagent cancellation control. A queued
-run that is cancelled never starts.
-
-Cancel a stuck run with `Esc`. Output produced before cancellation remains in
-the subagent tool result in the parent pi session. A run cancelled while still
-queued has no output to retain.
+Only the user directory is resolved: `~/.pi/agent/agents/`, or `$PI_CODING_AGENT_DIR/agents/` when that is set.
 
 ## Technique details
 
-### Permissions and tools
+### Concurrency
 
-- `pi`: supports a profile-defined `tools` list. Use a read-only list when you
-  need a restricted agent. A child pi process does not register this extension's
-  tool or commands.
-- `claude`: runs headlessly with approvals bypassed and receives an explicit
-  allowlist of working tools. Agent-spawning tools and deferred tool discovery
-  are excluded.
-- `codex`: runs headlessly with approvals bypassed and full-access sandbox mode.
-  Native multi-agent delegation is disabled.
+At most four subagents run at once; the rest stay visible as queued work and start when a slot opens. Runs have no time limit. `Esc` cancels the pi turn and with it every running and queued subagent call, keeping whatever output had already arrived.
 
-All harnesses can read and modify files or execute commands when their available
-tools allow it.
+### Security
 
-Every harness also enforces the extension's one-level nesting guard as a
-backstop, so a subagent cannot call the `subagent` tool.
+Project trust is [pi's](https://pi.dev/docs/latest/security#project-trust). The extension resolves none of its own and forwards pi's decision to every child.
 
-This prevents accidental delegation loops, not adversarial recursion: an agent
-with shell access can still invoke another CLI directly.
-
-### Project configuration gating
-
-Subagents derive a conservative **project configuration permission** from pi's
-trust decision. The permission is resolved once at session start and reused by
-every subagent that session; unknown state is treated as denied.
-
-It is enabled when pi trusts the project **and** either:
-
-- the directory holds resources that made pi actually gate on trust, or
-- pi's trust store records a positive decision for the directory or an ancestor.
-
-Pi reports a project as trusted without asking anyone when there is nothing to
-gate. That vacuous answer is not forwarded to children as approval: a checkout
-or generator could add project configuration after the session started, and a
-child spawned later would pick it up without anyone having decided.
-
-- **Enabled:** the selected harness loads its project settings and resources
-  normally, and `.pi/agents` profiles are discovered.
-- **Disabled:** `.pi/agents` profiles are skipped — `/agents` says so, and
-  `/trust` plus a pi restart enables them — and harness behavior differs:
-
-  - `pi`: does not load project settings or executable integrations, but still
-    loads context files such as `AGENTS.md` and `CLAUDE.md`.
-  - `claude`: does not load project `CLAUDE.md` or project/local settings, and
-    disables all inherited MCP servers.
-  - `codex`: marks the project as untrusted and still loads its `AGENTS.md`. It
-    also disables hooks, plugins, apps, and all inherited MCP servers across
-    configuration scopes.
-
-This controls automatic loading of project-controlled configuration only. It is
-not a sandbox: it does not restrict file access, tools, commands, or network
-access, and context files still load according to each harness.
-
-### Session persistence
-
-Every harness runs one-shot tasks with no session to resume. Subagent runs are
-ephemeral and do not save separate child transcripts.
+A subagent reads files, writes files, and runs commands as far as its `tools` list allows, and cannot call the `subagent` tool itself — delegation is one level deep.

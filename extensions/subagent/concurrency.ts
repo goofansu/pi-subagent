@@ -4,8 +4,8 @@
  * The dispatcher runs one agent per call, but the host executes a turn's tool
  * calls concurrently unless a tool declares itself sequential — so a parent that
  * emits five `subagent` calls in one turn starts five children at once, each a
- * full harness process with its own model traffic. Nothing in the tool shape
- * bounds that, which is why the bound lives here.
+ * full pi process with its own model traffic. Nothing in the tool shape bounds
+ * that, which is why the bound lives here.
  *
  * The cap is process-wide rather than per-call: it exists to protect local
  * resources, and those are shared by every run in flight.
@@ -14,7 +14,7 @@
 /**
  * The default cap. Four is enough for the fan-out a parallel fan-out is
  * actually for while staying inside what one machine can host — each slot is a
- * child harness process, not a coroutine.
+ * child pi process, not a coroutine.
  */
 export const MAX_CONCURRENT_SUBAGENTS = 4;
 
@@ -45,7 +45,6 @@ export interface SubagentLimiter {
 
 interface Waiter {
   admit: () => void;
-  reject: (cause: unknown) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
 }
@@ -99,7 +98,7 @@ export function createSubagentLimiter(
         return takeSlot();
       }
       await new Promise<void>((admit, reject) => {
-        const waiter: Waiter = { admit, reject, ...(signal ? { signal } : {}) };
+        const waiter: Waiter = { admit, ...(signal ? { signal } : {}) };
         if (signal) {
           waiter.onAbort = () => {
             const index = waiting.indexOf(waiter);

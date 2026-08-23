@@ -6,11 +6,7 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { COLLAPSED_TOOL_CALL_LINE_WIDTH } from "./formatting.ts";
 import { formatLifecycleStatus, renderSubagentResult } from "./render.ts";
-import type {
-  PersistedSubagentDetails,
-  SingleResult,
-  UsageStats,
-} from "./types.ts";
+import type { SingleResult, SubagentDetails, UsageStats } from "./types.ts";
 
 initTheme(undefined, false);
 
@@ -39,7 +35,6 @@ function singleResult(overrides: Partial<SingleResult> = {}): SingleResult {
   return {
     agent: "worker",
     description: "",
-    harness: "pi",
     status: "completed",
     queuedAt: 1_000,
     startedAt: 2_000,
@@ -52,9 +47,7 @@ function singleResult(overrides: Partial<SingleResult> = {}): SingleResult {
   };
 }
 
-function resultWithCommand(
-  command: string,
-): AgentToolResult<PersistedSubagentDetails> {
+function resultWithCommand(command: string): AgentToolResult<SubagentDetails> {
   const messages = [
     assistantMessage([
       {

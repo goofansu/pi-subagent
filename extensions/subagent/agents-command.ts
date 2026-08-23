@@ -21,9 +21,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import type { ProjectConfigPolicy } from "./project-config-policy.ts";
 import type { AgentConfig } from "./types.ts";
-import { resolveHarness } from "./types.ts";
 
 type AgentAction = "view" | "work";
 
@@ -36,19 +34,13 @@ type KeybindingMatcher = {
   matches(data: string, action: string): boolean;
 };
 
-function formatAgentListDescription(agent: AgentConfig): string {
-  const prefix = agent.source === "project" ? "[p]" : "[u]";
-  const harness = ` [${resolveHarness(agent)}]`;
-  return `${prefix}${harness} ${agent.description}`;
-}
-
 export function getAgentSelectItems(
   agentConfigs: ReadonlyMap<string, AgentConfig>,
 ): SelectItem[] {
   return [...agentConfigs.values()].map((agent) => ({
     value: agent.name,
     label: agent.name,
-    description: formatAgentListDescription(agent),
+    description: agent.description,
   }));
 }
 
@@ -77,43 +69,18 @@ export function formatAgentActionTitle(agentName: string): string {
   return `Choose action for ${agentName}`;
 }
 
+/** The prompt body, which every valid profile has. */
 export function formatAgentPromptMarkdown(agent: AgentConfig): string {
-  return agent.systemPrompt.trim() || "_No prompt configured._";
-}
-
-export function getAgentDetailMarkdownText(agent: AgentConfig): string {
-  return formatAgentPromptMarkdown(agent);
+  return agent.systemPrompt.trim();
 }
 
 export function buildAgentWorkMessage(agentName: string, task: string): string {
   return `Use the subagent tool with agent "${agentName}" for the task: ${task}`;
 }
 
-/**
- * Describes configuration permission, not repository safety: the extension
- * knows whether project-controlled config may load, which is a narrower claim
- * than "this project is trusted".
- */
-export function getAgentsProjectConfigStatus(policy: ProjectConfigPolicy): {
-  primary: string;
-  secondary?: string;
-} {
-  if (policy.allowProjectConfig) {
-    return {
-      primary: "✓ Project configuration enabled",
-      secondary: "[u] User agents • [p] Project agents",
-    };
-  }
-
-  return {
-    primary: "⚠ Project configuration disabled — [p] project agents excluded",
-    // Pointing at /trust would be bad advice for an unreadable store: /trust
-    // writes to the very file that will not parse.
-    secondary:
-      policy.reason === "trust-store-error"
-        ? "[u] User agents remain available • Pi's trust store could not be read"
-        : "[u] User agents remain available • /trust and restart Pi to load project agents",
-  };
+/** Where to put an agent, for the case where there are none to list. */
+export function formatNoAgentsMessage(agentsDir: string): string {
+  return `No subagents are configured. Add a profile to ${agentsDir}.`;
 }
 
 export function formatAgentListHint(
@@ -165,27 +132,6 @@ export async function runAgentWorkFlow(
   closeAgentsUi();
 }
 
-function addProjectConfigStatus(
-  container: Container,
-  theme: Theme,
-  policy: ProjectConfigPolicy,
-): void {
-  const status = getAgentsProjectConfigStatus(policy);
-  const text = theme.fg(
-    policy.allowProjectConfig ? "success" : "warning",
-    status.primary,
-  );
-  container.addChild(
-    new Text(
-      status.secondary
-        ? `${text}${theme.fg("muted", ` • ${status.secondary}`)}`
-        : text,
-      1,
-      0,
-    ),
-  );
-}
-
 class AgentsListComponent extends Container {
   private readonly searchInput = new Input();
   private readonly listContainer = new Container();
@@ -204,7 +150,6 @@ class AgentsListComponent extends Container {
     onCancel: () => void,
     keybindings: KeybindingMatcher,
     requestRender: () => void,
-    policy: ProjectConfigPolicy,
   ) {
     super();
     this.theme = theme;
@@ -218,7 +163,6 @@ class AgentsListComponent extends Container {
     this.addChild(
       new Text(theme.fg("accent", theme.bold("Select agent")), 1, 0),
     );
-    addProjectConfigStatus(this, theme, policy);
     this.addChild(this.searchInput);
     this.addChild(new Spacer(1));
     this.addChild(this.listContainer);
@@ -290,48 +234,6 @@ class AgentsListComponent extends Container {
     };
     this.selectList.onCancel = this.onCancel;
     this.listContainer.addChild(this.selectList);
-  }
-}
-
-class EmptyAgentsComponent extends Container {
-  private readonly keybindings: KeybindingMatcher;
-  private readonly onCancel: () => void;
-
-  constructor(
-    theme: Theme,
-    policy: ProjectConfigPolicy,
-    keybindings: KeybindingMatcher,
-    onCancel: () => void,
-  ) {
-    super();
-    this.keybindings = keybindings;
-    this.onCancel = onCancel;
-    this.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-    this.addChild(
-      new Text(theme.fg("accent", theme.bold("Select agent")), 1, 0),
-    );
-    addProjectConfigStatus(this, theme, policy);
-    this.addChild(new Spacer(1));
-    this.addChild(
-      new Text(
-        theme.fg("warning", "No user agents are configured.") +
-          theme.fg(
-            "muted",
-            " Use /trust and restart Pi to load project agents.",
-          ),
-        1,
-        0,
-      ),
-    );
-    this.addChild(new Spacer(1));
-    this.addChild(
-      new Text(theme.fg("dim", keyHint("tui.select.cancel", "close")), 1, 0),
-    );
-    this.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-  }
-
-  handleInput(data: string): void {
-    if (this.keybindings.matches(data, "tui.select.cancel")) this.onCancel();
   }
 }
 
@@ -407,7 +309,7 @@ class AgentDetailOverlayComponent {
     this.agent = agent;
     this.onBack = onBack;
     this.markdown = new Markdown(
-      getAgentDetailMarkdownText(agent),
+      formatAgentPromptMarkdown(agent),
       1,
       0,
       getMarkdownTheme(),
@@ -488,7 +390,7 @@ class AgentDetailOverlayComponent {
 
   invalidate(): void {
     this.markdown = new Markdown(
-      getAgentDetailMarkdownText(this.agent),
+      formatAgentPromptMarkdown(this.agent),
       1,
       0,
       getMarkdownTheme(),
@@ -570,24 +472,18 @@ async function openAgentDetail(
 export function registerAgentsCommand(
   pi: Pick<ExtensionAPI, "registerCommand" | "sendUserMessage">,
   agentConfigs: ReadonlyMap<string, AgentConfig>,
-  policy: ProjectConfigPolicy,
+  agentsDir: string,
 ) {
   pi.registerCommand("agents", {
     description: "List loaded subagents and view their prompts.",
     handler: async (_args, ctx) => {
       const items = getAgentSelectItems(agentConfigs);
-      if (items.length === 0 && policy.allowProjectConfig) {
-        ctx.ui.notify("No subagents are configured.", "info");
+      if (items.length === 0) {
+        ctx.ui.notify(formatNoAgentsMessage(agentsDir), "info");
         return;
       }
 
       await ctx.ui.custom<void>((rootTui, theme, keybindings, done) => {
-        if (items.length === 0) {
-          return new EmptyAgentsComponent(theme, policy, keybindings, () =>
-            done(undefined),
-          );
-        }
-
         type ActiveComponent = {
           render(width: number): string[];
           invalidate(): void;
@@ -635,7 +531,6 @@ export function registerAgentsCommand(
           () => done(undefined),
           keybindings,
           () => rootTui.requestRender(),
-          policy,
         );
 
         activeComponent = agentList;

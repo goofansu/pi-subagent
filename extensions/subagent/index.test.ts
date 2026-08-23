@@ -4,25 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { SubagentBackend } from "./backend.ts";
-import { createBackendRegistry, createEmptyResult } from "./backend.ts";
-import subagentExtension, {
-  findUnavailableHarnessWarnings,
-  registerSubagentFeatures,
-} from "./index.ts";
-import type { ProjectConfigPolicy } from "./project-config-policy.ts";
+import subagentExtension, { registerSubagentFeatures } from "./index.ts";
+import { createEmptyResult } from "./run.ts";
 import type { RunSubagentOptions } from "./runner.ts";
-import type { AgentConfig, Harness } from "./types.ts";
-
-function policyFor(allowProjectConfig: boolean): ProjectConfigPolicy {
-  return {
-    piProjectTrusted: allowProjectConfig,
-    allowProjectConfig,
-    reason: allowProjectConfig
-      ? "trust-required-and-approved"
-      : "vacuous-trust",
-  };
-}
+import type { AgentConfig } from "./types.ts";
 
 // ── Extension registration ───────────────────────────────────────────────────
 
@@ -52,11 +37,11 @@ test("the extension is not exposed inside a subagent Pi process", () => {
   }
 });
 
-test("subagent executions use the permission captured at session start", async () => {
-  for (const sessionPermission of [true, false]) {
+test("subagent executions use the trust decision captured at session start", async () => {
+  for (const sessionTrust of [true, false]) {
     let registeredTool: unknown;
     let executeTrustChecks = 0;
-    let forwardedPermission: boolean | undefined;
+    let forwardedTrust: boolean | undefined;
     const pi = {
       registerCommand() {},
       registerTool(tool: unknown) {
@@ -67,8 +52,8 @@ test("subagent executions use the permission captured at session start", async (
       },
     } as unknown as ExtensionAPI;
     const runner = async (options: RunSubagentOptions) => {
-      forwardedPermission = options.allowProjectConfig;
-      const result = createEmptyResult("worker", "task", "pi", 0);
+      forwardedTrust = options.projectTrusted;
+      const result = createEmptyResult("worker", "task", 0);
       result.status = "completed";
       result.exitCode = 0;
       return result;
@@ -79,7 +64,7 @@ test("subagent executions use the permission captured at session start", async (
       "/project",
       "/agent-dir",
       new Map([["worker", agentConfig("worker")]]),
-      policyFor(sessionPermission),
+      sessionTrust,
       runner,
     );
 
@@ -100,57 +85,54 @@ test("subagent executions use the permission captured at session start", async (
       {
         isProjectTrusted() {
           executeTrustChecks++;
-          return !sessionPermission;
+          return !sessionTrust;
         },
       },
     );
 
-    assert.equal(forwardedPermission, sessionPermission);
+    assert.equal(forwardedTrust, sessionTrust);
     assert.equal(executeTrustChecks, 0);
   }
 });
 
-test("the agents command receives the permission captured at session start", async () => {
-  for (const sessionPermission of [true, false]) {
-    let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
-    let customCalled = false;
-    const notifications: string[] = [];
-    const pi = {
-      registerCommand(_name: string, options: unknown) {
-        command = options as Parameters<ExtensionAPI["registerCommand"]>[1];
+test("the agents command is told where agents live", async () => {
+  let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+  let customCalled = false;
+  const notifications: string[] = [];
+  const pi = {
+    registerCommand(_name: string, options: unknown) {
+      command = options as Parameters<ExtensionAPI["registerCommand"]>[1];
+    },
+    registerTool() {},
+  } as unknown as ExtensionAPI;
+
+  registerSubagentFeatures(
+    pi,
+    "/project",
+    "/agent-dir/agents",
+    new Map(),
+    true,
+  );
+
+  assert.ok(command);
+  await command.handler("", {
+    ui: {
+      notify(message: string) {
+        notifications.push(message);
       },
-      registerTool() {},
-    } as unknown as ExtensionAPI;
-
-    registerSubagentFeatures(
-      pi,
-      "/project",
-      "/agent-dir",
-      new Map(),
-      policyFor(sessionPermission),
-    );
-
-    assert.ok(command);
-    await command.handler("", {
-      ui: {
-        notify(message: string) {
-          notifications.push(message);
-        },
-        custom: async () => {
-          customCalled = true;
-        },
+      custom: async () => {
+        customCalled = true;
       },
-    } as unknown as Parameters<typeof command.handler>[1]);
+    },
+  } as unknown as Parameters<typeof command.handler>[1]);
 
-    assert.equal(customCalled, !sessionPermission);
-    assert.deepEqual(
-      notifications,
-      sessionPermission ? ["No subagents are configured."] : [],
-    );
-  }
+  assert.equal(customCalled, false);
+  assert.deepEqual(notifications, [
+    "No subagents are configured. Add a profile to /agent-dir/agents.",
+  ]);
 });
 
-// ── Session-start project configuration policy ───────────────────────────────
+// ── Session-start discovery ──────────────────────────────────────────────────
 
 interface SessionStartRun {
   notifications: string[];
@@ -163,8 +145,8 @@ interface SessionStartRun {
 
 /**
  * Drive the real extension entry point against a temporary checkout and agent
- * directory, so the policy, discovery, and command registration are exercised
- * the way a session start does.
+ * directory, so discovery, trust forwarding, and command registration are
+ * exercised the way a session start does.
  */
 async function startSession(options: {
   cwd: string;
@@ -257,18 +239,26 @@ function makeCheckout(): { cwd: string; agentDir: string } {
   return { cwd, agentDir };
 }
 
-function writeProjectAgent(cwd: string, name: string): void {
-  mkdirSync(path.join(cwd, ".pi", "agents"), { recursive: true });
+function writeAgent(dir: string, name: string): void {
+  mkdirSync(dir, { recursive: true });
   writeFileSync(
-    path.join(cwd, ".pi", "agents", `${name}.md`),
-    `---\nname: ${name}\ndescription: ${name} agent\n---\n\nWork.\n`,
+    path.join(dir, `${name}.md`),
+    `---\ndescription: ${name} agent\n---\n\nWork.\n`,
     "utf-8",
   );
 }
 
-test("vacuous pi trust excludes project agents", async () => {
+function writeUserAgent(agentDir: string, name: string): void {
+  writeAgent(path.join(agentDir, "agents"), name);
+}
+
+function writeProjectAgent(cwd: string, name: string): void {
+  writeAgent(path.join(cwd, ".pi", "agents"), name);
+}
+
+test("agents come from the user directory", async () => {
   const { cwd, agentDir } = makeCheckout();
-  writeProjectAgent(cwd, "proj");
+  writeUserAgent(agentDir, "helper");
 
   const session = await startSession({
     cwd,
@@ -276,155 +266,51 @@ test("vacuous pi trust excludes project agents", async () => {
     piProjectTrusted: true,
   });
 
-  assert.deepEqual(session.agentNames, []);
+  assert.deepEqual(session.agentNames, ["helper"]);
   assert.deepEqual(session.notifications, []);
 });
 
-test("a host that cannot report trust fails closed", async () => {
+test("a project directory cannot contribute an agent, trusted or not", async () => {
+  // A profile carries a system prompt, a model, and a tool list, and its
+  // description is injected into the calling model's tool guidelines. Reading
+  // one from a working directory would let a checkout shape what the delegating
+  // session does and says, so no trust state enables it.
+  for (const piProjectTrusted of [true, false, undefined]) {
+    const { cwd, agentDir } = makeCheckout();
+    writeProjectAgent(cwd, "proj");
+    writeUserAgent(agentDir, "helper");
+
+    const session = await startSession({
+      cwd,
+      agentDir,
+      ...(piProjectTrusted === undefined ? {} : { piProjectTrusted }),
+    });
+
+    assert.deepEqual(
+      session.agentNames,
+      ["helper"],
+      `trusted=${piProjectTrusted}`,
+    );
+  }
+});
+
+test("an agents command with nothing to list says where to add a profile", async () => {
   const { cwd, agentDir } = makeCheckout();
-  writeProjectAgent(cwd, "proj");
-  // Even a saved approval cannot substitute for a host that never said.
-  writeFileSync(
-    path.join(agentDir, "trust.json"),
-    JSON.stringify({ [cwd]: true }),
-    "utf-8",
-  );
 
   const session = await startSession({ cwd, agentDir });
-
-  assert.deepEqual(session.agentNames, []);
-});
-
-test("a saved approval makes .pi/agents usable on its own", async () => {
-  const { cwd, agentDir } = makeCheckout();
-  writeProjectAgent(cwd, "proj");
-  writeFileSync(
-    path.join(agentDir, "trust.json"),
-    JSON.stringify({ [cwd]: true }),
-    "utf-8",
-  );
-
-  const session = await startSession({
-    cwd,
-    agentDir,
-    piProjectTrusted: true,
-  });
-
-  assert.deepEqual(session.agentNames, ["proj"]);
-});
-
-test("an unreadable trust store warns once and denies project agents", async () => {
-  const { cwd, agentDir } = makeCheckout();
-  writeProjectAgent(cwd, "proj");
-  writeFileSync(path.join(agentDir, "trust.json"), "{ not json", "utf-8");
-
-  const session = await startSession({
-    cwd,
-    agentDir,
-    piProjectTrusted: true,
-  });
-
-  assert.deepEqual(session.agentNames, []);
-  assert.equal(session.notifications.length, 1);
-  assert.match(session.notifications[0], /trust store/i);
-  assert.ok(!session.notifications[0].includes(agentDir));
-});
-
-test("configuration added after session start does not upgrade the permission", async () => {
-  const { cwd, agentDir } = makeCheckout();
-  writeProjectAgent(cwd, "proj");
-
-  const session = await startSession({
-    cwd,
-    agentDir,
-    piProjectTrusted: true,
-    // A trust-requiring resource appears mid-session; a recheck would read it
-    // as approval nobody gave.
-    beforeAgentsCommand: () => {
-      writeFileSync(path.join(cwd, ".pi", "settings.json"), "{}", "utf-8");
-    },
-  });
-
   const agentsCommand = await session.runAgentsCommand();
 
-  // Permission is still denied, so /agents opens the explanatory empty state
-  // rather than reporting that nothing is configured.
-  assert.equal(agentsCommand.customOpened, true);
-  assert.deepEqual(agentsCommand.notifications, []);
-});
-
-// ── Harness availability diagnostics ─────────────────────────────────────────
-
-function backend(name: Harness, available: boolean): SubagentBackend {
-  return {
-    name,
-    isAvailable: async () => available,
-    run: async (ctx) => ctx.result,
-  };
-}
-
-function agentConfig(name: string, harness?: Harness): AgentConfig {
-  return {
-    name,
-    description: `${name} agent`,
-    systemPrompt: "Work.",
-    ...(harness ? { harness } : {}),
-  };
-}
-
-test("findUnavailableHarnessWarnings stays quiet when every harness is available", async () => {
-  const warnings = await findUnavailableHarnessWarnings(
-    new Map([
-      ["a", agentConfig("a")],
-      ["b", agentConfig("b", "claude")],
-    ]),
-    createBackendRegistry([backend("pi", true), backend("claude", true)]),
+  assert.equal(agentsCommand.customOpened, false);
+  assert.equal(agentsCommand.notifications.length, 1);
+  assert.match(
+    agentsCommand.notifications[0],
+    /No subagents are configured\. Add a profile to /,
   );
-
-  assert.deepEqual(warnings, []);
-});
-
-test("findUnavailableHarnessWarnings names the agents blocked by a missing harness", async () => {
-  const warnings = await findUnavailableHarnessWarnings(
-    new Map([
-      ["reviewer", agentConfig("reviewer", "claude")],
-      ["implementer", agentConfig("implementer", "claude")],
-      ["scout", agentConfig("scout")],
-    ]),
-    createBackendRegistry([backend("pi", true), backend("claude", false)]),
-  );
-
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /Harness 'claude' is not available/);
-  assert.match(warnings[0], /reviewer, implementer/);
   assert.ok(
-    !warnings[0].includes("scout"),
-    "an agent on an available harness must not be reported",
+    agentsCommand.notifications[0].includes(path.join(agentDir, "agents")),
   );
-  // The warning has to say how to fix it, not just that it is broken.
-  assert.match(warnings[0], /@anthropic-ai\/claude-agent-sdk/);
 });
 
-test("findUnavailableHarnessWarnings reports a harness with no registered backend", async () => {
-  const warnings = await findUnavailableHarnessWarnings(
-    new Map([["worker", agentConfig("worker", "claude")]]),
-    createBackendRegistry([backend("pi", true)]),
-  );
-
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /Harness 'claude' is not available/);
-});
-
-test("findUnavailableHarnessWarnings tells Codex agents how to restore the CLI", async () => {
-  const warnings = await findUnavailableHarnessWarnings(
-    new Map([["worker", agentConfig("worker", "codex")]]),
-    createBackendRegistry([backend("pi", true), backend("codex", false)]),
-  );
-
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /Harness 'codex' is not available/);
-  assert.match(warnings[0], /Install or update the Codex CLI/);
-  assert.match(warnings[0], /on PATH/);
-  assert.match(warnings[0], /app server/);
-  assert.match(warnings[0], /multi_agent_v2/);
-});
+function agentConfig(name: string): AgentConfig {
+  return { name, description: `${name} agent`, systemPrompt: "Work." };
+}

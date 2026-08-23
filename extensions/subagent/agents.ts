@@ -1,13 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import type { AgentConfig, AgentSource, Effort, Harness } from "./types.ts";
-import {
-  DEFAULT_APPEND_SYSTEM_PROMPT,
-  DEFAULT_HARNESS,
-  EFFORTS,
-  HARNESSES,
-} from "./types.ts";
+import type { AgentConfig, Effort } from "./types.ts";
+import { EFFORTS } from "./types.ts";
 
 export interface InvalidAgentConfig {
   filePath: string;
@@ -29,10 +24,6 @@ export class AgentConfigValidationError extends Error {
   }
 }
 
-function oneOf(values: readonly string[]): string {
-  return values.join(", ");
-}
-
 /** What a rejected frontmatter value is, for a diagnostic that names it. */
 function describeType(value: unknown): string {
   if (Array.isArray(value)) return "a list";
@@ -44,7 +35,7 @@ function describeType(value: unknown): string {
  * A frontmatter field as a trimmed string, or `undefined` when absent or empty.
  *
  * YAML types the value, and nothing constrains an author to a string:
- * `harness: []` parses to an array. Rejecting it here is what turns
+ * `model: []` parses to an array. Rejecting it here is what turns
  * `raw?.trim is not a function` into a diagnostic naming the field.
  */
 function stringField(
@@ -82,24 +73,7 @@ function booleanField(
   return raw;
 }
 
-function parseHarness(raw: string | undefined, filePath: string): Harness {
-  const value = raw?.trim();
-  if (!value) return DEFAULT_HARNESS;
-  if ((HARNESSES as readonly string[]).includes(value)) return value as Harness;
-  throw new AgentConfigValidationError(
-    `unknown harness '${value}'; expected one of ${oneOf(HARNESSES)}`,
-    filePath,
-  );
-}
-
-/**
- * Reasoning depth, as its own validated field.
- *
- * A closed scale in a field of its own is the only shape that can catch a typo.
- * Carried as a `:<effort>` suffix on the model it could not: nothing
- * distinguishes a misspelled effort from a variant suffix a provider really uses,
- * so `opus:turbo` had to be read as a model id.
- */
+/** Reasoning depth, validated against the closed scale so a typo is an error. */
 function parseEffort(
   raw: string | undefined,
   filePath: string,
@@ -108,97 +82,19 @@ function parseEffort(
   if (!value) return undefined;
   if (!(EFFORTS as readonly string[]).includes(value)) {
     throw new AgentConfigValidationError(
-      `unknown effort '${value}'; expected one of ${oneOf(EFFORTS)}`,
+      `unknown effort '${value}'; expected one of ${EFFORTS.join(", ")}`,
       filePath,
     );
   }
   return value as Effort;
 }
 
-/**
- * Reject an effort suffix on the model.
- *
- * The model reaches the harness exactly as written — no provider stripping, no
- * suffix splitting — so a `:high` it carries would land as part of the id. Only a
- * trailing segment that *is* an effort is rejected; a provider's own variant
- * suffix (`google/gemma-4-31b-it:free`) or version (`…-v1:0`) is none of this
- * function's business.
- */
-function assertNoEffortSuffix(
-  model: string | undefined,
-  filePath: string,
-): void {
-  if (!model) return;
-  const colon = model.lastIndexOf(":");
-  if (colon === -1) return;
-  const suffix = model.slice(colon + 1);
-  if (!(EFFORTS as readonly string[]).includes(suffix)) return;
-  throw new AgentConfigValidationError(
-    `model is passed to the harness as written; set 'effort: ${suffix}' instead of the ':${suffix}' suffix`,
-    filePath,
-  );
-}
-
-/** Reject the removed inheritance marker instead of passing it as a model id. */
-function assertNoInheritModel(
-  model: string | undefined,
-  filePath: string,
-): void {
-  if (model !== "inherit") return;
-  throw new AgentConfigValidationError(
-    "model 'inherit' is not supported; omit model instead",
-    filePath,
-  );
-}
-
-/**
- * Reject a field the profile cannot control on this harness.
- *
- * Delegating to another harness means letting it work the way it works: an
- * external subagent runs its harness's own tools, and the extension does not
- * configure them. Accepting the field and quietly not honoring it is the
- * misreading most likely to matter — an author would believe they had built a
- * read-only agent and be wrong.
- */
-function assertPiOnlyField(
-  field: string,
-  detail: string,
-  harness: Harness,
-  filePath: string,
-): void {
-  if (harness === "pi") return;
-  throw new AgentConfigValidationError(
-    `${field} is only supported on harness 'pi'; harness '${harness}' ${detail}`,
-    filePath,
-  );
-}
-
-function parseTools(
-  raw: string | undefined,
-  harness: Harness,
-  filePath: string,
-): string | undefined {
-  const value = raw?.trim();
-  if (!value) return undefined;
-  assertPiOnlyField(
-    "tools",
-    "runs with a fixed tool set this backend controls",
-    harness,
-    filePath,
-  );
-  return value;
-}
-
-export function parseAgentConfig(
-  filePath: string,
-  source?: AgentSource,
-): AgentConfig {
+export function parseAgentConfig(filePath: string): AgentConfig {
   const content = fs.readFileSync(filePath, "utf-8");
   // Every field is `unknown`: these are YAML values, not strings, and each one
   // is narrowed by the parser that reads it.
   const { frontmatter, body } = parseFrontmatter<{
     description?: unknown;
-    harness?: unknown;
     model?: unknown;
     effort?: unknown;
     tools?: unknown;
@@ -222,43 +118,30 @@ export function parseAgentConfig(
       filePath,
     );
   }
-  const harness = parseHarness(
-    stringField(frontmatter.harness, "harness", filePath),
-    filePath,
-  );
-  const tools = parseTools(
-    stringField(frontmatter.tools, "tools", filePath),
-    harness,
-    filePath,
-  );
+  const tools = stringField(frontmatter.tools, "tools", filePath);
   const model = stringField(frontmatter.model, "model", filePath);
-  assertNoInheritModel(model, filePath);
-  assertNoEffortSuffix(model, filePath);
   const effort = parseEffort(
     stringField(frontmatter.effort, "effort", filePath),
+    filePath,
+  );
+  const appendSystemPrompt = booleanField(
+    frontmatter.appendSystemPrompt,
+    "appendSystemPrompt",
     filePath,
   );
   return {
     name: path.basename(filePath, path.extname(filePath)),
     description,
-    harness,
     model,
     ...(tools ? { tools } : {}),
-    appendSystemPrompt:
-      booleanField(
-        frontmatter.appendSystemPrompt,
-        "appendSystemPrompt",
-        filePath,
-      ) ?? DEFAULT_APPEND_SYSTEM_PROMPT,
+    ...(appendSystemPrompt === undefined ? {} : { appendSystemPrompt }),
     systemPrompt,
     ...(effort ? { effort } : {}),
-    ...(source ? { source } : {}),
   };
 }
 
 export function loadAgentConfigsWithDiagnostics(
   agentsDir: string,
-  source?: AgentSource,
 ): AgentConfigLoadResult {
   const configs = new Map<string, AgentConfig>();
   const invalidFiles: InvalidAgentConfig[] = [];
@@ -267,7 +150,7 @@ export function loadAgentConfigsWithDiagnostics(
     if (!file.endsWith(".md")) continue;
     const filePath = path.join(agentsDir, file);
     try {
-      const config = parseAgentConfig(filePath, source);
+      const config = parseAgentConfig(filePath);
       configs.set(config.name, config);
     } catch (error) {
       invalidFiles.push({
@@ -284,55 +167,22 @@ export function loadAgentConfigsWithDiagnostics(
   return { configs, invalidFiles };
 }
 
-export function loadAgentConfigs(
-  agentsDir: string,
-  source?: AgentSource,
-): Map<string, AgentConfig> {
-  return loadAgentConfigsWithDiagnostics(agentsDir, source).configs;
+export function loadAgentConfigs(agentsDir: string): Map<string, AgentConfig> {
+  return loadAgentConfigsWithDiagnostics(agentsDir).configs;
 }
 
-export interface AgentLayer {
-  dir: string;
-  source: AgentSource;
-}
-
-export function buildAgentConfigLayers(
-  projectCwd: string,
-  agentDir: string,
-  allowProjectConfig = false,
-): AgentLayer[] {
-  return [
-    { dir: path.join(agentDir, "agents"), source: "user" },
-    ...(allowProjectConfig
-      ? [
-          {
-            dir: path.join(projectCwd, ".pi", "agents"),
-            source: "project" as const,
-          },
-        ]
-      : []),
-  ];
-}
-
-export function loadLayeredAgentConfigsWithDiagnostics(
-  layers: AgentLayer[],
-): AgentConfigLoadResult {
-  const configs = new Map<string, AgentConfig>();
-  const invalidFiles: InvalidAgentConfig[] = [];
-  for (const layer of layers) {
-    const result = loadAgentConfigsWithDiagnostics(layer.dir, layer.source);
-    for (const [name, config] of result.configs) {
-      configs.set(name, config);
-    }
-    invalidFiles.push(...result.invalidFiles);
-  }
-  return { configs, invalidFiles };
-}
-
-export function loadLayeredAgentConfigs(
-  layers: AgentLayer[],
-): Map<string, AgentConfig> {
-  return loadLayeredAgentConfigsWithDiagnostics(layers).configs;
+/**
+ * The one directory agents are read from.
+ *
+ * User scope only, deliberately. A project directory cannot contribute agent
+ * profiles: a profile carries a system prompt, a model, and a tool list, and
+ * its description is injected into the calling model's tool guidelines, so
+ * honouring repository-controlled profiles would let a checkout shape what the
+ * delegating session does and says. Nothing in a working directory is read
+ * here, so there is no trust question to answer.
+ */
+export function getAgentsDir(agentDir: string): string {
+  return path.join(agentDir, "agents");
 }
 
 export function formatAgentGuidelines(
@@ -340,10 +190,8 @@ export function formatAgentGuidelines(
 ): string[] {
   if (agentConfigs.size === 0) return ["subagent has no configured agents."];
 
-  return [...agentConfigs.values()].map((config) =>
-    config.description
-      ? `subagent ${config.name}: ${config.description}`
-      : `subagent ${config.name}.`,
+  return [...agentConfigs.values()].map(
+    (config) => `subagent ${config.name}: ${config.description}`,
   );
 }
 

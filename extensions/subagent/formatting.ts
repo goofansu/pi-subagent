@@ -1,7 +1,6 @@
 import * as os from "node:os";
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
-import type { Effort, Harness, ThemeForeground, UsageStats } from "./types.ts";
-import { DEFAULT_HARNESS } from "./types.ts";
+import type { Effort, ThemeForeground, UsageStats } from "./types.ts";
 
 // Tool renderers do not receive the terminal width until the returned
 // component renders, so keep the source line conservative and let Text handle
@@ -17,18 +16,6 @@ export const COLLAPSED_TOOL_CALL_PREVIEW_WIDTH =
 export const EXPANDED_TOOL_CALL_PREVIEW_LENGTH = 3 * 1024;
 
 export type ToolCallDisplayMode = "collapsed" | "expanded";
-
-/**
- * Tag a result with the harness that produced it. The default harness is left
- * unlabeled so existing pi-only setups look unchanged.
- */
-export function formatHarnessBadge(
-  harness: Harness,
-  themeFg: ThemeForeground,
-): string {
-  if (harness === DEFAULT_HARNESS) return "";
-  return ` ${themeFg("dim", `[${harness}]`)}`;
-}
 
 export function formatTokens(count: number): string {
   if (count < 1000) return count.toString();
@@ -46,17 +33,12 @@ export function formatUsageStats(
   if (usage.turns)
     parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
   if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
-  // Withheld rather than shown as a floor: the accumulated figure is a
-  // placeholder, not an under-estimate, so there is no honest way to render it.
-  // Same treatment `cost` already gets when the run never reported one.
-  if (usage.output && !usage.outputUnreported)
-    parts.push(`↓${formatTokens(usage.output)}`);
+  if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
   if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
   if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
   if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
-  if (usage.contextTokens && usage.contextTokens > 0) {
+  if (usage.contextTokens > 0)
     parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
-  }
   if (model) parts.push(model);
   if (effort) parts.push(`effort:${effort}`);
   return parts.join(" ");
@@ -87,9 +69,7 @@ export function formatToolCall(
   const render = (fragments: ToolCallFragment[]) =>
     renderBoundedFragments(fragments, themeFg, displayMode);
 
-  // Backends name the same tools differently ("read" in pi, "Read" in Claude
-  // Code) while agreeing on the argument names, so match case-insensitively.
-  switch (toolName.toLowerCase()) {
+  switch (toolName) {
     case "bash": {
       const rawCommand =
         typeof args.command === "string" && args.command ? args.command : "...";
@@ -154,7 +134,6 @@ export function formatToolCall(
         { color: "accent", text: shortenPath(rawPath) },
       ]);
     }
-    case "glob":
     case "find": {
       const pattern = argumentText(args.pattern, "*");
       const rawPath = pathArgument(".", args.path);
@@ -172,36 +151,6 @@ export function formatToolCall(
         { color: "accent", text: `/${pattern}/` },
         { color: "dim", text: ` in ${shortenPath(rawPath)}` },
       ]);
-    }
-    case "todowrite": {
-      if (Array.isArray(args.todos)) {
-        const count = args.todos.length;
-        const details =
-          displayMode === "expanded" ? formatTodoDetails(args.todos) : [];
-        return render([
-          { color: "accent", text: displayToolName },
-          {
-            color: "dim",
-            text: ` (${count} ${count === 1 ? "todo" : "todos"}${details.length > 0 ? `: ${details.join("; ")}` : ""})`,
-          },
-        ]);
-      }
-      break;
-    }
-    case "apply_patch": {
-      if (Array.isArray(args.changes)) {
-        const count = args.changes.length;
-        const paths =
-          displayMode === "expanded" ? changedPaths(args.changes) : [];
-        return render([
-          { color: "accent", text: displayToolName },
-          {
-            color: "dim",
-            text: ` (${count} ${count === 1 ? "change" : "changes"}${paths.length > 0 ? `: ${paths.join(", ")}` : ""})`,
-          },
-        ]);
-      }
-      break;
     }
   }
 
@@ -256,42 +205,6 @@ function serializeToolArgs(args: Record<string, unknown>): string {
   } catch {
     return "[unserializable arguments]";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function changedPaths(changes: unknown[]): string[] {
-  return changes.flatMap((change) => {
-    if (!isRecord(change)) return [];
-    const path = [change.path, change.file_path].find(
-      (value): value is string => typeof value === "string" && value.length > 0,
-    );
-    return path ? [sanitizeInlineText(path)] : [];
-  });
-}
-
-function formatTodoDetails(todos: unknown[]): string[] {
-  return todos.flatMap((todo) => {
-    if (typeof todo === "string" && todo.length > 0) {
-      return [`[?] ${sanitizeInlineText(todo)}`];
-    }
-    if (!isRecord(todo)) return [];
-    const content = [todo.content, todo.activeForm].find(
-      (value): value is string => typeof value === "string" && value.length > 0,
-    );
-    if (!content) return [];
-    const status =
-      todo.status === "completed"
-        ? "[x]"
-        : todo.status === "in_progress"
-          ? "[>]"
-          : todo.status === "pending"
-            ? "[ ]"
-            : "[?]";
-    return [`${status} ${sanitizeInlineText(content)}`];
-  });
 }
 
 function sliceWithoutSplittingSurrogatePair(

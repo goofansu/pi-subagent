@@ -19,6 +19,6 @@
  * module as a test file of its own, on top of importing it into every real one.
  */
 
-import { DEPTH_ENV_KEY } from "./backend.ts";
+import { DEPTH_ENV_KEY } from "./run.ts";
 
 delete process.env[DEPTH_ENV_KEY];

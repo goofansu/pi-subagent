@@ -1,36 +1,24 @@
 /**
- * The harness-neutral dispatcher. It resolves an agent profile to a backend,
- * enforces the nesting depth guard and plumbs progress updates — so those
- * rules cannot drift between backends.
+ * The dispatcher. It enforces the nesting depth guard, holds every run to the
+ * concurrency cap, settles lifecycle state, and plumbs progress updates — the
+ * rules that apply to a subagent run whatever it does.
  */
 
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { BackendRegistry, ParentModel, SubagentTask } from "./backend.ts";
-import {
-  createBackendRegistry,
-  createEmptyResult,
-  DEPTH_ENV_KEY,
-  markResultRunning,
-  resolveBackend,
-  settleAborted,
-  settleResultLifecycle,
-} from "./backend.ts";
-import { claudeBackend } from "./backends/claude.ts";
-import { codexBackend } from "./backends/codex.ts";
-import { piBackend } from "./backends/pi.ts";
 import type { ReleaseSlot, SubagentLimiter } from "./concurrency.ts";
 import { QueueAbortedError, subagentLimiter } from "./concurrency.ts";
 import { getFinalOutput } from "./messages.ts";
+import { runPiAgent } from "./pi-agent.ts";
+import type { ParentModel, SubagentExecutor, SubagentTask } from "./run.ts";
+import {
+  createEmptyResult,
+  DEPTH_ENV_KEY,
+  markResultRunning,
+  settleAborted,
+  settleResultLifecycle,
+} from "./run.ts";
 import type { AgentConfig, OnUpdateCallback, SingleResult } from "./types.ts";
-import { resolveHarness } from "./types.ts";
 
 const MAX_SUBAGENT_DEPTH = 1;
-
-export const defaultBackendRegistry: BackendRegistry = createBackendRegistry([
-  piBackend,
-  claudeBackend,
-  codexBackend,
-]);
 
 export function getSubagentDepth(): number {
   const depth = parseInt(process.env[DEPTH_ENV_KEY] || "0", 10);
@@ -53,14 +41,13 @@ export interface RunSubagentOptions {
   signal?: AbortSignal;
   parentModel?: ParentModel;
   /**
-   * Whether the child may load project-controlled configuration from `cwd`;
-   * unknown is treated as denied.
+   * Pi's project-trust decision for `cwd`; unknown is treated as denied.
    */
-  allowProjectConfig?: boolean;
+  projectTrusted?: boolean;
   onUpdate?: OnUpdateCallback;
   cwd?: string;
-  agentDir?: string;
-  registry?: BackendRegistry;
+  /** Injected for tests; defaults to running the agent in a child pi. */
+  execute?: SubagentExecutor;
   /** Injected for tests; defaults to the process-wide cap. */
   limiter?: SubagentLimiter;
   /** Injected for deterministic lifecycle timestamps in tests. */
@@ -73,21 +60,17 @@ export async function runSubagent({
   prompt,
   signal,
   parentModel,
-  allowProjectConfig = false,
+  projectTrusted = false,
   onUpdate,
   cwd = process.cwd(),
-  agentDir = getAgentDir(),
-  registry = defaultBackendRegistry,
+  execute = runPiAgent,
   limiter = subagentLimiter,
   now = Date.now,
 }: RunSubagentOptions): Promise<SingleResult> {
   const currentDepth = getSubagentDepth();
   assertSubagentDepthAvailable(currentDepth);
 
-  const harness = resolveHarness(config);
-  const backend = resolveBackend(registry, harness);
-
-  const result = createEmptyResult(config.name, description, harness, now());
+  const result = createEmptyResult(config.name, description, now());
   if (config.effort) result.effort = config.effort;
 
   const task: SubagentTask = {
@@ -95,9 +78,8 @@ export async function runSubagent({
     description,
     prompt,
     cwd,
-    agentDir,
     depth: currentDepth,
-    allowProjectConfig,
+    projectTrusted,
     ...(parentModel ? { parentModel } : {}),
   };
 
@@ -123,7 +105,7 @@ export async function runSubagent({
   };
 
   // Report the run before it may have to wait. The cap means a fan-out wider
-  // than four leaves agents queued with no backend running yet, and nothing
+  // than four leaves agents queued with no child running yet, and nothing
   // else would put a row on screen for them.
   emit();
 
@@ -132,7 +114,7 @@ export async function runSubagent({
     release = await limiter.acquire(signal);
   } catch (cause) {
     // Cancelled while waiting for a slot. That is a cancelled run like any
-    // other — resolved, not thrown — and its backend never started.
+    // other — resolved, not thrown — and its child never started.
     if (cause instanceof QueueAbortedError) {
       settleAborted(result);
       settleResultLifecycle(result, now());
@@ -145,7 +127,7 @@ export async function runSubagent({
   try {
     markResultRunning(result, now());
     emit();
-    const settled = await backend.run({ task, result, emit, signal });
+    const settled = await execute({ task, result, emit, signal });
     settleResultLifecycle(settled, now());
     emit();
     return settled;
@@ -153,18 +135,3 @@ export async function runSubagent({
     release();
   }
 }
-
-// Re-exported for convenience: this module was the single entry point before
-// the backend extraction. These are for in-tree use. Nothing outside the
-// package can import them: pi loads `extensions/subagent/index.ts` by path and
-// the package publishes no `main` or `exports` entry, so there is no specifier
-// that resolves here from another package.
-export type { ParentModel } from "./backend.ts";
-export {
-  applyPiJsonEvent,
-  buildPiArgs,
-  getPiInvocation,
-  getSpawnOptions,
-  resolveSubagentModel,
-  writePromptToTempFile,
-} from "./backends/pi.ts";
