@@ -206,25 +206,31 @@ async function runPiFixture(
     signal?: AbortSignal;
     onEmit?: (result: SingleResult) => void;
     prompt?: string;
+    killEscalationMs?: number;
   } = {},
 ): Promise<SingleResult> {
   const shadow = shadowPiBinary(script);
   const result = createEmptyResult("worker", "Work", 0);
 
   try {
-    return await runPiAgent({
-      task: {
-        config: agent({ systemPrompt: "" }),
-        description: "Work",
-        prompt: options.prompt ?? "do it",
-        cwd: os.tmpdir(),
-        depth: 0,
-        projectTrusted: false,
+    return await runPiAgent(
+      {
+        task: {
+          config: agent({ systemPrompt: "" }),
+          description: "Work",
+          prompt: options.prompt ?? "do it",
+          cwd: os.tmpdir(),
+          depth: 0,
+          projectTrusted: false,
+        },
+        result,
+        emit: () => options.onEmit?.(result),
+        signal: options.signal,
       },
-      result,
-      emit: () => options.onEmit?.(result),
-      signal: options.signal,
-    });
+      options.killEscalationMs === undefined
+        ? {}
+        : { killEscalationMs: options.killEscalationMs },
+    );
   } finally {
     shadow.restore();
   }
@@ -351,6 +357,36 @@ test("the child pi driver keeps cancellation authoritative over a missing agent_
   assert.equal(settled.stopReason, "aborted");
   assert.match(settled.errorMessage ?? "", /Subagent was aborted/);
   assert.doesNotMatch(settled.errorMessage ?? "", /agent_end/);
+});
+
+test("an aborted child that ignores SIGTERM is killed by the escalation", async () => {
+  const controller = new AbortController();
+  const partialEvent = JSON.stringify({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "trap installed" }],
+      stopReason: "stop",
+    },
+  });
+
+  // `trap '' TERM` before the exec makes SIGTERM a no-op for the child (an
+  // ignored signal survives exec), so only the SIGKILL escalation can end it.
+  const settled = await runPiFixture(
+    `#!/bin/sh\ntrap '' TERM\nprintf '%s\\n' '${partialEvent}'\nexec sleep 30\n`,
+    {
+      signal: controller.signal,
+      killEscalationMs: 100,
+      onEmit: (result) => {
+        if (result.messages.length > 0 && !controller.signal.aborted) {
+          controller.abort();
+        }
+      },
+    },
+  );
+
+  assert.equal(settled.stopReason, "aborted");
+  assert.match(settled.errorMessage ?? "", /Subagent was aborted/);
 });
 
 test("resolveSubagentModel hands pi the model exactly as written", () => {
@@ -618,4 +654,14 @@ test("the stdout buffer does not flush the tail of a dropped line", () => {
 
   buffer.push("x".repeat(64));
   assert.deepEqual(buffer.flush(), []);
+});
+
+test("an oversized line is dropped even when it arrives terminated in one chunk", () => {
+  const buffer = createNdjsonBuffer(16);
+
+  // The cap must not depend on chunk size: a line that never accumulates
+  // un-terminated — it arrives whole, newline and all — is over the limit
+  // just the same.
+  assert.deepEqual(buffer.push(`${"x".repeat(64)}\n{"a":1}\n`), ['{"a":1}']);
+  assert.equal(buffer.overflowed(), true);
 });

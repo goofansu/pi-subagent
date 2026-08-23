@@ -50,6 +50,12 @@ const OVERSIZED_STDOUT_LINE_MESSAGE =
  * Splits a byte stream into newline-delimited lines, dropping any single line
  * that grows past `limit` and resuming cleanly at the next newline.
  *
+ * The guarantee is unconditional: no returned line exceeds the limit, however
+ * the stream was chunked. Pipe reads are in practice far smaller than the
+ * limit, so an oversized line is normally caught while it accumulates
+ * un-terminated — but the cap must not *depend* on chunk size, so a line that
+ * arrives already terminated inside one chunk is dropped just the same.
+ *
  * The resync is the part worth having in one place: after a line is dropped,
  * the remainder of it still arrives, and the newline that ends it would
  * otherwise look like the end of a complete, parseable line.
@@ -79,6 +85,12 @@ export function createNdjsonBuffer(
       // not a line, so it is discarded rather than parsed.
       if (skipNextLine) {
         skipNextLine = false;
+        continue;
+      }
+      // A line over the limit is dropped whether or not it managed to end
+      // itself; see the interface doc for why completed lines are checked.
+      if (part.length > limit) {
+        sawOverflow = true;
         continue;
       }
       lines.push(part);
@@ -353,12 +365,21 @@ async function writePromptToTempFile(
   return { dir: tmpDir, filePath };
 }
 
+/** How long an aborted child gets to obey SIGTERM before SIGKILL. */
+const KILL_ESCALATION_MS = 5_000;
+
 /**
  * Run one agent in a child pi process. This is the dispatcher's default
  * executor; see `SubagentExecutor` in `run.ts` for the contract it satisfies,
  * cancellation included.
+ *
+ * `killEscalationMs` is injected for tests: the SIGTERM→SIGKILL path cannot
+ * be exercised at all against a five-second wall-clock wait.
  */
-export async function runPiAgent(run: SubagentRun): Promise<SingleResult> {
+export async function runPiAgent(
+  run: SubagentRun,
+  { killEscalationMs = KILL_ESCALATION_MS }: { killEscalationMs?: number } = {},
+): Promise<SingleResult> {
   const { task, result, emit, signal } = run;
   const { config } = task;
 
@@ -479,7 +500,7 @@ export async function runPiAgent(run: SubagentRun): Promise<SingleResult> {
           proc.kill("SIGTERM");
           escalation = setTimeout(() => {
             if (!procClosed) proc.kill("SIGKILL");
-          }, 5000);
+          }, killEscalationMs);
           // The escalation must never be the reason the parent stays up: if
           // pi is quitting, SIGTERM has been sent and that has to be enough.
           escalation.unref?.();
