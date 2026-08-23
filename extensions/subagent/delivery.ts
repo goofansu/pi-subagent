@@ -79,6 +79,8 @@ export interface DeliveryOptions {
 export interface WaitOutcome {
   /** Reports for runs that settled, in the order they were asked for. */
   reports: string[];
+  /** Which runs those reports came from, for the collapsed result line. */
+  collected: Array<{ id: string; agent: string; status: LifecycleStatus }>;
   /** Ids still running when the wait gave up. Empty unless it timed out. */
   stillRunning: string[];
 }
@@ -262,6 +264,7 @@ export function createSubagentDelivery({
         await withDeadline(all, options);
 
         const reports: string[] = [];
+        const collected: WaitOutcome["collected"] = [];
         const stillRunning: string[] = [];
         for (const entry of claimed) {
           if (!entry.result) {
@@ -269,9 +272,14 @@ export function createSubagentDelivery({
             continue;
           }
           reports.push(formatReport(entry.id, entry.result));
+          collected.push({
+            id: entry.id,
+            agent: entry.result.agent,
+            status: entry.result.status,
+          });
           deliver(entry, false);
         }
-        return { reports, stillRunning };
+        return { reports, collected, stillRunning };
       } finally {
         // Releasing last is what lets an abandoned wait fall back to a push:
         // any run that settled while unclaimed is delivered here instead.

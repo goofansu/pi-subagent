@@ -195,7 +195,10 @@ export function registerSubagentFeatures(
 
       return {
         content: [{ type: "text", text: sections.join("\n\n") }],
-        details: undefined,
+        details: {
+          runs: outcome.collected,
+          stillRunning: outcome.stillRunning.length,
+        },
       };
     },
   });
@@ -240,7 +243,9 @@ export function registerSubagentFeatures(
         content: [
           { type: "text", text: `${report.agent} (${report.id}):\n\n${body}` },
         ],
-        details: undefined,
+        details: {
+          runs: [{ id: report.id, agent: report.agent, status: report.status }],
+        },
       };
     },
   });

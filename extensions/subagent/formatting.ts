@@ -23,6 +23,12 @@ export function formatDuration(milliseconds: number): string {
  * overlay and any future surface all render a status the same way from the
  * same data. This is the whole of what "what does aborted look like" means.
  */
+/** A character count for a summary line, abbreviated once it gets long. */
+export function formatCharacterCount(characters: number): string {
+  if (characters < 1_000) return `${characters} characters`;
+  return `${(characters / 1_000).toFixed(1)}k characters`;
+}
+
 export function runStatusGlyph(status: LifecycleStatus): string {
   switch (status) {
     case "running":

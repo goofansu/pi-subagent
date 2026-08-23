@@ -11,7 +11,11 @@
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import { runStatusGlyph, runStatusTone } from "./formatting.ts";
+import {
+  formatCharacterCount,
+  runStatusGlyph,
+  runStatusTone,
+} from "./formatting.ts";
 import { contentText } from "./render.ts";
 import type { LifecycleStatus } from "./types.ts";
 
@@ -47,11 +51,6 @@ function isDetails(value: unknown): value is ReportMessageDetails {
   );
 }
 
-function abbreviate(characters: number): string {
-  if (characters < 1_000) return `${characters} characters`;
-  return `${(characters / 1_000).toFixed(1)}k characters`;
-}
-
 /** The one line a collapsed report shows. */
 export function formatReportSummary(
   details: ReportMessageDetails,
@@ -68,7 +67,7 @@ export function formatReportSummary(
     theme.fg("toolTitle", theme.bold(details.agent)) +
     theme.fg("dim", ` (${details.id}) `) +
     theme.fg("muted", verb) +
-    theme.fg("dim", ` · ${abbreviate(characters)}`);
+    theme.fg("dim", ` · ${formatCharacterCount(characters)}`);
 
   if (details.truncated) {
     line += theme.fg(

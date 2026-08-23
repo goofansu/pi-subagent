@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { contentText, renderMarkdownResult } from "./render.ts";
+import type { CollectedRuns } from "./render.ts";
+import {
+  contentText,
+  formatCollectedSummary,
+  renderMarkdownResult,
+} from "./render.ts";
 
 initTheme(undefined, false);
 
@@ -11,14 +16,29 @@ const theme = {
   bold: (text: string) => text,
 } as unknown as Parameters<typeof renderMarkdownResult>[2];
 
-const options = { expanded: false, isPartial: false };
+const keyHintStub = (_action: string, description: string) =>
+  `ctrl+o ${description}`;
 
-function render(content: Parameters<typeof contentText>[0]): string {
-  return renderMarkdownResult({ content }, options, theme)
+function render(
+  content: string,
+  expanded: boolean,
+  details?: CollectedRuns,
+): string {
+  return renderMarkdownResult(
+    { content, details },
+    { expanded, isPartial: false },
+    theme,
+  )
     .render(80)
     .map((line) => stripVTControlCharacters(line).trimEnd())
     .join("\n");
 }
+
+const oneRun: CollectedRuns = {
+  runs: [{ id: "a3f81c2b", agent: "explore", status: "completed" }],
+};
+
+// ── Extraction ───────────────────────────────────────────────────────────────
 
 test("content arriving as parts reads the same as a plain string", () => {
   assert.equal(
@@ -32,10 +52,11 @@ test("content arriving as parts reads the same as a plain string", () => {
   assert.equal(contentText("plain"), "plain");
 });
 
-test("a result is rendered as markdown, not as its source", () => {
-  const rendered = render("A **bold** finding in `parser.ts`.");
+// ── Expanded ─────────────────────────────────────────────────────────────────
 
-  // The markers are interpreted rather than printed.
+test("an expanded result is rendered as markdown, not as its source", () => {
+  const rendered = render("A **bold** finding in `parser.ts`.", true, oneRun);
+
   assert.doesNotMatch(rendered, /\*\*bold\*\*/);
   assert.doesNotMatch(rendered, /`parser\.ts`/);
   assert.match(rendered, /bold/);
@@ -43,7 +64,7 @@ test("a result is rendered as markdown, not as its source", () => {
 });
 
 test("headings and lists become structure rather than punctuation", () => {
-  const rendered = render("# Findings\n\n- first\n- second");
+  const rendered = render("# Findings\n\n- first\n- second", true, oneRun);
 
   assert.doesNotMatch(rendered, /^# /m);
   assert.match(rendered, /Findings/);
@@ -51,7 +72,74 @@ test("headings and lists become structure rather than punctuation", () => {
   assert.match(rendered, /second/);
 });
 
+// ── Collapsed ────────────────────────────────────────────────────────────────
+
+test("a collapsed result is one line, not the report", () => {
+  const body = `# Findings\n\n${"a long paragraph\n".repeat(40)}`;
+  const rendered = render(body, false, oneRun);
+
+  assert.equal(rendered.split("\n").length, 1);
+  assert.doesNotMatch(rendered, /a long paragraph/);
+  assert.match(rendered, /explore/);
+  assert.match(rendered, /a3f81c2b/);
+});
+
+test("a collapsed summary names one run, or counts several", () => {
+  assert.match(
+    formatCollectedSummary(oneRun, 2_400, theme, keyHintStub),
+    /explore \(a3f81c2b\) · 2\.4k characters/,
+  );
+
+  assert.match(
+    formatCollectedSummary(
+      {
+        runs: [
+          { id: "a1", agent: "explore", status: "completed" },
+          { id: "b2", agent: "reviewer", status: "failed" },
+        ],
+      },
+      5_100,
+      theme,
+      keyHintStub,
+    ),
+    /2 reports from explore, reviewer · 5\.1k characters/,
+  );
+});
+
+test("a collapsed summary says when runs are still going", () => {
+  assert.match(
+    formatCollectedSummary(
+      { ...oneRun, stillRunning: 2 },
+      500,
+      theme,
+      keyHintStub,
+    ),
+    /2 still running/,
+  );
+  assert.doesNotMatch(
+    formatCollectedSummary(
+      { ...oneRun, stillRunning: 0 },
+      500,
+      theme,
+      keyHintStub,
+    ),
+    /still running/,
+  );
+});
+
+test("a result without details falls back to its opening line", () => {
+  const rendered = render("first line\nsecond line", false);
+
+  assert.equal(rendered, "first line");
+});
+
+test("a result naming no runs falls back rather than saying 0 reports", () => {
+  const rendered = render("Nothing to wait for.\nmore", false, { runs: [] });
+
+  assert.equal(rendered, "Nothing to wait for.");
+});
+
 test("an empty result renders nothing rather than a stray blank", () => {
-  assert.equal(render("   "), "");
-  assert.equal(render([]), "");
+  assert.equal(render("   ", false, oneRun), "");
+  assert.equal(render("   ", true, oneRun), "");
 });
