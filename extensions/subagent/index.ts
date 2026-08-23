@@ -13,7 +13,7 @@ import {
 import { registerAgentsCommand } from "./agents-command.ts";
 import type { SubagentDelivery } from "./delivery.ts";
 import { createSubagentDelivery } from "./delivery.ts";
-import { renderSubagentCall } from "./render.ts";
+import { renderMarkdownResult, renderSubagentCall } from "./render.ts";
 import { REPORT_MESSAGE_TYPE, renderReportMessage } from "./report-message.ts";
 import { getSubagentDepth, startSubagent } from "./runner.ts";
 import type { SubagentRuns } from "./runs.ts";
@@ -170,6 +170,7 @@ export function registerSubagentFeatures(
         }),
       ),
     }),
+    renderResult: renderMarkdownResult,
 
     async execute(_toolCallId, params, signal) {
       const outcome = await delivery.wait(params.ids, {
@@ -211,6 +212,7 @@ export function registerSubagentFeatures(
     parameters: Type.Object({
       id: Type.String({ description: "A run id returned by agent_start" }),
     }),
+    renderResult: renderMarkdownResult,
 
     async execute(_toolCallId, params) {
       const report = delivery.recall(params.id);

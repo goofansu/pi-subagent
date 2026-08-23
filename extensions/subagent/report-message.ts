@@ -12,6 +12,7 @@ import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { runStatusGlyph, runStatusTone } from "./formatting.ts";
+import { contentText } from "./render.ts";
 import type { LifecycleStatus } from "./types.ts";
 
 /** The `customType` that routes a report to the renderer below. */
@@ -35,15 +36,6 @@ interface RenderableTheme {
   // biome-ignore lint/suspicious/noExplicitAny: theme.bg takes a narrower ThemeColor
   bg(color: any, text: string): string;
   bold(text: string): string;
-}
-
-/** Plain text of a message body, whatever shape it arrived in. */
-export function messageText(content: RenderableMessage["content"]): string {
-  if (typeof content === "string") return content;
-  return content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text ?? "")
-    .join("");
 }
 
 function isDetails(value: unknown): value is ReportMessageDetails {
@@ -111,7 +103,7 @@ export function renderReportMessage(
   theme: RenderableTheme,
 ): Component | undefined {
   if (!isDetails(message.details)) return undefined;
-  const text = messageText(message.content);
+  const text = contentText(message.content);
 
   const box = new Box(options.outputPad ?? 1, 1, (line: string) =>
     theme.bg("customMessageBg", line),

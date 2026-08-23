@@ -3,11 +3,7 @@ import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { ReportMessageDetails } from "./report-message.ts";
-import {
-  formatReportSummary,
-  messageText,
-  renderReportMessage,
-} from "./report-message.ts";
+import { formatReportSummary, renderReportMessage } from "./report-message.ts";
 
 initTheme(undefined, false);
 
@@ -123,18 +119,6 @@ test("an expanded report shows the body under its summary", () => {
   const rendered = lines(component).join("\n");
   assert.match(rendered, /explore/);
   assert.match(rendered, /the whole finding/);
-});
-
-test("content arriving as parts is read the same as a plain string", () => {
-  assert.equal(
-    messageText([
-      { type: "text", text: "one " },
-      { type: "image" },
-      { type: "text", text: "two" },
-    ]),
-    "one two",
-  );
-  assert.equal(messageText("plain"), "plain");
 });
 
 test("a message this extension did not shape falls through to pi", () => {
