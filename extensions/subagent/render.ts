@@ -4,7 +4,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Markdown, Text } from "@earendil-works/pi-tui";
 import { formatCharacterCount, runStatusTone } from "./presentation.ts";
 import type { LifecycleStatus } from "./types.ts";
 
@@ -24,18 +24,21 @@ type RenderCallContext = { lastComponent?: Component; expanded: boolean };
  * and its answer arrives as a report of its own, so a row that tried to show
  * either would be a stale copy of both.
  *
- * The prompt is rendered as a markdown blockquote because the host paints the
- * tool result below it in the same grey, and two adjacent grey paragraphs read
- * as one voice. The quote's gutter says "this is what was asked"; the
- * unquoted text after it is what came back. Going through the markdown
- * renderer rather than painting a gutter by hand keeps the bar on every row
- * of a soft-wrapped brief and matches how quotes look everywhere else.
+ * The host paints the tool result below this row in the same grey as the
+ * prompt, and two adjacent grey paragraphs read as one voice. A `Prompt:`
+ * label and a blank line on each side are what keep the brief and the answer
+ * apart — plain text, no markdown, so the row reads the same however the
+ * brief is written and however narrow the terminal wraps it.
  */
 export function renderSubagentCall(
   args: SubagentArgs,
   theme: Theme,
   context: RenderCallContext,
 ): Component {
+  const text =
+    context.lastComponent instanceof Text
+      ? context.lastComponent
+      : new Text("", 0, 0);
   const header =
     theme.fg("toolTitle", theme.bold(args.agent)) +
     " " +
@@ -43,22 +46,16 @@ export function renderSubagentCall(
   const lines = args.prompt.split("\n");
   // A cut preview must say it is one: three lines that just stop read as the
   // whole brief.
-  const previewLines = context.expanded
-    ? lines
-    : [...lines.slice(0, 3), ...(lines.length > 3 ? ["…"] : [])];
-  const quote = previewLines.map((line) => `> ${line}`).join("\n");
-
-  const row =
-    context.lastComponent instanceof Container
-      ? context.lastComponent
-      : new Container();
-  row.clear();
-  row.addChild(new Text(header, 0, 0));
-  row.addChild(new Markdown(quote, 0, 0, getMarkdownTheme()));
-  // Air between the brief and whatever the host paints below it — the tool
-  // result otherwise sits flush against the quote and reads as its last line.
-  row.addChild(new Spacer(1));
-  return row;
+  const preview = context.expanded
+    ? args.prompt
+    : lines.slice(0, 3).join("\n") + (lines.length > 3 ? "\n…" : "");
+  // The trailing newline is air between the brief and whatever the host
+  // paints below it — the tool result otherwise reads as the prompt's last
+  // line.
+  text.setText(
+    `${header}\n\n${theme.fg("muted", "Prompt:")} ${theme.fg("dim", preview)}\n`,
+  );
+  return text;
 }
 
 /** The text of a tool result or message body, whatever shape it arrived in. */

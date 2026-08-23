@@ -52,43 +52,27 @@ function renderCall(prompt: string, expanded: boolean, width = 80): string {
 
 // ── The call row ─────────────────────────────────────────────────────────────
 
-test("the prompt wears a quote gutter that the result below does not", () => {
+test("the prompt is labelled and set apart from the result below", () => {
   const rendered = renderCall("Say hello.", false);
 
-  // The trailing blank line is air between the brief and the tool result the
-  // host paints directly below this row.
-  assert.equal(rendered, "librarian Say hello\n│ Say hello.\n");
+  // Blank lines on both sides are the air between the header, the brief, and
+  // the tool result the host paints directly below this row.
+  assert.equal(rendered, "librarian Say hello\n\nPrompt: Say hello.\n");
 });
 
-test("a cut prompt preview keeps the gutter and says it was cut", () => {
+test("a cut prompt preview says it was cut", () => {
   const rendered = renderCall("one\ntwo\nthree\nfour\nfive", false);
 
-  assert.equal(rendered, "librarian Say hello\n│ one\n│ two\n│ three\n│ …\n");
+  assert.equal(rendered, "librarian Say hello\n\nPrompt: one\ntwo\nthree\n…\n");
 });
 
-test("an expanded call shows the whole brief, every line quoted", () => {
+test("an expanded call shows the whole brief", () => {
   const rendered = renderCall("one\ntwo\nthree\nfour", true);
 
   assert.equal(
     rendered,
-    "librarian Say hello\n│ one\n│ two\n│ three\n│ four\n",
+    "librarian Say hello\n\nPrompt: one\ntwo\nthree\nfour\n",
   );
-});
-
-test("a brief that soft-wraps keeps its gutter on every wrapped row", () => {
-  const rendered = renderCall(
-    "please inspect and assess the repository and summarize its purpose",
-    false,
-    24,
-  );
-
-  const [, ...promptRows] = rendered.split("\n");
-  assert.equal(promptRows.at(-1), "", "the row ends with breathing room");
-  const quoted = promptRows.slice(0, -1);
-  assert.ok(quoted.length > 1, "the brief must actually wrap");
-  for (const row of quoted) {
-    assert.match(row, /^│ /, `every wrapped row wears the gutter: "${row}"`);
-  }
 });
 
 // ── Extraction ───────────────────────────────────────────────────────────────
