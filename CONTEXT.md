@@ -19,9 +19,10 @@ lifecycle, a transcript, usage, and exactly one delivery. Runs are the thing the
 registry holds and the widget lists. Not "job", not "task", not "call".
 
 **Detached run** — a run that outlives the turn that started it. Every run
-started by `agent_start` is detached. Detached runs belong to the pi process,
-not to the turn or the session: `Escape` does not stop them, session switch and
-fork do not stop them, and process shutdown does.
+started by `agent_start` is detached from the turn: `Escape` does not stop it.
+It is not detached from the session — a report belongs to the conversation
+that asked for it, so every `session_shutdown` (switch, fork, resume, new,
+reload, quit) cancels whatever is still running.
 
 **Child pi** — the process a run executes in. One-shot: it takes one prompt on
 stdin and produces one answer. It cannot be steered mid-flight.
@@ -44,10 +45,9 @@ releases the claim and the run pushes normally.
 
 **Session push** — the process-lifetime push target reports go through
 (`createSessionPush`). A session's own `sendMessage` throws once that session
-is replaced, so each `session_start` re-aims the target and a report that
-settles between sessions parks until the next one binds. This is what makes
-"session switch and fork do not stop them" true for the report, not just the
-process.
+is replaced, so each `session_start` re-aims the target. A report that settles
+mid-teardown parks instead of throwing through the stale API — a crash guard
+for the race, not a cross-session delivery channel.
 
 ## Modules
 
@@ -75,7 +75,8 @@ from its most recent tool call. Display only.
 **Trust** — pi's project-trust decision for the working directory, resolved by
 the session and forwarded to every child. The extension never derives its own.
 
-**Shutdown** — `session_shutdown` with reason `quit` or `reload` stops every
-running run: quit ends the process and reload discards this module instance,
-so either way nothing would be left to deliver a report. Session replacement
-(`new`, `resume`, `fork`) keeps the module — and the runs — alive.
+**Shutdown** — every `session_shutdown` stops every running run and marks the
+cancellations delivered, so no notice follows the operator into the next
+session. The next session's model never started these runs and has no context
+to act on their answers; after quit or reload nothing could deliver them at
+all.

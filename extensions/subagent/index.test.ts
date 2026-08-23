@@ -516,26 +516,18 @@ function captureShutdownHandler(): ShutdownHandler {
   return shutdown;
 }
 
-test("quit and reload stop runs that are still going; session replacement does not", async () => {
+test("every session shutdown stops runs that are still going", async () => {
   const shutdown = captureShutdownHandler();
 
-  for (const [reason, expectStopped] of [
-    ["resume", false],
-    ["new", false],
-    ["fork", false],
-    ["reload", true],
-    ["quit", true],
-  ] as const) {
+  // A report belongs to the conversation that asked for it, so replacement
+  // reasons cancel exactly like quit and reload do.
+  for (const reason of ["resume", "new", "fork", "reload", "quit"] as const) {
     let stops = 0;
     const result = createEmptyResult("explore", "look", 0);
     const handle = subagentRuns.track(result, () => stops++);
     try {
       await shutdown({ reason }, {});
-      assert.equal(
-        stops,
-        expectStopped ? 1 : 0,
-        `reason "${reason}" should ${expectStopped ? "" : "not "}stop the run`,
-      );
+      assert.equal(stops, 1, `reason "${reason}" should stop the run`);
     } finally {
       subagentRuns.release(handle.id);
     }

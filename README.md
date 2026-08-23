@@ -97,7 +97,7 @@ Subagents are not capped: every delegated run starts immediately. Each one is a 
 
 ### Lifecycle
 
-A run is detached: it belongs to the pi process, not to the turn or the session that started it. `Esc` cancels the turn but leaves the runs going, and switching, forking, or resuming a session leaves them going too — their reports follow into whichever session is live when they finish, and a report that settles in the gap between sessions waits for the next one. Only `agent_cancel` stops a single run; quitting pi or `/reload`ing its extensions stops every running subagent, since nothing would be left to deliver their reports.
+A run is detached from the turn, not from the session. `Esc` cancels the turn and leaves the runs going; `agent_cancel` stops a single one. Anything that ends the session — switching, forking, resuming, `/new`, `/reload`, quitting pi — stops every running subagent: a report belongs to the conversation that asked for it, and the next session's model has no context to act on answers it never asked for.
 
 ### Security
 

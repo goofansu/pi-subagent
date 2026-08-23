@@ -313,13 +313,14 @@ export function registerSubagentFeatures(
 
 // ── Process-lifetime state ────────────────────────────────────────────────────
 //
-// Detached runs belong to the pi process, not to any one session. Pi caches an
-// extension's factory across session replacement (resume, fork, /new), calling
-// it again with a fresh ExtensionAPI while this module instance — and with it
-// the run registry and the delivery bookkeeping — carries over. Everything
-// below exists so a run started in one session delivers into whichever session
-// is live when it settles, instead of pushing through a torn-down ExtensionAPI
-// (whose every method throws once its session is replaced).
+// Runs are detached from the *turn*, not from the session: every
+// session_shutdown cancels them, because a report belongs to the conversation
+// that asked for it. Pi still caches the extension factory across session
+// replacement (resume, fork, /new), so this module instance — and the state
+// below — outlives any one session. The session push exists for the seams
+// that creates: a report that settles while a session is being torn down must
+// park rather than throw through a stale ExtensionAPI (whose every method
+// throws once its session is replaced) and get lost.
 
 /** Where pushed reports go: the live session, or parked between sessions. */
 const sessionPush = createSessionPush();
@@ -374,9 +375,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
       agentConfigs.set(name, config);
     }
 
-    // Reports and the widget follow the live session even when this runtime's
-    // tools are already registered: runs from the previous session are still
-    // in the shared registry, and their reports belong here now.
+    // Re-aim reports at this session and flush anything that parked while the
+    // previous one was being torn down; put the widget on this session's UI.
     sessionPush.bind(reportPusher(pi));
     uninstallWidget?.();
     uninstallWidget = installRunsWidget(
@@ -407,7 +407,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
     }
   });
 
-  pi.on("session_shutdown", (event) => {
+  pi.on("session_shutdown", (_event) => {
     // This runtime's ExtensionAPI is about to start throwing. Reports that
     // settle from here on park until the next session binds; the widget stops
     // following a registry it can no longer draw.
@@ -415,17 +415,18 @@ export default function subagentExtension(pi: ExtensionAPI) {
     uninstallWidget?.();
     uninstallWidget = null;
 
-    // Quit ends the process and reload discards this module instance — either
-    // way nothing will be left that could ever deliver a report, so the
-    // children must not be left running headless. Session replacement (new,
-    // resume, fork) keeps this module alive and the runs with it.
-    if (event.reason === "quit" || event.reason === "reload") {
-      subagentRuns.cancel(
-        subagentRuns
-          .list()
-          .filter((run) => run.status === "running")
-          .map((run) => run.id),
-      );
-    }
+    // Every shutdown — quit, reload, new, resume, fork — cancels what is
+    // still running. A report belongs to the conversation that asked for it:
+    // the next session's model never started these runs and has no context to
+    // act on their answers, and after quit or reload nothing could deliver
+    // them at all. Marking the cancellations delivered keeps their notices
+    // from following the operator into the next session as noise.
+    const cancelled = subagentRuns.cancel(
+      subagentRuns
+        .list()
+        .filter((run) => run.status === "running")
+        .map((run) => run.id),
+    );
+    getProcessDelivery().deliverInline(cancelled);
   });
 }
