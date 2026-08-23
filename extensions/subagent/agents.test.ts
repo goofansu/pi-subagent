@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, test } from "node:test";
 import {
+  diagnoseAgentModels,
   formatAgentGuidelines,
   formatInvalidAgentFilesWarning,
   getAgentsDir,
@@ -164,6 +165,61 @@ test("loadAgentConfigsWithDiagnostics reports invalid agent files", async () => 
   );
 });
 
+test("diagnoseAgentModels skips profiles whose pinned model is unknown", () => {
+  const configs = new Map([
+    [
+      "canonical",
+      {
+        name: "canonical",
+        description: "Canonical",
+        model: "ACME/known",
+        systemPrompt: "Work.",
+      },
+    ],
+    [
+      "bare",
+      {
+        name: "bare",
+        description: "Bare",
+        model: "known",
+        systemPrompt: "Work.",
+      },
+    ],
+    [
+      "missing",
+      {
+        name: "missing",
+        description: "Missing",
+        model: "acme/missing",
+        systemPrompt: "Work.",
+      },
+    ],
+    [
+      "inherited",
+      {
+        name: "inherited",
+        description: "Inherited",
+        systemPrompt: "Work.",
+      },
+    ],
+  ]);
+
+  const result = diagnoseAgentModels(configs, "/agents", [
+    { provider: "acme", id: "known" },
+  ]);
+
+  assert.deepEqual(
+    [...result.configs.keys()],
+    ["canonical", "bare", "inherited"],
+  );
+  assert.deepEqual(result.invalidFiles, [
+    {
+      filePath: path.join("/agents", "missing.md"),
+      reason: "model 'acme/missing' was not found in Pi's model catalogue",
+    },
+  ]);
+});
+
 test("loadAgentConfigs returns an empty map when directory is missing", () => {
   const configs = loadAgentConfigs(
     path.join(os.tmpdir(), "missing-pi-subagent-agents"),
@@ -204,7 +260,7 @@ test("formatAgentGuidelines handles no configured agents", () => {
   ]);
 });
 
-test("formatInvalidAgentFilesWarning renders invalid files for UI notification", () => {
+test("formatInvalidAgentFilesWarning renders uniform agent-name diagnostics", () => {
   assert.equal(
     formatInvalidAgentFilesWarning([
       {
@@ -215,8 +271,17 @@ test("formatInvalidAgentFilesWarning renders invalid files for UI notification",
         filePath: path.join("agents", "missing-prompt.md"),
         reason: "missing required prompt body",
       },
+      {
+        filePath: path.join("agents", "review.strict.md"),
+        reason: "model 'missing' was not found",
+      },
     ]),
-    "Invalid subagent files were skipped:\n- agents/missing-description.md: missing required description frontmatter\n- agents/missing-prompt.md: missing required prompt body",
+    [
+      "Invalid subagents were skipped:",
+      "- missing-description: missing required description frontmatter",
+      "- missing-prompt: missing required prompt body",
+      "- review.strict: model 'missing' was not found",
+    ].join("\n"),
   );
 });
 

@@ -4,6 +4,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
+  diagnoseAgentModels,
   formatAgentGuidelines,
   formatInvalidAgentFilesWarning,
   getAgentsDir,
@@ -130,8 +131,17 @@ export default function subagentExtension(pi: ExtensionAPI) {
   //
   // The answer is taken once, here, and reused for the session.
   pi.on("session_start", (_event, ctx) => {
-    const agentConfigLoadResult = loadAgentConfigsWithDiagnostics(agentsDir);
-    const agentConfigs = agentConfigLoadResult.configs;
+    const parsedAgents = loadAgentConfigsWithDiagnostics(agentsDir);
+    const diagnosedModels = diagnoseAgentModels(
+      parsedAgents.configs,
+      agentsDir,
+      ctx.modelRegistry.getAll(),
+    );
+    const agentConfigs = diagnosedModels.configs;
+    const invalidFiles = [
+      ...parsedAgents.invalidFiles,
+      ...diagnosedModels.invalidFiles,
+    ];
 
     registerSubagentFeatures(
       pi,
@@ -141,11 +151,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
       ctx.isProjectTrusted?.() ?? false,
     );
 
-    if (agentConfigLoadResult.invalidFiles.length > 0) {
-      ctx.ui.notify(
-        formatInvalidAgentFilesWarning(agentConfigLoadResult.invalidFiles),
-        "warning",
-      );
+    if (invalidFiles.length > 0) {
+      ctx.ui.notify(formatInvalidAgentFilesWarning(invalidFiles), "warning");
     }
   });
 }

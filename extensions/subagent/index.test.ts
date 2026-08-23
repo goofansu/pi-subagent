@@ -154,6 +154,8 @@ async function startSession(options: {
   /** Omitted models a host that cannot report trust at all. */
   piProjectTrusted?: boolean;
   beforeAgentsCommand?: () => void;
+  sessionReason?: "startup" | "resume";
+  models?: Array<{ provider: string; id: string }>;
 }): Promise<SessionStartRun> {
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = options.agentDir;
@@ -185,9 +187,12 @@ async function startSession(options: {
 
     assert.ok(sessionStart);
     await sessionStart(
-      {},
+      { reason: options.sessionReason ?? "startup" },
       {
         cwd: options.cwd,
+        modelRegistry: {
+          getAll: () => options.models ?? [],
+        },
         ...(options.piProjectTrusted === undefined
           ? {}
           : { isProjectTrusted: () => options.piProjectTrusted }),
@@ -239,17 +244,17 @@ function makeCheckout(): { cwd: string; agentDir: string } {
   return { cwd, agentDir };
 }
 
-function writeAgent(dir: string, name: string): void {
+function writeAgent(dir: string, name: string, model?: string): void {
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     path.join(dir, `${name}.md`),
-    `---\ndescription: ${name} agent\n---\n\nWork.\n`,
+    `---\ndescription: ${name} agent\n${model ? `model: ${model}\n` : ""}---\n\nWork.\n`,
     "utf-8",
   );
 }
 
-function writeUserAgent(agentDir: string, name: string): void {
-  writeAgent(path.join(agentDir, "agents"), name);
+function writeUserAgent(agentDir: string, name: string, model?: string): void {
+  writeAgent(path.join(agentDir, "agents"), name, model);
 }
 
 function writeProjectAgent(cwd: string, name: string): void {
@@ -292,6 +297,28 @@ test("a project directory cannot contribute an agent, trusted or not", async () 
       `trusted=${piProjectTrusted}`,
     );
   }
+});
+
+test("model diagnostics run when a session is resumed", async () => {
+  const { cwd, agentDir } = makeCheckout();
+  writeUserAgent(agentDir, "known", "anthropic/claude-known");
+  writeUserAgent(agentDir, "missing", "anthropic/claude-missing");
+  writeUserAgent(agentDir, "inherited");
+
+  const session = await startSession({
+    cwd,
+    agentDir,
+    sessionReason: "resume",
+    models: [{ provider: "anthropic", id: "claude-known" }],
+  });
+
+  assert.deepEqual(session.agentNames, ["inherited", "known"]);
+  assert.equal(session.notifications.length, 1);
+  assert.match(session.notifications[0], /- missing: model/);
+  assert.match(
+    session.notifications[0],
+    /model 'anthropic\/claude-missing' was not found/,
+  );
 });
 
 test("an agents command with nothing to list says where to add a profile", async () => {

@@ -14,6 +14,11 @@ export interface AgentConfigLoadResult {
   invalidFiles: InvalidAgentConfig[];
 }
 
+export interface AgentModelReference {
+  provider: string;
+  id: string;
+}
+
 export class AgentConfigValidationError extends Error {
   readonly filePath: string;
 
@@ -172,6 +177,40 @@ export function loadAgentConfigs(agentsDir: string): Map<string, AgentConfig> {
 }
 
 /**
+ * Reject pinned models that are absent from Pi's already-loaded catalogue.
+ *
+ * Both `provider/model-id` and an unambiguous bare model id are accepted by
+ * Pi's CLI, so the diagnostic recognizes both exact forms. Model matching is
+ * case-insensitive, like `pi --model`. Profiles without a pinned model inherit
+ * the caller's model and need no catalogue check.
+ */
+export function diagnoseAgentModels(
+  configs: ReadonlyMap<string, AgentConfig>,
+  agentsDir: string,
+  models: readonly AgentModelReference[],
+): AgentConfigLoadResult {
+  const knownModels = new Set<string>();
+  for (const model of models) {
+    knownModels.add(model.id.toLowerCase());
+    knownModels.add(`${model.provider}/${model.id}`.toLowerCase());
+  }
+
+  const validConfigs = new Map<string, AgentConfig>();
+  const invalidFiles: InvalidAgentConfig[] = [];
+  for (const [name, config] of configs) {
+    if (config.model && !knownModels.has(config.model.toLowerCase())) {
+      invalidFiles.push({
+        filePath: path.join(agentsDir, `${name}.md`),
+        reason: `model '${config.model}' was not found in Pi's model catalogue`,
+      });
+      continue;
+    }
+    validConfigs.set(name, config);
+  }
+  return { configs: validConfigs, invalidFiles };
+}
+
+/**
  * The one directory agents are read from.
  *
  * User scope only, deliberately. A project directory cannot contribute agent
@@ -198,8 +237,12 @@ export function formatAgentGuidelines(
 export function formatInvalidAgentFilesWarning(
   invalidFiles: InvalidAgentConfig[],
 ): string {
-  const lines = invalidFiles.map(
-    (invalid) => `- ${invalid.filePath}: ${invalid.reason}`,
-  );
-  return ["Invalid subagent files were skipped:", ...lines].join("\n");
+  const lines = invalidFiles.map((invalid) => {
+    const agentName = path.basename(
+      invalid.filePath,
+      path.extname(invalid.filePath),
+    );
+    return `- ${agentName}: ${invalid.reason}`;
+  });
+  return ["Invalid subagents were skipped:", ...lines].join("\n");
 }

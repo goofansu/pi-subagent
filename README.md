@@ -34,12 +34,12 @@ The frontmatter configures the run and the body is the prompt. Only `description
 | Field | Required | Description | Example |
 | --- | --- | --- | --- |
 | `description` | Yes | When to use the agent. | `Implement and verify a scoped change` |
-| `model` | No | Passed to pi exactly as written. Omit it to use the calling session's model. | `openai-codex/gpt-5.6-sol` |
+| `model` | No | Exact `provider/model-id` or model id from Pi's loaded catalogue. Omit it to use the calling session's model. | `openai-codex/gpt-5.6-sol` |
 | `effort` | No | Reasoning depth, independent of `model`. | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `tools` | No | Comma-separated pi tool names. Omit it to use pi's defaults. | `read, grep, find, ls` |
 | `appendSystemPrompt` | No | Append the prompt to pi's own instructions. Defaults to `true`; `false` replaces them. | `false` |
 
-`model` reaches pi untouched, so reasoning depth belongs in `effort`, which pi takes as its thinking level. The two fields resolve independently:
+At each session start, profiles with pinned models absent from Pi's loaded model catalogue are skipped with a warning. This check also runs when a session is resumed. A valid `model` then reaches pi untouched, so reasoning depth belongs in `effort`, which pi takes as its thinking level. The two fields resolve independently:
 
 | Profile | Model the subagent runs | Thinking level it runs at |
 | --- | --- | --- |
