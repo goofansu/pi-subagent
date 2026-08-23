@@ -32,6 +32,80 @@ const PI_CLI_SCRIPT_PATHS = [
 ] as const;
 
 const RAW_STDOUT_TAIL_LIMIT = 2000;
+
+/**
+ * Cap on a single un-terminated stdout line, in characters.
+ *
+ * Unlike stderr, stdout carries structured events whose size is legitimately
+ * large: an `agent_end` event holds the child's entire transcript, so a tight
+ * cap would reject real traffic. This is a backstop against a child that emits
+ * without ever writing a newline, not a budget — anything under it is normal.
+ */
+export const STDOUT_LINE_LIMIT = 32 * 1024 * 1024;
+
+const OVERSIZED_STDOUT_LINE_MESSAGE =
+  "[... oversized stdout line dropped; resyncing at the next newline ...]\n";
+
+/**
+ * Splits a byte stream into newline-delimited lines, dropping any single line
+ * that grows past `limit` and resuming cleanly at the next newline.
+ *
+ * The resync is the part worth having in one place: after a line is dropped,
+ * the remainder of it still arrives, and the newline that ends it would
+ * otherwise look like the end of a complete, parseable line.
+ */
+export interface NdjsonBuffer {
+  /** Feed a chunk; returns the complete lines it finished. */
+  push(chunk: string): string[];
+  /** Take the trailing partial line, if it is one worth reading. */
+  flush(): string[];
+  /** Whether any line was dropped for exceeding the limit. */
+  overflowed(): boolean;
+}
+
+export function createNdjsonBuffer(
+  limit: number = STDOUT_LINE_LIMIT,
+): NdjsonBuffer {
+  let buffer = "";
+  let skipNextLine = false;
+  let sawOverflow = false;
+
+  const takeLines = (): string[] => {
+    const parts = buffer.split("\n");
+    buffer = parts.pop() ?? "";
+    const lines: string[] = [];
+    for (const part of parts) {
+      // The tail of a dropped line ends with a newline like any other; it is
+      // not a line, so it is discarded rather than parsed.
+      if (skipNextLine) {
+        skipNextLine = false;
+        continue;
+      }
+      lines.push(part);
+    }
+    return lines;
+  };
+
+  return {
+    push(chunk: string): string[] {
+      buffer += chunk;
+      const lines = takeLines();
+      if (buffer.length > limit) {
+        if (!skipNextLine) sawOverflow = true;
+        buffer = "";
+        skipNextLine = true;
+      }
+      return lines;
+    },
+    flush(): string[] {
+      const trailing = buffer;
+      buffer = "";
+      if (skipNextLine || !trailing.trim()) return [];
+      return [trailing];
+    },
+    overflowed: () => sawOverflow,
+  };
+}
 const MISSING_AGENT_END_ERROR =
   "Child pi exited with code 0 without a valid terminal agent_end event (with a messages array).";
 
@@ -331,10 +405,17 @@ export async function runPiAgent(run: SubagentRun): Promise<SingleResult> {
         return;
       }
 
+      // A child that dies during startup — a rejected model, an unknown tool
+      // name, a refused directory — closes this pipe while the prompt is still
+      // being written. Without a listener that EPIPE is an unhandled stream
+      // error, which takes down the parent pi, not the child.
+      proc.stdin.on("error", (err: Error) => {
+        result.stderr = appendStderr(result.stderr, `stdin: ${err.message}\n`);
+      });
       // Write the prompt to stdin and close it so pi reads it cleanly.
       proc.stdin.write(task.prompt, "utf-8");
       proc.stdin.end();
-      let buffer = "";
+      const stdout = createNdjsonBuffer();
 
       const processLine = (line: string) => {
         if (!line.trim()) return;
@@ -359,10 +440,7 @@ export async function runPiAgent(run: SubagentRun): Promise<SingleResult> {
       proc.stdout.on("data", (data) => {
         const chunk = data.toString();
         rawStdoutTail = (rawStdoutTail + chunk).slice(-RAW_STDOUT_TAIL_LIMIT);
-        buffer += chunk;
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-        for (const line of lines) processLine(line);
+        for (const line of stdout.push(chunk)) processLine(line);
       });
 
       proc.stderr.on("data", (data) => {
@@ -372,7 +450,13 @@ export async function runPiAgent(run: SubagentRun): Promise<SingleResult> {
       let procClosed = false;
       proc.on("close", (code) => {
         procClosed = true;
-        if (buffer.trim()) processLine(buffer);
+        for (const line of stdout.flush()) processLine(line);
+        if (stdout.overflowed()) {
+          result.stderr = appendStderr(
+            result.stderr,
+            OVERSIZED_STDOUT_LINE_MESSAGE,
+          );
+        }
         if ((code ?? 0) !== 0 && !result.stderr && !result.errorMessage) {
           result.errorMessage =
             `Child pi exited with code ${code ?? "unknown"} without stderr` +

@@ -12,6 +12,7 @@ import { getFinalOutput } from "./messages.ts";
 import {
   applyPiJsonEvent,
   buildPiArgs,
+  createNdjsonBuffer,
   getPiInvocation,
   getSpawnOptions,
   type PiInvocationRuntime,
@@ -204,6 +205,7 @@ async function runPiFixture(
   options: {
     signal?: AbortSignal;
     onEmit?: (result: SingleResult) => void;
+    prompt?: string;
   } = {},
 ): Promise<SingleResult> {
   const shadow = shadowPiBinary(script);
@@ -214,7 +216,7 @@ async function runPiFixture(
       task: {
         config: agent({ systemPrompt: "" }),
         description: "Work",
-        prompt: "do it",
+        prompt: options.prompt ?? "do it",
         cwd: os.tmpdir(),
         depth: 0,
         projectTrusted: false,
@@ -567,4 +569,53 @@ test("the child pi driver ignores an abort that arrives after a clean exit", asy
   assert.equal(settled.exitCode, 0);
   assert.equal(settled.stopReason, "stop");
   assert.equal(settled.errorMessage, undefined);
+});
+
+test("a child that exits before reading the prompt does not take the parent down", async () => {
+  // Larger than a pipe buffer, so the write is still in flight when the child
+  // goes away. Without a stdin error handler this surfaces as an unhandled
+  // EPIPE in the parent process rather than a failed run.
+  const oversizedPrompt = "x".repeat(1024 * 1024);
+  const result = await runPiFixture("#!/bin/sh\nexit 3\n", {
+    prompt: oversizedPrompt,
+  });
+
+  assert.equal(result.exitCode, 3);
+  assert.ok(
+    result.errorMessage || result.stderr,
+    "the run should report why it failed",
+  );
+});
+
+test("the stdout buffer splits lines across chunk boundaries", () => {
+  const buffer = createNdjsonBuffer(1024);
+
+  assert.deepEqual(buffer.push('{"a":1}\n{"b'), ['{"a":1}']);
+  assert.deepEqual(buffer.push('":2}\n'), ['{"b":2}']);
+  assert.deepEqual(buffer.flush(), []);
+  assert.equal(buffer.overflowed(), false);
+});
+
+test("the stdout buffer keeps a trailing line that never got a newline", () => {
+  const buffer = createNdjsonBuffer(1024);
+
+  assert.deepEqual(buffer.push('{"a":1}'), []);
+  assert.deepEqual(buffer.flush(), ['{"a":1}']);
+});
+
+test("the stdout buffer drops an oversized line and resyncs at the next newline", () => {
+  const buffer = createNdjsonBuffer(16);
+
+  assert.deepEqual(buffer.push("x".repeat(64)), []);
+  assert.equal(buffer.overflowed(), true);
+  // The rest of the dropped line arrives with the newline that ends it; that
+  // tail is not a line, and the good line after it still parses.
+  assert.deepEqual(buffer.push('more-of-it\n{"a":1}\n'), ['{"a":1}']);
+});
+
+test("the stdout buffer does not flush the tail of a dropped line", () => {
+  const buffer = createNdjsonBuffer(16);
+
+  buffer.push("x".repeat(64));
+  assert.deepEqual(buffer.flush(), []);
 });
