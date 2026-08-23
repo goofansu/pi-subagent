@@ -17,7 +17,7 @@ import {
   formatRunStatus,
   runStatusGlyph,
   runStatusTone,
-} from "./formatting.ts";
+} from "./presentation.ts";
 import type { RunView, SubagentRuns } from "./runs.ts";
 import type { ThemeForeground } from "./types.ts";
 

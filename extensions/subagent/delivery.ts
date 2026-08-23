@@ -19,38 +19,17 @@
  * See docs/adr/0002-push-only-result-delivery.md.
  */
 
-import { getFinalOutput } from "./messages.ts";
+import { formatReport, fullOutput } from "./presentation.ts";
 import type { SubagentRuns } from "./runs.ts";
 import { subagentRuns } from "./runs.ts";
 import type { LifecycleStatus, SingleResult } from "./types.ts";
-
-/**
- * Cap on a pushed report, in characters.
- *
- * A backstop, not a budget. A report arrives uninvited, so a runaway agent
- * that returns a whole file should not be able to swamp the parent's context —
- * but a thorough agent's genuine answer must never be cut, because there is
- * nowhere to recover the rest from: the run is released the moment it is
- * delivered, and there is deliberately no tool to fetch a report twice. Set it
- * high enough that only the pathological case reaches it.
- */
-export const REPORT_CHARACTER_LIMIT = 24_000;
-
-/**
- * Cap on the reason a failed run reports.
- *
- * Tighter than a report, and kept from the *end* rather than the beginning: a
- * failure's diagnosis is the last thing said before it died, which is the same
- * reason `appendStderr` keeps the tail.
- */
-export const FAILURE_REASON_LIMIT = 4_000;
 
 /** A report on its way to the model, with what a renderer needs to show it. */
 export interface PushedReport {
   id: string;
   agent: string;
   status: LifecycleStatus;
-  /** The message text the model reads. Capped; see the limits above. */
+  /** The message text the model reads. Capped; see `presentation.ts`. */
   text: string;
   /** Whether the text is shorter than what the run actually said. */
   truncated: boolean;
@@ -185,58 +164,6 @@ export interface SubagentDelivery {
   shutdown(): void;
   /** What a run said, whole, after it has been delivered. */
   recall(id: string): RetainedReport | undefined;
-}
-
-/**
- * Keep the head, and say what was dropped.
- *
- * Naming the shortfall matters more than the trim: a report that just stops
- * reads like a report that finished, and a model will act on it as though it
- * were whole.
- */
-function keepHead(text: string, limit: number): string {
-  if (text.length <= limit) return text;
-  const dropped = text.length - limit;
-  return `${text.slice(0, limit)}\n\n[... ${dropped} more characters dropped; this report is incomplete ...]`;
-}
-
-/** Keep the tail, for text whose end is the part that explains it. */
-function keepTail(text: string, limit: number): string {
-  if (text.length <= limit) return text;
-  const dropped = text.length - limit;
-  return `[... ${dropped} earlier characters dropped ...]\n${text.slice(-limit)}`;
-}
-
-/** Everything a run said, before any cap is applied. */
-export function fullOutput(result: SingleResult): string {
-  if (result.status === "aborted") return "";
-  if (result.status === "failed") {
-    return (
-      result.errorMessage || result.stderr || getFinalOutput(result.messages)
-    );
-  }
-  return getFinalOutput(result.messages).trim();
-}
-
-/** The report text for one settled run. */
-export function formatReport(id: string, result: SingleResult): string {
-  const name = `${result.agent} (${id})`;
-
-  if (result.status === "aborted") {
-    return `Subagent ${name} was cancelled before it finished.`;
-  }
-  if (result.status === "failed") {
-    const reason =
-      result.errorMessage || result.stderr || getFinalOutput(result.messages);
-    return `Subagent ${name} failed: ${
-      reason ? keepTail(reason, FAILURE_REASON_LIMIT) : "no reason reported"
-    }`;
-  }
-
-  const output = getFinalOutput(result.messages).trim();
-  if (!output) return `Subagent ${name} finished without output.`;
-
-  return `Subagent ${name} finished:\n\n${keepHead(output, REPORT_CHARACTER_LIMIT)}`;
 }
 
 interface Pending {

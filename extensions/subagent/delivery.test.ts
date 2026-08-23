@@ -2,13 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Message } from "@earendil-works/pi-ai";
 import type { PushedReport } from "./delivery.ts";
-import {
-  createSessionPush,
-  createSubagentDelivery,
-  FAILURE_REASON_LIMIT,
-  formatReport,
-  REPORT_CHARACTER_LIMIT,
-} from "./delivery.ts";
+import { createSessionPush, createSubagentDelivery } from "./delivery.ts";
+import { REPORT_CHARACTER_LIMIT } from "./presentation.ts";
 import { createEmptyResult } from "./run.ts";
 import { createSubagentRuns } from "./runs.ts";
 import type { SingleResult } from "./types.ts";
@@ -278,68 +273,6 @@ test("a delivered run is released from the registry", async () => {
   await flush();
 
   assert.equal(runs.size(), 0);
-});
-
-// ── Report shape ─────────────────────────────────────────────────────────────
-
-test("a report carries the final output and names the run", () => {
-  const result = createEmptyResult("explore", "look", 0);
-  result.messages.push(assistantText("three call sites"));
-  result.status = "completed";
-
-  const report = formatReport("a1b2c3d4", result);
-
-  assert.match(report, /^Subagent explore \(a1b2c3d4\) finished:/);
-  assert.match(report, /three call sites/);
-});
-
-test("a thorough report passes through whole", () => {
-  const result = createEmptyResult("explore", "look", 0);
-  result.messages.push(assistantText("x".repeat(10_000)));
-  result.status = "completed";
-
-  const report = formatReport("a1b2c3d4", result);
-
-  assert.match(report, /x{10000}/, "a real answer is never cut");
-  assert.doesNotMatch(report, /incomplete/);
-});
-
-test("a runaway report is cut, and says how much went missing", () => {
-  const result = createEmptyResult("explore", "look", 0);
-  result.messages.push(assistantText("x".repeat(REPORT_CHARACTER_LIMIT + 500)));
-  result.status = "completed";
-
-  const report = formatReport("a1b2c3d4", result);
-
-  assert.match(report, /500 more characters dropped/);
-  assert.match(report, /this report is incomplete/);
-});
-
-test("a failure reason keeps its tail, where the diagnosis is", () => {
-  const result = createEmptyResult("explore", "look", 0);
-  result.status = "failed";
-  result.stderr = `${"noise\n".repeat(2_000)}FATAL: the actual cause`;
-
-  const report = formatReport("a1", result);
-
-  assert.match(report, /FATAL: the actual cause$/);
-  assert.match(report, /earlier characters dropped/);
-  assert.ok(report.length < FAILURE_REASON_LIMIT + 200);
-});
-
-test("a failed report names the reason", () => {
-  const result = createEmptyResult("explore", "look", 0);
-  result.status = "failed";
-  result.errorMessage = "model refused";
-
-  assert.match(formatReport("a1", result), /failed: model refused/);
-});
-
-test("a finished run with no output says so rather than looking empty", () => {
-  const result = createEmptyResult("explore", "look", 0);
-  result.status = "completed";
-
-  assert.match(formatReport("a1", result), /finished without output/);
 });
 
 // ── Retention ────────────────────────────────────────────────────────────────

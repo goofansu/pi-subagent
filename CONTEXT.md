@@ -71,6 +71,11 @@ does: the nesting guard, lifecycle settlement, delivery.
 **Executor** (`pi-agent.ts`) — the child pi process itself. Substitutable at the
 seam defined in `run.ts`.
 
+**Presentation** (`presentation.ts`) — how a run and its report read to a
+human: status glyphs, tones, verbs, phrases, and the report text with its
+trims. The only module that interprets a lifecycle status for display; the
+delivery module does bookkeeping and asks this one what a report says.
+
 **Activity** — the one-line summary of what a run is doing right now, derived
 from its most recent tool call. Display only.
 

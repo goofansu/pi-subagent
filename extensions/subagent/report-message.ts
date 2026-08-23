@@ -11,7 +11,11 @@
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import { formatCharacterCount, runStatusTone } from "./formatting.ts";
+import {
+  formatCharacterCount,
+  reportVerb,
+  runStatusTone,
+} from "./presentation.ts";
 import { contentText } from "./render.ts";
 import type { LifecycleStatus } from "./types.ts";
 
@@ -62,7 +66,7 @@ export function formatReportSummary(
   renderKeyHint = keyHint,
 ): string {
   const tone = runStatusTone(details.status);
-  const verb = details.status === "completed" ? "reported" : details.status;
+  const verb = reportVerb(details.status);
 
   let line =
     theme.fg("toolTitle", theme.bold(details.agent)) +

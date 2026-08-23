@@ -5,7 +5,7 @@ import type {
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
-import { formatCharacterCount, runStatusTone } from "./formatting.ts";
+import { formatCharacterCount, runStatusTone } from "./presentation.ts";
 import type { LifecycleStatus } from "./types.ts";
 
 type SubagentArgs = {
