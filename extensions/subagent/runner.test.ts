@@ -6,8 +6,6 @@
 
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { createSubagentLimiter } from "./concurrency.ts";
 import type { SubagentExecutor, SubagentRun } from "./run.ts";
 import { createEmptyResult } from "./run.ts";
 import {
@@ -15,7 +13,8 @@ import {
   getSubagentDepth,
   runSubagent,
 } from "./runner.ts";
-import type { AgentConfig, SingleResult, SubagentDetails } from "./types.ts";
+import { createSubagentRuns } from "./runs.ts";
+import type { AgentConfig, SingleResult } from "./types.ts";
 
 // The depth guard reads the environment, so an inherited depth — these tests run
 // from inside a subagent often enough — would fail every test that is not about
@@ -77,12 +76,11 @@ function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
 
 // ── Result initialization ─────────────────────────────────────────────────────
 
-test("createEmptyResult starts a run queued with its entry time", () => {
+test("createEmptyResult starts a run running from its start time", () => {
   const result = createEmptyResult("worker", "a task", 1_000);
 
-  assert.equal(result.status, "queued");
-  assert.equal(result.queuedAt, 1_000);
-  assert.equal(result.startedAt, undefined);
+  assert.equal(result.status, "running");
+  assert.equal(result.startedAt, 1_000);
   assert.equal(result.finishedAt, undefined);
   assert.equal(result.exitCode, -1);
   assert.deepEqual(result.messages, []);
@@ -163,59 +161,41 @@ test("getSubagentDepth reads the environment and defaults to zero", () => {
 
 // ── Lifecycle and progress ────────────────────────────────────────────────────
 
-test("runSubagent reports queued, running, and centrally settled progress", async () => {
-  const updates: AgentToolResult<SubagentDetails>[] = [];
-  const statuses: Array<{
-    status: SingleResult["status"];
-    queuedAt?: number;
-    startedAt?: number;
-    finishedAt?: number;
-  }> = [];
+test("runSubagent publishes progress to the registry, not the transcript", async () => {
+  const runs = createSubagentRuns();
+  const statuses: Array<SingleResult["status"]> = [];
+  runs.subscribe(() => {
+    const [view] = runs.list();
+    if (view) statuses.push(view.status);
+  });
   const recorded = recordingExecutor();
-  const times = [1_000, 1_500, 4_500];
+  const times = [1_000, 4_500];
 
   const reported = await runSubagent({
     config: agent({ effort: "high" }),
     description: "task",
     prompt: "do it",
-    onUpdate: (partial) => {
-      updates.push(partial);
-      const current = partial.details.results[0];
-      statuses.push({
-        status: current.status,
-        queuedAt: current.queuedAt,
-        startedAt: current.startedAt,
-        finishedAt: current.finishedAt,
-      });
-    },
     execute: recorded.execute,
+    runs,
     now: () => times.shift() ?? assert.fail("unexpected clock read"),
   });
 
-  // The dispatcher publishes both lifecycle boundaries. The recording executor
-  // also emits its own initial and final progress snapshots.
-  assert.deepEqual(
-    statuses.map(({ status }) => status),
-    ["queued", "running", "running", "running", "completed"],
-  );
+  // Exact notification counts are an implementation detail; what matters is
+  // that the run appears as running, settles once, and settles last.
+  assert.equal(statuses[0], "running");
+  assert.equal(statuses.at(-1), "completed");
   assert.equal(
-    updates[0].content[0].type === "text" ? updates[0].content[0].text : "",
-    "(queued...)",
+    statuses.filter((status) => status === "completed").length,
+    1,
+    "a run settles exactly once",
   );
-  const last = updates.at(-1);
-  assert.ok(last);
-  assert.equal(
-    last.content[0].type === "text" ? last.content[0].text : "",
-    "ran the agent",
-  );
-  const lastResult: SingleResult = last.details.results[0];
-  assert.equal(lastResult.exitCode, 0);
-  assert.equal(lastResult.status, "completed");
-  assert.equal(lastResult.queuedAt, 1_000);
-  assert.equal(lastResult.startedAt, 1_500);
-  assert.equal(lastResult.finishedAt, 4_500);
-  assert.equal(updates[0].details.results[0].effort, "high");
+  assert.ok(statuses.length >= 3, "progress is published as the run advances");
+  assert.equal(reported.exitCode, 0);
+  assert.equal(reported.status, "completed");
+  assert.equal(reported.startedAt, 1_000);
+  assert.equal(reported.finishedAt, 4_500);
   assert.equal(reported.effort, "high");
+  assert.equal(runs.size(), 0, "the awaited form releases the run");
 });
 
 test("runSubagent centrally maps every outcome to a terminal state", async () => {
@@ -233,7 +213,7 @@ test("runSubagent centrally maps every outcome to a terminal state", async () =>
       run.result.stopReason = outcome.stopReason;
       return run.result;
     };
-    const times = [100, 200, 700];
+    const times = [100, 700];
 
     const result = await runSubagent({
       config: agent(),
@@ -245,8 +225,7 @@ test("runSubagent centrally maps every outcome to a terminal state", async () =>
 
     assert.equal(stateSeenByExecutor, "running");
     assert.equal(result.status, outcome.expected);
-    assert.equal(result.queuedAt, 100);
-    assert.equal(result.startedAt, 200);
+    assert.equal(result.startedAt, 100);
     assert.equal(result.finishedAt, 700);
   }
 });
@@ -264,170 +243,80 @@ test("runSubagent omits effort when the profile does not configure it", async ()
   assert.equal("effort" in result, false);
 });
 
-// ── Concurrency cap ───────────────────────────────────────────────────────────
+// ── Cancellation ──────────────────────────────────────────────────────────────
 
-/** An executor whose runs settle only when the test says so. */
-function gatedExecutor(): {
-  execute: SubagentExecutor;
-  started: () => number;
-  finishAll: () => void;
-} {
-  let started = 0;
-  const finishers: Array<() => void> = [];
+test("a run cancelled before it starts never spawns a child", async () => {
+  let executorCalls = 0;
   const execute: SubagentExecutor = async (run) => {
-    started++;
-    await new Promise<void>((resolve) => finishers.push(resolve));
+    executorCalls++;
+    return run.result;
+  };
+  const controller = new AbortController();
+  controller.abort();
+
+  const result = await runSubagent({
+    config: agent(),
+    description: "task",
+    prompt: "do it",
+    signal: controller.signal,
+    execute,
+    now: () => 500,
+  });
+
+  assert.equal(executorCalls, 0);
+  assert.equal(result.status, "aborted");
+  assert.equal(result.stopReason, "aborted");
+  assert.equal(result.finishedAt, 500);
+});
+
+// ── Registry ──────────────────────────────────────────────────────────────────
+
+test("a run is tracked while it runs and released once it is delivered", async () => {
+  const runs = createSubagentRuns();
+  const seen: number[] = [];
+  const execute: SubagentExecutor = async (run) => {
+    seen.push(runs.size());
     run.result.exitCode = 0;
     return run.result;
   };
-  return {
+
+  await runSubagent({
+    config: agent(),
+    description: "task",
+    prompt: "do it",
     execute,
-    started: () => started,
-    finishAll: () => {
-      for (const finish of finishers.splice(0)) finish();
-    },
+    runs,
+  });
+
+  assert.deepEqual(seen, [1], "the run is visible while its child works");
+  assert.equal(runs.size(), 0, "returning the tool result delivers the run");
+});
+
+test("the registry can cancel one run without touching the turn", async () => {
+  const runs = createSubagentRuns();
+  let sawAbort = false;
+  const execute: SubagentExecutor = async (run) => {
+    const [id] = runs.list().map((view) => view.id);
+    runs.cancel([id]);
+    sawAbort = run.signal?.aborted ?? false;
+    run.result.exitCode = 1;
+    run.result.stopReason = "aborted";
+    return run.result;
   };
-}
 
-test("runSubagent runs no more than the limiter allows at once", {
-  timeout: 5_000,
-}, async () => {
-  const gated = gatedExecutor();
-  const limiter = createSubagentLimiter(2);
-
-  const runs = [1, 2, 3, 4].map(() =>
-    runSubagent({
-      config: agent(),
-      description: "queued",
-      prompt: "go",
-      execute: gated.execute,
-      limiter,
-    }),
-  );
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(gated.started(), 2, "only two runs may be in flight");
-  assert.equal(limiter.queued(), 2);
-
-  gated.finishAll();
-  await new Promise((resolve) => setImmediate(resolve));
-  gated.finishAll();
-  const results = await Promise.all(runs);
-
-  assert.deepEqual(
-    results.map((r) => r.exitCode),
-    [0, 0, 0, 0],
-  );
-});
-
-test("a run cancelled while queued never starts its child", {
-  timeout: 5_000,
-}, async () => {
-  const gated = gatedExecutor();
-  const limiter = createSubagentLimiter(1);
-
-  const holding = runSubagent({
+  const result = await runSubagent({
     config: agent(),
-    description: "holds the slot",
-    prompt: "go",
-    execute: gated.execute,
-    limiter,
+    description: "task",
+    prompt: "do it",
+    execute,
+    runs,
   });
-  const controller = new AbortController();
-  const queuedTimes = [1_000, 4_000];
-  const queued = runSubagent({
-    config: agent(),
-    description: "waits",
-    prompt: "go",
-    signal: controller.signal,
-    execute: gated.execute,
-    limiter,
-    now: () =>
-      queuedTimes.shift() ?? assert.fail("unexpected queued clock read"),
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(gated.started(), 1);
 
-  controller.abort();
-  const result = await queued;
-
-  assert.equal(gated.started(), 1, "the queued run must not start after all");
-  assert.equal(result.exitCode, 1);
-  assert.equal(result.stopReason, "aborted");
+  assert.equal(sawAbort, true, "the executor sees its own run cancelled");
   assert.equal(result.status, "aborted");
-  assert.equal(result.queuedAt, 1_000);
-  assert.equal(result.startedAt, undefined);
-  assert.equal(result.finishedAt, 4_000);
-
-  gated.finishAll();
-  await holding;
 });
 
-test("a run releases its slot even when the executor throws", async () => {
-  const limiter = createSubagentLimiter(1);
-
-  await assert.rejects(
-    () =>
-      runSubagent({
-        config: agent(),
-        description: "throws",
-        prompt: "go",
-        execute: async () => {
-          throw new Error("the child exploded");
-        },
-        limiter,
-      }),
-    /the child exploded/,
-  );
-
-  assert.equal(limiter.active(), 0, "a thrown run must not leak its slot");
-});
-
-test("a queued run reports itself before it holds a slot", {
-  timeout: 5_000,
-}, async () => {
-  const gated = gatedExecutor();
-  const limiter = createSubagentLimiter(1);
-
-  const holding = runSubagent({
-    config: agent(),
-    description: "holds the slot",
-    prompt: "go",
-    execute: gated.execute,
-    limiter,
-  });
-  const updates: AgentToolResult<SubagentDetails>[] = [];
-  const queued = runSubagent({
-    config: agent(),
-    description: "waits",
-    prompt: "go",
-    onUpdate: (partial) => updates.push(partial),
-    execute: gated.execute,
-    limiter,
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-
-  // The child has not run, so nothing but the dispatcher can have reported
-  // this run — and without that report a fan-out wider than the cap would
-  // show no row at all for the agents still waiting.
-  assert.equal(limiter.queued(), 1);
-  assert.equal(updates.length, 1);
-  assert.equal(updates[0].details.results[0].exitCode, -1);
-  assert.equal(updates[0].details.results[0].status, "queued");
-  assert.equal(
-    updates[0].content[0].type === "text" ? updates[0].content[0].text : "",
-    "(queued...)",
-  );
-
-  // Releasing the slot admits the waiter, which then starts a run of its own —
-  // so the gate has to be opened again for it.
-  gated.finishAll();
-  await new Promise((resolve) => setImmediate(resolve));
-  gated.finishAll();
-  await Promise.all([holding, queued]);
-});
-
-// ── Project trust ─────────────────────────────────────────────────────────────
+// ── Trust ─────────────────────────────────────────────────────────────────────
 
 test("runSubagent forwards Pi's project-trust decision to the child", async () => {
   const recorded = recordingExecutor();

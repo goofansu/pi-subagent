@@ -1,22 +1,23 @@
 /**
- * The dispatcher. It enforces the nesting depth guard, holds every run to the
- * concurrency cap, settles lifecycle state, and plumbs progress updates — the
- * rules that apply to a subagent run whatever it does.
+ * The dispatcher. It enforces the nesting depth guard, settles lifecycle state,
+ * and plumbs progress updates — the rules that apply to a subagent run whatever
+ * it does.
+ *
+ * It deliberately imposes no concurrency cap; see
+ * docs/adr/0001-unbounded-subagent-concurrency.md.
  */
 
-import type { ReleaseSlot, SubagentLimiter } from "./concurrency.ts";
-import { QueueAbortedError, subagentLimiter } from "./concurrency.ts";
-import { getFinalOutput } from "./messages.ts";
 import { runPiAgent } from "./pi-agent.ts";
 import type { ParentModel, SubagentExecutor, SubagentTask } from "./run.ts";
 import {
   createEmptyResult,
   DEPTH_ENV_KEY,
-  markResultRunning,
   settleAborted,
   settleResultLifecycle,
 } from "./run.ts";
-import type { AgentConfig, OnUpdateCallback, SingleResult } from "./types.ts";
+import type { SubagentRuns } from "./runs.ts";
+import { subagentRuns } from "./runs.ts";
+import type { AgentConfig, SingleResult } from "./types.ts";
 
 const MAX_SUBAGENT_DEPTH = 1;
 
@@ -44,29 +45,41 @@ export interface RunSubagentOptions {
    * Pi's project-trust decision for `cwd`; unknown is treated as denied.
    */
   projectTrusted?: boolean;
-  onUpdate?: OnUpdateCallback;
   cwd?: string;
   /** Injected for tests; defaults to running the agent in a child pi. */
   execute?: SubagentExecutor;
-  /** Injected for tests; defaults to the process-wide cap. */
-  limiter?: SubagentLimiter;
+  /** Injected for tests; defaults to the process-wide registry. */
+  runs?: SubagentRuns;
   /** Injected for deterministic lifecycle timestamps in tests. */
   now?: () => number;
 }
 
-export async function runSubagent({
+/** A run that has started, named before it has finished. */
+export interface StartedSubagent {
+  /** Registry id, available immediately — this is what `agent_start` returns. */
+  readonly id: string;
+  readonly settled: Promise<SingleResult>;
+}
+
+/**
+ * Start a run and return its id without waiting for it.
+ *
+ * The synchronous part — the depth guard, the result record, the cancellation
+ * controller and registration — runs before this returns, which is what lets a
+ * fire-and-forget caller name the run it just started.
+ */
+export function startSubagent({
   config,
   description,
   prompt,
   signal,
   parentModel,
   projectTrusted = false,
-  onUpdate,
   cwd = process.cwd(),
   execute = runPiAgent,
-  limiter = subagentLimiter,
+  runs = subagentRuns,
   now = Date.now,
-}: RunSubagentOptions): Promise<SingleResult> {
+}: RunSubagentOptions): StartedSubagent {
   const currentDepth = getSubagentDepth();
   assertSubagentDepthAvailable(currentDepth);
 
@@ -83,55 +96,72 @@ export async function runSubagent({
     ...(parentModel ? { parentModel } : {}),
   };
 
-  const emit = () => {
-    if (!onUpdate) return;
-    const emptyOutput =
-      result.status === "queued"
-        ? "(queued...)"
-        : result.status === "running"
-          ? "(running...)"
-          : result.status === "aborted"
-            ? "(aborted)"
-            : "(no output)";
-    onUpdate({
-      content: [
-        {
-          type: "text",
-          text: getFinalOutput(result.messages) || emptyOutput,
-        },
-      ],
-      details: { results: [result] },
-    });
-  };
-
-  // Report the run before it may have to wait. The cap means a fan-out wider
-  // than four leaves agents queued with no child running yet, and nothing
-  // else would put a row on screen for them.
-  emit();
-
-  let release: ReleaseSlot;
-  try {
-    release = await limiter.acquire(signal);
-  } catch (cause) {
-    // Cancelled while waiting for a slot. That is a cancelled run like any
-    // other — resolved, not thrown — and its child never started.
-    if (cause instanceof QueueAbortedError) {
-      settleAborted(result);
-      settleResultLifecycle(result, now());
-      emit();
-      return result;
-    }
-    throw cause;
+  // The host's signal cancels the whole turn. Chaining it onto a controller of
+  // this run's own is what lets one run be stopped on its own — by the
+  // operator through the registry, or later by the model — without touching
+  // the others.
+  const controller = new AbortController();
+  const forwardAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", forwardAbort, { once: true });
   }
 
+  const handle = runs.track(result, forwardAbort);
+
+  // Progress goes to the registry and from there to whatever is on screen.
+  // It cannot go back into the transcript: a detached run's tool-call row is
+  // already final by the time its child says anything.
+  const emit = () => handle.changed();
+
+  const settled = (async (): Promise<SingleResult> => {
+    try {
+      // Put the run on screen before its child has said anything.
+      emit();
+
+      // A run cancelled before it starts must not spawn a child at all. The
+      // executor would otherwise spawn one and kill it a moment later.
+      if (controller.signal.aborted) {
+        settleAborted(result);
+        settleResultLifecycle(result, now());
+        emit();
+        return result;
+      }
+
+      const finished = await execute({
+        task,
+        result,
+        emit,
+        signal: controller.signal,
+      });
+      settleResultLifecycle(finished, now());
+      emit();
+      return finished;
+    } finally {
+      signal?.removeEventListener("abort", forwardAbort);
+    }
+  })();
+
+  return { id: handle.id, settled };
+}
+
+/**
+ * Start a run and wait for it, releasing it from the registry on the way out.
+ *
+ * The awaited form is for callers that treat the run as one blocking step.
+ * Fire-and-forget callers use {@link startSubagent} and hand the settled
+ * promise to the delivery module, which decides when the run is released.
+ */
+export async function runSubagent(
+  options: RunSubagentOptions,
+): Promise<SingleResult> {
+  const runs = options.runs ?? subagentRuns;
+  const started = startSubagent(options);
   try {
-    markResultRunning(result, now());
-    emit();
-    const settled = await execute({ task, result, emit, signal });
-    settleResultLifecycle(settled, now());
-    emit();
-    return settled;
+    return await started.settled;
   } finally {
-    release();
+    // The tool result carries the report back, so returning is this run's
+    // delivery and the registry has nothing left to show for it.
+    runs.release(started.id);
   }
 }

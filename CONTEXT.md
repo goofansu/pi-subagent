@@ -1,0 +1,69 @@
+# Domain model
+
+The vocabulary this codebase uses. Terms here are load-bearing: they name the
+seams, and code that uses a different word for the same thing is a bug in the
+naming, not a synonym.
+
+## Core
+
+**Agent** — a named role a task can be delegated to, e.g. `explore`. An agent is
+defined by exactly one **profile**.
+
+**Profile** — the Markdown file that defines an agent: frontmatter configuring
+the run (`description`, `model`, `effort`, `tools`, `appendSystemPrompt`) and a
+body that is the agent's prompt. Named after the agent, so `explore.md` defines
+`explore`. Read only from user scope; see `getAgentsDir`.
+
+**Run** — one execution of one profile against one prompt. A run has an id, a
+lifecycle, a transcript, usage, and exactly one delivery. Runs are the thing the
+registry holds and the widget lists. Not "job", not "task", not "call".
+
+**Detached run** — a run that outlives the turn that started it. Every run
+started by `agent_start` is detached. Detached runs belong to the pi process,
+not to the turn or the session: `Escape` does not stop them, session switch and
+fork do not stop them, and process shutdown does.
+
+**Child pi** — the process a run executes in. One-shot: it takes one prompt on
+stdin and produces one answer. It cannot be steered mid-flight.
+
+## Delivery
+
+**Report** — what a run gives back: its final assistant output, and nothing
+else. Tool-call logs and usage belong on screen, not in the parent's context.
+
+**Delivery** — the single act of giving a run's report to the model. The
+invariant is *exactly one delivery per run*, never zero and never two. A
+delivery is a push, a returned `agent_wait`, or a cancellation notice.
+
+**Push** — delivery by injecting the report into the session as a follow-up
+message when the run settles. The default path.
+
+**Claim** — an `agent_wait` claims the reports of the runs it names, suppressing
+their push so they return through the tool result instead. Abandoning the wait
+releases the claim and the run pushes normally.
+
+## Modules
+
+**Registry** — the module owning the set of live runs and their lifetime.
+Everything that displays or acts on runs reads it; the dispatcher is its only
+writer. It also owns the redraw clock.
+
+**Projection** (`RunView`) — an immutable row derived from a run for display.
+Callers never touch the mutable run record.
+
+**Dispatcher** (`runner.ts`) — the rules that hold for every run whatever it
+does: the nesting guard, lifecycle settlement, delivery.
+
+**Executor** (`pi-agent.ts`) — the child pi process itself. Substitutable at the
+seam defined in `run.ts`.
+
+**Activity** — the one-line summary of what a run is doing right now, derived
+from its most recent tool call. Display only.
+
+## Constraints
+
+**Depth** — delegation is one level deep. A subagent cannot start subagents;
+`PI_SUBAGENT_DEPTH` carries the guard into children.
+
+**Trust** — pi's project-trust decision for the working directory, resolved by
+the session and forwarded to every child. The extension never derives its own.

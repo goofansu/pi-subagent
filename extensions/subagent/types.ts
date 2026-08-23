@@ -1,4 +1,3 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 
 export interface UsageStats {
@@ -29,25 +28,15 @@ export const EFFORTS = [
 ] as const;
 export type Effort = (typeof EFFORTS)[number];
 
-export type LifecycleStatus =
-  | "queued"
-  | "running"
-  | "completed"
-  | "failed"
-  | "aborted";
-export type TerminalLifecycleStatus = Exclude<
-  LifecycleStatus,
-  "queued" | "running"
->;
+export type LifecycleStatus = "running" | "completed" | "failed" | "aborted";
+export type TerminalLifecycleStatus = Exclude<LifecycleStatus, "running">;
 
 export interface SingleResult {
   agent: string;
   description: string;
   status: LifecycleStatus;
-  /** Epoch milliseconds when the run entered the concurrency queue. */
-  queuedAt: number;
-  /** Epoch milliseconds when the limiter admitted the run to a child pi. */
-  startedAt?: number;
+  /** Epoch milliseconds when the run's child pi was spawned. */
+  startedAt: number;
   /** Epoch milliseconds when the run reached a terminal state. */
   finishedAt?: number;
   /** -1 while pending, 0 on success, non-zero on failure. */
@@ -61,14 +50,6 @@ export interface SingleResult {
   stopReason?: string;
   errorMessage?: string;
 }
-
-export interface SubagentDetails {
-  results: SingleResult[];
-}
-
-export type DisplayItem =
-  | { type: "text"; text: string }
-  | { type: "toolCall"; name: string; args: Record<string, unknown> };
 
 export interface AgentConfig {
   name: string;
@@ -88,10 +69,6 @@ export interface AgentConfig {
 export function resolveAppendSystemPrompt(config: AgentConfig): boolean {
   return config.appendSystemPrompt ?? DEFAULT_APPEND_SYSTEM_PROMPT;
 }
-
-export type OnUpdateCallback = (
-  partial: AgentToolResult<SubagentDetails>,
-) => void;
 
 // biome-ignore lint/suspicious/noExplicitAny: theme.fg uses ThemeColor which is narrower than string
 export type ThemeForeground = (color: any, text: string) => string;

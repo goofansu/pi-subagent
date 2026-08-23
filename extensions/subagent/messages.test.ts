@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Message } from "@earendil-works/pi-ai";
-import { getDisplayItems, getFinalOutput } from "./messages.ts";
+import { getFinalOutput } from "./messages.ts";
 
 const assistantMessage = (content: Message["content"]): Message =>
   ({ role: "assistant", content }) as Message;
@@ -41,24 +41,4 @@ test("getFinalOutput returns an empty string when no assistant text exists", () 
     getFinalOutput([userMessage([{ type: "text", text: "hello" }])]),
     "",
   );
-});
-
-test("getDisplayItems extracts assistant text and tool calls in order", () => {
-  const messages = [
-    userMessage([{ type: "text", text: "ignored" }]),
-    assistantMessage([
-      { type: "text", text: "thinking" },
-      {
-        type: "toolCall",
-        id: "call-1",
-        name: "bash",
-        arguments: { command: "npm test" },
-      },
-    ]),
-  ];
-
-  assert.deepEqual(getDisplayItems(messages), [
-    { type: "text", text: "thinking" },
-    { type: "toolCall", name: "bash", args: { command: "npm test" } },
-  ]);
 });

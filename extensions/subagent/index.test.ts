@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { PushedReport } from "./delivery.ts";
 import subagentExtension, { registerSubagentFeatures } from "./index.ts";
 import { createEmptyResult } from "./run.ts";
-import type { RunSubagentOptions } from "./runner.ts";
+import type { RunSubagentOptions, StartedSubagent } from "./runner.ts";
 import type { AgentConfig } from "./types.ts";
 
 // ── Extension registration ───────────────────────────────────────────────────
@@ -37,27 +38,79 @@ test("the extension is not exposed inside a subagent Pi process", () => {
   }
 });
 
-test("subagent executions use the trust decision captured at session start", async () => {
+interface SentMessage {
+  customType: string;
+  content: string;
+  options?: { deliverAs?: string; triggerTurn?: boolean };
+}
+
+interface RegisteredTools {
+  [name: string]: {
+    promptGuidelines?: string[];
+    execute(
+      toolCallId: string,
+      params: Record<string, unknown>,
+      signal?: AbortSignal,
+      onUpdate?: undefined,
+      ctx?: unknown,
+    ): Promise<{ content: Array<{ type: string; text: string }> }>;
+  };
+}
+
+/** Collect every tool the extension registers, keyed by name. */
+function collectTools(): {
+  pi: ExtensionAPI;
+  tools: RegisteredTools;
+  sent: SentMessage[];
+  push?: (report: PushedReport) => void;
+} {
+  const tools: RegisteredTools = {};
+  const sent: SentMessage[] = [];
+  const pi = {
+    registerCommand() {},
+    registerTool(tool: { name: string }) {
+      tools[tool.name] = tool as unknown as RegisteredTools[string];
+    },
+    registerMessageRenderer() {},
+    getThinkingLevel: () => "off",
+    sendMessage(
+      message: { customType: string; content: string },
+      options?: { deliverAs?: string; triggerTurn?: boolean },
+    ) {
+      sent.push({ ...message, options });
+    },
+  } as unknown as ExtensionAPI;
+  return { pi, tools, sent };
+}
+
+/** A stand-in for a started run that settles when the test says so. */
+function fakeStart(onOptions: (options: RunSubagentOptions) => void) {
+  let settle: (() => void) | undefined;
+  const start = (options: RunSubagentOptions): StartedSubagent => {
+    onOptions(options);
+    const result = createEmptyResult(options.config.name, "task", 0);
+    return {
+      id: "run-1",
+      settled: new Promise((resolve) => {
+        settle = () => {
+          result.status = "completed";
+          result.exitCode = 0;
+          resolve(result);
+        };
+      }),
+    };
+  };
+  return { start, settle: () => settle?.() };
+}
+
+test("agent_start uses the trust decision captured at session start", async () => {
   for (const sessionTrust of [true, false]) {
-    let registeredTool: unknown;
     let executeTrustChecks = 0;
     let forwardedTrust: boolean | undefined;
-    const pi = {
-      registerCommand() {},
-      registerTool(tool: unknown) {
-        registeredTool = tool;
-      },
-      getThinkingLevel() {
-        return "off";
-      },
-    } as unknown as ExtensionAPI;
-    const runner = async (options: RunSubagentOptions) => {
+    const { pi, tools } = collectTools();
+    const started = fakeStart((options) => {
       forwardedTrust = options.projectTrusted;
-      const result = createEmptyResult("worker", "task", 0);
-      result.status = "completed";
-      result.exitCode = 0;
-      return result;
-    };
+    });
 
     registerSubagentFeatures(
       pi,
@@ -65,19 +118,10 @@ test("subagent executions use the trust decision captured at session start", asy
       "/agent-dir",
       new Map([["worker", agentConfig("worker")]]),
       sessionTrust,
-      runner,
+      { start: started.start },
     );
 
-    const tool = registeredTool as {
-      execute(
-        toolCallId: string,
-        params: { agent: string; description: string; prompt: string },
-        signal: AbortSignal,
-        onUpdate: undefined,
-        ctx: unknown,
-      ): Promise<unknown>;
-    };
-    await tool.execute(
+    await tools.agent_start.execute(
       "call-1",
       { agent: "worker", description: "task", prompt: "work" },
       new AbortController().signal,
@@ -89,10 +133,72 @@ test("subagent executions use the trust decision captured at session start", asy
         },
       },
     );
+    started.settle();
 
     assert.equal(forwardedTrust, sessionTrust);
     assert.equal(executeTrustChecks, 0);
   }
+});
+
+test("agent_start returns a run id instead of the answer", async () => {
+  const { pi, tools } = collectTools();
+  const started = fakeStart(() => {});
+
+  registerSubagentFeatures(
+    pi,
+    "/project",
+    "/agent-dir",
+    new Map([["worker", agentConfig("worker")]]),
+    true,
+    { start: started.start },
+  );
+
+  const result = await tools.agent_start.execute(
+    "call-1",
+    { agent: "worker", description: "task", prompt: "work" },
+    undefined,
+    undefined,
+    {},
+  );
+  started.settle();
+
+  assert.match(result.content[0].text, /Started worker as run run-1/);
+  assert.doesNotMatch(result.content[0].text, /finished/);
+});
+
+test("agent_start refuses an unknown agent", async () => {
+  const { pi, tools } = collectTools();
+
+  registerSubagentFeatures(pi, "/project", "/agent-dir", new Map(), true, {
+    start: fakeStart(() => {}).start,
+  });
+
+  await assert.rejects(
+    () =>
+      tools.agent_start.execute(
+        "call-1",
+        { agent: "ghost", description: "task", prompt: "work" },
+        undefined,
+        undefined,
+        {},
+      ),
+    /Unknown agent: "ghost"/,
+  );
+});
+
+test("the orchestration primitives are registered", () => {
+  const { pi, tools } = collectTools();
+
+  registerSubagentFeatures(pi, "/project", "/agent-dir", new Map(), true, {
+    start: fakeStart(() => {}).start,
+  });
+
+  assert.deepEqual(Object.keys(tools).sort(), [
+    "agent_cancel",
+    "agent_result",
+    "agent_start",
+    "agent_wait",
+  ]);
 });
 
 test("the agents command is told where agents live", async () => {
@@ -104,6 +210,8 @@ test("the agents command is told where agents live", async () => {
       command = options as Parameters<ExtensionAPI["registerCommand"]>[1];
     },
     registerTool() {},
+    registerMessageRenderer() {},
+    sendMessage() {},
   } as unknown as ExtensionAPI;
 
   registerSubagentFeatures(
@@ -137,6 +245,8 @@ test("the agents command is told where agents live", async () => {
 interface SessionStartRun {
   notifications: string[];
   agentNames: string[];
+  /** Widget keys the extension set during the session, in order. */
+  widgetKeys: string[];
   runAgentsCommand(): Promise<{
     notifications: string[];
     customOpened: boolean;
@@ -166,6 +276,7 @@ async function startSession(options: {
     let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
     let toolGuidelines: string[] = [];
     const notifications: string[] = [];
+    const widgetKeys: string[] = [];
 
     subagentExtension({
       on(
@@ -179,9 +290,13 @@ async function startSession(options: {
           ExtensionAPI["registerCommand"]
         >[1];
       },
-      registerTool(tool: { promptGuidelines?: string[] }) {
-        toolGuidelines = tool.promptGuidelines ?? [];
+      registerTool(tool: { name: string; promptGuidelines?: string[] }) {
+        if (tool.name === "agent_start") {
+          toolGuidelines = tool.promptGuidelines ?? [];
+        }
       },
+      registerMessageRenderer() {},
+      sendMessage() {},
       getThinkingLevel: () => "off",
     } as unknown as ExtensionAPI);
 
@@ -200,14 +315,18 @@ async function startSession(options: {
           notify(message: string) {
             notifications.push(message);
           },
+          setWidget(key: string) {
+            widgetKeys.push(key);
+          },
         },
       },
     );
 
     return {
       notifications,
+      widgetKeys,
       agentNames: toolGuidelines.flatMap(
-        (line) => line.match(/^subagent ([\w-]+)[.:]/)?.slice(1, 2) ?? [],
+        (line) => line.match(/^agent_start ([\w-]+)[.:]/)?.slice(1, 2) ?? [],
       ),
       async runAgentsCommand() {
         options.beforeAgentsCommand?.();
@@ -341,3 +460,34 @@ test("an agents command with nothing to list says where to add a profile", async
 function agentConfig(name: string): AgentConfig {
   return { name, description: `${name} agent`, systemPrompt: "Work." };
 }
+
+test("a delivered report reaches the model and lets it respond", async () => {
+  const { pi, tools, sent } = collectTools();
+  const started = fakeStart(() => {});
+
+  registerSubagentFeatures(
+    pi,
+    "/project",
+    "/agent-dir",
+    new Map([["worker", agentConfig("worker")]]),
+    true,
+    { start: started.start },
+  );
+
+  await tools.agent_start.execute(
+    "call-1",
+    { agent: "worker", description: "task", prompt: "work" },
+    undefined,
+    undefined,
+    {},
+  );
+  started.settle();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].customType, "subagent-report");
+  // followUp so it never cuts into a turn in progress; triggerTurn so an idle
+  // session still acts on it instead of leaving it unread.
+  assert.equal(sent[0].options?.deliverAs, "followUp");
+  assert.equal(sent[0].options?.triggerTurn, true);
+});

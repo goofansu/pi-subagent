@@ -1,2 +1,2 @@
 dev:
-	pi -ne -np -nc --no-session --offline -e extensions/subagent --tools subagent
+	pi --offline -np -nc -ns -ne -e extensions/subagent --tools agent_start,agent_wait,agent_cancel,agent_result

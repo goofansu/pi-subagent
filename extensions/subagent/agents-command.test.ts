@@ -171,7 +171,7 @@ test("formatAgentDetailHint uses key hint for back and compact arrow labels", ()
 test("buildAgentWorkMessage returns the selected-agent work prompt", () => {
   assert.equal(
     buildAgentWorkMessage("explore", "inspect the parser"),
-    'Use the subagent tool with agent "explore" for the task: inspect the parser',
+    'Use agent_start with agent "explore" for the task: inspect the parser',
   );
 });
 
@@ -235,7 +235,7 @@ test("runAgentWorkFlow sends message and closes UI when task is provided", async
   assert.equal(closeCount, 1, "must close UI once");
   assert.deepEqual(notifications, [], "must not notify when task is provided");
   assert.deepEqual(sentMessages, [
-    'Use the subagent tool with agent "explore" for the task: inspect the parser',
+    'Use agent_start with agent "explore" for the task: inspect the parser',
   ]);
 });
 

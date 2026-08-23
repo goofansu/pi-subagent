@@ -249,14 +249,14 @@ test("formatAgentGuidelines renders available agents as tool-specific guidelines
   ]);
 
   assert.deepEqual(formatAgentGuidelines(configs), [
-    "subagent explore: Fast codebase exploration.",
-    "subagent custom: Runs a custom check.",
+    "agent_start explore: Fast codebase exploration.",
+    "agent_start custom: Runs a custom check.",
   ]);
 });
 
 test("formatAgentGuidelines handles no configured agents", () => {
   assert.deepEqual(formatAgentGuidelines(new Map()), [
-    "subagent has no configured agents.",
+    "agent_start has no configured agents.",
   ]);
 });
 

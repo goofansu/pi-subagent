@@ -227,10 +227,10 @@ export function getAgentsDir(agentDir: string): string {
 export function formatAgentGuidelines(
   agentConfigs: Map<string, AgentConfig>,
 ): string[] {
-  if (agentConfigs.size === 0) return ["subagent has no configured agents."];
+  if (agentConfigs.size === 0) return ["agent_start has no configured agents."];
 
   return [...agentConfigs.values()].map(
-    (config) => `subagent ${config.name}: ${config.description}`,
+    (config) => `agent_start ${config.name}: ${config.description}`,
   );
 }
 

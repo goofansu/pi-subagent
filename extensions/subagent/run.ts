@@ -73,20 +73,6 @@ export function settleAborted(result: SingleResult): void {
   result.errorMessage = ABORTED_MESSAGE;
 }
 
-/** Mark the limiter handoff where queued work actually starts its child. */
-export function markResultRunning(
-  result: SingleResult,
-  startedAt: number,
-): void {
-  if (result.status !== "queued") {
-    throw new Error(
-      `Cannot start a subagent result in '${result.status}' state`,
-    );
-  }
-  result.status = "running";
-  result.startedAt = startedAt;
-}
-
 /** Derive one terminal lifecycle state from the recorded outcome fields. */
 function terminalStatus(result: SingleResult): TerminalLifecycleStatus {
   if (result.stopReason === "aborted") return "aborted";
@@ -104,16 +90,12 @@ export function settleResultLifecycle(
   result: SingleResult,
   finishedAt: number,
 ): void {
-  if (result.status !== "queued" && result.status !== "running") {
+  if (result.status !== "running") {
     throw new Error(
       `Cannot settle a subagent result in '${result.status}' state`,
     );
   }
-  const status = terminalStatus(result);
-  if (result.status === "queued" && status !== "aborted") {
-    throw new Error(`A queued subagent result cannot settle as '${status}'`);
-  }
-  result.status = status;
+  result.status = terminalStatus(result);
   result.finishedAt = finishedAt;
 }
 
@@ -167,13 +149,13 @@ export type SubagentExecutor = (run: SubagentRun) => Promise<SingleResult>;
 export function createEmptyResult(
   agent: string,
   description: string,
-  queuedAt: number,
+  startedAt: number,
 ): SingleResult {
   return {
     agent,
     description,
-    status: "queued",
-    queuedAt,
+    status: "running",
+    startedAt,
     exitCode: -1, // -1 = pending
     messages: [],
     stderr: "",

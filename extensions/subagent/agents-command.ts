@@ -75,7 +75,7 @@ export function formatAgentPromptMarkdown(agent: AgentConfig): string {
 }
 
 export function buildAgentWorkMessage(agentName: string, task: string): string {
-  return `Use the subagent tool with agent "${agentName}" for the task: ${task}`;
+  return `Use agent_start with agent "${agentName}" for the task: ${task}`;
 }
 
 /** Where to put an agent, for the case where there are none to list. */

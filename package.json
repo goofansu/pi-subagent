@@ -1,7 +1,7 @@
 {
   "name": "pi-subagent",
   "version": "1.0.0",
-  "description": "Delegate tasks to specialized Pi subagents with isolated context. At most four run at a time, and any run can be cancelled.",
+  "description": "Delegate tasks to specialized Pi subagents with isolated context. Any run can be cancelled.",
   "type": "module",
   "keywords": [
     "pi-package"
