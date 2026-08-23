@@ -7,6 +7,7 @@ import {
   contentText,
   formatCollectedSummary,
   renderMarkdownResult,
+  renderSubagentCall,
 } from "./render.ts";
 
 initTheme(undefined, false);
@@ -37,6 +38,51 @@ function render(
 const oneRun: CollectedRuns = {
   runs: [{ id: "a3f81c2b", agent: "explore", status: "completed" }],
 };
+
+function renderCall(prompt: string, expanded: boolean, width = 80): string {
+  return renderSubagentCall(
+    { agent: "librarian", description: "Say hello", prompt },
+    theme as unknown as Parameters<typeof renderSubagentCall>[1],
+    { expanded },
+  )
+    .render(width)
+    .map((line) => stripVTControlCharacters(line).trimEnd())
+    .join("\n");
+}
+
+// ── The call row ─────────────────────────────────────────────────────────────
+
+test("the prompt wears a quote gutter that the result below does not", () => {
+  const rendered = renderCall("Say hello.", false);
+
+  assert.equal(rendered, "librarian Say hello\n│ Say hello.");
+});
+
+test("a cut prompt preview keeps the gutter and says it was cut", () => {
+  const rendered = renderCall("one\ntwo\nthree\nfour\nfive", false);
+
+  assert.equal(rendered, "librarian Say hello\n│ one\n│ two\n│ three\n│ …");
+});
+
+test("an expanded call shows the whole brief, every line quoted", () => {
+  const rendered = renderCall("one\ntwo\nthree\nfour", true);
+
+  assert.equal(rendered, "librarian Say hello\n│ one\n│ two\n│ three\n│ four");
+});
+
+test("a brief that soft-wraps keeps its gutter on every wrapped row", () => {
+  const rendered = renderCall(
+    "please inspect and assess the repository and summarize its purpose",
+    false,
+    24,
+  );
+
+  const [, ...promptRows] = rendered.split("\n");
+  assert.ok(promptRows.length > 1, "the brief must actually wrap");
+  for (const row of promptRows) {
+    assert.match(row, /^│ /, `every wrapped row wears the gutter: "${row}"`);
+  }
+});
 
 // ── Extraction ───────────────────────────────────────────────────────────────
 

@@ -4,7 +4,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { Markdown, Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { formatCharacterCount, runStatusTone } from "./formatting.ts";
 import type { LifecycleStatus } from "./types.ts";
 
@@ -23,14 +23,19 @@ type RenderCallContext = { lastComponent?: Component; expanded: boolean };
  * A started run reports nothing else here. Its progress lives in the widget
  * and its answer arrives as a report of its own, so a row that tried to show
  * either would be a stale copy of both.
+ *
+ * The prompt is rendered as a markdown blockquote because the host paints the
+ * tool result below it in the same grey, and two adjacent grey paragraphs read
+ * as one voice. The quote's gutter says "this is what was asked"; the
+ * unquoted text after it is what came back. Going through the markdown
+ * renderer rather than painting a gutter by hand keeps the bar on every row
+ * of a soft-wrapped brief and matches how quotes look everywhere else.
  */
 export function renderSubagentCall(
   args: SubagentArgs,
   theme: Theme,
   context: RenderCallContext,
 ): Component {
-  const text =
-    (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
   const header =
     theme.fg("toolTitle", theme.bold(args.agent)) +
     " " +
@@ -38,11 +43,19 @@ export function renderSubagentCall(
   const lines = args.prompt.split("\n");
   // A cut preview must say it is one: three lines that just stop read as the
   // whole brief.
-  const promptPreview = context.expanded
-    ? args.prompt
-    : lines.slice(0, 3).join("\n") + (lines.length > 3 ? "\n…" : "");
-  text.setText(`${header}\n${theme.fg("dim", promptPreview)}`);
-  return text;
+  const previewLines = context.expanded
+    ? lines
+    : [...lines.slice(0, 3), ...(lines.length > 3 ? ["…"] : [])];
+  const quote = previewLines.map((line) => `> ${line}`).join("\n");
+
+  const row =
+    context.lastComponent instanceof Container
+      ? context.lastComponent
+      : new Container();
+  row.clear();
+  row.addChild(new Text(header, 0, 0));
+  row.addChild(new Markdown(quote, 0, 0, getMarkdownTheme()));
+  return row;
 }
 
 /** The text of a tool result or message body, whatever shape it arrived in. */
