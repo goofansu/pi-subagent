@@ -144,24 +144,3 @@ export function startSubagent({
 
   return { id: handle.id, settled };
 }
-
-/**
- * Start a run and wait for it, releasing it from the registry on the way out.
- *
- * The awaited form is for callers that treat the run as one blocking step.
- * Fire-and-forget callers use {@link startSubagent} and hand the settled
- * promise to the delivery module, which decides when the run is released.
- */
-export async function runSubagent(
-  options: RunSubagentOptions,
-): Promise<SingleResult> {
-  const runs = options.runs ?? subagentRuns;
-  const started = startSubagent(options);
-  try {
-    return await started.settled;
-  } finally {
-    // The tool result carries the report back, so returning is this run's
-    // delivery and the registry has nothing left to show for it.
-    runs.release(started.id);
-  }
-}

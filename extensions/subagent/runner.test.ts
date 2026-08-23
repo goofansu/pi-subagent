@@ -1,17 +1,18 @@
 /**
- * Dispatcher tests: the depth guard, the concurrency cap, lifecycle settling,
- * and progress reporting — the rules that hold for every subagent run,
- * exercised against a stand-in executor so no child process is involved.
+ * Dispatcher tests: the depth guard, lifecycle settling, and progress
+ * reporting — the rules that hold for every subagent run, exercised against a
+ * stand-in executor so no child process is involved.
  */
 
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import type { SubagentExecutor, SubagentRun } from "./run.ts";
 import { createEmptyResult } from "./run.ts";
+import type { RunSubagentOptions } from "./runner.ts";
 import {
   assertSubagentDepthAvailable,
   getSubagentDepth,
-  runSubagent,
+  startSubagent,
 } from "./runner.ts";
 import { createSubagentRuns } from "./runs.ts";
 import type { AgentConfig, SingleResult } from "./types.ts";
@@ -74,6 +75,18 @@ function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
   };
 }
 
+/**
+ * Start a run against a throwaway registry and settle it. Nothing releases a
+ * started run except delivery, so tests must not lean on the process-wide
+ * registry or entries would accumulate across them.
+ */
+async function startAndSettle(
+  options: Omit<RunSubagentOptions, "runs">,
+): Promise<SingleResult> {
+  const started = startSubagent({ ...options, runs: createSubagentRuns() });
+  return await started.settled;
+}
+
 // ── Result initialization ─────────────────────────────────────────────────────
 
 test("createEmptyResult starts a run running from its start time", () => {
@@ -90,10 +103,10 @@ test("createEmptyResult starts a run running from its start time", () => {
 
 // ── Task handoff ──────────────────────────────────────────────────────────────
 
-test("runSubagent hands the executor the task's cwd and parent model", async () => {
+test("startSubagent hands the executor the task's cwd and parent model", async () => {
   const recorded = recordingExecutor();
 
-  await runSubagent({
+  await startAndSettle({
     config: agent(),
     description: "task",
     prompt: "do it",
@@ -111,9 +124,9 @@ test("runSubagent hands the executor the task's cwd and parent model", async () 
   });
 });
 
-test("runSubagent reports the current depth so the child can advance it", async () => {
+test("startSubagent reports the current depth so the child can advance it", async () => {
   const recorded = recordingExecutor();
-  await runSubagent({
+  await startAndSettle({
     config: agent(),
     description: "task",
     prompt: "do it",
@@ -125,17 +138,20 @@ test("runSubagent reports the current depth so the child can advance it", async 
 
 // ── Depth guard ───────────────────────────────────────────────────────────────
 
-test("runSubagent refuses to nest a subagent inside a subagent", async () => {
+test("startSubagent refuses to nest a subagent inside a subagent", () => {
   process.env.PI_SUBAGENT_DEPTH = "1";
   const recorded = recordingExecutor();
 
-  await assert.rejects(
-    runSubagent({
-      config: agent(),
-      description: "task",
-      prompt: "do it",
-      execute: recorded.execute,
-    }),
+  // The guard runs in the synchronous part, before a run id exists at all.
+  assert.throws(
+    () =>
+      startSubagent({
+        config: agent(),
+        description: "task",
+        prompt: "do it",
+        execute: recorded.execute,
+        runs: createSubagentRuns(),
+      }),
     /Subagents cannot spawn other subagents/,
   );
   assert.equal(recorded.calls.length, 0, "the child must not be started");
@@ -161,7 +177,7 @@ test("getSubagentDepth reads the environment and defaults to zero", () => {
 
 // ── Lifecycle and progress ────────────────────────────────────────────────────
 
-test("runSubagent publishes progress to the registry, not the transcript", async () => {
+test("startSubagent publishes progress to the registry, not the transcript", async () => {
   const runs = createSubagentRuns();
   const statuses: Array<SingleResult["status"]> = [];
   runs.subscribe(() => {
@@ -171,7 +187,7 @@ test("runSubagent publishes progress to the registry, not the transcript", async
   const recorded = recordingExecutor();
   const times = [1_000, 4_500];
 
-  const reported = await runSubagent({
+  const started = startSubagent({
     config: agent({ effort: "high" }),
     description: "task",
     prompt: "do it",
@@ -179,6 +195,7 @@ test("runSubagent publishes progress to the registry, not the transcript", async
     runs,
     now: () => times.shift() ?? assert.fail("unexpected clock read"),
   });
+  const reported = await started.settled;
 
   // Exact notification counts are an implementation detail; what matters is
   // that the run appears as running, settles once, and settles last.
@@ -195,10 +212,9 @@ test("runSubagent publishes progress to the registry, not the transcript", async
   assert.equal(reported.startedAt, 1_000);
   assert.equal(reported.finishedAt, 4_500);
   assert.equal(reported.effort, "high");
-  assert.equal(runs.size(), 0, "the awaited form releases the run");
 });
 
-test("runSubagent centrally maps every outcome to a terminal state", async () => {
+test("startSubagent centrally maps every outcome to a terminal state", async () => {
   const cases = [
     { exitCode: 0, stopReason: "stop", expected: "completed" },
     { exitCode: 1, stopReason: "error", expected: "failed" },
@@ -215,7 +231,7 @@ test("runSubagent centrally maps every outcome to a terminal state", async () =>
     };
     const times = [100, 700];
 
-    const result = await runSubagent({
+    const result = await startAndSettle({
       config: agent(),
       description: outcome.expected,
       prompt: "go",
@@ -230,9 +246,9 @@ test("runSubagent centrally maps every outcome to a terminal state", async () =>
   }
 });
 
-test("runSubagent omits effort when the profile does not configure it", async () => {
+test("startSubagent omits effort when the profile does not configure it", async () => {
   const recorded = recordingExecutor();
-  const result = await runSubagent({
+  const result = await startAndSettle({
     config: agent(),
     description: "task",
     prompt: "do it",
@@ -254,7 +270,7 @@ test("a run cancelled before it starts never spawns a child", async () => {
   const controller = new AbortController();
   controller.abort();
 
-  const result = await runSubagent({
+  const result = await startAndSettle({
     config: agent(),
     description: "task",
     prompt: "do it",
@@ -271,7 +287,7 @@ test("a run cancelled before it starts never spawns a child", async () => {
 
 // ── Registry ──────────────────────────────────────────────────────────────────
 
-test("a run is tracked while it runs and released once it is delivered", async () => {
+test("a started run stays tracked after it settles, until its delivery", async () => {
   const runs = createSubagentRuns();
   const seen: number[] = [];
   const execute: SubagentExecutor = async (run) => {
@@ -280,16 +296,19 @@ test("a run is tracked while it runs and released once it is delivered", async (
     return run.result;
   };
 
-  await runSubagent({
+  const started = startSubagent({
     config: agent(),
     description: "task",
     prompt: "do it",
     execute,
     runs,
   });
+  await started.settled;
 
   assert.deepEqual(seen, [1], "the run is visible while its child works");
-  assert.equal(runs.size(), 0, "returning the tool result delivers the run");
+  // Releasing is the delivery module's job: a settled run is still undelivered
+  // work the widget must keep showing.
+  assert.equal(runs.size(), 1, "settling does not release the run");
 });
 
 test("the registry can cancel one run without touching the turn", async () => {
@@ -304,13 +323,14 @@ test("the registry can cancel one run without touching the turn", async () => {
     return run.result;
   };
 
-  const result = await runSubagent({
+  const started = startSubagent({
     config: agent(),
     description: "task",
     prompt: "do it",
     execute,
     runs,
   });
+  const result = await started.settled;
 
   assert.equal(sawAbort, true, "the executor sees its own run cancelled");
   assert.equal(result.status, "aborted");
@@ -318,10 +338,10 @@ test("the registry can cancel one run without touching the turn", async () => {
 
 // ── Trust ─────────────────────────────────────────────────────────────────────
 
-test("runSubagent forwards Pi's project-trust decision to the child", async () => {
+test("startSubagent forwards Pi's project-trust decision to the child", async () => {
   const recorded = recordingExecutor();
 
-  await runSubagent({
+  await startAndSettle({
     config: agent(),
     description: "task",
     prompt: "do it",
@@ -332,10 +352,10 @@ test("runSubagent forwards Pi's project-trust decision to the child", async () =
   assert.equal(recorded.calls[0].task.projectTrusted, true);
 });
 
-test("runSubagent denies project trust when the caller reports none", async () => {
+test("startSubagent denies project trust when the caller reports none", async () => {
   const recorded = recordingExecutor();
 
-  await runSubagent({
+  await startAndSettle({
     config: agent(),
     description: "task",
     prompt: "do it",

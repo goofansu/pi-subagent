@@ -2,8 +2,8 @@
  * The run contract: everything the dispatcher hands a child run, and the
  * result bookkeeping both sides share.
  *
- * `runner.ts` owns the rules that hold for every run — the nesting guard, the
- * concurrency cap, lifecycle transitions and progress plumbing — and
+ * `runner.ts` owns the rules that hold for every run — the nesting guard,
+ * lifecycle transitions and progress plumbing — and
  * `pi-agent.ts` owns the child pi process itself. This module is what they
  * agree on, and the seam tests substitute a stand-in executor at.
  */
