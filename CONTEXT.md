@@ -42,6 +42,13 @@ message when the run settles. The default path.
 their push so they return through the tool result instead. Abandoning the wait
 releases the claim and the run pushes normally.
 
+**Session push** — the process-lifetime push target reports go through
+(`createSessionPush`). A session's own `sendMessage` throws once that session
+is replaced, so each `session_start` re-aims the target and a report that
+settles between sessions parks until the next one binds. This is what makes
+"session switch and fork do not stop them" true for the report, not just the
+process.
+
 ## Modules
 
 **Registry** — the module owning the set of live runs and their lifetime.
@@ -67,3 +74,8 @@ from its most recent tool call. Display only.
 
 **Trust** — pi's project-trust decision for the working directory, resolved by
 the session and forwarded to every child. The extension never derives its own.
+
+**Shutdown** — `session_shutdown` with reason `quit` or `reload` stops every
+running run: quit ends the process and reload discards this module instance,
+so either way nothing would be left to deliver a report. Session replacement
+(`new`, `resume`, `fork`) keeps the module — and the runs — alive.

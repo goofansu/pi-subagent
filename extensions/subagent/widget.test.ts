@@ -8,9 +8,7 @@ import { createSubagentRuns } from "./runs.ts";
 import type { WidgetComponent, WidgetHost, WidgetTheme } from "./widget.ts";
 import {
   formatCost,
-  formatModel,
   formatRunLine,
-  formatTurns,
   installRunsWidget,
   measureColumns,
   orderRuns,
@@ -30,8 +28,6 @@ function view(overrides: Partial<RunView> = {}): RunView {
     description: "look around",
     status: "running",
     elapsedMs: 12_400,
-    model: "openai-codex/gpt-5.6-sol",
-    turns: 3,
     cost: 0.0142,
     ...overrides,
   };
@@ -50,28 +46,15 @@ function columnOf(line: string, needle: string): number {
 
 // ── The line ─────────────────────────────────────────────────────────────────
 
-test("a run line carries id, agent, model, cost and status", () => {
+test("a run line carries agent, cost and status, and nothing else fixed", () => {
   const line = stripVTControlCharacters(formatRunLine(view(), theme, 120));
 
-  assert.match(line, /a3f81c2b/);
   assert.match(line, /explore/);
-  assert.match(line, /gpt-5\.6-sol/);
   assert.match(line, /\$0\.0142/);
   assert.match(line, /running for 12\.4s/);
-});
-
-test("the model drops its provider prefix", () => {
-  assert.equal(formatModel("openai-codex/gpt-5.6-sol"), "gpt-5.6-sol");
-  assert.equal(formatModel("gpt-5.6-sol"), "gpt-5.6-sol");
-});
-
-test("a run with no reported model yet still renders", () => {
-  const line = stripVTControlCharacters(
-    formatRunLine(view({ model: undefined }), theme, 120),
-  );
-
-  assert.match(line, /—/);
-  assert.match(line, /a3f81c2b/);
+  // The id and model are deliberately absent: ids belong to tool results and
+  // reports, and the model is the profile's business.
+  assert.doesNotMatch(line, /a3f81c2b/);
 });
 
 test("cost always reads as money, including zero", () => {
@@ -89,46 +72,30 @@ test("a line never exceeds the width it is given", () => {
   }
 });
 
-test("fields give way in order, and status never does", () => {
+test("cost gives way before status, and status never does", () => {
   const at = (width: number) =>
     stripVTControlCharacters(formatRunLine(view(), theme, width));
 
-  const wide = at(80);
-  assert.match(wide, /gpt-5\.6-sol.*3 turns.*\$0\.0142.*running for 12\.4s/);
+  const wide = at(45);
+  assert.match(wide, /\$0\.0142.*running for 12\.4s/);
 
-  // Model goes first: the least useful field once a run is under way.
-  const noModel = at(60);
-  assert.doesNotMatch(noModel, /gpt-5\.6-sol/);
-  assert.match(noModel, /3 turns.*\$0\.0142.*running for 12\.4s/);
-
-  // Then cost. Turns outlive it because a rising count is what shows the run
-  // is still moving, now that the line does not say what it is doing.
-  const noCost = at(50);
+  const noCost = at(33);
   assert.doesNotMatch(noCost, /\$0\.0142/);
-  assert.match(noCost, /3 turns.*running for 12\.4s/);
+  assert.match(noCost, /running for 12\.4s/);
 
-  // Status is last to go, and it never does.
-  assert.match(at(40), /running for 12\.4s/);
-  for (const width of [80, 60, 50, 40, 30, 12]) {
+  for (const width of [45, 33, 20, 12]) {
     assert.ok(at(width).length <= width, `width ${width} overflowed`);
   }
 });
 
-test("turns are omitted until the child has spoken", () => {
-  assert.equal(formatTurns(0), "");
-  assert.equal(formatTurns(1), "1 turn");
-  assert.equal(formatTurns(12), "12 turns");
-});
-
 test("columns are measured across rows, not per row", () => {
   const columns = measureColumns([
-    view({ agent: "explore", turns: 3 }),
-    view({ agent: "implementer", turns: 12, model: "x/claude-opus-5" }),
+    view({ agent: "explore", cost: 0.0142 }),
+    view({ agent: "implementer", cost: 12.4 }),
   ]);
 
   assert.equal(columns.agent, "implementer".length);
-  assert.equal(columns.model, "claude-opus-5".length);
-  assert.equal(columns.turns, "12 turns".length);
+  assert.equal(columns.cost, "$12.4000".length);
 });
 
 test("columns line up even when agent names differ in length", () => {
@@ -155,9 +122,9 @@ test("a wide glyph does not shift its row against a narrow one", () => {
     ),
   ).slice(1);
 
-  // Display columns, not string indices: "⏳" is one character but two columns
-  // wide, so the two are not the same measurement.
-  assert.equal(columnOf(lines[0], "a3f81c2b"), columnOf(lines[1], "a3f81c2b"));
+  // Display columns, not string indices: the glyph cell is padded to a fixed
+  // width so a glyph wider than one column cannot shift what follows it.
+  assert.equal(columnOf(lines[0], "explore"), columnOf(lines[1], "explore"));
 });
 
 // ── The block ────────────────────────────────────────────────────────────────
@@ -279,4 +246,60 @@ test("unsubscribing stops the widget following the registry", () => {
   runs.track(createEmptyResult("explore", "look", 0), () => {});
 
   assert.equal(host.calls.length, before);
+});
+
+// ── Activity tail ────────────────────────────────────────────────────────────
+
+test("a running run shows what it is doing after the status", () => {
+  const line = stripVTControlCharacters(
+    formatRunLine(view({ activity: "bash: npm test" }), theme, 120),
+  );
+
+  assert.match(line, /running for 12\.4s {2}· bash: npm test$/);
+});
+
+test("the description stands in before the first tool call", () => {
+  const line = stripVTControlCharacters(formatRunLine(view(), theme, 120));
+
+  assert.match(line, /· look around$/);
+});
+
+test("a settled run does not carry a stale activity", () => {
+  const line = stripVTControlCharacters(
+    formatRunLine(
+      view({ status: "completed", activity: "bash: npm test" }),
+      theme,
+      120,
+    ),
+  );
+
+  assert.doesNotMatch(line, /npm test/);
+  assert.doesNotMatch(line, /look around/);
+});
+
+test("the activity is the first thing sacrificed to width", () => {
+  const wide = stripVTControlCharacters(
+    formatRunLine(view({ activity: "bash: npm test" }), theme, 200),
+  );
+  const status = wide.indexOf("running for");
+  const narrow = stripVTControlCharacters(
+    formatRunLine(
+      view({ activity: "bash: npm test" }),
+      theme,
+      status + "running for 12.4s".length + 4,
+    ),
+  );
+
+  assert.match(narrow, /running for 12\.4s$/);
+  assert.doesNotMatch(narrow, /npm test/);
+});
+
+test("a long activity is cut to the width the columns left", () => {
+  const width = 100;
+  const line = stripVTControlCharacters(
+    formatRunLine(view({ activity: `bash: ${"x".repeat(200)}` }), theme, width),
+  );
+
+  assert.ok(visibleWidth(line) <= width);
+  assert.match(line, /…$/);
 });

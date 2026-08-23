@@ -3,6 +3,7 @@ import { test } from "node:test";
 import type { Message } from "@earendil-works/pi-ai";
 import type { PushedReport } from "./delivery.ts";
 import {
+  createSessionPush,
   createSubagentDelivery,
   FAILURE_REASON_LIMIT,
   formatReport,
@@ -335,4 +336,119 @@ test("an unknown id recalls nothing rather than throwing", () => {
   const { delivery } = harness();
 
   assert.equal(delivery.recall("never-existed"), undefined);
+});
+
+// ── Id diagnostics ───────────────────────────────────────────────────────────
+
+test("a wait tells a delivered report apart from an id that never existed", async () => {
+  const { delivery } = harness();
+  const run = deferredRun();
+  delivery.register("run-1", run.settled);
+  run.finish();
+  await flush();
+
+  const outcome = await delivery.wait(["run-1", "never-existed"]);
+
+  assert.deepEqual(outcome.alreadyDelivered, ["run-1"]);
+  assert.deepEqual(outcome.unknown, ["never-existed"]);
+  assert.deepEqual(outcome.reports, []);
+});
+
+test("an id named twice is one claim and one report", async () => {
+  const { delivery } = harness();
+  const run = deferredRun();
+  delivery.register("run-1", run.settled);
+
+  const waiting = delivery.wait(["run-1", "run-1"]);
+  run.finish("the answer");
+  const outcome = await waiting;
+
+  assert.equal(outcome.reports.length, 1);
+});
+
+test("a wait entered with a cancelled turn gives up immediately", async () => {
+  const { delivery } = harness();
+  const run = deferredRun();
+  delivery.register("run-1", run.settled);
+  const controller = new AbortController();
+  controller.abort();
+
+  const outcome = await delivery.wait(["run-1"], {
+    signal: controller.signal,
+  });
+
+  assert.deepEqual(outcome.stillRunning, ["run-1"]);
+});
+
+// ── A push target that fails ─────────────────────────────────────────────────
+
+test("a throwing push loses neither the process nor the report", async () => {
+  const runs = createSubagentRuns();
+  const delivery = createSubagentDelivery({
+    push: () => {
+      throw new Error("session torn down");
+    },
+    runs,
+  });
+  const run = deferredRun();
+  delivery.register("run-1", run.settled);
+
+  run.finish("survives");
+  await flush();
+
+  assert.equal(delivery.recall("run-1")?.output, "survives");
+});
+
+// ── The session push ─────────────────────────────────────────────────────────
+
+function report(id: string): PushedReport {
+  return {
+    id,
+    agent: "explore",
+    status: "completed",
+    text: id,
+    truncated: false,
+  };
+}
+
+test("reports park while no session is bound and flush in order when one is", () => {
+  const sessionPush = createSessionPush();
+  const delivered: string[] = [];
+
+  sessionPush.push(report("first"));
+  sessionPush.push(report("second"));
+  assert.equal(delivered.length, 0, "nothing to deliver into yet");
+
+  sessionPush.bind((pushed) => delivered.push(pushed.id));
+  assert.deepEqual(delivered, ["first", "second"]);
+
+  sessionPush.push(report("third"));
+  assert.deepEqual(delivered, ["first", "second", "third"]);
+});
+
+test("a session that went stale re-parks the report for the next one", () => {
+  const sessionPush = createSessionPush();
+  const delivered: string[] = [];
+
+  sessionPush.bind(() => {
+    throw new Error("this extension ctx is stale");
+  });
+  sessionPush.push(report("orphan"));
+  assert.equal(delivered.length, 0);
+
+  sessionPush.bind((pushed) => delivered.push(pushed.id));
+  assert.deepEqual(delivered, ["orphan"], "the report waited out the gap");
+});
+
+test("unbinding parks what settles between sessions", () => {
+  const sessionPush = createSessionPush();
+  const delivered: string[] = [];
+  sessionPush.bind((pushed) => delivered.push(pushed.id));
+
+  sessionPush.unbind();
+  sessionPush.push(report("between"));
+  assert.equal(delivered.length, 0);
+
+  sessionPush.bind((pushed) => delivered.push(pushed.id));
+  assert.deepEqual(delivered, ["between"]);
 });

@@ -5,11 +5,7 @@ import type {
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Markdown, Text } from "@earendil-works/pi-tui";
-import {
-  formatCharacterCount,
-  runStatusGlyph,
-  runStatusTone,
-} from "./formatting.ts";
+import { formatCharacterCount, runStatusTone } from "./formatting.ts";
 import type { LifecycleStatus } from "./types.ts";
 
 type SubagentArgs = {
@@ -39,9 +35,12 @@ export function renderSubagentCall(
     theme.fg("toolTitle", theme.bold(args.agent)) +
     " " +
     theme.fg("muted", args.description);
+  const lines = args.prompt.split("\n");
+  // A cut preview must say it is one: three lines that just stop read as the
+  // whole brief.
   const promptPreview = context.expanded
     ? args.prompt
-    : args.prompt.split("\n").slice(0, 3).join("\n");
+    : lines.slice(0, 3).join("\n") + (lines.length > 3 ? "\n…" : "");
   text.setText(`${header}\n${theme.fg("dim", promptPreview)}`);
   return text;
 }
@@ -72,7 +71,12 @@ function isCollectedRuns(value: unknown): value is CollectedRuns {
   );
 }
 
-/** The single line a collapsed result shows in place of the whole report. */
+/**
+ * The single line a collapsed result shows in place of the whole report.
+ *
+ * No status glyph — the dots belong to the widget. A lone run states its
+ * status as a word, painted in the status tone so a failure stands out.
+ */
 export function formatCollectedSummary(
   collected: CollectedRuns,
   characters: number,
@@ -85,16 +89,29 @@ export function formatCollectedSummary(
   if (runs.length === 1) {
     const run = runs[0];
     line =
+      theme.fg("toolTitle", run.agent) +
+      theme.fg("dim", ` (${run.id}) `) +
       theme.fg(
         runStatusTone(run.status) as Parameters<Theme["fg"]>[0],
-        `${runStatusGlyph(run.status)} `,
-      ) +
-      theme.fg("toolTitle", run.agent) +
-      theme.fg("dim", ` (${run.id})`);
+        run.status,
+      );
   } else {
+    // A fan-out is usually N of the same agent, and naming it N times says
+    // nothing the count does not. Names appear only where they differ.
+    const counts = new Map<string, number>();
+    for (const run of runs) {
+      counts.set(run.agent, (counts.get(run.agent) ?? 0) + 1);
+    }
     line =
-      theme.fg("toolTitle", `${runs.length} reports`) +
-      theme.fg("dim", ` from ${runs.map((run) => run.agent).join(", ")}`);
+      counts.size === 1
+        ? theme.fg("toolTitle", `${runs.length} ${runs[0].agent} reports`)
+        : theme.fg("toolTitle", `${runs.length} reports`) +
+          theme.fg(
+            "dim",
+            ` from ${[...counts]
+              .map(([agent, n]) => (n > 1 ? `${agent} ×${n}` : agent))
+              .join(", ")}`,
+          );
   }
 
   line += theme.fg("dim", ` · ${formatCharacterCount(characters)}`);

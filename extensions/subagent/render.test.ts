@@ -87,7 +87,7 @@ test("a collapsed result is one line, not the report", () => {
 test("a collapsed summary names one run, or counts several", () => {
   assert.match(
     formatCollectedSummary(oneRun, 2_400, theme, keyHintStub),
-    /explore \(a3f81c2b\) · 2\.4k characters/,
+    /explore \(a3f81c2b\) completed · 2\.4k characters/,
   );
 
   assert.match(
@@ -103,6 +103,37 @@ test("a collapsed summary names one run, or counts several", () => {
       keyHintStub,
     ),
     /2 reports from explore, reviewer · 5\.1k characters/,
+  );
+});
+
+test("a fan-out of one agent is counted, not named per run", () => {
+  const librarian = (id: string) =>
+    ({ id, agent: "librarian", status: "completed" }) as const;
+
+  assert.match(
+    formatCollectedSummary(
+      { runs: [librarian("a1"), librarian("b2"), librarian("c3")] },
+      193,
+      theme,
+      keyHintStub,
+    ),
+    /3 librarian reports · 193 characters/,
+  );
+
+  assert.match(
+    formatCollectedSummary(
+      {
+        runs: [
+          librarian("a1"),
+          librarian("b2"),
+          { id: "c3", agent: "reviewer", status: "failed" },
+        ],
+      },
+      193,
+      theme,
+      keyHintStub,
+    ),
+    /3 reports from librarian ×2, reviewer/,
   );
 });
 

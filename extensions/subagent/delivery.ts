@@ -56,6 +56,60 @@ export interface PushedReport {
 export type PushMessage = (report: PushedReport) => void;
 
 /**
+ * A push target that outlives any one session.
+ *
+ * Detached runs belong to the pi process, but the `sendMessage` a report is
+ * pushed through belongs to one session's ExtensionAPI, and every method on it
+ * throws once that session is replaced. This seam is what lets a run started
+ * in one session report into whichever session is live when it settles: the
+ * delivery is built once over `push`, and each session start re-aims it.
+ */
+export interface SessionPush {
+  /** The stable target to build the delivery with. */
+  push: PushMessage;
+  /** Aim at a live session and flush anything that parked while unbound. */
+  bind(push: PushMessage): void;
+  /** Drop the target; reports park until the next bind. */
+  unbind(): void;
+}
+
+export function createSessionPush(): SessionPush {
+  let live: PushMessage | null = null;
+  /** Reports that settled while no session was live, oldest first. */
+  const parked: PushedReport[] = [];
+
+  const push: PushMessage = (report) => {
+    if (!live) {
+      parked.push(report);
+      return;
+    }
+    try {
+      live(report);
+    } catch {
+      // The backstop for a session that went stale before its shutdown event
+      // reached us: park the report instead of losing it — or crashing the
+      // otherwise-unobserved promise chain it is delivered on.
+      live = null;
+      parked.push(report);
+    }
+  };
+
+  return {
+    push,
+    bind(target) {
+      live = target;
+      while (parked.length > 0 && live) {
+        const report = parked.shift();
+        if (report) push(report);
+      }
+    },
+    unbind() {
+      live = null;
+    },
+  };
+}
+
+/**
  * What a finished run said, kept for the life of the session.
  *
  * A pushed report is capped so a runaway agent cannot swamp the parent's
@@ -83,6 +137,10 @@ export interface WaitOutcome {
   collected: Array<{ id: string; agent: string; status: LifecycleStatus }>;
   /** Ids still running when the wait gave up. Empty unless it timed out. */
   stillRunning: string[];
+  /** Ids whose reports were delivered before this wait; `recall` has them. */
+  alreadyDelivered: string[];
+  /** Ids that name no run this delivery has ever seen. */
+  unknown: string[];
 }
 
 export interface SubagentDelivery {
@@ -183,6 +241,22 @@ export function createSubagentDelivery({
   const retained = new Map<string, RetainedReport>();
 
   /**
+   * Push without letting a throw escape. Delivery runs inside promise chains
+   * nothing else awaits, so a push that throws — a session torn down between
+   * settle and delivery — would surface as an unhandled rejection and take pi
+   * down with it. The bookkeeping has already run by the time push is called,
+   * and the report stays recallable through `recall`, so swallowing here loses
+   * nothing that retention does not keep.
+   */
+  const safePush: PushMessage = (report) => {
+    try {
+      push(report);
+    } catch {
+      // Retention still holds the run's whole output.
+    }
+  };
+
+  /**
    * Hand the report over, once. Whoever gets here first wins; every later
    * caller is a no-op, which is what makes the one-delivery rule hold under
    * a wait that times out at the same moment its run settles.
@@ -207,7 +281,7 @@ export function createSubagentDelivery({
 
     if (!byPush) return;
     const text = formatReport(entry.id, result);
-    push({
+    safePush({
       id: entry.id,
       agent: result.agent,
       status: result.status,
@@ -235,7 +309,7 @@ export function createSubagentDelivery({
           entry.delivered = true;
           pending.delete(id);
           runs.release(id);
-          push({
+          safePush({
             id,
             agent: "unknown",
             status: "failed",
@@ -254,9 +328,17 @@ export function createSubagentDelivery({
     has: (id) => pending.has(id),
 
     async wait(ids, options = {}) {
-      const claimed = ids
-        .map((id) => pending.get(id))
-        .filter((entry): entry is Pending => entry !== undefined);
+      // Deduplicated so an id named twice is one claim and one report, and
+      // classified so the caller can tell a typo from a report it already has.
+      const claimed: Pending[] = [];
+      const alreadyDelivered: string[] = [];
+      const unknown: string[] = [];
+      for (const id of new Set(ids)) {
+        const entry = pending.get(id);
+        if (entry) claimed.push(entry);
+        else if (retained.has(id)) alreadyDelivered.push(id);
+        else unknown.push(id);
+      }
       for (const entry of claimed) entry.claims++;
 
       try {
@@ -279,7 +361,7 @@ export function createSubagentDelivery({
           });
           deliver(entry, false);
         }
-        return { reports, collected, stillRunning };
+        return { reports, collected, stillRunning, alreadyDelivered, unknown };
       } finally {
         // Releasing last is what lets an abandoned wait fall back to a push:
         // any run that settled while unclaimed is delivered here instead.
@@ -318,6 +400,10 @@ async function withDeadline(
     await work;
     return;
   }
+
+  // An abort listener added to a signal that already fired never runs, so a
+  // wait entered with a cancelled turn would block until the runs settle.
+  if (signal?.aborted) return;
 
   await new Promise<void>((resolve) => {
     let settled = false;

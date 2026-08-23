@@ -40,34 +40,13 @@ export interface WidgetTheme {
   bold(text: string): string;
 }
 
-/** Just the model id. The provider prefix is rarely the interesting part. */
-export function formatModel(model: string | undefined): string {
-  if (!model) return "—";
-  const slash = model.lastIndexOf("/");
-  return slash === -1 ? model : model.slice(slash + 1);
-}
-
 export function formatCost(cost: number): string {
   return `$${cost.toFixed(4)}`;
-}
-
-/**
- * Turns taken, or nothing before the child has spoken.
- *
- * Since the line does not show what a run is doing, a rising turn count is the
- * signal that it is doing anything at all — which is why it outranks cost when
- * the terminal is too narrow for both.
- */
-export function formatTurns(turns: number): string {
-  if (turns <= 0) return "";
-  return `${turns} turn${turns === 1 ? "" : "s"}`;
 }
 
 /** Column widths shared by every row, so the fields read as a table. */
 export interface RunColumns {
   agent: number;
-  model: number;
-  turns: number;
   cost: number;
 }
 
@@ -79,8 +58,6 @@ export function measureColumns(runs: readonly RunView[]): RunColumns {
       MAX_AGENT_COLUMN_WIDTH,
       widest(runs.map((run) => run.agent)),
     ),
-    model: widest(runs.map((run) => formatModel(run.model))),
-    turns: widest(runs.map((run) => formatTurns(run.turns))),
     cost: widest(runs.map((run) => formatCost(run.cost))),
   };
 }
@@ -97,13 +74,25 @@ export function orderRuns(runs: readonly RunView[]): RunView[] {
   return [...running, ...settled];
 }
 
+/** How much room an activity tail needs before it is worth starting. */
+const MIN_ACTIVITY_WIDTH = 12;
+
 /**
- * One run as a single line: id, agent, model, turns, cost, status.
+ * One run as a single line: agent, cost, status, and — while the run is still
+ * going — what it is doing right now.
  *
- * Model and cost are dropped, in that order, when the line will not fit.
- * Status is the field a reader is actually watching, so it must survive a
- * narrow terminal — and it is last, which is exactly where truncation bites.
- * Turns outlive cost for the same reason: they show the run is still moving.
+ * Deliberately no run id and no model. The widget is read by the operator,
+ * and a human names a run by its agent and what it is doing; ids live in the
+ * tool results and reports, where the model that acts on them reads them, and
+ * the model an agent runs as is the profile's business. Cost is dropped when
+ * the line will not fit. Status is the field a reader is actually watching,
+ * so it must survive a narrow terminal — and it is last, which is exactly
+ * where truncation bites.
+ *
+ * The activity tail is the first thing sacrificed: it takes whatever width is
+ * left after the columns, and is skipped entirely when that is too little to
+ * read. Before the child's first tool call the run's description stands in,
+ * which is also what tells two runs of the same agent apart.
  */
 export function formatRunLine(
   run: RunView,
@@ -112,38 +101,41 @@ export function formatRunLine(
   columns: RunColumns = measureColumns([run]),
 ): string {
   const tone = runStatusTone(run.status);
-  // The glyphs are not all one column wide — "⏳" is two — so pad the cell
-  // rather than the string, or every row below a spinner sits one off.
+  // Padded to a fixed cell rather than trusting the glyph, so a future glyph
+  // that is not one column wide cannot shift its row against the others.
   const glyph = runStatusGlyph(run.status);
   const glyphCell = glyph + " ".repeat(Math.max(0, 2 - visibleWidth(glyph)));
 
   const fixed =
     theme.fg(tone, `${glyphCell} `) +
-    theme.fg("dim", `${run.id} `) +
     theme.fg("toolTitle", theme.bold(run.agent.padEnd(columns.agent)));
   const status = theme.fg(tone, `  ${formatRunStatus(run)}`);
-  const model = theme.fg(
-    "muted",
-    `  ${formatModel(run.model).padEnd(columns.model)}`,
-  );
-  const turns = theme.fg(
-    "dim",
-    `  ${formatTurns(run.turns).padStart(columns.turns)}`,
-  );
   const cost = theme.fg(
     "dim",
     `  ${formatCost(run.cost).padStart(columns.cost)}`,
   );
 
-  for (const candidate of [
-    fixed + model + turns + cost + status,
-    fixed + turns + cost + status,
-    fixed + turns + status,
-    fixed + status,
-  ]) {
-    if (visibleWidth(candidate) <= width) return candidate;
+  for (const candidate of [fixed + cost + status, fixed + status]) {
+    if (visibleWidth(candidate) <= width) {
+      return candidate + formatActivityTail(run, theme, width, candidate);
+    }
   }
   return truncateToWidth(fixed + status, width, "…", true);
+}
+
+/** The dim "what it is doing" tail, fitted to the width the columns left. */
+function formatActivityTail(
+  run: RunView,
+  theme: WidgetTheme,
+  width: number,
+  line: string,
+): string {
+  if (run.status !== "running") return "";
+  const doing = run.activity ?? run.description;
+  if (!doing) return "";
+  const remaining = width - visibleWidth(line);
+  if (remaining < MIN_ACTIVITY_WIDTH) return "";
+  return theme.fg("dim", truncateToWidth(`  · ${doing}`, remaining, "…"));
 }
 
 /** The whole widget: a titled rule, the rows, and an overflow summary. */

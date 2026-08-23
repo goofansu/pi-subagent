@@ -8,6 +8,7 @@ import type { PushedReport } from "./delivery.ts";
 import subagentExtension, { registerSubagentFeatures } from "./index.ts";
 import { createEmptyResult } from "./run.ts";
 import type { RunSubagentOptions, StartedSubagent } from "./runner.ts";
+import { subagentRuns } from "./runs.ts";
 import type { AgentConfig } from "./types.ts";
 
 // ── Extension registration ───────────────────────────────────────────────────
@@ -31,7 +32,7 @@ test("the extension is not exposed inside a subagent Pi process", () => {
         parentEvents.push(event);
       },
     } as unknown as ExtensionAPI);
-    assert.deepEqual(parentEvents, ["session_start"]);
+    assert.deepEqual(parentEvents, ["session_start", "session_shutdown"]);
   } finally {
     if (originalDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
     else process.env.PI_SUBAGENT_DEPTH = originalDepth;
@@ -490,4 +491,68 @@ test("a delivered report reaches the model and lets it respond", async () => {
   // session still acts on it instead of leaving it unread.
   assert.equal(sent[0].options?.deliverAs, "followUp");
   assert.equal(sent[0].options?.triggerTurn, true);
+});
+
+// ── Process lifecycle ────────────────────────────────────────────────────────
+
+type ShutdownHandler = (
+  event: { reason: string },
+  ctx: unknown,
+) => void | Promise<void>;
+
+function captureShutdownHandler(): ShutdownHandler {
+  let shutdown: ShutdownHandler | undefined;
+  subagentExtension({
+    on(event: string, handler: ShutdownHandler) {
+      if (event === "session_shutdown") shutdown = handler;
+    },
+    registerCommand() {},
+    registerTool() {},
+    registerMessageRenderer() {},
+    sendMessage() {},
+    getThinkingLevel: () => "off",
+  } as unknown as ExtensionAPI);
+  assert.ok(shutdown);
+  return shutdown;
+}
+
+test("quit and reload stop runs that are still going; session replacement does not", async () => {
+  const shutdown = captureShutdownHandler();
+
+  for (const [reason, expectStopped] of [
+    ["resume", false],
+    ["new", false],
+    ["fork", false],
+    ["reload", true],
+    ["quit", true],
+  ] as const) {
+    let stops = 0;
+    const result = createEmptyResult("explore", "look", 0);
+    const handle = subagentRuns.track(result, () => stops++);
+    try {
+      await shutdown({ reason }, {});
+      assert.equal(
+        stops,
+        expectStopped ? 1 : 0,
+        `reason "${reason}" should ${expectStopped ? "" : "not "}stop the run`,
+      );
+    } finally {
+      subagentRuns.release(handle.id);
+    }
+  }
+});
+
+test("a settled run is not asked to stop again on quit", async () => {
+  const shutdown = captureShutdownHandler();
+
+  let stops = 0;
+  const result = createEmptyResult("explore", "look", 0);
+  result.status = "completed";
+  const handle = subagentRuns.track(result, () => stops++);
+  try {
+    await shutdown({ reason: "quit" }, {});
+    assert.equal(stops, 0);
+  } finally {
+    subagentRuns.release(handle.id);
+  }
 });

@@ -11,8 +11,8 @@ import {
   loadAgentConfigsWithDiagnostics,
 } from "./agents.ts";
 import { registerAgentsCommand } from "./agents-command.ts";
-import type { SubagentDelivery } from "./delivery.ts";
-import { createSubagentDelivery } from "./delivery.ts";
+import type { PushMessage, SubagentDelivery } from "./delivery.ts";
+import { createSessionPush, createSubagentDelivery } from "./delivery.ts";
 import { renderMarkdownResult, renderSubagentCall } from "./render.ts";
 import { REPORT_MESSAGE_TYPE, renderReportMessage } from "./report-message.ts";
 import { getSubagentDepth, startSubagent } from "./runner.ts";
@@ -25,6 +25,37 @@ import { installRunsWidget } from "./widget.ts";
 const ID_LIST = Type.Array(Type.String(), {
   description: "Run ids returned by agent_start",
 });
+
+/** Push one report into a session as a collapsed custom message. */
+function reportPusher(pi: ExtensionAPI): PushMessage {
+  return (report) => {
+    // A custom message rather than a user message, so the report carries a
+    // renderer and shows as one collapsed line until it is asked for.
+    //
+    // Both options matter. `deliverAs: "followUp"` covers the case where
+    // the model is mid-turn: the report waits until it finishes rather
+    // than cutting into it. `triggerTurn` covers the case where the
+    // session is idle, and without it the report would sit unread in
+    // context until the operator happened to type something — which
+    // defeats delegating the work in the first place. Together they mean
+    // the model always gets a chance to act on a report, and never in the
+    // middle of a sentence.
+    pi.sendMessage(
+      {
+        customType: REPORT_MESSAGE_TYPE,
+        content: report.text,
+        display: true,
+        details: {
+          id: report.id,
+          agent: report.agent,
+          status: report.status,
+          truncated: report.truncated,
+        },
+      },
+      { deliverAs: "followUp", triggerTurn: true },
+    );
+  };
+}
 
 export interface SubagentFeatureDeps {
   delivery?: SubagentDelivery;
@@ -50,37 +81,7 @@ export function registerSubagentFeatures(
   pi.registerMessageRenderer(REPORT_MESSAGE_TYPE, renderReportMessage);
 
   const delivery =
-    deps.delivery ??
-    createSubagentDelivery({
-      push: (report) => {
-        // A custom message rather than a user message, so the report carries a
-        // renderer and shows as one collapsed line until it is asked for.
-        //
-        // Both options matter. `deliverAs: "followUp"` covers the case where
-        // the model is mid-turn: the report waits until it finishes rather
-        // than cutting into it. `triggerTurn` covers the case where the
-        // session is idle, and without it the report would sit unread in
-        // context until the operator happened to type something — which
-        // defeats delegating the work in the first place. Together they mean
-        // the model always gets a chance to act on a report, and never in the
-        // middle of a sentence.
-        pi.sendMessage(
-          {
-            customType: REPORT_MESSAGE_TYPE,
-            content: report.text,
-            display: true,
-            details: {
-              id: report.id,
-              agent: report.agent,
-              status: report.status,
-              truncated: report.truncated,
-            },
-          },
-          { deliverAs: "followUp", triggerTurn: true },
-        );
-      },
-      runs,
-    });
+    deps.delivery ?? createSubagentDelivery({ push: reportPusher(pi), runs });
 
   if (deps.widgetHost) installRunsWidget(deps.widgetHost, runs);
 
@@ -187,10 +188,20 @@ export function registerSubagentFeatures(
             "They will report on their own.",
         );
       }
-      if (sections.length === 0) {
+      if (outcome.alreadyDelivered.length > 0) {
         sections.push(
-          "Nothing to wait for — those runs have already reported.",
+          `Already reported: ${outcome.alreadyDelivered.join(", ")}. ` +
+            "agent_result re-reads a report you already have.",
         );
+      }
+      if (outcome.unknown.length > 0) {
+        sections.push(
+          `Unknown run ids: ${outcome.unknown.join(", ")}. ` +
+            "Check them against what agent_start returned.",
+        );
+      }
+      if (sections.length === 0) {
+        sections.push("Nothing to wait for — no run ids were given.");
       }
 
       return {
@@ -224,9 +235,12 @@ export function registerSubagentFeatures(
           content: [
             {
               type: "text",
-              text:
-                `No finished run with id ${params.id}. ` +
-                "Runs can be read once they have reported.",
+              text: delivery.has(params.id)
+                ? `Run ${params.id} has not reported yet. Its report will ` +
+                  "arrive on its own; agent_wait blocks for it if you cannot " +
+                  "continue without it."
+                : `No run with id ${params.id}. Check it against what ` +
+                  "agent_start returned.",
             },
           ],
           details: undefined,
@@ -262,26 +276,67 @@ export function registerSubagentFeatures(
     parameters: Type.Object({ ids: ID_LIST }),
 
     async execute(_toolCallId, params) {
-      const cancelled = runs.cancel(params.ids);
+      const requested = [...new Set(params.ids)];
+      const cancelled = runs.cancel(requested);
       // The model asked, so this tool result is the delivery for these runs;
       // a pushed "was cancelled" message would just repeat it back.
       delivery.deliverInline(cancelled);
 
+      const finished: string[] = [];
+      const unknown: string[] = [];
+      for (const id of requested) {
+        if (cancelled.includes(id)) continue;
+        // Settled but undelivered, or already recallable: either way the run
+        // beat the cancel and its report stands.
+        if (delivery.has(id) || delivery.recall(id)) finished.push(id);
+        else unknown.push(id);
+      }
+
+      const parts: string[] = [];
+      if (cancelled.length > 0)
+        parts.push(`Cancelled: ${cancelled.join(", ")}.`);
+      if (finished.length > 0) {
+        parts.push(`Already finished, report kept: ${finished.join(", ")}.`);
+      }
+      if (unknown.length > 0) {
+        parts.push(`Unknown run ids: ${unknown.join(", ")}.`);
+      }
+      if (parts.length === 0) parts.push("Nothing to cancel.");
+
       return {
-        content: [
-          {
-            type: "text",
-            text:
-              cancelled.length > 0
-                ? `Cancelled: ${cancelled.join(", ")}.`
-                : "Nothing to cancel — those runs had already finished.",
-          },
-        ],
+        content: [{ type: "text", text: parts.join(" ") }],
         details: undefined,
       };
     },
   });
 }
+
+// ── Process-lifetime state ────────────────────────────────────────────────────
+//
+// Detached runs belong to the pi process, not to any one session. Pi caches an
+// extension's factory across session replacement (resume, fork, /new), calling
+// it again with a fresh ExtensionAPI while this module instance — and with it
+// the run registry and the delivery bookkeeping — carries over. Everything
+// below exists so a run started in one session delivers into whichever session
+// is live when it settles, instead of pushing through a torn-down ExtensionAPI
+// (whose every method throws once its session is replaced).
+
+/** Where pushed reports go: the live session, or parked between sessions. */
+const sessionPush = createSessionPush();
+
+/** The one delivery for the process, lazily built over the shared registry. */
+let processDelivery: SubagentDelivery | null = null;
+
+function getProcessDelivery(): SubagentDelivery {
+  processDelivery ??= createSubagentDelivery({
+    push: sessionPush.push,
+    runs: subagentRuns,
+  });
+  return processDelivery;
+}
+
+/** Detaches the previous session's widget from the shared registry. */
+let uninstallWidget: (() => void) | null = null;
 
 export default function subagentExtension(pi: ExtensionAPI) {
   // A Pi child loads installed extensions just like its parent. Keep this
@@ -292,8 +347,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
   const agentsDir = getAgentsDir(getAgentDir());
 
-  // One map for the process, refilled on reload rather than replaced, so the
-  // tool and command closures registered below keep seeing current profiles.
+  // One map per runtime, refilled rather than replaced, so the tool and
+  // command closures registered below keep seeing current profiles.
   const agentConfigs = new Map<string, AgentConfig>();
   let registered = false;
 
@@ -319,9 +374,18 @@ export default function subagentExtension(pi: ExtensionAPI) {
       agentConfigs.set(name, config);
     }
 
-    // session_start also fires on reload, resume and fork. Registering again
-    // would install a second copy of every tool — and, once runs outlive a
-    // turn, a second registry beside children that are still alive.
+    // Reports and the widget follow the live session even when this runtime's
+    // tools are already registered: runs from the previous session are still
+    // in the shared registry, and their reports belong here now.
+    sessionPush.bind(reportPusher(pi));
+    uninstallWidget?.();
+    uninstallWidget = installRunsWidget(
+      ctx.ui as unknown as WidgetHost,
+      subagentRuns,
+    );
+
+    // A guard, not a per-session step: registering twice on one runtime would
+    // install a second copy of every tool.
     if (!registered) {
       registered = true;
       registerSubagentFeatures(
@@ -330,7 +394,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
         agentsDir,
         agentConfigs,
         ctx.isProjectTrusted?.() ?? false,
-        { widgetHost: ctx.ui as unknown as WidgetHost },
+        { delivery: getProcessDelivery() },
       );
     }
 
@@ -340,6 +404,28 @@ export default function subagentExtension(pi: ExtensionAPI) {
     ];
     if (invalidFiles.length > 0) {
       ctx.ui.notify(formatInvalidAgentFilesWarning(invalidFiles), "warning");
+    }
+  });
+
+  pi.on("session_shutdown", (event) => {
+    // This runtime's ExtensionAPI is about to start throwing. Reports that
+    // settle from here on park until the next session binds; the widget stops
+    // following a registry it can no longer draw.
+    sessionPush.unbind();
+    uninstallWidget?.();
+    uninstallWidget = null;
+
+    // Quit ends the process and reload discards this module instance — either
+    // way nothing will be left that could ever deliver a report, so the
+    // children must not be left running headless. Session replacement (new,
+    // resume, fork) keeps this module alive and the runs with it.
+    if (event.reason === "quit" || event.reason === "reload") {
+      subagentRuns.cancel(
+        subagentRuns
+          .list()
+          .filter((run) => run.status === "running")
+          .map((run) => run.id),
+      );
     }
   });
 }

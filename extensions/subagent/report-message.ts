@@ -11,11 +11,7 @@
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import {
-  formatCharacterCount,
-  runStatusGlyph,
-  runStatusTone,
-} from "./formatting.ts";
+import { formatCharacterCount, runStatusTone } from "./formatting.ts";
 import { contentText } from "./render.ts";
 import type { LifecycleStatus } from "./types.ts";
 
@@ -51,7 +47,13 @@ function isDetails(value: unknown): value is ReportMessageDetails {
   );
 }
 
-/** The one line a collapsed report shows. */
+/**
+ * The one line a collapsed report shows.
+ *
+ * No status glyph: the dots belong to the widget, where rows are scanned as a
+ * column. Here the verb says what happened, and it is painted in the status
+ * tone so a failure still stands out.
+ */
 export function formatReportSummary(
   details: ReportMessageDetails,
   characters: number,
@@ -63,10 +65,9 @@ export function formatReportSummary(
   const verb = details.status === "completed" ? "reported" : details.status;
 
   let line =
-    theme.fg(tone, `${runStatusGlyph(details.status)} `) +
     theme.fg("toolTitle", theme.bold(details.agent)) +
     theme.fg("dim", ` (${details.id}) `) +
-    theme.fg("muted", verb) +
+    theme.fg(tone, verb) +
     theme.fg("dim", ` · ${formatCharacterCount(characters)}`);
 
   if (details.truncated) {

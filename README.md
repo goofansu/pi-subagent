@@ -73,15 +73,19 @@ Only the user directory is resolved: `~/.pi/agent/agents/`, or `$PI_CODING_AGENT
 Runs are listed in a widget above the editor, one line each:
 
 ```
-─── subagents (3) ────────────────────────────────────────────────────
-  ⏳ a3f81c2b explore      gpt-5.6-sol     3 turns  $0.0142  running for 12.4s
-  ⏳ 7e0d4419 reviewer     claude-opus-5    1 turn  $0.0031  running for 3.1s
-  ✓  c14b90aa implementer  claude-opus-5  12 turns  $0.4210  completed in 1m 2s
+─── subagents (3) ─────────────────────────────────────────────
+  ●  explore      $0.0142  running for 12.4s  · grep: getFinalOutput
+  ●  reviewer     $0.0031  running for 3.1s  · review the delivery module
+  ●  implementer  $0.4210  completed in 1m 2s
 ```
+
+The status indicator is Herdr's colored dot: a `●` whose color carries the state — yellow running, green completed, red failed — plus a hollow `○` for a cancelled run, which Herdr has no state for.
+
+A running line ends with what the run is doing right now — its most recent tool call, or the run's description before the first one. That tail is also what tells two runs of the same agent apart, and it is the first thing dropped when the terminal is narrow. Run ids appear in tool results and reports, where the model that acts on them reads them, so the widget does not repeat them; name a run by its agent and task when asking for one to be cancelled.
 
 The widget appears when the first run starts and disappears once the last report has been delivered — a finished run stays listed until its report actually lands, which reads as "done, waiting to report". A fan-out wider than eight runs is summarised rather than filling the screen.
 
-Columns are measured across the visible rows so the fields line up. When the terminal is too narrow for all of them they give way in order — model first, then cost, then turns — so the status is always visible. Turns outlast cost because a rising turn count is what shows a run is still moving.
+Columns are measured across the visible rows so the fields line up. When the terminal is too narrow they give way in order — the activity tail first, then cost — so the status is always visible.
 
 The widget is a display. Pi routes keyboard input to the editor, never to a widget, so runs are stopped with `agent_cancel` rather than from here.
 
@@ -89,7 +93,11 @@ The widget is a display. Pi routes keyboard input to the editor, never to a widg
 
 ### Concurrency
 
-Subagents are not capped: every delegated run starts immediately. Each one is a child pi process, so a wide fan-out costs real local resources — see [ADR 0001](docs/adr/0001-unbounded-subagent-concurrency.md) for why the cap and its queue were removed. Runs have no time limit. `Esc` cancels the pi turn and with it every running subagent call, keeping whatever output had already arrived.
+Subagents are not capped: every delegated run starts immediately. Each one is a child pi process, so a wide fan-out costs real local resources — see [ADR 0001](docs/adr/0001-unbounded-subagent-concurrency.md) for why the cap and its queue were removed. Runs have no time limit.
+
+### Lifecycle
+
+A run is detached: it belongs to the pi process, not to the turn or the session that started it. `Esc` cancels the turn but leaves the runs going, and switching, forking, or resuming a session leaves them going too — their reports follow into whichever session is live when they finish, and a report that settles in the gap between sessions waits for the next one. Only `agent_cancel` stops a single run; quitting pi or `/reload`ing its extensions stops every running subagent, since nothing would be left to deliver their reports.
 
 ### Security
 

@@ -70,7 +70,6 @@ test("a tracked run is listed with its identity and elapsed time", () => {
       description: "look around",
       status: "running",
       elapsedMs: 2_500,
-      turns: 0,
       cost: 0,
     },
   ]);
@@ -89,30 +88,6 @@ test("a settled run stops accruing elapsed time", () => {
 
   assert.equal(runs.list()[0].status, "completed");
   assert.equal(runs.list()[0].elapsedMs, 1_000);
-});
-
-test("the model appears once the child reports one", () => {
-  const runs = createSubagentRuns(fakeClock(), sequentialIds());
-  const result = runningResult();
-  runs.track(result, () => {});
-
-  assert.equal(runs.list()[0].model, undefined);
-
-  result.model = "openai-codex/gpt-5.6-sol";
-
-  assert.equal(runs.list()[0].model, "openai-codex/gpt-5.6-sol");
-});
-
-test("turns count what the child has said", () => {
-  const runs = createSubagentRuns(fakeClock(), sequentialIds());
-  const result = runningResult();
-  runs.track(result, () => {});
-
-  assert.equal(runs.list()[0].turns, 0);
-
-  result.usage.turns = 3;
-
-  assert.equal(runs.list()[0].turns, 3);
 });
 
 test("cost tracks what the run has spent", () => {
@@ -225,4 +200,57 @@ test("cancelling an unknown or already-settled run is a no-op", () => {
 
   assert.deepEqual(runs.cancel(["run-1", "nonexistent"]), []);
   assert.equal(cancelled, 0);
+});
+
+// ── Robustness ───────────────────────────────────────────────────────────────
+
+test("one broken listener silences neither the change nor the others", () => {
+  const runs = createSubagentRuns(fakeClock(), sequentialIds());
+  let laterListenerHeard = 0;
+  runs.subscribe(() => {
+    throw new Error("a stale widget");
+  });
+  runs.subscribe(() => laterListenerHeard++);
+
+  assert.doesNotThrow(() => runs.track(runningResult(), () => {}));
+  assert.equal(laterListenerHeard, 1);
+});
+
+test("a colliding id is drawn again instead of orphaning a run", () => {
+  const drawn = ["dup", "dup", "fresh"];
+  const runs = createSubagentRuns(fakeClock(), () => {
+    const next = drawn.shift();
+    assert.ok(next, "ran out of ids");
+    return next;
+  });
+
+  const first = runs.track(runningResult(), () => {});
+  const second = runs.track(runningResult(), () => {});
+
+  assert.equal(first.id, "dup");
+  assert.equal(second.id, "fresh");
+  assert.equal(runs.size(), 2);
+});
+
+test("a run's most recent tool call is projected as its activity", () => {
+  const runs = createSubagentRuns(fakeClock(), sequentialIds());
+  const result = runningResult();
+  runs.track(result, () => {});
+
+  assert.equal(runs.list()[0].activity, undefined);
+
+  result.messages.push({
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id: "call-1",
+        name: "grep",
+        arguments: { pattern: "TODO" },
+      },
+    ],
+    // biome-ignore lint/suspicious/noExplicitAny: a partial message is enough
+  } as any);
+
+  assert.equal(runs.list()[0].activity, "grep: TODO");
 });

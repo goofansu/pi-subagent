@@ -29,16 +29,22 @@ export function formatCharacterCount(characters: number): string {
   return `${(characters / 1_000).toFixed(1)}k characters`;
 }
 
+/**
+ * One glyph per lifecycle state, matching Herdr's `state_icon` dots: a `●`
+ * whose color carries the state — yellow working, green done, red blocked —
+ * so the widget reads the same as the agent sidebar the operator already
+ * watches. The widget paints it in {@link runStatusTone} and is the only
+ * place it appears; transcript lines say the status in words instead. Herdr
+ * has no cancelled state; the hollow `○` marks a run nothing came of.
+ */
 export function runStatusGlyph(status: LifecycleStatus): string {
   switch (status) {
     case "running":
-      return "⏳";
     case "completed":
-      return "✓";
     case "failed":
-      return "✗";
+      return "●";
     case "aborted":
-      return "⊘";
+      return "○";
   }
 }
 

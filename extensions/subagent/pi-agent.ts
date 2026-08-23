@@ -473,20 +473,26 @@ export async function runPiAgent(run: SubagentRun): Promise<SingleResult> {
       });
 
       if (signal) {
+        let escalation: ReturnType<typeof setTimeout> | undefined;
         const killProc = () => {
           wasAborted = true;
           proc.kill("SIGTERM");
-          setTimeout(() => {
+          escalation = setTimeout(() => {
             if (!procClosed) proc.kill("SIGKILL");
           }, 5000);
+          // The escalation must never be the reason the parent stays up: if
+          // pi is quitting, SIGTERM has been sent and that has to be enough.
+          escalation.unref?.();
         };
         if (signal.aborted) killProc();
-        else {
-          signal.addEventListener("abort", killProc, { once: true });
+        else signal.addEventListener("abort", killProc, { once: true });
+        proc.on("close", () => {
           // Remove the listener once the process has closed so a late abort
-          // signal doesn't incorrectly mark a successfully completed run as aborted.
-          proc.on("close", () => signal.removeEventListener("abort", killProc));
-        }
+          // signal doesn't incorrectly mark a successfully completed run as
+          // aborted, and drop the SIGKILL escalation the close made moot.
+          signal.removeEventListener("abort", killProc);
+          if (escalation !== undefined) clearTimeout(escalation);
+        });
       }
     });
 

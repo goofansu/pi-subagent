@@ -14,6 +14,7 @@
  * the transcript holds it from then on.
  */
 
+import { deriveActivity } from "./messages.ts";
 import type { LifecycleStatus, SingleResult } from "./types.ts";
 
 /** How often elapsed times are republished while a run is unfinished. */
@@ -27,11 +28,12 @@ export interface RunView {
   status: LifecycleStatus;
   /** Milliseconds from start to now, or to settlement once finished. */
   elapsedMs: number;
-  /** What the child actually ran as, once it has reported one. */
-  model?: string;
-  /** Assistant turns the child has taken. Zero until it first speaks. */
-  turns: number;
   cost: number;
+  /**
+   * What the run is doing right now, derived from its most recent tool call.
+   * Absent until the child's first tool call. Display only.
+   */
+  activity?: string;
 }
 
 /** The dispatcher's write access to one tracked run. */
@@ -107,7 +109,17 @@ export function createSubagentRuns(
   let stopTicking: (() => void) | null = null;
 
   const notify = (): void => {
-    for (const listener of [...listeners]) listener();
+    for (const listener of [...listeners]) {
+      // Notify runs inside child-process stream callbacks, where an uncaught
+      // throw kills the whole pi process. One broken or stale listener — a
+      // widget whose session has since been torn down — must not do that, nor
+      // stop the listeners after it from hearing the change.
+      try {
+        listener();
+      } catch {
+        // Display-only subscribers; there is nowhere useful to report this.
+      }
+    }
   };
 
   /**
@@ -133,21 +145,24 @@ export function createSubagentRuns(
   const project = (run: TrackedRun): RunView => {
     const { result } = run;
     const end = result.finishedAt ?? clock.now();
+    const activity = deriveActivity(result.messages);
     return {
       id: run.id,
       agent: result.agent,
       description: result.description,
       status: result.status,
       elapsedMs: Math.max(0, end - result.startedAt),
-      ...(result.model ? { model: result.model } : {}),
-      turns: result.usage.turns,
       cost: result.usage.cost,
+      ...(activity ? { activity } : {}),
     };
   };
 
   return {
     track(result, cancel) {
-      const id = generateId();
+      // Short ids can collide; a collision would silently orphan the run
+      // already tracked under the id, so draw again instead.
+      let id = generateId();
+      while (runs.has(id)) id = generateId();
       runs.set(id, { id, result, cancel });
       syncTicker();
       notify();

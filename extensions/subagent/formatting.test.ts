@@ -37,17 +37,17 @@ test("formatRunStatus words each lifecycle state with its duration", () => {
   );
 });
 
-test("each lifecycle state has its own glyph and tone", () => {
+test("each lifecycle state has its own glyph-and-tone pair", () => {
   assert.deepEqual(
     (["running", "completed", "failed", "aborted"] as const).map((status) => [
       runStatusGlyph(status),
       runStatusTone(status),
     ]),
     [
-      ["⏳", "warning"],
-      ["✓", "success"],
-      ["✗", "error"],
-      ["⊘", "error"],
+      ["●", "warning"],
+      ["●", "success"],
+      ["●", "error"],
+      ["○", "error"],
     ],
   );
 });
