@@ -74,9 +74,9 @@ Runs are listed in a widget above the editor, one line each:
 
 ```
 ─── subagents (3) ─────────────────────────────────────────────
-  ●  explore      $0.0142  running  · grep: getFinalOutput
-  ●  reviewer     $0.0031  running  · review the delivery module
-  ●  implementer  $0.4210  completed in 1m 2s
+ ●  explore      $0.0142  running  · grep: getFinalOutput
+ ●  reviewer     $0.0031  running  · review the delivery module
+ ●  implementer  $0.4210  completed in 1m 2s
 ```
 
 The status indicator is Herdr's colored dot: a `●` whose color carries the state — yellow running, green completed, red failed — plus a hollow `○` for a cancelled run, which Herdr has no state for.

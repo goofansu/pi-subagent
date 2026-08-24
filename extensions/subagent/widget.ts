@@ -165,11 +165,11 @@ export function renderRunLines(
       "…",
       true,
     ),
-    ...shown.map((run) => `  ${formatRunLine(run, theme, width - 2, columns)}`),
+    ...shown.map((run) => ` ${formatRunLine(run, theme, width - 1, columns)}`),
   ];
 
   if (hidden > 0) {
-    lines.push(`  ${theme.fg("dim", `… and ${hidden} more`)}`);
+    lines.push(` ${theme.fg("dim", `… and ${hidden} more`)}`);
   }
   return lines;
 }
