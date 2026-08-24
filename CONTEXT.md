@@ -37,7 +37,9 @@ invariant is *exactly one delivery per run*, never zero and never two. A
 delivery is a push, a returned `agent_wait`, or a cancellation notice.
 
 **Push** — delivery by injecting the report into the session as a follow-up
-message when the run settles. The default path.
+message when the run settles. The default path. Pushed is not landed: pi holds
+a follow-up while the model is mid-turn, and the run stays listed until the
+message actually enters the conversation.
 
 **Claim** — an `agent_wait` claims the reports of the runs it names, suppressing
 their push so they return through the tool result instead. Abandoning the wait
@@ -60,8 +62,8 @@ crash guard for the teardown race, never a cross-session delivery channel.
 
 **Registry** — the module owning the set of live runs and their lifetime.
 Everything that displays or acts on runs reads it; the dispatcher is the only
-module that adds runs, and delivery is the only module that releases them — a
-run leaves the registry at its delivery, nowhere else.
+module that adds runs, and delivery is the only module that releases them —
+when the report actually lands in the conversation, nowhere else.
 
 **Projection** (`RunView`) — an immutable row derived from a run for display.
 Callers never touch the mutable run record.

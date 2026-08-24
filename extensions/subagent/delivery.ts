@@ -175,6 +175,13 @@ export interface SubagentDelivery {
    */
   cancel(ids: readonly string[]): CancelOutcome;
   /**
+   * The pushed report for this run has entered the conversation. Pushed is
+   * not landed: pi holds a follow-up while the model is mid-turn, and the
+   * run stays listed — "done, waiting to report" — until this confirms the
+   * model can actually see the report. Unknown ids are ignored.
+   */
+  reportLanded(id: string): void;
+  /**
    * The session is over: stop everything still running, mark every
    * undelivered run delivered so no notice follows the operator into the
    * next session, and clear retention — a report belongs to the conversation
@@ -215,6 +222,13 @@ export function createSubagentDelivery({
    * retention.
    */
   const inlineDelivered = new Set<Pending>();
+  /**
+   * Runs whose reports were pushed but have not yet entered the conversation.
+   * Their runs stay in the registry so the widget keeps showing them; the
+   * landing signal — `reportLanded`, wired to the message actually joining
+   * the session — lets the registry drop them.
+   */
+  const awaitingLanding = new Set<string>();
 
   /**
    * Evict the oldest whole outputs until retention fits its budget. The
@@ -273,15 +287,28 @@ export function createSubagentDelivery({
     if (entry.delivered) return;
     entry.delivered = true;
     pending.delete(entry.id);
-    runs.release(entry.id);
-    if (!entry.result) return;
+    if (!entry.result) {
+      runs.release(entry.id);
+      return;
+    }
 
     const result = entry.result;
     // Retained before the cap is applied, so what `agent_result` returns is
     // the run's whole answer rather than the copy that fitted in a message.
     retain(entry, result);
 
-    if (!byPush) return;
+    if (!byPush) {
+      // A wait returns the report through its tool result, which enters the
+      // conversation with the call itself — landed by construction.
+      runs.release(entry.id);
+      return;
+    }
+
+    // Pushed is not landed: pi holds a follow-up while the model is mid-turn.
+    // The run stays in the registry until `reportLanded` confirms the message
+    // joined the conversation, so the widget never drops a run whose report
+    // the model has not seen.
+    awaitingLanding.add(entry.id);
     const output = fullOutput(result);
     const text = formatReport(entry.id, result);
     safePush({
@@ -387,6 +414,11 @@ export function createSubagentDelivery({
 
     recall: (id) => retained.get(id),
 
+    reportLanded(id) {
+      if (!awaitingLanding.delete(id)) return;
+      runs.release(id);
+    },
+
     cancel(ids) {
       const requested = [...new Set(ids)];
       const cancelled = runs.cancel(requested);
@@ -428,6 +460,11 @@ export function createSubagentDelivery({
         entry.delivered = true;
         runs.release(entry.id);
       }
+      // Reports pushed but never landed — the session ended with them still
+      // queued. Their runs are terminal; the registry drops them now rather
+      // than listing them into a conversation that will never see them.
+      for (const id of awaitingLanding) runs.release(id);
+      awaitingLanding.clear();
       pending.clear();
       inlineDelivered.clear();
       retained.clear();

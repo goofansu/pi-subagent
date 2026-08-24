@@ -420,6 +420,23 @@ export default function subagentExtension(pi: ExtensionAPI) {
     }
   });
 
+  // A pushed report is delivered when it actually enters the conversation,
+  // not when it is handed over: pi holds a follow-up while the model is
+  // mid-turn, and the run must stay listed — "done, waiting to report" —
+  // until the model can see the report. This is the landing signal: the
+  // report message joining the session, in both the busy and idle paths.
+  pi.on("message_start", (event) => {
+    const message = event.message as {
+      role?: string;
+      customType?: string;
+      details?: { id?: string };
+    };
+    if (message.role !== "custom") return;
+    if (message.customType !== REPORT_MESSAGE_TYPE) return;
+    const id = message.details?.id;
+    if (id) getProcessDelivery().reportLanded(id);
+  });
+
   pi.on("session_shutdown", (_event) => {
     // This runtime's ExtensionAPI is about to start throwing. Reports that
     // settle from here on are dropped; the widget stops following a registry

@@ -32,7 +32,11 @@ test("the extension is not exposed inside a subagent Pi process", () => {
         parentEvents.push(event);
       },
     } as unknown as ExtensionAPI);
-    assert.deepEqual(parentEvents, ["session_start", "session_shutdown"]);
+    assert.deepEqual(parentEvents, [
+      "session_start",
+      "message_start",
+      "session_shutdown",
+    ]);
   } finally {
     if (originalDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
     else process.env.PI_SUBAGENT_DEPTH = originalDepth;

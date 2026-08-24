@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Message } from "@earendil-works/pi-ai";
-import type { PushedReport } from "./delivery.ts";
+import type { PushedReport, SubagentDelivery } from "./delivery.ts";
 import { createSessionPush, createSubagentDelivery } from "./delivery.ts";
 import { REPORT_CHARACTER_LIMIT } from "./presentation.ts";
 import { createEmptyResult } from "./run.ts";
@@ -54,13 +54,16 @@ function harness() {
   // The text that reached the model, which is what most assertions care about.
   const pushed: string[] = [];
   const runs = createSubagentRuns();
-  const delivery = createSubagentDelivery({
-    push: (report) => {
-      reports.push(report);
-      pushed.push(report.text);
-    },
-    runs,
-  });
+  // Pushes land immediately here, as in an idle session. Tests about the
+  // pushed-but-not-landed gap build their own delivery with a push that
+  // never lands.
+  let delivery: SubagentDelivery;
+  const push = (report: PushedReport): void => {
+    reports.push(report);
+    pushed.push(report.text);
+    delivery.reportLanded(report.id);
+  };
+  delivery = createSubagentDelivery({ push, runs });
   return { reports, pushed, runs, delivery };
 }
 
@@ -259,6 +262,52 @@ test("shutdown clears retention: a report belongs to the session that asked", as
   delivery.shutdown();
 
   assert.equal(delivery.recall(handle.id), undefined);
+});
+
+test("a pushed report keeps its run listed until the message lands", async () => {
+  const runs = createSubagentRuns();
+  const pushed: PushedReport[] = [];
+  const delivery = createSubagentDelivery({
+    push: (report) => pushed.push(report),
+    runs,
+  });
+  const run = deferredRun();
+  const handle = runs.track(run.result, () => {});
+  delivery.register(handle.id, run.settled);
+
+  // The parent model is mid-turn: pi queues the follow-up, nothing lands.
+  run.finish();
+  await flush();
+
+  assert.equal(pushed.length, 1, "the report was pushed");
+  assert.equal(runs.size(), 1, "done, waiting to report — still listed");
+
+  delivery.reportLanded(handle.id);
+
+  assert.equal(runs.size(), 0, "released when the message entered");
+});
+
+test("landing an unknown id changes nothing", () => {
+  const { delivery, runs } = harness();
+
+  delivery.reportLanded("never-existed");
+
+  assert.equal(runs.size(), 0);
+});
+
+test("shutdown releases runs whose pushed reports never landed", async () => {
+  const runs = createSubagentRuns();
+  const delivery = createSubagentDelivery({ push: () => {}, runs });
+  const run = deferredRun();
+  const handle = runs.track(run.result, () => {});
+  delivery.register(handle.id, run.settled);
+  run.finish();
+  await flush();
+  assert.equal(runs.size(), 1, "queued behind a session that is ending");
+
+  delivery.shutdown();
+
+  assert.equal(runs.size(), 0);
 });
 
 test("a delivered run is released from the registry", async () => {
