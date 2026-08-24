@@ -74,8 +74,8 @@ Runs are listed in a widget above the editor, one line each:
 
 ```
 ─── subagents (3) ─────────────────────────────────────────────
-  ●  explore      $0.0142  running for 12.4s  · grep: getFinalOutput
-  ●  reviewer     $0.0031  running for 3.1s  · review the delivery module
+  ●  explore      $0.0142  running  · grep: getFinalOutput
+  ●  reviewer     $0.0031  running  · review the delivery module
   ●  implementer  $0.4210  completed in 1m 2s
 ```
 

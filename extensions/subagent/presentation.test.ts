@@ -33,7 +33,7 @@ test("formatDuration never reports negative time", () => {
 test("formatRunStatus words each lifecycle state with its duration", () => {
   assert.equal(
     formatRunStatus({ status: "running", elapsedMs: 2_000 }),
-    "running for 2.0s",
+    "running",
   );
   assert.equal(
     formatRunStatus({ status: "completed", elapsedMs: 5_000 }),

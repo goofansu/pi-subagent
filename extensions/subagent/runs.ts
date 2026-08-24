@@ -1,6 +1,5 @@
 /**
- * The run registry: the set of subagent runs that exist right now, and the
- * clock that keeps their elapsed times moving.
+ * The run registry: the set of subagent runs that exist right now.
  *
  * A run used to exist only as a `SingleResult` closed over by one dispatcher
  * call and pushed at one consumer, the host's tool renderer. Nothing could
@@ -17,16 +16,16 @@
 
 import type { LifecycleStatus, SingleResult } from "./types.ts";
 
-/** How often elapsed times are republished while a run is unfinished. */
-export const TICK_INTERVAL_MS = 1_000;
-
 /** An immutable row derived from a run. Callers never see the live record. */
 export interface RunView {
   id: string;
   agent: string;
   description: string;
   status: LifecycleStatus;
-  /** Milliseconds from start to now, or to settlement once finished. */
+  /**
+   * Milliseconds from start to now, or to settlement once finished. Display
+   * reads it only once a run settles; nothing redraws to keep it moving.
+   */
   elapsedMs: number;
   cost: number;
   /**
@@ -43,26 +42,13 @@ export interface RunHandle {
   changed(): void;
 }
 
-/**
- * Time and scheduling, injected so tests need no real clock.
- *
- * `schedule` returns its own cancel rather than a handle, which keeps the
- * registry from knowing whether it is talking to `setInterval`, a fake, or
- * nothing at all.
- */
+/** Time, injected so tests need no real clock. */
 export interface RegistryClock {
   now(): number;
-  schedule(callback: () => void, intervalMs: number): () => void;
 }
 
 export const systemClock: RegistryClock = {
   now: () => Date.now(),
-  schedule: (callback, intervalMs) => {
-    const timer = setInterval(callback, intervalMs);
-    // A redraw timer must never be the reason the process stays up.
-    timer.unref?.();
-    return () => clearInterval(timer);
-  },
 };
 
 export interface SubagentRuns {
@@ -80,7 +66,7 @@ export interface SubagentRuns {
   release(id: string): void;
   /** Stop the named runs. Returns the ids that were actually cancelled. */
   cancel(ids: readonly string[]): string[];
-  /** Called on every change and on every tick. Returns an unsubscribe. */
+  /** Called on every change. Returns an unsubscribe. */
   subscribe(listener: () => void): () => void;
   /** How many runs are tracked, terminal ones included. */
   size(): number;
@@ -106,7 +92,6 @@ export function createSubagentRuns(
 ): SubagentRuns {
   const runs = new Map<string, TrackedRun>();
   const listeners = new Set<() => void>();
-  let stopTicking: (() => void) | null = null;
 
   const notify = (): void => {
     for (const listener of [...listeners]) {
@@ -119,26 +104,6 @@ export function createSubagentRuns(
       } catch {
         // Display-only subscribers; there is nowhere useful to report this.
       }
-    }
-  };
-
-  /**
-   * One interval for every run, alive only while something is unfinished.
-   * Elapsed time advances with no state change at all, so a change signal on
-   * its own would leave a run that sits silently in one tool call showing a
-   * frozen clock.
-   */
-  const syncTicker = (): void => {
-    const needsTicking = [...runs.values()].some(
-      (run) => !isTerminal(run.result.status),
-    );
-    if (needsTicking && !stopTicking) {
-      stopTicking = clock.schedule(notify, TICK_INTERVAL_MS);
-      return;
-    }
-    if (!needsTicking && stopTicking) {
-      stopTicking();
-      stopTicking = null;
     }
   };
 
@@ -165,13 +130,11 @@ export function createSubagentRuns(
       let id = generateId();
       while (runs.has(id)) id = generateId();
       runs.set(id, { id, result, cancel });
-      syncTicker();
       notify();
 
       return {
         id,
         changed() {
-          syncTicker();
           notify();
         },
       };
@@ -179,7 +142,6 @@ export function createSubagentRuns(
 
     release(id) {
       if (!runs.delete(id)) return;
-      syncTicker();
       notify();
     },
 

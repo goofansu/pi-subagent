@@ -51,10 +51,21 @@ test("a run line carries agent, cost and status, and nothing else fixed", () => 
 
   assert.match(line, /explore/);
   assert.match(line, /\$0\.0142/);
-  assert.match(line, /running for 12\.4s/);
+  assert.match(line, /running/);
+  // No live clock: elapsed time would need a once-a-second redraw to stay
+  // honest, so a running row names no duration at all.
+  assert.doesNotMatch(line, /12\.4s/);
   // The id and model are deliberately absent: ids belong to tool results and
   // reports, and the model is the profile's business.
   assert.doesNotMatch(line, /a3f81c2b/);
+});
+
+test("a settled run keeps its final duration, computed once", () => {
+  const line = stripVTControlCharacters(
+    formatRunLine(view({ status: "completed" }), theme, 120),
+  );
+
+  assert.match(line, /completed in 12\.4s/);
 });
 
 test("cost always reads as money, including zero", () => {
@@ -77,13 +88,13 @@ test("cost gives way before status, and status never does", () => {
     stripVTControlCharacters(formatRunLine(view(), theme, width));
 
   const wide = at(45);
-  assert.match(wide, /\$0\.0142.*running for 12\.4s/);
+  assert.match(wide, /\$0\.0142.*running/);
 
-  const noCost = at(33);
+  const noCost = at(22);
   assert.doesNotMatch(noCost, /\$0\.0142/);
-  assert.match(noCost, /running for 12\.4s/);
+  assert.match(noCost, /running/);
 
-  for (const width of [45, 33, 20, 12]) {
+  for (const width of [45, 22, 12]) {
     assert.ok(at(width).length <= width, `width ${width} overflowed`);
   }
 });
@@ -107,10 +118,7 @@ test("columns line up even when agent names differ in length", () => {
     ),
   ).slice(1);
 
-  assert.equal(
-    columnOf(lines[0], "running for"),
-    columnOf(lines[1], "running for"),
-  );
+  assert.equal(columnOf(lines[0], "running"), columnOf(lines[1], "running"));
 });
 
 test("a wide glyph does not shift its row against a narrow one", () => {
@@ -255,7 +263,7 @@ test("a running run shows what it is doing after the status", () => {
     formatRunLine(view({ activity: "bash: npm test" }), theme, 120),
   );
 
-  assert.match(line, /running for 12\.4s {2}· bash: npm test$/);
+  assert.match(line, /running {2}· bash: npm test$/);
 });
 
 test("the description stands in before the first tool call", () => {
@@ -281,16 +289,16 @@ test("the activity is the first thing sacrificed to width", () => {
   const wide = stripVTControlCharacters(
     formatRunLine(view({ activity: "bash: npm test" }), theme, 200),
   );
-  const status = wide.indexOf("running for");
+  const status = wide.indexOf("running");
   const narrow = stripVTControlCharacters(
     formatRunLine(
       view({ activity: "bash: npm test" }),
       theme,
-      status + "running for 12.4s".length + 4,
+      status + "running".length + 4,
     ),
   );
 
-  assert.match(narrow, /running for 12\.4s$/);
+  assert.match(narrow, /running$/);
   assert.doesNotMatch(narrow, /npm test/);
 });
 

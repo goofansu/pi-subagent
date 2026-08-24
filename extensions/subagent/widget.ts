@@ -199,9 +199,8 @@ export interface WidgetHost {
  *
  * The component reads the registry when it renders rather than closing over a
  * snapshot, so `setWidget` is only called when the widget appears or goes
- * away. Every other change — including the one-second tick — is a redraw
- * request, which avoids tearing down and rebuilding the widget once a second
- * for the whole life of a run.
+ * away. Every other change is a redraw request, which avoids tearing down and
+ * rebuilding the widget on each of a run's facts.
  */
 export function installRunsWidget(
   host: WidgetHost,

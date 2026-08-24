@@ -2,46 +2,22 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createEmptyResult, settleResultLifecycle } from "./run.ts";
 import type { RegistryClock } from "./runs.ts";
-import { createSubagentRuns, TICK_INTERVAL_MS } from "./runs.ts";
+import { createSubagentRuns } from "./runs.ts";
 import type { SingleResult } from "./types.ts";
 
 interface FakeClock extends RegistryClock {
   advance(ms: number): void;
-  /** Run the scheduled callback once, as a real interval would. */
-  fire(): void;
-  /** How many intervals have ever been started. */
-  scheduled(): number;
-  /** Whether an interval is currently live. */
-  running(): boolean;
-  lastIntervalMs(): number;
 }
 
-/** A clock the test drives by hand, recording every schedule and cancel. */
+/** A clock the test drives by hand. */
 function fakeClock(): FakeClock {
   let current = 0;
-  let scheduledCount = 0;
-  let callback: (() => void) | null = null;
-  let intervalMs = 0;
 
   return {
     now: () => current,
-    schedule(fn, ms) {
-      scheduledCount++;
-      callback = fn;
-      intervalMs = ms;
-      return () => {
-        callback = null;
-      };
-    },
     advance(ms) {
       current += ms;
     },
-    fire() {
-      callback?.();
-    },
-    scheduled: () => scheduledCount,
-    running: () => callback !== null,
-    lastIntervalMs: () => intervalMs,
   };
 }
 
@@ -137,46 +113,6 @@ test("subscribers hear about tracking, changes and delivery", () => {
   unsubscribe();
   runs.track(runningResult(), () => {});
   assert.equal(notifications, 3);
-});
-
-test("the tick runs only while a run is unfinished", () => {
-  const clock = fakeClock();
-  const runs = createSubagentRuns(clock, sequentialIds());
-  const result = runningResult();
-
-  assert.equal(clock.running(), false);
-
-  const handle = runs.track(result, () => {});
-  assert.equal(clock.running(), true);
-  assert.equal(clock.scheduled(), 1);
-
-  // A second run must not start a second interval.
-  const other = runs.track(runningResult(), () => {});
-  assert.equal(clock.scheduled(), 1);
-
-  result.exitCode = 0;
-  settleResultLifecycle(result, clock.now());
-  handle.changed();
-  assert.equal(clock.running(), true, "the other run is still going");
-
-  runs.release(other.id);
-  handle.changed();
-  assert.equal(clock.running(), false);
-});
-
-test("a tick republishes without any state change", () => {
-  const clock = fakeClock();
-  const runs = createSubagentRuns(clock, sequentialIds());
-  let notifications = 0;
-
-  runs.track(runningResult(), () => {});
-  runs.subscribe(() => notifications++);
-
-  clock.advance(TICK_INTERVAL_MS);
-  clock.fire();
-
-  assert.equal(notifications, 1);
-  assert.equal(clock.lastIntervalMs(), TICK_INTERVAL_MS);
 });
 
 test("cancelling a run calls its canceller and reports what it stopped", () => {

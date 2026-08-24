@@ -61,8 +61,7 @@ crash guard for the teardown race, never a cross-session delivery channel.
 **Registry** — the module owning the set of live runs and their lifetime.
 Everything that displays or acts on runs reads it; the dispatcher is the only
 module that adds runs, and delivery is the only module that releases them — a
-run leaves the registry at its delivery, nowhere else. It also owns the redraw
-clock.
+run leaves the registry at its delivery, nowhere else.
 
 **Projection** (`RunView`) — an immutable row derived from a run for display.
 Callers never touch the mutable run record.

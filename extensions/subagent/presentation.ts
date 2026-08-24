@@ -60,7 +60,10 @@ const STATUS_PRESENTATION: Record<
     glyph: "●",
     tone: "warning",
     verb: "running",
-    phrase: (duration) => `running for ${duration}`,
+    // No duration: a live clock would need a once-a-second redraw of the
+    // whole widget, and the settled phrases already say what a run cost in
+    // time once that number stops moving.
+    phrase: () => "running",
   },
   completed: {
     glyph: "●",
