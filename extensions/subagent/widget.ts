@@ -195,7 +195,8 @@ export interface WidgetHost {
 }
 
 /**
- * Keep the widget in step with the registry. Returns an unsubscribe.
+ * Keep the widget in step with the registry. Returns an uninstall that
+ * detaches the subscription and clears the widget from the host.
  *
  * The component reads the registry when it renders rather than closing over a
  * snapshot, so `setWidget` is only called when the widget appears or goes
@@ -236,5 +237,23 @@ export function installRunsWidget(
   };
 
   update();
-  return runs.subscribe(update);
+  const unsubscribe = runs.subscribe(update);
+
+  // Uninstalling undoes what installing did: the subscription and the widget
+  // itself. The interactive host happens to clear extension widgets on every
+  // session change, but that is its courtesy, not this module's contract —
+  // a host that does not would otherwise keep showing the last rows forever,
+  // because a fresh install over an empty registry never clears the key.
+  return () => {
+    unsubscribe();
+    if (!installed) return;
+    installed = false;
+    requestRender = null;
+    try {
+      host.setWidget(WIDGET_KEY, undefined);
+    } catch {
+      // A stale session's host throws on every method once replaced; the
+      // widget it can no longer clear is being discarded with it anyway.
+    }
+  };
 }

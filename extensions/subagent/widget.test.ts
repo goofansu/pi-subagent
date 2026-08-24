@@ -256,6 +256,40 @@ test("unsubscribing stops the widget following the registry", () => {
   assert.equal(host.calls.length, before);
 });
 
+test("uninstalling clears an installed widget from the host", () => {
+  const host = recordingHost();
+  const runs = createSubagentRuns();
+  runs.track(createEmptyResult("explore", "look", 0), () => {});
+  const stop = installRunsWidget(host, runs);
+
+  stop();
+
+  assert.deepEqual(host.calls.at(-1), { key: WIDGET_KEY, cleared: true });
+});
+
+test("uninstalling a widget that never showed touches the host not at all", () => {
+  const host = recordingHost();
+  const stop = installRunsWidget(host, createSubagentRuns());
+
+  stop();
+
+  assert.deepEqual(host.calls, []);
+});
+
+test("uninstalling survives a host that is already tearing down", () => {
+  const runs = createSubagentRuns();
+  runs.track(createEmptyResult("explore", "look", 0), () => {});
+  // A stale session's host: every method throws once the session is replaced.
+  const host: WidgetHost = {
+    setWidget(_key, content) {
+      if (content === undefined) throw new Error("session replaced");
+    },
+  };
+  const stop = installRunsWidget(host, runs);
+
+  assert.doesNotThrow(stop);
+});
+
 // ── Activity tail ────────────────────────────────────────────────────────────
 
 test("a running run shows what it is doing after the status", () => {
