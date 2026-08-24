@@ -8,8 +8,8 @@
   ],
   "license": "MIT",
   "scripts": {
-    "lint": "biome check --write .",
-    "lint:check": "biome check .",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
     "prepare": "node .husky/install.mjs",
     "test": "node --import tsx --import ./extensions/subagent/suite-setup.ts --test",
     "typecheck": "tsc --noEmit"
