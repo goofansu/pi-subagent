@@ -55,3 +55,18 @@ pushed onto its side.
 Stand-in executors return outcomes and report facts; they can no longer
 fabricate half-settled records, which makes some previously expressible test
 states (an executor observing the record mid-run) impossible by design.
+
+The fact vocabulary crossing the seam is deliberately pi-ai's `Message`
+while pi is the only harness. The fold and the message readers consume its
+payload shape directly — `provider`, `model`, `stopReason`, the usage
+fields, tool-call and text content parts — so that knowledge lives above
+the executor (in `messages.ts` and the fold) rather than behind a
+harness-neutral fact type. This is accepted, not overlooked: designing a
+"neutral" vocabulary against a single wire format would bake pi's
+assumptions into the neutral type anyway.
+
+Re-open this — and design the domain fact vocabulary as that work's first
+step — when a second harness (Claude Code, Codex) is actually being built;
+until then, a payload shape misread above the seam is the only other
+trigger. See `.scratch/architecture-deepening/issues/07` for the gated
+ticket.
