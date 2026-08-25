@@ -6,6 +6,7 @@ import {
   formatDuration,
   formatReport,
   formatRunStatus,
+  fullOutput,
   REPORT_CHARACTER_LIMIT,
   reportVerb,
   runStatusGlyph,
@@ -130,4 +131,48 @@ test("a finished run with no output says so rather than looking empty", () => {
   result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
 
   assert.match(formatReport("a1", result), /finished without output/);
+});
+
+test("INV-11: failed and cancelled results label partial output", () => {
+  const failed = createEmptyResult("explore", "look", 0);
+  failed.messages.push(assistantText("partial finding"));
+  failed.lifecycle = { phase: "failed", finishedAt: 10, exitCode: 1 };
+  assert.match(fullOutput(failed), /failed before completing/);
+  assert.match(
+    fullOutput(failed),
+    /Output produced before failure:\n\npartial finding/,
+  );
+
+  const cancelled = createEmptyResult("explore", "look", 0);
+  cancelled.messages.push(assistantText("work so far"));
+  cancelled.lifecycle = {
+    phase: "cancelled",
+    finishedAt: 10,
+    reason: "requested",
+  };
+  assert.match(fullOutput(cancelled), /cancelled before finishing/);
+  assert.match(
+    fullOutput(cancelled),
+    /Output produced before cancellation:\n\nwork so far/,
+  );
+});
+
+test("INV-11: failed and cancelled results plainly say when output is absent", () => {
+  const failed = createEmptyResult("explore", "look", 0);
+  failed.lifecycle = { phase: "failed", finishedAt: 10, exitCode: 1 };
+  assert.equal(
+    fullOutput(failed),
+    "This run failed before completing.\n\nThe run failed before producing output.",
+  );
+
+  const cancelled = createEmptyResult("explore", "look", 0);
+  cancelled.lifecycle = {
+    phase: "cancelled",
+    finishedAt: 10,
+    reason: "requested",
+  };
+  assert.equal(
+    fullOutput(cancelled),
+    "The run was cancelled before producing output.",
+  );
 });

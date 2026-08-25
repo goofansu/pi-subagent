@@ -158,13 +158,28 @@ function keepTail(text: string, limit: number): string {
  * is the only reader that knows it.
  */
 export function fullOutput(result: SingleResult): string {
-  if (result.lifecycle.phase === "cancelled") return "";
-  if (result.lifecycle.phase === "failed") {
-    return (
-      result.errorMessage || result.stderr || getFinalOutput(result.messages)
-    );
+  const output = getFinalOutput(result.messages).trim();
+  switch (result.lifecycle.phase) {
+    case "running":
+      return "";
+    case "completed":
+      return output;
+    case "failed": {
+      const reason = result.errorMessage || result.stderr;
+      const sections = ["This run failed before completing."];
+      if (reason) sections.push(`Failure: ${reason}`);
+      sections.push(
+        output
+          ? `Output produced before failure:\n\n${output}`
+          : "The run failed before producing output.",
+      );
+      return sections.join("\n\n");
+    }
+    case "cancelled":
+      return output
+        ? `This run was cancelled before finishing.\n\nOutput produced before cancellation:\n\n${output}`
+        : "The run was cancelled before producing output.";
   }
-  return getFinalOutput(result.messages).trim();
 }
 
 /**

@@ -207,11 +207,11 @@ test("a cancelled run's outcome is still recallable once its child dies", async 
   delivery.cancel([handle.id]);
   await flush();
 
-  assert.deepEqual(delivery.recall(handle.id), {
+  assert.deepEqual(delivery.result(handle.id), {
     id: handle.id,
     agent: "explore",
     status: "cancelled",
-    output: "",
+    output: "The run was cancelled before producing output.",
   });
 });
 
@@ -235,7 +235,7 @@ test("INV-6: repeated cancellation is safe and terminal state is unchanged", asy
 
   run.cancel();
   await flush();
-  assert.equal(delivery.recall(handle.id)?.status, "cancelled");
+  assert.equal(delivery.result(handle.id)?.status, "cancelled");
   assert.deepEqual(pushed, [], "the cancel stays the only delivery");
 });
 
@@ -269,7 +269,7 @@ test("shutdown stops what is running and delivers nothing anywhere", async () =>
   assert.equal(runs.size(), 0, "the registry starts the next session empty");
   assert.equal(delivery.has(handle.id), false);
   assert.equal(
-    delivery.recall(handle.id),
+    delivery.result(handle.id),
     undefined,
     "a run the session never heard from is not recallable in the next one",
   );
@@ -282,11 +282,11 @@ test("shutdown clears retention: a report belongs to the session that asked", as
   delivery.register(handle.id, run.settled);
   run.finish("the answer");
   await flush();
-  assert.ok(delivery.recall(handle.id), "delivered, so recallable");
+  assert.ok(delivery.result(handle.id), "delivered, so recallable");
 
   delivery.shutdown();
 
-  assert.equal(delivery.recall(handle.id), undefined);
+  assert.equal(delivery.result(handle.id), undefined);
 });
 
 test("a pushed report keeps its run listed until the message lands", async () => {
@@ -469,7 +469,7 @@ test("a delivered run's whole output stays readable by id", async () => {
   run.finish("the whole answer");
   await flush();
 
-  assert.deepEqual(delivery.recall("run-1"), {
+  assert.deepEqual(delivery.result("run-1"), {
     id: "run-1",
     agent: "explore",
     status: "completed",
@@ -489,7 +489,7 @@ test("retention keeps what the pushed report had to trim", async () => {
   assert.equal(reports[0].truncated, true);
   assert.ok(reports[0].text.length < huge.length, "the message is capped");
   assert.equal(
-    delivery.recall("run-1")?.output,
+    delivery.result("run-1")?.output,
     huge,
     "the run's whole answer survives the cap",
   );
@@ -515,13 +515,13 @@ test("a run collected by a wait is still readable afterwards", async () => {
   run.finish("waited answer");
   await waiting;
 
-  assert.equal(delivery.recall("run-1")?.output, "waited answer");
+  assert.equal(delivery.result("run-1")?.output, "waited answer");
 });
 
 test("an unknown id recalls nothing rather than throwing", () => {
   const { delivery } = harness();
 
-  assert.equal(delivery.recall("never-existed"), undefined);
+  assert.equal(delivery.result("never-existed"), undefined);
 });
 
 test("retention past its budget evicts the oldest output, which still answers", async () => {
@@ -529,7 +529,7 @@ test("retention past its budget evicts the oldest output, which still answers", 
   const delivery = createSubagentDelivery({
     push: () => {},
     runs,
-    retentionBudget: 20,
+    resultBudget: 20,
   });
   const first = deferredRun();
   const second = deferredRun("reviewer");
@@ -541,7 +541,7 @@ test("retention past its budget evicts the oldest output, which still answers", 
   second.finish("y".repeat(15));
   await flush();
 
-  assert.deepEqual(delivery.recall("run-1"), {
+  assert.deepEqual(delivery.result("run-1"), {
     id: "run-1",
     agent: "explore",
     status: "completed",
@@ -549,7 +549,7 @@ test("retention past its budget evicts the oldest output, which still answers", 
     evicted: true,
   });
   assert.equal(
-    delivery.recall("run-2")?.output,
+    delivery.result("run-2")?.output,
     "y".repeat(15),
     "the newest output survives",
   );
@@ -560,7 +560,7 @@ test("a single over-budget output survives until something newer lands", async (
   const delivery = createSubagentDelivery({
     push: () => {},
     runs,
-    retentionBudget: 20,
+    resultBudget: 20,
   });
   const huge = deferredRun();
   delivery.register("run-1", huge.settled);
@@ -568,7 +568,7 @@ test("a single over-budget output survives until something newer lands", async (
   await flush();
 
   assert.equal(
-    delivery.recall("run-1")?.output,
+    delivery.result("run-1")?.output,
     "x".repeat(50),
     "the newest entry is never evicted, even alone over budget",
   );
@@ -578,8 +578,8 @@ test("a single over-budget output survives until something newer lands", async (
   next.finish("small");
   await flush();
 
-  assert.equal(delivery.recall("run-1")?.evicted, true);
-  assert.equal(delivery.recall("run-2")?.output, "small");
+  assert.equal(delivery.result("run-1")?.evicted, true);
+  assert.equal(delivery.result("run-2")?.output, "small");
 });
 
 // ── Id diagnostics ───────────────────────────────────────────────────────────
@@ -659,7 +659,7 @@ test("a throwing push loses neither the process nor the report", async () => {
   run.finish("survives");
   await flush();
 
-  assert.equal(delivery.recall("run-1")?.output, "survives");
+  assert.equal(delivery.result("run-1")?.output, "survives");
 });
 
 // ── The session push ─────────────────────────────────────────────────────────

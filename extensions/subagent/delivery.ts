@@ -100,43 +100,43 @@ export function createSessionPush(): SessionPush {
  *
  * A pushed report is capped so a runaway agent cannot swamp the parent's
  * context, and before this existed the trimmed remainder was simply lost —
- * work that had already been paid for. Retention keeps the whole thing
+ * work that had already been paid for. Result storage keeps the whole thing
  * addressable by id, so `agent_result` can hand back what the cap left out.
  *
- * The invariant is delivered ⇒ recallable, for the session that asked:
- * `shutdown` clears retention, because a report belongs to the conversation
+ * The invariant is delivered ⇒ resultable, for the session that asked:
+ * `shutdown` clears result store, because a report belongs to the conversation
  * that asked for it and the next session's model never started these runs.
  * Within a session, whole outputs are held only up to a budget — see
- * {@link RETENTION_CHARACTER_BUDGET} — and an entry whose output was evicted
+ * {@link RESULT_STORE_CHARACTER_BUDGET} — and an entry whose output was evicted
  * still answers, saying so.
  */
-export interface RetainedReport {
+export interface RetainedResult {
   id: string;
   agent: string;
   status: LifecycleStatus;
   /** The run's full final output, untrimmed. Empty once evicted. */
   output: string;
-  /** True when the output was dropped to keep retention under budget. */
+  /** True when the output was dropped to keep result store under budget. */
   evicted?: boolean;
 }
 
 /**
- * Cap on the total characters retention holds across all runs.
+ * Cap on the total characters result store holds across all runs.
  *
- * Retention keeps every delivered run's whole output in memory for the rest
+ * Result storage keeps every delivered run's whole output in memory for the rest
  * of the session, and nothing else bounds it — a long session of large
  * reports would grow without limit. This is a backstop against that, not a
  * working budget: it is roughly eighty reports at the pushed-report cap, and
  * eviction takes the oldest outputs first. The newest entry always survives,
  * so a report that says it was trimmed can always be read back whole.
  */
-export const RETENTION_CHARACTER_BUDGET = 2_000_000;
+export const RESULT_STORE_CHARACTER_BUDGET = 2_000_000;
 
 export interface DeliveryOptions {
   push: PushMessage;
   runs?: SubagentRuns;
-  /** Injected for tests; defaults to {@link RETENTION_CHARACTER_BUDGET}. */
-  retentionBudget?: number;
+  /** Injected for tests; defaults to {@link RESULT_STORE_CHARACTER_BUDGET}. */
+  resultBudget?: number;
 }
 
 export interface WaitOutcome {
@@ -146,7 +146,7 @@ export interface WaitOutcome {
   collected: Array<{ id: string; agent: string; status: LifecycleStatus }>;
   /** Ids still running when the wait gave up. Empty unless it timed out. */
   stillRunning: string[];
-  /** Ids whose reports were delivered before this wait; `recall` has them. */
+  /** Ids whose reports were delivered before this wait; `result` has them. */
   alreadyDelivered: string[];
   /** Ids that name no run this delivery has ever seen. */
   unknown: string[];
@@ -178,7 +178,7 @@ export interface SubagentDelivery {
    * Stop the named runs and mark the stopped ones delivered, suppressing
    * their push: the model asked, so the answer belongs in the answer to its
    * request rather than in a message of its own. The stopped runs' outcomes
-   * are still retained once they settle, so `recall` can answer for them.
+   * are still results once they settle, so `result` can answer for them.
    */
   cancel(ids: readonly string[]): CancelOutcome;
   /**
@@ -207,12 +207,12 @@ export interface SubagentDelivery {
   /**
    * The session is over: stop everything still running, mark every
    * undelivered run delivered so no notice follows the operator into the
-   * next session, and clear retention — a report belongs to the conversation
+   * next session, and clear result store — a report belongs to the conversation
    * that asked for it.
    */
   shutdown(): void;
   /** What a run said, whole, after it has been delivered. */
-  recall(id: string): RetainedReport | undefined;
+  result(id: string): RetainedResult | undefined;
 }
 
 interface Pending {
@@ -233,18 +233,18 @@ interface Pending {
 export function createSubagentDelivery({
   push,
   runs = subagentRuns,
-  retentionBudget = RETENTION_CHARACTER_BUDGET,
+  resultBudget = RESULT_STORE_CHARACTER_BUDGET,
 }: DeliveryOptions): SubagentDelivery {
   const pending = new Map<string, Pending>();
-  const retained = new Map<string, RetainedReport>();
+  const results = new Map<string, RetainedResult>();
   /**
    * Runs cancelled by the model, delivered by that tool result but not yet
-   * settled — the child is still dying. Membership means "write retention
+   * settled — the child is still dying. Membership means "write result store
    * when the settle arrives, push nothing". Keyed by id so the id keeps
-   * answering while the child dies — a cancel, wait, or recall in that
+   * answering while the child dies — a cancel, wait, or result in that
    * window must not call the run one that never existed. A shutdown empties
    * the map so a child that dies after the session cannot write into the
-   * next one's retention.
+   * next one's result store.
    */
   const inlineDelivered = new Map<string, Pending>();
   /**
@@ -265,35 +265,35 @@ export function createSubagentDelivery({
   let unlandedAtAbort: string[] = [];
 
   /**
-   * Evict the oldest whole outputs until retention fits its budget. The
+   * Evict the oldest whole outputs until result store fits its budget. The
    * entries stay — id, agent, status — so an evicted run still answers
    * rather than reading like an id that never existed; only the heavy string
    * goes. The newest entry is never evicted: the report that just landed is
    * the one whose trim note points here.
    */
-  const enforceRetentionBudget = (): void => {
+  const enforceResultStoreBudget = (): void => {
     let total = 0;
-    for (const report of retained.values()) total += report.output.length;
-    const ids = [...retained.keys()];
+    for (const report of results.values()) total += report.output.length;
+    const ids = [...results.keys()];
     const newest = ids.at(-1);
     for (const id of ids) {
-      if (total <= retentionBudget || id === newest) break;
-      const report = retained.get(id);
+      if (total <= resultBudget || id === newest) break;
+      const report = results.get(id);
       if (!report?.output) continue;
       total -= report.output.length;
-      retained.set(id, { ...report, output: "", evicted: true });
+      results.set(id, { ...report, output: "", evicted: true });
     }
   };
 
-  /** Keep the run's whole answer addressable by id for `recall`. */
-  const retain = (entry: Pending, result: SingleResult): void => {
-    retained.set(entry.id, {
+  /** Keep the run's whole answer addressable by id for `result`. */
+  const storeResult = (entry: Pending, result: SingleResult): void => {
+    results.set(entry.id, {
       id: entry.id,
       agent: result.agent,
       status: result.lifecycle.phase,
       output: fullOutput(result),
     });
-    enforceRetentionBudget();
+    enforceResultStoreBudget();
   };
 
   /**
@@ -301,14 +301,14 @@ export function createSubagentDelivery({
    * nothing else awaits, so a push that throws — a session torn down between
    * settle and delivery — would surface as an unhandled rejection and take pi
    * down with it. The bookkeeping has already run by the time push is called,
-   * and the report stays recallable through `recall`, so swallowing here loses
-   * nothing that retention does not keep.
+   * and the report stays resultable through `result`, so swallowing here loses
+   * nothing that result store does not keep.
    */
   const safePush: PushMessage = (report) => {
     try {
       push(report);
     } catch {
-      // Retention still holds the run's whole output.
+      // Result storage still holds the run's whole output.
     }
   };
 
@@ -327,10 +327,6 @@ export function createSubagentDelivery({
     }
 
     const result = entry.result;
-    // Retained before the cap is applied, so what `agent_result` returns is
-    // the run's whole answer rather than the copy that fitted in a message.
-    retain(entry, result);
-
     if (!byPush) {
       // A wait returns the report through its tool result, which enters the
       // conversation with the call itself — landed by construction.
@@ -369,6 +365,11 @@ export function createSubagentDelivery({
       entry.tracked = (async () => {
         try {
           entry.result = await settled;
+          // Shutdown removes both owners before children finish dying, so a
+          // late settle cannot leak a result into the next session.
+          if (pending.get(id) === entry || inlineDelivered.get(id) === entry) {
+            storeResult(entry, entry.result);
+          }
         } catch (error: unknown) {
           // The executor contract says a failed run resolves; a rejection is a
           // bug, and swallowing it would leave a row on screen forever.
@@ -395,9 +396,9 @@ export function createSubagentDelivery({
         }
         // Delivered before it settled — a run the model cancelled. Its tool
         // result already said so; all that is left is to make the outcome
-        // recallable.
+        // resultable.
         if (entry.delivered) {
-          if (inlineDelivered.delete(entry.id)) retain(entry, entry.result);
+          inlineDelivered.delete(entry.id);
           return;
         }
         // A claimed run is the waiter's to deliver.
@@ -406,7 +407,7 @@ export function createSubagentDelivery({
     },
 
     // A cancelled run whose child is still dying is not a stranger: its id
-    // keeps answering until retention takes over at the settle.
+    // keeps answering until result store takes over at the settle.
     has: (id) => pending.has(id) || inlineDelivered.has(id),
 
     async wait(ids, options = {}) {
@@ -421,7 +422,7 @@ export function createSubagentDelivery({
         // A cancelled run still dying was delivered by its cancel's tool
         // result; calling it unknown would tell the model the id never
         // existed.
-        else if (retained.has(id) || inlineDelivered.has(id))
+        else if (results.has(id) || inlineDelivered.has(id))
           alreadyDelivered.push(id);
         else unknown.push(id);
       }
@@ -458,7 +459,7 @@ export function createSubagentDelivery({
       }
     },
 
-    recall: (id) => retained.get(id),
+    result: (id) => results.get(id),
 
     reportLanded(id) {
       if (!awaitingLanding.delete(id)) return;
@@ -488,7 +489,7 @@ export function createSubagentDelivery({
         const entry = pending.get(id);
         if (!entry) continue;
         // This tool result is the delivery; the settle callback writes
-        // retention when the child actually dies.
+        // result store when the child actually dies.
         entry.delivered = true;
         pending.delete(id);
         runs.release(id);
@@ -505,9 +506,9 @@ export function createSubagentDelivery({
           cancelled.push(id);
           continue;
         }
-        // Settled but undelivered, or already recallable: either way the run
+        // Settled but undelivered, or already resultable: either way the run
         // beat the cancel and its report stands.
-        if (pending.has(id) || retained.has(id)) finished.push(id);
+        if (pending.has(id) || results.has(id)) finished.push(id);
         else unknown.push(id);
       }
       return { cancelled, finished, unknown };
@@ -524,7 +525,7 @@ export function createSubagentDelivery({
       // Every undelivered run is marked delivered so nothing pushes into the
       // next session, and released so the registry starts the next session
       // empty. A child that settles after this finds its entry delivered and
-      // no longer retained-on-settle, so it writes nothing anywhere.
+      // no longer results-on-settle, so it writes nothing anywhere.
       for (const entry of pending.values()) {
         entry.delivered = true;
         runs.release(entry.id);
@@ -537,7 +538,7 @@ export function createSubagentDelivery({
       unlandedAtAbort = [];
       pending.clear();
       inlineDelivered.clear();
-      retained.clear();
+      results.clear();
     },
   };
 }

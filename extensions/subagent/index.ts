@@ -239,14 +239,14 @@ export function registerSubagentFeatures(
     renderResult: renderMarkdownResult,
 
     async execute(_toolCallId, params) {
-      const report = delivery.recall(params.id);
+      const report = delivery.result(params.id);
       if (!report) {
         return {
           content: [
             {
               type: "text",
               text: delivery.has(params.id)
-                ? `Run ${params.id} has not reported yet. Its report will ` +
+                ? `Run ${params.id} has not finished yet. Its notification will ` +
                   "arrive on its own; agent_wait blocks for it if you cannot " +
                   "continue without it."
                 : `No run with id ${params.id}. Check it against what ` +
@@ -464,7 +464,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
     // Every shutdown — quit, reload, new, resume, fork — is the delivery
     // module's shutdown: it stops what is still running, marks everything
-    // undelivered as delivered, and clears retention. A report belongs to the
+    // undelivered as delivered, and clears the result store. A report belongs to the
     // conversation that asked for it; the next session's model never started
     // these runs and has no context to act on their answers.
     getProcessDelivery().shutdown();
