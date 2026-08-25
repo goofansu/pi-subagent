@@ -5,6 +5,8 @@ import path from "node:path";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createSessionPush, type SubagentDelivery } from "./delivery.ts";
+import { createHarnessRegistry } from "./harness.ts";
+import { createPiHarness } from "./pi-harness.ts";
 import { createSubagentRuns } from "./runs.ts";
 import { createSessionLifecycle } from "./session-lifecycle.ts";
 import type { AgentConfig, SessionContext } from "./types.ts";
@@ -76,6 +78,40 @@ test("session start refills stable config and session-fact references", (t) => {
     cwd: "/second-project",
     projectTrusted: true,
   });
+});
+
+test("session start diagnoses a pinned Pi model when the catalogue is empty", (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "subagent-empty-catalogue-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const agentsDir = path.join(root, "agents");
+  mkdirSync(agentsDir, { recursive: true });
+  writeFileSync(
+    path.join(agentsDir, "pinned.md"),
+    "---\ndescription: pinned\nmodel: acme/model\n---\n\nWork.\n",
+  );
+  const warnings: string[] = [];
+  const lifecycle = createSessionLifecycle({
+    pi: { registerCommand() {}, sendMessage() {} } as unknown as ExtensionAPI,
+    agentsDir,
+    delivery: { shutdown() {} } as SubagentDelivery,
+    sessionPush: createSessionPush(),
+    runs: createSubagentRuns(),
+    harnesses: createHarnessRegistry([createPiHarness()]),
+    registerFeatures() {},
+  });
+
+  lifecycle.sessionStart({
+    ...sessionContext("/project", false),
+    ui: {
+      notify(message) {
+        warnings.push(message);
+      },
+      setWidget() {},
+    },
+  });
+
+  assert.match(warnings[0] ?? "", /acme\/model/);
+  assert.match(warnings[0] ?? "", /not found in Pi's model catalogue/);
 });
 
 test("session shutdown delegates cleanup as one lifecycle operation", () => {

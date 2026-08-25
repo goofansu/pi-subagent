@@ -18,7 +18,6 @@ const CLAUDE_MODELS: Record<string, string> = {
   opus: "claude-opus-4-6",
   sonnet: "claude-sonnet-4-6",
   haiku: "claude-haiku-4-5-20251001",
-  fable: "claude-fable-5",
   "claude-opus-4-0": "claude-opus-4-0",
   "claude-opus-4-20250514": "claude-opus-4-20250514",
   "claude-opus-4-1": "claude-opus-4-1",
@@ -37,7 +36,6 @@ const CLAUDE_MODELS: Record<string, string> = {
   "claude-haiku-3-5-20241022": "claude-haiku-3-5-20241022",
   "claude-haiku-4-5": "claude-haiku-4-5",
   "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
-  "claude-fable-5": "claude-fable-5",
 };
 const THINKING_BUDGETS: Record<string, number> = {
   minimal: 512,
@@ -118,8 +116,11 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
   }
   if (wire.type !== "result") return [];
 
+  const isError = wire.is_error === true;
   const resultParts =
-    typeof wire.result === "string" ? contentParts(wire.result) : [];
+    !isError && typeof wire.result === "string"
+      ? contentParts(wire.result)
+      : [];
   const modelUsage = isRecord(wire.modelUsage) ? wire.modelUsage : undefined;
   let input = 0;
   let output = 0;
@@ -128,11 +129,10 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
   const reportedCost =
     typeof wire.total_cost_usd === "number" ? wire.total_cost_usd : undefined;
   let cost = reportedCost ?? 0;
-  let model = typeof wire.model === "string" ? wire.model : undefined;
+  const model = typeof wire.model === "string" ? wire.model : undefined;
   if (modelUsage) {
-    for (const [modelId, value] of Object.entries(modelUsage)) {
+    for (const value of Object.values(modelUsage)) {
       if (!isRecord(value)) continue;
-      model ??= modelId;
       input += typeof value.inputTokens === "number" ? value.inputTokens : 0;
       output += typeof value.outputTokens === "number" ? value.outputTokens : 0;
       cacheRead +=
@@ -147,18 +147,22 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
         cost += value.costUSD;
     }
   }
-  const errorMessage =
-    wire.is_error &&
-    Array.isArray(wire.errors) &&
-    typeof wire.errors[0] === "string"
+  const resultErrorText =
+    isError && typeof wire.result === "string" && wire.result.trim()
+      ? wire.result
+      : undefined;
+  const listedErrorText =
+    isError && Array.isArray(wire.errors) && typeof wire.errors[0] === "string"
       ? wire.errors[0]
-      : wire.is_error && wire.subtype === "success"
-        ? "Claude query reported an error despite its success subtype"
-        : wire.is_error && typeof wire.subtype === "string"
-          ? `Claude query reported an error (${wire.subtype})`
-          : wire.is_error
-            ? "Claude query reported an error"
-            : undefined;
+      : undefined;
+  const errorMessage =
+    resultErrorText ??
+    listedErrorText ??
+    (isError && typeof wire.subtype === "string"
+      ? `Claude query reported an error (${wire.subtype})`
+      : isError
+        ? "Claude query reported an error"
+        : undefined);
   return [
     {
       role: "assistant",
@@ -278,7 +282,9 @@ export function createClaudeHarness(
           const controller = new AbortController();
           let stream: Query | undefined;
           let streamEnded = false;
+          let terminalResultReceived = false;
           let abortRequested = run.signal?.aborted ?? false;
+          let errorMessage: string | undefined;
           const abort = () => {
             if (streamEnded) return;
             abortRequested = true;
@@ -296,19 +302,27 @@ export function createClaudeHarness(
               stream.close();
               return { stopReason: "aborted" };
             }
-            let errorMessage: string | undefined;
             for await (const message of stream) {
+              if ((message as { type?: string }).type === "result") {
+                terminalResultReceived = true;
+              }
               for (const fact of translateClaudeMessage(message)) {
                 if (fact.errorMessage) errorMessage = fact.errorMessage;
                 run.report.message(fact);
               }
             }
             streamEnded = true;
-            if (abortRequested) return { stopReason: "aborted" };
+            if (abortRequested && !terminalResultReceived)
+              return { stopReason: "aborted" };
             return errorMessage
               ? { exitCode: 1, stopReason: "error", errorMessage }
               : { exitCode: 0 };
           } catch (error) {
+            if (terminalResultReceived) {
+              return errorMessage
+                ? { exitCode: 1, stopReason: "error", errorMessage }
+                : { exitCode: 0 };
+            }
             if (
               abortRequested ||
               controller.signal.aborted ||

@@ -39,7 +39,6 @@ function deferredRun(agent = "explore"): {
         exitCode: 1,
         reason: "requested",
       };
-      result.stopReason = "aborted";
       resolve(result);
     },
   };

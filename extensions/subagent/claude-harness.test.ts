@@ -47,7 +47,7 @@ test("Claude aliases and thinking budgets stay inside the adapter", () => {
 
 test("Claude validation accepts aliases and full model ids", () => {
   const harness = createClaudeHarness();
-  for (const alias of ["opus", "sonnet", "haiku", "fable"]) {
+  for (const alias of ["opus", "sonnet", "haiku"]) {
     assert.deepEqual(
       harness.validate(
         { ...config, fields: { model: alias } },
@@ -163,7 +163,6 @@ test("Claude keeps terminal facts when a successful result has empty text", () =
       cost: 0.25,
       turns: 2,
     },
-    model: "claude-sonnet-4-6",
     stopReason: "end_turn",
   });
 });
@@ -228,17 +227,33 @@ test("an empty Claude result carries accounting into the cost widget", async () 
   assert.match(lines[1] ?? "", /\$0\.2500/);
 });
 
-test("Claude reports an error flag truthfully even with a success subtype", () => {
+test("Claude uses the SDK error text for an error-flagged success result", () => {
   const [fact] = translateClaudeMessage({
     type: "result",
-    result: "",
+    // This is the SDK's success-subtype API-error shape: result is the
+    // provider diagnostic, not an answer to show the user.
+    result:
+      "API Error: 529 overloaded_error: service is temporarily overloaded",
     subtype: "success",
+    duration_ms: 1200,
+    duration_api_ms: 1100,
     is_error: true,
+    num_turns: 1,
+    stop_reason: "end_turn",
+    total_cost_usd: 0.01,
+    usage: { input_tokens: 10, output_tokens: 0 },
+    modelUsage: {},
+    permission_denials: [],
+    errors: [],
+    uuid: "result-uuid",
+    session_id: "session-id",
   } as unknown as SDKMessage);
 
-  assert.match(fact.errorMessage ?? "", /error/i);
-  assert.match(fact.errorMessage ?? "", /success/i);
-  assert.doesNotMatch(fact.errorMessage ?? "", /ended with success/i);
+  assert.equal(
+    fact.errorMessage,
+    "API Error: 529 overloaded_error: service is temporarily overloaded",
+  );
+  assert.deepEqual(fact.parts, []);
 });
 
 test("Claude runs end-to-end through the core run contract", async () => {
@@ -267,12 +282,19 @@ test("Claude runs end-to-end through the core run contract", async () => {
           num_turns: 2,
           total_cost_usd: 0.1,
           modelUsage: {
+            "claude-haiku-4-5-20251001": {
+              inputTokens: 1,
+              outputTokens: 1,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              costUSD: 0.02,
+            },
             "claude-sonnet-4-6": {
               inputTokens: 2,
               outputTokens: 1,
               cacheReadInputTokens: 0,
               cacheCreationInputTokens: 0,
-              costUSD: 0.1,
+              costUSD: 0.08,
             },
           },
         } as unknown as SDKMessage;
@@ -291,9 +313,64 @@ test("Claude runs end-to-end through the core run contract", async () => {
   assert.equal(result.lifecycle.phase, "completed");
   assert.equal(getFinalOutput(result.messages), "answer");
   assert.equal(result.stderr, "sdk diagnostic\\n");
-  assert.equal(result.usage.input, 2);
-  assert.equal(result.usage.output, 1);
+  assert.equal(result.model, "claude-sonnet-4-6");
+  assert.equal(result.usage.input, 3);
+  assert.equal(result.usage.output, 2);
   assert.equal(result.usage.turns, 2);
+});
+
+test("Claude keeps a terminal result when abort arrives before stream close", async () => {
+  const runs = createSubagentRuns();
+  let releaseStream: () => void = () => {};
+  const streamReleased = new Promise<void>((resolve) => {
+    releaseStream = resolve;
+  });
+  let closeCalled = false;
+  let resultReceived = false;
+  let abortController: AbortController | undefined;
+  const query: ClaudeQuery = ({ options }) => {
+    abortController = options?.abortController;
+    return {
+      async *[Symbol.asyncIterator]() {
+        resultReceived = true;
+        yield {
+          type: "result",
+          result: "answer",
+          subtype: "success",
+          is_error: false,
+          num_turns: 1,
+          stop_reason: "end_turn",
+          model: "claude-sonnet-4-6",
+          modelUsage: {},
+        } as unknown as SDKMessage;
+        await streamReleased;
+      },
+      close() {
+        closeCalled = true;
+        releaseStream();
+      },
+    } as never;
+  };
+  const started = startSubagent({
+    config,
+    description: "late cancellation",
+    prompt: "do it",
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs,
+  });
+
+  while (!abortController)
+    await new Promise((resolve) => setImmediate(resolve));
+  // The result has been received, but the SDK stream has not closed yet.
+  while (!resultReceived) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  runs.cancel([started.id], "requested");
+  const result = await started.settled;
+
+  assert.equal(closeCalled, true);
+  assert.equal(result.lifecycle.phase, "completed");
+  assert.equal(result.stopReason, "end_turn");
 });
 
 test("Claude cancellation stays cancelled when abort closes the stream gracefully", async () => {
@@ -337,6 +414,23 @@ test("Claude cancellation stays cancelled when abort closes the stream gracefull
   if (result.lifecycle.phase === "cancelled") {
     assert.equal(result.lifecycle.reason, "shutdown");
   }
+});
+
+test("Claude preserves the configured model when auxiliary usage is listed first", () => {
+  const [fact] = translateClaudeMessage({
+    type: "result",
+    result: "answer",
+    is_error: false,
+    num_turns: 1,
+    modelUsage: {
+      "claude-haiku-4-5-20251001": { inputTokens: 2, outputTokens: 1 },
+      "claude-sonnet-4-6": { inputTokens: 10, outputTokens: 4 },
+    },
+  } as unknown as SDKMessage);
+
+  assert.equal(fact.model, undefined);
+  assert.equal(fact.usage?.input, 12);
+  assert.equal(fact.usage?.output, 5);
 });
 
 test("Claude adapter feeds SDK stderr and normalizes abort", async () => {

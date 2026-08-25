@@ -41,7 +41,7 @@ export function createPiHarness(
         stringField(profile, "tools", filePath);
         booleanField(profile, "appendSystemPrompt", filePath);
         const catalogue = context?.models ?? models;
-        if (model && catalogue.length > 0) {
+        if (model) {
           const known = new Set(
             catalogue.flatMap((entry) => [
               entry.id.toLowerCase(),

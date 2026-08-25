@@ -4,16 +4,15 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { formatAgentGuidelines, getAgentsDir } from "./agents.ts";
-import { createClaudeHarness } from "./claude-harness.ts";
+import { createDefaultHarnessRegistry } from "./composition.ts";
 import type { SubagentDelivery } from "./delivery.ts";
 import { createSessionPush, createSubagentDelivery } from "./delivery.ts";
-import { createHarnessRegistry, type HarnessRegistry } from "./harness.ts";
+import type { HarnessRegistry } from "./harness.ts";
 import {
   NOTIFICATION_MESSAGE_TYPE,
   parseNotificationMessage,
   renderNotificationMessage,
 } from "./notification-message.ts";
-import { createPiHarness } from "./pi-harness.ts";
 import { renderMarkdownResult, renderSubagentCall } from "./render.ts";
 import { getSubagentDepth, startSubagent } from "./runner.ts";
 import type { SubagentRuns } from "./runs.ts";
@@ -293,12 +292,9 @@ export function registerSubagentFeatureTools(
 /** Stable push target aimed at the current live session. */
 const sessionPush = createSessionPush();
 
-// The composition root is the only production site that names concrete
-// harnesses. Core resolves profiles through this registry without branching.
-const harnesses = createHarnessRegistry([
-  createPiHarness(),
-  createClaudeHarness(),
-]);
+// The composition module is the only production site that names concrete
+// harnesses. Tool registration resolves profiles through this public registry.
+const harnesses = createDefaultHarnessRegistry();
 
 /** The one delivery for the process, lazily built over the shared registry. */
 let processDelivery: SubagentDelivery | null = null;

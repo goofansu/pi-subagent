@@ -268,8 +268,10 @@ function recordFact(result: SingleResult, fact: Fact): void {
     result.usage.contextTokens = usage.contextTokens;
   }
   result.usage.turns += usage?.turns ?? (fact.role === "assistant" ? 1 : 0);
-  if (fact.model) result.model = fact.model;
-  if (fact.stopReason) result.stopReason = fact.stopReason;
+  if (fact.model && !result.model) result.model = fact.model;
+  if (fact.stopReason && fact.stopReason !== "aborted") {
+    result.stopReason = fact.stopReason;
+  }
   if (fact.errorMessage) result.errorMessage = fact.errorMessage;
 }
 
@@ -303,7 +305,9 @@ export function createRunReporter(
       result.messages = [];
       result.usage = emptyUsage();
       delete result.activity;
-      delete result.model;
+      // A model resolved by the harness (or witnessed by an assistant fact)
+      // is authoritative metadata, not streamed transcript drift. Keep it
+      // while healing the transcript's additive facts and terminal fields.
       delete result.stopReason;
       delete result.errorMessage;
       for (const fact of facts) fold(fact);
@@ -329,7 +333,10 @@ export function applyOutcome(
   outcome: SubagentOutcome,
 ): void {
   if (outcome.stopReason === "aborted") {
-    result.stopReason = "aborted";
+    // `aborted` is executor mechanism vocabulary. Cancellation lifecycle and
+    // its recorded reason are the only domain representation; neither the
+    // result nor presentation may retain the backend stop verb.
+    delete result.stopReason;
     result.errorMessage = CANCELLED_MESSAGE;
     return;
   }

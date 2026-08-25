@@ -11,7 +11,7 @@ import {
   loadAgentConfigsWithDiagnostics,
   parseAgentConfig,
 } from "./agents.ts";
-import { createHarnessRegistry } from "./harness.ts";
+import { createHarnessRegistry, type Harness } from "./harness.ts";
 import { createPiHarness } from "./pi-harness.ts";
 import { EFFORTS } from "./types.ts";
 
@@ -168,6 +168,26 @@ test("loadAgentConfigsWithDiagnostics reports invalid agent files", async () => 
   );
 });
 
+test("the pi harness rejects a pinned model when its catalogue is empty", () => {
+  const registry = createHarnessRegistry([createPiHarness()]);
+  const diagnostics = registry.validate(
+    {
+      name: "pinned",
+      description: "Pinned",
+      harness: "pi",
+      fields: { model: "acme/model" },
+      systemPrompt: "Work.",
+    },
+    "/agents/pinned.md",
+    { models: [] },
+  );
+
+  assert.match(
+    diagnostics[0]?.reason ?? "",
+    /not found in Pi's model catalogue/,
+  );
+});
+
 test("the pi harness diagnoses models against its catalogue", () => {
   const registry = createHarnessRegistry([createPiHarness()]);
   const known = {
@@ -285,6 +305,55 @@ async function writeAgentWithFrontmatter(
   );
   return filePath;
 }
+
+test("profile loading asks the fake harness to reject its own unknown fields", async () => {
+  const dir = await makeTempDir();
+  await writeAgentWithFrontmatter(dir, "harness: fake\nfakeOnly: true");
+  const fake: Harness = {
+    name: "fake",
+    validate(profile) {
+      return Object.keys(profile.fields ?? {})
+        .filter((field) => field !== "fakeOnly")
+        .map((field) => ({ reason: `fake does not recognize '${field}'` }));
+    },
+    prepare() {
+      throw new Error("not needed for profile validation");
+    },
+  };
+  // The fake owns the field policy; profile loading merely routes the parsed
+  // opaque fields through the selected public harness contract.
+  const result = loadAgentConfigsWithDiagnostics(
+    dir,
+    createHarnessRegistry([fake]),
+  );
+  assert.equal(result.configs.size, 1);
+  assert.equal(result.invalidFiles.length, 0);
+
+  const badPath = await writeAgentWithFrontmatter(
+    dir,
+    "harness: fake\nunsupported: true",
+  );
+  // Use a second filename because the helper intentionally writes worker.md.
+  const renamed = path.join(dir, "bad.md");
+  await fs.promises.rename(badPath, renamed);
+  const bad = loadAgentConfigsWithDiagnostics(
+    dir,
+    createHarnessRegistry([
+      {
+        ...fake,
+        validate(profile) {
+          return Object.keys(profile.fields ?? {}).map((field) => ({
+            reason: `fake does not recognize '${field}'`,
+          }));
+        },
+      },
+    ]),
+  );
+  assert.match(
+    bad.invalidFiles.find((item) => item.filePath === renamed)?.reason ?? "",
+    /unsupported/,
+  );
+});
 
 test("unknown harnesses and fields become profile diagnostics", async () => {
   const dir = await makeTempDir();

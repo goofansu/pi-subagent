@@ -51,8 +51,9 @@ usage both per-message and cumulatively.
 
 The claude harness executes via `@anthropic-ai/claude-agent-sdk`'s `query()`
 rather than spawning the CLI and re-parsing stream-json. The run's existing
-`AbortSignal` drives the SDK abort and is normalized to
-`stopReason: "aborted"` at the seam, per the Cancel rule; SDK stderr feeds
+`AbortSignal` drives the SDK abort. The adapter may use `stopReason:
+"aborted"` internally in its executor outcome, but the seam normalizes it to
+lifecycle `cancelled` before it reaches the domain result; SDK stderr feeds
 `report.stderr`. Claude children always run with permissions bypassed in this
 version — trust is still forwarded in the request but not yet consulted —
 and have their agent-spawning tool disallowed so the Depth constraint holds.

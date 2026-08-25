@@ -400,7 +400,12 @@ test("a run cancelled before it starts never spawns a child", async () => {
 
   assert.equal(executorCalls, 0);
   assert.equal(result.lifecycle.phase, "cancelled");
-  assert.equal(result.stopReason, "aborted");
+  assert.equal(result.stopReason, undefined);
+  assert.doesNotMatch(
+    result.errorMessage ?? "",
+    /aborted/,
+    "backend cancellation vocabulary does not escape the seam",
+  );
   assert.equal(
     "finishedAt" in result.lifecycle ? result.lifecycle.finishedAt : undefined,
     500,
@@ -453,9 +458,22 @@ test("a cancellation reason survives registry release until settlement", async (
   const result = await started.settled;
 
   assert.equal(result.lifecycle.phase, "cancelled");
+  assert.equal(result.stopReason, undefined);
   if (result.lifecycle.phase === "cancelled") {
     assert.equal(result.lifecycle.reason, "shutdown");
   }
+});
+
+test("an aborted backend outcome never persists its stop reason in the domain result", async () => {
+  const result = await startAndSettle({
+    config: agent(),
+    description: "cancelled",
+    prompt: "go",
+    execute: async () => ({ stopReason: "aborted" }),
+  });
+
+  assert.equal(result.lifecycle.phase, "cancelled");
+  assert.equal(result.stopReason, undefined);
 });
 
 test("the registry can cancel one run without touching the turn", async () => {

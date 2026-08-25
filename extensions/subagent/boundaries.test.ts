@@ -98,7 +98,7 @@ export function findForbiddenImports(graphRoot: string = root): string[] {
   const adapterPaths = new Set(
     [...adapterNames].map((name) => path.join(graphRoot, name)),
   );
-  const compositionRoot = path.join(graphRoot, "index.ts");
+  const compositionRoot = path.join(graphRoot, "composition.ts");
   const allowedCompositionImports = new Set([
     path.join(graphRoot, "claude-harness.ts"),
     path.join(graphRoot, "pi-harness.ts"),
@@ -177,6 +177,26 @@ test("the production graph checker catches a controlled forbidden adapter edge",
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), [
     "runner.ts imports forbidden harness adapter pi-agent.ts",
+  ]);
+});
+
+test("only the composition registration edge may import adapters", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-composition-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(fixtureRoot, "composition.ts"),
+    'import "./pi-harness.ts";\n',
+  );
+  fs.writeFileSync(
+    path.join(fixtureRoot, "index.ts"),
+    'import "./pi-harness.ts";\n',
+  );
+  fs.writeFileSync(path.join(fixtureRoot, "pi-harness.ts"), "export {};\n");
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), [
+    "index.ts imports forbidden harness adapter pi-harness.ts",
   ]);
 });
 

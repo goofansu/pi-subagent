@@ -9,8 +9,9 @@ Runs are one-shot and backend-neutral. A profile names a harness (default
 provider wire messages and translate them into `Fact` records. The dispatcher,
 fold, registry, presentation, and widget consume only those facts. Usage on a
 fact is a delta and the fold sums it. Cancellation crosses the seam only as an
-`AbortSignal`; each adapter owns its child-specific stop mechanism and reports
-an aborted child as the domain state `cancelled`.
+`AbortSignal`; each adapter owns its child-specific stop mechanism. Backend
+`aborted` is normalized at the seam: the domain records lifecycle `cancelled`
+and its reason, never an `aborted` stop reason.
 
 ## INV-1 — Run identity is stable
 

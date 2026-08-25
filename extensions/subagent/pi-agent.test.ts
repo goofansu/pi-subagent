@@ -539,7 +539,8 @@ test("the child pi driver keeps cancellation authoritative over a missing agent_
     "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
     undefined,
   );
-  assert.equal(settled.stopReason, "aborted");
+  assert.equal(settled.lifecycle.phase, "cancelled");
+  assert.equal(settled.stopReason, undefined);
   assert.match(settled.errorMessage ?? "", /Subagent was cancelled/);
   assert.doesNotMatch(settled.errorMessage ?? "", /agent_end/);
 });
@@ -570,7 +571,8 @@ test("an aborted child that ignores SIGTERM is killed by the escalation", async 
     },
   );
 
-  assert.equal(settled.stopReason, "aborted");
+  assert.equal(settled.lifecycle.phase, "cancelled");
+  assert.equal(settled.stopReason, undefined);
   assert.match(settled.errorMessage ?? "", /Subagent was cancelled/);
 });
 

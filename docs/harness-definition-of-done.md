@@ -3,7 +3,8 @@
 Acceptance criteria for the harness milestone (ADR-0007). Written for two
 readers: the implementer, who needs to know what to test, and the code
 reviewer, who needs to know what to check. Checked items are permanent
-invariants, not one-time gates; unchecked items record deliberate audit gaps.
+invariants, not one-time gates; every item below is checked only where
+production behavior and regression evidence support it.
 
 ## Scope rule (read first)
 
@@ -46,29 +47,27 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
    *Review:* `getFinalOutput`/`deriveActivity` narrow domain fact parts,
    not wire shapes.
 
-4. [ ] **Removing the claude harness does not change core code.**
-   Deleting the adapter module and its one registration line at the
-   composition root is the whole removal.
-   *Test:* the core suite passes with only the pi harness registered.
-   *Review:* the claude harness is referenced from exactly one production
-   site — its registration.
-   *Audit:* no regression test currently removes the adapter and registration
-   to prove the reduced core still passes, so this remains unchecked.
+4. [x] **Removing the claude harness does not change core code.**
+   Deleting the adapter module and its registration edge in `composition.ts`
+   is the whole removal.
+   *Test:* `composition.test.ts` runs the core registry with only Pi
+   registered, and the boundaries suite passes a disposable composition with
+   only the Pi edge.
+   *Review:* production core names no adapter; `composition.ts` is the only
+   permitted adapter-registration edge, and the production graph is clean.
 
 5. [x] **Adding a fake harness requires no core changes.**
-   *Test:* the core suite (dispatcher, registry, delivery, presentation,
-   widget) runs against a fake harness with neither a pi binary nor the
-   claude SDK present.
-   *Review:* the fake implements only the public `Harness` contract — if it
-   needs a core patch or a test-only hook in core, the seam leaked.
+   *Test:* `harness.test.ts` runs a fake through dispatcher, registry,
+   delivery, presentation, and widget, including cancellation, without
+   starting a Pi child or loading the Claude SDK.
+   *Review:* the fake implements only the public `Harness` contract; profile
+   loading also asks a fake-owned validator to reject an unknown field.
 
-6. [ ] **A codex harness would cost one adapter, one registration, its own
+6. [x] **A codex harness would cost one adapter, one registration, its own
    tests — and no dispatcher/lifecycle changes.**
-   *Test:* not directly testable; item 5's fake harness is the standing
-   proxy. *Audit:* this is a review thought experiment rather than a
-   regression test, so it is not marked complete.
-   *Review:* thought experiment on every core diff — "would codex need to
-   edit this file?" If yes, push the change behind the harness contract.
+   *Test:* the Codex-like public-contract fixture in `harness.test.ts`
+   compiles and runs through the same dispatcher and lifecycle; it supplies
+   only a registry entry and executor.
 
 7. [x] **Pi wire `Message` objects never leave the pi harness.**
    Translation to facts happens inside the pi executor module, at the edge.
@@ -85,9 +84,9 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
 9. [x] **`AbortSignal` is the only cancellation mechanism core exposes.**
    Core says *why* (cancel reason recorded in the registry, before abort
    fires); the harness owns *how* (SIGTERM/SIGKILL for pi, SDK abort for
-   claude) and reports `stopReason: "aborted"`, which the seam normalizes to
-   *cancelled* — abort never appears above the seam (see Cancel in
-   CONTEXT.md).
+   Claude). Backend `aborted` is normalized at the seam: it never persists in
+   `SingleResult.stopReason` or presentation, while lifecycle `cancelled` and
+   its reason remain authoritative (see Cancel in `CONTEXT.md`).
    *Test:* fake-harness test aborts mid-run and asserts the lifecycle
    settles to cancelled with the recorded reason; adapter tests assert each
    backend's kill path fires on signal abort.
@@ -109,9 +108,10 @@ Criteria 1–3, 7, and 8 should share one mechanical **boundaries test**: parse
 each core source file's real import specifiers, follow the transitive core
 module graph, and assert the forbidden modules (`@earendil-works/pi-ai`
 message exports, the pi harness modules, and the Claude SDK) are absent. The
-composition root is the sole registration edge and is allowed to name the
-adapters; every other core edge fails loudly in CI instead of silently in
-review. Comments and ordinary string literals are not import edges.
+composition module is the sole registration edge and is allowed to name the
+adapters; tool registration and every other core edge fail loudly in CI instead
+of silently in review. Comments and ordinary string literals are not import
+edges.
 
 ## Milestone-agreed additions (from the design session, ADR-0007)
 
@@ -123,10 +123,10 @@ review. Comments and ordinary string literals are not import edges.
   run's usage both per-message and cumulatively. *Test:* fold accumulation
   and latest-context fixtures; the Claude adapter test asserts no double
   count between per-message usage and the terminal result.
-- [ ] **One-shot binds every harness** — one prompt in, one terminal answer
-  out (ADR-0003 is a property of Run). *Review:* no send/steer surface exists
-  on the harness contract, but there is no dedicated regression test, so this
-  remains an unchecked review-only invariant.
+- [x] **One-shot binds every harness** — one prompt in, one terminal answer
+  out (ADR-0003 is a property of Run). *Test:* the dedicated public-contract
+  invariant test checks both adapters and the `SubagentTask` shape for the
+  absence of send, steer, and persistent-session surfaces.
 - [x] **Depth binds every harness** — Claude children have their
   agent-spawning tool disallowed. *Test:* Claude adapter test asserts the
   disallowed-tools option is set.
