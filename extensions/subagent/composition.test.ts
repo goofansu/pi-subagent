@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createHarnessRegistry } from "./harness.ts";
 import { createPiHarness } from "./pi-harness.ts";
 
-test("the core registry remains usable with only Pi registered", () => {
+test("Pi-only composition keeps the core registry executable without Claude", () => {
   const registry = createHarnessRegistry([createPiHarness()]);
   assert.ok(registry.get("pi"));
   assert.equal(registry.get("claude"), undefined);

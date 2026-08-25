@@ -7,11 +7,6 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const adapterNames = new Set([
-  "claude-harness.ts",
-  "pi-agent.ts",
-  "pi-harness.ts",
-]);
 const forbiddenPackages = new Set([
   "@anthropic-ai/claude-agent-sdk",
   "@earendil-works/pi-ai",
@@ -58,6 +53,13 @@ function readImportSpecifiers(source: string): string[] {
     ) {
       const [argument] = node.arguments;
       add(argument && ts.isStringLiteral(argument) ? argument : undefined);
+    } else if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "require"
+    ) {
+      const [argument] = node.arguments;
+      add(argument && ts.isStringLiteral(argument) ? argument : undefined);
     }
     ts.forEachChild(node, visit);
   };
@@ -95,26 +97,32 @@ function describe(file: string, graphRoot: string): string {
  * A root parameter lets the regression test supply a disposable graph without
  * writing a fake checker or mutating the working tree. */
 export function findForbiddenImports(graphRoot: string = root): string[] {
+  const sourceFiles = fs
+    .readdirSync(graphRoot)
+    .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"));
+  // Adapter modules are identified by the production naming convention, not
+  // a frozen inventory. The pi process driver is the one legacy exception;
+  // its sibling harness module still follows the convention. A new
+  // codex-harness.ts is therefore excluded from core automatically rather than
+  // silently becoming part of the core graph.
   const adapterPaths = new Set(
-    [...adapterNames].map((name) => path.join(graphRoot, name)),
+    sourceFiles
+      .filter((file) => file.endsWith("-harness.ts") || file === "pi-agent.ts")
+      .map((file) => path.join(graphRoot, file)),
   );
   const compositionRoot = path.join(graphRoot, "composition.ts");
-  const allowedCompositionImports = new Set([
-    path.join(graphRoot, "claude-harness.ts"),
-    path.join(graphRoot, "pi-harness.ts"),
-  ]);
-  // Deriving this list keeps a newly added core module from silently escaping
-  // the boundary check. Adapter implementations are the only production
-  // modules excluded from the core graph; the composition root is allowed to
-  // register those adapters and no other core module may import them.
-  const coreFiles = fs
-    .readdirSync(graphRoot)
-    .filter(
-      (file) =>
-        file.endsWith(".ts") &&
-        !file.endsWith(".test.ts") &&
-        !adapterNames.has(file),
-    )
+  // Only direct adapter imports from the composition root are allowed. This
+  // registration shape keeps composition the sole adapter edge.
+  const allowedCompositionImports = new Set(
+    fs.existsSync(compositionRoot)
+      ? readImportSpecifiers(fs.readFileSync(compositionRoot, "utf8"))
+          .map((specifier) => resolveSourceFile(compositionRoot, specifier))
+          .filter((file): file is string => file !== undefined)
+          .filter((file) => adapterPaths.has(file))
+      : [],
+  );
+  const coreFiles = sourceFiles
+    .filter((file) => !adapterPaths.has(path.join(graphRoot, file)))
     .map((file) => path.join(graphRoot, file));
   const visited = new Set<string>();
   const violations: string[] = [];
@@ -164,6 +172,42 @@ test("comments and string literals are not import edges", () => {
   assert.deepEqual(readImportSpecifiers(source), ["./run.ts"]);
 });
 
+test("static CommonJS require edges are checked like imports", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-require-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(fixtureRoot, "runner.ts"),
+    'const adapter = require("./codex-harness.ts");\nvoid adapter;\n',
+  );
+  fs.writeFileSync(path.join(fixtureRoot, "codex-harness.ts"), "export {};\n");
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), [
+    "runner.ts imports forbidden harness adapter codex-harness.ts",
+  ]);
+});
+
+test("adapter discovery follows the harness naming convention", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-codex-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(fixtureRoot, "composition.ts"),
+    'import "./codex-harness.ts";\n',
+  );
+  fs.writeFileSync(path.join(fixtureRoot, "codex-harness.ts"), "export {};\n");
+  fs.writeFileSync(
+    path.join(fixtureRoot, "runner.ts"),
+    'import "./codex-harness.ts";\n',
+  );
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), [
+    "runner.ts imports forbidden harness adapter codex-harness.ts",
+  ]);
+});
+
 test("the production graph checker catches a controlled forbidden adapter edge", (t) => {
   const fixtureRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "pi-subagent-boundary-"),
@@ -177,6 +221,21 @@ test("the production graph checker catches a controlled forbidden adapter edge",
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), [
     "runner.ts imports forbidden harness adapter pi-agent.ts",
+  ]);
+});
+
+test("core-to-SDK package edges are forbidden too", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-sdk-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(fixtureRoot, "runner.ts"),
+    'import "@anthropic-ai/claude-agent-sdk";\n',
+  );
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), [
+    "runner.ts imports forbidden package @anthropic-ai/claude-agent-sdk",
   ]);
 });
 

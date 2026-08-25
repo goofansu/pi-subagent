@@ -47,14 +47,17 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
    *Review:* `getFinalOutput`/`deriveActivity` narrow domain fact parts,
    not wire shapes.
 
-4. [x] **Removing the claude harness does not change core code.**
-   Deleting the adapter module and its registration edge in `composition.ts`
-   is the whole removal.
-   *Test:* `composition.test.ts` runs the core registry with only Pi
-   registered, and the boundaries suite passes a disposable composition with
-   only the Pi edge.
-   *Review:* production core names no adapter; `composition.ts` is the only
-   permitted adapter-registration edge, and the production graph is clean.
+4. [x] **Removing the Claude harness does not change core code.**
+   The core has no Claude/SDK edge: removing the Claude adapter and its direct
+   registration import/entry in `composition.ts` is the only core-code change.
+   Removing `@anthropic-ai/claude-agent-sdk` from `package.json` and the lockfile
+   is a separate packaging-metadata change, not a core-code change.
+   *Test:* `composition.test.ts` runs a Pi-only composition, and the
+   boundaries suite statically proves the production core graph has no Claude
+   SDK edge while a disposable composition may retain only direct adapter
+   registration edges.
+   *Review:* `composition.ts` is the only permitted adapter-registration edge;
+   core execution and the graph checker do not require Claude.
 
 5. [x] **Adding a fake harness requires no core changes.**
    *Test:* `harness.test.ts` runs a fake through dispatcher, registry,
@@ -124,25 +127,32 @@ edges.
   and latest-context fixtures; the Claude adapter test asserts no double
   count between per-message usage and the terminal result.
 - [x] **One-shot binds every harness** — one prompt in, one terminal answer
-  out (ADR-0003 is a property of Run). *Test:* the dedicated public-contract
-  invariant test checks both adapters and the `SubagentTask` shape for the
-  absence of send, steer, and persistent-session surfaces.
+  out (ADR-0003 is a property of Run). *Test:* `one-shot.test.ts` has
+  compile-time exact `keyof` assertions for `Harness`, `HarnessRun`, and
+  `SubagentTask`, plus runtime checks covering both adapters and the absence
+  of send, steer, and persistent-session surfaces.
 - [x] **Depth binds every harness** — Claude children have their
-  agent-spawning tool disallowed. *Test:* Claude adapter test asserts the
-  disallowed-tools option is set.
+  agent-spawning tools disallowed. *Test:* Claude adapter tests assert both
+  installed SDK spawning tools, `Agent` and `Task`, are disallowed; the
+  dispatcher depth guard and Pi child-depth transport are also tested.
 - [x] **Trust posture is harness policy** — the request carries
   `projectTrusted`; the Claude harness bypasses permissions unconditionally in
   this version. *Test:* Claude adapter test asserts bypass regardless of the
   forwarded value. *Review:* the sharp edge is documented, not hidden.
 - [x] **Transcript healing is authoritative** — a terminal transcript
   replaces streamed facts and all derived error/metadata state, so a transient
-  streamed error cannot fail a clean run while a retained provider error still
-  wins over a generic process-exit diagnostic. *Test:* Shadow-Pi fixtures cover
-  both paths.
+  streamed error or fact-derived model cannot survive a clean replacement;
+  harness-resolved baseline model metadata remains available, and a retained
+  provider error still wins over a generic process-exit diagnostic. *Test:*
+  Shadow-Pi fixtures cover the error paths and dispatcher fold tests cover
+  stale-model replacement, removal, and baseline preservation.
 - [x] **Empty terminal accounting reaches presentation** — a successful Claude
-  result with no text remains a fact, including model, usage, turns, cost, and
-  stop reason. *Test:* the Claude integration fixture renders its nonzero cost
-  in the widget.
+  result with no text remains a fact, including usage, turns, cost, and stop
+  reason; model provenance comes from an empty/thinking assistant fact or one
+  unambiguous terminal usage entry, never an arbitrary auxiliary entry.
+  *Test:* unpinned Claude integration and widget fixtures render the nonzero
+  cost and assert model/accounting retention; auxiliary-first coverage proves
+  the ambiguous case is not inferred.
 - [x] **Claude model validation is explicit** — aliases and the documented
   allowlisted full IDs validate at session start; invented IDs are diagnosed
   with their value. *Test:* Claude harness validation fixtures cover aliases,

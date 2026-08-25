@@ -90,7 +90,12 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
   const wire = message as unknown as Record<string, unknown>;
   if (wire.type === "assistant" && isRecord(wire.message)) {
     const parts = contentParts(wire.message.content);
-    if (parts.length === 0) return [];
+    const model =
+      typeof wire.message.model === "string" ? wire.message.model : undefined;
+    // Thinking-only and empty assistant messages still carry model
+    // provenance. Keep those metadata-bearing facts even when no content
+    // block can cross the harness seam.
+    if (parts.length === 0 && !model) return [];
     return [
       {
         role: "assistant",
@@ -98,9 +103,7 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
         // Claude reports total turns on its terminal result. Streamed
         // assistant messages are progress, not additional turns.
         usage: { turns: 0 },
-        ...(typeof wire.message.model === "string"
-          ? { model: wire.message.model }
-          : {}),
+        ...(model ? { model } : {}),
       },
     ];
   }
@@ -122,6 +125,7 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
       ? contentParts(wire.result)
       : [];
   const modelUsage = isRecord(wire.modelUsage) ? wire.modelUsage : undefined;
+  const modelUsageEntries = modelUsage ? Object.entries(modelUsage) : [];
   let input = 0;
   let output = 0;
   let cacheRead = 0;
@@ -129,7 +133,15 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
   const reportedCost =
     typeof wire.total_cost_usd === "number" ? wire.total_cost_usd : undefined;
   let cost = reportedCost ?? 0;
-  const model = typeof wire.model === "string" ? wire.model : undefined;
+  // The SDK result has no model field in some versions. A single usage entry
+  // is an unambiguous answer; multiple entries may include auxiliary models,
+  // so never pick whichever happens to be first.
+  const model =
+    typeof wire.model === "string"
+      ? wire.model
+      : modelUsageEntries.length === 1
+        ? modelUsageEntries[0]?.[0]
+        : undefined;
   if (modelUsage) {
     for (const value of Object.values(modelUsage)) {
       if (!isRecord(value)) continue;
@@ -227,7 +239,7 @@ export function buildClaudeOptions(
     thinking: claudeThinking(effort),
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
-    disallowedTools: ["Agent"],
+    disallowedTools: ["Agent", "Task"],
     ...(tools ? { tools } : {}),
     systemPrompt: append
       ? {
@@ -283,6 +295,7 @@ export function createClaudeHarness(
           let stream: Query | undefined;
           let streamEnded = false;
           let terminalResultReceived = false;
+          let terminalResultBeforeAbort = false;
           let abortRequested = run.signal?.aborted ?? false;
           let errorMessage: string | undefined;
           const abort = () => {
@@ -303,8 +316,15 @@ export function createClaudeHarness(
               return { stopReason: "aborted" };
             }
             for await (const message of stream) {
-              if ((message as { type?: string }).type === "result") {
+              if (
+                (message as { type?: string }).type === "result" &&
+                !terminalResultReceived
+              ) {
                 terminalResultReceived = true;
+                // Ordering is the cancellation contract: a result witnessed
+                // before abort is authoritative, while a queued result after
+                // abort cannot resurrect the run.
+                terminalResultBeforeAbort = !abortRequested;
               }
               for (const fact of translateClaudeMessage(message)) {
                 if (fact.errorMessage) errorMessage = fact.errorMessage;
@@ -312,13 +332,13 @@ export function createClaudeHarness(
               }
             }
             streamEnded = true;
-            if (abortRequested && !terminalResultReceived)
+            if (abortRequested && !terminalResultBeforeAbort)
               return { stopReason: "aborted" };
             return errorMessage
               ? { exitCode: 1, stopReason: "error", errorMessage }
               : { exitCode: 0 };
           } catch (error) {
-            if (terminalResultReceived) {
+            if (terminalResultBeforeAbort) {
               return errorMessage
                 ? { exitCode: 1, stopReason: "error", errorMessage }
                 : { exitCode: 0 };

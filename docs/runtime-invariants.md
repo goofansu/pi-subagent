@@ -7,9 +7,12 @@ These invariants define the correctness contract of the subagent runtime.
 Runs are one-shot and backend-neutral. A profile names a harness (default
 `pi`); the registry resolves it before dispatch. Harness adapters alone know
 provider wire messages and translate them into `Fact` records. The dispatcher,
-fold, registry, presentation, and widget consume only those facts. Usage on a
-fact is a delta and the fold sums it. Cancellation crosses the seam only as an
-`AbortSignal`; each adapter owns its child-specific stop mechanism. Backend
+fold, registry, presentation, and widget consume only those facts.
+Input/output/cache counters, turns, and cost on a fact are additive deltas and
+the fold sums them; `contextTokens` is a latest-value gauge, so the fold
+replaces it with the newest reported context size rather than adding it.
+Cancellation crosses the seam only as an `AbortSignal`; each adapter owns its
+child-specific stop mechanism. Backend
 `aborted` is normalized at the seam: the domain records lifecycle `cancelled`
 and its reason, never an `aborted` stop reason.
 

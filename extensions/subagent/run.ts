@@ -285,6 +285,10 @@ export function createRunReporter(
   result: SingleResult,
   changed: () => void,
 ): RunReporter {
+  // A model resolved before execution is harness-owned baseline metadata. Any
+  // model first witnessed in streamed facts is provisional and must not survive
+  // replacement of the transcript unless the authoritative facts repeat it.
+  const baselineModel = result.model;
   const fold = (fact: Fact): void => {
     result.messages.push(fact);
     recordFact(result, fact);
@@ -305,12 +309,14 @@ export function createRunReporter(
       result.messages = [];
       result.usage = emptyUsage();
       delete result.activity;
-      // A model resolved by the harness (or witnessed by an assistant fact)
-      // is authoritative metadata, not streamed transcript drift. Keep it
-      // while healing the transcript's additive facts and terminal fields.
+      // Clear fact-derived model metadata before folding the authoritative
+      // snapshot. Restore only the harness-resolved baseline if the snapshot
+      // contains no model at all; a terminal fact's model replaces it.
+      delete result.model;
       delete result.stopReason;
       delete result.errorMessage;
       for (const fact of facts) fold(fact);
+      if (!result.model && baselineModel) result.model = baselineModel;
       refreshActivity();
       changed();
     },

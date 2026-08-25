@@ -346,6 +346,73 @@ test("the fold derives usage and activity from reported messages", async () => {
   assert.equal(result.activity, "grep: TODO");
 });
 
+test("a terminal transcript model replaces a stale streamed model", async () => {
+  const result = await startAndSettle({
+    config: agent(),
+    description: "task",
+    prompt: "go",
+    execute: async (run) => {
+      run.report.message({
+        role: "assistant",
+        parts: [{ type: "text", text: "stale" }],
+        model: "stale-model",
+      });
+      run.report.transcript([
+        {
+          role: "assistant",
+          parts: [{ type: "text", text: "authoritative" }],
+          model: "terminal-model",
+        },
+      ]);
+      return { exitCode: 0 };
+    },
+  });
+
+  assert.equal(result.model, "terminal-model");
+});
+
+test("a terminal transcript removes a stale fact-derived model", async () => {
+  const result = await startAndSettle({
+    config: agent(),
+    description: "task",
+    prompt: "go",
+    execute: async (run) => {
+      run.report.message({
+        role: "assistant",
+        parts: [{ type: "text", text: "stale" }],
+        model: "stale-model",
+      });
+      run.report.transcript([
+        { role: "assistant", parts: [{ type: "text", text: "authoritative" }] },
+      ]);
+      return { exitCode: 0 };
+    },
+  });
+
+  assert.equal("model" in result, false);
+});
+
+test("transcript healing preserves the harness-resolved baseline model", async () => {
+  const result = await startAndSettle({
+    config: agent({ model: "baseline-model" }),
+    description: "task",
+    prompt: "go",
+    execute: async (run) => {
+      run.report.message({
+        role: "assistant",
+        parts: [{ type: "text", text: "stale" }],
+        model: "stale-model",
+      });
+      run.report.transcript([
+        { role: "assistant", parts: [{ type: "text", text: "authoritative" }] },
+      ]);
+      return { exitCode: 0 };
+    },
+  });
+
+  assert.equal(result.model, "baseline-model");
+});
+
 test("a transcript snapshot replaces the streamed fold, healing usage", async () => {
   const execute: SubagentExecutor = async (run) => {
     run.report.message(assistantMessage());

@@ -45,9 +45,11 @@ never use. Derivation (activity, final output) stays in the fold — the
 ADR-0005 single-derivation-site property is kept; only the wire knowledge
 moves out.
 
-Usage on a fact is a **delta**; the shared fold sums. A harness that only
-knows totals reports one usage-bearing fact, and never reports the same run's
-usage both per-message and cumulatively.
+Input/output/cache counters, turns, and cost on a fact are **additive
+deltas**; the shared fold sums them. `contextTokens` is a latest-value gauge,
+so the fold replaces it with the newest reported context size. A harness that
+only knows totals reports one usage-bearing fact, and never reports the same
+run's usage both per-message and cumulatively.
 
 The claude harness executes via `@anthropic-ai/claude-agent-sdk`'s `query()`
 rather than spawning the CLI and re-parsing stream-json. The run's existing
