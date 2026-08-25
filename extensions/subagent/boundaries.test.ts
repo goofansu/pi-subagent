@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -11,32 +12,10 @@ const adapterNames = new Set([
   "pi-agent.ts",
   "pi-harness.ts",
 ]);
-const adapterPaths = new Set(
-  [...adapterNames].map((name) => path.join(root, name)),
-);
-const compositionRoot = path.join(root, "index.ts");
-const allowedCompositionImports = new Set([
-  path.join(root, "claude-harness.ts"),
-  path.join(root, "pi-harness.ts"),
-]);
 const forbiddenPackages = new Set([
   "@anthropic-ai/claude-agent-sdk",
   "@earendil-works/pi-ai",
 ]);
-
-// Deriving this list keeps a newly added core module from silently escaping the
-// boundary check. Adapter implementations are the only production modules
-// excluded from the core graph; the composition root is allowed to register
-// those adapters and no other core module may import them.
-const coreFiles = fs
-  .readdirSync(root)
-  .filter(
-    (file) =>
-      file.endsWith(".ts") &&
-      !file.endsWith(".test.ts") &&
-      !adapterNames.has(file),
-  )
-  .map((file) => path.join(root, file));
 
 /** Read module specifiers from syntax, not arbitrary strings or comments. */
 function readImportSpecifiers(source: string): string[] {
@@ -108,11 +87,35 @@ function resolveSourceFile(
   });
 }
 
-function describe(file: string): string {
-  return path.relative(root, file) || file;
+function describe(file: string, graphRoot: string): string {
+  return path.relative(graphRoot, file) || file;
 }
 
-function findForbiddenImports(): string[] {
+/** Walk a source root with the same production parser and resolver used below.
+ * A root parameter lets the regression test supply a disposable graph without
+ * writing a fake checker or mutating the working tree. */
+export function findForbiddenImports(graphRoot: string = root): string[] {
+  const adapterPaths = new Set(
+    [...adapterNames].map((name) => path.join(graphRoot, name)),
+  );
+  const compositionRoot = path.join(graphRoot, "index.ts");
+  const allowedCompositionImports = new Set([
+    path.join(graphRoot, "claude-harness.ts"),
+    path.join(graphRoot, "pi-harness.ts"),
+  ]);
+  // Deriving this list keeps a newly added core module from silently escaping
+  // the boundary check. Adapter implementations are the only production
+  // modules excluded from the core graph; the composition root is allowed to
+  // register those adapters and no other core module may import them.
+  const coreFiles = fs
+    .readdirSync(graphRoot)
+    .filter(
+      (file) =>
+        file.endsWith(".ts") &&
+        !file.endsWith(".test.ts") &&
+        !adapterNames.has(file),
+    )
+    .map((file) => path.join(graphRoot, file));
   const visited = new Set<string>();
   const violations: string[] = [];
 
@@ -128,7 +131,7 @@ function findForbiddenImports(): string[] {
       );
       if (forbiddenPackage) {
         violations.push(
-          `${describe(file)} imports forbidden package ${specifier}`,
+          `${describe(file, graphRoot)} imports forbidden package ${specifier}`,
         );
         continue;
       }
@@ -140,7 +143,7 @@ function findForbiddenImports(): string[] {
           continue;
         }
         violations.push(
-          `${describe(file)} imports forbidden harness adapter ${describe(target)}`,
+          `${describe(file, graphRoot)} imports forbidden harness adapter ${describe(target, graphRoot)}`,
         );
         continue;
       }
@@ -159,6 +162,22 @@ test("comments and string literals are not import edges", () => {
     import type { Fact } from "./run.ts";
   `;
   assert.deepEqual(readImportSpecifiers(source), ["./run.ts"]);
+});
+
+test("the production graph checker catches a controlled forbidden adapter edge", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(fixtureRoot, "runner.ts"),
+    'import "./pi-agent.ts";\n',
+  );
+  fs.writeFileSync(path.join(fixtureRoot, "pi-agent.ts"), "export {};\n");
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), [
+    "runner.ts imports forbidden harness adapter pi-agent.ts",
+  ]);
 });
 
 test("harness wire imports stop at their adapters", () => {

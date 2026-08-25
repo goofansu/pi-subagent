@@ -69,6 +69,7 @@ const CANCELLED_MESSAGE = "Subagent was cancelled";
  * this seam sees the wire word.
  */
 function terminalLifecycle(
+  result: SingleResult,
   outcome: SubagentOutcome,
   finishedAt: number,
   cancellationReason?: CancellationReason,
@@ -83,7 +84,12 @@ function terminalLifecycle(
     };
   }
   const phase =
-    exitCode === 0 && outcome.stopReason !== "error" ? "completed" : "failed";
+    exitCode === 0 &&
+    outcome.stopReason !== "error" &&
+    !result.errorMessage &&
+    result.stopReason !== "error"
+      ? "completed"
+      : "failed";
   return { phase, finishedAt, ...(exitCode === undefined ? {} : { exitCode }) };
 }
 
@@ -104,7 +110,12 @@ export function settleResultLifecycle(
     );
   }
   applyOutcome(result, outcome);
-  result.lifecycle = terminalLifecycle(outcome, finishedAt, cancellationReason);
+  result.lifecycle = terminalLifecycle(
+    result,
+    outcome,
+    finishedAt,
+    cancellationReason,
+  );
 }
 
 /** The caller's model, used when an agent profile does not pin one. */
@@ -291,6 +302,10 @@ export function createRunReporter(
     transcript(facts) {
       result.messages = [];
       result.usage = emptyUsage();
+      delete result.activity;
+      delete result.model;
+      delete result.stopReason;
+      delete result.errorMessage;
       for (const fact of facts) fold(fact);
       refreshActivity();
       changed();
@@ -319,5 +334,9 @@ export function applyOutcome(
     return;
   }
   if (outcome.stopReason) result.stopReason = outcome.stopReason;
-  if (outcome.errorMessage) result.errorMessage = outcome.errorMessage;
+  // A process-exit diagnostic is only a fallback. An authoritative terminal
+  // fact may already contain the provider's more useful explanation.
+  if (outcome.errorMessage && !result.errorMessage) {
+    result.errorMessage = outcome.errorMessage;
+  }
 }

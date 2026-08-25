@@ -79,8 +79,16 @@ Review the requested change and report concrete findings.
 ```
 
 Claude validates `model` at session start. It accepts the aliases `opus`,
-`sonnet`, `haiku`, and `fable`, or a full model ID from a recognized Claude
-model family; other values are reported as profile diagnostics. It uses the SDK
+`sonnet`, `haiku`, and `fable`, plus these explicit full IDs:
+`claude-opus-4-0`, `claude-opus-4-20250514`, `claude-opus-4-1`,
+`claude-opus-4-1-20250805`, `claude-opus-4-5`,
+`claude-opus-4-5-20251101`, `claude-opus-4-6`, `claude-sonnet-3-7`,
+`claude-sonnet-3-7-20250219`, `claude-sonnet-4-0`,
+`claude-sonnet-4-20250514`, `claude-sonnet-4-5`,
+`claude-sonnet-4-5-20250929`, `claude-sonnet-4-6`, `claude-haiku-3-5`,
+`claude-haiku-3-5-20241022`, `claude-haiku-4-5`,
+`claude-haiku-4-5-20251001`, and `claude-fable-5`. Other values are reported
+as profile diagnostics. It uses the SDK
 default when `model` is omitted. `effort` is translated by the adapter to a
 thinking-token budget (`off` disables thinking);
 `tools` selects Claude built-in tools; and `appendSystemPrompt` defaults to

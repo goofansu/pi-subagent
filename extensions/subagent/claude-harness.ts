@@ -13,14 +13,32 @@ import {
 import type { Fact, FactPart, ParentModel, SubagentTask } from "./run.ts";
 import { type AgentConfig, EFFORTS } from "./types.ts";
 
-const MODEL_ALIASES: Record<string, string> = {
+/** The complete accepted vocabulary: aliases resolve to their full id; full ids resolve to themselves. */
+const CLAUDE_MODELS: Record<string, string> = {
   opus: "claude-opus-4-6",
   sonnet: "claude-sonnet-4-6",
   haiku: "claude-haiku-4-5-20251001",
   fable: "claude-fable-5",
+  "claude-opus-4-0": "claude-opus-4-0",
+  "claude-opus-4-20250514": "claude-opus-4-20250514",
+  "claude-opus-4-1": "claude-opus-4-1",
+  "claude-opus-4-1-20250805": "claude-opus-4-1-20250805",
+  "claude-opus-4-5": "claude-opus-4-5",
+  "claude-opus-4-5-20251101": "claude-opus-4-5-20251101",
+  "claude-opus-4-6": "claude-opus-4-6",
+  "claude-sonnet-3-7": "claude-sonnet-3-7",
+  "claude-sonnet-3-7-20250219": "claude-sonnet-3-7-20250219",
+  "claude-sonnet-4-0": "claude-sonnet-4-0",
+  "claude-sonnet-4-20250514": "claude-sonnet-4-20250514",
+  "claude-sonnet-4-5": "claude-sonnet-4-5",
+  "claude-sonnet-4-5-20250929": "claude-sonnet-4-5-20250929",
+  "claude-sonnet-4-6": "claude-sonnet-4-6",
+  "claude-haiku-3-5": "claude-haiku-3-5",
+  "claude-haiku-3-5-20241022": "claude-haiku-3-5-20241022",
+  "claude-haiku-4-5": "claude-haiku-4-5",
+  "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
+  "claude-fable-5": "claude-fable-5",
 };
-const FULL_MODEL_ID =
-  /^claude-(?:(?:opus|sonnet|haiku|fable)(?:-[a-z0-9]+)+|\d+(?:-\d+)*-(?:opus|sonnet|haiku|fable)(?:-[a-z0-9]+)+)$/i;
 const THINKING_BUDGETS: Record<string, number> = {
   minimal: 512,
   low: 1_024,
@@ -46,7 +64,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function contentParts(content: unknown): FactPart[] {
-  if (typeof content === "string") return [{ type: "text", text: content }];
+  if (typeof content === "string") {
+    return content ? [{ type: "text", text: content }] : [];
+  }
   if (!Array.isArray(content)) return [];
   const parts: FactPart[] = [];
   for (const block of content) {
@@ -161,10 +181,8 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
 }
 
 function isClaudeModel(value: string): boolean {
-  return (
-    Object.hasOwn(MODEL_ALIASES, value.toLowerCase()) ||
-    FULL_MODEL_ID.test(value)
-  );
+  const normalized = value.toLowerCase();
+  return Object.hasOwn(CLAUDE_MODELS, normalized);
 }
 
 export function resolveClaudeModel(
@@ -172,7 +190,7 @@ export function resolveClaudeModel(
 ): string | undefined {
   if (!value) return undefined;
   const alias = value.toLowerCase();
-  return Object.hasOwn(MODEL_ALIASES, alias) ? MODEL_ALIASES[alias] : value;
+  return Object.hasOwn(CLAUDE_MODELS, alias) ? CLAUDE_MODELS[alias] : value;
 }
 
 export function claudeThinking(

@@ -14,6 +14,7 @@ import type { SubagentTask } from "./run.ts";
 import { startSubagent } from "./runner.ts";
 import { createSubagentRuns } from "./runs.ts";
 import type { AgentConfig } from "./types.ts";
+import { renderRunLines } from "./widget.ts";
 
 const config: AgentConfig = {
   name: "worker",
@@ -67,7 +68,7 @@ test("Claude validation accepts aliases and full model ids", () => {
 
 test("Claude validation diagnoses a misspelled model with its value", () => {
   const harness = createClaudeHarness();
-  for (const model of ["sontet", "claude-sontet-4-6"]) {
+  for (const model of ["sontet", "claude-sontet-4-6", "claude-sonnet-bogus"]) {
     assert.deepEqual(
       harness.validate({ ...config, fields: { model } }, "/agents/typo.md"),
       [{ reason: `invalid Claude model '${model}'` }],
@@ -165,6 +166,66 @@ test("Claude keeps terminal facts when a successful result has empty text", () =
     model: "claude-sonnet-4-6",
     stopReason: "end_turn",
   });
+});
+
+test("an empty Claude result carries accounting into the cost widget", async () => {
+  const query: ClaudeQuery = () =>
+    ({
+      async *[Symbol.asyncIterator]() {
+        yield {
+          type: "result",
+          result: "",
+          is_error: false,
+          num_turns: 2,
+          stop_reason: "end_turn",
+          total_cost_usd: 0.25,
+          modelUsage: {
+            "claude-sonnet-4-6": {
+              inputTokens: 10,
+              outputTokens: 4,
+              cacheReadInputTokens: 2,
+              cacheCreationInputTokens: 1,
+              costUSD: 0.25,
+            },
+          },
+        } as unknown as SDKMessage;
+      },
+      close() {},
+    }) as never;
+  const runs = createSubagentRuns();
+  const started = startSubagent({
+    config,
+    description: "empty Claude result",
+    prompt: "do it",
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs,
+  });
+
+  const result = await started.settled;
+  assert.equal(result.lifecycle.phase, "completed");
+  assert.deepEqual(result.messages[0]?.parts, []);
+  assert.equal(result.model, "claude-sonnet-4-6");
+  assert.deepEqual(result.usage, {
+    input: 10,
+    output: 4,
+    cacheRead: 2,
+    cacheWrite: 1,
+    cost: 0.25,
+    contextTokens: 0,
+    turns: 2,
+  });
+  assert.equal(result.stopReason, "end_turn");
+
+  const lines = renderRunLines(
+    runs.list(),
+    {
+      fg: (_color, text) => text,
+      bg: (_color, text) => text,
+      bold: (text) => text,
+    },
+    120,
+  );
+  assert.match(lines[1] ?? "", /\$0\.2500/);
 });
 
 test("Claude reports an error flag truthfully even with a success subtype", () => {

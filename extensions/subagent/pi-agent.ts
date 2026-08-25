@@ -402,31 +402,13 @@ export async function runPiAgent(
   let sawValidAgentEnd = false;
   let rawStdoutTail = "";
 
-  // The ending sometimes needs to know whether a diagnosis was already
-  // reported, and the executor no longer holds the record to look at — so it
-  // tracks what it witnessed itself, on the way past.
+  // Stderr is an auxiliary diagnostic only. In-band error state belongs to
+  // the authoritative facts in the run reporter; keeping another copy here
+  // would let a streamed error survive transcript healing.
   let reportedStderr = false;
-  let reportedErrorMessage = false;
-  let reportedInBandError = false;
-  let reportedInBandErrorMessage: string | undefined;
-  const noteInBandError = (fact: import("./run.ts").Fact): void => {
-    if (fact.stopReason === "error" || fact.errorMessage) {
-      reportedInBandError = true;
-    }
-    if (fact.errorMessage) {
-      reportedErrorMessage = true;
-      reportedInBandErrorMessage = fact.errorMessage;
-    }
-  };
   const report: RunReporter = {
-    message(fact) {
-      noteInBandError(fact);
-      run.report.message(fact);
-    },
-    transcript(facts) {
-      for (const fact of facts) noteInBandError(fact);
-      run.report.transcript(facts);
-    },
+    message: (fact) => run.report.message(fact),
+    transcript: (facts) => run.report.transcript(facts),
     stderr(chunk) {
       reportedStderr = true;
       run.report.stderr(chunk);
@@ -508,7 +490,7 @@ export async function runPiAgent(
         if (stdout.overflowed()) {
           report.stderr(OVERSIZED_STDOUT_LINE_MESSAGE);
         }
-        if (code !== 0 && !reportedErrorMessage) {
+        if (code !== 0) {
           closeErrorMessage = `Child pi exited with code ${code ?? "unknown"}`;
           const stdoutTail = rawStdoutTail.trim();
           if (!reportedStderr && stdoutTail) {
@@ -563,15 +545,6 @@ export async function runPiAgent(
         exitCode: 1,
         stopReason: "error",
         errorMessage: MISSING_AGENT_END_ERROR,
-      };
-    }
-    if (reportedInBandError) {
-      return {
-        exitCode,
-        stopReason: "error",
-        ...(reportedInBandErrorMessage
-          ? { errorMessage: reportedInBandErrorMessage }
-          : {}),
       };
     }
     return {

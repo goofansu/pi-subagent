@@ -260,6 +260,71 @@ test("the child pi driver accepts exit 0 after a valid agent_end event", async (
   assert.equal(settled.messages.length, 1);
 });
 
+test("a clean terminal transcript clears an earlier streamed error", async () => {
+  const streamedError = {
+    role: "assistant",
+    content: [],
+    stopReason: "error",
+    errorMessage: "transient provider error",
+  };
+  const cleanTerminal = {
+    role: "assistant",
+    content: [{ type: "text", text: "healed answer" }],
+    provider: "fixture-provider",
+    model: "fixture-model",
+    stopReason: "stop",
+  };
+  const settled = await runPiFixture(
+    `#!/bin/sh
+printf '%s\\n' '${JSON.stringify({ type: "message_end", message: streamedError })}'
+printf '%s\\n' '${JSON.stringify({ type: "agent_end", messages: [cleanTerminal] })}'
+`,
+  );
+
+  assert.equal(settled.lifecycle.phase, "completed");
+  assert.equal(settled.errorMessage, undefined);
+  assert.equal(settled.stopReason, "stop");
+  assert.equal(getFinalOutput(settled.messages), "healed answer");
+});
+
+test("a retained terminal error beats the generic child exit diagnostic", async () => {
+  const terminalError = {
+    role: "assistant",
+    content: [],
+    provider: "fixture-provider",
+    model: "fixture-model",
+    stopReason: "error",
+    errorMessage: "provider says the request was rejected",
+  };
+  const shadow = shadowPiBinary(`#!/bin/sh
+printf '%s\\n' '${JSON.stringify({ type: "agent_end", messages: [terminalError] })}'
+exit 7
+`);
+  const result = createEmptyResult("worker", "Work", 0);
+  const report = createRunReporter(result, () => {});
+
+  try {
+    const outcome = await runPiAgent({
+      task: {
+        config: agent({ systemPrompt: "" }),
+        description: "Work",
+        prompt: "do it",
+        cwd: os.tmpdir(),
+        childDepth: 1,
+        projectTrusted: false,
+      },
+      report,
+    });
+    settleResultLifecycle(result, outcome, 1);
+
+    assert.equal(result.lifecycle.phase, "failed");
+    assert.equal(result.errorMessage, "provider says the request was rejected");
+    assert.equal(result.stopReason, "error");
+  } finally {
+    shadow.restore();
+  }
+});
+
 test("toolResult messages survive streamed delivery and transcript healing", async () => {
   const assistant = {
     role: "assistant",
