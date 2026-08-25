@@ -75,7 +75,7 @@ test("a delivered report is 'reported', not 'completed'", () => {
 test("a report carries the final output and names the run", () => {
   const result = createEmptyResult("explore", "look", 0);
   result.messages.push(assistantText("three call sites"));
-  result.status = "completed";
+  result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
 
   const report = formatReport("a1b2c3d4", result);
 
@@ -86,7 +86,7 @@ test("a report carries the final output and names the run", () => {
 test("a thorough report passes through whole", () => {
   const result = createEmptyResult("explore", "look", 0);
   result.messages.push(assistantText("x".repeat(10_000)));
-  result.status = "completed";
+  result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
 
   const report = formatReport("a1b2c3d4", result);
 
@@ -97,7 +97,7 @@ test("a thorough report passes through whole", () => {
 test("a runaway report is cut, and says how much went missing", () => {
   const result = createEmptyResult("explore", "look", 0);
   result.messages.push(assistantText("x".repeat(REPORT_CHARACTER_LIMIT + 500)));
-  result.status = "completed";
+  result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
 
   const report = formatReport("a1b2c3d4", result);
 
@@ -107,7 +107,7 @@ test("a runaway report is cut, and says how much went missing", () => {
 
 test("a failure reason keeps its tail, where the diagnosis is", () => {
   const result = createEmptyResult("explore", "look", 0);
-  result.status = "failed";
+  result.lifecycle = { phase: "failed", finishedAt: 10, exitCode: 1 };
   result.stderr = `${"noise\n".repeat(2_000)}FATAL: the actual cause`;
 
   const report = formatReport("a1", result);
@@ -119,7 +119,7 @@ test("a failure reason keeps its tail, where the diagnosis is", () => {
 
 test("a failed report names the reason", () => {
   const result = createEmptyResult("explore", "look", 0);
-  result.status = "failed";
+  result.lifecycle = { phase: "failed", finishedAt: 10, exitCode: 1 };
   result.errorMessage = "model refused";
 
   assert.match(formatReport("a1", result), /failed: model refused/);
@@ -127,7 +127,7 @@ test("a failed report names the reason", () => {
 
 test("a finished run with no output says so rather than looking empty", () => {
   const result = createEmptyResult("explore", "look", 0);
-  result.status = "completed";
+  result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
 
   assert.match(formatReport("a1", result), /finished without output/);
 });

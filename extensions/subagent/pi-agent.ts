@@ -393,7 +393,7 @@ export async function runPiAgent(
     );
 
     let closeErrorMessage: string | undefined;
-    const exitCode = await new Promise<number>((resolve) => {
+    const exitCode = await new Promise<number | undefined>((resolve) => {
       const invocation = getPiInvocation(args);
       const proc = spawn(
         invocation.command,
@@ -452,14 +452,14 @@ export async function runPiAgent(
         if (stdout.overflowed()) {
           report.stderr(OVERSIZED_STDOUT_LINE_MESSAGE);
         }
-        if ((code ?? 0) !== 0 && !reportedStderr && !reportedErrorMessage) {
+        if (code !== 0 && !reportedStderr && !reportedErrorMessage) {
           closeErrorMessage =
             `Child pi exited with code ${code ?? "unknown"} without stderr` +
             (rawStdoutTail.trim()
               ? `. Last stdout: ${rawStdoutTail.trim()}`
               : ".");
         }
-        resolve(code ?? 0);
+        resolve(code ?? undefined);
       });
 
       proc.on("error", (err) => {
@@ -496,7 +496,7 @@ export async function runPiAgent(
     // killed the child (the listener is removed once it closes), so the abort
     // marker travels in the outcome; the dispatcher normalizes the rest.
     if (wasAborted) {
-      return { exitCode: 1, stopReason: "aborted" };
+      return { stopReason: "aborted" };
     }
     if (exitCode === 0 && !sawValidAgentEnd) {
       const stdoutTail = rawStdoutTail.trim();

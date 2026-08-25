@@ -10,7 +10,6 @@
 import { resolveSubagentModel, runPiAgent } from "./pi-agent.ts";
 import type { ParentModel, SubagentExecutor, SubagentTask } from "./run.ts";
 import {
-  applyOutcome,
   createEmptyResult,
   createRunReporter,
   DEPTH_ENV_KEY,
@@ -18,7 +17,7 @@ import {
 } from "./run.ts";
 import type { SubagentRuns } from "./runs.ts";
 import { subagentRuns } from "./runs.ts";
-import type { AgentConfig, SingleResult } from "./types.ts";
+import type { AgentConfig, CancellationReason, SingleResult } from "./types.ts";
 
 const MAX_SUBAGENT_DEPTH = 1;
 
@@ -112,7 +111,11 @@ export function startSubagent({
     else signal.addEventListener("abort", forwardAbort, { once: true });
   }
 
-  const handle = runs.track(result, forwardAbort);
+  let cancellationReason: CancellationReason | undefined;
+  const handle = runs.track(result, (reason) => {
+    cancellationReason = reason;
+    forwardAbort();
+  });
 
   // Progress goes to the registry and from there to whatever is on screen.
   // It cannot go back into the transcript: a detached run's tool-call row is
@@ -130,8 +133,12 @@ export function startSubagent({
       // A run cancelled before it starts must not spawn a child at all. The
       // executor would otherwise spawn one and kill it a moment later.
       if (controller.signal.aborted) {
-        applyOutcome(result, { exitCode: 1, stopReason: "aborted" });
-        settleResultLifecycle(result, now());
+        settleResultLifecycle(
+          result,
+          { stopReason: "aborted" },
+          now(),
+          cancellationReason,
+        );
         emit();
         return result;
       }
@@ -141,8 +148,7 @@ export function startSubagent({
         report,
         signal: controller.signal,
       });
-      applyOutcome(result, outcome);
-      settleResultLifecycle(result, now());
+      settleResultLifecycle(result, outcome, now(), cancellationReason);
       emit();
       return result;
     } finally {

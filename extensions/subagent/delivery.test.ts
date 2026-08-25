@@ -29,16 +29,17 @@ function deferredRun(agent = "explore"): {
     settled,
     finish(output = "the answer") {
       result.messages.push(assistantText(output));
-      result.status = "completed";
-      result.exitCode = 0;
-      result.finishedAt = 10;
+      result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
       resolve(result);
     },
     cancel() {
-      result.status = "cancelled";
-      result.exitCode = 1;
+      result.lifecycle = {
+        phase: "cancelled",
+        finishedAt: 10,
+        exitCode: 1,
+        reason: "requested",
+      };
       result.stopReason = "aborted";
-      result.finishedAt = 10;
       resolve(result);
     },
   };

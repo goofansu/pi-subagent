@@ -20,7 +20,11 @@ import {
   runPiAgent,
   translatePiJsonEvent,
 } from "./pi-agent.ts";
-import { applyOutcome, createEmptyResult, createRunReporter } from "./run.ts";
+import {
+  createEmptyResult,
+  createRunReporter,
+  settleResultLifecycle,
+} from "./run.ts";
 import type { AgentConfig, SingleResult } from "./types.ts";
 
 function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -233,7 +237,7 @@ async function runPiFixture(
     );
     // What the dispatcher does with the outcome, so assertions stay written
     // in result terms.
-    applyOutcome(result, outcome);
+    settleResultLifecycle(result, outcome, 1);
     return result;
   } finally {
     shadow.restore();
@@ -258,7 +262,10 @@ test("the child pi driver accepts exit 0 after a valid agent_end event", async (
     `#!/bin/sh\nprintf '%s\\n' '${terminalEvent}'\n`,
   );
 
-  assert.equal(settled.exitCode, 0);
+  assert.equal(
+    "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
+    0,
+  );
   assert.equal(settled.stopReason, "stop");
   assert.equal(settled.errorMessage, undefined);
   assert.equal(settled.messages.length, 1);
@@ -278,7 +285,10 @@ test("the child pi driver fails exit 0 without an agent_end event", async () => 
     `#!/bin/sh\nprintf '%s\\n' '${nonterminalEvent}'\n`,
   );
 
-  assert.equal(settled.exitCode, 1);
+  assert.equal(
+    "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
+    1,
+  );
   assert.equal(settled.stopReason, "error");
   assert.equal(settled.messages.length, 1);
   assert.match(settled.errorMessage ?? "", /valid terminal agent_end event/);
@@ -295,7 +305,10 @@ test("the child pi driver rejects a structurally invalid agent_end event", async
     `#!/bin/sh\nprintf '%s\\n' '${fakeTerminalEvent}'\n`,
   );
 
-  assert.equal(settled.exitCode, 1);
+  assert.equal(
+    "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
+    1,
+  );
   assert.equal(settled.stopReason, "error");
   assert.equal(settled.messages.length, 0);
   assert.match(settled.errorMessage ?? "", /valid terminal agent_end event/);
@@ -309,7 +322,10 @@ test("the child pi driver retains a bounded malformed stdout tail", async () => 
     `#!/bin/sh\nprintf '%s\\n' '${malformedOutput}'\n`,
   );
 
-  assert.equal(settled.exitCode, 1);
+  assert.equal(
+    "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
+    1,
+  );
   assert.equal(settled.stopReason, "error");
   assert.match(settled.errorMessage ?? "", /Last stdout:/);
   assert.match(settled.errorMessage ?? "", /diagnostic-tail/);
@@ -322,7 +338,10 @@ test("the child pi driver preserves a nonzero child exit", async () => {
     "#!/bin/sh\nprintf '%s\\n' '{not-json}'\nprintf '%s\\n' 'fixture failure' >&2\nexit 7\n",
   );
 
-  assert.equal(settled.exitCode, 7);
+  assert.equal(
+    "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
+    7,
+  );
   assert.equal(settled.stopReason, undefined);
   assert.equal(settled.errorMessage, undefined);
   assert.match(settled.stderr, /fixture failure/);
@@ -357,7 +376,10 @@ test("the child pi driver keeps cancellation authoritative over a missing agent_
   );
 
   assert.equal(abortedAfterOutput, true);
-  assert.equal(settled.exitCode, 1);
+  assert.equal(
+    "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
+    undefined,
+  );
   assert.equal(settled.stopReason, "aborted");
   assert.match(settled.errorMessage ?? "", /Subagent was cancelled/);
   assert.doesNotMatch(settled.errorMessage ?? "", /agent_end/);
@@ -607,7 +629,10 @@ test("the child pi driver ignores an abort that arrives after a clean exit", asy
   controller.abort();
   await new Promise((resolve) => setTimeout(resolve, 50));
 
-  assert.equal(settled.exitCode, 0);
+  assert.equal(
+    "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
+    0,
+  );
   assert.equal(settled.stopReason, "stop");
   assert.equal(settled.errorMessage, undefined);
 });
@@ -621,7 +646,10 @@ test("a child that exits before reading the prompt does not take the parent down
     prompt: oversizedPrompt,
   });
 
-  assert.equal(result.exitCode, 3);
+  assert.equal(
+    "exitCode" in result.lifecycle ? result.lifecycle.exitCode : undefined,
+    3,
+  );
   assert.ok(
     result.errorMessage || result.stderr,
     "the run should report why it failed",

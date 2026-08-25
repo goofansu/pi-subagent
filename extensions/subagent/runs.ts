@@ -14,7 +14,11 @@
  * the transcript holds it from then on.
  */
 
-import type { LifecycleStatus, SingleResult } from "./types.ts";
+import type {
+  CancellationReason,
+  LifecycleStatus,
+  SingleResult,
+} from "./types.ts";
 
 /** An immutable row derived from a run. Callers never see the live record. */
 export interface RunView {
@@ -56,7 +60,10 @@ export interface SubagentRuns {
    * Put a run under the registry's care. `cancel` is whatever stops this
    * particular run; the registry calls it and does not care how it works.
    */
-  track(result: SingleResult, cancel: () => void): RunHandle;
+  track(
+    result: SingleResult,
+    cancel: (reason: CancellationReason) => void,
+  ): RunHandle;
   /** Every tracked run, projected for display. */
   list(): readonly RunView[];
   /**
@@ -65,7 +72,7 @@ export interface SubagentRuns {
    */
   release(id: string): void;
   /** Stop the named runs. Returns the ids that were actually cancelled. */
-  cancel(ids: readonly string[]): string[];
+  cancel(ids: readonly string[], reason?: CancellationReason): string[];
   /** Called on every change. Returns an unsubscribe. */
   subscribe(listener: () => void): () => void;
   /** How many runs are tracked, terminal ones included. */
@@ -75,7 +82,7 @@ export interface SubagentRuns {
 interface TrackedRun {
   id: string;
   result: SingleResult;
-  cancel: () => void;
+  cancel: (reason: CancellationReason) => void;
 }
 
 function isTerminal(status: LifecycleStatus): boolean {
@@ -109,12 +116,15 @@ export function createSubagentRuns(
 
   const project = (run: TrackedRun): RunView => {
     const { result } = run;
-    const end = result.finishedAt ?? clock.now();
+    const end =
+      result.lifecycle.phase === "running"
+        ? clock.now()
+        : result.lifecycle.finishedAt;
     return {
       id: run.id,
       agent: result.agent,
       description: result.description,
-      status: result.status,
+      status: result.lifecycle.phase,
       elapsedMs: Math.max(0, end - result.startedAt),
       cost: result.usage.cost,
       // Recorded by the dispatcher's fold as messages arrive; the registry
@@ -149,14 +159,14 @@ export function createSubagentRuns(
       return [...runs.values()].map(project);
     },
 
-    cancel(ids) {
+    cancel(ids, reason = "requested") {
       const cancelled: string[] = [];
       for (const id of ids) {
         const run = runs.get(id);
         // Cancelling a run that already settled is a no-op, not an error: the
         // caller raced the run and lost, which is not a failure of theirs.
-        if (!run || isTerminal(run.result.status)) continue;
-        run.cancel();
+        if (!run || isTerminal(run.result.lifecycle.phase)) continue;
+        run.cancel(reason);
         cancelled.push(id);
       }
       if (cancelled.length > 0) notify();

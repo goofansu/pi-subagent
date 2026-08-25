@@ -19,8 +19,9 @@ import type { Message } from "@earendil-works/pi-ai";
 import { deriveActivity } from "./messages.ts";
 import type {
   AgentConfig,
+  CancellationReason,
+  Lifecycle,
   SingleResult,
-  TerminalLifecycleStatus,
   UsageStats,
 } from "./types.ts";
 
@@ -68,11 +69,23 @@ const CANCELLED_MESSAGE = "Subagent was cancelled";
  * executor say `aborted`, the domain says `cancelled`, and nothing above
  * this seam sees the wire word.
  */
-function terminalStatus(result: SingleResult): TerminalLifecycleStatus {
-  if (result.stopReason === "aborted") return "cancelled";
-  if (result.exitCode === 0 && result.stopReason !== "error")
-    return "completed";
-  return "failed";
+function terminalLifecycle(
+  outcome: SubagentOutcome,
+  finishedAt: number,
+  cancellationReason?: CancellationReason,
+): Lifecycle {
+  const exitCode = outcome.exitCode;
+  if (outcome.stopReason === "aborted") {
+    return {
+      phase: "cancelled",
+      finishedAt,
+      ...(exitCode === undefined ? {} : { exitCode }),
+      reason: cancellationReason ?? "requested",
+    };
+  }
+  const phase =
+    exitCode === 0 && outcome.stopReason !== "error" ? "completed" : "failed";
+  return { phase, finishedAt, ...(exitCode === undefined ? {} : { exitCode }) };
 }
 
 /**
@@ -82,15 +95,17 @@ function terminalStatus(result: SingleResult): TerminalLifecycleStatus {
  */
 export function settleResultLifecycle(
   result: SingleResult,
+  outcome: SubagentOutcome,
   finishedAt: number,
+  cancellationReason?: CancellationReason,
 ): void {
-  if (result.status !== "running") {
+  if (result.lifecycle.phase !== "running") {
     throw new Error(
-      `Cannot settle a subagent result in '${result.status}' state`,
+      `Cannot settle a subagent result in '${result.lifecycle.phase}' state`,
     );
   }
-  result.status = terminalStatus(result);
-  result.finishedAt = finishedAt;
+  applyOutcome(result, outcome);
+  result.lifecycle = terminalLifecycle(outcome, finishedAt, cancellationReason);
 }
 
 /** The caller's model, used when an agent profile does not pin one. */
@@ -149,7 +164,8 @@ export interface RunReporter {
  * ending says otherwise.
  */
 export interface SubagentOutcome {
-  exitCode: number;
+  /** Absent when the child exited because of a signal. */
+  exitCode?: number;
   stopReason?: string;
   errorMessage?: string;
 }
@@ -194,9 +210,8 @@ export function createEmptyResult(
   return {
     agent,
     description,
-    status: "running",
+    lifecycle: { phase: "running" },
     startedAt,
-    exitCode: -1, // -1 = pending
     messages: [],
     stderr: "",
     usage: emptyUsage(),
@@ -287,12 +302,10 @@ export function applyOutcome(
   outcome: SubagentOutcome,
 ): void {
   if (outcome.stopReason === "aborted") {
-    result.exitCode = 1;
     result.stopReason = "aborted";
     result.errorMessage = CANCELLED_MESSAGE;
     return;
   }
-  result.exitCode = outcome.exitCode;
   if (outcome.stopReason) result.stopReason = outcome.stopReason;
   if (outcome.errorMessage) result.errorMessage = outcome.errorMessage;
 }

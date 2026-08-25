@@ -28,19 +28,26 @@ export const EFFORTS = [
 ] as const;
 export type Effort = (typeof EFFORTS)[number];
 
-export type LifecycleStatus = "running" | "completed" | "failed" | "cancelled";
+export type CancellationReason = "requested" | "shutdown";
+export type Lifecycle =
+  | { phase: "running" }
+  | { phase: "completed"; finishedAt: number; exitCode?: number }
+  | { phase: "failed"; finishedAt: number; exitCode?: number }
+  | {
+      phase: "cancelled";
+      finishedAt: number;
+      exitCode?: number;
+      reason: CancellationReason;
+    };
+export type LifecycleStatus = Lifecycle["phase"];
 export type TerminalLifecycleStatus = Exclude<LifecycleStatus, "running">;
 
 export interface SingleResult {
   agent: string;
   description: string;
-  status: LifecycleStatus;
+  lifecycle: Lifecycle;
   /** Epoch milliseconds when the run's child pi was spawned. */
   startedAt: number;
-  /** Epoch milliseconds when the run reached a terminal state. */
-  finishedAt?: number;
-  /** -1 while pending, 0 on success, non-zero on failure. */
-  exitCode: number;
   messages: Message[];
   stderr: string;
   usage: UsageStats;

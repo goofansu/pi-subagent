@@ -123,8 +123,11 @@ function fakeStart(onOptions: (options: RunSubagentOptions) => void) {
       id: "run-1",
       settled: new Promise((resolve) => {
         settle = () => {
-          result.status = "completed";
-          result.exitCode = 0;
+          result.lifecycle = {
+            phase: "completed",
+            finishedAt: 10,
+            exitCode: 0,
+          };
           resolve(result);
         };
       }),
@@ -592,7 +595,7 @@ test("a settled run is not asked to stop again on quit", async () => {
 
   let stops = 0;
   const result = createEmptyResult("explore", "look", 0);
-  result.status = "completed";
+  result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
   const handle = subagentRuns.track(result, () => stops++);
   try {
     await shutdown({ reason: "quit" }, {});

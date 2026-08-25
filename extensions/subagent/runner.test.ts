@@ -94,10 +94,16 @@ async function startAndSettle(
 test("createEmptyResult starts a run running from its start time", () => {
   const result = createEmptyResult("worker", "a task", 1_000);
 
-  assert.equal(result.status, "running");
+  assert.equal(result.lifecycle.phase, "running");
   assert.equal(result.startedAt, 1_000);
-  assert.equal(result.finishedAt, undefined);
-  assert.equal(result.exitCode, -1);
+  assert.equal(
+    "finishedAt" in result.lifecycle ? result.lifecycle.finishedAt : undefined,
+    undefined,
+  );
+  assert.equal(
+    "exitCode" in result.lifecycle ? result.lifecycle.exitCode : undefined,
+    undefined,
+  );
   assert.deepEqual(result.messages, []);
   assert.equal(result.usage.turns, 0);
   assert.equal(result.usage.cost, 0);
@@ -181,7 +187,7 @@ test("getSubagentDepth reads the environment and defaults to zero", () => {
 
 test("startSubagent publishes progress to the registry, not the transcript", async () => {
   const runs = createSubagentRuns();
-  const statuses: Array<SingleResult["status"]> = [];
+  const statuses: Array<SingleResult["lifecycle"]["phase"]> = [];
   runs.subscribe(() => {
     const [view] = runs.list();
     if (view) statuses.push(view.status);
@@ -209,10 +215,18 @@ test("startSubagent publishes progress to the registry, not the transcript", asy
     "a run settles exactly once",
   );
   assert.ok(statuses.length >= 3, "progress is published as the run advances");
-  assert.equal(reported.exitCode, 0);
-  assert.equal(reported.status, "completed");
+  assert.equal(
+    "exitCode" in reported.lifecycle ? reported.lifecycle.exitCode : undefined,
+    0,
+  );
+  assert.equal(reported.lifecycle.phase, "completed");
   assert.equal(reported.startedAt, 1_000);
-  assert.equal(reported.finishedAt, 4_500);
+  assert.equal(
+    "finishedAt" in reported.lifecycle
+      ? reported.lifecycle.finishedAt
+      : undefined,
+    4_500,
+  );
   assert.equal(reported.effort, "high");
 });
 
@@ -235,9 +249,14 @@ test("startSubagent centrally maps every outcome to a terminal state", async () 
       now: () => times.shift() ?? assert.fail("unexpected clock read"),
     });
 
-    assert.equal(result.status, expected);
+    assert.equal(result.lifecycle.phase, expected);
     assert.equal(result.startedAt, 100);
-    assert.equal(result.finishedAt, 700);
+    assert.equal(
+      "finishedAt" in result.lifecycle
+        ? result.lifecycle.finishedAt
+        : undefined,
+      700,
+    );
   }
 });
 
@@ -327,9 +346,12 @@ test("a run cancelled before it starts never spawns a child", async () => {
   });
 
   assert.equal(executorCalls, 0);
-  assert.equal(result.status, "cancelled");
+  assert.equal(result.lifecycle.phase, "cancelled");
   assert.equal(result.stopReason, "aborted");
-  assert.equal(result.finishedAt, 500);
+  assert.equal(
+    "finishedAt" in result.lifecycle ? result.lifecycle.finishedAt : undefined,
+    500,
+  );
 });
 
 // ── Registry ──────────────────────────────────────────────────────────────────
@@ -377,7 +399,10 @@ test("the registry can cancel one run without touching the turn", async () => {
   const result = await started.settled;
 
   assert.equal(sawAbort, true, "the executor sees its own run cancelled");
-  assert.equal(result.status, "cancelled");
+  assert.equal(result.lifecycle.phase, "cancelled");
+  if (result.lifecycle.phase === "cancelled") {
+    assert.equal(result.lifecycle.reason, "requested");
+  }
 });
 
 // ── Trust ─────────────────────────────────────────────────────────────────────

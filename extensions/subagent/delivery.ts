@@ -290,7 +290,7 @@ export function createSubagentDelivery({
     retained.set(entry.id, {
       id: entry.id,
       agent: result.agent,
-      status: result.status,
+      status: result.lifecycle.phase,
       output: fullOutput(result),
     });
     enforceRetentionBudget();
@@ -348,7 +348,7 @@ export function createSubagentDelivery({
     const report: PushedReport = {
       id: entry.id,
       agent: result.agent,
-      status: result.status,
+      status: result.lifecycle.phase,
       text,
       truncated: !text.includes(output) && output.length > 0,
     };
@@ -443,7 +443,7 @@ export function createSubagentDelivery({
           collected.push({
             id: entry.id,
             agent: entry.result.agent,
-            status: entry.result.status,
+            status: entry.result.lifecycle.phase,
           });
           deliver(entry, false);
         }
@@ -519,6 +519,7 @@ export function createSubagentDelivery({
           .list()
           .filter((run) => run.status === "running")
           .map((run) => run.id),
+        "shutdown",
       );
       // Every undelivered run is marked delivered so nothing pushes into the
       // next session, and released so the registry starts the next session

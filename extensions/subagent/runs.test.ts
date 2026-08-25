@@ -58,8 +58,7 @@ test("a settled run stops accruing elapsed time", () => {
   runs.track(result, () => {});
 
   clock.advance(1_000);
-  result.exitCode = 0;
-  settleResultLifecycle(result, clock.now());
+  settleResultLifecycle(result, { exitCode: 0 }, clock.now());
   clock.advance(10_000);
 
   assert.equal(runs.list()[0].status, "completed");
@@ -130,9 +129,7 @@ test("cancelling an unknown or already-settled run is a no-op", () => {
   const result = runningResult();
   let cancelled = 0;
   runs.track(result, () => cancelled++);
-
-  result.exitCode = 0;
-  settleResultLifecycle(result, clock.now());
+  settleResultLifecycle(result, { exitCode: 0 }, clock.now());
 
   assert.deepEqual(runs.cancel(["run-1", "nonexistent"]), []);
   assert.equal(cancelled, 0);

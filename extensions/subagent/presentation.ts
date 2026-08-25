@@ -158,8 +158,8 @@ function keepTail(text: string, limit: number): string {
  * is the only reader that knows it.
  */
 export function fullOutput(result: SingleResult): string {
-  if (result.status === "cancelled") return "";
-  if (result.status === "failed") {
+  if (result.lifecycle.phase === "cancelled") return "";
+  if (result.lifecycle.phase === "failed") {
     return (
       result.errorMessage || result.stderr || getFinalOutput(result.messages)
     );
@@ -175,10 +175,10 @@ export function fullOutput(result: SingleResult): string {
 export function formatReport(id: string, result: SingleResult): string {
   const name = `${result.agent} (${id})`;
 
-  if (result.status === "cancelled") {
+  if (result.lifecycle.phase === "cancelled") {
     return `Subagent ${name} was cancelled before it finished.`;
   }
-  if (result.status === "failed") {
+  if (result.lifecycle.phase === "failed") {
     const reason =
       result.errorMessage || result.stderr || getFinalOutput(result.messages);
     return `Subagent ${name} failed: ${
