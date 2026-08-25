@@ -220,7 +220,7 @@ test("startSubagent centrally maps every outcome to a terminal state", async () 
   const cases = [
     { exitCode: 0, stopReason: "stop", expected: "completed" },
     { exitCode: 1, stopReason: "error", expected: "failed" },
-    { exitCode: 1, stopReason: "aborted", expected: "aborted" },
+    { exitCode: 1, stopReason: "aborted", expected: "cancelled" },
   ] as const;
 
   for (const { expected, ...outcome } of cases) {
@@ -327,7 +327,7 @@ test("a run cancelled before it starts never spawns a child", async () => {
   });
 
   assert.equal(executorCalls, 0);
-  assert.equal(result.status, "aborted");
+  assert.equal(result.status, "cancelled");
   assert.equal(result.stopReason, "aborted");
   assert.equal(result.finishedAt, 500);
 });
@@ -377,7 +377,7 @@ test("the registry can cancel one run without touching the turn", async () => {
   const result = await started.settled;
 
   assert.equal(sawAbort, true, "the executor sees its own run cancelled");
-  assert.equal(result.status, "aborted");
+  assert.equal(result.status, "cancelled");
 });
 
 // ── Trust ─────────────────────────────────────────────────────────────────────

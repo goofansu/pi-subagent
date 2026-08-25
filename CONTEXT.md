@@ -27,6 +27,12 @@ reload, quit) cancels whatever is still running.
 **Child pi** — the process a run executes in. One-shot: it takes one prompt on
 stdin and produces one answer. It cannot be steered mid-flight.
 
+**Cancel** — request that a run stop. *Cancelled* is the terminal domain status
+of a run stopped intentionally; the model, the operator, and presentation all
+say cancelled. *Abort* is not a domain word: it is mechanism vocabulary —
+`AbortController`/`AbortSignal`, pi's `stopReason: "aborted"` — normalized to
+cancelled at the executor seam and never shown above it.
+
 ## Delivery
 
 **Report** — what a run gives back: its final assistant output, and nothing

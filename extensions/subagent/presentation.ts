@@ -77,11 +77,11 @@ const STATUS_PRESENTATION: Record<
     verb: "failed",
     phrase: (duration) => `failed after ${duration}`,
   },
-  aborted: {
+  cancelled: {
     glyph: "○",
     tone: "error",
-    verb: "aborted",
-    phrase: (duration) => `aborted after ${duration}`,
+    verb: "cancelled",
+    phrase: (duration) => `cancelled after ${duration}`,
   },
 };
 
@@ -158,7 +158,7 @@ function keepTail(text: string, limit: number): string {
  * is the only reader that knows it.
  */
 export function fullOutput(result: SingleResult): string {
-  if (result.status === "aborted") return "";
+  if (result.status === "cancelled") return "";
   if (result.status === "failed") {
     return (
       result.errorMessage || result.stderr || getFinalOutput(result.messages)
@@ -175,7 +175,7 @@ export function fullOutput(result: SingleResult): string {
 export function formatReport(id: string, result: SingleResult): string {
   const name = `${result.agent} (${id})`;
 
-  if (result.status === "aborted") {
+  if (result.status === "cancelled") {
     return `Subagent ${name} was cancelled before it finished.`;
   }
   if (result.status === "failed") {

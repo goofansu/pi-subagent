@@ -35,7 +35,7 @@ function deferredRun(agent = "explore"): {
       resolve(result);
     },
     cancel() {
-      result.status = "aborted";
+      result.status = "cancelled";
       result.exitCode = 1;
       result.stopReason = "aborted";
       result.finishedAt = 10;
@@ -209,7 +209,7 @@ test("a cancelled run's outcome is still recallable once its child dies", async 
   assert.deepEqual(delivery.recall(handle.id), {
     id: handle.id,
     agent: "explore",
-    status: "aborted",
+    status: "cancelled",
     output: "",
   });
 });
@@ -234,7 +234,7 @@ test("a cancelled run's id keeps answering while its child dies", async () => {
 
   run.cancel();
   await flush();
-  assert.equal(delivery.recall(handle.id)?.status, "aborted");
+  assert.equal(delivery.recall(handle.id)?.status, "cancelled");
   assert.deepEqual(pushed, [], "the cancel stays the only delivery");
 });
 

@@ -44,14 +44,14 @@ test("formatRunStatus words each lifecycle state with its duration", () => {
     "failed after 5.0s",
   );
   assert.equal(
-    formatRunStatus({ status: "aborted", elapsedMs: 3_000 }),
-    "aborted after 3.0s",
+    formatRunStatus({ status: "cancelled", elapsedMs: 3_000 }),
+    "cancelled after 3.0s",
   );
 });
 
 test("each lifecycle state has its own glyph-and-tone pair", () => {
   assert.deepEqual(
-    (["running", "completed", "failed", "aborted"] as const).map((status) => [
+    (["running", "completed", "failed", "cancelled"] as const).map((status) => [
       runStatusGlyph(status),
       runStatusTone(status),
     ]),
@@ -67,7 +67,7 @@ test("each lifecycle state has its own glyph-and-tone pair", () => {
 test("a delivered report is 'reported', not 'completed'", () => {
   assert.equal(reportVerb("completed"), "reported");
   assert.equal(reportVerb("failed"), "failed");
-  assert.equal(reportVerb("aborted"), "aborted");
+  assert.equal(reportVerb("cancelled"), "cancelled");
 });
 
 // ── Report shape ─────────────────────────────────────────────────────────────

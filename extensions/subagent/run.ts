@@ -58,12 +58,18 @@ export function appendStderr(existing: string, chunk: string): string {
   );
 }
 
-/** The message an aborted run reports. */
-const ABORTED_MESSAGE = "Subagent was aborted";
+/** The message a cancelled run reports. */
+const CANCELLED_MESSAGE = "Subagent was cancelled";
 
-/** Derive one terminal lifecycle state from the recorded outcome fields. */
+/**
+ * Derive one terminal lifecycle state from the recorded outcome fields.
+ *
+ * This is where wire vocabulary becomes domain vocabulary: pi and the
+ * executor say `aborted`, the domain says `cancelled`, and nothing above
+ * this seam sees the wire word.
+ */
 function terminalStatus(result: SingleResult): TerminalLifecycleStatus {
-  if (result.stopReason === "aborted") return "aborted";
+  if (result.stopReason === "aborted") return "cancelled";
   if (result.exitCode === 0 && result.stopReason !== "error")
     return "completed";
   return "failed";
@@ -283,7 +289,7 @@ export function applyOutcome(
   if (outcome.stopReason === "aborted") {
     result.exitCode = 1;
     result.stopReason = "aborted";
-    result.errorMessage = ABORTED_MESSAGE;
+    result.errorMessage = CANCELLED_MESSAGE;
     return;
   }
   result.exitCode = outcome.exitCode;

@@ -28,7 +28,7 @@ export const EFFORTS = [
 ] as const;
 export type Effort = (typeof EFFORTS)[number];
 
-export type LifecycleStatus = "running" | "completed" | "failed" | "aborted";
+export type LifecycleStatus = "running" | "completed" | "failed" | "cancelled";
 export type TerminalLifecycleStatus = Exclude<LifecycleStatus, "running">;
 
 export interface SingleResult {
