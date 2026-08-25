@@ -62,7 +62,7 @@ function harness() {
   const push = (report: PushedNotification): void => {
     reports.push(report);
     pushed.push(report.text);
-    delivery.reportLanded(report.id);
+    delivery.notificationLanded(report.id);
   };
   delivery = createSubagentDelivery({ push, runs });
   return { reports, pushed, runs, delivery };
@@ -260,7 +260,7 @@ test("a pushed report keeps its run listed until the message lands", async () =>
   assert.equal(pushed.length, 1, "the report was pushed");
   assert.equal(runs.size(), 1, "done, waiting to report — still listed");
 
-  delivery.reportLanded(handle.id);
+  delivery.notificationLanded(handle.id);
 
   assert.equal(runs.size(), 0, "released when the message entered");
 });
@@ -268,7 +268,7 @@ test("a pushed report keeps its run listed until the message lands", async () =>
 test("landing an unknown id changes nothing", () => {
   const { delivery, runs } = harness();
 
-  delivery.reportLanded("never-existed");
+  delivery.notificationLanded("never-existed");
 
   assert.equal(runs.size(), 0);
 });
@@ -303,7 +303,7 @@ test("INV-9: an interrupt-discarded follow-up is pushed again after settle", asy
   assert.equal(pushed[1].text, pushed[0].text, "the same report, verbatim");
   assert.equal(runs.size(), 1, "still listed until the retry lands");
 
-  delivery.reportLanded(handle.id);
+  delivery.notificationLanded(handle.id);
   assert.equal(runs.size(), 0);
 });
 
@@ -317,7 +317,7 @@ test("one landing per run: re-push never double-delivers", async () => {
 
   delivery.turnAborted();
   // Pi's continuation drained the surviving queue: the report landed.
-  delivery.reportLanded(handle.id);
+  delivery.notificationLanded(handle.id);
   delivery.agentSettled();
 
   assert.equal(pushed.length, 1, "a landed report is never doubled");
@@ -586,6 +586,17 @@ test("a wait entered with a cancelled turn gives up immediately", async () => {
 });
 
 // ── A push target that fails ─────────────────────────────────────────────────
+
+test("an unexpected executor rejection remains awaitable and retrievable", async () => {
+  const { delivery } = harness();
+  delivery.register("run-1", Promise.reject(new Error("executor bug")));
+  await flush();
+
+  assert.deepEqual((await delivery.wait(["run-1"])).terminal, [
+    { id: "run-1", agent: "unknown", phase: "failed" },
+  ]);
+  assert.match(delivery.result("run-1")?.output ?? "", /executor bug/);
+});
 
 test("INV-9: notification failure cannot invalidate the stored result", async () => {
   const runs = createSubagentRuns();

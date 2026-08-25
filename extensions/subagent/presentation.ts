@@ -78,7 +78,7 @@ export function runStatusTone(status: LifecycleStatus): string {
 }
 
 /** The word a collapsed report line says a run did. */
-export function reportVerb(status: LifecycleStatus): string {
+export function notificationVerb(status: LifecycleStatus): string {
   return STATUS_PRESENTATION[status].verb;
 }
 

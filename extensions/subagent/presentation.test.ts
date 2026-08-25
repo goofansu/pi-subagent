@@ -7,7 +7,7 @@ import {
   formatRunStatus,
   fullOutput,
   NOTIFICATION_PREVIEW_CHARACTER_LIMIT,
-  reportVerb,
+  notificationVerb,
   runStatusGlyph,
   runStatusTone,
 } from "./presentation.ts";
@@ -65,9 +65,9 @@ test("each lifecycle state has its own glyph-and-tone pair", () => {
 });
 
 test("a delivered report is 'reported', not 'completed'", () => {
-  assert.equal(reportVerb("completed"), "reported");
-  assert.equal(reportVerb("failed"), "failed");
-  assert.equal(reportVerb("cancelled"), "cancelled");
+  assert.equal(notificationVerb("completed"), "reported");
+  assert.equal(notificationVerb("failed"), "failed");
+  assert.equal(notificationVerb("cancelled"), "cancelled");
 });
 
 // ── Report shape ─────────────────────────────────────────────────────────────

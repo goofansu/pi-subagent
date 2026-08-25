@@ -432,7 +432,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
     if (message.role !== "custom") return;
     if (message.customType !== NOTIFICATION_MESSAGE_TYPE) return;
     const id = message.details?.id;
-    if (id) getProcessDelivery().reportLanded(id);
+    if (id) getProcessDelivery().notificationLanded(id);
   });
 
   // A report pushed while the model is mid-turn rides pi's follow-up queue,

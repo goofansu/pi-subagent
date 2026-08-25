@@ -13,7 +13,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import {
   formatCharacterCount,
-  reportVerb,
+  notificationVerb,
   runStatusTone,
 } from "./presentation.ts";
 import { contentText } from "./render.ts";
@@ -65,7 +65,7 @@ export function formatNotificationSummary(
   renderKeyHint = keyHint,
 ): string {
   const tone = runStatusTone(details.status);
-  const verb = reportVerb(details.status);
+  const verb = notificationVerb(details.status);
 
   const line =
     theme.fg("toolTitle", theme.bold(details.agent)) +

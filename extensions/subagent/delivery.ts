@@ -19,7 +19,7 @@ import type { LifecycleStatus, SingleResult } from "./types.ts";
 export interface PushedNotification {
   id: string;
   agent: string;
-  status: LifecycleStatus;
+  status: Exclude<LifecycleStatus, "running">;
   /** The bounded orientation message the model reads. */
   text: string;
 }
@@ -164,7 +164,7 @@ export interface SubagentDelivery {
    * run stays listed — "done, waiting to report" — until this confirms the
    * model can actually see the report. Unknown ids are ignored.
    */
-  reportLanded(id: string): void;
+  notificationLanded(id: string): void;
   /**
    * The turn ended aborted. Pi's interactive host clears its queued messages
    * on the operator's interrupt, and a pushed report riding that queue is
@@ -257,6 +257,8 @@ export function createSubagentDelivery({
   };
 
   const notify = (id: string, result: SingleResult): void => {
+    if (result.lifecycle.phase === "running")
+      throw new Error(`Cannot notify for running subagent ${id}`);
     const notification: PushedNotification = {
       id,
       agent: result.agent,
@@ -284,13 +286,22 @@ export function createSubagentDelivery({
           if (registeredGeneration !== generation || pending.get(id) !== entry)
             return;
           pending.delete(id);
+          const message =
+            error instanceof Error ? error.message : String(error);
+          results.set(id, {
+            id,
+            agent: "unknown",
+            status: "failed",
+            output:
+              `This run failed before completing.\n\nFailure: ${message}` +
+              "\n\nThe run failed before producing output.",
+          });
+          enforceResultStoreBudget();
           const notification: PushedNotification = {
             id,
             agent: "unknown",
             status: "failed",
-            text: `Subagent run ${id} ended unexpectedly: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+            text: `Subagent run ${id} ended unexpectedly: ${message}`,
           };
           notifications.set(id, { phase: "pending", notification });
           applyNotificationEvent(id, { type: "push" });
@@ -330,7 +341,7 @@ export function createSubagentDelivery({
 
     result: (id) => results.get(id),
 
-    reportLanded(id) {
+    notificationLanded(id) {
       applyNotificationEvent(id, { type: "landed" });
     },
 
