@@ -96,6 +96,16 @@ test("N3: failed notification carries only the primary error and pointer", () =>
   );
 });
 
+test("N1: failed notification bounds a pathological error message", () => {
+  const result = createEmptyResult("explore", "look", 0);
+  result.lifecycle = { phase: "failed", finishedAt: 10, exitCode: 1 };
+  result.errorMessage = "y".repeat(NOTIFICATION_PREVIEW_CHARACTER_LIMIT + 500);
+
+  const notification = formatNotification("a1", result);
+  assert.ok(notification.length < NOTIFICATION_PREVIEW_CHARACTER_LIMIT + 200);
+  assert.match(notification, /Use agent_result with id a1/);
+});
+
 test("completed results preserve output exactly", () => {
   const result = createEmptyResult("explore", "look", 0);
   result.messages.push(assistantText("  answer\n"));

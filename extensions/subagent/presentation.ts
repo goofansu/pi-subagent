@@ -171,8 +171,15 @@ export function formatNotification(id: string, result: SingleResult): string {
         : "No output was produced.";
       return `Subagent ${name} completed.\n\n${preview}\n\n${pointer}`;
     }
-    case "failed":
-      return `Subagent ${name} failed: ${result.errorMessage || "no reason reported"}\n\n${pointer}`;
+    case "failed": {
+      // Bounded like the completed preview (N1): the primary error is
+      // normally short, but nothing upstream guarantees it, and the whole
+      // message stays behind agent_result either way.
+      const reason = notificationPreview(
+        result.errorMessage || "no reason reported",
+      );
+      return `Subagent ${name} failed: ${reason}\n\n${pointer}`;
+    }
     case "cancelled":
       return `Subagent ${name} was cancelled (${result.lifecycle.reason}).`;
   }

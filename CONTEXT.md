@@ -15,8 +15,10 @@ body that is the agent's prompt. Named after the agent, so `explore.md` defines
 `explore`. Read only from user scope; see `getAgentsDir`.
 
 **Run** — one execution of one profile against one prompt. A run has an id, a
-lifecycle, a transcript, usage, and notification delivery state. Runs are the thing the
-registry holds and the widget lists. Not "job", not "task", not "call".
+lifecycle, a transcript, and usage. Runs are the thing the registry holds and
+the widget lists. Not "job", not "task", not "call". Notification delivery
+state is a separate state machine, tracked by the delivery module keyed by run
+id — never on the run itself.
 
 **Detached run** — a run that outlives the turn that started it. Every run
 started by `agent_start` is detached from the turn: `Escape` does not stop it.
@@ -101,8 +103,9 @@ transcript.
 **Trust** — pi's project-trust decision for the working directory, resolved by
 the session and forwarded to every child. The extension never derives its own.
 
-**Shutdown** — every `session_shutdown` stops every running run, marks
-drops every unlanded notification and clears the result store, so neither a notification nor a stored result follows the operator into the next session. The next
+**Shutdown** — every `session_shutdown` stops every running run, drops every
+unlanded notification, and clears the result store, so neither a notification
+nor a stored result follows the operator into the next session. The next
 session's model never started these runs and has no context to act on their
 answers; after quit or reload nothing could notify about them at all. The delivery
 module owns this as one operation (`shutdown`).
