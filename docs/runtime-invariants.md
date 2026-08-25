@@ -107,6 +107,21 @@ Notification delivery is retried when the host lets a lost push be detected.
 That retry is reliability for orchestration, not part of result correctness:
 a lost notification never implies lost work (INV-9).
 
+The delivery state machine is:
+
+```text
+pending --push--> awaiting-landing --landed--> delivered
+                    |
+                 known-lost
+                    |
+                    +--retry--> awaiting-landing
+```
+
+An interrupt marks every queued, unlanded notice `known-lost`. A landing that
+races that mark wins and makes the notice `delivered`; otherwise agent settle
+retries it. Session shutdown moves every unlanded notice to `delivered` without
+pushing and releases its run.
+
 ### N1 — Notifications are bounded independently of result size
 
 The notification's preview budget is its own constant, not the whole-report

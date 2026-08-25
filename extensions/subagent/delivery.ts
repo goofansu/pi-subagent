@@ -5,6 +5,11 @@
  * known to be lost.
  */
 
+import {
+  type NotificationDeliveryEvent,
+  type NotificationDeliveryState,
+  transitionNotification,
+} from "./notification-delivery.ts";
 import { formatNotification, fullOutput } from "./presentation.ts";
 import type { SubagentRuns } from "./runs.ts";
 import { subagentRuns } from "./runs.ts";
@@ -200,8 +205,7 @@ export function createSubagentDelivery({
 }: DeliveryOptions): SubagentDelivery {
   const pending = new Map<string, Pending>();
   const results = new Map<string, RetainedResult>();
-  const awaitingLanding = new Map<string, PushedNotification>();
-  let unlandedAtAbort: string[] = [];
+  const notifications = new Map<string, NotificationDeliveryState>();
   let generation = 0;
 
   const enforceResultStoreBudget = (): void => {
@@ -240,6 +244,18 @@ export function createSubagentDelivery({
     }
   };
 
+  const applyNotificationEvent = (
+    id: string,
+    event: NotificationDeliveryEvent,
+  ): void => {
+    const current = notifications.get(id);
+    if (!current) return;
+    const transition = transitionNotification(current, event);
+    notifications.set(id, transition.state);
+    if (transition.push) safePush(transition.push);
+    if (transition.release) runs.release(id);
+  };
+
   const notify = (id: string, result: SingleResult): void => {
     const notification: PushedNotification = {
       id,
@@ -247,8 +263,8 @@ export function createSubagentDelivery({
       status: result.lifecycle.phase,
       text: formatNotification(id, result),
     };
-    awaitingLanding.set(id, notification);
-    safePush(notification);
+    notifications.set(id, { phase: "pending", notification });
+    applyNotificationEvent(id, { type: "push" });
   };
 
   return {
@@ -276,8 +292,8 @@ export function createSubagentDelivery({
               error instanceof Error ? error.message : String(error)
             }`,
           };
-          awaitingLanding.set(id, notification);
-          safePush(notification);
+          notifications.set(id, { phase: "pending", notification });
+          applyNotificationEvent(id, { type: "push" });
         }
       })();
     },
@@ -315,20 +331,20 @@ export function createSubagentDelivery({
     result: (id) => results.get(id),
 
     reportLanded(id) {
-      if (!awaitingLanding.delete(id)) return;
-      runs.release(id);
+      applyNotificationEvent(id, { type: "landed" });
     },
 
     turnAborted() {
-      unlandedAtAbort = [...awaitingLanding.keys()];
+      for (const [id, state] of notifications) {
+        if (state.phase === "awaiting-landing")
+          applyNotificationEvent(id, { type: "known-lost" });
+      }
     },
 
     agentSettled() {
-      const dropped = unlandedAtAbort;
-      unlandedAtAbort = [];
-      for (const id of dropped) {
-        const notification = awaitingLanding.get(id);
-        if (notification) safePush(notification);
+      for (const [id, state] of notifications) {
+        if (state.phase === "known-lost")
+          applyNotificationEvent(id, { type: "retry" });
       }
     },
 
@@ -356,10 +372,10 @@ export function createSubagentDelivery({
       );
       generation++;
       for (const id of pending.keys()) runs.release(id);
-      for (const id of awaitingLanding.keys()) runs.release(id);
+      for (const id of notifications.keys())
+        applyNotificationEvent(id, { type: "shutdown" });
       pending.clear();
-      awaitingLanding.clear();
-      unlandedAtAbort = [];
+      notifications.clear();
       results.clear();
     },
   };

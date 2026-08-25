@@ -414,7 +414,7 @@ test("a delivered run is released from the registry", async () => {
 
 // ── Retention ────────────────────────────────────────────────────────────────
 
-test("a delivered run's whole output stays readable by id", async () => {
+test("INV-4: a stored result is durable and repeatable", async () => {
   const { delivery } = harness();
   const run = deferredRun();
   delivery.register("run-1", run.settled);
@@ -464,7 +464,7 @@ test("an unknown id recalls nothing rather than throwing", () => {
   assert.equal(delivery.result("never-existed"), undefined);
 });
 
-test("retention past its budget evicts the oldest output, which still answers", async () => {
+test("INV-4: result eviction is oldest-first and unaffected by retrieval", async () => {
   const runs = createSubagentRuns();
   const delivery = createSubagentDelivery({
     push: () => {},
@@ -587,7 +587,7 @@ test("a wait entered with a cancelled turn gives up immediately", async () => {
 
 // ── A push target that fails ─────────────────────────────────────────────────
 
-test("a throwing push loses neither the process nor the report", async () => {
+test("INV-9: notification failure cannot invalidate the stored result", async () => {
   const runs = createSubagentRuns();
   const delivery = createSubagentDelivery({
     push: () => {
