@@ -1,12 +1,9 @@
-import type {
-  ExtensionUIContext,
-  ToolRenderResultOptions,
-} from "@earendil-works/pi-coding-agent";
+import type { ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Markdown, Text } from "@earendil-works/pi-tui";
 import { formatCharacterCount, runStatusTone } from "./presentation.ts";
-import type { LifecycleStatus } from "./types.ts";
+import type { LifecycleStatus, RenderableTheme } from "./types.ts";
 
 type SubagentArgs = {
   agent: string;
@@ -14,7 +11,6 @@ type SubagentArgs = {
   prompt: string;
 };
 
-type Theme = ExtensionUIContext["theme"];
 type RenderCallContext = { lastComponent?: Component; expanded: boolean };
 
 /**
@@ -32,7 +28,7 @@ type RenderCallContext = { lastComponent?: Component; expanded: boolean };
  */
 export function renderSubagentCall(
   args: SubagentArgs,
-  theme: Theme,
+  theme: RenderableTheme,
   context: RenderCallContext,
 ): Component {
   const text =
@@ -93,7 +89,7 @@ function isCollectedRuns(value: unknown): value is CollectedRuns {
 export function formatCollectedSummary(
   collected: CollectedRuns,
   characters: number,
-  theme: Theme,
+  theme: RenderableTheme,
   renderKeyHint = keyHint,
 ): string {
   const { runs } = collected;
@@ -104,10 +100,7 @@ export function formatCollectedSummary(
     line =
       theme.fg("toolTitle", run.agent) +
       theme.fg("dim", ` (${run.id}) `) +
-      theme.fg(
-        runStatusTone(run.status) as Parameters<Theme["fg"]>[0],
-        run.status,
-      );
+      theme.fg(runStatusTone(run.status), run.status);
   } else {
     // A fan-out is usually N of the same agent, and naming it N times says
     // nothing the count does not. Names appear only where they differ.
@@ -145,7 +138,7 @@ export function renderMarkdownResult(
     details?: unknown;
   },
   options: ToolRenderResultOptions,
-  theme: Theme,
+  theme: RenderableTheme,
 ): Component {
   const text = contentText(result.content).trim();
   if (!text) return new Text("", 0, 0);

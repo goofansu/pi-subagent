@@ -10,7 +10,7 @@
  */
 
 import { getFinalOutput } from "./messages.ts";
-import type { LifecycleStatus, SingleResult } from "./types.ts";
+import type { LifecycleStatus, SingleResult, Tone } from "./types.ts";
 
 /** Maximum characters of completed output included in a notification. */
 export const NOTIFICATION_PREVIEW_CHARACTER_LIMIT = 1_000;
@@ -30,7 +30,7 @@ const STATUS_PRESENTATION: Record<
   LifecycleStatus,
   {
     glyph: string;
-    tone: string;
+    tone: Tone;
     verb: string;
     phrase: (duration: string) => string;
   }
@@ -70,7 +70,7 @@ export function runStatusGlyph(status: LifecycleStatus): string {
 }
 
 /** The theme colour a status should be painted in. */
-export function runStatusTone(status: LifecycleStatus): string {
+export function runStatusTone(status: LifecycleStatus): Tone {
   return STATUS_PRESENTATION[status].tone;
 }
 

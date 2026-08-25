@@ -14,7 +14,7 @@ import {
   runStatusTone,
 } from "./presentation.ts";
 import { contentText } from "./render.ts";
-import type { LifecycleStatus } from "./types.ts";
+import type { LifecycleStatus, RenderableTheme } from "./types.ts";
 
 /** The `customType` that routes a notification to the renderer below. */
 export const NOTIFICATION_MESSAGE_TYPE = "subagent-notification";
@@ -54,14 +54,6 @@ export function buildNotificationMessage(
 interface RenderableMessage {
   content: string | Array<{ type: string; text?: string }>;
   details?: unknown;
-}
-
-interface RenderableTheme {
-  // biome-ignore lint/suspicious/noExplicitAny: theme.fg takes a narrower ThemeColor
-  fg(color: any, text: string): string;
-  // biome-ignore lint/suspicious/noExplicitAny: theme.bg takes a narrower ThemeColor
-  bg(color: any, text: string): string;
-  bold(text: string): string;
 }
 
 function isDetails(value: unknown): value is NotificationMessageDetails {

@@ -5,7 +5,8 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { createEmptyResult } from "./run.ts";
 import type { RunView } from "./runs.ts";
 import { createSubagentRuns } from "./runs.ts";
-import type { WidgetComponent, WidgetHost, WidgetTheme } from "./widget.ts";
+import type { RenderableTheme } from "./types.ts";
+import type { WidgetComponent, WidgetHost } from "./widget.ts";
 import {
   formatCost,
   formatRunLine,
@@ -16,9 +17,10 @@ import {
   WIDGET_KEY,
 } from "./widget.ts";
 
-const theme: WidgetTheme = {
-  fg: (_color: unknown, text: string) => text,
-  bold: (text: string) => text,
+const theme: RenderableTheme = {
+  fg: (_color, text) => text,
+  bg: (_color, text) => text,
+  bold: (text) => text,
 };
 
 function view(overrides: Partial<RunView> = {}): RunView {

@@ -12,6 +12,7 @@ import {
   runStatusTone,
 } from "./presentation.ts";
 import { createEmptyResult } from "./run.ts";
+import type { Tone } from "./types.ts";
 
 function assistantText(text: string): Message {
   return { role: "assistant", content: [{ type: "text", text }] } as Message;
@@ -50,6 +51,8 @@ test("INV-10: presentation observes lifecycle state without determining it", () 
 });
 
 test("each lifecycle state has its own glyph-and-tone pair", () => {
+  const completedTone: Tone = runStatusTone("completed");
+  assert.equal(completedTone, "success");
   assert.deepEqual(
     (["running", "completed", "failed", "cancelled"] as const).map((status) => [
       runStatusGlyph(status),

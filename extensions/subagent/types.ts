@@ -1,4 +1,5 @@
 import type { Message } from "@earendil-works/pi-ai";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 
 export interface UsageStats {
   input: number;
@@ -82,5 +83,8 @@ export function resolveAppendSystemPrompt(config: AgentConfig): boolean {
   return config.appendSystemPrompt ?? DEFAULT_APPEND_SYSTEM_PROMPT;
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: theme.fg uses ThemeColor which is narrower than string
-export type ThemeForeground = (color: any, text: string) => string;
+/** Status colours presentation may select. */
+export type Tone = "warning" | "success" | "error";
+
+/** The shared host-theme surface used by every subagent renderer. */
+export type RenderableTheme = Pick<Theme, "fg" | "bg" | "bold">;

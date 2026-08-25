@@ -19,7 +19,7 @@ import {
   runStatusTone,
 } from "./presentation.ts";
 import type { RunView, SubagentRuns } from "./runs.ts";
-import type { ThemeForeground } from "./types.ts";
+import type { RenderableTheme } from "./types.ts";
 
 export const WIDGET_KEY = "subagent-runs";
 
@@ -34,11 +34,6 @@ export const MAX_WIDGET_ROWS = 8;
 /** Past this, a long agent name gets its own ragged row rather than pushing
  * every other row's columns across the terminal. */
 export const MAX_AGENT_COLUMN_WIDTH = 16;
-
-export interface WidgetTheme {
-  fg: ThemeForeground;
-  bold(text: string): string;
-}
 
 export function formatCost(cost: number): string {
   return `$${cost.toFixed(4)}`;
@@ -96,7 +91,7 @@ const MIN_ACTIVITY_WIDTH = 12;
  */
 export function formatRunLine(
   run: RunView,
-  theme: WidgetTheme,
+  theme: RenderableTheme,
   width: number,
   columns: RunColumns = measureColumns([run]),
 ): string {
@@ -126,7 +121,7 @@ export function formatRunLine(
 /** The dim "what it is doing" tail, fitted to the width the columns left. */
 function formatActivityTail(
   run: RunView,
-  theme: WidgetTheme,
+  theme: RenderableTheme,
   width: number,
   line: string,
 ): string {
@@ -141,7 +136,7 @@ function formatActivityTail(
 /** The whole widget: a titled rule, the rows, and an overflow summary. */
 export function renderRunLines(
   runs: readonly RunView[],
-  theme: WidgetTheme,
+  theme: RenderableTheme,
   width: number,
   maxRows: number = MAX_WIDGET_ROWS,
 ): string[] {
@@ -189,7 +184,7 @@ export interface WidgetHost {
   setWidget(
     key: string,
     content:
-      | ((tui: WidgetTui, theme: WidgetTheme) => WidgetComponent)
+      | ((tui: WidgetTui, theme: RenderableTheme) => WidgetComponent)
       | undefined,
   ): void;
 }
