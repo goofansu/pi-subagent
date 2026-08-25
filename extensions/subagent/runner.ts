@@ -7,7 +7,7 @@
  * docs/adr/0001-unbounded-subagent-concurrency.md.
  */
 
-import { resolveSubagentModel, runPiAgent } from "./pi-agent.ts";
+import { runPiAgent } from "./pi-agent.ts";
 import type {
   ParentModel,
   SubagentExecutor,
@@ -25,6 +25,29 @@ import { subagentRuns } from "./runs.ts";
 import type { AgentConfig, CancellationReason, SingleResult } from "./types.ts";
 
 const MAX_SUBAGENT_DEPTH = 1;
+
+/**
+ * Resolve the model id the executor should pass to its harness, if any.
+ * Profile policy wins; otherwise the parent session's resolved model flows on.
+ */
+export function resolveSubagentModel(
+  config: AgentConfig,
+  parentModel: ParentModel | undefined,
+): string | undefined {
+  if (config.model) return config.model;
+  if (!parentModel) return undefined;
+  return `${parentModel.provider}/${parentModel.id}`;
+}
+
+/** Resolve the thinking level before the task crosses the executor seam. */
+export function resolveSubagentThinking(
+  config: AgentConfig,
+  parentModel: ParentModel | undefined,
+): string | undefined {
+  if (config.effort) return config.effort;
+  if (config.model) return undefined;
+  return parentModel?.thinkingLevel;
+}
 
 export function getSubagentDepth(): number {
   const depth = parseInt(process.env[DEPTH_ENV_KEY] || "0", 10);
@@ -81,6 +104,8 @@ export function startSubagent({
   parentModel,
   projectTrusted = false,
   cwd = process.cwd(),
+  // Keep this static default while pi is the only harness adapter. A second
+  // adapter is the trigger to move default wiring to the composition root.
   execute = runPiAgent,
   runs = subagentRuns,
   now = Date.now,
@@ -93,6 +118,7 @@ export function startSubagent({
   // The model the run is headed for, before its child has said anything; the
   // fold refines it from each assistant message once the child speaks.
   const resolvedModel = resolveSubagentModel(config, parentModel);
+  const resolvedThinking = resolveSubagentThinking(config, parentModel);
   if (resolvedModel) result.model = resolvedModel;
 
   const task: SubagentTask = {
@@ -100,9 +126,10 @@ export function startSubagent({
     description,
     prompt,
     cwd,
-    depth: currentDepth,
+    childDepth: currentDepth + 1,
     projectTrusted,
-    ...(parentModel ? { parentModel } : {}),
+    ...(resolvedModel ? { resolvedModel } : {}),
+    ...(resolvedThinking ? { resolvedThinking } : {}),
   };
 
   // The host's signal cancels the whole turn. Chaining it onto a controller of

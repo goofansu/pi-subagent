@@ -97,8 +97,9 @@ transcript.
 
 ## Constraints
 
-**Depth** — delegation is one level deep. A subagent cannot start subagents;
-`PI_SUBAGENT_DEPTH` carries the guard into children.
+**Depth** — delegation is one level deep. A subagent cannot start subagents.
+The Dispatcher alone decides a child's depth; executors only copy it, with
+`PI_SUBAGENT_DEPTH` as the transport into children.
 
 **Trust** — pi's project-trust decision for the working directory, resolved by
 the session and forwarded to every child. The extension never derives its own.

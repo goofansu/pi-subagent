@@ -14,12 +14,7 @@ import {
   getPackageDir,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import type {
-  ParentModel,
-  RunReporter,
-  SubagentOutcome,
-  SubagentRun,
-} from "./run.ts";
+import type { RunReporter, SubagentOutcome, SubagentRun } from "./run.ts";
 import { DEPTH_ENV_KEY } from "./run.ts";
 import type { AgentConfig } from "./types.ts";
 import { resolveAppendSystemPrompt } from "./types.ts";
@@ -199,22 +194,6 @@ export function getPiInvocation(
   return { command: "pi", args };
 }
 
-/**
- * The thinking level to pass, or `undefined` to leave pi's default alone.
- *
- * A profile's `effort` wins. Failing that, only an omitted model brings the
- * caller's level with it: a pinned model with no `effort` means "this model at
- * whatever pi would normally use", not "this model at the caller's level".
- */
-export function resolveSubagentThinking(
-  config: AgentConfig,
-  parentModel: ParentModel | undefined,
-): string | undefined {
-  if (config.effort) return config.effort;
-  if (config.model) return undefined;
-  return parentModel?.thinkingLevel;
-}
-
 export function buildPiArgs(
   config: AgentConfig,
   resolvedModel: string | undefined,
@@ -253,28 +232,14 @@ export function buildPiArgs(
   return args;
 }
 
-/** Resolve the model id pi's `--model` expects, if any applies. */
-export function resolveSubagentModel(
-  config: AgentConfig,
-  parentModel: ParentModel | undefined,
-): string | undefined {
-  // Verbatim. Whatever `pi --model` accepts is between the author and pi.
-  if (config.model) return config.model;
-  if (!parentModel) return undefined;
-  return `${parentModel.provider}/${parentModel.id}`;
-}
-
-export function getSpawnOptions(
-  cwd: string,
-  currentDepth: number,
-): SpawnOptions {
+export function getSpawnOptions(cwd: string, childDepth: number): SpawnOptions {
   return {
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
     cwd,
     env: {
       ...process.env,
-      [DEPTH_ENV_KEY]: String(currentDepth + 1),
+      [DEPTH_ENV_KEY]: String(childDepth),
     },
   };
 }
@@ -346,8 +311,6 @@ export async function runPiAgent(
   const { task, signal } = run;
   const { config } = task;
 
-  const resolvedModel = resolveSubagentModel(config, task.parentModel);
-
   let tmpPromptDir: string | null = null;
   let tmpPromptPath: string | null = null;
   let wasAborted = false;
@@ -386,9 +349,9 @@ export async function runPiAgent(
 
     const args = buildPiArgs(
       config,
-      resolvedModel,
+      task.resolvedModel,
       tmpPromptPath ?? undefined,
-      resolveSubagentThinking(config, task.parentModel),
+      task.resolvedThinking,
       task.projectTrusted,
     );
 
@@ -398,7 +361,7 @@ export async function runPiAgent(
       const proc = spawn(
         invocation.command,
         invocation.args,
-        getSpawnOptions(task.cwd, task.depth),
+        getSpawnOptions(task.cwd, task.childDepth),
       );
       if (!proc.stdin || !proc.stdout || !proc.stderr) {
         report.stderr("Failed to open child pi stdio pipes");

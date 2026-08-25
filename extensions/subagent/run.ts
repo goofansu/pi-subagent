@@ -26,9 +26,9 @@ import type {
 } from "./types.ts";
 
 /**
- * Environment variable carrying the subagent nesting depth. The dispatcher
- * reads it and the executor must pass `depth + 1` to its child, so it belongs
- * to neither one alone.
+ * Environment variable transporting the child depth. The dispatcher decides
+ * the value and the executor copies it into its child environment, so the key
+ * belongs to the contract between them.
  */
 export const DEPTH_ENV_KEY = "PI_SUBAGENT_DEPTH";
 
@@ -123,9 +123,12 @@ export interface SubagentTask {
   readonly prompt: string;
   /** Working directory for the child. */
   readonly cwd: string;
-  readonly parentModel?: ParentModel;
-  /** Depth of the *parent*; children must run at `depth + 1`. */
-  readonly depth: number;
+  /** Model flag already resolved by the dispatcher. */
+  readonly resolvedModel?: string;
+  /** Thinking flag already resolved by the dispatcher. */
+  readonly resolvedThinking?: string;
+  /** Nesting depth the executor must copy to its child. */
+  readonly childDepth: number;
   /**
    * Pi's project-trust decision for `cwd`, as resolved by the session that is
    * delegating. Forwarded so the child reaches the same answer instead of

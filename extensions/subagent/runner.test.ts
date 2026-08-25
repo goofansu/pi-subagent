@@ -13,6 +13,8 @@ import type { RunSubagentOptions } from "./runner.ts";
 import {
   assertSubagentDepthAvailable,
   getSubagentDepth,
+  resolveSubagentModel,
+  resolveSubagentThinking,
   startSubagent,
 } from "./runner.ts";
 import { createSubagentRuns } from "./runs.ts";
@@ -111,14 +113,18 @@ test("createEmptyResult starts a run running from its start time", () => {
 
 // ── Task handoff ──────────────────────────────────────────────────────────────
 
-test("startSubagent hands the executor the task's cwd and parent model", async () => {
+test("startSubagent hands the executor resolved dispatch policy", async () => {
   const recorded = recordingExecutor();
 
   await startAndSettle({
     config: agent(),
     description: "task",
     prompt: "do it",
-    parentModel: { provider: "anthropic", id: "claude-opus-4-5" },
+    parentModel: {
+      provider: "anthropic",
+      id: "claude-opus-4-5",
+      thinkingLevel: "high",
+    },
     cwd: "/tmp/workspace",
     execute: recorded.execute,
   });
@@ -126,22 +132,46 @@ test("startSubagent hands the executor the task's cwd and parent model", async (
   const { task } = recorded.calls[0];
   assert.equal(task.cwd, "/tmp/workspace");
   assert.equal(task.prompt, "do it");
-  assert.deepEqual(task.parentModel, {
-    provider: "anthropic",
-    id: "claude-opus-4-5",
-  });
+  assert.equal(task.resolvedModel, "anthropic/claude-opus-4-5");
+  assert.equal(task.resolvedThinking, "high");
+  assert.equal(task.childDepth, 1);
+  assert.equal("parentModel" in task, false);
+  assert.equal("depth" in task, false);
 });
 
-test("startSubagent reports the current depth so the child can advance it", async () => {
-  const recorded = recordingExecutor();
-  await startAndSettle({
-    config: agent(),
-    description: "task",
-    prompt: "do it",
-    execute: recorded.execute,
-  });
+test("resolveSubagentModel hands model policy through exactly once", () => {
+  assert.equal(
+    resolveSubagentModel(
+      agent({ model: "openrouter/google/gemma-4-31b-it:free" }),
+      undefined,
+    ),
+    "openrouter/google/gemma-4-31b-it:free",
+  );
+  assert.equal(
+    resolveSubagentModel(agent(), {
+      provider: "anthropic",
+      id: "claude-opus-4-5",
+      thinkingLevel: "low",
+    }),
+    "anthropic/claude-opus-4-5",
+  );
+});
 
-  assert.equal(recorded.calls[0].task.depth, 0);
+test("resolveSubagentThinking applies profile and parent policy", () => {
+  const parent = {
+    provider: "anthropic",
+    id: "claude-opus-4-5",
+    thinkingLevel: "low",
+  };
+  assert.equal(
+    resolveSubagentThinking(agent({ effort: "high" }), parent),
+    "high",
+  );
+  assert.equal(resolveSubagentThinking(agent(), parent), "low");
+  assert.equal(
+    resolveSubagentThinking(agent({ model: "sonnet" }), parent),
+    undefined,
+  );
 });
 
 // ── Depth guard ───────────────────────────────────────────────────────────────

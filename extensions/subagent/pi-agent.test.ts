@@ -15,8 +15,6 @@ import {
   getPiInvocation,
   getSpawnOptions,
   type PiInvocationRuntime,
-  resolveSubagentModel,
-  resolveSubagentThinking,
   runPiAgent,
   translatePiJsonEvent,
 } from "./pi-agent.ts";
@@ -176,16 +174,6 @@ test("getPiInvocation preserves child arguments and command boundaries", (t) => 
   assert.deepEqual(args, originalArgs);
 });
 
-test("resolveSubagentModel passes a variant-suffixed id through untouched", () => {
-  assert.equal(
-    resolveSubagentModel(
-      agent({ model: "openrouter/google/gemma-4-31b-it:free" }),
-      undefined,
-    ),
-    "openrouter/google/gemma-4-31b-it:free",
-  );
-});
-
 /**
  * Put a stand-in `pi` on PATH so the backend's real spawn path runs without a
  * pi install. Returns a restore function.
@@ -226,7 +214,7 @@ async function runPiFixture(
           description: "Work",
           prompt: options.prompt ?? "do it",
           cwd: os.tmpdir(),
-          depth: 0,
+          childDepth: 1,
           projectTrusted: false,
         },
         report,
@@ -425,57 +413,6 @@ test("an aborted child that ignores SIGTERM is killed by the escalation", async 
   assert.match(settled.errorMessage ?? "", /Subagent was cancelled/);
 });
 
-test("resolveSubagentModel hands pi the model exactly as written", () => {
-  for (const model of [
-    "openai-codex/gpt-5.5",
-    "openrouter/google/gemma-4-31b-it:free",
-    "sonnet",
-  ]) {
-    assert.equal(
-      resolveSubagentModel(agent({ model }), undefined),
-      model,
-      model,
-    );
-  }
-});
-
-test("resolveSubagentModel uses the caller's model when the profile omits one", () => {
-  // The level travels separately now, so nothing is spliced into the id.
-  assert.equal(
-    resolveSubagentModel(agent(), {
-      provider: "anthropic",
-      id: "claude-opus-4-5",
-      thinkingLevel: "low",
-    }),
-    "anthropic/claude-opus-4-5",
-  );
-});
-
-test("resolveSubagentThinking prefers the profile's effort", () => {
-  assert.equal(
-    resolveSubagentThinking(agent({ model: "sonnet", effort: "high" }), {
-      provider: "anthropic",
-      id: "claude-opus-4-5",
-      thinkingLevel: "low",
-    }),
-    "high",
-  );
-});
-
-test("resolveSubagentThinking uses the caller's level only when model is omitted", () => {
-  const parent = {
-    provider: "anthropic",
-    id: "claude-opus-4-5",
-    thinkingLevel: "low",
-  };
-  assert.equal(resolveSubagentThinking(agent(), parent), "low");
-  // A pinned model with no effort means pi's default, not the caller's level.
-  assert.equal(
-    resolveSubagentThinking(agent({ model: "sonnet" }), parent),
-    undefined,
-  );
-});
-
 test("buildPiArgs forwards the parent's project trust decision", () => {
   const trusted = buildPiArgs(agent(), undefined, undefined, undefined, true);
   assert.equal(trusted.includes("--approve"), true);
@@ -584,11 +521,11 @@ test("buildPiArgs does not include the prompt in argv", () => {
   );
 });
 
-test("getSpawnOptions runs child pi in the configured project cwd", () => {
-  const options = getSpawnOptions("/tmp/customer-project", 0);
+test("getSpawnOptions copies the resolved child depth", () => {
+  const options = getSpawnOptions("/tmp/customer-project", 3);
 
   assert.equal(options.cwd, "/tmp/customer-project");
-  assert.equal(options.env?.PI_SUBAGENT_DEPTH, "1");
+  assert.equal(options.env?.PI_SUBAGENT_DEPTH, "3");
 });
 
 test("an agent_end event reaches the record as the transcript fact", () => {
