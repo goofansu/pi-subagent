@@ -2,12 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Message } from "@earendil-works/pi-ai";
 import {
-  FAILURE_REASON_LIMIT,
   formatDuration,
-  formatReport,
+  formatNotification,
   formatRunStatus,
   fullOutput,
-  REPORT_CHARACTER_LIMIT,
+  NOTIFICATION_PREVIEW_CHARACTER_LIMIT,
   reportVerb,
   runStatusGlyph,
   runStatusTone,
@@ -73,64 +72,38 @@ test("a delivered report is 'reported', not 'completed'", () => {
 
 // ── Report shape ─────────────────────────────────────────────────────────────
 
-test("a report carries the final output and names the run", () => {
+test("N1/N2: completed notification has a deterministic bounded preview and result pointer", () => {
   const result = createEmptyResult("explore", "look", 0);
-  result.messages.push(assistantText("three call sites"));
+  result.messages.push(
+    assistantText("x".repeat(NOTIFICATION_PREVIEW_CHARACTER_LIMIT + 500)),
+  );
   result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
 
-  const report = formatReport("a1b2c3d4", result);
-
-  assert.match(report, /^Subagent explore \(a1b2c3d4\) finished:/);
-  assert.match(report, /three call sites/);
+  const notification = formatNotification("a1", result);
+  assert.ok(notification.length < NOTIFICATION_PREVIEW_CHARACTER_LIMIT + 200);
+  assert.match(notification, /Use agent_result with id a1/);
+  assert.doesNotMatch(notification, /x{1200}/);
 });
 
-test("a thorough report passes through whole", () => {
-  const result = createEmptyResult("explore", "look", 0);
-  result.messages.push(assistantText("x".repeat(10_000)));
-  result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
-
-  const report = formatReport("a1b2c3d4", result);
-
-  assert.match(report, /x{10000}/, "a real answer is never cut");
-  assert.doesNotMatch(report, /incomplete/);
-});
-
-test("a runaway report is cut, and says how much went missing", () => {
-  const result = createEmptyResult("explore", "look", 0);
-  result.messages.push(assistantText("x".repeat(REPORT_CHARACTER_LIMIT + 500)));
-  result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
-
-  const report = formatReport("a1b2c3d4", result);
-
-  assert.match(report, /500 more characters dropped/);
-  assert.match(report, /this report is incomplete/);
-});
-
-test("a failure reason keeps its tail, where the diagnosis is", () => {
-  const result = createEmptyResult("explore", "look", 0);
-  result.lifecycle = { phase: "failed", finishedAt: 10, exitCode: 1 };
-  result.stderr = `${"noise\n".repeat(2_000)}FATAL: the actual cause`;
-
-  const report = formatReport("a1", result);
-
-  assert.match(report, /FATAL: the actual cause$/);
-  assert.match(report, /earlier characters dropped/);
-  assert.ok(report.length < FAILURE_REASON_LIMIT + 200);
-});
-
-test("a failed report names the reason", () => {
+test("N3: failed notification carries only the primary error and pointer", () => {
   const result = createEmptyResult("explore", "look", 0);
   result.lifecycle = { phase: "failed", finishedAt: 10, exitCode: 1 };
   result.errorMessage = "model refused";
-
-  assert.match(formatReport("a1", result), /failed: model refused/);
+  result.stderr = "raw secret stderr";
+  assert.equal(
+    formatNotification("a1", result),
+    "Subagent explore (a1) failed: model refused\n\nUse agent_result with id a1 to retrieve the full result.",
+  );
 });
 
-test("a finished run with no output says so rather than looking empty", () => {
+test("a cancelled notification is terse and contains no partial output", () => {
   const result = createEmptyResult("explore", "look", 0);
-  result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
-
-  assert.match(formatReport("a1", result), /finished without output/);
+  result.messages.push(assistantText("partial secret"));
+  result.lifecycle = { phase: "cancelled", finishedAt: 10, reason: "shutdown" };
+  assert.equal(
+    formatNotification("a1", result),
+    "Subagent explore (a1) was cancelled (shutdown).",
+  );
 });
 
 test("INV-11: failed and cancelled results label partial output", () => {

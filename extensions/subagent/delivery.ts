@@ -26,24 +26,22 @@
  * See docs/adr/0002-push-only-result-delivery.md.
  */
 
-import { formatReport, fullOutput } from "./presentation.ts";
+import { formatNotification, fullOutput } from "./presentation.ts";
 import type { SubagentRuns } from "./runs.ts";
 import { subagentRuns } from "./runs.ts";
 import type { LifecycleStatus, SingleResult } from "./types.ts";
 
 /** A report on its way to the model, with what a renderer needs to show it. */
-export interface PushedReport {
+export interface PushedNotification {
   id: string;
   agent: string;
   status: LifecycleStatus;
-  /** The message text the model reads. Capped; see `presentation.ts`. */
+  /** The bounded orientation message the model reads. */
   text: string;
-  /** Whether the text is shorter than what the run actually said. */
-  truncated: boolean;
 }
 
 /** Push a report into the session. Narrowed from `ExtensionAPI`. */
-export type PushMessage = (report: PushedReport) => void;
+export type PushNotification = (report: PushedNotification) => void;
 
 /**
  * A push target that outlives any one session.
@@ -63,17 +61,17 @@ export type PushMessage = (report: PushedReport) => void;
  */
 export interface SessionPush {
   /** The stable target to build the delivery with. */
-  push: PushMessage;
+  push: PushNotification;
   /** Aim at a live session. */
-  bind(push: PushMessage): void;
+  bind(push: PushNotification): void;
   /** Drop the target; reports that settle before the next bind are dropped. */
   unbind(): void;
 }
 
 export function createSessionPush(): SessionPush {
-  let live: PushMessage | null = null;
+  let live: PushNotification | null = null;
 
-  const push: PushMessage = (report) => {
+  const push: PushNotification = (report) => {
     if (!live) return;
     try {
       live(report);
@@ -133,7 +131,7 @@ export interface RetainedResult {
 export const RESULT_STORE_CHARACTER_BUDGET = 2_000_000;
 
 export interface DeliveryOptions {
-  push: PushMessage;
+  push: PushNotification;
   runs?: SubagentRuns;
   /** Injected for tests; defaults to {@link RESULT_STORE_CHARACTER_BUDGET}. */
   resultBudget?: number;
@@ -254,7 +252,7 @@ export function createSubagentDelivery({
    * landing signal — `reportLanded`, wired to the message actually joining
    * the session — lets the registry drop them.
    */
-  const awaitingLanding = new Map<string, PushedReport>();
+  const awaitingLanding = new Map<string, PushedNotification>();
   /**
    * What was pushed and unlanded when the turn aborted. The interrupt that
    * aborted the turn is the one thing that discards queued reports, and only
@@ -304,7 +302,7 @@ export function createSubagentDelivery({
    * and the report stays resultable through `result`, so swallowing here loses
    * nothing that result store does not keep.
    */
-  const safePush: PushMessage = (report) => {
+  const safePush: PushNotification = (report) => {
     try {
       push(report);
     } catch {
@@ -339,14 +337,11 @@ export function createSubagentDelivery({
     // joined the conversation, so the widget never drops a run whose report
     // the model has not seen. The report itself is kept so `agentSettled`
     // can push it again if an interrupt clears it out of pi's queue.
-    const output = fullOutput(result);
-    const text = formatReport(entry.id, result);
-    const report: PushedReport = {
+    const report: PushedNotification = {
       id: entry.id,
       agent: result.agent,
       status: result.lifecycle.phase,
-      text,
-      truncated: !text.includes(output) && output.length > 0,
+      text: formatNotification(entry.id, result),
     };
     awaitingLanding.set(entry.id, report);
     safePush(report);
@@ -379,14 +374,13 @@ export function createSubagentDelivery({
           pending.delete(id);
           runs.release(id);
           if (alreadyDelivered) return;
-          const notice: PushedReport = {
+          const notice: PushedNotification = {
             id,
             agent: "unknown",
             status: "failed",
             text: `Subagent run ${id} ended unexpectedly: ${
               error instanceof Error ? error.message : String(error)
             }`,
-            truncated: false,
           };
           // Landing-tracked like any push, so an interrupt cannot silently
           // swallow the one notice that says the run died.
@@ -440,7 +434,7 @@ export function createSubagentDelivery({
             stillRunning.push(entry.id);
             continue;
           }
-          reports.push(formatReport(entry.id, entry.result));
+          reports.push(formatNotification(entry.id, entry.result));
           collected.push({
             id: entry.id,
             agent: entry.result.agent,

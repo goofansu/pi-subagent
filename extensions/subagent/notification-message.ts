@@ -20,13 +20,12 @@ import { contentText } from "./render.ts";
 import type { LifecycleStatus } from "./types.ts";
 
 /** The `customType` that routes a report to the renderer below. */
-export const REPORT_MESSAGE_TYPE = "subagent-report";
+export const NOTIFICATION_MESSAGE_TYPE = "subagent-notification";
 
-export interface ReportMessageDetails {
+export interface NotificationMessageDetails {
   id: string;
   agent: string;
   status: LifecycleStatus;
-  truncated: boolean;
 }
 
 interface RenderableMessage {
@@ -42,12 +41,12 @@ interface RenderableTheme {
   bold(text: string): string;
 }
 
-function isDetails(value: unknown): value is ReportMessageDetails {
+function isDetails(value: unknown): value is NotificationMessageDetails {
   return (
     typeof value === "object" &&
     value !== null &&
-    typeof (value as ReportMessageDetails).id === "string" &&
-    typeof (value as ReportMessageDetails).agent === "string"
+    typeof (value as NotificationMessageDetails).id === "string" &&
+    typeof (value as NotificationMessageDetails).agent === "string"
   );
 }
 
@@ -58,8 +57,8 @@ function isDetails(value: unknown): value is ReportMessageDetails {
  * column. Here the verb says what happened, and it is painted in the status
  * tone so a failure still stands out.
  */
-export function formatReportSummary(
-  details: ReportMessageDetails,
+export function formatNotificationSummary(
+  details: NotificationMessageDetails,
   characters: number,
   theme: RenderableTheme,
   expanded = false,
@@ -68,18 +67,12 @@ export function formatReportSummary(
   const tone = runStatusTone(details.status);
   const verb = reportVerb(details.status);
 
-  let line =
+  const line =
     theme.fg("toolTitle", theme.bold(details.agent)) +
     theme.fg("dim", ` (${details.id}) `) +
     theme.fg(tone, verb) +
     theme.fg("dim", ` · ${formatCharacterCount(characters)}`);
 
-  if (details.truncated) {
-    line += theme.fg(
-      "warning",
-      ` · trimmed, agent_result ${details.id} has the rest`,
-    );
-  }
   // One key toggles both ways, so the hint has to name the direction it will
   // actually go rather than always offering to expand.
   const hint = renderKeyHint(
@@ -101,7 +94,7 @@ export function formatReportSummary(
  * the session said. This reproduces pi's own custom-message styling so a
  * report sits in the conversation like a message.
  */
-export function renderReportMessage(
+export function renderNotificationMessage(
   message: RenderableMessage,
   options: { expanded: boolean; outputPad?: number },
   theme: RenderableTheme,
@@ -114,7 +107,7 @@ export function renderReportMessage(
   );
   box.addChild(
     new Text(
-      formatReportSummary(
+      formatNotificationSummary(
         message.details,
         text.length,
         theme,

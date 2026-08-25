@@ -11,10 +11,13 @@ import {
   loadAgentConfigsWithDiagnostics,
 } from "./agents.ts";
 import { registerAgentsCommand } from "./agents-command.ts";
-import type { PushMessage, SubagentDelivery } from "./delivery.ts";
+import type { PushNotification, SubagentDelivery } from "./delivery.ts";
 import { createSessionPush, createSubagentDelivery } from "./delivery.ts";
+import {
+  NOTIFICATION_MESSAGE_TYPE,
+  renderNotificationMessage,
+} from "./notification-message.ts";
 import { renderMarkdownResult, renderSubagentCall } from "./render.ts";
-import { REPORT_MESSAGE_TYPE, renderReportMessage } from "./report-message.ts";
 import { getSubagentDepth, startSubagent } from "./runner.ts";
 import type { SubagentRuns } from "./runs.ts";
 import { subagentRuns } from "./runs.ts";
@@ -27,7 +30,7 @@ const ID_LIST = Type.Array(Type.String(), {
 });
 
 /** Push one report into a session as a collapsed custom message. */
-function reportPusher(pi: ExtensionAPI): PushMessage {
+function notificationPusher(pi: ExtensionAPI): PushNotification {
   return (report) => {
     // A custom message rather than a user message, so the report carries a
     // renderer and shows as one collapsed line until it is asked for.
@@ -42,14 +45,13 @@ function reportPusher(pi: ExtensionAPI): PushMessage {
     // middle of a sentence.
     pi.sendMessage(
       {
-        customType: REPORT_MESSAGE_TYPE,
+        customType: NOTIFICATION_MESSAGE_TYPE,
         content: report.text,
         display: true,
         details: {
           id: report.id,
           agent: report.agent,
           status: report.status,
-          truncated: report.truncated,
         },
       },
       { deliverAs: "followUp", triggerTurn: true },
@@ -88,10 +90,14 @@ export function registerSubagentFeatures(
 
   const runs = deps.runs ?? subagentRuns;
   const start = deps.start ?? startSubagent;
-  pi.registerMessageRenderer(REPORT_MESSAGE_TYPE, renderReportMessage);
+  pi.registerMessageRenderer(
+    NOTIFICATION_MESSAGE_TYPE,
+    renderNotificationMessage,
+  );
 
   const delivery =
-    deps.delivery ?? createSubagentDelivery({ push: reportPusher(pi), runs });
+    deps.delivery ??
+    createSubagentDelivery({ push: notificationPusher(pi), runs });
 
   if (deps.widgetHost) installRunsWidget(deps.widgetHost, runs);
 
@@ -395,7 +401,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
     sessionContext.projectTrusted = ctx.isProjectTrusted?.() ?? false;
 
     // Re-aim reports at this session; put the widget on this session's UI.
-    sessionPush.bind(reportPusher(pi));
+    sessionPush.bind(notificationPusher(pi));
     uninstallWidget?.();
     uninstallWidget = installRunsWidget(
       ctx.ui as unknown as WidgetHost,
@@ -432,7 +438,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       details?: { id?: string };
     };
     if (message.role !== "custom") return;
-    if (message.customType !== REPORT_MESSAGE_TYPE) return;
+    if (message.customType !== NOTIFICATION_MESSAGE_TYPE) return;
     const id = message.details?.id;
     if (id) getProcessDelivery().reportLanded(id);
   });

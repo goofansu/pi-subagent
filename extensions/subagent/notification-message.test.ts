@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import type { ReportMessageDetails } from "./report-message.ts";
-import { formatReportSummary, renderReportMessage } from "./report-message.ts";
+import type { NotificationMessageDetails } from "./notification-message.ts";
+import {
+  formatNotificationSummary,
+  renderNotificationMessage,
+} from "./notification-message.ts";
 
 initTheme(undefined, false);
 
@@ -17,19 +20,19 @@ const keyHintStub = (_action: string, description: string) =>
   `ctrl+o ${description}`;
 
 const summary = (
-  details: ReportMessageDetails,
+  details: NotificationMessageDetails,
   characters: number,
   expanded = false,
-) => formatReportSummary(details, characters, theme, expanded, keyHintStub);
+) =>
+  formatNotificationSummary(details, characters, theme, expanded, keyHintStub);
 
 function details(
-  overrides: Partial<ReportMessageDetails> = {},
-): ReportMessageDetails {
+  overrides: Partial<NotificationMessageDetails> = {},
+): NotificationMessageDetails {
   return {
     id: "a3f81c2b",
     agent: "explore",
     status: "completed",
-    truncated: false,
     ...overrides,
   };
 }
@@ -62,13 +65,6 @@ test("small reports are counted exactly rather than rounded to zero", () => {
   assert.match(summary(details(), 240), /240 characters/);
 });
 
-test("a trimmed report says where the rest is", () => {
-  const line = summary(details({ truncated: true }), 30_000);
-
-  assert.match(line, /trimmed/);
-  assert.match(line, /agent_result a3f81c2b/);
-});
-
 test("a failed run reads as failed rather than reported", () => {
   const line = summary(details({ status: "failed" }), 100);
 
@@ -79,7 +75,7 @@ test("a failed run reads as failed rather than reported", () => {
 // ── The message ──────────────────────────────────────────────────────────────
 
 test("a collapsed report shows its summary and not the report", () => {
-  const component = renderReportMessage(
+  const component = renderNotificationMessage(
     { content: "a very long body\nacross lines", details: details() },
     { expanded: false },
     theme,
@@ -92,7 +88,7 @@ test("a collapsed report shows its summary and not the report", () => {
 });
 
 test("a report is framed like every other message, not loose text", () => {
-  const component = renderReportMessage(
+  const component = renderNotificationMessage(
     { content: "body", details: details() },
     { expanded: false, outputPad: 2 },
     theme,
@@ -109,7 +105,7 @@ test("a report is framed like every other message, not loose text", () => {
 });
 
 test("an expanded report shows the body under its summary", () => {
-  const component = renderReportMessage(
+  const component = renderNotificationMessage(
     { content: "the whole finding", details: details() },
     { expanded: true },
     theme,
@@ -123,7 +119,7 @@ test("an expanded report shows the body under its summary", () => {
 
 test("a message this extension did not shape falls through to pi", () => {
   assert.equal(
-    renderReportMessage(
+    renderNotificationMessage(
       { content: "something else", details: { unrelated: true } },
       { expanded: false },
       theme,

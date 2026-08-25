@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Message } from "@earendil-works/pi-ai";
-import type { PushedReport, SubagentDelivery } from "./delivery.ts";
+import type { PushedNotification, SubagentDelivery } from "./delivery.ts";
 import { createSessionPush, createSubagentDelivery } from "./delivery.ts";
-import { REPORT_CHARACTER_LIMIT } from "./presentation.ts";
+import { NOTIFICATION_PREVIEW_CHARACTER_LIMIT } from "./presentation.ts";
 import { createEmptyResult } from "./run.ts";
 import { createSubagentRuns } from "./runs.ts";
 import type { SingleResult } from "./types.ts";
@@ -51,7 +51,7 @@ function flush(): Promise<void> {
 }
 
 function harness() {
-  const reports: PushedReport[] = [];
+  const reports: PushedNotification[] = [];
   // The text that reached the model, which is what most assertions care about.
   const pushed: string[] = [];
   const runs = createSubagentRuns();
@@ -59,7 +59,7 @@ function harness() {
   // pushed-but-not-landed gap build their own delivery with a push that
   // never lands.
   let delivery: SubagentDelivery;
-  const push = (report: PushedReport): void => {
+  const push = (report: PushedNotification): void => {
     reports.push(report);
     pushed.push(report.text);
     delivery.reportLanded(report.id);
@@ -77,7 +77,7 @@ test("an unclaimed run pushes its report when it settles", async () => {
   await flush();
 
   assert.equal(pushed.length, 1);
-  assert.match(pushed[0], /explore \(run-1\) finished/);
+  assert.match(pushed[0], /explore \(run-1\) completed/);
   assert.match(pushed[0], /found three call sites/);
 });
 
@@ -291,7 +291,7 @@ test("shutdown clears retention: a report belongs to the session that asked", as
 
 test("a pushed report keeps its run listed until the message lands", async () => {
   const runs = createSubagentRuns();
-  const pushed: PushedReport[] = [];
+  const pushed: PushedNotification[] = [];
   const delivery = createSubagentDelivery({
     push: (report) => pushed.push(report),
     runs,
@@ -324,7 +324,7 @@ test("landing an unknown id changes nothing", () => {
 
 /** A delivery whose pushes never land on their own, as when pi queues them. */
 function queuedHarness() {
-  const pushed: PushedReport[] = [];
+  const pushed: PushedNotification[] = [];
   const runs = createSubagentRuns();
   const delivery = createSubagentDelivery({
     push: (report) => pushed.push(report),
@@ -481,29 +481,16 @@ test("retention keeps what the pushed report had to trim", async () => {
   const { reports, delivery } = harness();
   const run = deferredRun();
   delivery.register("run-1", run.settled);
-  const huge = "x".repeat(REPORT_CHARACTER_LIMIT + 5_000);
+  const huge = "x".repeat(NOTIFICATION_PREVIEW_CHARACTER_LIMIT + 5_000);
 
   run.finish(huge);
   await flush();
-
-  assert.equal(reports[0].truncated, true);
   assert.ok(reports[0].text.length < huge.length, "the message is capped");
   assert.equal(
     delivery.result("run-1")?.output,
     huge,
     "the run's whole answer survives the cap",
   );
-});
-
-test("a report that fits is not marked as trimmed", async () => {
-  const { reports, delivery } = harness();
-  const run = deferredRun();
-  delivery.register("run-1", run.settled);
-
-  run.finish("short answer");
-  await flush();
-
-  assert.equal(reports[0].truncated, false);
 });
 
 test("a run collected by a wait is still readable afterwards", async () => {
@@ -664,13 +651,12 @@ test("a throwing push loses neither the process nor the report", async () => {
 
 // ── The session push ─────────────────────────────────────────────────────────
 
-function report(id: string): PushedReport {
+function report(id: string): PushedNotification {
   return {
     id,
     agent: "explore",
     status: "completed",
     text: id,
-    truncated: false,
   };
 }
 

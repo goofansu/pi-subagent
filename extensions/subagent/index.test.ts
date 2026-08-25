@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { PushedReport } from "./delivery.ts";
+import type { PushedNotification } from "./delivery.ts";
 import subagentExtension, { registerSubagentFeatures } from "./index.ts";
 import { createEmptyResult } from "./run.ts";
 import type { RunSubagentOptions, StartedSubagent } from "./runner.ts";
@@ -92,7 +92,7 @@ function collectTools(): {
   pi: ExtensionAPI;
   tools: RegisteredTools;
   sent: SentMessage[];
-  push?: (report: PushedReport) => void;
+  push?: (report: PushedNotification) => void;
 } {
   const tools: RegisteredTools = {};
   const sent: SentMessage[] = [];
@@ -542,7 +542,7 @@ test("a delivered report reaches the model and lets it respond", async () => {
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].customType, "subagent-report");
+  assert.equal(sent[0].customType, "subagent-notification");
   // followUp so it never cuts into a turn in progress; triggerTurn so an idle
   // session still acts on it instead of leaving it unread.
   assert.equal(sent[0].options?.deliverAs, "followUp");
