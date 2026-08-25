@@ -630,17 +630,27 @@ function makeCheckout(): { cwd: string; agentDir: string } {
   return { cwd, agentDir };
 }
 
-function writeAgent(dir: string, name: string, model?: string): void {
+function writeAgent(
+  dir: string,
+  name: string,
+  model?: string,
+  harness?: string,
+): void {
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     path.join(dir, `${name}.md`),
-    `---\ndescription: ${name} agent\n${model ? `model: ${model}\n` : ""}---\n\nWork.\n`,
+    `---\ndescription: ${name} agent\n${harness ? `harness: ${harness}\n` : ""}${model ? `model: ${model}\n` : ""}---\n\nWork.\n`,
     "utf-8",
   );
 }
 
-function writeUserAgent(agentDir: string, name: string, model?: string): void {
-  writeAgent(path.join(agentDir, "agents"), name, model);
+function writeUserAgent(
+  agentDir: string,
+  name: string,
+  model?: string,
+  harness?: string,
+): void {
+  writeAgent(path.join(agentDir, "agents"), name, model, harness);
 }
 
 function writeProjectAgent(cwd: string, name: string): void {
@@ -704,6 +714,22 @@ test("model diagnostics run when a session is resumed", async () => {
   assert.match(
     session.notifications[0],
     /model 'anthropic\/claude-missing' was not found/,
+  );
+});
+
+test("Claude model diagnostics run at session start", async () => {
+  const { cwd, agentDir } = makeCheckout();
+  writeUserAgent(agentDir, "alias", "sonnet", "claude");
+  writeUserAgent(agentDir, "full", "claude-sonnet-4-6", "claude");
+  writeUserAgent(agentDir, "typo", "sontet", "claude");
+
+  const session = await startSession({ cwd, agentDir });
+
+  assert.deepEqual(session.agentNames, ["alias", "full"]);
+  assert.equal(session.notifications.length, 1);
+  assert.match(
+    session.notifications[0],
+    /- typo: invalid Claude model 'sontet'/,
   );
 });
 

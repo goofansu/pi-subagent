@@ -78,9 +78,11 @@ appendSystemPrompt: true
 Review the requested change and report concrete findings.
 ```
 
-Claude accepts the aliases `opus`, `sonnet`, `haiku`, and `fable`, or a full
-Claude model id. It uses the SDK default when `model` is omitted. `effort` is
-translated by the adapter to a thinking-token budget (`off` disables thinking);
+Claude validates `model` at session start. It accepts the aliases `opus`,
+`sonnet`, `haiku`, and `fable`, or a full model ID from a recognized Claude
+model family; other values are reported as profile diagnostics. It uses the SDK
+default when `model` is omitted. `effort` is translated by the adapter to a
+thinking-token budget (`off` disables thinking);
 `tools` selects Claude built-in tools; and `appendSystemPrompt` defaults to
 `true`, appending the profile to Claude Code's default prompt. `false` supplies
 the profile as the complete system prompt. Claude profiles do not inherit the

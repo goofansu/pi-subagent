@@ -28,6 +28,8 @@ const MODEL_ALIASES: Record<string, string> = {
   haiku: "claude-haiku-4-5-20251001",
   fable: "claude-fable-5",
 };
+const FULL_MODEL_ID =
+  /^claude-(?:(?:opus|sonnet|haiku|fable)(?:-[a-z0-9]+)+|\d+(?:-\d+)*-(?:opus|sonnet|haiku|fable)(?:-[a-z0-9]+)+)$/i;
 const THINKING_BUDGETS: Record<string, number> = {
   minimal: 512,
   low: 1_024,
@@ -167,11 +169,19 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
   ];
 }
 
+function isClaudeModel(value: string): boolean {
+  return (
+    Object.hasOwn(MODEL_ALIASES, value.toLowerCase()) ||
+    FULL_MODEL_ID.test(value)
+  );
+}
+
 export function resolveClaudeModel(
   value: string | undefined,
 ): string | undefined {
   if (!value) return undefined;
-  return MODEL_ALIASES[value.toLowerCase()] ?? value;
+  const alias = value.toLowerCase();
+  return Object.hasOwn(MODEL_ALIASES, alias) ? MODEL_ALIASES[alias] : value;
 }
 
 export function claudeThinking(
@@ -246,7 +256,7 @@ export function createClaudeHarness(
             `appendSystemPrompt must be true or false in ${filePath}`,
           );
         }
-        if (model && resolveClaudeModel(model) === undefined)
+        if (model && !isClaudeModel(model))
           throw new Error(`invalid Claude model '${model}'`);
       } catch (error) {
         diagnostics.push({

@@ -43,6 +43,37 @@ test("Claude aliases and thinking budgets stay inside the adapter", () => {
   );
 });
 
+test("Claude validation accepts aliases and full model ids", () => {
+  const harness = createClaudeHarness();
+  for (const alias of ["opus", "sonnet", "haiku", "fable"]) {
+    assert.deepEqual(
+      harness.validate(
+        { ...config, fields: { model: alias } },
+        `/agents/${alias}.md`,
+      ),
+      [],
+    );
+  }
+
+  assert.deepEqual(
+    harness.validate(
+      { ...config, fields: { model: "claude-opus-4-5-20251101" } },
+      "/agents/full-id.md",
+    ),
+    [],
+  );
+});
+
+test("Claude validation diagnoses a misspelled model with its value", () => {
+  const harness = createClaudeHarness();
+  for (const model of ["sontet", "claude-sontet-4-6"]) {
+    assert.deepEqual(
+      harness.validate({ ...config, fields: { model } }, "/agents/typo.md"),
+      [{ reason: `invalid Claude model '${model}'` }],
+    );
+  }
+});
+
 test("Claude permissions bypass either forwarded trust value and disallow child spawning", () => {
   for (const projectTrusted of [false, true]) {
     const options = buildClaudeOptions(
