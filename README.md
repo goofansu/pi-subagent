@@ -87,7 +87,9 @@ Claude validates `model` at session start. It accepts the SDK's aliases
 `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5`,
 `claude-haiku-4-5-20251001`, `claude-opus-4-5`,
 `claude-opus-4-5-20251101`, `claude-sonnet-4-5`,
-`claude-sonnet-4-5-20250929`, plus the installed SDK's legacy forms
+`claude-sonnet-4-5-20250929`, `claude-3-5-haiku`,
+`claude-3-5-sonnet`, `claude-3-5-sonnet-20241022`,
+`claude-3-7-sonnet`, plus the installed SDK's legacy forms
 `claude-3-7-sonnet-latest`, `claude-3-7-sonnet-20250219`,
 `claude-3-5-haiku-latest`, `claude-3-5-haiku-20241022`,
 `claude-opus-4-0`, `claude-opus-4-20250514`, `claude-opus-4-1`,

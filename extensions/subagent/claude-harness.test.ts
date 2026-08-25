@@ -34,6 +34,44 @@ const task: SubagentTask = {
   projectTrusted: false,
 };
 
+// Canonical IDs and first-party IDs from the installed SDK model registry.
+const INSTALLED_SDK_MODEL_IDS = [
+  "claude-3-5-haiku",
+  "claude-3-5-haiku-20241022",
+  "claude-haiku-4-5",
+  "claude-haiku-4-5-20251001",
+  "claude-3-5-sonnet",
+  "claude-3-5-sonnet-20241022",
+  "claude-3-7-sonnet",
+  "claude-3-7-sonnet-20250219",
+  "claude-sonnet-4-0",
+  "claude-sonnet-4-20250514",
+  "claude-sonnet-4-5",
+  "claude-sonnet-4-5-20250929",
+  "claude-sonnet-4-6",
+  "claude-sonnet-5",
+  "claude-opus-4-0",
+  "claude-opus-4-20250514",
+  "claude-opus-4-1",
+  "claude-opus-4-1-20250805",
+  "claude-opus-4-5",
+  "claude-opus-4-5-20251101",
+  "claude-opus-4-6",
+  "claude-opus-4-7",
+  "claude-opus-4-8",
+  "claude-opus-5",
+  "claude-fable-5",
+  "claude-mythos-5",
+] as const;
+
+// These additional forms are present in the installed SDK's legacy model
+// vocabulary and must remain accepted even though they are not registry IDs.
+const INSTALLED_SDK_LEGACY_MODEL_IDS = [
+  "claude-3-7-sonnet-latest",
+  "claude-3-5-haiku-latest",
+  "claude-mythos-preview",
+] as const;
+
 test("Claude aliases and thinking budgets stay inside the adapter", () => {
   assert.equal(resolveClaudeModel("sonnet"), "claude-sonnet-5");
   assert.deepEqual(
@@ -56,6 +94,30 @@ test("Claude validation accepts every installed-SDK model entry", () => {
       model,
     );
     assert.equal(resolveClaudeModel(model), resolved, model);
+  }
+});
+
+test("Claude accepts every installed SDK registry model ID", () => {
+  const harness = createClaudeHarness();
+  for (const model of INSTALLED_SDK_MODEL_IDS) {
+    assert.deepEqual(
+      harness.validate({ ...config, fields: { model } }, `/agents/${model}.md`),
+      [],
+      model,
+    );
+    assert.equal(resolveClaudeModel(model), model, model);
+  }
+});
+
+test("Claude retains installed SDK legacy model forms", () => {
+  const harness = createClaudeHarness();
+  for (const model of INSTALLED_SDK_LEGACY_MODEL_IDS) {
+    assert.deepEqual(
+      harness.validate({ ...config, fields: { model } }, `/agents/${model}.md`),
+      [],
+      model,
+    );
+    assert.equal(resolveClaudeModel(model), model, model);
   }
 });
 
