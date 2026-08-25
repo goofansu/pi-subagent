@@ -21,8 +21,9 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
 1. [x] **`runner.ts` imports no pi-harness or Claude types.**
    No `runPiAgent` import, no pi `provider/id` model building, no pi
    thinking-scale vocabulary — resolution lives in the harness.
-   *Test:* a boundaries test asserts the dispatcher's module graph contains
-   neither `pi-agent` nor `@earendil-works/pi-ai` nor the claude SDK.
+   *Test:* the boundaries test parses real import specifiers and walks the
+   dispatcher's transitive core-module graph; it contains neither `pi-agent`
+   nor `@earendil-works/pi-ai` nor the claude SDK.
    *Review:* the executor arrives via the harness resolved from the profile;
    any `if (harness === ...)` branch in the dispatcher is a defect.
 
@@ -30,8 +31,8 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
    `run.ts`, `types.ts`, and `runs.ts` speak only the domain Fact type;
    `SingleResult.messages` is facts, and usage extraction reads typed domain
    units, never a widened cast of a wire payload.
-   *Test:* same boundaries test covers these files; fold/usage tests are
-   written against fact builders.
+   *Test:* the same AST-based boundaries test covers these files and every
+   reachable core module; fold/usage tests are written against fact builders.
    *Review:* no `as Message`, no hand-narrowing of wire content parts, in
    source or in tests.
 
@@ -39,8 +40,9 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
    `index.ts`, `render.ts`, `widget.ts`, `presentation.ts`, `messages.ts`
    consume facts and `RunView` only. (Host API and pi-tui are allowed —
    see the scope rule.)
-   *Test:* boundaries test; presentation/notification tests use fact
-   builders.
+   *Test:* the transitive boundaries test covers these files; the
+   composition root may register adapters, but tool registration and rendering
+   have no backend edges. Presentation/notification tests use fact builders.
    *Review:* `getFinalOutput`/`deriveActivity` narrow domain fact parts,
    not wire shapes.
 
@@ -68,13 +70,14 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
 7. [x] **Pi wire `Message` objects never leave the pi harness.**
    Translation to facts happens inside the pi executor module, at the edge.
    *Test:* pi adapter tests feed NDJSON fixtures and assert emitted *facts*;
-   boundaries test forbids `@earendil-works/pi-ai` message imports outside
-   the pi harness module.
+   the boundaries test parses the graph and forbids `@earendil-works/pi-ai`
+   message imports outside the pi harness module.
    *Review:* the translator is the only consumer of the wire shape.
 
 8. [x] **Claude SDK message objects never leave the claude harness.**
    Same rule, same checks: SDK fixtures in, facts out; `SDKMessage` types
-   confined to the adapter module.
+   confined to the adapter module, and the parsed graph forbids Claude SDK
+   imports outside it.
 
 9. [x] **`AbortSignal` is the only cancellation mechanism core exposes.**
    Core says *why* (cancel reason recorded in the registry, before abort
@@ -99,11 +102,13 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
     *Review:* `agents.ts` contains no field semantics beyond the common
     three; no central config union type enumerating every backend's options.
 
-Criteria 1–3, 7, and 8 should share one mechanical **boundaries test**: read
-each core source file's import specifiers and assert the forbidden modules
-(`@earendil-works/pi-ai` message exports, the pi harness module, the claude
-SDK) are absent — so the invariant fails loudly in CI instead of silently in
-review.
+Criteria 1–3, 7, and 8 should share one mechanical **boundaries test**: parse
+each core source file's real import specifiers, follow the transitive core
+module graph, and assert the forbidden modules (`@earendil-works/pi-ai`
+message exports, the pi harness modules, and the Claude SDK) are absent. The
+composition root is the sole registration edge and is allowed to name the
+adapters; every other core edge fails loudly in CI instead of silently in
+review. Comments and ordinary string literals are not import edges.
 
 ## Milestone-agreed additions (from the design session, ADR-0007)
 
