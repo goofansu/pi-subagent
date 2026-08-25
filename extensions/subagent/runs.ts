@@ -70,10 +70,10 @@ export interface SubagentRuns {
   release(id: string): void;
   /** Stop the named runs. Returns the ids that were actually cancelled. */
   cancel(ids: readonly string[], reason?: CancellationReason): string[];
+  /** Stop every running run without querying the display projection. */
+  cancelRunning(reason: CancellationReason): string[];
   /** Called on every change. Returns an unsubscribe. */
   subscribe(listener: () => void): () => void;
-  /** How many runs are tracked, terminal ones included. */
-  size(): number;
 }
 
 interface TrackedRun {
@@ -113,6 +113,31 @@ export function createSubagentRuns(
         // Display-only subscribers; there is nowhere useful to report this.
       }
     }
+  };
+
+  const cancel = (
+    ids: readonly string[],
+    reason: CancellationReason,
+  ): string[] => {
+    const cancelled: string[] = [];
+    for (const id of ids) {
+      const run = runs.get(id);
+      // Cancelling a run that already settled is a no-op, not an error: the
+      // caller raced the run and lost, which is not a failure of theirs.
+      if (
+        !run ||
+        run.cancellationReason !== undefined ||
+        isTerminal(run.result.lifecycle.phase)
+      )
+        continue;
+      // Record before forwarding the abort: settlement can run from the
+      // callback, and must observe the reason that caused it.
+      run.cancellationReason = reason;
+      run.cancel();
+      cancelled.push(id);
+    }
+    if (cancelled.length > 0) notify();
+    return cancelled;
   };
 
   const project = (run: TrackedRun): RunView => {
@@ -162,34 +187,21 @@ export function createSubagentRuns(
       return [...runs.values()].map(project);
     },
 
-    cancel(ids, reason = "requested") {
-      const cancelled: string[] = [];
-      for (const id of ids) {
-        const run = runs.get(id);
-        // Cancelling a run that already settled is a no-op, not an error: the
-        // caller raced the run and lost, which is not a failure of theirs.
-        if (
-          !run ||
-          run.cancellationReason !== undefined ||
-          isTerminal(run.result.lifecycle.phase)
-        )
-          continue;
-        // Record before forwarding the abort: settlement can run from the
-        // callback, and must observe the reason that caused it.
-        run.cancellationReason = reason;
-        run.cancel();
-        cancelled.push(id);
-      }
-      if (cancelled.length > 0) notify();
-      return cancelled;
+    cancel: (ids, reason = "requested") => cancel(ids, reason),
+
+    cancelRunning(reason) {
+      return cancel(
+        [...runs.values()]
+          .filter((run) => run.result.lifecycle.phase === "running")
+          .map((run) => run.id),
+        reason,
+      );
     },
 
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-
-    size: () => runs.size,
   };
 }
 

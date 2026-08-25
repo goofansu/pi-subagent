@@ -147,7 +147,11 @@ test("a cancel stops the run without suppressing its notification", async () => 
     true,
     "the stored result remains known",
   );
-  assert.equal(runs.size(), 0, "the landed notification releases the run");
+  assert.equal(
+    runs.list().length,
+    0,
+    "the landed notification releases the run",
+  );
 });
 
 test("a cancelled run's outcome is still recallable once its child dies", async () => {
@@ -219,7 +223,11 @@ test("shutdown stops what is running and delivers nothing anywhere", async () =>
   await flush();
 
   assert.deepEqual(pushed, [], "no notice follows into the next session");
-  assert.equal(runs.size(), 0, "the registry starts the next session empty");
+  assert.equal(
+    runs.list().length,
+    0,
+    "the registry starts the next session empty",
+  );
   assert.equal(delivery.has(handle.id), false);
   assert.equal(
     delivery.result(handle.id),
@@ -258,11 +266,11 @@ test("a pushed report keeps its run listed until the message lands", async () =>
   await flush();
 
   assert.equal(pushed.length, 1, "the report was pushed");
-  assert.equal(runs.size(), 1, "done, waiting to report — still listed");
+  assert.equal(runs.list().length, 1, "done, waiting to report — still listed");
 
   delivery.notificationLanded(handle.id);
 
-  assert.equal(runs.size(), 0, "released when the message entered");
+  assert.equal(runs.list().length, 0, "released when the message entered");
 });
 
 test("landing an unknown id changes nothing", () => {
@@ -270,7 +278,7 @@ test("landing an unknown id changes nothing", () => {
 
   delivery.notificationLanded("never-existed");
 
-  assert.equal(runs.size(), 0);
+  assert.equal(runs.list().length, 0);
 });
 
 // ── Reports an interrupt threw out of the queue ──────────────────────────────
@@ -301,10 +309,10 @@ test("INV-9: an interrupt-discarded follow-up is pushed again after settle", asy
 
   assert.equal(pushed.length, 2, "the discarded report is pushed again");
   assert.equal(pushed[1].text, pushed[0].text, "the same report, verbatim");
-  assert.equal(runs.size(), 1, "still listed until the retry lands");
+  assert.equal(runs.list().length, 1, "still listed until the retry lands");
 
   delivery.notificationLanded(handle.id);
-  assert.equal(runs.size(), 0);
+  assert.equal(runs.list().length, 0);
 });
 
 test("one landing per run: re-push never double-delivers", async () => {
@@ -380,7 +388,7 @@ test("shutdown forgets what an abort snapshotted", async () => {
   delivery.agentSettled();
 
   assert.equal(pushed.length, 1, "nothing re-pushes into the next session");
-  assert.equal(runs.size(), 0);
+  assert.equal(runs.list().length, 0);
 });
 
 test("shutdown releases runs whose pushed reports never landed", async () => {
@@ -391,11 +399,11 @@ test("shutdown releases runs whose pushed reports never landed", async () => {
   delivery.register(handle.id, run.settled);
   run.finish();
   await flush();
-  assert.equal(runs.size(), 1, "queued behind a session that is ending");
+  assert.equal(runs.list().length, 1, "queued behind a session that is ending");
 
   delivery.shutdown();
 
-  assert.equal(runs.size(), 0);
+  assert.equal(runs.list().length, 0);
 });
 
 test("a delivered run is released from the registry", async () => {
@@ -405,11 +413,11 @@ test("a delivered run is released from the registry", async () => {
   const [tracked] = runs.list();
   delivery.register(tracked.id, run.settled);
 
-  assert.equal(runs.size(), 1);
+  assert.equal(runs.list().length, 1);
   run.finish();
   await flush();
 
-  assert.equal(runs.size(), 0);
+  assert.equal(runs.list().length, 0);
 });
 
 // ── Retention ────────────────────────────────────────────────────────────────

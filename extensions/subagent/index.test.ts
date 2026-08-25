@@ -376,7 +376,7 @@ test("INV-8 boundary: session shutdown cancels and forgets a tool-started run", 
 
   boundary.events.session_shutdown({ reason: "new" });
   assert.equal(boundary.active[0].signal?.aborted, true);
-  assert.equal(boundary.runs.size(), 0);
+  assert.equal(boundary.runs.list().length, 0);
 
   boundary.active[0].resolve({ stopReason: "aborted" });
   await boundary.flush();

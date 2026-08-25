@@ -327,13 +327,7 @@ export function createSubagentDelivery({
     },
 
     shutdown() {
-      runs.cancel(
-        runs
-          .list()
-          .filter((run) => run.status === "running")
-          .map((run) => run.id),
-        "shutdown",
-      );
+      runs.cancelRunning("shutdown");
       generation++;
       for (const id of pending.keys()) runs.release(id);
       for (const id of notifications.keys())

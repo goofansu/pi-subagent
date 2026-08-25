@@ -79,10 +79,10 @@ test("a released run leaves the registry", () => {
   const runs = createSubagentRuns(fakeClock(), sequentialIds());
   const handle = runs.track(runningResult(), () => {});
 
-  assert.equal(runs.size(), 1);
+  assert.equal(runs.list().length, 1);
   runs.release(handle.id);
 
-  assert.equal(runs.size(), 0);
+  assert.equal(runs.list().length, 0);
   assert.deepEqual(runs.list(), []);
 });
 
@@ -94,7 +94,7 @@ test("releasing an unknown run changes nothing", () => {
 
   runs.release("never-existed");
 
-  assert.equal(runs.size(), 1);
+  assert.equal(runs.list().length, 1);
   assert.equal(notifications, 0);
 });
 
@@ -132,6 +132,21 @@ test("the first cancellation reason wins across repeated requests", () => {
   assert.deepEqual(runs.cancel([handle.id], "requested"), []);
   assert.equal(cancelled, 1);
   assert.equal(handle.cancellationReason(), "shutdown");
+});
+
+test("cancelRunning stops only running runs without using projections", () => {
+  const clock = fakeClock();
+  const runs = createSubagentRuns(clock, sequentialIds());
+  let runningCancelled = 0;
+  let settledCancelled = 0;
+  runs.track(runningResult("running"), () => runningCancelled++);
+  const settled = runningResult("settled");
+  runs.track(settled, () => settledCancelled++);
+  settleResultLifecycle(settled, { exitCode: 0 }, clock.now());
+
+  assert.deepEqual(runs.cancelRunning("shutdown"), ["run-1"]);
+  assert.equal(runningCancelled, 1);
+  assert.equal(settledCancelled, 0);
 });
 
 test("cancelling an unknown or already-settled run is a no-op", () => {
@@ -174,7 +189,7 @@ test("INV-1: run ids are stable and never reused within a session", () => {
 
   assert.equal(first.id, "dup");
   assert.equal(second.id, "fresh");
-  assert.equal(runs.size(), 1);
+  assert.equal(runs.list().length, 1);
 });
 
 test("a run's recorded activity is projected, and nothing else is derived", () => {

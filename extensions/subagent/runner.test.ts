@@ -408,7 +408,7 @@ test("a started run stays tracked after it settles, until its delivery", async (
   const runs = createSubagentRuns();
   const seen: number[] = [];
   const execute: SubagentExecutor = async () => {
-    seen.push(runs.size());
+    seen.push(runs.list().length);
     return { exitCode: 0 };
   };
 
@@ -424,7 +424,7 @@ test("a started run stays tracked after it settles, until its delivery", async (
   assert.deepEqual(seen, [1], "the run is visible while its child works");
   // Releasing is the delivery module's job: a settled run is still undelivered
   // work the widget must keep showing.
-  assert.equal(runs.size(), 1, "settling does not release the run");
+  assert.equal(runs.list().length, 1, "settling does not release the run");
 });
 
 test("the registry can cancel one run without touching the turn", async () => {
