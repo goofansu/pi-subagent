@@ -650,6 +650,24 @@ test("an agent_end event reaches the record as the transcript fact", () => {
   assert.equal(current.usage.turns, 1);
 });
 
+test("Pi context tokens are the latest gauge across multiple turns", () => {
+  const current = createEmptyResult("general-purpose", "test", 0);
+  const report = createRunReporter(current, () => {});
+  const message = (text: string, totalTokens: number) => ({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      usage: { totalTokens },
+    },
+  });
+
+  translatePiJsonEvent(message("first", 10), report);
+  translatePiJsonEvent(message("second", 25), report);
+
+  assert.equal(current.usage.contextTokens, 25);
+});
+
 test("the child pi driver ignores an abort that arrives after a clean exit", async () => {
   const controller = new AbortController();
   const terminalEvent = JSON.stringify({

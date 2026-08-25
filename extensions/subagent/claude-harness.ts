@@ -84,6 +84,9 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
       {
         role: "assistant",
         parts,
+        // Claude reports total turns on its terminal result. Streamed
+        // assistant messages are progress, not additional turns.
+        usage: { turns: 0 },
         ...(typeof wire.message.model === "string"
           ? { model: wire.message.model }
           : {}),
@@ -112,7 +115,7 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
   const reportedCost =
     typeof wire.total_cost_usd === "number" ? wire.total_cost_usd : undefined;
   let cost = reportedCost ?? 0;
-  let model: string | undefined;
+  let model = typeof wire.model === "string" ? wire.model : undefined;
   if (modelUsage) {
     for (const [modelId, value] of Object.entries(modelUsage)) {
       if (!isRecord(value)) continue;
@@ -131,31 +134,30 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
         cost += value.costUSD;
     }
   }
-  if (resultParts.length === 0 && !wire.is_error) return [];
   const errorMessage =
     wire.is_error &&
     Array.isArray(wire.errors) &&
     typeof wire.errors[0] === "string"
       ? wire.errors[0]
-      : wire.is_error && typeof wire.subtype === "string"
-        ? `Claude query ended with ${wire.subtype}`
-        : undefined;
+      : wire.is_error && wire.subtype === "success"
+        ? "Claude query reported an error despite its success subtype"
+        : wire.is_error && typeof wire.subtype === "string"
+          ? `Claude query reported an error (${wire.subtype})`
+          : wire.is_error
+            ? "Claude query reported an error"
+            : undefined;
   return [
     {
       role: "assistant",
       parts: resultParts,
-      ...(input || output || cacheRead || cacheWrite || cost
-        ? {
-            usage: {
-              input,
-              output,
-              cacheRead,
-              cacheWrite,
-              cost,
-              turns: typeof wire.num_turns === "number" ? wire.num_turns : 1,
-            },
-          }
-        : {}),
+      usage: {
+        input,
+        output,
+        cacheRead,
+        cacheWrite,
+        cost,
+        turns: typeof wire.num_turns === "number" ? wire.num_turns : 1,
+      },
       ...(model ? { model } : {}),
       ...(typeof wire.stop_reason === "string"
         ? { stopReason: wire.stop_reason }
@@ -263,7 +265,11 @@ export function createClaudeHarness(
         execute: async (run) => {
           const controller = new AbortController();
           let stream: Query | undefined;
+          let streamEnded = false;
+          let abortRequested = run.signal?.aborted ?? false;
           const abort = () => {
+            if (streamEnded) return;
+            abortRequested = true;
             controller.abort();
             stream?.close();
           };
@@ -285,11 +291,17 @@ export function createClaudeHarness(
                 run.report.message(fact);
               }
             }
+            streamEnded = true;
+            if (abortRequested) return { stopReason: "aborted" };
             return errorMessage
               ? { exitCode: 1, stopReason: "error", errorMessage }
               : { exitCode: 0 };
           } catch (error) {
-            if (controller.signal.aborted || run.signal?.aborted)
+            if (
+              abortRequested ||
+              controller.signal.aborted ||
+              run.signal?.aborted
+            )
               return { stopReason: "aborted" };
             const message =
               error instanceof Error ? error.message : String(error);

@@ -144,7 +144,10 @@ export type FactPart =
   | { type: "text"; text: string }
   | { type: "tool_call"; name: string; arguments?: Record<string, unknown> };
 
-/** Usage attached to a fact is a delta, never a cumulative total. */
+/**
+ * Usage attached to a fact is a delta, except contextTokens is a latest-value
+ * gauge.
+ */
 export interface FactUsage {
   input?: number;
   output?: number;
@@ -250,7 +253,9 @@ function recordFact(result: SingleResult, fact: Fact): void {
   result.usage.cacheRead += usage?.cacheRead ?? 0;
   result.usage.cacheWrite += usage?.cacheWrite ?? 0;
   result.usage.cost += usage?.cost ?? 0;
-  result.usage.contextTokens += usage?.contextTokens ?? 0;
+  if (usage?.contextTokens !== undefined) {
+    result.usage.contextTokens = usage.contextTokens;
+  }
   result.usage.turns += usage?.turns ?? (fact.role === "assistant" ? 1 : 0);
   if (fact.model) result.model = fact.model;
   if (fact.stopReason) result.stopReason = fact.stopReason;

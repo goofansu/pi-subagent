@@ -43,16 +43,18 @@ test("Claude aliases and thinking budgets stay inside the adapter", () => {
   );
 });
 
-test("Claude permissions bypass trust and disallow child spawning", () => {
-  const options = buildClaudeOptions(
-    task,
-    undefined,
-    "off",
-    new AbortController(),
-  );
-  assert.equal(options.permissionMode, "bypassPermissions");
-  assert.equal(options.allowDangerouslySkipPermissions, true);
-  assert.deepEqual(options.disallowedTools, ["Agent"]);
+test("Claude permissions bypass either forwarded trust value and disallow child spawning", () => {
+  for (const projectTrusted of [false, true]) {
+    const options = buildClaudeOptions(
+      { ...task, projectTrusted },
+      undefined,
+      "off",
+      new AbortController(),
+    );
+    assert.equal(options.permissionMode, "bypassPermissions");
+    assert.equal(options.allowDangerouslySkipPermissions, true);
+    assert.deepEqual(options.disallowedTools, ["Agent"]);
+  }
 });
 
 test("SDK messages translate to facts and terminal usage is counted once", () => {
@@ -87,7 +89,7 @@ test("SDK messages translate to facts and terminal usage is counted once", () =>
   assert.deepEqual(live[0].parts, [
     { type: "tool_call", name: "Read", arguments: { file_path: "a.ts" } },
   ]);
-  assert.equal(live[0].usage, undefined);
+  assert.equal(live[0].usage?.turns, 0);
   assert.deepEqual(terminal[0].usage, {
     input: 10,
     output: 4,
@@ -96,6 +98,54 @@ test("SDK messages translate to facts and terminal usage is counted once", () =>
     cost: 0.25,
     turns: 1,
   });
+});
+
+test("Claude keeps terminal facts when a successful result has empty text", () => {
+  const [fact] = translateClaudeMessage({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    num_turns: 2,
+    stop_reason: "end_turn",
+    total_cost_usd: 0.25,
+    modelUsage: {
+      "claude-sonnet-4-6": {
+        inputTokens: 10,
+        outputTokens: 4,
+        cacheReadInputTokens: 2,
+        cacheCreationInputTokens: 1,
+        costUSD: 0.25,
+      },
+    },
+  } as unknown as SDKMessage);
+
+  assert.deepEqual(fact, {
+    role: "assistant",
+    parts: [],
+    usage: {
+      input: 10,
+      output: 4,
+      cacheRead: 2,
+      cacheWrite: 1,
+      cost: 0.25,
+      turns: 2,
+    },
+    model: "claude-sonnet-4-6",
+    stopReason: "end_turn",
+  });
+});
+
+test("Claude reports an error flag truthfully even with a success subtype", () => {
+  const [fact] = translateClaudeMessage({
+    type: "result",
+    result: "",
+    subtype: "success",
+    is_error: true,
+  } as unknown as SDKMessage);
+
+  assert.match(fact.errorMessage ?? "", /error/i);
+  assert.match(fact.errorMessage ?? "", /success/i);
+  assert.doesNotMatch(fact.errorMessage ?? "", /ended with success/i);
 });
 
 test("Claude runs end-to-end through the core run contract", async () => {
@@ -111,10 +161,17 @@ test("Claude runs end-to-end through the core run contract", async () => {
           },
         } as unknown as SDKMessage;
         yield {
+          type: "assistant",
+          message: {
+            model: "claude-sonnet-4-6",
+            content: [{ type: "text", text: "second live turn" }],
+          },
+        } as unknown as SDKMessage;
+        yield {
           type: "result",
           result: "answer",
           is_error: false,
-          num_turns: 1,
+          num_turns: 2,
           total_cost_usd: 0.1,
           modelUsage: {
             "claude-sonnet-4-6": {
@@ -143,6 +200,50 @@ test("Claude runs end-to-end through the core run contract", async () => {
   assert.equal(result.stderr, "sdk diagnostic\\n");
   assert.equal(result.usage.input, 2);
   assert.equal(result.usage.output, 1);
+  assert.equal(result.usage.turns, 2);
+});
+
+test("Claude cancellation stays cancelled when abort closes the stream gracefully", async () => {
+  const runs = createSubagentRuns();
+  let queryReady: () => void = () => {};
+  const ready = new Promise<void>((resolve) => {
+    queryReady = resolve;
+  });
+  let closeCalled = false;
+  const query: ClaudeQuery = ({ options }) => {
+    queryReady();
+    return {
+      async *[Symbol.asyncIterator]() {
+        await new Promise<void>((resolve) =>
+          options?.abortController?.signal.addEventListener(
+            "abort",
+            () => resolve(),
+            { once: true },
+          ),
+        );
+      },
+      close() {
+        closeCalled = true;
+      },
+    } as never;
+  };
+  const started = startSubagent({
+    config,
+    description: "cancelled claude run",
+    prompt: "do it",
+    harness: createClaudeHarness(async () => query),
+    runs,
+  });
+
+  await ready;
+  runs.cancel([started.id], "shutdown");
+  const result = await started.settled;
+
+  assert.equal(closeCalled, true);
+  assert.equal(result.lifecycle.phase, "cancelled");
+  if (result.lifecycle.phase === "cancelled") {
+    assert.equal(result.lifecycle.reason, "shutdown");
+  }
 });
 
 test("Claude adapter feeds SDK stderr and normalizes abort", async () => {
