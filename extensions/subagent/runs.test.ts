@@ -123,6 +123,17 @@ test("cancelling a run calls its canceller and reports what it stopped", () => {
   assert.equal(cancelled, 1);
 });
 
+test("the first cancellation reason wins across repeated requests", () => {
+  const runs = createSubagentRuns(fakeClock(), sequentialIds());
+  let cancelled = 0;
+  const handle = runs.track(runningResult(), () => cancelled++);
+
+  assert.deepEqual(runs.cancel([handle.id], "shutdown"), [handle.id]);
+  assert.deepEqual(runs.cancel([handle.id], "requested"), []);
+  assert.equal(cancelled, 1);
+  assert.equal(handle.cancellationReason(), "shutdown");
+});
+
 test("cancelling an unknown or already-settled run is a no-op", () => {
   const clock = fakeClock();
   const runs = createSubagentRuns(clock, sequentialIds());

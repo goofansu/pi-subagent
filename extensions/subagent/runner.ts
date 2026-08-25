@@ -22,7 +22,7 @@ import {
 } from "./run.ts";
 import type { SubagentRuns } from "./runs.ts";
 import { subagentRuns } from "./runs.ts";
-import type { AgentConfig, CancellationReason, SingleResult } from "./types.ts";
+import type { AgentConfig, SingleResult } from "./types.ts";
 
 const MAX_SUBAGENT_DEPTH = 1;
 
@@ -143,11 +143,7 @@ export function startSubagent({
     else signal.addEventListener("abort", forwardAbort, { once: true });
   }
 
-  let cancellationReason: CancellationReason | undefined;
-  const handle = runs.track(result, (reason) => {
-    cancellationReason = reason;
-    forwardAbort();
-  });
+  const handle = runs.track(result, forwardAbort);
 
   // Progress goes to the registry and from there to whatever is on screen.
   // It cannot go back into the transcript: a detached run's tool-call row is
@@ -169,7 +165,7 @@ export function startSubagent({
           result,
           { stopReason: "aborted" },
           now(),
-          cancellationReason,
+          handle.cancellationReason(),
         );
         emit();
         return result;
@@ -189,7 +185,12 @@ export function startSubagent({
           errorMessage: `Executor failed unexpectedly: ${message}`,
         };
       }
-      settleResultLifecycle(result, outcome, now(), cancellationReason);
+      settleResultLifecycle(
+        result,
+        outcome,
+        now(),
+        handle.cancellationReason(),
+      );
       emit();
       return result;
     } finally {

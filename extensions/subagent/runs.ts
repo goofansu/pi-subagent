@@ -40,6 +40,8 @@ export interface RunView {
 /** The dispatcher's write access to one tracked run. */
 export interface RunHandle {
   readonly id: string;
+  /** Why cancellation was first requested, if it was. */
+  cancellationReason(): CancellationReason | undefined;
   /** Publish this run's current state to subscribers. */
   changed(): void;
 }
@@ -58,10 +60,7 @@ export interface SubagentRuns {
    * Put a run under the registry's care. `cancel` is whatever stops this
    * particular run; the registry calls it and does not care how it works.
    */
-  track(
-    result: SingleResult,
-    cancel: (reason: CancellationReason) => void,
-  ): RunHandle;
+  track(result: SingleResult, cancel: () => void): RunHandle;
   /** Every tracked run, projected for display. */
   list(): readonly RunView[];
   /**
@@ -80,7 +79,8 @@ export interface SubagentRuns {
 interface TrackedRun {
   id: string;
   result: SingleResult;
-  cancel: (reason: CancellationReason) => void;
+  cancel: () => void;
+  cancellationReason?: CancellationReason;
 }
 
 function isTerminal(status: LifecycleStatus): boolean {
@@ -146,6 +146,7 @@ export function createSubagentRuns(
 
       return {
         id,
+        cancellationReason: () => runs.get(id)?.cancellationReason,
         changed() {
           notify();
         },
@@ -167,8 +168,16 @@ export function createSubagentRuns(
         const run = runs.get(id);
         // Cancelling a run that already settled is a no-op, not an error: the
         // caller raced the run and lost, which is not a failure of theirs.
-        if (!run || isTerminal(run.result.lifecycle.phase)) continue;
-        run.cancel(reason);
+        if (
+          !run ||
+          run.cancellationReason !== undefined ||
+          isTerminal(run.result.lifecycle.phase)
+        )
+          continue;
+        // Record before forwarding the abort: settlement can run from the
+        // callback, and must observe the reason that caused it.
+        run.cancellationReason = reason;
+        run.cancel();
         cancelled.push(id);
       }
       if (cancelled.length > 0) notify();
