@@ -4,11 +4,19 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { PushedNotification } from "./delivery.ts";
-import subagentExtension, { registerSubagentFeatures } from "./index.ts";
-import { createEmptyResult } from "./run.ts";
-import type { RunSubagentOptions, StartedSubagent } from "./runner.ts";
-import { subagentRuns } from "./runs.ts";
+import { createSubagentDelivery, type PushedNotification } from "./delivery.ts";
+import subagentExtension, {
+  registerDeliveryEventHandlers,
+  registerShutdownEventHandler,
+  registerSubagentFeatures,
+} from "./index.ts";
+import { createEmptyResult, type SubagentOutcome } from "./run.ts";
+import {
+  type RunSubagentOptions,
+  type StartedSubagent,
+  startSubagent,
+} from "./runner.ts";
+import { createSubagentRuns, subagentRuns } from "./runs.ts";
 import type { AgentConfig } from "./types.ts";
 
 // ── Extension registration ───────────────────────────────────────────────────
@@ -188,29 +196,257 @@ test("agent_start reads the live session's trust and cwd at execute time", async
   assert.equal(executeTrustChecks, 0);
 });
 
-test("INV-2: a successful start means the run is actually running with no queue", async () => {
+test("INV-2 boundary: a successful start is executing, never queued", async () => {
+  const boundary = runtimeBoundary(["run-1"]);
+  const id = await boundary.start();
+
+  assert.equal(id, "run-1");
+  assert.equal(boundary.active.length, 1, "the stand-in executor is running");
+  assert.equal(boundary.runs.list()[0].status, "running");
+});
+
+interface BoundaryRun {
+  report: Parameters<NonNullable<RunSubagentOptions["execute"]>>[0]["report"];
+  signal?: AbortSignal;
+  resolve(outcome: SubagentOutcome): void;
+}
+
+function runtimeBoundary(
+  ids: string[],
+  { pushThrows = false }: { pushThrows?: boolean } = {},
+) {
   const { pi, tools } = collectTools();
-  const started = fakeStart(() => {});
+  const runs = createSubagentRuns({ now: () => 0 }, () => {
+    const id = ids.shift();
+    assert.ok(id, "ran out of boundary-test ids");
+    return id;
+  });
+  const pushed: PushedNotification[] = [];
+  const delivery = createSubagentDelivery({
+    runs,
+    push: (notification) => {
+      pushed.push(notification);
+      if (pushThrows) throw new Error("push failed");
+    },
+  });
+  const active: BoundaryRun[] = [];
+  let widgetFactory:
+    | ((
+        tui: { requestRender(): void },
+        theme: {
+          fg(_tone: string, text: string): string;
+          bold(text: string): string;
+        },
+      ) => { render(width: number): string[] })
+    | undefined;
+  const execute: NonNullable<RunSubagentOptions["execute"]> = (run) =>
+    new Promise((resolve) =>
+      active.push({ report: run.report, signal: run.signal, resolve }),
+    );
 
   registerSubagentFeatures(
     pi,
     { cwd: "/project", projectTrusted: true },
     "/agent-dir",
     new Map([["worker", agentConfig("worker")]]),
-    { start: started.start },
+    {
+      runs,
+      delivery,
+      start: (options) => startSubagent({ ...options, execute, runs }),
+      widgetHost: {
+        setWidget(_key, content) {
+          widgetFactory = content as typeof widgetFactory;
+        },
+      },
+    },
   );
 
-  const result = await tools.agent_start.execute(
-    "call-1",
-    { agent: "worker", description: "task", prompt: "work" },
-    undefined,
-    undefined,
-    {},
-  );
-  started.settle();
+  const events: Record<string, (event: unknown) => void> = {};
+  const eventPi = {
+    on(event: string, handler: (event: unknown) => void) {
+      events[event] = handler;
+    },
+  } as unknown as ExtensionAPI;
+  registerDeliveryEventHandlers(eventPi, delivery);
+  registerShutdownEventHandler(eventPi, delivery);
 
-  assert.match(result.content[0].text, /Started worker as run run-1/);
-  assert.doesNotMatch(result.content[0].text, /finished/);
+  const start = async (): Promise<string> => {
+    const result = await tools.agent_start.execute(
+      "call",
+      { agent: "worker", description: "task", prompt: "work" },
+      undefined,
+      undefined,
+      {},
+    );
+    const id = result.content[0].text.match(/run (\S+)/)?.[1];
+    assert.ok(id);
+    return id.replace(/\.$/, "");
+  };
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+  const renderWidget = (): string => {
+    assert.ok(widgetFactory, "runs widget is installed");
+    const component = widgetFactory(
+      { requestRender() {} },
+      {
+        fg: (_tone, text) => text,
+        bold: (text) => text,
+      },
+    );
+    return component.render(100).join("\n");
+  };
+
+  return {
+    tools,
+    runs,
+    pushed,
+    active,
+    events,
+    delivery,
+    start,
+    flush,
+    renderWidget,
+  };
+}
+
+test("INV-1 boundary: landed run ids are never reused", async () => {
+  const boundary = runtimeBoundary(["dup", "dup", "fresh"]);
+  const first = await boundary.start();
+  boundary.active[0].resolve({ exitCode: 0 });
+  await boundary.flush();
+  boundary.events.message_start({
+    message: {
+      role: "custom",
+      customType: "subagent-notification",
+      details: { id: first },
+    },
+  });
+
+  const second = await boundary.start();
+  assert.equal(first, "dup");
+  assert.equal(second, "fresh");
+});
+
+test("INV-3 boundary: completed and failed states are final", async () => {
+  const boundary = runtimeBoundary(["completed", "failed"]);
+  const completed = await boundary.start();
+  const failed = await boundary.start();
+  boundary.active[0].resolve({ exitCode: 0 });
+  boundary.active[1].resolve({ exitCode: 1, errorMessage: "failed" });
+  await boundary.flush();
+
+  const before = await boundary.tools.agent_await.execute("await-1", {
+    ids: [completed, failed],
+  });
+  await boundary.tools.agent_cancel.execute("cancel", {
+    ids: [completed, failed],
+  });
+  const after = await boundary.tools.agent_await.execute("await-2", {
+    ids: [completed, failed],
+  });
+
+  assert.match(before.content[0].text, /completed/);
+  assert.match(before.content[0].text, /failed/);
+  assert.equal(after.content[0].text, before.content[0].text);
+});
+
+test("INV-3/INV-6 boundary: cancellation is repeatable and terminal", async () => {
+  const boundary = runtimeBoundary(["run-1"]);
+  const id = await boundary.start();
+
+  await boundary.tools.agent_cancel.execute("cancel-1", { ids: [id] });
+  await boundary.tools.agent_cancel.execute("cancel-2", { ids: [id] });
+  boundary.active[0].resolve({ stopReason: "aborted" });
+  await boundary.flush();
+
+  const first = await boundary.tools.agent_await.execute("await-1", {
+    ids: [id],
+  });
+  await boundary.tools.agent_cancel.execute("cancel-3", { ids: [id] });
+  const second = await boundary.tools.agent_await.execute("await-2", {
+    ids: [id],
+  });
+  assert.match(first.content[0].text, /cancelled/);
+  assert.equal(second.content[0].text, first.content[0].text);
+});
+
+test("INV-8 boundary: session shutdown cancels and forgets a tool-started run", async () => {
+  const boundary = runtimeBoundary(["run-1"]);
+  const id = await boundary.start();
+
+  boundary.events.session_shutdown({ reason: "new" });
+  assert.equal(boundary.active[0].signal?.aborted, true);
+  assert.equal(boundary.runs.size(), 0);
+
+  boundary.active[0].resolve({ stopReason: "aborted" });
+  await boundary.flush();
+  assert.equal(boundary.pushed.length, 0);
+  const result = await boundary.tools.agent_result.execute("result", { id });
+  assert.match(result.content[0].text, /No run with id/);
+});
+
+test("INV-9 boundary: lost notification retries once without changing result", async () => {
+  const boundary = runtimeBoundary(["run-1"]);
+  const id = await boundary.start();
+  boundary.active[0].report.message({
+    role: "assistant",
+    content: [{ type: "text", text: "  answer\n" }],
+  } as never);
+  boundary.active[0].resolve({ exitCode: 0 });
+  await boundary.flush();
+
+  assert.equal(boundary.pushed.length, 1);
+  boundary.events.turn_end({ message: { stopReason: "aborted" } });
+  boundary.events.agent_settled({});
+  assert.equal(boundary.pushed.length, 2);
+  assert.equal(boundary.pushed[1].text, boundary.pushed[0].text);
+
+  const landed = {
+    message: {
+      role: "custom",
+      customType: "subagent-notification",
+      details: { id },
+    },
+  };
+  boundary.events.message_start(landed);
+  boundary.events.message_start(landed);
+  boundary.events.agent_settled({});
+  assert.equal(boundary.pushed.length, 2);
+
+  const result = await boundary.tools.agent_result.execute("result", { id });
+  assert.match(result.content[0].text, / {2}answer\n$/);
+});
+
+test("INV-9 boundary: a failed notification push preserves the exact result", async () => {
+  const boundary = runtimeBoundary(["run-1"], { pushThrows: true });
+  const id = await boundary.start();
+  boundary.active[0].report.message({
+    role: "assistant",
+    content: [{ type: "text", text: "  exact answer\n" }],
+  } as never);
+  boundary.active[0].resolve({ exitCode: 0 });
+  await boundary.flush();
+
+  const result = await boundary.tools.agent_result.execute("result", { id });
+  assert.match(result.content[0].text, / {2}exact answer\n$/);
+});
+
+test("INV-10 boundary: widget and result presentation never determine state", async () => {
+  const boundary = runtimeBoundary(["run-1"]);
+  const id = await boundary.start();
+  assert.match(boundary.renderWidget(), /running/);
+
+  boundary.active[0].report.message({
+    role: "assistant",
+    content: [{ type: "text", text: "answer" }],
+  } as never);
+  boundary.active[0].resolve({ exitCode: 0 });
+  await boundary.flush();
+  assert.match(boundary.renderWidget(), /completed/);
+
+  await boundary.tools.agent_result.execute("result", { id });
+  assert.equal(boundary.runs.list()[0].status, "completed");
+  assert.match(boundary.renderWidget(), /completed/);
 });
 
 test("agent_start refuses an unknown agent", async () => {

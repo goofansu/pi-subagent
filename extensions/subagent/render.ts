@@ -20,8 +20,8 @@ type RenderCallContext = { lastComponent?: Component; expanded: boolean };
 /**
  * The transcript row for `agent_start`: who was asked, and what for.
  *
- * A started run reports nothing else here. Its progress lives in the widget
- * and its answer arrives as a report of its own, so a row that tried to show
+ * A started run returns nothing else here. Its progress lives in the widget
+ * and its answer is retrieved separately, so a row that tried to show
  * either would be a stale copy of both.
  *
  * The host paints the tool result below this row in the same grey as the
@@ -85,7 +85,7 @@ function isCollectedRuns(value: unknown): value is CollectedRuns {
 }
 
 /**
- * The single line a collapsed result shows in place of the whole report.
+ * The single line a collapsed result shows in place of the whole body.
  *
  * No status glyph — the dots belong to the widget. A lone run states its
  * status as a word, painted in the status tone so a failure stands out.
@@ -117,8 +117,8 @@ export function formatCollectedSummary(
     }
     line =
       counts.size === 1
-        ? theme.fg("toolTitle", `${runs.length} ${runs[0].agent} reports`)
-        : theme.fg("toolTitle", `${runs.length} reports`) +
+        ? theme.fg("toolTitle", `${runs.length} ${runs[0].agent} results`)
+        : theme.fg("toolTitle", `${runs.length} results`) +
           theme.fg(
             "dim",
             ` from ${[...counts]
@@ -135,14 +135,9 @@ export function formatCollectedSummary(
 }
 
 /**
- * Render a collected report: a summary line collapsed, Markdown expanded.
- *
- * Two things are wrong with the flat default for these tools. What
- * `agent_await` and `agent_result` return is prose an agent wrote, with the
- * headings, lists and code spans it chose, and rendered flat it reads as a
- * wall of asterisks and backticks. And a report can be thousands of
- * characters, which is a lot of transcript to scroll past for something you
- * have usually already read once as a delivered message.
+ * Render a collected result: a summary line collapsed, Markdown expanded.
+ * Agent output may contain Markdown and can be thousands of characters, so
+ * the flat default is both hard to read and hard to scroll past.
  */
 export function renderMarkdownResult(
   result: {
@@ -157,9 +152,8 @@ export function renderMarkdownResult(
 
   if (options.expanded) return new Markdown(text, 0, 0, getMarkdownTheme());
 
-  // Without runs to name there is nothing to summarise from — `agent_await` on
-  // an already-delivered id reports no runs at all — so fall back to the
-  // opening line rather than announcing "0 reports".
+  // Without runs to name there is nothing to summarise, so fall back to the
+  // opening line rather than announcing "0 results".
   if (!isCollectedRuns(result.details) || result.details.runs.length === 0) {
     const firstLine = text.split("\n", 1)[0] ?? "";
     return new Text(theme.fg("toolOutput", firstLine), 0, 0);

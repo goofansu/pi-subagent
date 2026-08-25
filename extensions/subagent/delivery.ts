@@ -15,7 +15,7 @@ import type { SubagentRuns } from "./runs.ts";
 import { subagentRuns } from "./runs.ts";
 import type { LifecycleStatus, SingleResult } from "./types.ts";
 
-/** A report on its way to the model, with what a renderer needs to show it. */
+/** A completion notification on its way to the model. */
 export interface PushedNotification {
   id: string;
   agent: string;
@@ -24,44 +24,36 @@ export interface PushedNotification {
   text: string;
 }
 
-/** Push a report into the session. Narrowed from `ExtensionAPI`. */
-export type PushNotification = (report: PushedNotification) => void;
+/** Push a completion notification into the session. */
+export type PushNotification = (notification: PushedNotification) => void;
 
 /**
  * A push target that outlives any one session.
  *
- * Detached runs belong to the pi process, but the `sendMessage` a report is
- * pushed through belongs to one session's ExtensionAPI, and every method on it
- * throws once that session is replaced. This seam is what lets the delivery be
- * built once over `push` while each session start re-aims it at the live
- * session.
- *
- * A report that arrives with no session bound is dropped, not queued: it
- * belongs to the conversation that started its run, and that conversation is
- * gone. Delivering it into the next session would hand a model an answer to a
- * question it never asked. The drop is a crash guard for the teardown race —
- * settling through a stale API must not throw through an otherwise-unobserved
- * promise chain — never a cross-session delivery channel.
+ * A session's `sendMessage` becomes stale when that session is replaced. This
+ * process-lifetime seam lets each session start re-aim notification pushes at
+ * the live API. A notice emitted with no session bound is dropped rather than
+ * crossing into a conversation that did not start its run.
  */
 export interface SessionPush {
   /** The stable target to build the delivery with. */
   push: PushNotification;
   /** Aim at a live session. */
   bind(push: PushNotification): void;
-  /** Drop the target; reports that settle before the next bind are dropped. */
+  /** Drop the target; notifications emitted before the next bind are dropped. */
   unbind(): void;
 }
 
 export function createSessionPush(): SessionPush {
   let live: PushNotification | null = null;
 
-  const push: PushNotification = (report) => {
+  const push: PushNotification = (notification) => {
     if (!live) return;
     try {
-      live(report);
+      live(notification);
     } catch {
-      // A session that went stale before its shutdown event reached us. Stop
-      // pushing through it; the reports it can no longer take are dropped.
+      // Stop using a session that went stale before its shutdown event. The
+      // notifications it can no longer accept are dropped.
       live = null;
     }
   };
@@ -78,19 +70,11 @@ export function createSessionPush(): SessionPush {
 }
 
 /**
- * What a delivered run said, kept for the rest of the session.
+ * A terminal run's authoritative result, retained for the session.
  *
- * A pushed report is capped so a runaway agent cannot swamp the parent's
- * context, and before this existed the trimmed remainder was simply lost —
- * work that had already been paid for. Result storage keeps the whole thing
- * addressable by id, so `agent_result` can hand back what the cap left out.
- *
- * The invariant is delivered ⇒ resultable, for the session that asked:
- * `shutdown` clears result store, because a report belongs to the conversation
- * that asked for it and the next session's model never started these runs.
- * Within a session, whole outputs are held only up to a budget — see
- * {@link RESULT_STORE_CHARACTER_BUDGET} — and an entry whose output was evicted
- * still answers, saying so.
+ * Storage is independent of notification delivery. Whole outputs are held up
+ * to {@link RESULT_STORE_CHARACTER_BUDGET}; an evicted entry remains
+ * addressable and reports that its output is gone.
  */
 export interface RetainedResult {
   id: string;
@@ -106,12 +90,9 @@ export interface RetainedResult {
 /**
  * Cap on the total characters result store holds across all runs.
  *
- * Result storage keeps every delivered run's whole output in memory for the rest
- * of the session, and nothing else bounds it — a long session of large
- * reports would grow without limit. This is a backstop against that, not a
- * working budget: it is roughly eighty reports at the pushed-report cap, and
- * eviction takes the oldest outputs first. The newest entry always survives,
- * so a report that says it was trimmed can always be read back whole.
+ * Without a total budget, a long session of large results would grow without
+ * limit. Eviction removes the oldest output first while retaining its terminal
+ * metadata. The newest result always survives.
  */
 export const RESULT_STORE_CHARACTER_BUDGET = 2_000_000;
 
@@ -140,14 +121,14 @@ export interface WaitOutcome {
 export interface CancelOutcome {
   /** Ids this call stopped. Their cancellation is delivered by the caller. */
   cancelled: string[];
-  /** Ids that settled before the cancel arrived; their reports stand. */
+  /** Ids that settled before the cancel arrived; their results stand. */
   finished: string[];
   /** Ids that name no run this delivery has ever seen. */
   unknown: string[];
 }
 
 export interface SubagentDelivery {
-  /** Take responsibility for a started run's report. */
+  /** Track a started run through settlement, storage, and notification. */
   register(id: string, settled: Promise<SingleResult>): void;
   /** Whether this id names a known run. */
   has(id: string): boolean;
@@ -158,37 +139,15 @@ export interface SubagentDelivery {
   ): Promise<WaitOutcome>;
   /** Request cancellation. The eventual result and notification are unchanged. */
   cancel(ids: readonly string[]): CancelOutcome;
-  /**
-   * The pushed report for this run has entered the conversation. Pushed is
-   * not landed: pi holds a follow-up while the model is mid-turn, and the
-   * run stays listed — "done, waiting to report" — until this confirms the
-   * model can actually see the report. Unknown ids are ignored.
-   */
+  /** Confirm that this run's pushed notification entered the conversation. */
   notificationLanded(id: string): void;
-  /**
-   * The turn ended aborted. Pi's interactive host clears its queued messages
-   * on the operator's interrupt, and a pushed report riding that queue is
-   * discarded with it — it will never land. This snapshots what was pushed
-   * and unlanded at the abort, so `agentSettled` can push it again.
-   */
+  /** Mark queued, unlanded notifications as known lost after an interrupt. */
   turnAborted(): void;
-  /**
-   * The agent settled after its run. Pi drains any queued messages that
-   * survived — it continues the run for them — before it settles, so a
-   * report that was unlanded at the abort and is *still* unlanded now is
-   * provably gone, not merely queued: push it again. Without a preceding
-   * abort this is a no-op, and a report that landed between the abort and
-   * the settle drops out, so the retry cannot double-deliver.
-   */
+  /** Retry notifications known lost once the parent agent settles. */
   agentSettled(): void;
-  /**
-   * The session is over: stop everything still running, mark every
-   * undelivered run delivered so no notice follows the operator into the
-   * next session, and clear result store — a report belongs to the conversation
-   * that asked for it.
-   */
+  /** Stop running children and clear this session's notifications/results. */
   shutdown(): void;
-  /** What a run said, whole, after it has been delivered. */
+  /** Observe a terminal run's retained authoritative result. */
   result(id: string): RetainedResult | undefined;
 }
 
@@ -403,7 +362,7 @@ const MAX_TIMEOUT_MS = 2 ** 31 - 1;
  * Resolve when `work` does, or give up on a timeout or an abort.
  *
  * Giving up never rejects: a wait that ran out of patience is an outcome the
- * caller reports, not an error, and the run it was waiting on is still alive.
+ * caller observes, not an error, and the run it was waiting on is still alive.
  */
 async function withDeadline(
   work: Promise<unknown>,

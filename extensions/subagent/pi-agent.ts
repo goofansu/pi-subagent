@@ -452,12 +452,12 @@ export async function runPiAgent(
         if (stdout.overflowed()) {
           report.stderr(OVERSIZED_STDOUT_LINE_MESSAGE);
         }
-        if (code !== 0 && !reportedStderr && !reportedErrorMessage) {
-          closeErrorMessage =
-            `Child pi exited with code ${code ?? "unknown"} without stderr` +
-            (rawStdoutTail.trim()
-              ? `. Last stdout: ${rawStdoutTail.trim()}`
-              : ".");
+        if (code !== 0 && !reportedErrorMessage) {
+          closeErrorMessage = `Child pi exited with code ${code ?? "unknown"}`;
+          const stdoutTail = rawStdoutTail.trim();
+          if (!reportedStderr && stdoutTail) {
+            report.stderr(`Last stdout:\n${stdoutTail}`);
+          }
         }
         resolve(code ?? undefined);
       });
@@ -500,12 +500,13 @@ export async function runPiAgent(
     }
     if (exitCode === 0 && !sawValidAgentEnd) {
       const stdoutTail = rawStdoutTail.trim();
+      report.stderr(
+        stdoutTail ? `Last stdout:\n${stdoutTail}` : "No stdout was captured.",
+      );
       return {
         exitCode: 1,
         stopReason: "error",
-        errorMessage: stdoutTail
-          ? `${MISSING_AGENT_END_ERROR} Last stdout:\n${stdoutTail}`
-          : `${MISSING_AGENT_END_ERROR} No stdout was captured.`,
+        errorMessage: MISSING_AGENT_END_ERROR,
       };
     }
     return {

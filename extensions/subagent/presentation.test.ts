@@ -64,13 +64,13 @@ test("each lifecycle state has its own glyph-and-tone pair", () => {
   );
 });
 
-test("a delivered report is 'reported', not 'completed'", () => {
-  assert.equal(notificationVerb("completed"), "reported");
+test("a completed notification uses lifecycle vocabulary", () => {
+  assert.equal(notificationVerb("completed"), "completed");
   assert.equal(notificationVerb("failed"), "failed");
   assert.equal(notificationVerb("cancelled"), "cancelled");
 });
 
-// ── Report shape ─────────────────────────────────────────────────────────────
+// ── Notification and result shape ───────────────────────────────────────────
 
 test("N1/N2: completed notification has a deterministic bounded preview and result pointer", () => {
   const result = createEmptyResult("explore", "look", 0);
@@ -94,6 +94,14 @@ test("N3: failed notification carries only the primary error and pointer", () =>
     formatNotification("a1", result),
     "Subagent explore (a1) failed: model refused\n\nUse agent_result with id a1 to retrieve the full result.",
   );
+});
+
+test("completed results preserve output exactly", () => {
+  const result = createEmptyResult("explore", "look", 0);
+  result.messages.push(assistantText("  answer\n"));
+  result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
+
+  assert.equal(fullOutput(result), "  answer\n");
 });
 
 test("a cancelled notification is terse and contains no partial output", () => {

@@ -66,7 +66,7 @@ export function measureColumns(runs: readonly RunView[]): RunColumns {
  * Running runs first, then everything else, each group newest last.
  *
  * What is still happening is what the reader is watching; a settled run is
- * only here until its report lands.
+ * only here until its notification lands.
  */
 export function orderRuns(runs: readonly RunView[]): RunView[] {
   const running = runs.filter((run) => run.status === "running");
@@ -83,7 +83,7 @@ const MIN_ACTIVITY_WIDTH = 12;
  *
  * Deliberately no run id and no model. The widget is read by the operator,
  * and a human names a run by its agent and what it is doing; ids live in the
- * tool results and reports, where the model that acts on them reads them, and
+ * tool results and notifications, where the model that acts on them reads them, and
  * the model an agent runs as is the profile's business. Cost is dropped when
  * the line will not fit. Status is the field a reader is actually watching,
  * so it must survive a narrow terminal — and it is last, which is exactly

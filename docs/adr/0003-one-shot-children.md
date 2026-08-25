@@ -27,11 +27,11 @@ spawn-stream-exit.
 
 ## Decision
 
-Children stay one-shot: one prompt in, one report out. There is no `agent_send`
+Children stay one-shot: one prompt in, one terminal result out. There is no `agent_send`
 or equivalent primitive, and none is planned.
 
 The orchestration surface is deliberately the process algebra — spawn
-(`agent_start`), join (`agent_wait`), cancel (`agent_cancel`) — with no
+(`agent_start`), join (`agent_await`), cancel (`agent_cancel`) — with no
 operation that reaches inside a running child.
 
 ## Consequences
@@ -46,5 +46,5 @@ against a warm context is the one capability a persistent child would add that
 retention cannot.
 
 This is a decision, not a gap. Re-open it when follow-up delegation is worth an
-RPC executor and an idle-agent lifecycle — not merely to read a report, which
+RPC executor and an idle-agent lifecycle — not merely to read a result, which
 retention already covers.

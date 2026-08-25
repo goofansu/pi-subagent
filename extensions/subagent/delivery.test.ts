@@ -422,12 +422,14 @@ test("INV-4: a stored result is durable and repeatable", async () => {
   run.finish("the whole answer");
   await flush();
 
-  assert.deepEqual(delivery.result("run-1"), {
+  const expected = {
     id: "run-1",
     agent: "explore",
-    status: "completed",
+    status: "completed" as const,
     output: "the whole answer",
-  });
+  };
+  assert.deepEqual(delivery.result("run-1"), expected);
+  assert.deepEqual(delivery.result("run-1"), expected);
 });
 
 test("retention keeps what the pushed report had to trim", async () => {
@@ -478,6 +480,9 @@ test("INV-4: result eviction is oldest-first and unaffected by retrieval", async
 
   first.finish("x".repeat(15));
   await flush();
+  assert.equal(delivery.result("run-1")?.output, "x".repeat(15));
+  assert.equal(delivery.result("run-1")?.output, "x".repeat(15));
+
   second.finish("y".repeat(15));
   await flush();
 

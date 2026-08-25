@@ -8,7 +8,12 @@
  */
 
 import { resolveSubagentModel, runPiAgent } from "./pi-agent.ts";
-import type { ParentModel, SubagentExecutor, SubagentTask } from "./run.ts";
+import type {
+  ParentModel,
+  SubagentExecutor,
+  SubagentOutcome,
+  SubagentTask,
+} from "./run.ts";
 import {
   createEmptyResult,
   createRunReporter,
@@ -143,11 +148,20 @@ export function startSubagent({
         return result;
       }
 
-      const outcome = await execute({
-        task,
-        report,
-        signal: controller.signal,
-      });
+      let outcome: SubagentOutcome;
+      try {
+        outcome = await execute({
+          task,
+          report,
+          signal: controller.signal,
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        outcome = {
+          stopReason: "error",
+          errorMessage: `Executor failed unexpectedly: ${message}`,
+        };
+      }
       settleResultLifecycle(result, outcome, now(), cancellationReason);
       emit();
       return result;

@@ -158,11 +158,12 @@ test("INV-1: run ids are stable and never reused within a session", () => {
   });
 
   const first = runs.track(runningResult(), () => {});
+  runs.release(first.id);
   const second = runs.track(runningResult(), () => {});
 
   assert.equal(first.id, "dup");
   assert.equal(second.id, "fresh");
-  assert.equal(runs.size(), 2);
+  assert.equal(runs.size(), 1);
 });
 
 test("a run's recorded activity is projected, and nothing else is derived", () => {

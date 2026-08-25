@@ -1,11 +1,8 @@
 /**
- * How a delivered report looks in the transcript.
+ * How a completion notification looks in the transcript.
  *
- * Reports arrive uninvited and can be long, so they are pushed as a custom
- * message with a renderer of their own rather than as plain user text. Pi
- * renders custom messages against the same expansion state that `ctrl+o`
- * toggles for tool output, which starts collapsed — so a report is a single
- * summary line until you ask for it.
+ * Notifications use a custom message so they can stay compact when collapsed
+ * and reveal their bounded orientation text when expanded.
  */
 
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
@@ -19,7 +16,7 @@ import {
 import { contentText } from "./render.ts";
 import type { LifecycleStatus } from "./types.ts";
 
-/** The `customType` that routes a report to the renderer below. */
+/** The `customType` that routes a notification to the renderer below. */
 export const NOTIFICATION_MESSAGE_TYPE = "subagent-notification";
 
 export interface NotificationMessageDetails {
@@ -51,7 +48,7 @@ function isDetails(value: unknown): value is NotificationMessageDetails {
 }
 
 /**
- * The one line a collapsed report shows.
+ * The one line a collapsed notification shows.
  *
  * No status glyph: the dots belong to the widget, where rows are scanned as a
  * column. Here the verb says what happened, and it is painted in the status
@@ -83,16 +80,10 @@ export function formatNotificationSummary(
 }
 
 /**
- * Render a delivered report: one summary line collapsed, the whole thing
- * expanded. Returning `undefined` lets pi fall back to its default rendering
- * for a message this extension did not shape.
- *
- * The box is not decoration. Pi renders a custom message itself only when no
- * extension supplies a renderer — "it handles its own styling" — so returning
- * a bare component silently opts out of the frame every other message in the
- * transcript has, and the report reads as loose text rather than as something
- * the session said. This reproduces pi's own custom-message styling so a
- * report sits in the conversation like a message.
+ * Render a notification as one summary line when collapsed and its bounded
+ * orientation text when expanded. Returning `undefined` lets pi handle a
+ * custom message this extension did not shape. The box reproduces pi's own
+ * custom-message frame so the notification reads as part of the conversation.
  */
 export function renderNotificationMessage(
   message: RenderableMessage,

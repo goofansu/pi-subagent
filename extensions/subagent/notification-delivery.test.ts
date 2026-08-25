@@ -29,14 +29,62 @@ const events: NotificationDeliveryEvent[] = [
 ];
 
 test("notification transitions cover every state x event pair", () => {
-  const covered = new Set<string>();
+  const pending = states[0];
+  const awaiting = states[1];
+  const lost = states[2];
+  const delivered = states[3];
+  const released = { state: { phase: "delivered" } as const, release: true };
+  const expected = {
+    pending: {
+      push: {
+        state: { phase: "awaiting-landing" as const, notification },
+        push: notification,
+      },
+      landed: { state: pending },
+      "known-lost": { state: pending },
+      retry: { state: pending },
+      shutdown: released,
+    },
+    "awaiting-landing": {
+      push: { state: awaiting },
+      landed: released,
+      "known-lost": {
+        state: { phase: "known-lost" as const, notification },
+      },
+      retry: { state: awaiting },
+      shutdown: released,
+    },
+    "known-lost": {
+      push: { state: lost },
+      landed: released,
+      "known-lost": { state: lost },
+      retry: {
+        state: { phase: "awaiting-landing" as const, notification },
+        push: notification,
+      },
+      shutdown: released,
+    },
+    delivered: {
+      push: { state: delivered },
+      landed: { state: delivered },
+      "known-lost": { state: delivered },
+      retry: { state: delivered },
+      shutdown: { state: delivered },
+    },
+  };
+
+  let covered = 0;
   for (const state of states) {
     for (const event of events) {
-      covered.add(`${state.phase}:${event.type}`);
-      assert.doesNotThrow(() => transitionNotification(state, event));
+      covered++;
+      assert.deepEqual(
+        transitionNotification(state, event),
+        expected[state.phase][event.type],
+        `${state.phase} x ${event.type}`,
+      );
     }
   }
-  assert.equal(covered.size, states.length * events.length);
+  assert.equal(covered, states.length * events.length);
 });
 
 test("pending pushes once and landing is final", () => {

@@ -1,10 +1,8 @@
 /**
- * Presentation: how a run and its report read to a human, everywhere.
+ * Presentation: how run state, notifications, and retained results read.
  *
- * This is the one module that interprets a lifecycle status for display —
- * its glyph, its tone, its verbs, its phrases, and what a settled run's
- * report says, including which result field carries the text and which end
- * gets trimmed. Surfaces (the widget, the transcript renderers) compose
+ * This is the one module that interprets lifecycle status for display — its
+ * glyph, tone, verbs, phrases, notification text, and result text. Surfaces (the widget, the transcript renderers) compose
  * their own lines from what this module hands them; none of them decides
  * what a status *means*. Adding or renaming a status is a change here, and
  * the exhaustive table below is what turns the old cross-module hunt into
@@ -25,9 +23,8 @@ export const NOTIFICATION_PREVIEW_CHARACTER_LIMIT = 1_000;
  * same as the agent sidebar the operator already watches. Herdr has no
  * cancelled state; the hollow `○` marks a run nothing came of.
  *
- * `verb` is the collapsed report line's word: "reported" marks a delivery,
- * where a bare "completed" would state a fact about a run the reader has not
- * seen. `phrase` narrates the same status next to its duration.
+ * `verb` is the collapsed notification line's status word. `phrase` narrates
+ * the same status next to its duration.
  */
 const STATUS_PRESENTATION: Record<
   LifecycleStatus,
@@ -50,7 +47,7 @@ const STATUS_PRESENTATION: Record<
   completed: {
     glyph: "●",
     tone: "success",
-    verb: "reported",
+    verb: "completed",
     phrase: (duration) => `completed in ${duration}`,
   },
   failed: {
@@ -77,7 +74,7 @@ export function runStatusTone(status: LifecycleStatus): string {
   return STATUS_PRESENTATION[status].tone;
 }
 
-/** The word a collapsed report line says a run did. */
+/** The word a collapsed notification says about a run. */
 export function notificationVerb(status: LifecycleStatus): string {
   return STATUS_PRESENTATION[status].verb;
 }
@@ -132,27 +129,30 @@ function notificationPreview(text: string): string {
  * is the only reader that knows it.
  */
 export function fullOutput(result: SingleResult): string {
-  const output = getFinalOutput(result.messages).trim();
+  const output = getFinalOutput(result.messages);
   switch (result.lifecycle.phase) {
     case "running":
       return "";
     case "completed":
       return output;
     case "failed": {
-      const reason = result.errorMessage || result.stderr;
+      const partialOutput = output.trim();
       const sections = ["This run failed before completing."];
-      if (reason) sections.push(`Failure: ${reason}`);
+      if (result.errorMessage) sections.push(`Failure: ${result.errorMessage}`);
+      if (result.stderr) sections.push(`Diagnostics:\n\n${result.stderr}`);
       sections.push(
-        output
-          ? `Output produced before failure:\n\n${output}`
+        partialOutput
+          ? `Output produced before failure:\n\n${partialOutput}`
           : "The run failed before producing output.",
       );
       return sections.join("\n\n");
     }
-    case "cancelled":
-      return output
-        ? `This run was cancelled before finishing.\n\nOutput produced before cancellation:\n\n${output}`
+    case "cancelled": {
+      const partialOutput = output.trim();
+      return partialOutput
+        ? `This run was cancelled before finishing.\n\nOutput produced before cancellation:\n\n${partialOutput}`
         : "The run was cancelled before producing output.";
+    }
   }
 }
 

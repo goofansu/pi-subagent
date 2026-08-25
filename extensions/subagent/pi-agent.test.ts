@@ -20,6 +20,7 @@ import {
   runPiAgent,
   translatePiJsonEvent,
 } from "./pi-agent.ts";
+import { formatNotification, fullOutput } from "./presentation.ts";
 import {
   createEmptyResult,
   createRunReporter,
@@ -292,7 +293,9 @@ test("the child pi driver fails exit 0 without an agent_end event", async () => 
   assert.equal(settled.stopReason, "error");
   assert.equal(settled.messages.length, 1);
   assert.match(settled.errorMessage ?? "", /valid terminal agent_end event/);
-  assert.match(settled.errorMessage ?? "", /"type":"message_end"/);
+  assert.doesNotMatch(settled.errorMessage ?? "", /"type":"message_end"/);
+  assert.match(fullOutput(settled), /"type":"message_end"/);
+  assert.doesNotMatch(formatNotification("a1", settled), /partial output/);
 });
 
 test("the child pi driver rejects a structurally invalid agent_end event", async () => {
@@ -312,7 +315,8 @@ test("the child pi driver rejects a structurally invalid agent_end event", async
   assert.equal(settled.stopReason, "error");
   assert.equal(settled.messages.length, 0);
   assert.match(settled.errorMessage ?? "", /valid terminal agent_end event/);
-  assert.match(settled.errorMessage ?? "", /"messages":\{"role"/);
+  assert.doesNotMatch(settled.errorMessage ?? "", /"messages":\{"role"/);
+  assert.match(fullOutput(settled), /"messages":\{"role"/);
 });
 
 test("the child pi driver retains a bounded malformed stdout tail", async () => {
@@ -327,10 +331,10 @@ test("the child pi driver retains a bounded malformed stdout tail", async () => 
     1,
   );
   assert.equal(settled.stopReason, "error");
-  assert.match(settled.errorMessage ?? "", /Last stdout:/);
-  assert.match(settled.errorMessage ?? "", /diagnostic-tail/);
-  assert.doesNotMatch(settled.errorMessage ?? "", /malformed-/);
-  assert.ok((settled.errorMessage?.length ?? 0) < 2500);
+  assert.doesNotMatch(settled.errorMessage ?? "", /diagnostic-tail/);
+  assert.match(fullOutput(settled), /Last stdout:/);
+  assert.match(fullOutput(settled), /diagnostic-tail/);
+  assert.doesNotMatch(fullOutput(settled), /malformed-/);
 });
 
 test("the child pi driver preserves a nonzero child exit", async () => {
@@ -343,8 +347,14 @@ test("the child pi driver preserves a nonzero child exit", async () => {
     7,
   );
   assert.equal(settled.stopReason, undefined);
-  assert.equal(settled.errorMessage, undefined);
+  assert.equal(settled.errorMessage, "Child pi exited with code 7");
   assert.match(settled.stderr, /fixture failure/);
+  assert.match(fullOutput(settled), /fixture failure/);
+  assert.match(
+    formatNotification("a1", settled),
+    /failed: Child pi exited with code 7/,
+  );
+  assert.doesNotMatch(formatNotification("a1", settled), /fixture failure/);
 });
 
 test("the child pi driver keeps cancellation authoritative over a missing agent_end", async () => {

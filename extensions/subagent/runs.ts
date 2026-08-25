@@ -8,10 +8,8 @@
  * dispatcher is the only module that adds runs; the delivery module is the
  * only one that releases them.
  *
- * A run lives here from the moment it starts until its report is delivered.
- * Delivery is the point at which the result has entered the conversation, so
- * the registry's job — showing work that is otherwise invisible — is done, and
- * the transcript holds it from then on.
+ * A run lives here from start until its completion notification lands. At that
+ * point the conversation names the run and the registry's display job is done.
  */
 
 import type {
@@ -67,7 +65,7 @@ export interface SubagentRuns {
   /** Every tracked run, projected for display. */
   list(): readonly RunView[];
   /**
-   * Drop a run whose report has reached the model. Unknown ids are ignored,
+   * Drop a run whose notification has reached the model. Unknown ids are ignored,
    * so a caller never has to check whether it already released one.
    */
   release(id: string): void;
@@ -98,6 +96,9 @@ export function createSubagentRuns(
   generateId: () => string = shortId,
 ): SubagentRuns {
   const runs = new Map<string, TrackedRun>();
+  // Releasing a run removes it from display, but its identity remains spent:
+  // callers may still hold or mention that id for the rest of the session.
+  const issuedIds = new Set<string>();
   const listeners = new Set<() => void>();
 
   const notify = (): void => {
@@ -135,10 +136,11 @@ export function createSubagentRuns(
 
   return {
     track(result, cancel) {
-      // Short ids can collide; a collision would silently orphan the run
-      // already tracked under the id, so draw again instead.
+      // Short ids can collide. An id remains unavailable after release because
+      // run identity is stable for the whole session, not merely while live.
       let id = generateId();
-      while (runs.has(id)) id = generateId();
+      while (issuedIds.has(id)) id = generateId();
+      issuedIds.add(id);
       runs.set(id, { id, result, cancel });
       notify();
 

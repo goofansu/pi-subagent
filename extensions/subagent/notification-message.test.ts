@@ -50,7 +50,7 @@ test("a summary names the agent, the run and the size", () => {
 
   assert.match(line, /explore/);
   assert.match(line, /a3f81c2b/);
-  assert.match(line, /reported/);
+  assert.match(line, /completed/);
   assert.match(line, /2\.4k characters/);
   assert.match(line, /to expand/);
 });
@@ -61,20 +61,19 @@ test("the hint names the direction the key will actually go", () => {
   assert.doesNotMatch(summary(details(), 100, true), /to expand/);
 });
 
-test("small reports are counted exactly rather than rounded to zero", () => {
+test("small notifications are counted exactly", () => {
   assert.match(summary(details(), 240), /240 characters/);
 });
 
-test("a failed run reads as failed rather than reported", () => {
+test("a failed notification reads as failed", () => {
   const line = summary(details({ status: "failed" }), 100);
 
   assert.match(line, /failed/);
-  assert.doesNotMatch(line, /reported/);
 });
 
 // ── The message ──────────────────────────────────────────────────────────────
 
-test("a collapsed report shows its summary and not the report", () => {
+test("a collapsed notification hides its body", () => {
   const component = renderNotificationMessage(
     { content: "a very long body\nacross lines", details: details() },
     { expanded: false },
@@ -87,7 +86,7 @@ test("a collapsed report shows its summary and not the report", () => {
   assert.doesNotMatch(rendered, /a very long body/);
 });
 
-test("a report is framed like every other message, not loose text", () => {
+test("a notification is framed like every other message", () => {
   const component = renderNotificationMessage(
     { content: "body", details: details() },
     { expanded: false, outputPad: 2 },
@@ -97,14 +96,14 @@ test("a report is framed like every other message, not loose text", () => {
   assert.ok(component);
   const rendered = component.render(60);
   // Pi skips its own framing whenever an extension renders a message, so the
-  // padded block has to come from here or the report floats in the transcript.
+  // padded block has to come from here or the notice floats in the transcript.
   assert.ok(rendered.length >= 3, "a blank padded row above and below");
   assert.equal(rendered[0].trim(), "", "top padding");
   assert.equal(rendered.at(-1)?.trim(), "", "bottom padding");
   assert.match(rendered[1], /^ {2}/, "outputPad is honoured");
 });
 
-test("an expanded report shows the body under its summary", () => {
+test("an expanded notification shows its body", () => {
   const component = renderNotificationMessage(
     { content: "the whole finding", details: details() },
     { expanded: true },

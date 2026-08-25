@@ -230,6 +230,24 @@ test("startSubagent publishes progress to the registry, not the transcript", asy
   assert.equal(reported.effort, "high");
 });
 
+test("a rejected executor settles the authoritative run as failed", async () => {
+  const runs = createSubagentRuns();
+  const started = startSubagent({
+    config: agent(),
+    description: "task",
+    prompt: "go",
+    execute: async () => {
+      throw new Error("executor bug");
+    },
+    runs,
+  });
+
+  const result = await started.settled;
+  assert.equal(result.lifecycle.phase, "failed");
+  assert.equal(runs.list()[0].status, "failed");
+  assert.match(result.errorMessage ?? "", /executor bug/);
+});
+
 test("INV-3: terminal lifecycle states are final", async () => {
   const cases = [
     { exitCode: 0, stopReason: "stop", expected: "completed" },

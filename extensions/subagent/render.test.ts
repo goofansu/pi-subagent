@@ -111,7 +111,7 @@ test("headings and lists become structure rather than punctuation", () => {
 
 // ── Collapsed ────────────────────────────────────────────────────────────────
 
-test("a collapsed result is one line, not the report", () => {
+test("a collapsed result is one summary line", () => {
   const body = `# Findings\n\n${"a long paragraph\n".repeat(40)}`;
   const rendered = render(body, false, oneRun);
 
@@ -139,7 +139,7 @@ test("a collapsed summary names one run, or counts several", () => {
       theme,
       keyHintStub,
     ),
-    /2 reports from explore, reviewer · 5\.1k characters/,
+    /2 results from explore, reviewer · 5\.1k characters/,
   );
 });
 
@@ -154,7 +154,7 @@ test("a fan-out of one agent is counted, not named per run", () => {
       theme,
       keyHintStub,
     ),
-    /3 librarian reports · 193 characters/,
+    /3 librarian results · 193 characters/,
   );
 
   assert.match(
@@ -170,7 +170,7 @@ test("a fan-out of one agent is counted, not named per run", () => {
       theme,
       keyHintStub,
     ),
-    /3 reports from librarian ×2, reviewer/,
+    /3 results from librarian ×2, reviewer/,
   );
 });
 
@@ -201,7 +201,7 @@ test("a result without details falls back to its opening line", () => {
   assert.equal(rendered, "first line");
 });
 
-test("a result naming no runs falls back rather than saying 0 reports", () => {
+test("a result naming no runs falls back rather than saying 0 results", () => {
   const rendered = render("Nothing to wait for.\nmore", false, { runs: [] });
 
   assert.equal(rendered, "Nothing to wait for.");

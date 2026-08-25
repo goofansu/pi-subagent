@@ -29,29 +29,23 @@ const ID_LIST = Type.Array(Type.String(), {
   description: "Run ids returned by agent_start",
 });
 
-/** Push one report into a session as a collapsed custom message. */
+/** Push one completion notification into a session. */
 function notificationPusher(pi: ExtensionAPI): PushNotification {
-  return (report) => {
-    // A custom message rather than a user message, so the report carries a
-    // renderer and shows as one collapsed line until it is asked for.
+  return (notification) => {
+    // A custom message rather than a user message gives the notification a
+    // renderer and a compact collapsed form.
     //
-    // Both options matter. `deliverAs: "followUp"` covers the case where
-    // the model is mid-turn: the report waits until it finishes rather
-    // than cutting into it. `triggerTurn` covers the case where the
-    // session is idle, and without it the report would sit unread in
-    // context until the operator happened to type something — which
-    // defeats delegating the work in the first place. Together they mean
-    // the model always gets a chance to act on a report, and never in the
-    // middle of a sentence.
+    // `deliverAs: "followUp"` waits for an active turn rather than interrupting
+    // it. `triggerTurn` lets an idle model act without operator input.
     pi.sendMessage(
       {
         customType: NOTIFICATION_MESSAGE_TYPE,
-        content: report.text,
+        content: notification.text,
         display: true,
         details: {
-          id: report.id,
-          agent: report.agent,
-          status: report.status,
+          id: notification.id,
+          agent: notification.agent,
+          status: notification.status,
         },
       },
       { deliverAs: "followUp", triggerTurn: true },
@@ -115,7 +109,7 @@ export function registerSubagentFeatures(
 
   const startDescription =
     "Start a subagent on a task and return immediately. Returns a run id, " +
-    "not the answer: the agent's report arrives on its own when it finishes. " +
+    "not the answer: a completion notification arrives when it finishes. " +
     "Do not guess at what it will say.";
 
   pi.registerTool({
@@ -159,7 +153,7 @@ export function registerSubagentFeatures(
             type: "text",
             text:
               `Started ${config.name} as run ${started.id}. ` +
-              "Its report will arrive when it finishes; carry on until then.",
+              "Its notification will arrive when it finishes; carry on until then.",
           },
         ],
         details: undefined,
@@ -181,7 +175,7 @@ export function registerSubagentFeatures(
       timeout_seconds: Type.Optional(
         Type.Number({
           description:
-            "Give up waiting after this long. The runs keep going and report " +
+            "Give up waiting after this long. The runs keep going and notify " +
             "on their own.",
         }),
       ),
@@ -223,8 +217,8 @@ export function registerSubagentFeatures(
   });
 
   const resultDescription =
-    "Fetch a finished subagent's full output by run id. Use it when a report " +
-    "says it was trimmed, or to re-read a run you were told about earlier.";
+    "Fetch a finished subagent's full output by run id. Use it when a notification " +
+    "points to the result, or to re-read a run you were told about earlier.";
 
   pi.registerTool({
     name: "agent_result",
@@ -237,8 +231,8 @@ export function registerSubagentFeatures(
     renderResult: renderMarkdownResult,
 
     async execute(_toolCallId, params) {
-      const report = delivery.result(params.id);
-      if (!report) {
+      const retained = delivery.result(params.id);
+      if (!retained) {
         return {
           content: [
             {
@@ -256,29 +250,36 @@ export function registerSubagentFeatures(
       }
 
       const body =
-        report.output ||
-        (report.evicted
-          ? "This run's full output is no longer retained; it was evicted " +
-            "to bound memory. What its delivered report said is all that " +
-            "remains."
-          : report.status === "cancelled"
+        retained.output ||
+        (retained.evicted
+          ? "This run's full output was evicted to bound result-store memory."
+          : retained.status === "cancelled"
             ? "The run was cancelled before it produced output."
             : "The run finished without output.");
 
       return {
         content: [
-          { type: "text", text: `${report.agent} (${report.id}):\n\n${body}` },
+          {
+            type: "text",
+            text: `${retained.agent} (${retained.id}):\n\n${body}`,
+          },
         ],
         details: {
-          runs: [{ id: report.id, agent: report.agent, status: report.status }],
+          runs: [
+            {
+              id: retained.id,
+              agent: retained.agent,
+              status: retained.status,
+            },
+          ],
         },
       };
     },
   });
 
   const cancelDescription =
-    "Stop subagents whose work is no longer needed. Anything they have not " +
-    "finished is discarded.";
+    "Stop subagents whose work is no longer needed. Partial output remains " +
+    "available through agent_result after cancellation settles.";
 
   pi.registerTool({
     name: "agent_cancel",
@@ -288,8 +289,8 @@ export function registerSubagentFeatures(
     parameters: Type.Object({ ids: ID_LIST }),
 
     async execute(_toolCallId, params) {
-      // The model asked, so this tool result is the delivery for the runs it
-      // stops; a pushed "was cancelled" message would just repeat it back.
+      // Cancellation requests do not claim delivery: each run still stores its
+      // terminal result and emits its normal cancellation notification.
       const outcome = delivery.cancel(params.ids);
 
       const parts: string[] = [];
@@ -297,7 +298,7 @@ export function registerSubagentFeatures(
         parts.push(`Cancelled: ${outcome.cancelled.join(", ")}.`);
       if (outcome.finished.length > 0) {
         parts.push(
-          `Already finished, report kept: ${outcome.finished.join(", ")}.`,
+          `Already finished, result kept: ${outcome.finished.join(", ")}.`,
         );
       }
       if (outcome.unknown.length > 0) {
@@ -316,15 +317,13 @@ export function registerSubagentFeatures(
 // ── Process-lifetime state ────────────────────────────────────────────────────
 //
 // Runs are detached from the *turn*, not from the session: every
-// session_shutdown cancels them, because a report belongs to the conversation
-// that asked for it. Pi still caches the extension factory across session
-// replacement (resume, fork, /new), so this module instance — and the state
-// below — outlives any one session. The session push exists for the seams
-// that creates: a report that settles while a session is being torn down must
-// be dropped rather than thrown through a stale ExtensionAPI (whose every
-// method throws once its session is replaced).
+// session_shutdown cancels them because notifications and results belong to
+// the conversation that asked. Pi caches the extension factory across session
+// replacement, so this module instance outlives any one session. The stable
+// push seam drops notices that settle during teardown rather than calling a
+// stale ExtensionAPI.
 
-/** Where pushed reports go: the live session, or parked between sessions. */
+/** Stable push target aimed at the current live session. */
 const sessionPush = createSessionPush();
 
 /** The one delivery for the process, lazily built over the shared registry. */
@@ -340,6 +339,43 @@ function getProcessDelivery(): SubagentDelivery {
 
 /** Detaches the previous session's widget from the shared registry. */
 let uninstallWidget: (() => void) | null = null;
+
+/** Register the session-event boundary that drives notification landing/retry. */
+export function registerDeliveryEventHandlers(
+  pi: ExtensionAPI,
+  delivery: SubagentDelivery,
+): void {
+  pi.on("message_start", (event) => {
+    const message = event.message as {
+      role?: string;
+      customType?: string;
+      details?: { id?: string };
+    };
+    if (message.role !== "custom") return;
+    if (message.customType !== NOTIFICATION_MESSAGE_TYPE) return;
+    const id = message.details?.id;
+    if (id) delivery.notificationLanded(id);
+  });
+
+  pi.on("turn_end", (event) => {
+    const message = event.message as { stopReason?: string } | undefined;
+    if (message?.stopReason === "aborted") delivery.turnAborted();
+  });
+
+  pi.on("agent_settled", () => delivery.agentSettled());
+}
+
+/** Register session shutdown cleanup at the host event boundary. */
+export function registerShutdownEventHandler(
+  pi: ExtensionAPI,
+  delivery: SubagentDelivery,
+  beforeShutdown: () => void = () => {},
+): void {
+  pi.on("session_shutdown", () => {
+    beforeShutdown();
+    delivery.shutdown();
+  });
+}
 
 export default function subagentExtension(pi: ExtensionAPI) {
   // A Pi child loads installed extensions just like its parent. Keep this
@@ -392,7 +428,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
     sessionContext.cwd = ctx.cwd;
     sessionContext.projectTrusted = ctx.isProjectTrusted?.() ?? false;
 
-    // Re-aim reports at this session; put the widget on this session's UI.
+    // Re-aim notifications at this session; install its runs widget.
     sessionPush.bind(notificationPusher(pi));
     uninstallWidget?.();
     uninstallWidget = installRunsWidget(
@@ -418,53 +454,14 @@ export default function subagentExtension(pi: ExtensionAPI) {
     }
   });
 
-  // A pushed report is delivered when it actually enters the conversation,
-  // not when it is handed over: pi holds a follow-up while the model is
-  // mid-turn, and the run must stay listed — "done, waiting to report" —
-  // until the model can see the report. This is the landing signal: the
-  // report message joining the session, in both the busy and idle paths.
-  pi.on("message_start", (event) => {
-    const message = event.message as {
-      role?: string;
-      customType?: string;
-      details?: { id?: string };
-    };
-    if (message.role !== "custom") return;
-    if (message.customType !== NOTIFICATION_MESSAGE_TYPE) return;
-    const id = message.details?.id;
-    if (id) getProcessDelivery().notificationLanded(id);
-  });
+  // Notification landing/retry is driven by host session events.
+  registerDeliveryEventHandlers(pi, getProcessDelivery());
 
-  // A report pushed while the model is mid-turn rides pi's follow-up queue,
-  // and the operator's interrupt clears that queue: the report would never
-  // land, the model would never see the answer, and the run would stay
-  // listed forever. The abort is visible as an aborted assistant message;
-  // once the agent settles, pi has already drained whatever survived in its
-  // queues — it continues the run for leftover queued messages before
-  // settling — so a report still unlanded then was discarded, and the
-  // delivery pushes it again.
-  pi.on("turn_end", (event) => {
-    const message = event.message as { stopReason?: string } | undefined;
-    if (message?.stopReason === "aborted") getProcessDelivery().turnAborted();
-  });
-
-  pi.on("agent_settled", () => {
-    getProcessDelivery().agentSettled();
-  });
-
-  pi.on("session_shutdown", (_event) => {
-    // This runtime's ExtensionAPI is about to start throwing. Reports that
-    // settle from here on are dropped; the widget stops following a registry
-    // it can no longer draw.
+  registerShutdownEventHandler(pi, getProcessDelivery(), () => {
+    // This ExtensionAPI is about to become stale. Notifications that settle
+    // from here on are dropped; uninstall the session's widget.
     sessionPush.unbind();
     uninstallWidget?.();
     uninstallWidget = null;
-
-    // Every shutdown — quit, reload, new, resume, fork — is the delivery
-    // module's shutdown: it stops what is still running, marks everything
-    // undelivered as delivered, and clears the result store. A report belongs to the
-    // conversation that asked for it; the next session's model never started
-    // these runs and has no context to act on their answers.
-    getProcessDelivery().shutdown();
   });
 }
