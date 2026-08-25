@@ -25,6 +25,19 @@ function readImportSpecifiers(source: string): string[] {
   const add = (node: ts.StringLiteralLike | undefined): void => {
     if (node) specifiers.push(node.text);
   };
+  const staticString = (
+    node: ts.Node | undefined,
+  ): node is ts.StringLiteralLike =>
+    Boolean(
+      node &&
+        (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)),
+    );
+  const isRequireCallee = (node: ts.Expression): boolean =>
+    (ts.isIdentifier(node) && node.text === "require") ||
+    (ts.isPropertyAccessExpression(node) && node.name.text === "require") ||
+    (ts.isElementAccessExpression(node) &&
+      staticString(node.argumentExpression) &&
+      node.argumentExpression.text === "require");
 
   const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node)) {
@@ -52,14 +65,10 @@ function readImportSpecifiers(source: string): string[] {
       node.expression.kind === ts.SyntaxKind.ImportKeyword
     ) {
       const [argument] = node.arguments;
-      add(argument && ts.isStringLiteral(argument) ? argument : undefined);
-    } else if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === "require"
-    ) {
+      add(argument && staticString(argument) ? argument : undefined);
+    } else if (ts.isCallExpression(node) && isRequireCallee(node.expression)) {
       const [argument] = node.arguments;
-      add(argument && ts.isStringLiteral(argument) ? argument : undefined);
+      add(argument && staticString(argument) ? argument : undefined);
     }
     ts.forEachChild(node, visit);
   };
@@ -110,6 +119,12 @@ export function findForbiddenImports(graphRoot: string = root): string[] {
       .filter((file) => file.endsWith("-harness.ts") || file === "pi-agent.ts")
       .map((file) => path.join(graphRoot, file)),
   );
+  const adapterOwnership = (file: string): "claude" | "pi" | "other" => {
+    const name = path.basename(file);
+    if (name === "claude-harness.ts") return "claude";
+    if (name === "pi-harness.ts" || name === "pi-agent.ts") return "pi";
+    return "other";
+  };
   const compositionRoot = path.join(graphRoot, "composition.ts");
   // Only direct adapter imports from the composition root are allowed. This
   // registration shape keeps composition the sole adapter edge.
@@ -126,6 +141,32 @@ export function findForbiddenImports(graphRoot: string = root): string[] {
     .map((file) => path.join(graphRoot, file));
   const visited = new Set<string>();
   const violations: string[] = [];
+
+  // Adapter modules are the only place backend wire types may appear. Check
+  // ownership explicitly rather than treating every adapter as an opaque hole
+  // in the graph: a crossed import must fail even when both adapters are
+  // otherwise excluded from the core walk.
+  for (const adapter of adapterPaths) {
+    const owner = adapterOwnership(adapter);
+    for (const specifier of readImportSpecifiers(
+      fs.readFileSync(adapter, "utf8"),
+    )) {
+      const importsClaude =
+        specifier === "@anthropic-ai/claude-agent-sdk" ||
+        specifier.startsWith("@anthropic-ai/claude-agent-sdk/");
+      const importsPi =
+        specifier === "@earendil-works/pi-ai" ||
+        specifier.startsWith("@earendil-works/pi-ai/");
+      const forbidden =
+        (importsClaude && owner !== "claude") || (importsPi && owner !== "pi");
+      if (forbidden) {
+        const wire = importsClaude ? "Claude SDK" : "Pi wire";
+        violations.push(
+          `${describe(adapter, graphRoot)} imports forbidden ${wire} package ${specifier}`,
+        );
+      }
+    }
+  }
 
   const visit = (file: string): void => {
     if (visited.has(file) || adapterPaths.has(file)) return;
@@ -167,9 +208,33 @@ test("comments and string literals are not import edges", () => {
   const source = `
     // import "@anthropic-ai/claude-agent-sdk";
     const text = "./pi-agent.ts";
+    const name = "pi-agent";
+    import(\`./\${name}.ts\`);
     import type { Fact } from "./run.ts";
   `;
   assert.deepEqual(readImportSpecifiers(source), ["./run.ts"]);
+});
+
+test("no-substitution imports and static property requires are checked", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-static-forms-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(fixtureRoot, "runner.ts"),
+    [
+      "await import(`./codex-harness.ts`);",
+      'module.require("./codex-harness.ts");',
+      'module["require"]("./codex-harness.ts");',
+    ].join("\n"),
+  );
+  fs.writeFileSync(path.join(fixtureRoot, "codex-harness.ts"), "export {};");
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), [
+    "runner.ts imports forbidden harness adapter codex-harness.ts",
+    "runner.ts imports forbidden harness adapter codex-harness.ts",
+    "runner.ts imports forbidden harness adapter codex-harness.ts",
+  ]);
 });
 
 test("static CommonJS require edges are checked like imports", (t) => {
@@ -236,6 +301,63 @@ test("core-to-SDK package edges are forbidden too", (t) => {
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), [
     "runner.ts imports forbidden package @anthropic-ai/claude-agent-sdk",
+  ]);
+});
+
+test("each named adapter may import only its owned wire", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-owned-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(fixtureRoot, "claude-harness.ts"),
+    'import "@anthropic-ai/claude-agent-sdk";\n',
+  );
+  fs.writeFileSync(
+    path.join(fixtureRoot, "pi-agent.ts"),
+    'import "@earendil-works/pi-ai";\n',
+  );
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), []);
+});
+
+test("crossed Claude and Pi adapter wire imports are rejected", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-crossed-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(fixtureRoot, "composition.ts"),
+    'import "./claude-harness.ts"; import "./pi-harness.ts";\n',
+  );
+  fs.writeFileSync(
+    path.join(fixtureRoot, "claude-harness.ts"),
+    'import "@earendil-works/pi-ai";\n',
+  );
+  fs.writeFileSync(
+    path.join(fixtureRoot, "pi-harness.ts"),
+    'import "@anthropic-ai/claude-agent-sdk";\n',
+  );
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), [
+    "claude-harness.ts imports forbidden Pi wire package @earendil-works/pi-ai",
+    "pi-harness.ts imports forbidden Claude SDK package @anthropic-ai/claude-agent-sdk",
+  ]);
+});
+
+test("an unclassified adapter cannot import either wire", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-other-adapter-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(fixtureRoot, "codex-harness.ts"),
+    'import "@earendil-works/pi-ai"; import "@anthropic-ai/claude-agent-sdk";\n',
+  );
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), [
+    "codex-harness.ts imports forbidden Pi wire package @earendil-works/pi-ai",
+    "codex-harness.ts imports forbidden Claude SDK package @anthropic-ai/claude-agent-sdk",
   ]);
 });
 

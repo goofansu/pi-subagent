@@ -3,7 +3,9 @@ import { test } from "node:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   buildClaudeOptions,
+  CLAUDE_MODEL_RESOLUTIONS,
   type ClaudeQuery,
+  type ClaudeQueryLoader,
   createClaudeHarness,
   resolveClaudeModel,
   translateClaudeMessage,
@@ -33,7 +35,7 @@ const task: SubagentTask = {
 };
 
 test("Claude aliases and thinking budgets stay inside the adapter", () => {
-  assert.equal(resolveClaudeModel("sonnet"), "claude-sonnet-4-6");
+  assert.equal(resolveClaudeModel("sonnet"), "claude-sonnet-5");
   assert.deepEqual(
     buildClaudeOptions(
       task,
@@ -45,30 +47,33 @@ test("Claude aliases and thinking budgets stay inside the adapter", () => {
   );
 });
 
-test("Claude validation accepts aliases and full model ids", () => {
+test("Claude validation accepts every installed-SDK model entry", () => {
   const harness = createClaudeHarness();
-  for (const alias of ["opus", "sonnet", "haiku"]) {
+  for (const [model, resolved] of Object.entries(CLAUDE_MODEL_RESOLUTIONS)) {
     assert.deepEqual(
-      harness.validate(
-        { ...config, fields: { model: alias } },
-        `/agents/${alias}.md`,
-      ),
+      harness.validate({ ...config, fields: { model } }, `/agents/${model}.md`),
       [],
+      model,
     );
+    assert.equal(resolveClaudeModel(model), resolved, model);
   }
-
-  assert.deepEqual(
-    harness.validate(
-      { ...config, fields: { model: "claude-opus-4-5-20251101" } },
-      "/agents/full-id.md",
-    ),
-    [],
-  );
 });
 
 test("Claude validation diagnoses a misspelled model with its value", () => {
   const harness = createClaudeHarness();
-  for (const model of ["sontet", "claude-sontet-4-6", "claude-sonnet-bogus"]) {
+  for (const model of [
+    "sontet",
+    "fableish",
+    "claude-sontet-4-6",
+    "claude-sonnet-bogus",
+    "claude-sonnet-5-20260101",
+    "claude-opus-4-9",
+    "claude-fable-4",
+    "claude-sonnet-3-7",
+    "claude-sonnet-3-7-20250219",
+    "claude-haiku-3-5",
+    "claude-haiku-3-5-20241022",
+  ]) {
     assert.deepEqual(
       harness.validate({ ...config, fields: { model } }, "/agents/typo.md"),
       [{ reason: `invalid Claude model '${model}'` }],
@@ -268,7 +273,7 @@ test("an empty Claude result carries accounting into the cost widget", async () 
   const result = await started.settled;
   assert.equal(result.lifecycle.phase, "completed");
   assert.deepEqual(result.messages[0]?.parts, []);
-  assert.equal(result.model, "claude-sonnet-4-6");
+  assert.equal(result.model, "claude-sonnet-5");
   assert.deepEqual(result.usage, {
     input: 10,
     output: 4,
@@ -378,7 +383,7 @@ test("Claude runs end-to-end through the core run contract", async () => {
   assert.equal(result.lifecycle.phase, "completed");
   assert.equal(getFinalOutput(result.messages), "answer");
   assert.equal(result.stderr, "sdk diagnostic\\n");
-  assert.equal(result.model, "claude-sonnet-4-6");
+  assert.equal(result.model, "claude-sonnet-5");
   assert.equal(result.usage.input, 3);
   assert.equal(result.usage.output, 2);
   assert.equal(result.usage.turns, 2);
@@ -490,6 +495,38 @@ test("Claude cancellation stays cancelled when abort arrives before a later term
   assert.equal(result.messages.at(-1)?.parts[0]?.type, "text");
 });
 
+test("Claude cancellation during SDK loading never invokes query", async () => {
+  let releaseLoader: () => void = () => {};
+  let queryCalled = false;
+  const loader: ClaudeQueryLoader = () =>
+    new Promise((resolve) => {
+      releaseLoader = () =>
+        resolve(() => {
+          queryCalled = true;
+          return {
+            async *[Symbol.asyncIterator]() {},
+            close() {},
+          } as never;
+        });
+    });
+  const runs = createSubagentRuns();
+  const started = startSubagent({
+    config,
+    description: "cancel while loading Claude",
+    prompt: "do it",
+    harnesses: createHarnessRegistry([createClaudeHarness(loader)]),
+    runs,
+  });
+
+  runs.cancel([started.id], "requested");
+  releaseLoader();
+  const result = await started.settled;
+
+  assert.equal(queryCalled, false);
+  assert.equal(result.lifecycle.phase, "cancelled");
+  assert.equal(result.stopReason, undefined);
+});
+
 test("Claude cancellation stays cancelled when abort closes the stream gracefully", async () => {
   const runs = createSubagentRuns();
   let queryReady: () => void = () => {};
@@ -562,40 +599,4 @@ test("Claude preserves the configured model when auxiliary usage is listed first
   assert.equal(fact.model, undefined);
   assert.equal(fact.usage?.input, 12);
   assert.equal(fact.usage?.output, 5);
-});
-
-test("Claude adapter feeds SDK stderr and normalizes abort", async () => {
-  const captured: { options?: Record<string, unknown> } = {};
-  let closeCalled = false;
-  const query = () => {
-    const stream = {
-      async *[Symbol.asyncIterator]() {
-        await new Promise<void>(() => {});
-      },
-      close() {
-        closeCalled = true;
-      },
-    };
-    return stream;
-  };
-  const harness = createClaudeHarness(async () => query as never);
-  const prepared = harness.prepare(task);
-  const controller = new AbortController();
-  const run = {
-    task,
-    signal: controller.signal,
-    report: {
-      message() {},
-      transcript() {},
-      stderr(value: string) {
-        captured.options = { stderr: value };
-      },
-    },
-  };
-  const pending = prepared.execute(run);
-  controller.abort();
-  const outcome = await pending;
-  assert.equal(outcome.stopReason, "aborted");
-  assert.equal(closeCalled, true);
-  assert.equal(captured.options, undefined);
 });

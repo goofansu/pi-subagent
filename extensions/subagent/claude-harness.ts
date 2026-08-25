@@ -13,29 +13,45 @@ import {
 import type { Fact, FactPart, ParentModel, SubagentTask } from "./run.ts";
 import { type AgentConfig, EFFORTS } from "./types.ts";
 
-/** The complete accepted vocabulary: aliases resolve to their full id; full ids resolve to themselves. */
-const CLAUDE_MODELS: Record<string, string> = {
-  opus: "claude-opus-4-6",
-  sonnet: "claude-sonnet-4-6",
-  haiku: "claude-haiku-4-5-20251001",
+/**
+ * The installed SDK documents these aliases and model IDs. Keep this list
+ * explicit: accepting a plausible-looking ID would defer a profile error until
+ * a child starts, and would make session-start diagnostics nondeterministic.
+ *
+ * The current IDs mirror the SDK's `Model` vocabulary; the dated and `latest`
+ * entries are the legacy API forms still named by the installed SDK's client.
+ * Aliases resolve to the current canonical ID for their family.
+ */
+export const CLAUDE_MODEL_RESOLUTIONS: Readonly<Record<string, string>> = {
+  fable: "claude-fable-5",
+  opus: "claude-opus-4-8",
+  sonnet: "claude-sonnet-5",
+  haiku: "claude-haiku-4-5",
+  "claude-sonnet-5": "claude-sonnet-5",
+  "claude-fable-5": "claude-fable-5",
+  "claude-mythos-5": "claude-mythos-5",
+  "claude-opus-5": "claude-opus-5",
+  "claude-opus-4-8": "claude-opus-4-8",
+  "claude-opus-4-7": "claude-opus-4-7",
+  "claude-mythos-preview": "claude-mythos-preview",
+  "claude-opus-4-6": "claude-opus-4-6",
+  "claude-sonnet-4-6": "claude-sonnet-4-6",
+  "claude-haiku-4-5": "claude-haiku-4-5",
+  "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
+  "claude-opus-4-5": "claude-opus-4-5",
+  "claude-opus-4-5-20251101": "claude-opus-4-5-20251101",
+  "claude-sonnet-4-5": "claude-sonnet-4-5",
+  "claude-sonnet-4-5-20250929": "claude-sonnet-4-5-20250929",
+  "claude-3-7-sonnet-latest": "claude-3-7-sonnet-latest",
+  "claude-3-7-sonnet-20250219": "claude-3-7-sonnet-20250219",
+  "claude-3-5-haiku-latest": "claude-3-5-haiku-latest",
+  "claude-3-5-haiku-20241022": "claude-3-5-haiku-20241022",
   "claude-opus-4-0": "claude-opus-4-0",
   "claude-opus-4-20250514": "claude-opus-4-20250514",
   "claude-opus-4-1": "claude-opus-4-1",
   "claude-opus-4-1-20250805": "claude-opus-4-1-20250805",
-  "claude-opus-4-5": "claude-opus-4-5",
-  "claude-opus-4-5-20251101": "claude-opus-4-5-20251101",
-  "claude-opus-4-6": "claude-opus-4-6",
-  "claude-sonnet-3-7": "claude-sonnet-3-7",
-  "claude-sonnet-3-7-20250219": "claude-sonnet-3-7-20250219",
   "claude-sonnet-4-0": "claude-sonnet-4-0",
   "claude-sonnet-4-20250514": "claude-sonnet-4-20250514",
-  "claude-sonnet-4-5": "claude-sonnet-4-5",
-  "claude-sonnet-4-5-20250929": "claude-sonnet-4-5-20250929",
-  "claude-sonnet-4-6": "claude-sonnet-4-6",
-  "claude-haiku-3-5": "claude-haiku-3-5",
-  "claude-haiku-3-5-20241022": "claude-haiku-3-5-20241022",
-  "claude-haiku-4-5": "claude-haiku-4-5",
-  "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
 };
 const THINKING_BUDGETS: Record<string, number> = {
   minimal: 512,
@@ -198,7 +214,7 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
 
 function isClaudeModel(value: string): boolean {
   const normalized = value.toLowerCase();
-  return Object.hasOwn(CLAUDE_MODELS, normalized);
+  return Object.hasOwn(CLAUDE_MODEL_RESOLUTIONS, normalized);
 }
 
 export function resolveClaudeModel(
@@ -206,7 +222,9 @@ export function resolveClaudeModel(
 ): string | undefined {
   if (!value) return undefined;
   const alias = value.toLowerCase();
-  return Object.hasOwn(CLAUDE_MODELS, alias) ? CLAUDE_MODELS[alias] : value;
+  return Object.hasOwn(CLAUDE_MODEL_RESOLUTIONS, alias)
+    ? CLAUDE_MODEL_RESOLUTIONS[alias]
+    : value;
 }
 
 export function claudeThinking(
@@ -308,6 +326,9 @@ export function createClaudeHarness(
           else run.signal?.addEventListener("abort", abort, { once: true });
           try {
             const query = await loadQuery();
+            // Loading the SDK is asynchronous. Cancellation can win that race;
+            // in that case no provider query may be started.
+            if (controller.signal.aborted) return { stopReason: "aborted" };
             const options = buildClaudeOptions(task, model, effort, controller);
             options.stderr = (data) => run.report.stderr(data);
             stream = query({ prompt: task.prompt, options });

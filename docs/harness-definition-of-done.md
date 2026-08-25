@@ -75,14 +75,15 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
 7. [x] **Pi wire `Message` objects never leave the pi harness.**
    Translation to facts happens inside the pi executor module, at the edge.
    *Test:* pi adapter tests feed NDJSON fixtures and assert emitted *facts*;
-   the boundaries test parses the graph and forbids `@earendil-works/pi-ai`
-   message imports outside the pi harness module.
+   the boundaries test directly assigns Pi wire ownership to the Pi harness and
+   driver, rejecting Pi wire imports from Claude and other adapters (and
+   rejecting Claude SDK imports from the Pi side).
    *Review:* the translator is the only consumer of the wire shape.
 
 8. [x] **Claude SDK message objects never leave the claude harness.**
    Same rule, same checks: SDK fixtures in, facts out; `SDKMessage` types
-   confined to the adapter module, and the parsed graph forbids Claude SDK
-   imports outside it.
+   confined to the Claude adapter, and the parsed graph directly rejects
+   Claude SDK imports from the Pi or any other adapter.
 
 9. [x] **`AbortSignal` is the only cancellation mechanism core exposes.**
    Core says *why* (cancel reason recorded in the registry, before abort
@@ -110,11 +111,13 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
 Criteria 1–3, 7, and 8 should share one mechanical **boundaries test**: parse
 each core source file's real import specifiers, follow the transitive core
 module graph, and assert the forbidden modules (`@earendil-works/pi-ai`
-message exports, the pi harness modules, and the Claude SDK) are absent. The
-composition module is the sole registration edge and is allowed to name the
-adapters; tool registration and every other core edge fail loudly in CI instead
-of silently in review. Comments and ordinary string literals are not import
-edges.
+message exports, the pi harness modules, and the Claude SDK) are absent. It
+also checks adapter ownership directly: Pi wire is confined to the Pi
+harness/driver, Claude SDK wire to the Claude adapter, and other adapters own
+neither. The composition module is the sole registration edge and is allowed
+to name the adapters; tool registration and every other core edge fail loudly
+in CI instead of silently in review. Static module forms are edges too;
+comments and ordinary string literals are not.
 
 ## Milestone-agreed additions (from the design session, ADR-0007)
 
@@ -153,12 +156,14 @@ edges.
   *Test:* unpinned Claude integration and widget fixtures render the nonzero
   cost and assert model/accounting retention; auxiliary-first coverage proves
   the ambiguous case is not inferred.
-- [x] **Claude model validation is explicit** — aliases and the documented
-  allowlisted full IDs validate at session start; invented IDs are diagnosed
-  with their value. *Test:* Claude harness validation fixtures cover aliases,
-  full IDs, and `claude-sonnet-bogus`.
+- [x] **Claude model validation is explicit** — the installed SDK's aliases
+  and documented allowlisted full IDs validate synchronously at session start;
+  invented IDs are diagnosed with their value. *Test:* Claude harness
+  validation iterates every allowlisted entry and rejects legacy-order and
+  other plausible invented IDs.
 - [x] **The boundary test proves its negative case** — the production parser,
-  resolver, and graph walker reject a controlled core-to-adapter edge without
-  changing the working tree, while comments and ordinary strings remain
-  ignored. *Test:* the checker runs against a disposable fixture root and the
-  real production graph.
+  resolver, and graph walker reject controlled core-to-adapter and crossed
+  adapter-wire edges without changing the working tree. Static imports,
+  no-substitution dynamic imports, and property-access requires are covered;
+  comments and ordinary strings remain ignored. *Test:* the checker runs
+  against disposable fixture roots and the real production graph.
