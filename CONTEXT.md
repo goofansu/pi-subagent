@@ -10,12 +10,17 @@ naming, not a synonym.
 defined by exactly one **profile**.
 
 **Profile** — the Markdown file that defines an agent: frontmatter configuring
-the run (`description`, `model`, `effort`, `tools`, `appendSystemPrompt`) and a
-body that is the agent's prompt. Named after the agent, so `explore.md` defines
-`explore`. Read only from user scope; see `getAgentsDir`.
+the run and a body that is the agent's prompt. Generic parsing understands only
+`description`, `harness` (default `pi`), and the body; every other field
+(`model`, `effort`, `tools`, `appendSystemPrompt`) keeps one name across
+harnesses but is validated and interpreted by the named harness, and a field
+the harness does not recognize is a diagnostic, not a silent pass-through.
+Named after the agent, so `explore.md` defines `explore`. Read only from user
+scope; see `getAgentsDir`.
 
-**Run** — one execution of one profile against one prompt. A run has an id, a
-lifecycle, a transcript, and usage. Runs are the thing the registry holds and
+**Run** — one execution of one profile against one prompt. A run is one-shot —
+one prompt in, one terminal answer out — whichever harness executes it. A run
+has an id, a lifecycle, a transcript, and usage. Runs are the thing the registry holds and
 the widget lists. Not "job", not "task", not "call". Notification delivery
 state is a separate state machine, tracked by the delivery module keyed by run
 id — never on the run itself.
@@ -28,6 +33,11 @@ reload, quit) cancels whatever is still running.
 
 **Child pi** — the process a run executes in. One-shot: it takes one prompt on
 stdin and produces one answer. It cannot be steered mid-flight.
+
+**Fact** — a harness-neutral record of something the child did: a message with
+a role and parts (text, tool call) plus usage, model, and stop reason in domain
+units. Facts are the only vocabulary that crosses the executor seam; a wire
+format is translated into facts inside its harness and nowhere else.
 
 **Cancel** — request that a run stop. *Cancelled* is the terminal domain status
 of a run stopped intentionally; the model, the operator, and presentation all
@@ -79,12 +89,17 @@ does: the nesting guard, lifecycle settlement, and sole ownership of the run
 record — executors report facts, and the fold in `run.ts`, invoked only by
 the dispatcher, is what writes them.
 
-**Executor** (`pi-agent.ts`) — the child pi process itself. It witnesses what
-the child did: it reports facts (a message, a terminal transcript snapshot, a
-stderr chunk) through the reporter defined in `run.ts` and resolves to an
-outcome; it never touches the run record. Substitutable at that seam. Wire
-format stops here — everything derived from the facts (usage, activity, the
-per-message model) is computed in the fold.
+**Harness** — a named backend (`pi`, `claude`) that knows how to run profiles:
+it validates the harness-owned parts of a profile and supplies an executor per
+run. A profile names its harness; core resolves that name through the harness
+registry and never interprets harness-specific configuration or imports a
+backend's types.
+
+**Executor** — the per-run execution a harness supplies (`pi-agent.ts` is the
+pi harness's). It witnesses what the child did: it reports harness-neutral
+facts through the reporter defined in `run.ts` and resolves to an outcome; it
+never touches the run record. Wire format stops inside the harness — no
+backend's message shapes cross this seam.
 
 **Presentation** (`presentation.ts`) — how a run and its notification read to a
 human: status glyphs, tones, verbs, phrases, and notification text. The only module that interprets a lifecycle status for display; the
@@ -102,12 +117,17 @@ transcript.
 
 ## Constraints
 
-**Depth** — delegation is one level deep. A subagent cannot start subagents.
-The Dispatcher alone decides a child's depth; executors only copy it, with
-`PI_SUBAGENT_DEPTH` as the transport into children.
+**Depth** — delegation is one level deep. A subagent cannot start subagents,
+whichever harness runs it. The Dispatcher alone decides a child's depth;
+executors only copy it, and each harness owns enforcement in its children —
+`PI_SUBAGENT_DEPTH` as pi's transport, the agent-spawning tool disallowed for
+claude.
 
 **Trust** — pi's project-trust decision for the working directory, resolved by
-the session and forwarded to every child. The extension never derives its own.
+the session and forwarded in every run request; the extension never derives its
+own. Applying it is harness policy: the pi harness forwards it to its child,
+the claude harness does not consult it yet — its policy is a constant bypass,
+the forwarded value reserved for later.
 
 **Shutdown** — every `session_shutdown` stops every running run, drops every
 unlanded notification, and clears the result store, so neither a notification

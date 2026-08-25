@@ -4,7 +4,9 @@ Date: 2026-08-24
 
 ## Status
 
-Accepted. Supersedes [ADR-0004](0004-shared-mutable-run-record.md).
+Accepted. Supersedes [ADR-0004](0004-shared-mutable-run-record.md). The
+fact-vocabulary consequence (pi-ai's `Message` crossing the seam) is
+superseded by [ADR-0007](0007-harness-seam-with-neutral-facts.md).
 
 ## Context
 
