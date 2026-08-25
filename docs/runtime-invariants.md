@@ -8,14 +8,17 @@ A run ID identifies exactly one subagent run within the current session.
 
 A run ID is never reused for another run.
 
-## INV-2 — Successful spawn means running
+## INV-2 — Successful start means running
 
-If `subagent({ action: "spawn" })` succeeds, the run has been admitted
-and is actually running.
+If `agent_start` succeeds, the run has been admitted and is actually running.
 
 There is no hidden queued state.
 
-If the concurrency limit is reached, `spawn` fails instead.
+If the concurrency limit is reached, `agent_start` fails instead.
+
+*Status: the no-queue half holds today. The fail-at-limit half is a target —
+the current runtime is deliberately uncapped (ADR-0001); enforcing a limit
+re-opens that decision and needs its own ADR.*
 
 ## INV-3 — Terminal states are final
 
@@ -29,21 +32,27 @@ Once terminal, it never becomes `running` again.
 
 ## INV-4 — Results are durable and repeatable
 
-Once a terminal result is stored, calling `result()` does not consume it.
+Once a terminal result is stored, calling `agent_result` does not consume it.
 
 The same result may be retrieved repeatedly until the runtime's documented
-retention boundary is reached.
+storage boundary is reached or the session shuts down.
+
+Retrieval is observational: it does not consume the result, pin it, or affect
+eviction priority. Storage lifetime is bounded by the store's memory budget,
+never by whether the model happened to retrieve a result.
 
 ## INV-5 — Await is observational
 
-`await()` only waits for runs to become terminal.
+`agent_await` waits for named runs to become terminal and returns their
+lifecycle state — id, agent, terminal phase — and nothing else: no preview,
+no output, no error text.
 
-It does not consume results, claim delivery ownership, or otherwise change
-the result's availability.
+It does not consume results, affect result retention, suppress notifications,
+or claim delivery ownership.
 
 ## INV-6 — Cancellation is idempotent
 
-Cancelling the same run multiple times is safe.
+Requesting cancellation of the same run multiple times is safe.
 
 Cancelling an already-terminal run does not change its terminal state.
 
@@ -51,6 +60,9 @@ Cancelling an already-terminal run does not change its terminal state.
 
 The number of simultaneously running subagents never exceeds the configured
 concurrency limit.
+
+*Status: target — the current runtime is deliberately uncapped (ADR-0001).
+Do not regression-test this invariant until the limit exists.*
 
 ## INV-8 — Shutdown cleans up running work
 
@@ -68,3 +80,46 @@ Follow-up is notification only; the result store is authoritative.
 
 TUI rendering and notification state may observe the runtime, but they do not
 determine whether a run is running, terminal, cancelled, or has a result.
+
+## INV-11 — Terminal runs retain their output
+
+A terminal run retains whatever useful output it produced, subject to the
+documented retention boundary.
+
+Terminal status determines how that output is labeled on retrieval, not
+whether it is retained:
+
+- `completed` — the complete final output, returned as-is
+- `failed` — output produced before the failure, labeled as such
+- `cancelled` — output produced up to cancellation, labeled as such
+
+A retrieved partial output must be impossible to mistake for a finished
+answer. A run that produced no output says so; an empty "partial output"
+section is never manufactured.
+
+## Notification constraints
+
+A completion notification is orientation, not result delivery: it says what
+finished, how it finished, and enough to decide whether `agent_result` is
+worth calling.
+
+Notification delivery is retried when the host lets a lost push be detected.
+That retry is reliability for orchestration, not part of result correctness:
+a lost notification never implies lost work (INV-9).
+
+### N1 — Notifications are bounded independently of result size
+
+The notification's preview budget is its own constant, not the whole-report
+emergency cap.
+
+### N2 — Notifications are inference-free
+
+Constructing a notification performs no model inference and no additional
+agent execution. The preview is a deterministic truncation of the run's own
+output.
+
+### N3 — Failure notifications are diagnostic
+
+A failed run's notification contains enough failure information (the primary
+error message) to diagnose the common case without retrieving the full
+result.
