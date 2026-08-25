@@ -90,6 +90,11 @@ per-message model) is computed in the fold.
 human: status glyphs, tones, verbs, phrases, and notification text. The only module that interprets a lifecycle status for display; the
 delivery module does bookkeeping and asks this one what a notification says.
 
+**Session lifecycle** (`session-lifecycle.ts`) — owns session start and
+shutdown: refilling stable profile/session-fact references, re-aiming pushes,
+replacing the widget, one-shot feature registration, warnings, and cleanup.
+The composition root only forwards host events to it.
+
 **Activity** — the one-line summary of what a run is doing right now, derived
 from its most recent tool call by the dispatcher's fold and recorded on the
 run. Display only; the registry projects the field without reading the

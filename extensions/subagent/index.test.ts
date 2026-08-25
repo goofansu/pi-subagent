@@ -8,8 +8,9 @@ import { createSubagentDelivery, type PushedNotification } from "./delivery.ts";
 import subagentExtension, {
   registerDeliveryEventHandlers,
   registerShutdownEventHandler,
-  registerSubagentFeatures,
+  registerSubagentFeatureTools,
 } from "./index.ts";
+import { buildNotificationMessage } from "./notification-message.ts";
 import { createEmptyResult, type SubagentOutcome } from "./run.ts";
 import {
   type RunSubagentOptions,
@@ -18,6 +19,7 @@ import {
 } from "./runner.ts";
 import { createSubagentRuns, subagentRuns } from "./runs.ts";
 import type { AgentConfig } from "./types.ts";
+import { installRunsWidget } from "./widget.ts";
 
 // ── Extension registration ───────────────────────────────────────────────────
 
@@ -42,10 +44,10 @@ test("the extension is not exposed inside a subagent Pi process", () => {
     } as unknown as ExtensionAPI);
     assert.deepEqual(parentEvents, [
       "session_start",
+      "session_shutdown",
       "message_start",
       "turn_end",
       "agent_settled",
-      "session_shutdown",
     ]);
   } finally {
     if (originalDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
@@ -155,12 +157,16 @@ test("agent_start reads the live session's trust and cwd at execute time", async
   });
   const session = { cwd: "/project", projectTrusted: false };
 
-  registerSubagentFeatures(
+  const runs = createSubagentRuns();
+  registerSubagentFeatureTools(
     pi,
     session,
-    "/agent-dir",
     new Map([["worker", agentConfig("worker")]]),
-    { start: started.start },
+    {
+      start: started.start,
+      runs,
+      delivery: createSubagentDelivery({ runs, push: () => {} }),
+    },
   );
 
   const execute = () =>
@@ -244,21 +250,23 @@ function runtimeBoundary(
       active.push({ report: run.report, signal: run.signal, resolve }),
     );
 
-  registerSubagentFeatures(
+  registerSubagentFeatureTools(
     pi,
     { cwd: "/project", projectTrusted: true },
-    "/agent-dir",
     new Map([["worker", agentConfig("worker")]]),
     {
       runs,
       delivery,
       start: (options) => startSubagent({ ...options, execute, runs }),
-      widgetHost: {
-        setWidget(_key, content) {
-          widgetFactory = content as typeof widgetFactory;
-        },
+    },
+  );
+  installRunsWidget(
+    {
+      setWidget(_key, content) {
+        widgetFactory = content as typeof widgetFactory;
       },
     },
+    runs,
   );
 
   const events: Record<string, (event: unknown) => void> = {};
@@ -451,14 +459,16 @@ test("INV-10 boundary: widget and result presentation never determine state", as
 
 test("agent_start refuses an unknown agent", async () => {
   const { pi, tools } = collectTools();
+  const runs = createSubagentRuns();
 
-  registerSubagentFeatures(
+  registerSubagentFeatureTools(
     pi,
     { cwd: "/project", projectTrusted: true },
-    "/agent-dir",
     new Map(),
     {
       start: fakeStart(() => {}).start,
+      runs,
+      delivery: createSubagentDelivery({ runs, push: () => {} }),
     },
   );
 
@@ -477,14 +487,16 @@ test("agent_start refuses an unknown agent", async () => {
 
 test("the orchestration primitives are registered", () => {
   const { pi, tools } = collectTools();
+  const runs = createSubagentRuns();
 
-  registerSubagentFeatures(
+  registerSubagentFeatureTools(
     pi,
     { cwd: "/project", projectTrusted: true },
-    "/agent-dir",
     new Map(),
     {
       start: fakeStart(() => {}).start,
+      runs,
+      delivery: createSubagentDelivery({ runs, push: () => {} }),
     },
   );
 
@@ -493,44 +505,6 @@ test("the orchestration primitives are registered", () => {
     "agent_cancel",
     "agent_result",
     "agent_start",
-  ]);
-});
-
-test("the agents command is told where agents live", async () => {
-  let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
-  let customCalled = false;
-  const notifications: string[] = [];
-  const pi = {
-    registerCommand(_name: string, options: unknown) {
-      command = options as Parameters<ExtensionAPI["registerCommand"]>[1];
-    },
-    registerTool() {},
-    registerMessageRenderer() {},
-    sendMessage() {},
-  } as unknown as ExtensionAPI;
-
-  registerSubagentFeatures(
-    pi,
-    { cwd: "/project", projectTrusted: true },
-    "/agent-dir/agents",
-    new Map(),
-  );
-
-  assert.ok(command);
-  await command.handler("", {
-    ui: {
-      notify(message: string) {
-        notifications.push(message);
-      },
-      custom: async () => {
-        customCalled = true;
-      },
-    },
-  } as unknown as Parameters<typeof command.handler>[1]);
-
-  assert.equal(customCalled, false);
-  assert.deepEqual(notifications, [
-    "No subagents are configured. Add a profile to /agent-dir/agents.",
   ]);
 });
 
@@ -759,12 +733,23 @@ test("a delivered report reaches the model and lets it respond", async () => {
   const { pi, tools, sent } = collectTools();
   const started = fakeStart(() => {});
 
-  registerSubagentFeatures(
+  const runs = createSubagentRuns();
+  registerSubagentFeatureTools(
     pi,
     { cwd: "/project", projectTrusted: true },
-    "/agent-dir",
     new Map([["worker", agentConfig("worker")]]),
-    { start: started.start },
+    {
+      start: started.start,
+      runs,
+      delivery: createSubagentDelivery({
+        runs,
+        push: (notification) =>
+          pi.sendMessage(buildNotificationMessage(notification), {
+            deliverAs: "followUp",
+            triggerTurn: true,
+          }),
+      }),
+    },
   );
 
   await tools.agent_start.execute(

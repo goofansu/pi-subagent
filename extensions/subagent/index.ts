@@ -3,18 +3,10 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import {
-  diagnoseAgentModels,
-  formatAgentGuidelines,
-  formatInvalidAgentFilesWarning,
-  getAgentsDir,
-  loadAgentConfigsWithDiagnostics,
-} from "./agents.ts";
-import { registerAgentsCommand } from "./agents-command.ts";
-import type { PushNotification, SubagentDelivery } from "./delivery.ts";
+import { formatAgentGuidelines, getAgentsDir } from "./agents.ts";
+import type { SubagentDelivery } from "./delivery.ts";
 import { createSessionPush, createSubagentDelivery } from "./delivery.ts";
 import {
-  buildNotificationMessage,
   NOTIFICATION_MESSAGE_TYPE,
   parseNotificationMessage,
   renderNotificationMessage,
@@ -23,70 +15,45 @@ import { renderMarkdownResult, renderSubagentCall } from "./render.ts";
 import { getSubagentDepth, startSubagent } from "./runner.ts";
 import type { SubagentRuns } from "./runs.ts";
 import { subagentRuns } from "./runs.ts";
-import type { AgentConfig } from "./types.ts";
-import type { WidgetHost } from "./widget.ts";
-import { installRunsWidget } from "./widget.ts";
+import { createSessionLifecycle } from "./session-lifecycle.ts";
+import type { AgentConfig, SessionContext } from "./types.ts";
 
 const ID_LIST = Type.Array(Type.String(), {
   description: "Run ids returned by agent_start",
 });
 
-/** Push one completion notification into a session. */
-function notificationPusher(pi: ExtensionAPI): PushNotification {
-  return (notification) => {
-    // A custom message rather than a user message gives the notification a
-    // renderer and a compact collapsed form.
-    //
-    // `deliverAs: "followUp"` waits for an active turn rather than interrupting
-    // it. `triggerTurn` lets an idle model act without operator input.
-    pi.sendMessage(buildNotificationMessage(notification), {
-      deliverAs: "followUp",
-      triggerTurn: true,
-    });
-  };
+interface SubagentToolRuntime {
+  delivery: SubagentDelivery;
+  runs: SubagentRuns;
+  start: typeof startSubagent;
 }
 
-export interface SubagentFeatureDeps {
-  delivery?: SubagentDelivery;
-  runs?: SubagentRuns;
-  /** Injected for tests; defaults to starting a real child pi. */
-  start?: typeof startSubagent;
-  /** Where the runs widget is installed. Omitted in non-interactive hosts. */
-  widgetHost?: WidgetHost;
-}
-
-/**
- * The session facts a run inherits, held mutably so the tools — registered
- * once per runtime — always read the live session's answer rather than the
- * one captured when the first session registered them. Refilled on every
- * `session_start`, like the agent map.
- */
-export interface SessionContext {
-  cwd: string;
-  projectTrusted: boolean;
-}
-
+/** Production feature registrar: all runtime policy is already composed. */
 export function registerSubagentFeatures(
   pi: ExtensionAPI,
   session: SessionContext,
-  agentsDir: string,
   agentConfigs: Map<string, AgentConfig>,
-  deps: SubagentFeatureDeps = {},
+  delivery: SubagentDelivery,
 ): void {
-  registerAgentsCommand(pi, agentConfigs, agentsDir);
+  registerSubagentFeatureTools(pi, session, agentConfigs, {
+    delivery,
+    runs: subagentRuns,
+    start: startSubagent,
+  });
+}
 
-  const runs = deps.runs ?? subagentRuns;
-  const start = deps.start ?? startSubagent;
+/** Tool seam used by focused tests with a stand-in runtime. */
+export function registerSubagentFeatureTools(
+  pi: ExtensionAPI,
+  session: SessionContext,
+  agentConfigs: Map<string, AgentConfig>,
+  runtime: SubagentToolRuntime,
+): void {
+  const { delivery, runs, start } = runtime;
   pi.registerMessageRenderer(
     NOTIFICATION_MESSAGE_TYPE,
     renderNotificationMessage,
   );
-
-  const delivery =
-    deps.delivery ??
-    createSubagentDelivery({ push: notificationPusher(pi), runs });
-
-  if (deps.widgetHost) installRunsWidget(deps.widgetHost, runs);
 
   const guidelines = formatAgentGuidelines(agentConfigs);
 
@@ -330,9 +297,6 @@ function getProcessDelivery(): SubagentDelivery {
   return processDelivery;
 }
 
-/** Detaches the previous session's widget from the shared registry. */
-let uninstallWidget: (() => void) | null = null;
-
 /** Register the session-event boundary that drives notification landing/retry. */
 export function registerDeliveryEventHandlers(
   pi: ExtensionAPI,
@@ -370,84 +334,19 @@ export default function subagentExtension(pi: ExtensionAPI) {
   // depth check remains the backstop for direct calls.
   if (getSubagentDepth() > 0) return;
 
-  const agentsDir = getAgentsDir(getAgentDir());
-
-  // One map per runtime, refilled rather than replaced, so the tool and
-  // command closures registered below keep seeing current profiles.
-  const agentConfigs = new Map<string, AgentConfig>();
-  // Same discipline for the session facts a run inherits: the tools are
-  // registered once per runtime, but sessions replace each other under them,
-  // so cwd and trust are re-read from every session rather than captured from
-  // whichever one happened to register the tools. Trust starts denied — a run
-  // somehow started before the first session_start must not be the trusted
-  // one.
-  const sessionContext: SessionContext = {
-    cwd: process.cwd(),
-    projectTrusted: false,
-  };
-  let registered = false;
-
-  // Agents come only from user scope, so discovery reads nothing a working
-  // directory controls and needs no trust decision of its own.
-  //
-  // A child pi is a different matter: it runs in the project directory and
-  // resolves its own settings, resources, and packages there. Pi has already
-  // decided whether this directory is trusted — see
-  // https://pi.dev/docs/latest/security#project-trust — so read its answer and
-  // forward it rather than deriving a second one. A child runs
-  // non-interactively and could neither prompt nor see a session-only decision
-  // on its own. A host that cannot report at all fails closed.
-  pi.on("session_start", (_event, ctx) => {
-    const parsedAgents = loadAgentConfigsWithDiagnostics(agentsDir);
-    const diagnosedModels = diagnoseAgentModels(
-      parsedAgents.configs,
-      agentsDir,
-      ctx.modelRegistry.getAll(),
-    );
-    agentConfigs.clear();
-    for (const [name, config] of diagnosedModels.configs) {
-      agentConfigs.set(name, config);
-    }
-
-    // This session's answers, not the first one's. A host that cannot report
-    // trust at all fails closed.
-    sessionContext.cwd = ctx.cwd;
-    sessionContext.projectTrusted = ctx.isProjectTrusted?.() ?? false;
-
-    // Re-aim notifications at this session; install its runs widget.
-    sessionPush.bind(notificationPusher(pi));
-    uninstallWidget?.();
-    uninstallWidget = installRunsWidget(
-      ctx.ui as unknown as WidgetHost,
-      subagentRuns,
-    );
-
-    // A guard, not a per-session step: registering twice on one runtime would
-    // install a second copy of every tool.
-    if (!registered) {
-      registered = true;
-      registerSubagentFeatures(pi, sessionContext, agentsDir, agentConfigs, {
-        delivery: getProcessDelivery(),
-      });
-    }
-
-    const invalidFiles = [
-      ...parsedAgents.invalidFiles,
-      ...diagnosedModels.invalidFiles,
-    ];
-    if (invalidFiles.length > 0) {
-      ctx.ui.notify(formatInvalidAgentFilesWarning(invalidFiles), "warning");
-    }
+  const delivery = getProcessDelivery();
+  const lifecycle = createSessionLifecycle({
+    pi,
+    agentsDir: getAgentsDir(getAgentDir()),
+    delivery,
+    sessionPush,
+    runs: subagentRuns,
+    registerFeatures: (session, agentConfigs) =>
+      registerSubagentFeatures(pi, session, agentConfigs, delivery),
   });
 
-  // Notification landing/retry is driven by host session events.
-  registerDeliveryEventHandlers(pi, getProcessDelivery());
-
-  registerShutdownEventHandler(pi, getProcessDelivery(), () => {
-    // This ExtensionAPI is about to become stale. Notifications that settle
-    // from here on are dropped; uninstall the session's widget.
-    sessionPush.unbind();
-    uninstallWidget?.();
-    uninstallWidget = null;
-  });
+  // The composition root only wires host events to their owning modules.
+  pi.on("session_start", (_event, ctx) => lifecycle.sessionStart(ctx));
+  pi.on("session_shutdown", () => lifecycle.sessionShutdown());
+  registerDeliveryEventHandlers(pi, delivery);
 }

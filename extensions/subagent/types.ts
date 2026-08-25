@@ -64,6 +64,12 @@ export interface SingleResult {
   errorMessage?: string;
 }
 
+/** Live session facts inherited by runs started through registered tools. */
+export interface SessionContext {
+  cwd: string;
+  projectTrusted: boolean;
+}
+
 export interface AgentConfig {
   name: string;
   description: string;
