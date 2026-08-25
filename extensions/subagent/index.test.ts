@@ -397,8 +397,8 @@ test("INV-9 boundary: lost notification retries once without changing result", a
   const id = await boundary.start();
   boundary.active[0].report.message({
     role: "assistant",
-    content: [{ type: "text", text: "  answer\n" }],
-  } as never);
+    parts: [{ type: "text", text: "  answer\n" }],
+  });
   boundary.active[0].resolve({ exitCode: 0 });
   await boundary.flush();
 
@@ -429,8 +429,8 @@ test("INV-9 boundary: a failed notification push preserves the exact result", as
   const id = await boundary.start();
   boundary.active[0].report.message({
     role: "assistant",
-    content: [{ type: "text", text: "  exact answer\n" }],
-  } as never);
+    parts: [{ type: "text", text: "  exact answer\n" }],
+  });
   boundary.active[0].resolve({ exitCode: 0 });
   await boundary.flush();
 
@@ -445,8 +445,8 @@ test("INV-10 boundary: widget and result presentation never determine state", as
 
   boundary.active[0].report.message({
     role: "assistant",
-    content: [{ type: "text", text: "answer" }],
-  } as never);
+    parts: [{ type: "text", text: "answer" }],
+  });
   boundary.active[0].resolve({ exitCode: 0 });
   await boundary.flush();
   assert.match(boundary.renderWidget(), /completed/);

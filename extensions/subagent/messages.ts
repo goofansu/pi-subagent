@@ -1,10 +1,6 @@
-import type { Message } from "@earendil-works/pi-ai";
+import type { Fact, FactPart } from "./run.ts";
 
-/**
- * The argument most worth showing for a tool call, probed in the order the
- * common pi tools name their primary argument. A miss just means the activity
- * line shows the tool name alone.
- */
+/** The argument most worth showing for a tool call. */
 const ACTIVITY_ARGUMENT_KEYS = [
   "command",
   "path",
@@ -16,27 +12,19 @@ const ACTIVITY_ARGUMENT_KEYS = [
   "description",
   "prompt",
 ] as const;
-
-/** Keep an activity readable on one widget line whatever the argument holds. */
+/** Keep an activity readable on one widget line. */
 const ACTIVITY_LIMIT = 120;
 
-interface ToolCallPart {
-  type: "toolCall";
-  name: string;
-  arguments?: Record<string, unknown>;
+function isToolCallPart(
+  part: FactPart,
+): part is Extract<FactPart, { type: "tool_call" }> {
+  return part.type === "tool_call";
 }
 
-function isToolCallPart(part: unknown): part is ToolCallPart {
-  return (
-    typeof part === "object" &&
-    part !== null &&
-    (part as ToolCallPart).type === "toolCall" &&
-    typeof (part as ToolCallPart).name === "string"
-  );
-}
-
-/** One line saying what a tool call is doing: the tool, and its main argument. */
-export function describeToolCall(call: ToolCallPart): string {
+/** One line saying what a tool call is doing. */
+export function describeToolCall(
+  call: Extract<FactPart, { type: "tool_call" }>,
+): string {
   for (const key of ACTIVITY_ARGUMENT_KEYS) {
     const value = call.arguments?.[key];
     if (typeof value === "string" && value.trim()) {
@@ -47,37 +35,31 @@ export function describeToolCall(call: ToolCallPart): string {
   return call.name;
 }
 
-/**
- * What a run is doing right now: its most recent tool call, summarised.
- *
- * The scan walks backwards for the latest assistant message that called a
- * tool. `undefined` before the child's first tool call — the caller decides
- * what stands in for it.
- */
-export function deriveActivity(messages: Message[]): string | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
-    for (let j = msg.content.length - 1; j >= 0; j--) {
-      const part = msg.content[j];
+/** What a run is doing, derived from its latest assistant tool-call fact. */
+export function deriveActivity(facts: Fact[]): string | undefined {
+  for (let i = facts.length - 1; i >= 0; i--) {
+    const fact = facts[i];
+    if (fact.role !== "assistant") continue;
+    for (let j = fact.parts.length - 1; j >= 0; j--) {
+      const part = fact.parts[j];
       if (isToolCallPart(part)) return describeToolCall(part);
     }
   }
   return undefined;
 }
 
-export function getFinalOutput(messages: Message[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    // The array check guards wire data, like the one in deriveActivity: these
-    // messages arrive as unvalidated JSON from a child process, and a shape
-    // surprise here would reject the delivery chain, not a tool call.
-    if (msg.role === "assistant" && Array.isArray(msg.content)) {
-      const parts = msg.content
-        .filter((part) => part.type === "text")
-        .map((part) => (part as { type: "text"; text: string }).text);
-      if (parts.length > 0) return parts.join("");
-    }
+export function getFinalOutput(facts: Fact[]): string {
+  for (let i = facts.length - 1; i >= 0; i--) {
+    const fact = facts[i];
+    if (fact.role !== "assistant") continue;
+    const text = fact.parts
+      .filter(
+        (part): part is Extract<FactPart, { type: "text" }> =>
+          part.type === "text",
+      )
+      .map((part) => part.text)
+      .join("");
+    if (text) return text;
   }
   return "";
 }

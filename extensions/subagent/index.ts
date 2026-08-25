@@ -4,13 +4,16 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { formatAgentGuidelines, getAgentsDir } from "./agents.ts";
+import { createClaudeHarness } from "./claude-harness.ts";
 import type { SubagentDelivery } from "./delivery.ts";
 import { createSessionPush, createSubagentDelivery } from "./delivery.ts";
+import { createHarnessRegistry, type HarnessRegistry } from "./harness.ts";
 import {
   NOTIFICATION_MESSAGE_TYPE,
   parseNotificationMessage,
   renderNotificationMessage,
 } from "./notification-message.ts";
+import { createPiHarness } from "./pi-harness.ts";
 import { renderMarkdownResult, renderSubagentCall } from "./render.ts";
 import { getSubagentDepth, startSubagent } from "./runner.ts";
 import type { SubagentRuns } from "./runs.ts";
@@ -26,6 +29,7 @@ interface SubagentToolRuntime {
   delivery: SubagentDelivery;
   runs: SubagentRuns;
   start: typeof startSubagent;
+  harnesses?: HarnessRegistry;
 }
 
 /** Production feature registrar: all runtime policy is already composed. */
@@ -34,11 +38,13 @@ export function registerSubagentFeatures(
   session: SessionContext,
   agentConfigs: Map<string, AgentConfig>,
   delivery: SubagentDelivery,
+  harnesses: HarnessRegistry,
 ): void {
   registerSubagentFeatureTools(pi, session, agentConfigs, {
     delivery,
     runs: subagentRuns,
     start: startSubagent,
+    harnesses,
   });
 }
 
@@ -49,7 +55,7 @@ export function registerSubagentFeatureTools(
   agentConfigs: Map<string, AgentConfig>,
   runtime: SubagentToolRuntime,
 ): void {
-  const { delivery, runs, start } = runtime;
+  const { delivery, runs, start, harnesses } = runtime;
   pi.registerMessageRenderer(
     NOTIFICATION_MESSAGE_TYPE,
     renderNotificationMessage,
@@ -97,6 +103,7 @@ export function registerSubagentFeatureTools(
         projectTrusted: session.projectTrusted,
         cwd: session.cwd,
         runs,
+        harnesses,
         parentModel: ctx.model
           ? {
               provider: ctx.model.provider,
@@ -286,6 +293,13 @@ export function registerSubagentFeatureTools(
 /** Stable push target aimed at the current live session. */
 const sessionPush = createSessionPush();
 
+// The composition root is the only production site that names concrete
+// harnesses. Core resolves profiles through this registry without branching.
+const harnesses = createHarnessRegistry([
+  createPiHarness(),
+  createClaudeHarness(),
+]);
+
 /** The one delivery for the process, lazily built over the shared registry. */
 let processDelivery: SubagentDelivery | null = null;
 
@@ -329,8 +343,9 @@ export default function subagentExtension(pi: ExtensionAPI) {
     delivery,
     sessionPush,
     runs: subagentRuns,
+    harnesses,
     registerFeatures: (session, agentConfigs) =>
-      registerSubagentFeatures(pi, session, agentConfigs, delivery),
+      registerSubagentFeatures(pi, session, agentConfigs, delivery, harnesses),
   });
 
   // The composition root only wires host events to their owning modules.

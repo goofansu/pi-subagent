@@ -1,5 +1,5 @@
-import type { Message } from "@earendil-works/pi-ai";
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { Fact } from "./run.ts";
 
 export interface UsageStats {
   input: number;
@@ -10,24 +10,6 @@ export interface UsageStats {
   contextTokens: number;
   turns: number;
 }
-
-/** Applied when a profile does not say; see {@link resolveAppendSystemPrompt}. */
-const DEFAULT_APPEND_SYSTEM_PROMPT = true;
-
-/**
- * Reasoning depth, which pi takes as a thinking level of its own rather than as
- * part of the model id.
- */
-export const EFFORTS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
-export type Effort = (typeof EFFORTS)[number];
 
 export type CancellationReason = "requested" | "shutdown";
 export type Lifecycle =
@@ -43,23 +25,32 @@ export type Lifecycle =
 export type LifecycleStatus = Lifecycle["phase"];
 export type TerminalLifecycleStatus = Exclude<LifecycleStatus, "running">;
 
+/** A generic profile: only the common fields are interpreted by core. */
+export interface AgentConfig {
+  name: string;
+  description: string;
+  /** Profiles default to pi; optional keeps programmatic stand-ins concise. */
+  harness?: string;
+  /** Every frontmatter field other than description and harness. */
+  readonly fields?: Readonly<Record<string, unknown>>;
+  systemPrompt: string;
+  /** Opaque programmatic profile fields; parsed profiles use `fields`. */
+  readonly [field: string]: unknown;
+}
+
 export interface SingleResult {
   agent: string;
   description: string;
   lifecycle: Lifecycle;
-  /** Epoch milliseconds when the run's child pi was spawned. */
+  /** Epoch milliseconds when the run's child was spawned. */
   startedAt: number;
-  messages: Message[];
+  messages: Fact[];
   stderr: string;
   usage: UsageStats;
-  /**
-   * What the run is doing right now, derived from its most recent tool call
-   * as messages fold in. Display only; absent before the first tool call.
-   */
+  /** Display-only activity derived from the most recent tool call. */
   activity?: string;
   model?: string;
-  /** Explicit reasoning effort configured by the profile. */
-  effort?: Effort;
+  effort?: string;
   stopReason?: string;
   errorMessage?: string;
 }
@@ -68,25 +59,6 @@ export interface SingleResult {
 export interface SessionContext {
   cwd: string;
   projectTrusted: boolean;
-}
-
-export interface AgentConfig {
-  name: string;
-  description: string;
-  /** Model id, handed to pi exactly as written. */
-  model?: string;
-  /** Reasoning depth. Independent of `model`; pi takes it separately. */
-  effort?: Effort;
-  /** Comma-separated pi tool names. Omitted means pi's own defaults. */
-  tools?: string;
-  /** Append to pi's instructions. Omitted means the shared default. */
-  appendSystemPrompt?: boolean;
-  systemPrompt: string;
-}
-
-/** Whether to append an agent prompt, resolving the documented default. */
-export function resolveAppendSystemPrompt(config: AgentConfig): boolean {
-  return config.appendSystemPrompt ?? DEFAULT_APPEND_SYSTEM_PROMPT;
 }
 
 /** Status colours presentation may select. */

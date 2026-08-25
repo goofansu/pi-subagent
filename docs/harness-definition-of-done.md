@@ -18,7 +18,7 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
 
 ## The ten criteria
 
-1. **`runner.ts` imports no pi-harness or Claude types.**
+1. [x] **`runner.ts` imports no pi-harness or Claude types.**
    No `runPiAgent` import, no pi `provider/id` model building, no pi
    thinking-scale vocabulary — resolution lives in the harness.
    *Test:* a boundaries test asserts the dispatcher's module graph contains
@@ -26,7 +26,7 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
    *Review:* the executor arrives via the harness resolved from the profile;
    any `if (harness === ...)` branch in the dispatcher is a defect.
 
-2. **Run state imports no pi-harness or Claude types.**
+2. [x] **Run state imports no pi-harness or Claude types.**
    `run.ts`, `types.ts`, and `runs.ts` speak only the domain Fact type;
    `SingleResult.messages` is facts, and usage extraction reads typed domain
    units, never a widened cast of a wire payload.
@@ -35,7 +35,7 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
    *Review:* no `as Message`, no hand-narrowing of wire content parts, in
    source or in tests.
 
-3. **Tool registration and rendering import no pi-harness or Claude types.**
+3. [x] **Tool registration and rendering import no pi-harness or Claude types.**
    `index.ts`, `render.ts`, `widget.ts`, `presentation.ts`, `messages.ts`
    consume facts and `RunView` only. (Host API and pi-tui are allowed —
    see the scope rule.)
@@ -44,39 +44,39 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
    *Review:* `getFinalOutput`/`deriveActivity` narrow domain fact parts,
    not wire shapes.
 
-4. **Removing the claude harness does not change core code.**
+4. [x] **Removing the claude harness does not change core code.**
    Deleting the adapter module and its one registration line at the
    composition root is the whole removal.
    *Test:* the core suite passes with only the pi harness registered.
    *Review:* the claude harness is referenced from exactly one production
    site — its registration.
 
-5. **Adding a fake harness requires no core changes.**
+5. [x] **Adding a fake harness requires no core changes.**
    *Test:* the core suite (dispatcher, registry, delivery, presentation,
    widget) runs against a fake harness with neither a pi binary nor the
    claude SDK present.
    *Review:* the fake implements only the public `Harness` contract — if it
    needs a core patch or a test-only hook in core, the seam leaked.
 
-6. **A codex harness would cost one adapter, one registration, its own
+6. [x] **A codex harness would cost one adapter, one registration, its own
    tests — and no dispatcher/lifecycle changes.**
    *Test:* not directly testable; item 5's fake harness is the standing
    proxy.
    *Review:* thought experiment on every core diff — "would codex need to
    edit this file?" If yes, push the change behind the harness contract.
 
-7. **Pi wire `Message` objects never leave the pi harness.**
+7. [x] **Pi wire `Message` objects never leave the pi harness.**
    Translation to facts happens inside the pi executor module, at the edge.
    *Test:* pi adapter tests feed NDJSON fixtures and assert emitted *facts*;
    boundaries test forbids `@earendil-works/pi-ai` message imports outside
    the pi harness module.
    *Review:* the translator is the only consumer of the wire shape.
 
-8. **Claude SDK message objects never leave the claude harness.**
+8. [x] **Claude SDK message objects never leave the claude harness.**
    Same rule, same checks: SDK fixtures in, facts out; `SDKMessage` types
    confined to the adapter module.
 
-9. **`AbortSignal` is the only cancellation mechanism core exposes.**
+9. [x] **`AbortSignal` is the only cancellation mechanism core exposes.**
    Core says *why* (cancel reason recorded in the registry, before abort
    fires); the harness owns *how* (SIGTERM/SIGKILL for pi, SDK abort for
    claude) and reports `stopReason: "aborted"`, which the seam normalizes to
@@ -88,7 +88,7 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
    *Review:* no harness-specific stop verbs in core; no second cancellation
    channel (no `harness.cancel()` method, no shared flags).
 
-10. **Harness-specific config is validated and interpreted by the harness.**
+10. [x] **Harness-specific config is validated and interpreted by the harness.**
     Generic profile parsing understands `description`, `harness`, and the
     body; `model`, `effort`, `tools`, `appendSystemPrompt` are validated by
     the named harness, and a field the harness does not recognize is a

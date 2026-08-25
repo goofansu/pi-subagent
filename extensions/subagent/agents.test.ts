@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, test } from "node:test";
 import {
-  diagnoseAgentModels,
   formatAgentGuidelines,
   formatInvalidAgentFilesWarning,
   getAgentsDir,
@@ -12,7 +11,8 @@ import {
   loadAgentConfigsWithDiagnostics,
   parseAgentConfig,
 } from "./agents.ts";
-import { EFFORTS, resolveAppendSystemPrompt } from "./types.ts";
+import { createHarnessRegistry } from "./harness.ts";
+import { createPiHarness } from "./pi-harness.ts";
 
 const tempDirs: string[] = [];
 
@@ -43,9 +43,12 @@ test("parseAgentConfig reads name, frontmatter, and system prompt", async () => 
   assert.deepEqual(parseAgentConfig(filePath), {
     name: "reviewer",
     description: "Reviews code",
-    model: "custom",
-    tools: "read,grep,find,ls,bash",
-    appendSystemPrompt: true,
+    harness: "pi",
+    fields: {
+      model: "custom",
+      tools: "read,grep,find,ls,bash",
+      appendSystemPrompt: true,
+    },
     systemPrompt: "You review code.",
   });
 });
@@ -61,9 +64,8 @@ test("parseAgentConfig leaves an unset appendSystemPrompt absent", async () => {
   );
 
   const config = parseAgentConfig(filePath);
-  assert.equal(config.appendSystemPrompt, undefined);
-  assert.equal(Object.hasOwn(config, "appendSystemPrompt"), false);
-  assert.equal(resolveAppendSystemPrompt(config), true);
+  assert.equal(config.fields?.appendSystemPrompt, undefined);
+  assert.equal(Object.hasOwn(config.fields ?? {}, "appendSystemPrompt"), false);
 });
 
 test("parseAgentConfig preserves explicit appendSystemPrompt false", async () => {
@@ -74,7 +76,7 @@ test("parseAgentConfig preserves explicit appendSystemPrompt false", async () =>
     "---\ndescription: Reviews code\nappendSystemPrompt: false\n---\n\nYou review code.\n",
   );
 
-  assert.equal(parseAgentConfig(filePath).appendSystemPrompt, false);
+  assert.equal(parseAgentConfig(filePath).fields?.appendSystemPrompt, false);
 });
 
 test("loadAgentConfigs returns markdown agents keyed by name", async () => {
@@ -165,59 +167,32 @@ test("loadAgentConfigsWithDiagnostics reports invalid agent files", async () => 
   );
 });
 
-test("diagnoseAgentModels skips profiles whose pinned model is unknown", () => {
-  const configs = new Map([
-    [
-      "canonical",
-      {
-        name: "canonical",
-        description: "Canonical",
-        model: "ACME/known",
-        systemPrompt: "Work.",
-      },
-    ],
-    [
-      "bare",
-      {
-        name: "bare",
-        description: "Bare",
-        model: "known",
-        systemPrompt: "Work.",
-      },
-    ],
-    [
-      "missing",
-      {
-        name: "missing",
-        description: "Missing",
-        model: "acme/missing",
-        systemPrompt: "Work.",
-      },
-    ],
-    [
-      "inherited",
-      {
-        name: "inherited",
-        description: "Inherited",
-        systemPrompt: "Work.",
-      },
-    ],
-  ]);
-
-  const result = diagnoseAgentModels(configs, "/agents", [
-    { provider: "acme", id: "known" },
-  ]);
-
+test("the pi harness diagnoses models against its catalogue", () => {
+  const registry = createHarnessRegistry([createPiHarness()]);
+  const known = {
+    name: "known",
+    description: "Known",
+    harness: "pi",
+    fields: { model: "ACME/known" },
+    systemPrompt: "Work.",
+  };
+  const missing = {
+    ...known,
+    name: "missing",
+    fields: { model: "acme/missing" },
+  };
   assert.deepEqual(
-    [...result.configs.keys()],
-    ["canonical", "bare", "inherited"],
+    registry.validate(known, "/agents/known.md", {
+      models: [{ provider: "acme", id: "known" }],
+    }),
+    [],
   );
-  assert.deepEqual(result.invalidFiles, [
-    {
-      filePath: path.join("/agents", "missing.md"),
-      reason: "model 'acme/missing' was not found in Pi's model catalogue",
-    },
-  ]);
+  assert.match(
+    registry.validate(missing, "/agents/missing.md", {
+      models: [{ provider: "acme", id: "known" }],
+    })[0]?.reason ?? "",
+    /not found in Pi's model catalogue/,
+  );
 });
 
 test("loadAgentConfigs returns an empty map when directory is missing", () => {
@@ -310,22 +285,42 @@ async function writeAgentWithFrontmatter(
   return filePath;
 }
 
-test("parseAgentConfig names the field when frontmatter is not a string", async () => {
-  // YAML types the value, so nothing stops an author writing a list or a map.
-  // The diagnostic has to name the field, not read `raw?.trim is not a
-  // function` out of a crash.
+test("unknown harnesses and fields become profile diagnostics", async () => {
+  const dir = await makeTempDir();
+  const unknownPath = await writeAgentWithFrontmatter(dir, "harness: codex");
+  const unknown = parseAgentConfig(unknownPath);
+  assert.match(
+    createHarnessRegistry([createPiHarness()]).validate(unknown, unknownPath)[0]
+      ?.reason ?? "",
+    /unknown harness 'codex'/,
+  );
+  const fieldPath = await writeAgentWithFrontmatter(dir, "unsupported: true");
+  const field = parseAgentConfig(fieldPath);
+  assert.match(
+    createHarnessRegistry([createPiHarness()]).validate(field, fieldPath)[0]
+      ?.reason ?? "",
+    /does not recognize field 'unsupported'/,
+  );
+});
+
+test("the named harness diagnoses profile field types", async () => {
   const dir = await makeTempDir();
   for (const [frontmatter, expected] of [
-    ["model: {a: 1}", /model must be a string, not a map/],
-    ["tools: 12", /tools must be a string, not a number/],
-    ["model: []", /model must be a string, not a list/],
+    ["model: {a: 1}", /model must be a string/],
+    ["tools: 12", /tools must be a string/],
+    ["model: []", /model must be a string/],
     [
       "appendSystemPrompt: yes please",
-      /appendSystemPrompt must be true or false, not a string/,
+      /appendSystemPrompt must be true or false/,
     ],
   ] as const) {
     const filePath = await writeAgentWithFrontmatter(dir, frontmatter);
-    assert.throws(() => parseAgentConfig(filePath), expected, frontmatter);
+    const config = parseAgentConfig(filePath);
+    const diagnostics = createHarnessRegistry([createPiHarness()]).validate(
+      config,
+      filePath,
+    );
+    assert.match(diagnostics[0]?.reason ?? "", expected, frontmatter);
   }
 });
 
@@ -345,14 +340,14 @@ test("parseAgentConfig treats an empty optional string field as absent", async (
   const filePath = await writeAgentWithFrontmatter(dir, "model:");
 
   const config = parseAgentConfig(filePath);
-  assert.equal(config.model, undefined);
+  assert.equal(config.fields?.model, null);
 });
 
 test("parseAgentConfig accepts a comma-separated tools list", async () => {
   const dir = await makeTempDir();
   const filePath = await writeAgentWithFrontmatter(dir, "tools: read, grep");
 
-  assert.equal(parseAgentConfig(filePath).tools, "read, grep");
+  assert.equal(parseAgentConfig(filePath).fields?.tools, "read, grep");
 });
 
 test("parseAgentConfig reads effort as its own field", async () => {
@@ -363,15 +358,23 @@ test("parseAgentConfig reads effort as its own field", async () => {
   );
 
   const config = parseAgentConfig(filePath);
-  assert.equal(config.model, "openai-codex/gpt-5.6-sol");
-  assert.equal(config.effort, "high");
+  assert.equal(config.fields?.model, "openai-codex/gpt-5.6-sol");
+  assert.equal(config.fields?.effort, "high");
 });
 
 test("parseAgentConfig accepts every effort in the scale", async () => {
   const dir = await makeTempDir();
-  for (const effort of EFFORTS) {
+  for (const effort of [
+    "off",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+  ]) {
     const filePath = await writeAgentWithFrontmatter(dir, `effort: ${effort}`);
-    assert.equal(parseAgentConfig(filePath).effort, effort);
+    assert.equal(parseAgentConfig(filePath).fields?.effort, effort);
   }
 });
 
@@ -379,12 +382,12 @@ test("parseAgentConfig rejects an unknown effort", async () => {
   const dir = await makeTempDir();
   const filePath = await writeAgentWithFrontmatter(dir, "effort: turbo");
 
-  // The validation a model suffix could never do: `effort` is a closed scale, so
-  // a typo is an error rather than something indistinguishable from an id.
-  assert.throws(
-    () => parseAgentConfig(filePath),
-    /unknown effort 'turbo'; expected one of off, minimal, low, medium, high, xhigh, max/,
+  const config = parseAgentConfig(filePath);
+  const diagnostics = createHarnessRegistry([createPiHarness()]).validate(
+    config,
+    filePath,
   );
+  assert.match(diagnostics[0]?.reason ?? "", /unknown effort 'turbo'/);
 });
 
 test("parseAgentConfig passes a model through exactly as written", async () => {
@@ -400,6 +403,6 @@ test("parseAgentConfig passes a model through exactly as written", async () => {
     "sonnet:high",
   ]) {
     const filePath = await writeAgentWithFrontmatter(dir, `model: ${model}`);
-    assert.equal(parseAgentConfig(filePath).model, model, model);
+    assert.equal(parseAgentConfig(filePath).fields?.model, model, model);
   }
 });

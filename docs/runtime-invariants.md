@@ -2,6 +2,16 @@
 
 These invariants define the correctness contract of the subagent runtime.
 
+## Harness seam
+
+Runs are one-shot and backend-neutral. A profile names a harness (default
+`pi`); the registry resolves it before dispatch. Harness adapters alone know
+provider wire messages and translate them into `Fact` records. The dispatcher,
+fold, registry, presentation, and widget consume only those facts. Usage on a
+fact is a delta and the fold sums it. Cancellation crosses the seam only as an
+`AbortSignal`; each adapter owns its child-specific stop mechanism and reports
+an aborted child as the domain state `cancelled`.
+
 ## INV-1 — Run identity is stable
 
 A run ID identifies exactly one subagent run within the current session.

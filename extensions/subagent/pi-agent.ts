@@ -9,7 +9,6 @@ import { type SpawnOptions, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Message } from "@earendil-works/pi-ai";
 import {
   getPackageDir,
   withFileMutationQueue,
@@ -17,7 +16,6 @@ import {
 import type { RunReporter, SubagentOutcome, SubagentRun } from "./run.ts";
 import { DEPTH_ENV_KEY } from "./run.ts";
 import type { AgentConfig } from "./types.ts";
-import { resolveAppendSystemPrompt } from "./types.ts";
 
 export interface PiInvocationRuntime {
   execPath: string;
@@ -194,6 +192,15 @@ export function getPiInvocation(
   return { command: "pi", args };
 }
 
+function stringField(config: AgentConfig, name: string): string | undefined {
+  const value = config.fields?.[name] ?? config[name];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function booleanField(config: AgentConfig, name: string): boolean {
+  return (config.fields?.[name] ?? config[name]) !== false;
+}
+
 export function buildPiArgs(
   config: AgentConfig,
   resolvedModel: string | undefined,
@@ -216,12 +223,11 @@ export function buildPiArgs(
   // pi takes the thinking level as its own flag, so nothing has to be spliced
   // into the model string — which is what made a colon ambiguous before.
   if (thinkingLevel) args.push("--thinking", thinkingLevel);
-  if (config.tools) {
-    args.push("--tools", config.tools);
-  }
+  const tools = stringField(config, "tools");
+  if (tools) args.push("--tools", tools);
   if (systemPromptPath) {
     args.push(
-      resolveAppendSystemPrompt(config)
+      booleanField(config, "appendSystemPrompt")
         ? "--append-system-prompt"
         : "--system-prompt",
       systemPromptPath,
@@ -244,34 +250,110 @@ export function getSpawnOptions(cwd: string, childDepth: number): SpawnOptions {
   };
 }
 
-function isValidAgentEndEvent(event: Record<string, unknown>): boolean {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function factPart(value: unknown): import("./run.ts").FactPart | undefined {
+  if (typeof value === "string") return { type: "text", text: value };
+  if (!isRecord(value) || typeof value.type !== "string") return undefined;
+  if (value.type === "text" && typeof value.text === "string") {
+    return { type: "text", text: value.text };
+  }
+  if (value.type === "toolCall" && typeof value.name === "string") {
+    return {
+      type: "tool_call",
+      name: value.name,
+      ...(isRecord(value.arguments) ? { arguments: value.arguments } : {}),
+    };
+  }
+  return undefined;
+}
+
+function piFact(value: unknown): import("./run.ts").Fact | undefined {
+  if (!isRecord(value)) return undefined;
+  const role = value.role;
+  if (role !== "user" && role !== "assistant" && role !== "tool")
+    return undefined;
+  if (typeof value.content !== "string" && !Array.isArray(value.content)) {
+    return undefined;
+  }
+  const rawParts = Array.isArray(value.content)
+    ? value.content
+    : [value.content];
+  const parts = rawParts
+    .map(factPart)
+    .filter((part): part is import("./run.ts").FactPart => part !== undefined);
+  if (parts.length === 0) return undefined;
+  const rawUsage = isRecord(value.usage) ? value.usage : undefined;
+  const rawCost =
+    rawUsage && isRecord(rawUsage.cost) ? rawUsage.cost : undefined;
+  const usage = rawUsage
+    ? {
+        input: typeof rawUsage.input === "number" ? rawUsage.input : undefined,
+        output:
+          typeof rawUsage.output === "number" ? rawUsage.output : undefined,
+        cacheRead:
+          typeof rawUsage.cacheRead === "number"
+            ? rawUsage.cacheRead
+            : undefined,
+        cacheWrite:
+          typeof rawUsage.cacheWrite === "number"
+            ? rawUsage.cacheWrite
+            : undefined,
+        contextTokens:
+          typeof rawUsage.totalTokens === "number"
+            ? rawUsage.totalTokens
+            : undefined,
+        cost:
+          rawCost && typeof rawCost.total === "number"
+            ? rawCost.total
+            : undefined,
+      }
+    : undefined;
+  return {
+    role,
+    parts,
+    ...(usage ? { usage } : {}),
+    ...(typeof value.provider === "string" && typeof value.model === "string"
+      ? { model: `${value.provider}/${value.model}` }
+      : {}),
+    ...(typeof value.stopReason === "string"
+      ? { stopReason: value.stopReason }
+      : {}),
+    ...(typeof value.errorMessage === "string"
+      ? { errorMessage: value.errorMessage }
+      : {}),
+  };
+}
+
+function isValidAgentEndEvent(
+  event: Record<string, unknown>,
+): event is Record<string, unknown> & { messages: unknown[] } {
   return event.type === "agent_end" && Array.isArray(event.messages);
 }
 
-/**
- * Translate one parsed pi event into a reported fact. This is the whole of
- * the wire-format knowledge: which event types matter, and which fact each
- * one is. What the facts do to the run record is the fold's business.
- */
+/** Translate parsed pi wire events into domain facts at the adapter edge. */
 export function translatePiJsonEvent(
   event: Record<string, unknown>,
   report: RunReporter,
 ): boolean {
-  if (event.type === "message_end" && event.message) {
-    report.message(event.message as Message);
+  if (
+    (event.type === "message_end" || event.type === "tool_result_end") &&
+    event.message
+  ) {
+    const fact = piFact(event.message);
+    if (fact) report.message(fact);
     return true;
   }
-
-  if (event.type === "tool_result_end" && event.message) {
-    report.message(event.message as Message);
-    return true;
-  }
-
   if (isValidAgentEndEvent(event)) {
-    report.transcript(event.messages as Message[]);
+    report.transcript(
+      event.messages
+        .map(piFact)
+        .filter((fact): fact is import("./run.ts").Fact => fact !== undefined),
+    );
     return true;
   }
-
   return false;
 }
 
@@ -306,7 +388,15 @@ const KILL_ESCALATION_MS = 5_000;
  */
 export async function runPiAgent(
   run: SubagentRun,
-  { killEscalationMs = KILL_ESCALATION_MS }: { killEscalationMs?: number } = {},
+  {
+    killEscalationMs = KILL_ESCALATION_MS,
+    resolvedModel,
+    resolvedThinking,
+  }: {
+    killEscalationMs?: number;
+    resolvedModel?: string;
+    resolvedThinking?: string;
+  } = {},
 ): Promise<SubagentOutcome> {
   const { task, signal } = run;
   const { config } = task;
@@ -322,17 +412,16 @@ export async function runPiAgent(
   // tracks what it witnessed itself, on the way past.
   let reportedStderr = false;
   let reportedErrorMessage = false;
-  const carriesErrorMessage = (msg: Message): boolean =>
-    msg.role === "assistant" &&
-    Boolean((msg as { errorMessage?: string }).errorMessage);
+  const carriesErrorMessage = (fact: import("./run.ts").Fact): boolean =>
+    fact.role === "assistant" && Boolean(fact.errorMessage);
   const report: RunReporter = {
-    message(msg) {
-      if (carriesErrorMessage(msg)) reportedErrorMessage = true;
-      run.report.message(msg);
+    message(fact) {
+      if (carriesErrorMessage(fact)) reportedErrorMessage = true;
+      run.report.message(fact);
     },
-    transcript(messages) {
-      reportedErrorMessage = messages.some(carriesErrorMessage);
-      run.report.transcript(messages);
+    transcript(facts) {
+      reportedErrorMessage = facts.some(carriesErrorMessage);
+      run.report.transcript(facts);
     },
     stderr(chunk) {
       reportedStderr = true;
@@ -349,9 +438,9 @@ export async function runPiAgent(
 
     const args = buildPiArgs(
       config,
-      task.resolvedModel,
+      resolvedModel,
       tmpPromptPath ?? undefined,
-      task.resolvedThinking,
+      resolvedThinking,
       task.projectTrusted,
     );
 

@@ -6,15 +6,18 @@
 
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
-import type { Message } from "@earendil-works/pi-ai";
-import type { SubagentExecutor, SubagentOutcome, SubagentRun } from "./run.ts";
+import { createPiHarness } from "./pi-harness.ts";
+import type {
+  Fact,
+  SubagentExecutor,
+  SubagentOutcome,
+  SubagentRun,
+} from "./run.ts";
 import { createEmptyResult } from "./run.ts";
 import type { RunSubagentOptions } from "./runner.ts";
 import {
   assertSubagentDepthAvailable,
   getSubagentDepth,
-  resolveSubagentModel,
-  resolveSubagentThinking,
   startSubagent,
 } from "./runner.ts";
 import { createSubagentRuns } from "./runs.ts";
@@ -36,24 +39,14 @@ afterEach(() => {
   else delete process.env.PI_SUBAGENT_DEPTH;
 });
 
-function assistantMessage(): Message {
+function assistantMessage(): Fact {
   return {
     role: "assistant",
-    content: [{ type: "text", text: "ran the agent" }],
-    api: "anthropic-messages",
-    provider: "test-provider",
-    model: "test-model",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    parts: [{ type: "text", text: "ran the agent" }],
+    usage: { input: 0, output: 0, turns: 1 },
+    model: "test-provider/test-model",
     stopReason: "stop",
-    timestamp: 0,
-  } as Message;
+  };
 }
 
 /** An executor that records what it was handed and reports a canned success. */
@@ -87,7 +80,11 @@ function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
 async function startAndSettle(
   options: Omit<RunSubagentOptions, "runs">,
 ): Promise<SingleResult> {
-  const started = startSubagent({ ...options, runs: createSubagentRuns() });
+  const started = startSubagent({
+    ...options,
+    harness: createPiHarness(),
+    runs: createSubagentRuns(),
+  });
   return await started.settled;
 }
 
@@ -132,46 +129,34 @@ test("startSubagent hands the executor resolved dispatch policy", async () => {
   const { task } = recorded.calls[0];
   assert.equal(task.cwd, "/tmp/workspace");
   assert.equal(task.prompt, "do it");
-  assert.equal(task.resolvedModel, "anthropic/claude-opus-4-5");
-  assert.equal(task.resolvedThinking, "high");
   assert.equal(task.childDepth, 1);
   assert.equal("parentModel" in task, false);
   assert.equal("depth" in task, false);
 });
 
-test("resolveSubagentModel hands model policy through exactly once", () => {
-  assert.equal(
-    resolveSubagentModel(
-      agent({ model: "openrouter/google/gemma-4-31b-it:free" }),
-      undefined,
-    ),
-    "openrouter/google/gemma-4-31b-it:free",
-  );
-  assert.equal(
-    resolveSubagentModel(agent(), {
-      provider: "anthropic",
-      id: "claude-opus-4-5",
-      thinkingLevel: "low",
-    }),
-    "anthropic/claude-opus-4-5",
-  );
-});
-
-test("resolveSubagentThinking applies profile and parent policy", () => {
-  const parent = {
+test("the selected harness owns model and effort resolution", () => {
+  const harness = createPiHarness();
+  const task = {
+    config: agent({ model: "sonnet", effort: "high" }),
+    description: "task",
+    prompt: "do it",
+    cwd: "/tmp",
+    childDepth: 1,
+    projectTrusted: false,
+  };
+  const prepared = harness.prepare(task, {
     provider: "anthropic",
     id: "claude-opus-4-5",
     thinkingLevel: "low",
-  };
-  assert.equal(
-    resolveSubagentThinking(agent({ effort: "high" }), parent),
-    "high",
+  });
+  assert.equal(prepared.model, "sonnet");
+  assert.equal(prepared.effort, "high");
+  const inherited = harness.prepare(
+    { ...task, config: agent() },
+    { provider: "anthropic", id: "claude-opus-4-5", thinkingLevel: "low" },
   );
-  assert.equal(resolveSubagentThinking(agent(), parent), "low");
-  assert.equal(
-    resolveSubagentThinking(agent({ model: "sonnet" }), parent),
-    undefined,
-  );
+  assert.equal(inherited.model, "anthropic/claude-opus-4-5");
+  assert.equal(inherited.effort, undefined);
 });
 
 // ── Depth guard ───────────────────────────────────────────────────────────────
@@ -230,6 +215,7 @@ test("startSubagent publishes progress to the registry, not the transcript", asy
     description: "task",
     prompt: "do it",
     execute: recorded.execute,
+    harness: createPiHarness(),
     runs,
     now: () => times.shift() ?? assert.fail("unexpected clock read"),
   });
@@ -312,17 +298,16 @@ test("the fold derives usage and activity from reported messages", async () => {
   const execute: SubagentExecutor = async (run) => {
     run.report.message({
       role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "call-1",
-          name: "grep",
-          arguments: { pattern: "TODO" },
-        },
+      parts: [
+        { type: "tool_call", name: "grep", arguments: { pattern: "TODO" } },
       ],
-      usage: { input: 7, cost: { total: 0.5 } },
-      // biome-ignore lint/suspicious/noExplicitAny: a partial message is enough
-    } as any);
+      usage: { input: 7, cost: 0.5, turns: 1 },
+    });
+    run.report.message({
+      role: "assistant",
+      parts: [{ type: "text", text: "done" }],
+      usage: { input: 3, cost: 0.25, turns: 1 },
+    });
     return { exitCode: 0 };
   };
 
@@ -335,9 +320,9 @@ test("the fold derives usage and activity from reported messages", async () => {
 
   // Derived, not reported: the executor named a message, and the dispatcher's
   // fold worked out what it means for usage and activity.
-  assert.equal(result.usage.turns, 1);
-  assert.equal(result.usage.input, 7);
-  assert.equal(result.usage.cost, 0.5);
+  assert.equal(result.usage.turns, 2);
+  assert.equal(result.usage.input, 10);
+  assert.equal(result.usage.cost, 0.75);
   assert.equal(result.activity, "grep: TODO");
 });
 

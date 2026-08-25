@@ -15,7 +15,6 @@
  * See docs/adr/0005-executor-reports-facts.md.
  */
 
-import type { Message } from "@earendil-works/pi-ai";
 import { deriveActivity } from "./messages.ts";
 import type {
   AgentConfig,
@@ -123,10 +122,6 @@ export interface SubagentTask {
   readonly prompt: string;
   /** Working directory for the child. */
   readonly cwd: string;
-  /** Model flag already resolved by the dispatcher. */
-  readonly resolvedModel?: string;
-  /** Thinking flag already resolved by the dispatcher. */
-  readonly resolvedThinking?: string;
   /** Nesting depth the executor must copy to its child. */
   readonly childDepth: number;
   /**
@@ -143,15 +138,42 @@ export interface SubagentTask {
  * of the executor's write access to a run: it names what happened, and the
  * fold behind these callbacks decides what the record says.
  */
+export type FactRole = "user" | "assistant" | "tool";
+
+export type FactPart =
+  | { type: "text"; text: string }
+  | { type: "tool_call"; name: string; arguments?: Record<string, unknown> };
+
+/** Usage attached to a fact is a delta, never a cumulative total. */
+export interface FactUsage {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  cost?: number;
+  contextTokens?: number;
+  turns?: number;
+}
+
+/** The only message vocabulary allowed across a harness executor seam. */
+export interface Fact {
+  role: FactRole;
+  parts: FactPart[];
+  usage?: FactUsage;
+  model?: string;
+  stopReason?: string;
+  errorMessage?: string;
+}
+
 export interface RunReporter {
-  /** One transcript message the child produced. */
-  message(msg: Message): void;
+  /** One harness-neutral fact the child produced. */
+  message(fact: Fact): void;
   /**
    * The child's terminal transcript snapshot, replacing everything streamed
-   * so far. The authoritative copy: whatever drift the streamed messages
+   * so far. The authoritative copy: whatever drift the streamed facts
    * accumulated, this heals it.
    */
-  transcript(messages: Message[]): void;
+  transcript(facts: Fact[]): void;
   /** A chunk of the child's stderr. */
   stderr(chunk: string): void;
 }
@@ -221,36 +243,18 @@ export function createEmptyResult(
   };
 }
 
-function recordAssistantUsage(result: SingleResult, msg: Message): void {
-  const assistant = msg as Message & {
-    usage?: {
-      input?: number;
-      output?: number;
-      cacheRead?: number;
-      cacheWrite?: number;
-      totalTokens?: number;
-      cost?: { total?: number };
-    };
-    provider?: string;
-    model?: string;
-    stopReason?: string;
-    errorMessage?: string;
-  };
-  result.usage.turns++;
-  const usage = assistant.usage;
-  if (usage) {
-    result.usage.input += usage.input || 0;
-    result.usage.output += usage.output || 0;
-    result.usage.cacheRead += usage.cacheRead || 0;
-    result.usage.cacheWrite += usage.cacheWrite || 0;
-    result.usage.cost += usage.cost?.total || 0;
-    result.usage.contextTokens = usage.totalTokens || 0;
-  }
-  if (assistant.provider && assistant.model) {
-    result.model = `${assistant.provider}/${assistant.model}`;
-  }
-  if (assistant.stopReason) result.stopReason = assistant.stopReason;
-  if (assistant.errorMessage) result.errorMessage = assistant.errorMessage;
+function recordFact(result: SingleResult, fact: Fact): void {
+  const usage = fact.usage;
+  result.usage.input += usage?.input ?? 0;
+  result.usage.output += usage?.output ?? 0;
+  result.usage.cacheRead += usage?.cacheRead ?? 0;
+  result.usage.cacheWrite += usage?.cacheWrite ?? 0;
+  result.usage.cost += usage?.cost ?? 0;
+  result.usage.contextTokens += usage?.contextTokens ?? 0;
+  result.usage.turns += usage?.turns ?? (fact.role === "assistant" ? 1 : 0);
+  if (fact.model) result.model = fact.model;
+  if (fact.stopReason) result.stopReason = fact.stopReason;
+  if (fact.errorMessage) result.errorMessage = fact.errorMessage;
 }
 
 /**
@@ -263,9 +267,9 @@ export function createRunReporter(
   result: SingleResult,
   changed: () => void,
 ): RunReporter {
-  const fold = (msg: Message): void => {
-    result.messages.push(msg);
-    if (msg.role === "assistant") recordAssistantUsage(result, msg);
+  const fold = (fact: Fact): void => {
+    result.messages.push(fact);
+    recordFact(result, fact);
   };
   const refreshActivity = (): void => {
     const activity = deriveActivity(result.messages);
@@ -279,10 +283,10 @@ export function createRunReporter(
       refreshActivity();
       changed();
     },
-    transcript(messages) {
+    transcript(facts) {
       result.messages = [];
       result.usage = emptyUsage();
-      for (const msg of messages) fold(msg);
+      for (const fact of facts) fold(fact);
       refreshActivity();
       changed();
     },

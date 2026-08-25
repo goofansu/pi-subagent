@@ -1,11 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
-  diagnoseAgentModels,
   formatInvalidAgentFilesWarning,
   loadAgentConfigsWithDiagnostics,
 } from "./agents.ts";
 import { registerAgentsCommand } from "./agents-command.ts";
 import type { SessionPush, SubagentDelivery } from "./delivery.ts";
+import type { HarnessRegistry } from "./harness.ts";
 import { buildNotificationMessage } from "./notification-message.ts";
 import type { SubagentRuns } from "./runs.ts";
 import type { AgentConfig, SessionContext } from "./types.ts";
@@ -33,6 +33,7 @@ export interface SessionLifecycleOptions {
   delivery: SubagentDelivery;
   sessionPush: SessionPush;
   runs: SubagentRuns;
+  harnesses?: HarnessRegistry;
   registerFeatures(
     session: SessionContext,
     agentConfigs: Map<string, AgentConfig>,
@@ -46,6 +47,7 @@ export function createSessionLifecycle({
   delivery,
   sessionPush,
   runs,
+  harnesses,
   registerFeatures,
 }: SessionLifecycleOptions): SessionLifecycle {
   // These objects are deliberately stable: tools and commands register once,
@@ -60,15 +62,14 @@ export function createSessionLifecycle({
 
   return {
     sessionStart(ctx) {
-      const parsedAgents = loadAgentConfigsWithDiagnostics(agentsDir);
-      const diagnosedModels = diagnoseAgentModels(
-        parsedAgents.configs,
+      const parsedAgents = loadAgentConfigsWithDiagnostics(
         agentsDir,
-        ctx.modelRegistry.getAll(),
+        harnesses,
+        { models: ctx.modelRegistry.getAll() },
       );
 
       agentConfigs.clear();
-      for (const [name, config] of diagnosedModels.configs) {
+      for (const [name, config] of parsedAgents.configs) {
         agentConfigs.set(name, config);
       }
       sessionContext.cwd = ctx.cwd;
@@ -89,10 +90,7 @@ export function createSessionLifecycle({
         registerFeatures(sessionContext, agentConfigs);
       }
 
-      const invalidFiles = [
-        ...parsedAgents.invalidFiles,
-        ...diagnosedModels.invalidFiles,
-      ];
+      const invalidFiles = parsedAgents.invalidFiles;
       if (invalidFiles.length > 0) {
         ctx.ui.notify(formatInvalidAgentFilesWarning(invalidFiles), "warning");
       }

@@ -29,40 +29,80 @@ A notification always gives the calling model a chance to act on it, and never i
 
 ## Usage
 
-### Agent format
+### Agent format and harnesses
 
-An agent is a Markdown file named after the agent, so `implementer.md` is the agent `implementer`:
+An agent is a Markdown file named after the agent, so `implementer.md` defines
+`implementer`:
 
 ```markdown
 ---
 description: Implements approved plans and verifies changes
+harness: pi
 model: openai-codex/gpt-5.6-sol
 effort: high
+tools: read, grep, find, ls
+appendSystemPrompt: true
 ---
 
 You are an implementation agent. Follow the approved plan and verify your work.
 ```
 
-The frontmatter configures the run and the body is the prompt. Only `description` and the body are required; a file missing either is skipped and reported at session start.
+`description`, `harness`, and the body are the generic profile vocabulary.
+`harness` defaults to `pi`, so existing profiles continue to work unchanged.
+An unknown harness, or a field that the selected harness does not understand,
+is reported as a profile diagnostic at session start.
 
-| Field | Required | Description | Example |
-| --- | --- | --- | --- |
-| `description` | Yes | When to use the agent. | `Implement and verify a scoped change` |
-| `model` | No | Exact `provider/model-id` or model id from Pi's loaded catalogue. Omit it to use the calling session's model. | `openai-codex/gpt-5.6-sol` |
-| `effort` | No | Reasoning depth, independent of `model`. | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
-| `tools` | No | Comma-separated pi tool names. Omit it to use pi's defaults. | `read, grep, find, ls` |
-| `appendSystemPrompt` | No | Append the prompt to pi's own instructions. Defaults to `true`; `false` replaces them. | `false` |
+#### Pi profiles
 
-At each session start, profiles with pinned models absent from Pi's loaded model catalogue are skipped with a warning. This check also runs when a session is resumed. A valid `model` then reaches pi untouched, so reasoning depth belongs in `effort`, which pi takes as its thinking level. The two fields resolve independently:
+Pi understands `model`, `effort`, `tools`, and `appendSystemPrompt`.
+`model` is an exact model id (or `provider/model-id`) from Pi's catalogue;
+`effort` is Pi's thinking level; `tools` is a comma-separated Pi tool list;
+and `appendSystemPrompt` defaults to `true` and controls whether the profile
+prompt is appended to or replaces Pi's instructions. A pinned model is checked
+against Pi's loaded catalogue.
 
-| Profile | Model the subagent runs | Thinking level it runs at |
+#### Claude profiles
+
+Use the Claude Agent SDK with the same field names:
+
+```markdown
+---
+description: Review a change with Claude's coding tools
+harness: claude
+model: sonnet
+effort: high
+tools: Read, Grep, Glob, Bash
+appendSystemPrompt: true
+---
+
+Review the requested change and report concrete findings.
+```
+
+Claude accepts the aliases `opus`, `sonnet`, `haiku`, and `fable`, or a full
+Claude model id. It uses the SDK default when `model` is omitted. `effort` is
+translated by the adapter to a thinking-token budget (`off` disables thinking);
+`tools` selects Claude built-in tools; and `appendSystemPrompt` defaults to
+`true`, appending the profile to Claude Code's default prompt. `false` supplies
+the profile as the complete system prompt. Claude profiles do not inherit the
+calling model.
+
+Claude children bypass permissions unconditionally in this version, even when
+the parent working directory is untrusted. This is an intentional sharp edge;
+the trust value is carried for a future policy change. The child cannot spawn
+another agent.
+
+#### Resolution matrix
+
+| Profile | Pi model / effort | Claude model / effort |
 | --- | --- | --- |
-| neither field | the calling session's | the calling session's |
-| `effort` only | the calling session's | `effort` |
-| `model` only | `model` | pi's own `defaultThinkingLevel` |
-| both fields | `model` | `effort` |
+| neither | caller's model / caller's thinking level | SDK default / SDK default |
+| `effort` only | caller's model / profile effort | SDK default / profile budget |
+| `model` only | profile model / Pi default thinking | profile alias or id / SDK default |
+| both | profile model / profile effort | profile alias or id / profile budget |
 
-Pinning a `model` therefore drops the caller's thinking level instead of carrying it over, since a level chosen for one model is not a level for another. Set `effort` whenever the depth matters. Pi clamps either to what the chosen model supports.
+All harnesses are one-shot: one prompt in and one terminal answer out. The
+adapter translates provider messages into neutral facts; profiles and the rest
+of the runtime never depend on provider wire types.
 
 ### Agent lookup
 

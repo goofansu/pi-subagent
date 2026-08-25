@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Message } from "@earendil-works/pi-ai";
 import type { PushedNotification, SubagentDelivery } from "./delivery.ts";
 import { createSessionPush, createSubagentDelivery } from "./delivery.ts";
 import { NOTIFICATION_PREVIEW_CHARACTER_LIMIT } from "./presentation.ts";
+import type { Fact } from "./run.ts";
 import { createEmptyResult } from "./run.ts";
 import { createSubagentRuns } from "./runs.ts";
 import type { SingleResult } from "./types.ts";
 
-function assistantText(text: string): Message {
-  return { role: "assistant", content: [{ type: "text", text }] } as Message;
+function assistantText(text: string): Fact {
+  return { role: "assistant", parts: [{ type: "text", text }] };
 }
 
 /** A run the test settles by hand. */

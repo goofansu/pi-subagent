@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Message } from "@earendil-works/pi-ai";
 import {
   formatDuration,
   formatNotification,
@@ -11,11 +10,12 @@ import {
   runStatusGlyph,
   runStatusTone,
 } from "./presentation.ts";
+import type { Fact } from "./run.ts";
 import { createEmptyResult } from "./run.ts";
 import type { Tone } from "./types.ts";
 
-function assistantText(text: string): Message {
-  return { role: "assistant", content: [{ type: "text", text }] } as Message;
+function assistantText(text: string): Fact {
+  return { role: "assistant", parts: [{ type: "text", text }] };
 }
 
 // ── Status words, glyphs, tones ──────────────────────────────────────────────
