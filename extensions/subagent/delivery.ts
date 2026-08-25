@@ -16,6 +16,13 @@
  * for the runs it stops, and `shutdown` delivers everything left by cancelling
  * it, so no notice follows the operator into the next session.
  *
+ * A push is not the end of the story: while the model is mid-turn, pi parks
+ * the report in its follow-up queue, and the operator's interrupt clears that
+ * queue — the report would never enter the conversation. So a pushed report is
+ * kept until it lands, and `turnAborted`/`agentSettled` re-push what an
+ * interrupt threw away. One *landing* per run is the invariant the retry
+ * preserves; the push itself may have to happen more than once.
+ *
  * See docs/adr/0002-push-only-result-delivery.md.
  */
 
@@ -182,6 +189,22 @@ export interface SubagentDelivery {
    */
   reportLanded(id: string): void;
   /**
+   * The turn ended aborted. Pi's interactive host clears its queued messages
+   * on the operator's interrupt, and a pushed report riding that queue is
+   * discarded with it — it will never land. This snapshots what was pushed
+   * and unlanded at the abort, so `agentSettled` can push it again.
+   */
+  turnAborted(): void;
+  /**
+   * The agent settled after its run. Pi drains any queued messages that
+   * survived — it continues the run for them — before it settles, so a
+   * report that was unlanded at the abort and is *still* unlanded now is
+   * provably gone, not merely queued: push it again. Without a preceding
+   * abort this is a no-op, and a report that landed between the abort and
+   * the settle drops out, so the retry cannot double-deliver.
+   */
+  agentSettled(): void;
+  /**
    * The session is over: stop everything still running, mark every
    * undelivered run delivered so no notice follows the operator into the
    * next session, and clear retention — a report belongs to the conversation
@@ -217,18 +240,29 @@ export function createSubagentDelivery({
   /**
    * Runs cancelled by the model, delivered by that tool result but not yet
    * settled — the child is still dying. Membership means "write retention
-   * when the settle arrives, push nothing". A shutdown empties the set so a
-   * child that dies after the session cannot write into the next one's
-   * retention.
+   * when the settle arrives, push nothing". Keyed by id so the id keeps
+   * answering while the child dies — a cancel, wait, or recall in that
+   * window must not call the run one that never existed. A shutdown empties
+   * the map so a child that dies after the session cannot write into the
+   * next one's retention.
    */
-  const inlineDelivered = new Set<Pending>();
+  const inlineDelivered = new Map<string, Pending>();
   /**
-   * Runs whose reports were pushed but have not yet entered the conversation.
+   * Reports pushed but not yet entered into the conversation, kept whole so
+   * they can be pushed again if an interrupt clears them out of pi's queue.
    * Their runs stay in the registry so the widget keeps showing them; the
    * landing signal — `reportLanded`, wired to the message actually joining
    * the session — lets the registry drop them.
    */
-  const awaitingLanding = new Set<string>();
+  const awaitingLanding = new Map<string, PushedReport>();
+  /**
+   * What was pushed and unlanded when the turn aborted. The interrupt that
+   * aborted the turn is the one thing that discards queued reports, and only
+   * what was already pushed by then can have been in the queue it cleared —
+   * anything pushed later either lands through pi's queue-draining
+   * continuation or starts a turn of its own.
+   */
+  let unlandedAtAbort: string[] = [];
 
   /**
    * Evict the oldest whole outputs until retention fits its budget. The
@@ -307,17 +341,19 @@ export function createSubagentDelivery({
     // Pushed is not landed: pi holds a follow-up while the model is mid-turn.
     // The run stays in the registry until `reportLanded` confirms the message
     // joined the conversation, so the widget never drops a run whose report
-    // the model has not seen.
-    awaitingLanding.add(entry.id);
+    // the model has not seen. The report itself is kept so `agentSettled`
+    // can push it again if an interrupt clears it out of pi's queue.
     const output = fullOutput(result);
     const text = formatReport(entry.id, result);
-    safePush({
+    const report: PushedReport = {
       id: entry.id,
       agent: result.agent,
       status: result.status,
       text,
       truncated: !text.includes(output) && output.length > 0,
-    });
+    };
+    awaitingLanding.set(entry.id, report);
+    safePush(report);
   };
 
   return {
@@ -338,11 +374,11 @@ export function createSubagentDelivery({
           // bug, and swallowing it would leave a row on screen forever.
           const alreadyDelivered = entry.delivered;
           entry.delivered = true;
-          inlineDelivered.delete(entry);
+          inlineDelivered.delete(id);
           pending.delete(id);
           runs.release(id);
           if (alreadyDelivered) return;
-          safePush({
+          const notice: PushedReport = {
             id,
             agent: "unknown",
             status: "failed",
@@ -350,14 +386,18 @@ export function createSubagentDelivery({
               error instanceof Error ? error.message : String(error)
             }`,
             truncated: false,
-          });
+          };
+          // Landing-tracked like any push, so an interrupt cannot silently
+          // swallow the one notice that says the run died.
+          awaitingLanding.set(id, notice);
+          safePush(notice);
           return;
         }
         // Delivered before it settled — a run the model cancelled. Its tool
         // result already said so; all that is left is to make the outcome
         // recallable.
         if (entry.delivered) {
-          if (inlineDelivered.delete(entry)) retain(entry, entry.result);
+          if (inlineDelivered.delete(entry.id)) retain(entry, entry.result);
           return;
         }
         // A claimed run is the waiter's to deliver.
@@ -365,7 +405,9 @@ export function createSubagentDelivery({
       })();
     },
 
-    has: (id) => pending.has(id),
+    // A cancelled run whose child is still dying is not a stranger: its id
+    // keeps answering until retention takes over at the settle.
+    has: (id) => pending.has(id) || inlineDelivered.has(id),
 
     async wait(ids, options = {}) {
       // Deduplicated so an id named twice is one claim and one report, and
@@ -376,7 +418,11 @@ export function createSubagentDelivery({
       for (const id of new Set(ids)) {
         const entry = pending.get(id);
         if (entry) claimed.push(entry);
-        else if (retained.has(id)) alreadyDelivered.push(id);
+        // A cancelled run still dying was delivered by its cancel's tool
+        // result; calling it unknown would tell the model the id never
+        // existed.
+        else if (retained.has(id) || inlineDelivered.has(id))
+          alreadyDelivered.push(id);
         else unknown.push(id);
       }
       for (const entry of claimed) entry.claims++;
@@ -419,6 +465,22 @@ export function createSubagentDelivery({
       runs.release(id);
     },
 
+    turnAborted() {
+      unlandedAtAbort = [...awaitingLanding.keys()];
+    },
+
+    agentSettled() {
+      const dropped = unlandedAtAbort;
+      unlandedAtAbort = [];
+      for (const id of dropped) {
+        // Still unlanded now that the queues are drained: the interrupt threw
+        // it away. Landed in the meantime — pi's continuation injected the
+        // surviving queue — and it drops out here instead of doubling.
+        const report = awaitingLanding.get(id);
+        if (report) safePush(report);
+      }
+    },
+
     cancel(ids) {
       const requested = [...new Set(ids)];
       const cancelled = runs.cancel(requested);
@@ -430,13 +492,19 @@ export function createSubagentDelivery({
         entry.delivered = true;
         pending.delete(id);
         runs.release(id);
-        inlineDelivered.add(entry);
+        inlineDelivered.set(id, entry);
       }
 
       const finished: string[] = [];
       const unknown: string[] = [];
       for (const id of requested) {
         if (cancelled.includes(id)) continue;
+        // Cancelled before and still dying: the cancel is idempotent, not a
+        // report of an id that never existed.
+        if (inlineDelivered.has(id)) {
+          cancelled.push(id);
+          continue;
+        }
         // Settled but undelivered, or already recallable: either way the run
         // beat the cancel and its report stands.
         if (pending.has(id) || retained.has(id)) finished.push(id);
@@ -463,14 +531,22 @@ export function createSubagentDelivery({
       // Reports pushed but never landed — the session ended with them still
       // queued. Their runs are terminal; the registry drops them now rather
       // than listing them into a conversation that will never see them.
-      for (const id of awaitingLanding) runs.release(id);
+      for (const id of awaitingLanding.keys()) runs.release(id);
       awaitingLanding.clear();
+      unlandedAtAbort = [];
       pending.clear();
       inlineDelivered.clear();
       retained.clear();
     },
   };
 }
+
+/**
+ * The longest delay `setTimeout` honours. Past it Node fires the timer after
+ * one millisecond, which would turn an over-generous timeout into an instant
+ * one; clamping keeps it what the caller meant — effectively forever.
+ */
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 /**
  * Resolve when `work` does, or give up on a timeout or an abort.
@@ -502,7 +578,9 @@ async function withDeadline(
     };
 
     const timer =
-      timeoutMs === undefined ? undefined : setTimeout(finish, timeoutMs);
+      timeoutMs === undefined
+        ? undefined
+        : setTimeout(finish, Math.min(timeoutMs, MAX_TIMEOUT_MS));
     signal?.addEventListener("abort", finish, { once: true });
     void work.then(finish, finish);
   });

@@ -35,12 +35,37 @@ test("the extension is not exposed inside a subagent Pi process", () => {
     assert.deepEqual(parentEvents, [
       "session_start",
       "message_start",
+      "turn_end",
+      "agent_settled",
       "session_shutdown",
     ]);
   } finally {
     if (originalDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
     else process.env.PI_SUBAGENT_DEPTH = originalDepth;
   }
+});
+
+test("interrupt bookkeeping survives turns of any shape", () => {
+  const handlers: Record<string, (event: unknown, ctx: unknown) => unknown> =
+    {};
+  subagentExtension({
+    on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
+      handlers[event] = handler;
+    },
+    registerCommand() {},
+    registerTool() {},
+    registerMessageRenderer() {},
+    sendMessage() {},
+    getThinkingLevel: () => "off",
+  } as unknown as ExtensionAPI);
+
+  // The abort path reads the turn's ending; a turn with no message at all
+  // must not take the handler down with it.
+  assert.doesNotThrow(() => handlers.turn_end({}, {}));
+  assert.doesNotThrow(() =>
+    handlers.turn_end({ message: { stopReason: "aborted" } }, {}),
+  );
+  assert.doesNotThrow(() => handlers.agent_settled({}, {}));
 });
 
 interface SentMessage {

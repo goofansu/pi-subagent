@@ -69,7 +69,10 @@ export function deriveActivity(messages: Message[]): string | undefined {
 export function getFinalOutput(messages: Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (msg.role === "assistant") {
+    // The array check guards wire data, like the one in deriveActivity: these
+    // messages arrive as unvalidated JSON from a child process, and a shape
+    // surprise here would reject the delivery chain, not a tool call.
+    if (msg.role === "assistant" && Array.isArray(msg.content)) {
       const parts = msg.content
         .filter((part) => part.type === "text")
         .map((part) => (part as { type: "text"; text: string }).text);

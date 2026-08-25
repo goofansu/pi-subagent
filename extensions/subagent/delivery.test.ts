@@ -214,6 +214,30 @@ test("a cancelled run's outcome is still recallable once its child dies", async 
   });
 });
 
+test("a cancelled run's id keeps answering while its child dies", async () => {
+  const { pushed, delivery, runs } = harness();
+  const run = deferredRun();
+  // A child that takes its time dying: the cancel never settles the run.
+  const handle = runs.track(run.result, () => {});
+  delivery.register(handle.id, run.settled);
+
+  delivery.cancel([handle.id]);
+
+  // Between the cancel and the settle the id must not read as a stranger.
+  assert.equal(delivery.has(handle.id), true, "still a known run");
+  const again = delivery.cancel([handle.id]);
+  assert.deepEqual(again.cancelled, [handle.id], "cancelling is idempotent");
+  assert.deepEqual(again.unknown, []);
+  const outcome = await delivery.wait([handle.id]);
+  assert.deepEqual(outcome.alreadyDelivered, [handle.id]);
+  assert.deepEqual(outcome.unknown, []);
+
+  run.cancel();
+  await flush();
+  assert.equal(delivery.recall(handle.id)?.status, "aborted");
+  assert.deepEqual(pushed, [], "the cancel stays the only delivery");
+});
+
 test("a cancel tells a finished run apart from an id that never existed", async () => {
   const { delivery, runs } = harness();
   const run = deferredRun();
@@ -292,6 +316,116 @@ test("landing an unknown id changes nothing", () => {
 
   delivery.reportLanded("never-existed");
 
+  assert.equal(runs.size(), 0);
+});
+
+// ── Reports an interrupt threw out of the queue ──────────────────────────────
+
+/** A delivery whose pushes never land on their own, as when pi queues them. */
+function queuedHarness() {
+  const pushed: PushedReport[] = [];
+  const runs = createSubagentRuns();
+  const delivery = createSubagentDelivery({
+    push: (report) => pushed.push(report),
+    runs,
+  });
+  return { pushed, runs, delivery };
+}
+
+test("a report the interrupt discarded is pushed again once the agent settles", async () => {
+  const { pushed, runs, delivery } = queuedHarness();
+  const run = deferredRun();
+  const handle = runs.track(run.result, () => {});
+  delivery.register(handle.id, run.settled);
+  run.finish("the answer");
+  await flush();
+  assert.equal(pushed.length, 1, "queued behind the model's turn");
+
+  // The operator interrupts: pi clears its queue, the report with it.
+  delivery.turnAborted();
+  delivery.agentSettled();
+
+  assert.equal(pushed.length, 2, "the discarded report is pushed again");
+  assert.equal(pushed[1].text, pushed[0].text, "the same report, verbatim");
+  assert.equal(runs.size(), 1, "still listed until the retry lands");
+
+  delivery.reportLanded(handle.id);
+  assert.equal(runs.size(), 0);
+});
+
+test("a report that landed before the settle is not pushed twice", async () => {
+  const { pushed, runs, delivery } = queuedHarness();
+  const run = deferredRun();
+  const handle = runs.track(run.result, () => {});
+  delivery.register(handle.id, run.settled);
+  run.finish();
+  await flush();
+
+  delivery.turnAborted();
+  // Pi's continuation drained the surviving queue: the report landed.
+  delivery.reportLanded(handle.id);
+  delivery.agentSettled();
+
+  assert.equal(pushed.length, 1, "a landed report is never doubled");
+});
+
+test("a settle with no preceding abort pushes nothing again", async () => {
+  const { pushed, runs, delivery } = queuedHarness();
+  const run = deferredRun();
+  const handle = runs.track(run.result, () => {});
+  delivery.register(handle.id, run.settled);
+  run.finish();
+  await flush();
+
+  delivery.agentSettled();
+
+  assert.equal(pushed.length, 1);
+});
+
+test("a report pushed after the abort is left to land on its own", async () => {
+  const { pushed, runs, delivery } = queuedHarness();
+  const run = deferredRun();
+  const handle = runs.track(run.result, () => {});
+  delivery.register(handle.id, run.settled);
+
+  // The abort precedes the push: this report was never in the cleared queue.
+  delivery.turnAborted();
+  run.finish();
+  await flush();
+  delivery.agentSettled();
+
+  assert.equal(pushed.length, 1, "pi's own draining will land it");
+});
+
+test("a retry the interrupt discards again is pushed once more", async () => {
+  const { pushed, runs, delivery } = queuedHarness();
+  const run = deferredRun();
+  const handle = runs.track(run.result, () => {});
+  delivery.register(handle.id, run.settled);
+  run.finish();
+  await flush();
+
+  delivery.turnAborted();
+  delivery.agentSettled();
+  delivery.turnAborted();
+  delivery.agentSettled();
+
+  assert.equal(pushed.length, 3, "the report keeps trying until it lands");
+});
+
+test("shutdown forgets what an abort snapshotted", async () => {
+  const { pushed, runs, delivery } = queuedHarness();
+  const run = deferredRun();
+  const handle = runs.track(run.result, () => {});
+  delivery.register(handle.id, run.settled);
+  run.finish();
+  await flush();
+
+  delivery.turnAborted();
+  delivery.shutdown();
+  delivery.agentSettled();
+
+  assert.equal(pushed.length, 1, "nothing re-pushes into the next session");
   assert.equal(runs.size(), 0);
 });
 
@@ -472,6 +606,25 @@ test("an id named twice is one claim and one report", async () => {
   run.finish("the answer");
   const outcome = await waiting;
 
+  assert.equal(outcome.reports.length, 1);
+});
+
+test("a timeout past setTimeout's ceiling waits instead of firing at once", async () => {
+  const { delivery } = harness();
+  const run = deferredRun();
+  delivery.register("run-1", run.settled);
+
+  // Un-clamped, a delay past 2^31-1 ms fires after one millisecond and the
+  // wait would give up while the run was still going.
+  const waiting = delivery.wait(["run-1"], { timeoutMs: 2 ** 32 });
+  const winner = await Promise.race([
+    waiting.then(() => "gave up"),
+    new Promise((resolve) => setTimeout(() => resolve("still waiting"), 50)),
+  ]);
+  assert.equal(winner, "still waiting");
+
+  run.finish("patient answer");
+  const outcome = await waiting;
   assert.equal(outcome.reports.length, 1);
 });
 

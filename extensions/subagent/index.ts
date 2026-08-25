@@ -437,6 +437,23 @@ export default function subagentExtension(pi: ExtensionAPI) {
     if (id) getProcessDelivery().reportLanded(id);
   });
 
+  // A report pushed while the model is mid-turn rides pi's follow-up queue,
+  // and the operator's interrupt clears that queue: the report would never
+  // land, the model would never see the answer, and the run would stay
+  // listed forever. The abort is visible as an aborted assistant message;
+  // once the agent settles, pi has already drained whatever survived in its
+  // queues — it continues the run for leftover queued messages before
+  // settling — so a report still unlanded then was discarded, and the
+  // delivery pushes it again.
+  pi.on("turn_end", (event) => {
+    const message = event.message as { stopReason?: string } | undefined;
+    if (message?.stopReason === "aborted") getProcessDelivery().turnAborted();
+  });
+
+  pi.on("agent_settled", () => {
+    getProcessDelivery().agentSettled();
+  });
+
   pi.on("session_shutdown", (_event) => {
     // This runtime's ExtensionAPI is about to start throwing. Reports that
     // settle from here on are dropped; the widget stops following a registry

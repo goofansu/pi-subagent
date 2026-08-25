@@ -39,7 +39,10 @@ delivery is a push, a returned `agent_wait`, or a cancellation notice.
 **Push** — delivery by injecting the report into the session as a follow-up
 message when the run settles. The default path. Pushed is not landed: pi holds
 a follow-up while the model is mid-turn, and the run stays listed until the
-message actually enters the conversation.
+message actually enters the conversation. The operator's interrupt clears pi's
+follow-up queue, discarding any report riding it — so a report pushed before
+an aborted turn and still unlanded once the agent settles is pushed again.
+One *landing* per run is the invariant; the push may happen more than once.
 
 **Claim** — an `agent_wait` claims the reports of the runs it names, suppressing
 their push so they return through the tool result instead. Abandoning the wait
