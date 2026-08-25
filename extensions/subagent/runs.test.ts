@@ -149,7 +149,7 @@ test("one broken listener silences neither the change nor the others", () => {
   assert.equal(laterListenerHeard, 1);
 });
 
-test("a colliding id is drawn again instead of orphaning a run", () => {
+test("INV-1: run ids are stable and never reused within a session", () => {
   const drawn = ["dup", "dup", "fresh"];
   const runs = createSubagentRuns(fakeClock(), () => {
     const next = drawn.shift();

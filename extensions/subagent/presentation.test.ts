@@ -30,7 +30,7 @@ test("formatDuration never reports negative time", () => {
   assert.equal(formatDuration(-500), "0.0s");
 });
 
-test("formatRunStatus words each lifecycle state with its duration", () => {
+test("INV-10: presentation observes lifecycle state without determining it", () => {
   assert.equal(
     formatRunStatus({ status: "running", elapsedMs: 2_000 }),
     "running",

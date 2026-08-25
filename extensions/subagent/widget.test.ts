@@ -60,7 +60,7 @@ test("a run line carries agent, cost and status, and nothing else fixed", () => 
   assert.doesNotMatch(line, /a3f81c2b/);
 });
 
-test("a settled run keeps its final duration, computed once", () => {
+test("INV-10: the widget observes runtime state without determining it", () => {
   const line = stripVTControlCharacters(
     formatRunLine(view({ status: "completed" }), theme, 120),
   );

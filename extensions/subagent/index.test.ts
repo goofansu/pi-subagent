@@ -188,7 +188,7 @@ test("agent_start reads the live session's trust and cwd at execute time", async
   assert.equal(executeTrustChecks, 0);
 });
 
-test("agent_start returns a run id instead of the answer", async () => {
+test("INV-2: a successful start means the run is actually running with no queue", async () => {
   const { pi, tools } = collectTools();
   const started = fakeStart(() => {});
 
@@ -572,7 +572,7 @@ function captureShutdownHandler(): ShutdownHandler {
   return shutdown;
 }
 
-test("every session shutdown stops runs that are still going", async () => {
+test("INV-8: session shutdown stops every running child and cleans up", async () => {
   const shutdown = captureShutdownHandler();
 
   // A report belongs to the conversation that asked for it, so replacement

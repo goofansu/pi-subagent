@@ -230,7 +230,7 @@ test("startSubagent publishes progress to the registry, not the transcript", asy
   assert.equal(reported.effort, "high");
 });
 
-test("startSubagent centrally maps every outcome to a terminal state", async () => {
+test("INV-3: terminal lifecycle states are final", async () => {
   const cases = [
     { exitCode: 0, stopReason: "stop", expected: "completed" },
     { exitCode: 1, stopReason: "error", expected: "failed" },

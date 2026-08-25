@@ -215,7 +215,7 @@ test("a cancelled run's outcome is still recallable once its child dies", async 
   });
 });
 
-test("a cancelled run's id keeps answering while its child dies", async () => {
+test("INV-6: repeated cancellation is safe and terminal state is unchanged", async () => {
   const { pushed, delivery, runs } = harness();
   const run = deferredRun();
   // A child that takes its time dying: the cancel never settles the run.
@@ -333,7 +333,7 @@ function queuedHarness() {
   return { pushed, runs, delivery };
 }
 
-test("a report the interrupt discarded is pushed again once the agent settles", async () => {
+test("INV-9: an interrupt-discarded follow-up is pushed again after settle", async () => {
   const { pushed, runs, delivery } = queuedHarness();
   const run = deferredRun();
   const handle = runs.track(run.result, () => {});
@@ -354,7 +354,7 @@ test("a report the interrupt discarded is pushed again once the agent settles", 
   assert.equal(runs.size(), 0);
 });
 
-test("a report that landed before the settle is not pushed twice", async () => {
+test("one landing per run: re-push never double-delivers", async () => {
   const { pushed, runs, delivery } = queuedHarness();
   const run = deferredRun();
   const handle = runs.track(run.result, () => {});
