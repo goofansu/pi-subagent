@@ -25,6 +25,18 @@ export type Lifecycle =
 export type LifecycleStatus = Lifecycle["phase"];
 export type TerminalLifecycleStatus = Exclude<LifecycleStatus, "running">;
 
+/** The shared seven-value effort scale used by every harness. */
+export const EFFORTS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+export type Effort = (typeof EFFORTS)[number];
+
 /** A generic profile: only the common fields are interpreted by core. */
 export interface AgentConfig {
   name: string;

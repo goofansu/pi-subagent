@@ -8,6 +8,7 @@ import {
   resolveClaudeModel,
   translateClaudeMessage,
 } from "./claude-harness.ts";
+import { createHarnessRegistry } from "./harness.ts";
 import { getFinalOutput } from "./messages.ts";
 import type { SubagentTask } from "./run.ts";
 import { startSubagent } from "./runner.ts";
@@ -222,7 +223,7 @@ test("Claude runs end-to-end through the core run contract", async () => {
     config,
     description: "claude run",
     prompt: "do it",
-    harness: createClaudeHarness(async () => query),
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
     runs: createSubagentRuns(),
   });
   const result = await started.settled;
@@ -262,7 +263,7 @@ test("Claude cancellation stays cancelled when abort closes the stream gracefull
     config,
     description: "cancelled claude run",
     prompt: "do it",
-    harness: createClaudeHarness(async () => query),
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
     runs,
   });
 

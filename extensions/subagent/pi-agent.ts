@@ -13,6 +13,7 @@ import {
   getPackageDir,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
+import { booleanField, stringField } from "./harness.ts";
 import type { RunReporter, SubagentOutcome, SubagentRun } from "./run.ts";
 import { DEPTH_ENV_KEY } from "./run.ts";
 import type { AgentConfig } from "./types.ts";
@@ -192,15 +193,6 @@ export function getPiInvocation(
   return { command: "pi", args };
 }
 
-function stringField(config: AgentConfig, name: string): string | undefined {
-  const value = config.fields?.[name] ?? config[name];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function booleanField(config: AgentConfig, name: string): boolean {
-  return (config.fields?.[name] ?? config[name]) !== false;
-}
-
 export function buildPiArgs(
   config: AgentConfig,
   resolvedModel: string | undefined,
@@ -223,11 +215,11 @@ export function buildPiArgs(
   // pi takes the thinking level as its own flag, so nothing has to be spliced
   // into the model string — which is what made a colon ambiguous before.
   if (thinkingLevel) args.push("--thinking", thinkingLevel);
-  const tools = stringField(config, "tools");
+  const tools = stringField(config, "tools", "profile");
   if (tools) args.push("--tools", tools);
   if (systemPromptPath) {
     args.push(
-      booleanField(config, "appendSystemPrompt")
+      booleanField(config, "appendSystemPrompt", "profile") !== false
         ? "--append-system-prompt"
         : "--system-prompt",
       systemPromptPath,

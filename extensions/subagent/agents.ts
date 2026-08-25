@@ -53,7 +53,11 @@ function requiredDescription(raw: unknown, filePath: string): string {
   return value;
 }
 
-function stringField(raw: unknown, field: string, filePath: string): string {
+function requiredStringField(
+  raw: unknown,
+  field: string,
+  filePath: string,
+): string {
   if (typeof raw !== "string" || !raw.trim()) {
     throw new AgentConfigValidationError(
       `${field} must be a non-empty string`,
@@ -75,7 +79,7 @@ export function parseAgentConfig(filePath: string): AgentConfig {
   const harness =
     frontmatter.harness === undefined
       ? "pi"
-      : stringField(frontmatter.harness, "harness", filePath);
+      : requiredStringField(frontmatter.harness, "harness", filePath);
   const systemPrompt = body.trim();
   if (!systemPrompt) {
     throw new AgentConfigValidationError(

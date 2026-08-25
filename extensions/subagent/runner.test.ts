@@ -6,6 +6,7 @@
 
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
+import { createHarnessRegistry, type Harness } from "./harness.ts";
 import { createPiHarness } from "./pi-harness.ts";
 import type {
   Fact,
@@ -17,8 +18,8 @@ import { createEmptyResult } from "./run.ts";
 import type { RunSubagentOptions } from "./runner.ts";
 import {
   assertSubagentDepthAvailable,
+  startSubagent as dispatchSubagent,
   getSubagentDepth,
-  startSubagent,
 } from "./runner.ts";
 import { createSubagentRuns } from "./runs.ts";
 import type { AgentConfig, SingleResult } from "./types.ts";
@@ -72,17 +73,37 @@ function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
   };
 }
 
+/** Keep executor injection behind the same harness seam production uses. */
+function startSubagent(
+  options: RunSubagentOptions & { execute: SubagentExecutor },
+): ReturnType<typeof dispatchSubagent> {
+  const { execute, ...dispatchOptions } = options;
+  const harness: Harness = {
+    name: "pi",
+    validate: () => [],
+    prepare: (task, parentModel) => ({
+      ...createPiHarness().prepare(task, parentModel),
+      execute,
+    }),
+  };
+  return dispatchSubagent({
+    ...dispatchOptions,
+    harnesses: createHarnessRegistry([harness]),
+  });
+}
+
 /**
  * Start a run against a throwaway registry and settle it. Nothing releases a
  * started run except delivery, so tests must not lean on the process-wide
  * registry or entries would accumulate across them.
  */
 async function startAndSettle(
-  options: Omit<RunSubagentOptions, "runs">,
+  options: Omit<RunSubagentOptions, "runs" | "harnesses"> & {
+    execute: SubagentExecutor;
+  },
 ): Promise<SingleResult> {
   const started = startSubagent({
     ...options,
-    harness: createPiHarness(),
     runs: createSubagentRuns(),
   });
   return await started.settled;
@@ -215,7 +236,6 @@ test("startSubagent publishes progress to the registry, not the transcript", asy
     description: "task",
     prompt: "do it",
     execute: recorded.execute,
-    harness: createPiHarness(),
     runs,
     now: () => times.shift() ?? assert.fail("unexpected clock read"),
   });

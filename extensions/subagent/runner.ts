@@ -4,8 +4,8 @@
  * module never branches on a backend.
  */
 
-import type { Harness, HarnessRegistry, ParentModel } from "./harness.ts";
-import type { SubagentExecutor, SubagentOutcome, SubagentTask } from "./run.ts";
+import type { HarnessRegistry } from "./harness.ts";
+import type { ParentModel, SubagentOutcome, SubagentTask } from "./run.ts";
 import {
   createEmptyResult,
   createRunReporter,
@@ -41,10 +41,7 @@ export interface RunSubagentOptions {
   projectTrusted?: boolean;
   cwd?: string;
   /** Harness resolution is the only backend decision in the dispatcher. */
-  harness?: Harness;
   harnesses?: HarnessRegistry;
-  /** Injected for tests; the public executor contract remains unchanged. */
-  execute?: SubagentExecutor;
   runs?: SubagentRuns;
   now?: () => number;
 }
@@ -64,17 +61,15 @@ export function startSubagent({
   parentModel,
   projectTrusted = false,
   cwd = process.cwd(),
-  harness,
   harnesses,
-  execute,
   runs = subagentRuns,
   now = Date.now,
 }: RunSubagentOptions): StartedSubagent {
   const currentDepth = getSubagentDepth();
   assertSubagentDepthAvailable(currentDepth);
 
-  const selectedHarness = harness ?? harnesses?.get(config.harness ?? "pi");
-  if (!selectedHarness && !execute) {
+  const selectedHarness = harnesses?.get(config.harness ?? "pi");
+  if (!selectedHarness) {
     throw new Error(`No harness registered for '${config.harness ?? "pi"}'`);
   }
 
@@ -87,13 +82,9 @@ export function startSubagent({
     childDepth: currentDepth + 1,
     projectTrusted,
   };
-  const prepared = selectedHarness?.prepare(task, parentModel);
-  if (prepared?.model) result.model = prepared.model;
-  if (prepared?.effort) result.effort = prepared.effort;
-  const executor = execute ?? prepared?.execute;
-  if (!executor)
-    throw new Error(`Harness '${config.harness ?? "pi"}' supplied no executor`);
-
+  const prepared = selectedHarness.prepare(task, parentModel);
+  if (prepared.model) result.model = prepared.model;
+  if (prepared.effort) result.effort = prepared.effort;
   const controller = new AbortController();
   const forwardAbort = () => controller.abort();
   if (signal) {
@@ -121,7 +112,7 @@ export function startSubagent({
 
       let outcome: SubagentOutcome;
       try {
-        outcome = await executor({
+        outcome = await prepared.execute({
           task,
           report,
           signal: controller.signal,

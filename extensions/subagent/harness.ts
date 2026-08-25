@@ -1,12 +1,5 @@
-import type { SubagentExecutor, SubagentTask } from "./run.ts";
+import type { ParentModel, SubagentExecutor, SubagentTask } from "./run.ts";
 import type { AgentConfig } from "./types.ts";
-
-/** The parent model context, intentionally opaque to the dispatcher. */
-export interface ParentModel {
-  provider: string;
-  id: string;
-  thinkingLevel?: string;
-}
 
 export interface HarnessDiagnostic {
   reason: string;
@@ -61,7 +54,7 @@ export function createHarnessRegistry(
   };
 }
 
-/** Shared profile-field helpers used only by adapters while validating. */
+/** Shared profile-field helpers used by both validation and execution. */
 export function stringField(
   profile: AgentConfig,
   field: string,

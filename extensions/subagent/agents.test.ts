@@ -13,6 +13,7 @@ import {
 } from "./agents.ts";
 import { createHarnessRegistry } from "./harness.ts";
 import { createPiHarness } from "./pi-harness.ts";
+import { EFFORTS } from "./types.ts";
 
 const tempDirs: string[] = [];
 
@@ -364,15 +365,7 @@ test("parseAgentConfig reads effort as its own field", async () => {
 
 test("parseAgentConfig accepts every effort in the scale", async () => {
   const dir = await makeTempDir();
-  for (const effort of [
-    "off",
-    "minimal",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max",
-  ]) {
+  for (const effort of EFFORTS) {
     const filePath = await writeAgentWithFrontmatter(dir, `effort: ${effort}`);
     assert.equal(parseAgentConfig(filePath).fields?.effort, effort);
   }

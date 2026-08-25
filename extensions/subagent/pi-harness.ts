@@ -3,7 +3,6 @@ import type {
   HarnessDiagnostic,
   HarnessRun,
   HarnessValidationContext,
-  ParentModel,
 } from "./harness.ts";
 import {
   booleanField,
@@ -12,10 +11,8 @@ import {
   unknownFields,
 } from "./harness.ts";
 import { runPiAgent } from "./pi-agent.ts";
-import type { SubagentTask } from "./run.ts";
-import type { AgentConfig } from "./types.ts";
-
-const PI_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+import type { ParentModel, SubagentTask } from "./run.ts";
+import { type AgentConfig, EFFORTS } from "./types.ts";
 
 export function createPiHarness(
   models: readonly { provider: string; id: string }[] = [],
@@ -40,7 +37,7 @@ export function createPiHarness(
       }
       try {
         const model = stringField(profile, "model", filePath);
-        effortField(profile, filePath, PI_EFFORTS);
+        effortField(profile, filePath, EFFORTS);
         stringField(profile, "tools", filePath);
         booleanField(profile, "appendSystemPrompt", filePath);
         const catalogue = context?.models ?? models;
@@ -66,7 +63,7 @@ export function createPiHarness(
     },
     prepare(task: SubagentTask, parentModel?: ParentModel): HarnessRun {
       const profileModel = stringField(task.config, "model", "profile");
-      const effort = effortField(task.config, "profile", PI_EFFORTS);
+      const effort = effortField(task.config, "profile", EFFORTS);
       const model =
         profileModel ??
         (parentModel ? `${parentModel.provider}/${parentModel.id}` : undefined);

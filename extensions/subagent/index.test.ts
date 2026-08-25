@@ -5,12 +5,18 @@ import path from "node:path";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createSubagentDelivery, type PushedNotification } from "./delivery.ts";
+import { createHarnessRegistry, type Harness } from "./harness.ts";
 import subagentExtension, {
   registerDeliveryEventHandlers,
   registerSubagentFeatureTools,
 } from "./index.ts";
 import { buildNotificationMessage } from "./notification-message.ts";
-import { createEmptyResult, type SubagentOutcome } from "./run.ts";
+import {
+  createEmptyResult,
+  type SubagentExecutor,
+  type SubagentOutcome,
+  type SubagentRun,
+} from "./run.ts";
 import {
   type RunSubagentOptions,
   type StartedSubagent,
@@ -211,7 +217,7 @@ test("INV-2 boundary: a successful start is executing, never queued", async () =
 });
 
 interface BoundaryRun {
-  report: Parameters<NonNullable<RunSubagentOptions["execute"]>>[0]["report"];
+  report: SubagentRun["report"];
   signal?: AbortSignal;
   resolve(outcome: SubagentOutcome): void;
 }
@@ -244,10 +250,15 @@ function runtimeBoundary(
         },
       ) => { render(width: number): string[] })
     | undefined;
-  const execute: NonNullable<RunSubagentOptions["execute"]> = (run) =>
+  const execute: SubagentExecutor = (run) =>
     new Promise((resolve) =>
       active.push({ report: run.report, signal: run.signal, resolve }),
     );
+  const harness: Harness = {
+    name: "pi",
+    validate: () => [],
+    prepare: () => ({ execute }),
+  };
 
   registerSubagentFeatureTools(
     pi,
@@ -256,7 +267,12 @@ function runtimeBoundary(
     {
       runs,
       delivery,
-      start: (options) => startSubagent({ ...options, execute, runs }),
+      start: (options) =>
+        startSubagent({
+          ...options,
+          harnesses: createHarnessRegistry([harness]),
+          runs,
+        }),
     },
   );
   installRunsWidget(

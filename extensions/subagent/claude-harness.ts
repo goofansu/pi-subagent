@@ -3,25 +3,16 @@ import type {
   Query,
   SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  Harness,
-  HarnessDiagnostic,
-  HarnessRun,
-  ParentModel,
+import type { Harness, HarnessDiagnostic, HarnessRun } from "./harness.ts";
+import {
+  booleanField,
+  effortField,
+  stringField,
+  unknownFields,
 } from "./harness.ts";
-import { effortField, stringField, unknownFields } from "./harness.ts";
-import type { Fact, FactPart, SubagentTask } from "./run.ts";
-import type { AgentConfig } from "./types.ts";
+import type { Fact, FactPart, ParentModel, SubagentTask } from "./run.ts";
+import { type AgentConfig, EFFORTS } from "./types.ts";
 
-const CLAUDE_EFFORTS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-];
 const MODEL_ALIASES: Record<string, string> = {
   opus: "claude-opus-4-6",
   sonnet: "claude-sonnet-4-6",
@@ -206,8 +197,7 @@ export function buildClaudeOptions(
     .map((tool) => tool.trim())
     .filter(Boolean);
   const append =
-    (task.config.fields?.appendSystemPrompt ??
-      task.config.appendSystemPrompt) !== false;
+    booleanField(task.config, "appendSystemPrompt", "profile") !== false;
   const options: Options = {
     cwd: task.cwd,
     model,
@@ -247,15 +237,9 @@ export function createClaudeHarness(
       }
       try {
         const model = stringField(profile, "model", filePath);
-        effortField(profile, filePath, CLAUDE_EFFORTS);
+        effortField(profile, filePath, EFFORTS);
         stringField(profile, "tools", filePath);
-        const append =
-          profile.fields?.appendSystemPrompt ?? profile.appendSystemPrompt;
-        if (append !== undefined && typeof append !== "boolean") {
-          throw new Error(
-            `appendSystemPrompt must be true or false in ${filePath}`,
-          );
-        }
+        booleanField(profile, "appendSystemPrompt", filePath);
         if (model && !isClaudeModel(model))
           throw new Error(`invalid Claude model '${model}'`);
       } catch (error) {
@@ -268,7 +252,7 @@ export function createClaudeHarness(
     prepare(task: SubagentTask, _parentModel?: ParentModel): HarnessRun {
       const configuredModel = stringField(task.config, "model", "profile");
       const model = resolveClaudeModel(configuredModel);
-      const effort = effortField(task.config, "profile", CLAUDE_EFFORTS);
+      const effort = effortField(task.config, "profile", EFFORTS);
       return {
         model,
         effort,
