@@ -168,13 +168,12 @@ export function registerSubagentFeatures(
   });
 
   const waitDescription =
-    "Wait for started subagents to finish and return their reports. Use only " +
-    "when you cannot continue without the answer; otherwise carry on and let " +
-    "the reports arrive.";
+    "Wait for started subagents to become terminal and return lifecycle state only. " +
+    "Use only when you cannot proceed; the answer arrives via notification and agent_result.";
 
   pi.registerTool({
-    name: "agent_wait",
-    label: "Wait for subagents",
+    name: "agent_await",
+    label: "Await subagents",
     description: waitDescription,
     promptSnippet: waitDescription,
     parameters: Type.Object({
@@ -197,33 +196,26 @@ export function registerSubagentFeatures(
         ...(signal ? { signal } : {}),
       });
 
-      const sections = [...outcome.reports];
-      if (outcome.stillRunning.length > 0) {
-        sections.push(
-          `Still running: ${outcome.stillRunning.join(", ")}. ` +
-            "They will report on their own.",
-        );
-      }
-      if (outcome.alreadyDelivered.length > 0) {
-        sections.push(
-          `Already reported: ${outcome.alreadyDelivered.join(", ")}. ` +
-            "agent_result re-reads a report you already have.",
-        );
-      }
-      if (outcome.unknown.length > 0) {
-        sections.push(
-          `Unknown run ids: ${outcome.unknown.join(", ")}. ` +
-            "Check them against what agent_start returned.",
-        );
-      }
-      if (sections.length === 0) {
-        sections.push("Nothing to wait for — no run ids were given.");
-      }
+      const sections = outcome.terminal.map(
+        (run) =>
+          `${run.agent} (${run.id}): ${run.phase}${
+            run.reason ? ` (${run.reason})` : ""
+          }`,
+      );
+      if (outcome.stillRunning.length > 0)
+        sections.push(`Still running: ${outcome.stillRunning.join(", ")}.`);
+      if (outcome.unknown.length > 0)
+        sections.push(`Unknown run ids: ${outcome.unknown.join(", ")}.`);
+      if (sections.length === 0) sections.push("No run ids were given.");
 
       return {
         content: [{ type: "text", text: sections.join("\n\n") }],
         details: {
-          runs: outcome.collected,
+          runs: outcome.terminal.map(({ id, agent, phase }) => ({
+            id,
+            agent,
+            status: phase,
+          })),
           stillRunning: outcome.stillRunning.length,
         },
       };
@@ -253,7 +245,7 @@ export function registerSubagentFeatures(
               type: "text",
               text: delivery.has(params.id)
                 ? `Run ${params.id} has not finished yet. Its notification will ` +
-                  "arrive on its own; agent_wait blocks for it if you cannot " +
+                  "arrive on its own; agent_await blocks for it if you cannot " +
                   "continue without it."
                 : `No run with id ${params.id}. Check it against what ` +
                   "agent_start returned.",

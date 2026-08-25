@@ -72,7 +72,7 @@ export function contentText(
 /** Which runs a collected result covers, for the line shown when collapsed. */
 export interface CollectedRuns {
   runs: Array<{ id: string; agent: string; status: LifecycleStatus }>;
-  /** Runs asked for that had not finished. Only `agent_wait` produces these. */
+  /** Runs asked for that had not finished. Only `agent_await` produces these. */
   stillRunning?: number;
 }
 
@@ -138,7 +138,7 @@ export function formatCollectedSummary(
  * Render a collected report: a summary line collapsed, Markdown expanded.
  *
  * Two things are wrong with the flat default for these tools. What
- * `agent_wait` and `agent_result` return is prose an agent wrote, with the
+ * `agent_await` and `agent_result` return is prose an agent wrote, with the
  * headings, lists and code spans it chose, and rendered flat it reads as a
  * wall of asterisks and backticks. And a report can be thousands of
  * characters, which is a lot of transcript to scroll past for something you
@@ -157,7 +157,7 @@ export function renderMarkdownResult(
 
   if (options.expanded) return new Markdown(text, 0, 0, getMarkdownTheme());
 
-  // Without runs to name there is nothing to summarise from — `agent_wait` on
+  // Without runs to name there is nothing to summarise from — `agent_await` on
   // an already-delivered id reports no runs at all — so fall back to the
   // opening line rather than announcing "0 reports".
   if (!isCollectedRuns(result.details) || result.details.runs.length === 0) {

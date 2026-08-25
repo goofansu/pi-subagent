@@ -68,107 +68,55 @@ function harness() {
   return { reports, pushed, runs, delivery };
 }
 
-test("an unclaimed run pushes its report when it settles", async () => {
+test("an unobserved run pushes its notification when it settles", async () => {
   const { pushed, delivery } = harness();
   const run = deferredRun();
-
   delivery.register("run-1", run.settled);
   run.finish("found three call sites");
   await flush();
-
   assert.equal(pushed.length, 1);
   assert.match(pushed[0], /explore \(run-1\) completed/);
-  assert.match(pushed[0], /found three call sites/);
 });
 
-test("a claimed run returns through the wait and never pushes", async () => {
+test("INV-5: await observes terminality without suppressing notification", async () => {
   const { pushed, delivery } = harness();
   const run = deferredRun();
   delivery.register("run-1", run.settled);
-
   const waiting = delivery.wait(["run-1"]);
   run.finish("the answer");
   const outcome = await waiting;
-
-  assert.equal(outcome.reports.length, 1);
-  assert.match(outcome.reports[0], /the answer/);
-  assert.deepEqual(outcome.stillRunning, []);
-  assert.deepEqual(pushed, [], "a waited-on run must not also push");
-});
-
-test("a wait that times out leaves the run to push on its own", async () => {
-  const { pushed, delivery } = harness();
-  const run = deferredRun();
-  delivery.register("run-1", run.settled);
-
-  const outcome = await delivery.wait(["run-1"], { timeoutMs: 5 });
-
-  assert.deepEqual(outcome.reports, []);
-  assert.deepEqual(outcome.stillRunning, ["run-1"]);
-  assert.deepEqual(pushed, [], "nothing to report yet");
-
-  run.finish("late answer");
   await flush();
-
-  assert.equal(pushed.length, 1, "the abandoned claim falls back to a push");
-  assert.match(pushed[0], /late answer/);
-});
-
-test("an abandoned wait releases its claim to the push path", async () => {
-  const { pushed, delivery } = harness();
-  const run = deferredRun();
-  delivery.register("run-1", run.settled);
-  const controller = new AbortController();
-
-  const waiting = delivery.wait(["run-1"], { signal: controller.signal });
-  controller.abort();
-  await waiting;
-
-  run.finish();
-  await flush();
-
+  assert.deepEqual(outcome.terminal, [
+    { id: "run-1", agent: "explore", phase: "completed" },
+  ]);
   assert.equal(pushed.length, 1);
+  assert.doesNotMatch(JSON.stringify(outcome), /the answer/);
 });
 
-test("delivery happens exactly once when a wait and a settle race", async () => {
-  const { pushed, delivery } = harness();
+test("INV-5: await is repeatable for an already-terminal run", async () => {
+  const { delivery } = harness();
   const run = deferredRun();
   delivery.register("run-1", run.settled);
-
-  const waiting = delivery.wait(["run-1"], { timeoutMs: 0 });
   run.finish();
-  const outcome = await waiting;
   await flush();
-
-  const deliveries = outcome.reports.length + pushed.length;
-  assert.equal(deliveries, 1, "one delivery, whichever path won");
+  assert.deepEqual(
+    await delivery.wait(["run-1"]),
+    await delivery.wait(["run-1"]),
+  );
 });
 
-test("waiting on several runs returns once all of them settle", async () => {
-  const { pushed, delivery } = harness();
-  const first = deferredRun("explore");
-  const second = deferredRun("reviewer");
-  delivery.register("run-1", first.settled);
-  delivery.register("run-2", second.settled);
-
-  const waiting = delivery.wait(["run-1", "run-2"]);
-  first.finish("first answer");
-  second.finish("second answer");
-  const outcome = await waiting;
-
-  assert.equal(outcome.reports.length, 2);
-  assert.match(outcome.reports[0], /first answer/);
-  assert.match(outcome.reports[1], /second answer/);
-  assert.deepEqual(pushed, []);
-});
-
-test("waiting on an already-delivered run reports nothing rather than failing", async () => {
+test("INV-5: timeout and unknown ids are the only special await cases", async () => {
   const { delivery } = harness();
-
-  const outcome = await delivery.wait(["never-existed"]);
-
-  assert.deepEqual(outcome.reports, []);
-  assert.deepEqual(outcome.stillRunning, []);
+  const run = deferredRun();
+  delivery.register("run-1", run.settled);
+  assert.deepEqual(
+    await delivery.wait(["run-1", "missing"], { timeoutMs: 0 }),
+    {
+      terminal: [],
+      stillRunning: ["run-1"],
+      unknown: ["missing"],
+    },
+  );
 });
 
 test("a cancelled run pushes a cancellation notice when nobody asked", async () => {
@@ -183,7 +131,7 @@ test("a cancelled run pushes a cancellation notice when nobody asked", async () 
   assert.match(pushed[0], /was cancelled/);
 });
 
-test("a cancel stops the run and suppresses its push", async () => {
+test("a cancel stops the run without suppressing its notification", async () => {
   const { pushed, delivery, runs } = harness();
   const run = deferredRun();
   const handle = runs.track(run.result, run.cancel);
@@ -193,9 +141,13 @@ test("a cancel stops the run and suppresses its push", async () => {
   await flush();
 
   assert.deepEqual(outcome.cancelled, [handle.id]);
-  assert.deepEqual(pushed, [], "the tool result already said so");
-  assert.equal(delivery.has(handle.id), false);
-  assert.equal(runs.size(), 0, "the cancel is the delivery");
+  assert.equal(pushed.length, 1);
+  assert.equal(
+    delivery.has(handle.id),
+    true,
+    "the stored result remains known",
+  );
+  assert.equal(runs.size(), 0, "the landed notification releases the run");
 });
 
 test("a cancelled run's outcome is still recallable once its child dies", async () => {
@@ -211,6 +163,7 @@ test("a cancelled run's outcome is still recallable once its child dies", async 
     id: handle.id,
     agent: "explore",
     status: "cancelled",
+    reason: "requested",
     output: "The run was cancelled before producing output.",
   });
 });
@@ -229,14 +182,14 @@ test("INV-6: repeated cancellation is safe and terminal state is unchanged", asy
   const again = delivery.cancel([handle.id]);
   assert.deepEqual(again.cancelled, [handle.id], "cancelling is idempotent");
   assert.deepEqual(again.unknown, []);
-  const outcome = await delivery.wait([handle.id]);
-  assert.deepEqual(outcome.alreadyDelivered, [handle.id]);
+  const outcome = await delivery.wait([handle.id], { timeoutMs: 0 });
+  assert.deepEqual(outcome.stillRunning, [handle.id]);
   assert.deepEqual(outcome.unknown, []);
 
   run.cancel();
   await flush();
   assert.equal(delivery.result(handle.id)?.status, "cancelled");
-  assert.deepEqual(pushed, [], "the cancel stays the only delivery");
+  assert.equal(pushed.length, 1, "cancellation still produces a notification");
 });
 
 test("a cancel tells a finished run apart from an id that never existed", async () => {
@@ -580,12 +533,14 @@ test("a wait tells a delivered report apart from an id that never existed", asyn
 
   const outcome = await delivery.wait(["run-1", "never-existed"]);
 
-  assert.deepEqual(outcome.alreadyDelivered, ["run-1"]);
+  assert.deepEqual(
+    outcome.terminal.map((run) => run.id),
+    ["run-1"],
+  );
   assert.deepEqual(outcome.unknown, ["never-existed"]);
-  assert.deepEqual(outcome.reports, []);
 });
 
-test("an id named twice is one claim and one report", async () => {
+test("an id named twice produces one await observation", async () => {
   const { delivery } = harness();
   const run = deferredRun();
   delivery.register("run-1", run.settled);
@@ -594,7 +549,7 @@ test("an id named twice is one claim and one report", async () => {
   run.finish("the answer");
   const outcome = await waiting;
 
-  assert.equal(outcome.reports.length, 1);
+  assert.equal(outcome.terminal.length, 1);
 });
 
 test("a timeout past setTimeout's ceiling waits instead of firing at once", async () => {
@@ -613,7 +568,7 @@ test("a timeout past setTimeout's ceiling waits instead of firing at once", asyn
 
   run.finish("patient answer");
   const outcome = await waiting;
-  assert.equal(outcome.reports.length, 1);
+  assert.equal(outcome.terminal.length, 1);
 });
 
 test("a wait entered with a cancelled turn gives up immediately", async () => {

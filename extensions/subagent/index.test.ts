@@ -253,10 +253,10 @@ test("the orchestration primitives are registered", () => {
   );
 
   assert.deepEqual(Object.keys(tools).sort(), [
+    "agent_await",
     "agent_cancel",
     "agent_result",
     "agent_start",
-    "agent_wait",
   ]);
 });
 

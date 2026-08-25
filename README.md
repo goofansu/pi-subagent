@@ -17,11 +17,11 @@ Delegation is three tools, not one. A subagent runs detached from the turn that 
 | Tool | What it does |
 | --- | --- |
 | `agent_start` | Starts a run and returns a run id immediately. Takes `agent`, `description`, and `prompt`; the profile decides the model, effort, and tools. The report arrives on its own when the run finishes. |
-| `agent_wait` | Waits for named runs and returns their reports. For when the calling model cannot continue without the answer. Takes an optional `timeout_seconds`, after which the runs carry on and report by themselves. |
+| `agent_await` | Waits for named runs to become terminal and returns lifecycle state only. Takes an optional `timeout_seconds`; awaiting never suppresses notifications or consumes results. |
 | `agent_cancel` | Stops named runs and discards their unfinished work. |
 | `agent_result` | Reads a finished run's full output by id, for when a report was trimmed or needs re-reading. |
 
-A finished run's report is delivered exactly once: pushed into the session as a follow-up message, or returned by the `agent_wait` that claimed it — never both. See [ADR 0002](docs/adr/0002-push-only-result-delivery.md).
+Every terminal output is stored for `agent_result`. A small completion notification is pushed independently, and `agent_await` only observes lifecycle state. See [ADR 0006](docs/adr/0006-completion-notifications-and-result-store.md).
 
 A pushed report appears as a single collapsed line — the agent, the run id, and how much it said — and expands with the same key that expands tool output. The message the model reads is capped so a runaway agent cannot swamp the context, but the run's whole answer is kept for the session and a trimmed report says so, naming the `agent_result` call that returns the rest. Nothing an agent produced is thrown away.
 

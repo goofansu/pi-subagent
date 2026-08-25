@@ -35,24 +35,18 @@ cancelled at the executor seam and never shown above it.
 
 ## Delivery
 
-**Report** — what a run gives back: its final assistant output, and nothing
-else. Tool-call logs and usage belong on screen, not in the parent's context.
+**Result** — the authoritative terminal output for a run. It is written to the
+result store when the run settles and observed with `agent_result`.
 
-**Delivery** — the single act of giving a run's report to the model. The
-invariant is *exactly one delivery per run*, never zero and never two. A
-delivery is a push, a returned `agent_wait`, or a cancellation notice.
+**Notification** — a small status-specific completion notice pushed as a
+follow-up message. It orients the model and points to `agent_result`; it is not
+the result itself. Pushed is not landed: pi may hold a follow-up while the model
+is mid-turn. If an interrupt discards it, the notification is pushed again
+after the agent settles. One landing per notification is the invariant.
 
-**Push** — delivery by injecting the report into the session as a follow-up
-message when the run settles. The default path. Pushed is not landed: pi holds
-a follow-up while the model is mid-turn, and the run stays listed until the
-message actually enters the conversation. The operator's interrupt clears pi's
-follow-up queue, discarding any report riding it — so a report pushed before
-an aborted turn and still unlanded once the agent settles is pushed again.
-One *landing* per run is the invariant; the push may happen more than once.
-
-**Claim** — an `agent_wait` claims the reports of the runs it names, suppressing
-their push so they return through the tool result instead. Abandoning the wait
-releases the claim and the run pushes normally.
+**Await** — `agent_await` observes terminality only. It returns run identity and
+terminal lifecycle state, never output, and does not suppress notifications or
+affect the result store. Repeated awaits return the same lifecycle state.
 
 **Result store** — the authoritative home of every terminal run's output,
 addressable by id from the moment the run settles. `agent_result` observes a
