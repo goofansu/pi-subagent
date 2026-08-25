@@ -4,7 +4,9 @@ import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { NotificationMessageDetails } from "./notification-message.ts";
 import {
+  buildNotificationMessage,
   formatNotificationSummary,
+  parseNotificationMessage,
   renderNotificationMessage,
 } from "./notification-message.ts";
 
@@ -72,6 +74,37 @@ test("a failed notification reads as failed", () => {
 });
 
 // ── The message ──────────────────────────────────────────────────────────────
+
+test("notification payloads build and parse through one contract", () => {
+  const message = buildNotificationMessage({
+    ...details(),
+    text: "Agent completed",
+  });
+
+  assert.deepEqual(
+    parseNotificationMessage({ role: "custom", ...message }),
+    details(),
+  );
+});
+
+test("landing detection rejects foreign custom messages", () => {
+  assert.equal(
+    parseNotificationMessage({
+      role: "custom",
+      customType: "some-other-extension",
+      details: details(),
+    }),
+    undefined,
+  );
+  assert.equal(
+    parseNotificationMessage({
+      role: "custom",
+      customType: "subagent-notification",
+      details: { ...details(), status: "running" },
+    }),
+    undefined,
+  );
+});
 
 test("a collapsed notification hides its body", () => {
   const component = renderNotificationMessage(

@@ -1,4 +1,7 @@
-import type { PushedNotification } from "./delivery.ts";
+import type { NotificationMessage } from "./notification-message.ts";
+
+/** A completion notification on its way to the model. */
+export type PushedNotification = NotificationMessage;
 
 export type NotificationDeliveryState =
   | { phase: "pending"; notification: PushedNotification }

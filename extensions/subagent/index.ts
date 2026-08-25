@@ -14,7 +14,9 @@ import { registerAgentsCommand } from "./agents-command.ts";
 import type { PushNotification, SubagentDelivery } from "./delivery.ts";
 import { createSessionPush, createSubagentDelivery } from "./delivery.ts";
 import {
+  buildNotificationMessage,
   NOTIFICATION_MESSAGE_TYPE,
+  parseNotificationMessage,
   renderNotificationMessage,
 } from "./notification-message.ts";
 import { renderMarkdownResult, renderSubagentCall } from "./render.ts";
@@ -37,19 +39,10 @@ function notificationPusher(pi: ExtensionAPI): PushNotification {
     //
     // `deliverAs: "followUp"` waits for an active turn rather than interrupting
     // it. `triggerTurn` lets an idle model act without operator input.
-    pi.sendMessage(
-      {
-        customType: NOTIFICATION_MESSAGE_TYPE,
-        content: notification.text,
-        display: true,
-        details: {
-          id: notification.id,
-          agent: notification.agent,
-          status: notification.status,
-        },
-      },
-      { deliverAs: "followUp", triggerTurn: true },
-    );
+    pi.sendMessage(buildNotificationMessage(notification), {
+      deliverAs: "followUp",
+      triggerTurn: true,
+    });
   };
 }
 
@@ -346,15 +339,8 @@ export function registerDeliveryEventHandlers(
   delivery: SubagentDelivery,
 ): void {
   pi.on("message_start", (event) => {
-    const message = event.message as {
-      role?: string;
-      customType?: string;
-      details?: { id?: string };
-    };
-    if (message.role !== "custom") return;
-    if (message.customType !== NOTIFICATION_MESSAGE_TYPE) return;
-    const id = message.details?.id;
-    if (id) delivery.notificationLanded(id);
+    const notification = parseNotificationMessage(event.message);
+    if (notification) delivery.notificationLanded(notification.id);
   });
 
   pi.on("turn_end", (event) => {

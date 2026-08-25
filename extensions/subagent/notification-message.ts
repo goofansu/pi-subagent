@@ -22,7 +22,33 @@ export const NOTIFICATION_MESSAGE_TYPE = "subagent-notification";
 export interface NotificationMessageDetails {
   id: string;
   agent: string;
-  status: LifecycleStatus;
+  status: Exclude<LifecycleStatus, "running">;
+}
+
+/** Everything needed to build one host custom-message payload. */
+export interface NotificationMessage extends NotificationMessageDetails {
+  /** The bounded orientation message the model reads. */
+  text: string;
+}
+
+export interface NotificationMessagePayload {
+  customType: typeof NOTIFICATION_MESSAGE_TYPE;
+  content: string;
+  display: true;
+  details: NotificationMessageDetails;
+}
+
+/** Build the custom-message payload pushed through the host. */
+export function buildNotificationMessage(
+  notification: NotificationMessage,
+): NotificationMessagePayload {
+  const { id, agent, status, text } = notification;
+  return {
+    customType: NOTIFICATION_MESSAGE_TYPE,
+    content: text,
+    display: true,
+    details: { id, agent, status },
+  };
 }
 
 interface RenderableMessage {
@@ -39,12 +65,30 @@ interface RenderableTheme {
 }
 
 function isDetails(value: unknown): value is NotificationMessageDetails {
+  if (typeof value !== "object" || value === null) return false;
+  const details = value as Record<string, unknown>;
   return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as NotificationMessageDetails).id === "string" &&
-    typeof (value as NotificationMessageDetails).agent === "string"
+    typeof details.id === "string" &&
+    typeof details.agent === "string" &&
+    (details.status === "completed" ||
+      details.status === "failed" ||
+      details.status === "cancelled")
   );
+}
+
+/** Parse a landed host message back into notification identity. */
+export function parseNotificationMessage(
+  value: unknown,
+): NotificationMessageDetails | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const message = value as Record<string, unknown>;
+  if (
+    message.role !== "custom" ||
+    message.customType !== NOTIFICATION_MESSAGE_TYPE ||
+    !isDetails(message.details)
+  )
+    return undefined;
+  return message.details;
 }
 
 /**

@@ -8,6 +8,7 @@
 import {
   type NotificationDeliveryEvent,
   type NotificationDeliveryState,
+  type PushedNotification,
   transitionNotification,
 } from "./notification-delivery.ts";
 import { formatNotification, fullOutput } from "./presentation.ts";
@@ -15,14 +16,7 @@ import type { SubagentRuns } from "./runs.ts";
 import { subagentRuns } from "./runs.ts";
 import type { LifecycleStatus, SingleResult } from "./types.ts";
 
-/** A completion notification on its way to the model. */
-export interface PushedNotification {
-  id: string;
-  agent: string;
-  status: Exclude<LifecycleStatus, "running">;
-  /** The bounded orientation message the model reads. */
-  text: string;
-}
+export type { PushedNotification } from "./notification-delivery.ts";
 
 /** Push a completion notification into the session. */
 export type PushNotification = (notification: PushedNotification) => void;
