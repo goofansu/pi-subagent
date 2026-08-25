@@ -260,6 +260,102 @@ test("the child pi driver accepts exit 0 after a valid agent_end event", async (
   assert.equal(settled.messages.length, 1);
 });
 
+test("toolResult messages survive streamed delivery and transcript healing", async () => {
+  const assistant = {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+    provider: "fixture-provider",
+    model: "fixture-model",
+    stopReason: "toolUse",
+  };
+  const toolResult = {
+    role: "toolResult",
+    toolCallId: "call-1",
+    toolName: "read",
+    content: [{ type: "text", text: "file contents" }],
+    isError: false,
+  };
+  const settled = await runPiFixture(
+    `#!/bin/sh
+printf '%s\\n' '${JSON.stringify({ type: "message_end", message: assistant })}'
+printf '%s\\n' '${JSON.stringify({ type: "message_end", message: toolResult })}'
+printf '%s\\n' '${JSON.stringify({ type: "agent_end", messages: [assistant, toolResult] })}'
+`,
+  );
+
+  assert.equal(settled.lifecycle.phase, "completed");
+  assert.deepEqual(
+    settled.messages.map((message) => message.role),
+    ["assistant", "tool"],
+  );
+  assert.deepEqual(settled.messages[1]?.parts, [
+    { type: "text", text: "file contents" },
+  ]);
+});
+
+test("a thinking-only message keeps its terminal metadata and usage", async () => {
+  const message = {
+    role: "assistant",
+    content: [{ type: "thinking", thinking: "planning" }],
+    provider: "fixture-provider",
+    model: "fixture-model",
+    usage: {
+      input: 11,
+      output: 7,
+      cacheRead: 2,
+      cacheWrite: 1,
+      totalTokens: 21,
+      cost: { total: 0.12 },
+    },
+    stopReason: "stop",
+  };
+  const settled = await runPiFixture(
+    `#!/bin/sh
+printf '%s\\n' '${JSON.stringify({ type: "agent_end", messages: [message] })}'
+`,
+  );
+
+  assert.equal(settled.lifecycle.phase, "completed");
+  assert.deepEqual(settled.messages[0]?.parts, []);
+  assert.equal(settled.stopReason, "stop");
+  assert.equal(settled.usage.input, 11);
+  assert.equal(settled.usage.output, 7);
+  assert.equal(settled.usage.contextTokens, 21);
+  assert.equal(settled.usage.cost, 0.12);
+  assert.equal(settled.usage.turns, 1);
+});
+
+test("an error-bearing empty message fails an otherwise clean child", async () => {
+  const message = {
+    role: "assistant",
+    content: [],
+    provider: "fixture-provider",
+    model: "fixture-model",
+    usage: {
+      input: 5,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 5,
+      cost: { total: 0.05 },
+    },
+    stopReason: "error",
+    errorMessage: "fixture in-band error",
+  };
+  const settled = await runPiFixture(
+    `#!/bin/sh
+printf '%s\\n' '${JSON.stringify({ type: "agent_end", messages: [message] })}'
+`,
+  );
+
+  assert.equal(settled.lifecycle.phase, "failed");
+  assert.deepEqual(settled.messages[0]?.parts, []);
+  assert.equal(settled.errorMessage, "fixture in-band error");
+  assert.equal(settled.stopReason, "error");
+  assert.equal(settled.usage.input, 5);
+  assert.equal(settled.usage.turns, 1);
+});
+
 test("the child pi driver fails exit 0 without an agent_end event", async () => {
   const nonterminalEvent = JSON.stringify({
     type: "message_end",

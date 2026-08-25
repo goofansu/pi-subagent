@@ -272,7 +272,8 @@ function factPart(value: unknown): import("./run.ts").FactPart | undefined {
 
 function piFact(value: unknown): import("./run.ts").Fact | undefined {
   if (!isRecord(value)) return undefined;
-  const role = value.role;
+  const wireRole = value.role;
+  const role = wireRole === "toolResult" ? "tool" : wireRole;
   if (role !== "user" && role !== "assistant" && role !== "tool")
     return undefined;
   if (typeof value.content !== "string" && !Array.isArray(value.content)) {
@@ -284,7 +285,9 @@ function piFact(value: unknown): import("./run.ts").Fact | undefined {
   const parts = rawParts
     .map(factPart)
     .filter((part): part is import("./run.ts").FactPart => part !== undefined);
-  if (parts.length === 0) return undefined;
+  // Thinking and provider-specific content blocks do not cross the harness
+  // seam, but their message metadata still does. An empty parts array is a
+  // meaningful fact when it carries usage, a stop reason, or an error.
   const rawUsage = isRecord(value.usage) ? value.usage : undefined;
   const rawCost =
     rawUsage && isRecord(rawUsage.cost) ? rawUsage.cost : undefined;
@@ -412,15 +415,24 @@ export async function runPiAgent(
   // tracks what it witnessed itself, on the way past.
   let reportedStderr = false;
   let reportedErrorMessage = false;
-  const carriesErrorMessage = (fact: import("./run.ts").Fact): boolean =>
-    fact.role === "assistant" && Boolean(fact.errorMessage);
+  let reportedInBandError = false;
+  let reportedInBandErrorMessage: string | undefined;
+  const noteInBandError = (fact: import("./run.ts").Fact): void => {
+    if (fact.stopReason === "error" || fact.errorMessage) {
+      reportedInBandError = true;
+    }
+    if (fact.errorMessage) {
+      reportedErrorMessage = true;
+      reportedInBandErrorMessage = fact.errorMessage;
+    }
+  };
   const report: RunReporter = {
     message(fact) {
-      if (carriesErrorMessage(fact)) reportedErrorMessage = true;
+      noteInBandError(fact);
       run.report.message(fact);
     },
     transcript(facts) {
-      reportedErrorMessage = facts.some(carriesErrorMessage);
+      for (const fact of facts) noteInBandError(fact);
       run.report.transcript(facts);
     },
     stderr(chunk) {
@@ -559,6 +571,15 @@ export async function runPiAgent(
         exitCode: 1,
         stopReason: "error",
         errorMessage: MISSING_AGENT_END_ERROR,
+      };
+    }
+    if (reportedInBandError) {
+      return {
+        exitCode,
+        stopReason: "error",
+        ...(reportedInBandErrorMessage
+          ? { errorMessage: reportedInBandErrorMessage }
+          : {}),
       };
     }
     return {
