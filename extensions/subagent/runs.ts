@@ -166,12 +166,15 @@ export function createSubagentRuns(
       let id = generateId();
       while (issuedIds.has(id)) id = generateId();
       issuedIds.add(id);
-      runs.set(id, { id, result, cancel });
+      const tracked: TrackedRun = { id, result, cancel };
+      runs.set(id, tracked);
       notify();
 
       return {
         id,
-        cancellationReason: () => runs.get(id)?.cancellationReason,
+        // The handle outlives display tracking: delivery may release the run
+        // before its child has observed cancellation and settled.
+        cancellationReason: () => tracked.cancellationReason,
         changed() {
           notify();
         },

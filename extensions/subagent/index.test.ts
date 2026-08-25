@@ -7,7 +7,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createSubagentDelivery, type PushedNotification } from "./delivery.ts";
 import subagentExtension, {
   registerDeliveryEventHandlers,
-  registerShutdownEventHandler,
   registerSubagentFeatureTools,
 } from "./index.ts";
 import { buildNotificationMessage } from "./notification-message.ts";
@@ -276,7 +275,7 @@ function runtimeBoundary(
     },
   } as unknown as ExtensionAPI;
   registerDeliveryEventHandlers(eventPi, delivery);
-  registerShutdownEventHandler(eventPi, delivery);
+  events.session_shutdown = () => delivery.shutdown();
 
   const start = async (): Promise<string> => {
     const result = await tools.agent_start.execute(

@@ -315,18 +315,6 @@ export function registerDeliveryEventHandlers(
   pi.on("agent_settled", () => delivery.agentSettled());
 }
 
-/** Register session shutdown cleanup at the host event boundary. */
-export function registerShutdownEventHandler(
-  pi: ExtensionAPI,
-  delivery: SubagentDelivery,
-  beforeShutdown: () => void = () => {},
-): void {
-  pi.on("session_shutdown", () => {
-    beforeShutdown();
-    delivery.shutdown();
-  });
-}
-
 export default function subagentExtension(pi: ExtensionAPI) {
   // A Pi child loads installed extensions just like its parent. Keep this
   // extension entirely inert there so the model cannot see and repeatedly

@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import type { Message } from "@earendil-works/pi-ai";
-import type { SubagentExecutor, SubagentRun } from "./run.ts";
+import type { SubagentExecutor, SubagentOutcome, SubagentRun } from "./run.ts";
 import { createEmptyResult } from "./run.ts";
 import type { RunSubagentOptions } from "./runner.ts";
 import {
@@ -425,6 +425,32 @@ test("a started run stays tracked after it settles, until its delivery", async (
   // Releasing is the delivery module's job: a settled run is still undelivered
   // work the widget must keep showing.
   assert.equal(runs.list().length, 1, "settling does not release the run");
+});
+
+test("a cancellation reason survives registry release until settlement", async () => {
+  const runs = createSubagentRuns();
+  let finish: (outcome: SubagentOutcome) => void = () => {};
+  const execute: SubagentExecutor = () =>
+    new Promise((resolve) => {
+      finish = resolve;
+    });
+  const started = startSubagent({
+    config: agent(),
+    description: "task",
+    prompt: "do it",
+    execute,
+    runs,
+  });
+
+  runs.cancel([started.id], "shutdown");
+  runs.release(started.id);
+  finish({ stopReason: "aborted" });
+  const result = await started.settled;
+
+  assert.equal(result.lifecycle.phase, "cancelled");
+  if (result.lifecycle.phase === "cancelled") {
+    assert.equal(result.lifecycle.reason, "shutdown");
+  }
 });
 
 test("the registry can cancel one run without touching the turn", async () => {
