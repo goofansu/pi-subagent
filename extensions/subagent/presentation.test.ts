@@ -7,7 +7,6 @@ import {
   fullOutput,
   NOTIFICATION_PREVIEW_CHARACTER_LIMIT,
   notificationVerb,
-  runStatusGlyph,
   runStatusTone,
 } from "./presentation.ts";
 import type { Fact } from "./run.ts";
@@ -18,7 +17,7 @@ function assistantText(text: string): Fact {
   return { role: "assistant", parts: [{ type: "text", text }] };
 }
 
-// ── Status words, glyphs, tones ──────────────────────────────────────────────
+// ── Status words and tones ───────────────────────────────────────────────────
 
 test("formatDuration reports tenths, then minutes, then hours", () => {
   assert.equal(formatDuration(0), "0.0s");
@@ -50,20 +49,14 @@ test("INV-10: presentation observes lifecycle state without determining it", () 
   );
 });
 
-test("each lifecycle state has its own glyph-and-tone pair", () => {
+test("each lifecycle state has a presentation tone", () => {
   const completedTone: Tone = runStatusTone("completed");
   assert.equal(completedTone, "success");
   assert.deepEqual(
-    (["running", "completed", "failed", "cancelled"] as const).map((status) => [
-      runStatusGlyph(status),
-      runStatusTone(status),
-    ]),
-    [
-      ["●", "warning"],
-      ["●", "success"],
-      ["●", "error"],
-      ["○", "error"],
-    ],
+    (["running", "completed", "failed", "cancelled"] as const).map(
+      runStatusTone,
+    ),
+    ["warning", "success", "error", "error"],
   );
 });
 

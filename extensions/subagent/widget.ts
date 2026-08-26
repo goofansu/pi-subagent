@@ -13,11 +13,7 @@
  */
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import {
-  formatRunStatus,
-  runStatusGlyph,
-  runStatusTone,
-} from "./presentation.ts";
+import { formatRunStatus, runStatusTone } from "./presentation.ts";
 import type { RunView, SubagentRuns } from "./runs.ts";
 import type { RenderableTheme } from "./types.ts";
 
@@ -31,30 +27,42 @@ export const WIDGET_KEY = "subagent-runs";
  */
 export const MAX_WIDGET_ROWS = 8;
 
-/** Past this, a long agent name gets its own ragged row rather than pushing
- * every other row's columns across the terminal. */
+/** Every component in a row is separated by the same amount of space. */
+export const ROW_DELIMITER = "  ";
+
+/** Keep profile names from consuming the rest of every widget row. */
 export const MAX_AGENT_COLUMN_WIDTH = 16;
 
 export function formatCost(cost: number): string {
   return `$${cost.toFixed(4)}`;
 }
 
-/** Column widths shared by every row, so the fields read as a table. */
+/** Widths shared by every visible row so each field starts in one column. */
 export interface RunColumns {
   agent: number;
+  harness: number;
   cost: number;
 }
 
 export function measureColumns(runs: readonly RunView[]): RunColumns {
   const widest = (values: string[]) =>
-    values.reduce((max, value) => Math.max(max, value.length), 0);
+    values.reduce((max, value) => Math.max(max, visibleWidth(value)), 0);
   return {
     agent: Math.min(
       MAX_AGENT_COLUMN_WIDTH,
       widest(runs.map((run) => run.agent)),
     ),
+    harness: widest(runs.map((run) => run.harness)),
     cost: widest(runs.map((run) => formatCost(run.cost))),
   };
+}
+
+function padEndToWidth(value: string, width: number): string {
+  return value + " ".repeat(Math.max(0, width - visibleWidth(value)));
+}
+
+function padStartToWidth(value: string, width: number): string {
+  return " ".repeat(Math.max(0, width - visibleWidth(value))) + value;
 }
 
 /**
@@ -73,21 +81,18 @@ export function orderRuns(runs: readonly RunView[]): RunView[] {
 const MIN_ACTIVITY_WIDTH = 12;
 
 /**
- * One run as a single line: agent, cost, status, and — while the run is still
- * going — what it is doing right now.
+ * One run as a single line: agent, harness, cost, status, and — while the run
+ * is still going — what it is doing right now.
  *
  * Deliberately no run id and no model. The widget is read by the operator,
  * and a human names a run by its agent and what it is doing; ids live in the
- * tool results and notifications, where the model that acts on them reads them, and
- * the model an agent runs as is the profile's business. Cost is dropped when
- * the line will not fit. Status is the field a reader is actually watching,
- * so it must survive a narrow terminal — and it is last, which is exactly
- * where truncation bites.
+ * tool results and notifications, where the model that acts on them reads
+ * them. Cost is dropped when the line will not fit.
  *
  * The activity tail is the first thing sacrificed: it takes whatever width is
- * left after the columns, and is skipped entirely when that is too little to
- * read. Before the child's first tool call the run's description stands in,
- * which is also what tells two runs of the same agent apart.
+ * left after the fixed components, and is skipped entirely when that is too
+ * little to read. Before the child's first tool call the run's description
+ * stands in, which is also what tells two runs of the same agent apart.
  */
 export function formatRunLine(
   run: RunView,
@@ -96,26 +101,33 @@ export function formatRunLine(
   columns: RunColumns = measureColumns([run]),
 ): string {
   const tone = runStatusTone(run.status);
-  // Padded to a fixed cell rather than trusting the glyph, so a future glyph
-  // that is not one column wide cannot shift its row against the others.
-  const glyph = runStatusGlyph(run.status);
-  const glyphCell = glyph + " ".repeat(Math.max(0, 2 - visibleWidth(glyph)));
-
-  const fixed =
-    theme.fg(tone, `${glyphCell} `) +
-    theme.fg("toolTitle", theme.bold(run.agent.padEnd(columns.agent)));
-  const status = theme.fg(tone, `  ${formatRunStatus(run)}`);
+  const agentName = truncateToWidth(run.agent, MAX_AGENT_COLUMN_WIDTH, "…");
+  const agent = theme.fg(
+    "toolTitle",
+    theme.bold(padEndToWidth(agentName, columns.agent)),
+  );
+  const harness = theme.fg("dim", padEndToWidth(run.harness, columns.harness));
+  const status = theme.fg(tone, formatRunStatus(run));
   const cost = theme.fg(
     "dim",
-    `  ${formatCost(run.cost).padStart(columns.cost)}`,
+    padStartToWidth(formatCost(run.cost), columns.cost),
   );
 
-  for (const candidate of [fixed + cost + status, fixed + status]) {
+  for (const components of [
+    [agent, harness, cost, status],
+    [agent, harness, status],
+  ]) {
+    const candidate = components.join(ROW_DELIMITER);
     if (visibleWidth(candidate) <= width) {
       return candidate + formatActivityTail(run, theme, width, candidate);
     }
   }
-  return truncateToWidth(fixed + status, width, "…", true);
+  return truncateToWidth(
+    [agent, harness, status].join(ROW_DELIMITER),
+    width,
+    "…",
+    true,
+  );
 }
 
 /** The dim "what it is doing" tail, fitted to the width the columns left. */
@@ -130,7 +142,7 @@ function formatActivityTail(
   if (!doing) return "";
   const remaining = width - visibleWidth(line);
   if (remaining < MIN_ACTIVITY_WIDTH) return "";
-  return theme.fg("dim", truncateToWidth(`  · ${doing}`, remaining, "…"));
+  return theme.fg("dim", truncateToWidth(` · ${doing}`, remaining, "…"));
 }
 
 /** The whole widget: a titled rule, the rows, and an overflow summary. */
@@ -145,10 +157,7 @@ export function renderRunLines(
   const ordered = orderRuns(runs);
   const shown = ordered.slice(0, maxRows);
   const hidden = ordered.length - shown.length;
-  // Measured across the visible rows, so the fields line up as a table rather
-  // than stepping in and out with each agent name and model id.
   const columns = measureColumns(shown);
-
   const title = ` subagents (${runs.length}) `;
   const fill = Math.max(0, width - 3 - visibleWidth(title));
   const lines = [

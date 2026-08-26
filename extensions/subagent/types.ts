@@ -52,6 +52,8 @@ export interface AgentConfig {
 
 export interface SingleResult {
   agent: string;
+  /** The harness executing this run, retained for live presentation. */
+  harness: string;
   description: string;
   lifecycle: Lifecycle;
   /** Epoch milliseconds when the run's child was spawned. */

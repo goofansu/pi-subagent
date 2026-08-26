@@ -73,7 +73,12 @@ export function startSubagent({
     throw new Error(`No harness registered for '${config.harness ?? "pi"}'`);
   }
 
-  const result = createEmptyResult(config.name, description, now());
+  const result = createEmptyResult(
+    config.name,
+    description,
+    now(),
+    selectedHarness.name,
+  );
   const task: SubagentTask = {
     config,
     description,

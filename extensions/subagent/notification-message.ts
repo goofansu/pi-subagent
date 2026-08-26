@@ -86,7 +86,7 @@ export function parseNotificationMessage(
 /**
  * The one line a collapsed notification shows.
  *
- * No status glyph: the dots belong to the widget, where rows are scanned as a
+ * No status glyph: lifecycle state is written as text, where rows are scanned as a
  * column. Here the verb says what happened, and it is painted in the status
  * tone so a failure still stands out.
  */

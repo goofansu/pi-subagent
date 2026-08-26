@@ -83,7 +83,7 @@ function isCollectedRuns(value: unknown): value is CollectedRuns {
 /**
  * The single line a collapsed result shows in place of the whole body.
  *
- * No status glyph — the dots belong to the widget. A lone run states its
+ * No status glyph — lifecycle state is written as text. A lone run states its
  * status as a word, painted in the status tone so a failure stands out.
  */
 export function formatCollectedSummary(

@@ -2,7 +2,7 @@
  * Presentation: how run state, notifications, and retained results read.
  *
  * This is the one module that interprets lifecycle status for display — its
- * glyph, tone, verbs, phrases, notification text, and result text. Surfaces (the widget, the transcript renderers) compose
+ * tone, verbs, phrases, notification text, and result text. Surfaces (the widget, the transcript renderers) compose
  * their own lines from what this module hands them; none of them decides
  * what a status *means*. Adding or renaming a status is a change here, and
  * the exhaustive table below is what turns the old cross-module hunt into
@@ -18,25 +18,18 @@ export const NOTIFICATION_PREVIEW_CHARACTER_LIMIT = 1_000;
 /**
  * What each status looks and sounds like, in one place.
  *
- * `glyph` matches Herdr's `state_icon` dots: a `●` whose color carries the
- * state — yellow working, green done, red blocked — so the widget reads the
- * same as the agent sidebar the operator already watches. Herdr has no
- * cancelled state; the hollow `○` marks a run nothing came of.
- *
  * `verb` is the collapsed notification line's status word. `phrase` narrates
  * the same status next to its duration.
  */
 const STATUS_PRESENTATION: Record<
   LifecycleStatus,
   {
-    glyph: string;
     tone: Tone;
     verb: string;
     phrase: (duration: string) => string;
   }
 > = {
   running: {
-    glyph: "●",
     tone: "warning",
     verb: "running",
     // No duration: a live clock would need a once-a-second redraw of the
@@ -45,29 +38,21 @@ const STATUS_PRESENTATION: Record<
     phrase: () => "running",
   },
   completed: {
-    glyph: "●",
     tone: "success",
     verb: "completed",
     phrase: (duration) => `completed in ${duration}`,
   },
   failed: {
-    glyph: "●",
     tone: "error",
     verb: "failed",
     phrase: (duration) => `failed after ${duration}`,
   },
   cancelled: {
-    glyph: "○",
     tone: "error",
     verb: "cancelled",
     phrase: (duration) => `cancelled after ${duration}`,
   },
 };
-
-/** One glyph per lifecycle state; the widget paints it in the status tone. */
-export function runStatusGlyph(status: LifecycleStatus): string {
-  return STATUS_PRESENTATION[status].glyph;
-}
 
 /** The theme colour a status should be painted in. */
 export function runStatusTone(status: LifecycleStatus): Tone {

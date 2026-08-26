@@ -43,6 +43,7 @@ test("a tracked run is listed with its identity and elapsed time", () => {
     {
       id: "run-1",
       agent: "explore",
+      harness: "pi",
       description: "look around",
       status: "running",
       elapsedMs: 2_500,

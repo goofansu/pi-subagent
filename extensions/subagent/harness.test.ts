@@ -62,7 +62,9 @@ test("a fake harness reaches dispatcher, registry, delivery, presentation, and w
   await delivery.wait([started.id]);
 
   assert.equal(result.lifecycle.phase, "completed");
+  assert.equal(result.harness, "fake");
   assert.equal(runs.list()[0]?.status, "completed");
+  assert.equal(runs.list()[0]?.harness, "fake");
   assert.match(pushed[0] ?? "", /completed/);
   assert.match(formatNotification(started.id, result), /completed/);
   assert.match(

@@ -11,8 +11,9 @@ import {
   formatCost,
   formatRunLine,
   installRunsWidget,
-  measureColumns,
+  MAX_AGENT_COLUMN_WIDTH,
   orderRuns,
+  ROW_DELIMITER,
   renderRunLines,
   WIDGET_KEY,
 } from "./widget.ts";
@@ -27,6 +28,7 @@ function view(overrides: Partial<RunView> = {}): RunView {
   return {
     id: "a3f81c2b",
     agent: "explore",
+    harness: "pi",
     description: "look around",
     status: "running",
     elapsedMs: 12_400,
@@ -39,7 +41,6 @@ function plain(lines: string[]): string[] {
   return lines.map((line) => stripVTControlCharacters(line).trimEnd());
 }
 
-/** The display column a substring starts at, counting wide characters. */
 function columnOf(line: string, needle: string): number {
   const index = line.indexOf(needle);
   assert.notEqual(index, -1, `"${needle}" is not in "${line}"`);
@@ -48,10 +49,10 @@ function columnOf(line: string, needle: string): number {
 
 // ── The line ─────────────────────────────────────────────────────────────────
 
-test("a run line carries agent, cost and status, and nothing else fixed", () => {
+test("a run line carries agent, harness, cost and status, and nothing else fixed", () => {
   const line = stripVTControlCharacters(formatRunLine(view(), theme, 120));
 
-  assert.match(line, /explore/);
+  assert.match(line, /explore {2}pi/);
   assert.match(line, /\$0\.0142/);
   assert.match(line, /running/);
   // No live clock: elapsed time would need a once-a-second redraw to stay
@@ -101,40 +102,52 @@ test("cost gives way before status, and status never does", () => {
   }
 });
 
-test("columns are measured across rows, not per row", () => {
-  const columns = measureColumns([
-    view({ agent: "explore", cost: 0.0142 }),
-    view({ agent: "implementer", cost: 12.4 }),
-  ]);
+test("fixed row fields use the same space delimiter", () => {
+  const line = stripVTControlCharacters(
+    formatRunLine(view({ activity: "bash: npm test" }), theme, 120),
+  );
 
-  assert.equal(columns.agent, "implementer".length);
-  assert.equal(columns.cost, "$12.4000".length);
+  assert.equal(ROW_DELIMITER, "  ");
+  assert.equal(line, "explore  pi  $0.0142  running · bash: npm test");
 });
 
-test("columns line up even when agent names differ in length", () => {
+test("long agent names are truncated without hiding later fields", () => {
+  const line = stripVTControlCharacters(
+    formatRunLine(view({ agent: "a-very-long-agent-profile-name" }), theme, 80),
+  );
+
+  assert.equal(MAX_AGENT_COLUMN_WIDTH, 16);
+  assert.match(line, /^a-very-long-age… {2}pi/);
+  assert.match(line, /running/);
+});
+
+test("each field aligns across rows", () => {
   const lines = plain(
     renderRunLines(
-      [view({ agent: "explore" }), view({ agent: "implementer" })],
+      [
+        view({ agent: "librarian", harness: "pi", activity: "first" }),
+        view({
+          agent: "tools",
+          harness: "claude",
+          cost: 0,
+          activity: "second",
+        }),
+      ],
       theme,
       120,
     ),
   ).slice(1);
 
-  assert.equal(columnOf(lines[0], "running"), columnOf(lines[1], "running"));
-});
-
-test("a wide glyph does not shift its row against a narrow one", () => {
-  const lines = plain(
-    renderRunLines(
-      [view({ status: "running" }), view({ status: "completed" })],
-      theme,
-      120,
-    ),
-  ).slice(1);
-
-  // Display columns, not string indices: the glyph cell is padded to a fixed
-  // width so a glyph wider than one column cannot shift what follows it.
-  assert.equal(columnOf(lines[0], "explore"), columnOf(lines[1], "explore"));
+  for (const [firstNeedle, secondNeedle] of [
+    ["pi", "claude"],
+    ["$0.0142", "$0.0000"],
+    ["running", "running"],
+  ]) {
+    assert.equal(
+      columnOf(lines[0], firstNeedle),
+      columnOf(lines[1], secondNeedle),
+    );
+  }
 });
 
 // ── The block ────────────────────────────────────────────────────────────────
@@ -299,13 +312,13 @@ test("a running run shows what it is doing after the status", () => {
     formatRunLine(view({ activity: "bash: npm test" }), theme, 120),
   );
 
-  assert.match(line, /running {2}· bash: npm test$/);
+  assert.match(line, /running · bash: npm test$/);
 });
 
 test("the description stands in before the first tool call", () => {
   const line = stripVTControlCharacters(formatRunLine(view(), theme, 120));
 
-  assert.match(line, /· look around$/);
+  assert.match(line, / · look around$/);
 });
 
 test("a settled run does not carry a stale activity", () => {
@@ -338,7 +351,7 @@ test("the activity is the first thing sacrificed to width", () => {
   assert.doesNotMatch(narrow, /npm test/);
 });
 
-test("a long activity is cut to the width the columns left", () => {
+test("a long activity is cut to the width the fixed components left", () => {
   const width = 100;
   const line = stripVTControlCharacters(
     formatRunLine(view({ activity: `bash: ${"x".repeat(200)}` }), theme, width),

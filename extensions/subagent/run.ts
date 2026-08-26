@@ -245,9 +245,11 @@ export function createEmptyResult(
   agent: string,
   description: string,
   startedAt: number,
+  harness = "pi",
 ): SingleResult {
   return {
     agent,
+    harness,
     description,
     lifecycle: { phase: "running" },
     startedAt,

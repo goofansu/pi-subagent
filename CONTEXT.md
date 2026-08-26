@@ -102,7 +102,7 @@ never touches the run record. Wire format stops inside the harness — no
 backend's message shapes cross this seam.
 
 **Presentation** (`presentation.ts`) — how a run and its notification read to a
-human: status glyphs, tones, verbs, phrases, and notification text. The only module that interprets a lifecycle status for display; the
+human: status tones, verbs, phrases, and notification text. The only module that interprets a lifecycle status for display; the
 delivery module does bookkeeping and asks this one what a notification says.
 
 **Session lifecycle** (`session-lifecycle.ts`) — owns session start and

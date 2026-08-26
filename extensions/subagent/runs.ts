@@ -22,6 +22,7 @@ import type {
 export interface RunView {
   id: string;
   agent: string;
+  harness: string;
   description: string;
   status: LifecycleStatus;
   /**
@@ -149,6 +150,7 @@ export function createSubagentRuns(
     return {
       id: run.id,
       agent: result.agent,
+      harness: result.harness,
       description: result.description,
       status: result.lifecycle.phase,
       elapsedMs: Math.max(0, end - result.startedAt),

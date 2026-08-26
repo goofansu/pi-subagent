@@ -81,21 +81,8 @@ Review the requested change and report concrete findings.
 Claude validates `model` at session start. It accepts the SDK's aliases
 `fable`, `opus`, `sonnet`, and `haiku`, resolving them to
 `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, and
-`claude-haiku-4-5`. It also accepts these explicit IDs:
-`claude-sonnet-5`, `claude-fable-5`, `claude-mythos-5`, `claude-opus-5`,
-`claude-opus-4-8`, `claude-opus-4-7`, `claude-mythos-preview`,
-`claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5`,
-`claude-haiku-4-5-20251001`, `claude-opus-4-5`,
-`claude-opus-4-5-20251101`, `claude-sonnet-4-5`,
-`claude-sonnet-4-5-20250929`, `claude-3-5-haiku`,
-`claude-3-5-sonnet`, `claude-3-5-sonnet-20241022`,
-`claude-3-7-sonnet`, plus the installed SDK's legacy forms
-`claude-3-7-sonnet-latest`, `claude-3-7-sonnet-20250219`,
-`claude-3-5-haiku-latest`, `claude-3-5-haiku-20241022`,
-`claude-opus-4-0`, `claude-opus-4-20250514`, `claude-opus-4-1`,
-`claude-opus-4-1-20250805`, `claude-sonnet-4-0`, and
-`claude-sonnet-4-20250514`. Other values are reported as profile
-diagnostics. It uses the SDK default when `model` is omitted. `effort` is
+`claude-haiku-4-5`. It also accepts explicit IDs, such as
+`claude-sonnet-5`. It uses the SDK default when `model` is omitted. `effort` is
 translated by the adapter to a thinking-token budget (`off` disables thinking);
 `tools` selects Claude built-in tools; and `appendSystemPrompt` defaults to
 `true`, appending the profile to Claude Code's default prompt. `false` supplies
@@ -139,18 +126,22 @@ Runs are listed in a widget above the editor, one line each:
 
 ```
 ─── subagents (3) ─────────────────────────────────────────────
- ●  explore      $0.0142  running  · grep: getFinalOutput
- ●  reviewer     $0.0031  running  · review the delivery module
- ●  implementer  $0.4210  completed in 1m 2s
+ explore      pi      $0.0142  running · grep: getFinalOutput
+ reviewer     claude  $0.0031  running · review the delivery module
+ implementer  pi      $0.4210  completed in 1m 2s
 ```
 
-The status indicator is Herdr's colored dot: a `●` whose color carries the state — yellow running, green completed, red failed — plus a hollow `○` for a cancelled run, which Herdr has no state for.
+Each row names the harness immediately after the agent. The agent, harness,
+cost, and status fields align across rows with a two-space delimiter. Running
+activity follows its status with one space on either side of `·`; lifecycle
+state is written in its status colour without a separate icon.
 
 A running line ends with what the run is doing right now — its most recent tool call, or the run's description before the first one. That tail is also what tells two runs of the same agent apart, and it is the first thing dropped when the terminal is narrow. Run ids appear in tool results and notifications, where the model that acts on them reads them, so the widget does not repeat them; name a run by its agent and task when asking for one to be cancelled.
 
 The widget appears when the first run starts and disappears once the last notification has landed — a finished run stays listed while its completion notice is waiting to enter the conversation. A fan-out wider than eight runs is summarised rather than filling the screen.
 
-Columns are measured across the visible rows so the fields line up. When the terminal is too narrow they give way in order — the activity tail first, then cost — so the status is always visible.
+When the terminal is too narrow, components give way in order — the activity
+tail first, then cost.
 
 The widget is a display. Pi routes keyboard input to the editor, never to a widget, so runs are stopped with `agent_cancel` rather than from here.
 
