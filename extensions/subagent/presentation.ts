@@ -293,13 +293,17 @@ export function formatAgentResultUnavailable(
 }
 
 function formatTokenCount(value: number): string {
-  const absolute = Math.abs(value);
-  if (absolute < 1_000) return String(value);
+  if (Math.abs(value) < 1_000) return String(value);
 
-  const units = ["", "k", "m", "b", "t"];
+  const units = ["k", "m", "b", "t"];
+  let scaled = value / 1_000;
   let unit = 0;
-  let scaled = value;
   while (Math.abs(scaled) >= 1_000 && unit < units.length - 1) {
+    scaled /= 1_000;
+    unit++;
+  }
+  // Promote values whose one-decimal rendering crosses the next boundary.
+  if (Math.abs(Number(scaled.toFixed(1))) >= 1_000 && unit < units.length - 1) {
     scaled /= 1_000;
     unit++;
   }
@@ -307,20 +311,13 @@ function formatTokenCount(value: number): string {
 }
 
 /** The trailing accounting line for a notification, when usage was reported. */
-export function formatNotificationAccounting(
-  usage: UsageStats | undefined,
+function formatNotificationAccounting(
+  usage: UsageStats,
   model: string | undefined,
 ): string | undefined {
-  if (
-    !usage ||
-    !Object.values(usage).some(
-      (value) => typeof value === "number" && value !== 0,
-    )
-  )
-    return undefined;
-
   const parts: string[] = [];
-  if (usage.cost !== 0) parts.push(`cost $${usage.cost.toFixed(4)}`);
+  const roundedCost = Math.round(usage.cost * 10_000) / 10_000;
+  if (roundedCost !== 0) parts.push(`cost $${roundedCost.toFixed(4)}`);
   if (usage.input !== 0 || usage.output !== 0) {
     const tokens = [];
     if (usage.input !== 0) tokens.push(`${formatTokenCount(usage.input)} in`);
@@ -328,8 +325,11 @@ export function formatNotificationAccounting(
       tokens.push(`${formatTokenCount(usage.output)} out`);
     parts.push(tokens.join(" / "));
   }
-  if (usage.turns !== 0) parts.push(`${formatTokenCount(usage.turns)} turns`);
-  if (model) parts.push(model);
+  if (usage.turns !== 0) {
+    parts.push(`${usage.turns} ${usage.turns === 1 ? "turn" : "turns"}`);
+  }
+  // A model identifies reported accounting; it is not accounting by itself.
+  if (parts.length > 0 && model) parts.push(model);
   return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 

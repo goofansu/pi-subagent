@@ -7,7 +7,6 @@ import {
   formatDuration,
   formatExecutorRejection,
   formatNotification,
-  formatNotificationAccounting,
   formatResult,
   formatRunStatus,
   formatStartResult,
@@ -175,55 +174,58 @@ test("a completed notification uses lifecycle vocabulary", () => {
 });
 
 test("notification accounting abbreviates usage and includes the model", () => {
-  assert.equal(
-    formatNotificationAccounting(
-      {
-        input: 12_300,
-        output: 4_500,
-        cacheRead: 0,
-        cacheWrite: 0,
-        cost: 0.1242,
-        contextTokens: 0,
-        turns: 3,
-      },
-      "claude-sonnet-4-6",
-    ),
-    "cost $0.1242 · 12.3k in / 4.5k out · 3 turns · claude-sonnet-4-6",
+  const result = createEmptyResult("explore", "look", 0);
+  result.lifecycle = { phase: "completed", finishedAt: 10 };
+  result.usage.input = 12_300;
+  result.usage.output = 4_500;
+  result.usage.cost = 0.1242;
+  result.usage.turns = 3;
+  result.model = "claude-sonnet-4-6";
+
+  assert.match(
+    formatNotification("a1", result),
+    /cost \$0\.1242 · 12\.3k in \/ 4\.5k out · 3 turns · claude-sonnet-4-6$/,
   );
+
+  result.usage.input = 999_950;
+  assert.match(formatNotification("a1", result), /1\.0m in/);
 });
 
-test("notification accounting omits zero or absent fields", () => {
+test("notification accounting omits absent and undisplayed usage facts", () => {
+  const result = createEmptyResult("explore", "look", 0);
+  result.lifecycle = {
+    phase: "cancelled",
+    finishedAt: 10,
+    reason: "requested",
+  };
+  result.model = "baseline-model";
+
   assert.equal(
-    formatNotificationAccounting(
-      {
-        input: 1_200,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        cost: 0,
-        contextTokens: 0,
-        turns: 0,
-      },
-      undefined,
-    ),
-    "1.2k in",
+    formatNotification("a1", result),
+    "Subagent explore (a1) was cancelled (requested).",
   );
+
+  // Cache and context facts are not fields in the accounting line, so they
+  // must not cause a model-only line to appear.
+  result.usage.cacheRead = 40_000;
+  result.usage.contextTokens = 90_000;
+  result.usage.cost = 0.00004;
   assert.equal(
-    formatNotificationAccounting(
-      {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        cost: 0,
-        contextTokens: 0,
-        turns: 0,
-      },
-      "baseline-model",
-    ),
-    undefined,
+    formatNotification("a1", result),
+    "Subagent explore (a1) was cancelled (requested).",
   );
-  assert.equal(formatNotificationAccounting(undefined, "model"), undefined);
+
+  result.usage.input = 1_200;
+  result.model = undefined;
+  assert.match(formatNotification("a1", result), /\n\n1\.2k in$/);
+});
+
+test("notification accounting uses singular turn grammar", () => {
+  const result = createEmptyResult("explore", "look", 0);
+  result.lifecycle = { phase: "completed", finishedAt: 10 };
+  result.usage.turns = 1;
+
+  assert.match(formatNotification("a1", result), /\n\n1 turn$/);
 });
 
 test("completed, failed, and cancelled notifications carry accounting", () => {

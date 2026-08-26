@@ -495,7 +495,7 @@ test("an unknown id recalls nothing rather than throwing", () => {
   assert.equal(delivery.result("never-existed"), undefined);
 });
 
-test("result-store eviction follows insertion order, not retrieval order", async () => {
+test("INV-4: result-store eviction follows insertion order, not retrieval order", async () => {
   const runs = createSubagentRuns();
   const delivery = createSubagentDelivery({
     push: () => {},
