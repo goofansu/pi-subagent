@@ -5,8 +5,9 @@ These invariants define the correctness contract of the subagent runtime.
 ## Harness seam
 
 Runs are one-shot and backend-neutral. A profile names a harness (default
-`pi`); the registry resolves it before dispatch. Harness adapters alone know
-provider wire messages and translate them into `Fact` records. The dispatcher,
+`pi`); the registry resolves it before dispatch. Pi, Claude, and Codex harness
+adapters alone know provider wire messages and translate them into `Fact`
+records. The dispatcher,
 fold, registry, presentation, and widget consume only those facts.
 Input/output/cache counters, turns, and cost on a fact are additive deltas and
 the fold sums them; `contextTokens` is a latest-value gauge, so the fold

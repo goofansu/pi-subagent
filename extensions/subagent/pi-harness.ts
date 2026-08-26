@@ -1,3 +1,4 @@
+import type { ChildProcessSpawn } from "./child-process.ts";
 import type {
   Harness,
   HarnessDiagnostic,
@@ -9,7 +10,7 @@ import {
   stringField,
   validateCommonProfileFields,
 } from "./harness.ts";
-import { type PiSpawn, runPiAgent } from "./pi-agent.ts";
+import { runPiAgent } from "./pi-agent.ts";
 import type { ParentModel, SubagentTask } from "./run.ts";
 import { type AgentConfig, EFFORTS } from "./types.ts";
 
@@ -30,7 +31,7 @@ function catalogueSummary(values: readonly string[]): string {
 }
 
 export interface PiHarnessOptions {
-  readonly spawn?: PiSpawn;
+  readonly spawn?: ChildProcessSpawn;
 }
 
 export function createPiHarness(options: PiHarnessOptions = {}): Harness {

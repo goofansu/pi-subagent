@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createClaudeHarness } from "./claude-harness.ts";
+import { createCodexHarness } from "./codex-harness.ts";
 import type { Harness, HarnessRun } from "./harness.ts";
 import { createPiHarness } from "./pi-harness.ts";
 import type { SubagentTask } from "./run.ts";
@@ -89,4 +90,5 @@ test("one-shot is an invariant of the public harness/task contract for both adap
       throw new Error("execution is not part of this contract fixture");
     }),
   );
+  assertOneShotContract(createCodexHarness());
 });

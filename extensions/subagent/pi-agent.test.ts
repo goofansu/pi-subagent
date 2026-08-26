@@ -12,6 +12,11 @@ import * as path from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import {
+  type ChildProcessSpawn,
+  createNdjsonBuffer,
+  getSpawnOptions,
+} from "./child-process.ts";
+import {
   type HarnessConformanceFixture,
   type HarnessConformanceRig,
   type HarnessConformanceScenario,
@@ -20,11 +25,8 @@ import {
 import { getFinalOutput } from "./messages.ts";
 import {
   buildPiArgs,
-  createNdjsonBuffer,
   getPiInvocation,
-  getSpawnOptions,
   type PiInvocationRuntime,
-  type PiSpawn,
   runPiAgent,
   translatePiJsonEvent,
 } from "./pi-agent.ts";
@@ -201,7 +203,7 @@ async function runPiFixture(
     killEscalationMs?: number;
   } = {},
 ): Promise<SingleResult> {
-  const injectedSpawn: PiSpawn = (_command, _args, spawnOptions) =>
+  const injectedSpawn: ChildProcessSpawn = (_command, _args, spawnOptions) =>
     realSpawn(process.execPath, ["-e", script], spawnOptions);
   const result = createEmptyResult("worker", "Work", 0);
   const report = createRunReporter(result, () => options.onEmit?.(result));
@@ -296,7 +298,7 @@ function piConformanceRig(): HarnessConformanceRig {
         usage,
       });
 
-      const spawn: PiSpawn = (_command, _args, options) => {
+      const spawn: ChildProcessSpawn = (_command, _args, options) => {
         observedDepth = Number(options.env?.[DEPTH_ENV_KEY]);
         assert.equal(
           options.env?.PATH,

@@ -4,11 +4,12 @@ import { createDefaultHarnessRegistry } from "./composition.ts";
 import { createHarnessRegistry } from "./harness.ts";
 import { createPiHarness } from "./pi-harness.ts";
 
-test("default composition registers exactly the pi and claude harnesses", () => {
+test("default composition registers the pi, claude, and codex harnesses", () => {
   const registry = createDefaultHarnessRegistry();
 
   assert.ok(registry.get("pi"));
   assert.ok(registry.get("claude"));
+  assert.ok(registry.get("codex"));
   assert.equal(registry.get("unknown"), undefined);
 });
 

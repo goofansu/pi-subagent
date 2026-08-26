@@ -1,6 +1,6 @@
 # pi-subagent
 
-Delegate tasks to specialized subagents with isolated context windows in pi. Runs use a named harness: the Pi harness uses a child pi process and [pi's project-trust model](https://pi.dev/docs/latest/security#project-trust), while the Claude harness uses the Claude Agent SDK and currently bypasses permissions unconditionally.
+Delegate tasks to specialized subagents with isolated context windows in pi. Runs use a named harness: `pi`, `claude`, or `codex`. The Pi harness uses a child pi process and [pi's project-trust model](https://pi.dev/docs/latest/security#project-trust), Claude uses the Claude Agent SDK, and Codex uses the installed Codex CLI in headless JSON mode.
 
 ## Install
 
@@ -108,14 +108,29 @@ server in Claude Code also grants it to claude-harness subagents. The `tools`
 field narrows built-in tools only. See
 [ADR 0008](docs/adr/0008-claude-children-inherit-operator-environment.md).
 
+#### Codex profiles
+
+Codex runs `codex exec --json --ephemeral --skip-git-repo-check -C <cwd> -`.
+`model` is passed unvalidated to `-m`; Codex validates it. `effort` accepts
+`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; `off` maps to
+`none` and every other value is passed through to
+`model_reasoning_effort`. Codex does not recognize `tools` or
+`appendSystemPrompt`, so those fields produce profile diagnostics. The profile
+system prompt is prepended to the stdin prompt.
+
+Codex consults the forwarded project-trust value: trusted children use
+`--dangerously-bypass-approvals-and-sandbox`, while untrusted children use
+`-s read-only`. Codex children are ephemeral and inherit the operator's
+environment; see [ADR 0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md).
+
 #### Resolution matrix
 
-| Profile | Pi model / effort | Claude model / effort |
-| --- | --- | --- |
-| neither | caller's model / caller's thinking level | SDK default / SDK default |
-| `effort` only | caller's model / profile effort | SDK default / profile budget |
-| `model` only | profile model / Pi default thinking | profile alias / SDK default |
-| both | profile model / profile effort | profile alias / profile budget |
+| Profile | Pi model / effort | Claude model / effort | Codex model / effort |
+| --- | --- | --- | --- |
+| neither | caller's model / caller's thinking level | SDK default / SDK default | Codex default / Codex default |
+| `effort` only | caller's model / profile effort | SDK default / profile budget | Codex default / profile effort |
+| `model` only | profile model / Pi default thinking | profile alias / SDK default | profile model / Codex default |
+| both | profile model / profile effort | profile alias / profile budget | profile model / profile effort |
 
 All harnesses are one-shot: one prompt in and one terminal answer out. The
 adapter translates provider messages into neutral facts; profiles and the rest
@@ -154,7 +169,7 @@ The widget is a display. Pi routes keyboard input to the editor, never to a widg
 
 ### Concurrency
 
-Subagents are not capped: every delegated run starts immediately. A Pi-harness run is a child pi process; a Claude-harness run uses the Claude Agent SDK directly. Either way, a wide fan-out costs real local resources — see [ADR 0001](docs/adr/0001-unbounded-subagent-concurrency.md) for why the cap and its queue were removed. Runs have no time limit.
+Subagents are not capped: every delegated run starts immediately. A Pi-harness run is a child pi process; a Claude-harness run uses the Claude Agent SDK directly; a Codex-harness run uses `codex exec` as a child process. Either way, a wide fan-out costs real local resources — see [ADR 0001](docs/adr/0001-unbounded-subagent-concurrency.md) for why the cap and its queue were removed. Runs have no time limit.
 
 ### Lifecycle
 
@@ -162,6 +177,6 @@ A run is detached from the turn, not from the session. `Esc` cancels the turn an
 
 ### Security
 
-For the Pi harness, project trust is [pi's](https://pi.dev/docs/latest/security#project-trust): the extension resolves none of its own and forwards Pi's decision to every child pi process. The Claude harness uses the Claude Agent SDK instead; it does not consult that trust flag in this version and bypasses permissions unconditionally.
+For the Pi harness, project trust is [pi's](https://pi.dev/docs/latest/security#project-trust): the extension resolves none of its own and forwards Pi's decision to every child pi process. The Claude harness uses the Claude Agent SDK instead; it does not consult that trust flag in this version and bypasses permissions unconditionally. Codex consults the same forwarded value: trusted children bypass approvals and sandbox, while untrusted children use a read-only sandbox. This deliberate asymmetry is documented in [ADR 0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md).
 
 A subagent reads files, writes files, and runs commands as far as its `tools` list allows, and cannot delegate further — delegation is one level deep. A running subagent also cannot be given more input; see [ADR 0003](docs/adr/0003-one-shot-children.md).

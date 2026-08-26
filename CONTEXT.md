@@ -89,17 +89,18 @@ does: the nesting guard, lifecycle settlement, and sole ownership of the run
 record — executors report facts, and the fold in `run.ts`, invoked only by
 the dispatcher, is what writes them.
 
-**Harness** — a named backend (`pi`, `claude`) that knows how to run profiles:
+**Harness** — a named backend (`pi`, `claude`, `codex`) that knows how to run profiles:
 it validates the harness-owned parts of a profile and supplies an executor per
 run. A profile names its harness; core resolves that name through the harness
 registry and never interprets harness-specific configuration or imports a
 backend's types.
 
 **Executor** — the per-run execution a harness supplies (`pi-agent.ts` is the
-pi harness's). It witnesses what the child did: it reports harness-neutral
-facts through the reporter defined in `run.ts` and resolves to an outcome; it
-never touches the run record. Wire format stops inside the harness — no
-backend's message shapes cross this seam.
+pi harness's; it composes the neutral `child-process.ts` driver). It witnesses
+what the child did: it reports harness-neutral facts through the reporter
+defined in `run.ts` and resolves to an outcome; it never touches the run
+record. Wire format stops inside the harness — no backend's message shapes
+cross this seam.
 
 **Conformance** — the named battery of required scenarios every harness's
 executor must pass as part of its own tests. It makes the executor
@@ -131,14 +132,14 @@ transcript.
 **Depth** — delegation is one level deep. A subagent cannot start subagents,
 whichever harness runs it. The Dispatcher alone decides a child's depth;
 executors only copy it, and each harness owns enforcement in its children —
-`PI_SUBAGENT_DEPTH` as pi's transport, the agent-spawning tool disallowed for
-claude.
+`PI_SUBAGENT_DEPTH` as pi and codex's transport, the agent-spawning tool
+disallowed for claude.
 
 **Trust** — pi's project-trust decision for the working directory, resolved by
 the session and forwarded in every run request; the extension never derives its
-own. Applying it is harness policy: the pi harness forwards it to its child,
-the claude harness does not consult it yet — its policy is a constant bypass,
-the forwarded value reserved for later.
+own. Applying it is harness policy: pi forwards it to its child, claude remains
+a constant bypass, and codex consults it up front — trusted children use full
+bypass while untrusted children use a read-only sandbox.
 
 **Shutdown** — every `session_shutdown` stops every running run, drops every
 unlanded notification, and clears the result store, so neither a notification

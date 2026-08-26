@@ -1,4 +1,5 @@
 import { createClaudeHarness } from "./claude-harness.ts";
+import { createCodexHarness } from "./codex-harness.ts";
 import { createHarnessRegistry, type HarnessRegistry } from "./harness.ts";
 import { createPiHarness } from "./pi-harness.ts";
 
@@ -8,5 +9,9 @@ import { createPiHarness } from "./pi-harness.ts";
  * adapter.
  */
 export function createDefaultHarnessRegistry(): HarnessRegistry {
-  return createHarnessRegistry([createPiHarness(), createClaudeHarness()]);
+  return createHarnessRegistry([
+    createPiHarness(),
+    createClaudeHarness(),
+    createCodexHarness(),
+  ]);
 }

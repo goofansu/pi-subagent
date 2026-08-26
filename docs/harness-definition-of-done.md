@@ -15,7 +15,8 @@ host: `ExtensionAPI`, pi-tui components, `Theme`, and host event names are
 how this extension exists at all and are allowed everywhere. A reviewer
 checking items 1–3 is looking for wire/message types, not host-API imports.
 
-"Claude" means everything from `@anthropic-ai/claude-agent-sdk`.
+"Claude" means everything from `@anthropic-ai/claude-agent-sdk`. "Codex" means
+Codex CLI JSONL events and invocation policy, all confined to its adapter.
 
 ## The ten criteria
 
@@ -72,11 +73,11 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
 
 6. [x] **A codex harness would cost one adapter, one registration, its own
    tests — and no dispatcher/lifecycle changes.**
-   *Test:* the Codex-like public-contract fixture in `harness.test.ts`
-   compiles and runs through the same dispatcher and lifecycle; a new
-   harness's own tests must also run the shared **Harness Conformance**
-   battery. The one-adapter cost is therefore the adapter, its registration,
-   and its battery tests.
+   *Test:* `codex-harness.test.ts` runs the real Codex adapter through the
+   shared **Harness Conformance** battery (six scenarios, with transcript
+   healing visibly skipped), plus wire fixtures and argv validation. The
+   one-adapter cost is therefore the adapter, its registration, and its
+   battery tests.
 
 7. [x] **Pi wire `Message` objects never leave the pi harness.**
    Translation to facts happens inside the pi executor module, at the edge.
@@ -154,8 +155,11 @@ comments and ordinary string literals are not.
   separately tested.
 - [x] **Trust posture is harness policy** — the request carries
   `projectTrusted`; the Claude harness bypasses permissions unconditionally in
-  this version. *Test:* Claude adapter test asserts bypass regardless of the
-  forwarded value. *Review:* the sharp edge is documented, not hidden.
+  this version, while Codex consults it: trusted children use full bypass and
+  untrusted children use a read-only sandbox. *Test:* Claude adapter tests
+  assert bypass regardless of the forwarded value; Codex argv tests assert
+  both postures. *Review:* the sharp edge and deliberate asymmetry are
+  documented, not hidden.
 - [x] **Transcript healing is authoritative** — a terminal transcript
   replaces streamed facts and all derived error/metadata state, so a transient
   streamed error cannot survive a clean replacement. A model reported by an

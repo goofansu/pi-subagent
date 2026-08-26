@@ -1,15 +1,9 @@
 /**
- * The child pi driver — spawns pi in headless JSON mode and translates its
- * NDJSON event stream into the facts the run contract defines. It witnesses
- * what the child did; it never writes the run record. Wire-format knowledge
- * stops at this file.
+ * The pi harness adapter — resolves the pi invocation and translates its
+ * NDJSON event stream into neutral facts. Process lifetime belongs to the
+ * shared child-process driver; this module keeps pi policy and wire knowledge.
  */
 
-import {
-  type ChildProcess,
-  spawn as defaultSpawn,
-  type SpawnOptions,
-} from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -17,10 +11,10 @@ import {
   getPackageDir,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
+import { type ChildProcessSpawn, runChildProcess } from "./child-process.ts";
 import { parseTools, shouldAppendSystemPrompt } from "./harness.ts";
 import {
   ABORTED_STOP_REASON,
-  DEPTH_ENV_KEY,
   type RunReporter,
   type SubagentOutcome,
   type SubagentRun,
@@ -34,13 +28,6 @@ export interface PiInvocationRuntime {
   isPiCli: boolean;
 }
 
-/** The process creation seam for the pi adapter. */
-export type PiSpawn = (
-  command: string,
-  args: readonly string[],
-  options: SpawnOptions,
-) => ChildProcess;
-
 const PI_CLI_SCRIPT_PATHS = [
   ["dist", "cli.js"],
   ["dist", "bun", "cli.js"],
@@ -48,93 +35,6 @@ const PI_CLI_SCRIPT_PATHS = [
   ["src", "bun", "cli.ts"],
 ] as const;
 
-const RAW_STDOUT_TAIL_LIMIT = 2000;
-
-/**
- * Cap on a single un-terminated stdout line, in characters.
- *
- * Unlike stderr, stdout carries structured events whose size is legitimately
- * large: an `agent_end` event holds the child's entire transcript, so a tight
- * cap would reject real traffic. This is a backstop against a child that emits
- * without ever writing a newline, not a budget — anything under it is normal.
- */
-export const STDOUT_LINE_LIMIT = 32 * 1024 * 1024;
-
-const OVERSIZED_STDOUT_LINE_MESSAGE =
-  "[... oversized stdout line dropped; resyncing at the next newline ...]\n";
-
-/**
- * Splits a byte stream into newline-delimited lines, dropping any single line
- * that grows past `limit` and resuming cleanly at the next newline.
- *
- * The guarantee is unconditional: no returned line exceeds the limit, however
- * the stream was chunked. Pipe reads are in practice far smaller than the
- * limit, so an oversized line is normally caught while it accumulates
- * un-terminated — but the cap must not *depend* on chunk size, so a line that
- * arrives already terminated inside one chunk is dropped just the same.
- *
- * The resync is the part worth having in one place: after a line is dropped,
- * the remainder of it still arrives, and the newline that ends it would
- * otherwise look like the end of a complete, parseable line.
- */
-export interface NdjsonBuffer {
-  /** Feed a chunk; returns the complete lines it finished. */
-  push(chunk: string): string[];
-  /** Take the trailing partial line, if it is one worth reading. */
-  flush(): string[];
-  /** Whether any line was dropped for exceeding the limit. */
-  overflowed(): boolean;
-}
-
-export function createNdjsonBuffer(
-  limit: number = STDOUT_LINE_LIMIT,
-): NdjsonBuffer {
-  let buffer = "";
-  let skipNextLine = false;
-  let sawOverflow = false;
-
-  const takeLines = (): string[] => {
-    const parts = buffer.split("\n");
-    buffer = parts.pop() ?? "";
-    const lines: string[] = [];
-    for (const part of parts) {
-      // The tail of a dropped line ends with a newline like any other; it is
-      // not a line, so it is discarded rather than parsed.
-      if (skipNextLine) {
-        skipNextLine = false;
-        continue;
-      }
-      // A line over the limit is dropped whether or not it managed to end
-      // itself; see the interface doc for why completed lines are checked.
-      if (part.length > limit) {
-        sawOverflow = true;
-        continue;
-      }
-      lines.push(part);
-    }
-    return lines;
-  };
-
-  return {
-    push(chunk: string): string[] {
-      buffer += chunk;
-      const lines = takeLines();
-      if (buffer.length > limit) {
-        if (!skipNextLine) sawOverflow = true;
-        buffer = "";
-        skipNextLine = true;
-      }
-      return lines;
-    },
-    flush(): string[] {
-      const trailing = buffer;
-      buffer = "";
-      if (skipNextLine || !trailing.trim()) return [];
-      return [trailing];
-    },
-    overflowed: () => sawOverflow,
-  };
-}
 const MISSING_AGENT_END_ERROR =
   "Child pi exited with code 0 without a valid terminal agent_end event (with a messages array).";
 
@@ -244,18 +144,6 @@ export function buildPiArgs(
   // Prompt is passed via stdin, not as a CLI arg, to avoid process-listing
   // exposure of sensitive content and OS argument-length limits (E2BIG).
   return args;
-}
-
-export function getSpawnOptions(cwd: string, childDepth: number): SpawnOptions {
-  return {
-    shell: false,
-    stdio: ["pipe", "pipe", "pipe"],
-    cwd,
-    env: {
-      ...process.env,
-      [DEPTH_ENV_KEY]: String(childDepth),
-    },
-  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -386,53 +274,30 @@ async function writePromptToTempFile(
   return { dir: tmpDir, filePath };
 }
 
-/** How long an aborted child gets to obey SIGTERM before SIGKILL. */
-const KILL_ESCALATION_MS = 5_000;
-
-/**
- * Run one agent in a child pi process. This is the dispatcher's default
- * executor; see `SubagentExecutor` in `run.ts` for the contract it satisfies,
- * cancellation included.
- *
- * `killEscalationMs` and the spawn function are injected for tests; production
- * uses the five-second SIGTERM→SIGKILL wait and Node's child-process
- * implementation.
- */
 export async function runPiAgent(
   run: SubagentRun,
   {
-    killEscalationMs = KILL_ESCALATION_MS,
+    killEscalationMs,
     resolvedModel,
     resolvedThinking,
-    spawn = defaultSpawn,
+    spawn,
   }: {
     killEscalationMs?: number;
     resolvedModel?: string;
     resolvedThinking?: string;
-    spawn?: PiSpawn;
+    spawn?: ChildProcessSpawn;
   } = {},
 ): Promise<SubagentOutcome> {
-  const { task, signal } = run;
+  const { task } = run;
   const { config } = task;
-
   let tmpPromptDir: string | null = null;
   let tmpPromptPath: string | null = null;
-  let wasAborted = false;
   let sawValidAgentEnd = false;
-  let terminalAgentEndBeforeAbort = false;
-  let rawStdoutTail = "";
-
-  // Stderr is an auxiliary diagnostic only. In-band error state belongs to
-  // the authoritative facts in the run reporter; keeping another copy here
-  // would let a streamed error survive transcript healing.
   let reportedStderr = false;
   const report: RunReporter = {
     message: (fact) => run.report.message(fact),
     transcript: (facts) => run.report.transcript(facts),
-    stderr(chunk) {
-      reportedStderr = true;
-      run.report.stderr(chunk);
-    },
+    stderr: (chunk) => run.report.stderr(chunk),
   };
 
   try {
@@ -449,119 +314,53 @@ export async function runPiAgent(
       resolvedThinking,
       task.projectTrusted,
     );
-
-    let closeErrorMessage: string | undefined;
-    const exitCode = await new Promise<number | undefined>((resolve) => {
-      const invocation = getPiInvocation(args);
-      const proc = spawn(
-        invocation.command,
-        invocation.args,
-        getSpawnOptions(task.cwd, task.childDepth),
-      );
-      if (!proc.stdin || !proc.stdout || !proc.stderr) {
-        report.stderr("Failed to open child pi stdio pipes");
-        resolve(1);
-        return;
-      }
-
-      // A child that dies during startup — a rejected model, an unknown tool
-      // name, a refused directory — closes this pipe while the prompt is still
-      // being written. Without a listener that EPIPE is an unhandled stream
-      // error, which takes down the parent pi, not the child.
-      proc.stdin.on("error", (err: Error) => {
-        report.stderr(`stdin: ${err.message}\n`);
-      });
-      // Write the prompt to stdin and close it so pi reads it cleanly.
-      proc.stdin.write(task.prompt, "utf-8");
-      proc.stdin.end();
-      const stdout = createNdjsonBuffer();
-
-      const processLine = (line: string) => {
-        if (!line.trim()) return;
+    const invocation = getPiInvocation(args);
+    const child = await runChildProcess({
+      command: invocation.command,
+      args: invocation.args,
+      cwd: task.cwd,
+      childDepth: task.childDepth,
+      prompt: task.prompt,
+      signal: run.signal,
+      ...(spawn ? { spawn } : {}),
+      ...(killEscalationMs === undefined ? {} : { killEscalationMs }),
+      onStderr: (chunk) => {
+        reportedStderr = true;
+        run.report.stderr(chunk);
+      },
+      onLine: (line) => {
         let parsed: unknown;
         try {
           parsed = JSON.parse(line);
         } catch {
-          return;
+          return false;
         }
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          return;
+          return false;
         }
-
         const event = parsed as Record<string, unknown>;
-        if (isValidAgentEndEvent(event)) {
-          sawValidAgentEnd = true;
-          if (!wasAborted) terminalAgentEndBeforeAbort = true;
-        }
+        const terminal = isValidAgentEndEvent(event);
+        if (terminal) sawValidAgentEnd = true;
         translatePiJsonEvent(event, report);
-      };
-
-      proc.stdout.on("data", (data) => {
-        const chunk = data.toString();
-        rawStdoutTail = (rawStdoutTail + chunk).slice(-RAW_STDOUT_TAIL_LIMIT);
-        for (const line of stdout.push(chunk)) processLine(line);
-      });
-
-      proc.stderr.on("data", (data) => {
-        report.stderr(data.toString());
-      });
-
-      let procClosed = false;
-      proc.on("close", (code) => {
-        procClosed = true;
-        for (const line of stdout.flush()) processLine(line);
-        if (stdout.overflowed()) {
-          report.stderr(OVERSIZED_STDOUT_LINE_MESSAGE);
-        }
-        if (code !== 0 && !(wasAborted && terminalAgentEndBeforeAbort)) {
-          closeErrorMessage = `Child pi exited with code ${code ?? "unknown"}`;
-          const stdoutTail = rawStdoutTail.trim();
-          if (!reportedStderr && stdoutTail) {
-            report.stderr(`Last stdout:\n${stdoutTail}`);
-          }
-        }
-        resolve(code ?? undefined);
-      });
-
-      proc.on("error", (err) => {
-        report.stderr(err.message);
-        resolve(1);
-      });
-
-      if (signal) {
-        let escalation: ReturnType<typeof setTimeout> | undefined;
-        const killProc = () => {
-          wasAborted = true;
-          proc.kill("SIGTERM");
-          escalation = setTimeout(() => {
-            if (!procClosed) proc.kill("SIGKILL");
-          }, killEscalationMs);
-          // The escalation must never be the reason the parent stays up: if
-          // pi is quitting, SIGTERM has been sent and that has to be enough.
-          escalation.unref?.();
-        };
-        if (signal.aborted) killProc();
-        else signal.addEventListener("abort", killProc, { once: true });
-        proc.on("close", () => {
-          // Remove the listener once the process has closed so a late abort
-          // signal doesn't incorrectly mark a successfully completed run as
-          // aborted, and drop the SIGKILL escalation the close made moot.
-          signal.removeEventListener("abort", killProc);
-          if (escalation !== undefined) clearTimeout(escalation);
-        });
-      }
+        return terminal;
+      },
     });
 
-    // Cancellation is a resolved outcome, not a rejection — see the executor
-    // contract in run.ts. Only this driver knows whether the abort actually
-    // killed the child (the listener is removed once it closes), so the abort
-    // marker travels in the outcome; the dispatcher normalizes the rest.
-    if (wasAborted && !terminalAgentEndBeforeAbort) {
+    if (child.exitCode !== 0 && !(child.aborted && child.terminalBeforeAbort)) {
+      const closeErrorMessage = `Child pi exited with code ${child.exitCode ?? "unknown"}`;
+      const stdoutTail = child.stdoutTail.trim();
+      if (!reportedStderr && stdoutTail) {
+        run.report.stderr(`Last stdout:\n${stdoutTail}`);
+      }
+      if (child.aborted) return { stopReason: ABORTED_STOP_REASON };
+      return { exitCode: child.exitCode, errorMessage: closeErrorMessage };
+    }
+    if (child.aborted && !child.terminalBeforeAbort) {
       return { stopReason: ABORTED_STOP_REASON };
     }
-    if (exitCode === 0 && !sawValidAgentEnd) {
-      const stdoutTail = rawStdoutTail.trim();
-      report.stderr(
+    if (child.exitCode === 0 && !sawValidAgentEnd) {
+      const stdoutTail = child.stdoutTail.trim();
+      run.report.stderr(
         stdoutTail ? `Last stdout:\n${stdoutTail}` : "No stdout was captured.",
       );
       return {
@@ -571,10 +370,7 @@ export async function runPiAgent(
       };
     }
     return {
-      // A terminal answer witnessed before cancellation is authoritative even
-      // when killing the now-unneeded child reports a signal-derived exit.
-      exitCode: wasAborted && terminalAgentEndBeforeAbort ? 0 : exitCode,
-      ...(closeErrorMessage ? { errorMessage: closeErrorMessage } : {}),
+      exitCode: child.aborted && child.terminalBeforeAbort ? 0 : child.exitCode,
     };
   } finally {
     if (tmpPromptPath)
