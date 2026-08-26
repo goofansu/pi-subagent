@@ -741,8 +741,13 @@ test("Claude model diagnostics run at session start", async () => {
 
   const session = await startSession({ cwd, agentDir });
 
-  assert.deepEqual(session.agentNames, ["alias", "full"]);
+  // Only family aliases are valid; a full ID is diagnosed like a typo.
+  assert.deepEqual(session.agentNames, ["alias"]);
   assert.equal(session.notifications.length, 1);
+  assert.match(
+    session.notifications[0],
+    /- full: invalid Claude model 'claude-sonnet-4-6'/,
+  );
   assert.match(
     session.notifications[0],
     /- typo: invalid Claude model 'sontet'/,

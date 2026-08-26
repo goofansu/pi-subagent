@@ -103,8 +103,8 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
     the named harness, and a field the harness does not recognize is a
     diagnostic.
     *Test:* profile-loading tests per harness: pi accepts its fields, the
-    fake harness rejects an unknown field with a diagnostic, claude maps its
-    own model aliases.
+    fake harness rejects an unknown field with a diagnostic, claude validates
+    its own model aliases.
     *Review:* `agents.ts` contains no field semantics beyond the common
     three; no central config union type enumerating every backend's options.
 
@@ -159,11 +159,14 @@ comments and ordinary string literals are not.
   *Test:* unpinned Claude integration and widget fixtures render the nonzero
   cost and assert model/accounting retention; auxiliary-first coverage proves
   the ambiguous case is not inferred.
-- [x] **Claude model validation is explicit** — the installed SDK's aliases
-  and documented allowlisted full IDs validate synchronously at session start;
-  invented IDs are diagnosed with their value. *Test:* Claude harness
-  validation iterates every allowlisted entry and rejects legacy-order and
-  other plausible invented IDs.
+- [x] **Claude model validation is aliases-only** — exactly the SDK's
+  documented family aliases (`fable`, `opus`, `sonnet`, `haiku`) validate
+  synchronously at session start; the alias is passed through unresolved and
+  the SDK maps it to the family's current default ID, so no local alias→ID
+  mapping or full-ID allowlist can go stale. Full, dated, and invented IDs
+  are diagnosed with their value and the accepted aliases. *Test:* Claude
+  harness validation accepts each alias case-insensitively, passes it
+  through unresolved, and rejects full IDs and misspellings.
 - [x] **The boundary test proves its negative case** — the production parser,
   resolver, and graph walker reject controlled core-to-adapter and crossed
   adapter-wire edges without changing the working tree. Static imports,

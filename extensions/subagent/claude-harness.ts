@@ -14,49 +14,21 @@ import type { Fact, FactPart, ParentModel, SubagentTask } from "./run.ts";
 import { type AgentConfig, EFFORTS } from "./types.ts";
 
 /**
- * The installed SDK documents these aliases and model IDs. Keep this list
- * explicit: accepting a plausible-looking ID would defer a profile error until
- * a child starts, and would make session-start diagnostics nondeterministic.
- *
- * The current IDs mirror the SDK's `Model` vocabulary; the dated and `latest`
- * entries are the legacy API forms still named by the installed SDK's client.
- * Aliases resolve to the current canonical ID for their family.
+ * The SDK documents these family aliases and resolves each to its current
+ * default ID itself, so no local alias→ID mapping or full-ID allowlist is
+ * kept — both went stale in practice as models shipped. Only aliases are
+ * accepted: a full or dated ID would need such an allowlist to validate
+ * deterministically at session start, and profiles here always want the
+ * current model of a family. Canonical model provenance on the run record
+ * comes from the child's streamed facts, which are authoritative over this
+ * baseline.
  */
-export const CLAUDE_MODEL_RESOLUTIONS: Readonly<Record<string, string>> = {
-  fable: "claude-fable-5",
-  opus: "claude-opus-5",
-  sonnet: "claude-sonnet-5",
-  haiku: "claude-haiku-4-5",
-  "claude-sonnet-5": "claude-sonnet-5",
-  "claude-fable-5": "claude-fable-5",
-  "claude-mythos-5": "claude-mythos-5",
-  "claude-opus-5": "claude-opus-5",
-  "claude-opus-4-8": "claude-opus-4-8",
-  "claude-opus-4-7": "claude-opus-4-7",
-  "claude-mythos-preview": "claude-mythos-preview",
-  "claude-opus-4-6": "claude-opus-4-6",
-  "claude-sonnet-4-6": "claude-sonnet-4-6",
-  "claude-haiku-4-5": "claude-haiku-4-5",
-  "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001",
-  "claude-opus-4-5": "claude-opus-4-5",
-  "claude-opus-4-5-20251101": "claude-opus-4-5-20251101",
-  "claude-sonnet-4-5": "claude-sonnet-4-5",
-  "claude-sonnet-4-5-20250929": "claude-sonnet-4-5-20250929",
-  "claude-3-5-haiku": "claude-3-5-haiku",
-  "claude-3-5-sonnet": "claude-3-5-sonnet",
-  "claude-3-5-sonnet-20241022": "claude-3-5-sonnet-20241022",
-  "claude-3-7-sonnet": "claude-3-7-sonnet",
-  "claude-3-7-sonnet-latest": "claude-3-7-sonnet-latest",
-  "claude-3-7-sonnet-20250219": "claude-3-7-sonnet-20250219",
-  "claude-3-5-haiku-latest": "claude-3-5-haiku-latest",
-  "claude-3-5-haiku-20241022": "claude-3-5-haiku-20241022",
-  "claude-opus-4-0": "claude-opus-4-0",
-  "claude-opus-4-20250514": "claude-opus-4-20250514",
-  "claude-opus-4-1": "claude-opus-4-1",
-  "claude-opus-4-1-20250805": "claude-opus-4-1-20250805",
-  "claude-sonnet-4-0": "claude-sonnet-4-0",
-  "claude-sonnet-4-20250514": "claude-sonnet-4-20250514",
-};
+export const CLAUDE_MODEL_ALIASES: readonly string[] = [
+  "fable",
+  "opus",
+  "sonnet",
+  "haiku",
+];
 const THINKING_BUDGETS: Record<string, number> = {
   minimal: 512,
   low: 1_024,
@@ -217,18 +189,7 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
 }
 
 function isClaudeModel(value: string): boolean {
-  const normalized = value.toLowerCase();
-  return Object.hasOwn(CLAUDE_MODEL_RESOLUTIONS, normalized);
-}
-
-export function resolveClaudeModel(
-  value: string | undefined,
-): string | undefined {
-  if (!value) return undefined;
-  const alias = value.toLowerCase();
-  return Object.hasOwn(CLAUDE_MODEL_RESOLUTIONS, alias)
-    ? CLAUDE_MODEL_RESOLUTIONS[alias]
-    : value;
+  return CLAUDE_MODEL_ALIASES.includes(value.toLowerCase());
 }
 
 export function claudeThinking(
@@ -297,7 +258,9 @@ export function createClaudeHarness(
         stringField(profile, "tools", filePath);
         booleanField(profile, "appendSystemPrompt", filePath);
         if (model && !isClaudeModel(model))
-          throw new Error(`invalid Claude model '${model}'`);
+          throw new Error(
+            `invalid Claude model '${model}' (expected one of: ${CLAUDE_MODEL_ALIASES.join(", ")})`,
+          );
       } catch (error) {
         diagnostics.push({
           reason: error instanceof Error ? error.message : String(error),
@@ -306,8 +269,9 @@ export function createClaudeHarness(
       return diagnostics;
     },
     prepare(task: SubagentTask, _parentModel?: ParentModel): HarnessRun {
-      const configuredModel = stringField(task.config, "model", "profile");
-      const model = resolveClaudeModel(configuredModel);
+      // The alias is passed through as-is; the SDK resolves it to the
+      // family's current default ID.
+      const model = stringField(task.config, "model", "profile")?.toLowerCase();
       const effort = effortField(task.config, "profile", EFFORTS);
       return {
         model,

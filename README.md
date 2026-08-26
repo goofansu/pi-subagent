@@ -78,11 +78,10 @@ appendSystemPrompt: true
 Review the requested change and report concrete findings.
 ```
 
-Claude validates `model` at session start. It accepts the SDK's aliases
-`fable`, `opus`, `sonnet`, and `haiku`, resolving them to
-`claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, and
-`claude-haiku-4-5`. It also accepts explicit IDs, such as
-`claude-sonnet-5`. It uses the SDK default when `model` is omitted. `effort` is
+Claude validates `model` at session start. It accepts only the SDK's family
+aliases `fable`, `opus`, `sonnet`, and `haiku`; the SDK resolves an alias to
+the family's current default ID, so explicit IDs such as `claude-sonnet-5`
+are rejected. It uses the SDK default when `model` is omitted. `effort` is
 translated by the adapter to a thinking-token budget (`off` disables thinking);
 `tools` selects Claude built-in tools (see the [Claude Code tools
 reference](https://code.claude.com/docs/en/tools-reference) to configure the
@@ -111,8 +110,8 @@ field narrows built-in tools only. See
 | --- | --- | --- |
 | neither | caller's model / caller's thinking level | SDK default / SDK default |
 | `effort` only | caller's model / profile effort | SDK default / profile budget |
-| `model` only | profile model / Pi default thinking | profile alias or id / SDK default |
-| both | profile model / profile effort | profile alias or id / profile budget |
+| `model` only | profile model / Pi default thinking | profile alias / SDK default |
+| both | profile model / profile effort | profile alias / profile budget |
 
 All harnesses are one-shot: one prompt in and one terminal answer out. The
 adapter translates provider messages into neutral facts; profiles and the rest

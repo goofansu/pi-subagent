@@ -3,11 +3,10 @@ import { test } from "node:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   buildClaudeOptions,
-  CLAUDE_MODEL_RESOLUTIONS,
+  CLAUDE_MODEL_ALIASES,
   type ClaudeQuery,
   type ClaudeQueryLoader,
   createClaudeHarness,
-  resolveClaudeModel,
   translateClaudeMessage,
 } from "./claude-harness.ts";
 import { createHarnessRegistry } from "./harness.ts";
@@ -34,118 +33,62 @@ const task: SubagentTask = {
   projectTrusted: false,
 };
 
-// Canonical IDs and first-party IDs from the installed SDK model registry.
-const INSTALLED_SDK_MODEL_IDS = [
-  "claude-3-5-haiku",
-  "claude-3-5-haiku-20241022",
-  "claude-haiku-4-5",
-  "claude-haiku-4-5-20251001",
-  "claude-3-5-sonnet",
-  "claude-3-5-sonnet-20241022",
-  "claude-3-7-sonnet",
-  "claude-3-7-sonnet-20250219",
-  "claude-sonnet-4-0",
-  "claude-sonnet-4-20250514",
-  "claude-sonnet-4-5",
-  "claude-sonnet-4-5-20250929",
-  "claude-sonnet-4-6",
-  "claude-sonnet-5",
-  "claude-opus-4-0",
-  "claude-opus-4-20250514",
-  "claude-opus-4-1",
-  "claude-opus-4-1-20250805",
-  "claude-opus-4-5",
-  "claude-opus-4-5-20251101",
-  "claude-opus-4-6",
-  "claude-opus-4-7",
-  "claude-opus-4-8",
-  "claude-opus-5",
-  "claude-fable-5",
-  "claude-mythos-5",
-] as const;
-
-// These additional forms are present in the installed SDK's legacy model
-// vocabulary and must remain accepted even though they are not registry IDs.
-const INSTALLED_SDK_LEGACY_MODEL_IDS = [
-  "claude-3-7-sonnet-latest",
-  "claude-3-5-haiku-latest",
-  "claude-mythos-preview",
-] as const;
-
-test("Claude SDK family aliases resolve to their installed defaults", () => {
-  assert.equal(resolveClaudeModel("opus"), "claude-opus-5");
-  assert.equal(resolveClaudeModel("sonnet"), "claude-sonnet-5");
-  assert.equal(resolveClaudeModel("haiku"), "claude-haiku-4-5");
-  assert.equal(resolveClaudeModel("fable"), "claude-fable-5");
+test("Claude validation accepts exactly the SDK family aliases", () => {
+  const harness = createClaudeHarness();
+  assert.deepEqual(
+    [...CLAUDE_MODEL_ALIASES],
+    ["fable", "opus", "sonnet", "haiku"],
+  );
+  for (const model of [...CLAUDE_MODEL_ALIASES, "Sonnet", "OPUS"]) {
+    assert.deepEqual(
+      harness.validate({ ...config, fields: { model } }, `/agents/${model}.md`),
+      [],
+      model,
+    );
+  }
 });
 
-test("Claude aliases and thinking budgets stay inside the adapter", () => {
-  assert.equal(resolveClaudeModel("sonnet"), "claude-sonnet-5");
+test("Claude passes the alias through unresolved for the SDK to interpret", () => {
+  const harness = createClaudeHarness();
+  assert.equal(harness.prepare(task).model, "sonnet");
+  assert.equal(
+    harness.prepare({
+      ...task,
+      config: { ...config, fields: { model: "Opus" } },
+    }).model,
+    "opus",
+  );
+  assert.equal(
+    harness.prepare({ ...task, config: { ...config, fields: {} } }).model,
+    undefined,
+  );
+});
+
+test("Claude thinking budgets stay inside the adapter", () => {
   assert.deepEqual(
-    buildClaudeOptions(
-      task,
-      resolveClaudeModel("sonnet"),
-      "high",
-      new AbortController(),
-    ).thinking,
+    buildClaudeOptions(task, "sonnet", "high", new AbortController()).thinking,
     { type: "enabled", budgetTokens: 8192 },
   );
 });
 
-test("Claude validation accepts every installed-SDK model entry", () => {
-  const harness = createClaudeHarness();
-  for (const [model, resolved] of Object.entries(CLAUDE_MODEL_RESOLUTIONS)) {
-    assert.deepEqual(
-      harness.validate({ ...config, fields: { model } }, `/agents/${model}.md`),
-      [],
-      model,
-    );
-    assert.equal(resolveClaudeModel(model), resolved, model);
-  }
-});
-
-test("Claude accepts every installed SDK registry model ID", () => {
-  const harness = createClaudeHarness();
-  for (const model of INSTALLED_SDK_MODEL_IDS) {
-    assert.deepEqual(
-      harness.validate({ ...config, fields: { model } }, `/agents/${model}.md`),
-      [],
-      model,
-    );
-    assert.equal(resolveClaudeModel(model), model, model);
-  }
-});
-
-test("Claude retains installed SDK legacy model forms", () => {
-  const harness = createClaudeHarness();
-  for (const model of INSTALLED_SDK_LEGACY_MODEL_IDS) {
-    assert.deepEqual(
-      harness.validate({ ...config, fields: { model } }, `/agents/${model}.md`),
-      [],
-      model,
-    );
-    assert.equal(resolveClaudeModel(model), model, model);
-  }
-});
-
-test("Claude validation diagnoses a misspelled model with its value", () => {
+test("Claude validation diagnoses a non-alias model with its value", () => {
   const harness = createClaudeHarness();
   for (const model of [
     "sontet",
     "fableish",
-    "claude-sontet-4-6",
-    "claude-sonnet-bogus",
-    "claude-sonnet-5-20260101",
-    "claude-opus-4-9",
-    "claude-fable-4",
-    "claude-sonnet-3-7",
-    "claude-sonnet-3-7-20250219",
-    "claude-haiku-3-5",
-    "claude-haiku-3-5-20241022",
+    "claude-sonnet-5",
+    "claude-fable-5",
+    "claude-opus-4-5",
+    "claude-haiku-4-5-20251001",
+    "claude-3-5-haiku-latest",
   ]) {
     assert.deepEqual(
       harness.validate({ ...config, fields: { model } }, "/agents/typo.md"),
-      [{ reason: `invalid Claude model '${model}'` }],
+      [
+        {
+          reason: `invalid Claude model '${model}' (expected one of: fable, opus, sonnet, haiku)`,
+        },
+      ],
     );
   }
 });
