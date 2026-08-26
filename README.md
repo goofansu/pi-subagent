@@ -84,8 +84,10 @@ Claude validates `model` at session start. It accepts the SDK's aliases
 `claude-haiku-4-5`. It also accepts explicit IDs, such as
 `claude-sonnet-5`. It uses the SDK default when `model` is omitted. `effort` is
 translated by the adapter to a thinking-token budget (`off` disables thinking);
-`tools` selects Claude built-in tools; and `appendSystemPrompt` defaults to
-`true`, appending the profile to Claude Code's default prompt. `false` supplies
+`tools` selects Claude built-in tools (see the [Claude Code tools
+reference](https://code.claude.com/docs/en/tools-reference) to configure the
+list); and `appendSystemPrompt` defaults to `true`, appending the profile to
+Claude Code's default prompt. `false` supplies
 the profile as the complete system prompt. Claude profiles do not inherit the
 calling model.
 
