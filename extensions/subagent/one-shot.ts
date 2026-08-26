@@ -6,11 +6,11 @@ export type SourceConclusion =
   | { status: "failed"; errorMessage?: string };
 
 export interface OneShotEventAcknowledgement {
-  translated: boolean;
   terminal: boolean;
 }
 
 export interface OneShotSink<E> {
+  /** Return whether this event was a terminal answer witnessed before abort. */
   event(event: E): OneShotEventAcknowledgement | undefined;
   stderr(chunk: string): void;
 }
@@ -79,7 +79,7 @@ export async function runOneShot<E>({
         translatorFailed = true;
         throw error;
       }
-      if (!translation) return { translated: false, terminal: false };
+      if (!translation) return undefined;
       const terminalTranslation = translation.terminal === true && !wasAborted;
       if (terminalTranslation) terminal = true;
       if (translation.errorMessage !== undefined)
@@ -89,7 +89,7 @@ export async function runOneShot<E>({
       for (const fact of translation.facts ?? []) report.message(fact);
       if (translation.transcript !== undefined)
         report.transcript(translation.transcript);
-      return { translated: true, terminal: terminalTranslation };
+      return { terminal: terminalTranslation };
     },
     stderr(chunk) {
       if (!settled) report.stderr(chunk);

@@ -449,6 +449,7 @@ function piConformanceRig(): HarnessConformanceRig {
             finalOutput: "pi answer",
             stopReason: "stop",
             errorMessage: undefined,
+            stderrExcludes: "Last stdout:",
           });
         case "terminal-transcript-healing":
           return base({
@@ -615,7 +616,7 @@ test("the child pi source fails exit 0 without an agent_end event", async () => 
   assert.doesNotMatch(formatNotification("a1", settled), /partial output/);
 });
 
-test("a translated nonterminal event suppresses stdout on a nonzero exit", async () => {
+test("a translated nonterminal event preserves stdout on a nonzero exit", async () => {
   const event = JSON.stringify({
     type: "message_end",
     message: {
@@ -631,11 +632,11 @@ process.exitCode = 7;`,
   );
   assert.equal(settled.lifecycle.phase, "failed");
   assert.equal(settled.errorMessage, "Child pi exited with code 7");
-  assert.doesNotMatch(fullOutput(settled), /Last stdout:/);
+  assert.match(fullOutput(settled), /Last stdout:/);
   assert.match(fullOutput(settled), /partial failure/);
 });
 
-test("a translated error event suppresses stdout on a nonzero exit", async () => {
+test("a translated error event preserves stdout on a nonzero exit", async () => {
   const event = JSON.stringify({
     type: "message_end",
     message: {
@@ -652,7 +653,7 @@ process.exitCode = 7;`,
   );
   assert.equal(settled.lifecycle.phase, "failed");
   assert.equal(settled.errorMessage, "translated failure");
-  assert.doesNotMatch(fullOutput(settled), /Last stdout:/);
+  assert.match(fullOutput(settled), /Last stdout:/);
 });
 
 test("the child pi source rejects a structurally invalid agent_end event", async () => {

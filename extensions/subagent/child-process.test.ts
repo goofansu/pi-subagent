@@ -55,13 +55,16 @@ function sourceForFakeChild(child: FakeChild) {
 async function runSource(
   script: string,
   overrides: Record<string, unknown> = {},
+  acknowledge: (
+    event: Record<string, unknown>,
+  ) => { terminal: boolean } | undefined = () => undefined,
 ) {
   const events: Record<string, unknown>[] = [];
   const stderr: string[] = [];
   const sink: OneShotSink<Record<string, unknown>> = {
     event: (event) => {
       events.push(event);
-      return undefined;
+      return acknowledge(event);
     },
     stderr: (chunk) => stderr.push(chunk),
   };
@@ -187,6 +190,29 @@ test("process source emits a failure diagnostic and a silent stdout tail", async
   assert.match(result.stderr, /Last stdout:/);
   assert.match(result.stderr, /-tail/);
   assert.ok(result.stderr.length < 2100);
+});
+
+test("process source uses only terminal acknowledgement to suppress a tail", async () => {
+  const clean = await runSource(
+    'process.stdout.write(JSON.stringify({ kind: "partial" }) + "\\n");',
+    {},
+    () => ({ terminal: false }),
+  );
+  assert.match(clean.stderr, /Last stdout:/);
+
+  const nonterminal = await runSource(
+    'process.stdout.write(JSON.stringify({ kind: "partial" }) + "\\n"); process.exitCode = 7;',
+    {},
+    () => ({ terminal: false }),
+  );
+  assert.match(nonterminal.stderr, /Last stdout:/);
+
+  const terminal = await runSource(
+    'process.stdout.write(JSON.stringify({ kind: "answer" }) + "\\n"); process.exitCode = 7;',
+    {},
+    () => ({ terminal: true }),
+  );
+  assert.doesNotMatch(terminal.stderr, /Last stdout:/);
 });
 
 test("process source does not replace an existing stderr diagnostic", async () => {
@@ -317,9 +343,11 @@ test("process source reports errors on stderr and cleans up the child", async ()
   assert.equal(child.listenerCount("error"), 0);
 });
 
-test("abort stops the child and the source settles", async () => {
+test("abort stops the child without emitting a stdout tail", async () => {
   const controller = new AbortController();
   let killed = 0;
+  let child: FakeChild | undefined;
+  const stderr: string[] = [];
   const source = processJsonSource({
     command: "fixture",
     args: [],
@@ -328,25 +356,28 @@ test("abort stops the child and the source settles", async () => {
     prompt: "",
     childName: "fixture",
     spawn: (_command, _args, _options) => {
-      const child = new EventEmitter() as unknown as FakeChild;
+      child = new EventEmitter() as unknown as FakeChild;
       child.stdin = new PassThrough();
       child.stdout = new PassThrough();
       child.stderr = new PassThrough();
       child.kill = () => {
         killed++;
-        queueMicrotask(() => child.emit("close", null, null));
+        queueMicrotask(() => child?.emit("close", null, null));
         return true;
       };
       return child as unknown as ChildProcess;
     },
   });
   const promise = source(
-    { event: () => undefined, stderr: () => {} },
+    { event: () => undefined, stderr: (chunk) => stderr.push(chunk) },
     controller.signal,
   );
+  assert.ok(child);
+  child.stdout.write("tail before cancellation");
   controller.abort();
   await promise;
   assert.equal(killed, 1);
+  assert.equal(stderr.join(""), "");
 });
 
 test("the process source owns the child depth environment key", () => {

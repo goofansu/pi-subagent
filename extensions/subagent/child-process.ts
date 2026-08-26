@@ -124,8 +124,7 @@ export function processJsonSource(options: {
 
       const stdout = createNdjsonBuffer();
       let rawStdoutTail = "";
-      let sawTranslatedEvent = false;
-      let sawTerminalTranslation = false;
+      let sawTerminalAnswer = false;
       let sawStderr = false;
       let processError = false;
       let settled = false;
@@ -207,8 +206,7 @@ export function processJsonSource(options: {
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
           return;
         const acknowledgement = sink.event(parsed as Record<string, unknown>);
-        if (acknowledgement?.translated) sawTranslatedEvent = true;
-        if (acknowledgement?.terminal) sawTerminalTranslation = true;
+        if (acknowledgement?.terminal) sawTerminalAnswer = true;
       };
       const abort = (): void => {
         if (settled) return;
@@ -253,6 +251,15 @@ export function processJsonSource(options: {
           fail(sinkError);
         }
       }
+      const shouldReportPostMortem = (): boolean =>
+        !aborted && !sawStderr && !sawTerminalAnswer;
+      const lastStdoutDiagnostic = (): string => {
+        const stdoutTail = rawStdoutTail.trim();
+        return stdoutTail
+          ? `Last stdout:\n${stdoutTail}`
+          : "No stdout was captured.";
+      };
+
       function onClose(code: number | null): void {
         if (settled) {
           childClosed = true;
@@ -274,25 +281,15 @@ export function processJsonSource(options: {
             return;
           }
           if (code === 0) {
-            if (!aborted && !sawTerminalTranslation) {
-              sink.stderr(
-                rawStdoutTail.trim()
-                  ? `Last stdout:\n${rawStdoutTail.trim()}`
-                  : "No stdout was captured.",
-              );
-            }
+            if (shouldReportPostMortem()) sink.stderr(lastStdoutDiagnostic());
             finish({ status: "clean" });
             return;
           }
-          // A raw stdout tail is useful only for a silent, actually failing
-          // child. Translated output and stderr are already better diagnostics.
-          if (
-            !aborted &&
-            !sawStderr &&
-            !sawTranslatedEvent &&
-            rawStdoutTail.trim()
-          ) {
-            sink.stderr(`Last stdout:\n${rawStdoutTail.trim()}`);
+          // A raw stdout tail is useful only when the run actually failed and
+          // no stderr or terminal answer already explains it. Partial facts,
+          // metadata, and provider errors do not replace this bounded tail.
+          if (shouldReportPostMortem() && rawStdoutTail.trim()) {
+            sink.stderr(lastStdoutDiagnostic());
           }
           finish({
             status: "failed",

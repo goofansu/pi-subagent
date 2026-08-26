@@ -204,6 +204,7 @@ function codexConformanceRig(): HarnessConformanceRig {
             phase: "completed",
             finalOutput: "codex answer",
             errorMessage: undefined,
+            stderrExcludes: "Last stdout:",
           });
         case "terminal-transcript-healing":
           return base({
@@ -393,6 +394,54 @@ test("Codex argv bypasses approvals for either forwarded trust value", () => {
     "model_reasoning_effort=high",
     "-",
   ]);
+});
+
+test("Codex usage-only output keeps a raw tail on nonzero exit", async () => {
+  const stderr: string[] = [];
+  const spawn: ChildProcessSpawn = (_command, _args, _options) => {
+    const child = fakeCodexChild(() => {});
+    queueMicrotask(() => {
+      child.stdout.write(
+        json({
+          type: "turn.completed",
+          usage: { input_tokens: 4, output_tokens: 2 },
+        }),
+      );
+      child.finish(7);
+    });
+    return child as unknown as ChildProcess;
+  };
+  const task = {
+    config: {
+      name: "worker",
+      description: "worker",
+      harness: "codex",
+      fields: {},
+      systemPrompt: "",
+    },
+    description: "work",
+    prompt: "user prompt",
+    cwd: "/project",
+    childDepth: 1,
+    projectTrusted: false,
+  } as const;
+  const ending = await createCodexHarness({ spawn })
+    .prepare(task)
+    .execute({
+      task,
+      report: {
+        message: () => {},
+        transcript: () => {},
+        stderr: (chunk) => stderr.push(chunk),
+      },
+    });
+
+  assert.deepEqual(ending, {
+    ending: "failed",
+    errorMessage: "Child codex exited with code 7",
+  });
+  assert.match(stderr.join(""), /Last stdout:/);
+  assert.match(stderr.join(""), /turn.completed/);
 });
 
 test("Codex prepends its profile system prompt to stdin", async () => {

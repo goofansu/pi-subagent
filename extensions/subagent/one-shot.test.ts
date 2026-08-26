@@ -122,6 +122,38 @@ test("runOneShot applies its ending precedence and message rules", async () => {
   assert.deepEqual(reported, ["fact:1"]);
 });
 
+test("runOneShot exposes only truthful terminal acknowledgements", async () => {
+  const controller = new AbortController();
+  const acknowledgements: unknown[] = [];
+  let settledSink: { event: (event: string) => unknown } | undefined;
+  const result = await runOneShot({
+    source: async (sink) => {
+      settledSink = sink;
+      acknowledgements.push(sink.event("ignored"));
+      acknowledgements.push(sink.event("progress"));
+      acknowledgements.push(sink.event("terminal"));
+      controller.abort();
+      acknowledgements.push(sink.event("terminal"));
+      return { status: "clean" } as const;
+    },
+    translate: (event) =>
+      event === "ignored" ? undefined : { terminal: event === "terminal" },
+    report: { message: () => {}, transcript: () => {}, stderr: () => {} },
+    signal: controller.signal,
+    missingAnswerMessage: "missing",
+  });
+  acknowledgements.push(settledSink?.event("terminal"));
+
+  assert.deepEqual(result, { ending: "answered" });
+  assert.deepEqual(acknowledgements, [
+    undefined,
+    { terminal: false },
+    { terminal: true },
+    { terminal: false },
+    undefined,
+  ]);
+});
+
 test("runOneShot distinguishes cancellation, source errors, and missing answers", async () => {
   const makeReport = (): RunReporter => ({
     message: () => {},
