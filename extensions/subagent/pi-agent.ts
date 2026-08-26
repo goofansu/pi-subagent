@@ -508,7 +508,7 @@ export async function runPiAgent(
         if (stdout.overflowed()) {
           report.stderr(OVERSIZED_STDOUT_LINE_MESSAGE);
         }
-        if (code !== 0 && !(code === null && terminalAgentEndBeforeAbort)) {
+        if (code !== 0 && !(wasAborted && terminalAgentEndBeforeAbort)) {
           closeErrorMessage = `Child pi exited with code ${code ?? "unknown"}`;
           const stdoutTail = rawStdoutTail.trim();
           if (!reportedStderr && stdoutTail) {
@@ -567,9 +567,8 @@ export async function runPiAgent(
     }
     return {
       // A terminal answer witnessed before cancellation is authoritative even
-      // when killing the now-unneeded child reports no numeric exit code.
-      exitCode:
-        terminalAgentEndBeforeAbort && exitCode === undefined ? 0 : exitCode,
+      // when killing the now-unneeded child reports a signal-derived exit.
+      exitCode: wasAborted && terminalAgentEndBeforeAbort ? 0 : exitCode,
       ...(closeErrorMessage ? { errorMessage: closeErrorMessage } : {}),
     };
   } finally {

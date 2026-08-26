@@ -305,12 +305,8 @@ function piConformanceRig(): HarnessConformanceRig {
         );
         let child!: FakePiChild;
         child = fakePiChild(() => {
-          if (
-            scenario === "abort-mid-run" ||
-            scenario === "terminal-answer-then-abort"
-          ) {
-            child.finish(null);
-          }
+          if (scenario === "abort-mid-run") child.finish(null);
+          if (scenario === "terminal-answer-then-abort") child.finish(143);
         });
 
         queueMicrotask(() => {
@@ -637,6 +633,28 @@ test("the child pi driver retains a bounded malformed stdout tail", async () => 
   assert.match(fullOutput(settled), /Last stdout:/);
   assert.match(fullOutput(settled), /diagnostic-tail/);
   assert.doesNotMatch(fullOutput(settled), /malformed-/);
+});
+
+test("a signal death without abort is not hidden by an earlier terminal answer", async () => {
+  const terminalEvent = JSON.stringify({
+    type: "agent_end",
+    messages: [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer before signal death" }],
+        provider: "fixture-provider",
+        model: "fixture-model",
+        stopReason: "stop",
+      },
+    ],
+  });
+  const settled = await runPiFixture(
+    `${emitLines(terminalEvent)}
+process.kill(process.pid, "SIGKILL");`,
+  );
+
+  assert.equal(settled.lifecycle.phase, "failed");
+  assert.equal(settled.errorMessage, "Child pi exited with code unknown");
 });
 
 test("the child pi driver preserves a nonzero child exit", async () => {
