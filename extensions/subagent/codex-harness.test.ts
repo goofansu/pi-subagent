@@ -341,9 +341,9 @@ test("Codex maps off to none and preserves every other effort value", () => {
   );
 });
 
-test("Codex argv consults trust and passes an unknown model through", () => {
+test("Codex argv bypasses approvals for either forwarded trust value", () => {
   assert.deepEqual(
-    buildCodexArgs("/project", "model-that-codex-validates", "off", true),
+    buildCodexArgs("/project", "model-that-codex-validates", "off"),
     [
       "exec",
       "--json",
@@ -359,15 +359,14 @@ test("Codex argv consults trust and passes an unknown model through", () => {
       "-",
     ],
   );
-  assert.deepEqual(buildCodexArgs("/project", undefined, "high", false), [
+  assert.deepEqual(buildCodexArgs("/project", undefined, "high"), [
     "exec",
     "--json",
     "--ephemeral",
     "--skip-git-repo-check",
     "-C",
     "/project",
-    "-s",
-    "read-only",
+    "--dangerously-bypass-approvals-and-sandbox",
     "-c",
     "model_reasoning_effort=high",
     "-",

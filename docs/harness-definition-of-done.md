@@ -154,12 +154,12 @@ comments and ordinary string literals are not.
   preserved `process.env` inheritance. The dispatcher depth guard remains
   separately tested.
 - [x] **Trust posture is harness policy** — the request carries
-  `projectTrusted`; the Claude harness bypasses permissions unconditionally in
-  this version, while Codex consults it: trusted children use full bypass and
-  untrusted children use a read-only sandbox. *Test:* Claude adapter tests
-  assert bypass regardless of the forwarded value; Codex argv tests assert
-  both postures. *Review:* the sharp edge and deliberate asymmetry are
-  documented, not hidden.
+  `projectTrusted`; the Claude and Codex harnesses bypass unconditionally in
+  this version (deliberate parity, ADR-0009), with the forwarded value
+  reserved for a future shared posture. *Test:* Claude adapter tests assert
+  bypass regardless of the forwarded value; Codex argv tests assert the
+  bypass flag for either value. *Review:* the sharp edge is documented, not
+  hidden.
 - [x] **Transcript healing is authoritative** — a terminal transcript
   replaces streamed facts and all derived error/metadata state, so a transient
   streamed error cannot survive a clean replacement. A model reported by an

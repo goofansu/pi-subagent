@@ -118,9 +118,9 @@ Codex runs `codex exec --json --ephemeral --skip-git-repo-check -C <cwd> -`.
 `appendSystemPrompt`, so those fields produce profile diagnostics. The profile
 system prompt is prepended to the stdin prompt.
 
-Codex consults the forwarded project-trust value: trusted children use
-`--dangerously-bypass-approvals-and-sandbox`, while untrusted children use
-`-s read-only`. Codex children are ephemeral and inherit the operator's
+Codex children always run with `--dangerously-bypass-approvals-and-sandbox` —
+the same posture as Claude children, whatever the forwarded project-trust
+value says. Codex children are ephemeral and inherit the operator's
 environment; see [ADR 0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md).
 
 #### Resolution matrix
@@ -177,6 +177,6 @@ A run is detached from the turn, not from the session. `Esc` cancels the turn an
 
 ### Security
 
-For the Pi harness, project trust is [pi's](https://pi.dev/docs/latest/security#project-trust): the extension resolves none of its own and forwards Pi's decision to every child pi process. The Claude harness uses the Claude Agent SDK instead; it does not consult that trust flag in this version and bypasses permissions unconditionally. Codex consults the same forwarded value: trusted children bypass approvals and sandbox, while untrusted children use a read-only sandbox. This deliberate asymmetry is documented in [ADR 0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md).
+For the Pi harness, project trust is [pi's](https://pi.dev/docs/latest/security#project-trust): the extension resolves none of its own and forwards Pi's decision to every child pi process. The Claude and Codex harnesses do not consult that trust flag in this version: Claude bypasses permissions unconditionally, and Codex always bypasses approvals and sandbox — deliberate parity, with the forwarded value reserved for a future shared posture, documented in [ADR 0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md).
 
 A subagent reads files, writes files, and runs commands as far as its `tools` list allows, and cannot delegate further — delegation is one level deep. A running subagent also cannot be given more input; see [ADR 0003](docs/adr/0003-one-shot-children.md).

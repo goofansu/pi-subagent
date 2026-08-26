@@ -137,9 +137,9 @@ disallowed for claude.
 
 **Trust** — pi's project-trust decision for the working directory, resolved by
 the session and forwarded in every run request; the extension never derives its
-own. Applying it is harness policy: pi forwards it to its child, claude remains
-a constant bypass, and codex consults it up front — trusted children use full
-bypass while untrusted children use a read-only sandbox.
+own. Applying it is harness policy: pi forwards it to its child; claude and
+codex do not consult it yet — their policy is a constant bypass, the forwarded
+value reserved for a future shared posture (ADR-0009).
 
 **Shutdown** — every `session_shutdown` stops every running run, drops every
 unlanded notification, and clears the result store, so neither a notification

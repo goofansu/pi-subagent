@@ -34,7 +34,6 @@ export function buildCodexArgs(
   cwd: string,
   model: string | undefined,
   effort: string | undefined,
-  projectTrusted: boolean,
 ): string[] {
   const args = [
     "exec",
@@ -44,8 +43,11 @@ export function buildCodexArgs(
     "-C",
     cwd,
   ];
-  if (projectTrusted) args.push("--dangerously-bypass-approvals-and-sandbox");
-  else args.push("-s", "read-only");
+  // Trust posture is parity with the claude harness (ADR-0009): every codex
+  // child bypasses approvals and sandbox regardless of the forwarded
+  // projectTrusted value, which stays in the request reserved for a future
+  // shared policy. A non-interactive child could never answer approvals.
+  args.push("--dangerously-bypass-approvals-and-sandbox");
   if (model) args.push("-m", model);
   const resolvedEffort = codexEffort(effort);
   if (resolvedEffort)
@@ -198,7 +200,7 @@ export function createCodexHarness(options: CodexHarnessOptions = {}): Harness {
           };
           const child = await runChildProcess({
             command: "codex",
-            args: buildCodexArgs(task.cwd, model, effort, task.projectTrusted),
+            args: buildCodexArgs(task.cwd, model, effort),
             cwd: task.cwd,
             childDepth: task.childDepth,
             prompt: codexPrompt(task),
