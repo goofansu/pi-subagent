@@ -20,8 +20,8 @@ scope; see `getAgentsDir`.
 
 **Run** — one execution of one profile against one prompt. A run is one-shot —
 one prompt in, one terminal answer out — whichever harness executes it. A run
-has an id, a lifecycle, a transcript, and usage. Runs are the thing the registry holds and
-the widget lists. Not "job", not "task", not "call". Notification delivery
+has an id, a lifecycle, a transcript, and usage. The registry holds runs, and
+the widget lists them. Not "job", not "task", not "call". Notification delivery
 state is a separate state machine, tracked by the delivery module keyed by run
 id — never on the run itself.
 
@@ -40,6 +40,11 @@ reason in domain units. A metadata fact carries provider run metadata without
 pretending the provider emitted a conversational message; it contributes no
 implicit turn. Facts are the only vocabulary that crosses the executor seam;
 a wire format is translated into facts inside its harness and nowhere else.
+
+**Ending** — the executor's honest terminal resolution of a run: **answered**,
+**failed** (with an optional fallback message), or **cancelled**. It carries no
+exit code or backend stop vocabulary; the fold turns it into lifecycle state
+and preserves fact-derived details.
 
 **Cancel** — request that a run stop. *Cancelled* is the terminal domain status
 of a run stopped intentionally; the model, the operator, and presentation all
@@ -109,10 +114,12 @@ missing-answer policy, and ending derivation, whichever source feeds it. It
 runs one source to one ending, reports facts live, and discards calls after
 settlement.
 
-**Conformance** — the named battery of required scenarios every harness's
-executor must pass as part of its own tests. It makes the executor
-obligations of `run.ts` mechanical: backend failures resolve as failed,
-backend aborts normalize to
+**Conformance** — the named battery of nine required scenarios every
+harness's executor must pass as part of its own tests: `backend-crash`,
+`abort-mid-run`, `terminal-answer-then-abort`, `usage-totals`, `child-depth`,
+`config-immutable`, `no-terminal-answer`, `post-answer-failure`, and
+`terminal-transcript-healing`. It makes the executor obligations of `run.ts`
+mechanical: backend failures resolve as failed, backend aborts normalize to
 cancellation, a terminal answer survives a later abort, usage deltas fold with
 latest context gauges, child depth reaches the child, and profile configuration
 stays unchanged. Transcript healing is optional and visibly skipped by

@@ -113,8 +113,12 @@ export function processJsonSource(options: {
         return;
       }
       if (!proc.stdin || !proc.stdout || !proc.stderr) {
-        sink.stderr("Failed to open child stdio pipes\n");
-        resolve({ status: "failed" });
+        try {
+          sink.stderr("Failed to open child stdio pipes\n");
+          resolve({ status: "failed" });
+        } catch (error) {
+          reject(error);
+        }
         return;
       }
 
@@ -123,22 +127,63 @@ export function processJsonSource(options: {
       let sawEvent = false;
       let sawStderr = false;
       let processError = false;
-      let closed = false;
+      let settled = false;
+      let childClosed = false;
       let aborted = signal.aborted;
       let escalation: ReturnType<typeof setTimeout> | undefined;
 
-      const cleanup = (): void => {
+      const cleanupAbort = (): void => {
         signal.removeEventListener("abort", abort);
         if (escalation !== undefined) clearTimeout(escalation);
+      };
+      const detachStreams = (): void => {
+        proc.stdin?.removeListener("error", onStdinError);
+        proc.stdout?.removeListener("data", onStdoutData);
+        proc.stderr?.removeListener("data", onStderrData);
+      };
+      const detachProcess = (): void => {
+        proc.removeListener("error", onProcessError);
+        proc.removeListener("close", onClose);
+      };
+      const terminate = (): void => {
+        if (childClosed) return;
+        try {
+          proc.kill("SIGTERM");
+        } catch {
+          // The process may have exited between the event and this cleanup.
+        }
+        if (escalation === undefined) {
+          escalation = setTimeout(() => {
+            if (!childClosed) {
+              try {
+                proc.kill("SIGKILL");
+              } catch {
+                // The process may have exited between the two signals.
+              }
+            }
+          }, killEscalationMs);
+          escalation.unref?.();
+        }
+      };
+      const fail = (error: unknown): void => {
+        if (settled) return;
+        settled = true;
+        cleanupAbort();
+        detachStreams();
+        if (childClosed) detachProcess();
+        else terminate();
+        reject(error);
       };
       const finish = (
         conclusion:
           | { status: "clean" }
           | { status: "failed"; errorMessage?: string },
       ): void => {
-        if (closed) return;
-        closed = true;
-        cleanup();
+        if (settled) return;
+        settled = true;
+        cleanupAbort();
+        detachStreams();
+        if (childClosed) detachProcess();
         resolve(conclusion);
       };
       const processLine = (line: string): void => {
@@ -154,79 +199,108 @@ export function processJsonSource(options: {
         sawEvent = true;
         sink.event(parsed as Record<string, unknown>);
       };
-      const close = (code: number | null): void => {
-        if (closed) return;
-        for (const line of stdout.flush()) processLine(line);
-        if (stdout.overflowed()) {
-          sawStderr = true;
-          sink.stderr(OVERSIZED_STDOUT_LINE_MESSAGE);
-        }
-        if (processError) {
-          finish({ status: "failed" });
-          return;
-        }
-        if (code === 0) {
-          if (!aborted && !sawStderr && !sawEvent) {
-            sink.stderr(
-              rawStdoutTail.trim()
-                ? `Last stdout:\n${rawStdoutTail.trim()}`
-                : "No stdout was captured.",
-            );
-          }
-          finish({ status: "clean" });
-          return;
-        }
-        // A raw stdout tail is useful only for a silent, actually failing
-        // child. Parsed output and stderr are already better diagnostics.
-        if (!aborted && !sawStderr && !sawEvent && rawStdoutTail.trim()) {
-          sink.stderr(`Last stdout:\n${rawStdoutTail.trim()}`);
-        }
-        finish({
-          status: "failed",
-          errorMessage: `Child ${childName} exited with code ${code ?? "unknown"}`,
-        });
-      };
       const abort = (): void => {
-        if (closed) return;
+        if (settled) return;
         aborted = true;
-        proc.kill("SIGTERM");
-        escalation = setTimeout(() => {
-          if (!closed) proc.kill("SIGKILL");
-        }, killEscalationMs);
-        escalation.unref?.();
+        terminate();
       };
-
-      proc.stdin.on("error", (error: Error) => {
+      function onStdinError(error: Error): void {
         sawStderr = true;
-        sink.stderr(`stdin: ${error.message}\n`);
-      });
-      if (!signal.aborted) {
-        proc.stdin.write(prompt, "utf-8");
-        proc.stdin.end();
+        try {
+          sink.stderr(`stdin: ${error.message}\n`);
+        } catch (sinkError) {
+          fail(sinkError);
+        }
       }
-      proc.stdout.on("data", (data) => {
+      function onStdoutData(data: Buffer | string): void {
         const chunk = data.toString();
         rawStdoutTail = (rawStdoutTail + chunk).slice(-RAW_STDOUT_TAIL_LIMIT);
         try {
           for (const line of stdout.push(chunk)) processLine(line);
         } catch (error) {
-          reject(error);
+          fail(error);
         }
-      });
-      proc.stderr.on("data", (data) => {
+      }
+      function onStderrData(data: Buffer | string): void {
         sawStderr = true;
-        sink.stderr(data.toString());
-      });
-      proc.on("error", (error) => {
-        if (closed) return;
+        try {
+          sink.stderr(data.toString());
+        } catch (error) {
+          fail(error);
+        }
+      }
+      function onProcessError(error: Error): void {
+        if (settled) return;
         processError = true;
         sawStderr = true;
-        sink.stderr(`${error.message}\n`);
-        // An error is terminal even on child implementations that do not emit
-        // the usual follow-up close event.
-        finish({ status: "failed" });
-      });
-      proc.on("close", close);
+        try {
+          sink.stderr(`${error.message}\n`);
+          // An error is terminal even on child implementations that do not
+          // emit the usual follow-up close event.
+          finish({ status: "failed" });
+        } catch (sinkError) {
+          fail(sinkError);
+        }
+      }
+      function onClose(code: number | null): void {
+        if (settled) {
+          childClosed = true;
+          cleanupAbort();
+          detachProcess();
+          return;
+        }
+        childClosed = true;
+        try {
+          // Flush is part of the source's framing contract: a final NDJSON
+          // record need not have a trailing newline.
+          for (const line of stdout.flush()) processLine(line);
+          if (stdout.overflowed()) {
+            sawStderr = true;
+            sink.stderr(OVERSIZED_STDOUT_LINE_MESSAGE);
+          }
+          if (processError) {
+            finish({ status: "failed" });
+            return;
+          }
+          if (code === 0) {
+            if (!aborted && !sawStderr && !sawEvent) {
+              sink.stderr(
+                rawStdoutTail.trim()
+                  ? `Last stdout:\n${rawStdoutTail.trim()}`
+                  : "No stdout was captured.",
+              );
+            }
+            finish({ status: "clean" });
+            return;
+          }
+          // A raw stdout tail is useful only for a silent, actually failing
+          // child. Parsed output and stderr are already better diagnostics.
+          if (!aborted && !sawStderr && !sawEvent && rawStdoutTail.trim()) {
+            sink.stderr(`Last stdout:\n${rawStdoutTail.trim()}`);
+          }
+          finish({
+            status: "failed",
+            errorMessage: `Child ${childName} exited with code ${code ?? "unknown"}`,
+          });
+        } catch (error) {
+          fail(error);
+        }
+      }
+
+      proc.stdin.on("error", onStdinError);
+      if (!signal.aborted) {
+        try {
+          proc.stdin.write(prompt, "utf-8");
+          proc.stdin.end();
+        } catch (error) {
+          fail(error);
+          return;
+        }
+      }
+      proc.stdout.on("data", onStdoutData);
+      proc.stderr.on("data", onStderrData);
+      proc.on("error", onProcessError);
+      proc.on("close", onClose);
       if (aborted || signal.aborted) abort();
       else signal.addEventListener("abort", abort, { once: true });
     });

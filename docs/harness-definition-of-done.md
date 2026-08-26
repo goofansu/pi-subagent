@@ -87,7 +87,7 @@ Codex CLI JSONL events and invocation policy, all confined to its adapter.
    Translation to facts happens inside the pi executor module, at the edge.
    *Test:* pi adapter tests feed NDJSON fixtures and assert emitted *facts*;
    the boundaries test directly assigns Pi wire ownership to the Pi harness and
-   driver, rejecting Pi wire imports from Claude and other adapters (and
+   process source, rejecting Pi wire imports from Claude and other adapters (and
    rejecting Claude SDK imports from the Pi side).
    *Review:* the translator is the only consumer of the wire shape.
 
@@ -126,10 +126,10 @@ each core source file's real import specifiers, follow the transitive core
 module graph, and assert the forbidden modules (`@earendil-works/pi-ai`
 message exports, the pi harness modules, and the Claude SDK) are absent. It
 also checks adapter ownership directly: Pi wire is confined to the Pi
-harness/driver, Claude SDK wire to the Claude adapter, and other adapters own
-neither. The composition module is the sole registration edge and is allowed
-to name the adapters; tool registration and every other core edge fail loudly
-in CI instead of silently in review. Static module forms are edges too;
+harness and process source, Claude SDK wire to the Claude adapter, and other
+adapters own neither. The composition module is the sole registration edge;
+it is allowed to name the adapters. Tool registration and every other core edge
+fail loudly in CI instead of silently in review. Static module forms are edges too;
 comments and ordinary string literals are not.
 
 ## Milestone-agreed additions (from the design session, ADR-0007)

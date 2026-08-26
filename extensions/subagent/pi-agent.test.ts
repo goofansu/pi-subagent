@@ -1,6 +1,6 @@
 /**
- * Child pi driver tests: how the CLI is located, what argv it is given, how its
- * NDJSON stream folds into a result, and how the process itself is settled.
+ * Pi harness tests: how the CLI is located, what argv it is given, how its
+ * NDJSON becomes facts, and how its process source settles a run.
  */
 
 import assert from "node:assert/strict";
@@ -206,7 +206,7 @@ async function runPiFixture(
   const result = createEmptyResult("worker", "Work", 0);
   const report = createRunReporter(result, () => options.onEmit?.(result));
 
-  const outcome = await runPiAgent(
+  const ending = await runPiAgent(
     {
       task: {
         config: agent({ systemPrompt: "" }),
@@ -226,9 +226,9 @@ async function runPiFixture(
       spawn: injectedSpawn,
     },
   );
-  // What the dispatcher does with the outcome, so assertions stay written
+  // What the dispatcher does with the ending, so assertions stay written
   // in result terms.
-  settleResultLifecycle(result, outcome, 1);
+  settleResultLifecycle(result, ending, 1);
   return result;
 }
 

@@ -162,6 +162,32 @@ test("runOneShot distinguishes cancellation, source errors, and missing answers"
   );
 });
 
+test("runOneShot preserves failed conclusion messages, including an absent one", async () => {
+  const report: RunReporter = {
+    message: () => {},
+    transcript: () => {},
+    stderr: () => {},
+  };
+  assert.deepEqual(
+    await runOneShot({
+      source: async () => ({ status: "failed", errorMessage: "exit detail" }),
+      translate: () => undefined,
+      report,
+      missingAnswerMessage: "missing",
+    }),
+    { ending: "failed", errorMessage: "exit detail" },
+  );
+  assert.deepEqual(
+    await runOneShot({
+      source: async () => ({ status: "failed" }),
+      translate: () => undefined,
+      report,
+      missingAnswerMessage: "missing",
+    }),
+    { ending: "failed" },
+  );
+});
+
 test("runOneShot absorbs a source throw after abort as cancelled", async () => {
   const controller = new AbortController();
   const source = async (
@@ -185,6 +211,60 @@ test("runOneShot absorbs a source throw after abort as cancelled", async () => {
   });
   controller.abort();
   assert.deepEqual(await promise, { ending: "cancelled" });
+});
+
+test("runOneShot forwards facts, transcripts, and stderr after abort until source settlement", async () => {
+  const controller = new AbortController();
+  const forwarded: string[] = [];
+  const source = async (sink: {
+    event: (event: string) => void;
+    stderr: (chunk: string) => void;
+  }) => {
+    sink.event("before");
+    controller.abort();
+    sink.event("after");
+    sink.stderr("after abort");
+    return { status: "clean" } as const;
+  };
+  const result = await runOneShot({
+    source,
+    translate: (event) => ({
+      facts: [{ role: "assistant", parts: [{ type: "text", text: event }] }],
+      transcript: event === "after" ? [] : undefined,
+      terminal: true,
+    }),
+    report: {
+      message: (fact) => forwarded.push(`fact:${fact.parts[0]?.type}`),
+      transcript: () => forwarded.push("transcript"),
+      stderr: (chunk) => forwarded.push(`stderr:${chunk}`),
+    },
+    signal: controller.signal,
+    missingAnswerMessage: "missing",
+  });
+
+  assert.deepEqual(result, { ending: "answered" });
+  assert.deepEqual(forwarded, [
+    "fact:text",
+    "fact:text",
+    "transcript",
+    "stderr:after abort",
+  ]);
+});
+
+test("runOneShot does not latch a terminal answer first witnessed after abort", async () => {
+  const controller = new AbortController();
+  const result = await runOneShot({
+    source: async (sink) => {
+      controller.abort();
+      sink.event("late answer");
+      return { status: "clean" };
+    },
+    translate: () => ({ terminal: true }),
+    report: { message: () => {}, transcript: () => {}, stderr: () => {} },
+    signal: controller.signal,
+    missingAnswerMessage: "missing",
+  });
+  assert.deepEqual(result, { ending: "cancelled" });
 });
 
 test("runOneShot gives witnessed errors precedence and forwards facts, transcripts, and stderr in order", async () => {
@@ -249,7 +329,7 @@ test("runOneShot discards sink calls after source settlement", async () => {
   assert.equal(reports, 0);
 });
 
-test("streamSource stops an opened stream and wins a pre-start abort race", async () => {
+test("runOneShot composes streamSource's pre-start race without starting work", async () => {
   let opened = 0;
   let stopped = 0;
   let release = () => {};
@@ -271,22 +351,28 @@ test("streamSource stops an opened stream and wins a pre-start abort race", asyn
     };
   });
   const preStart = new AbortController();
-  const preStartPromise = source(
-    { event: () => {}, stderr: () => {} },
-    preStart.signal,
-  );
+  const preStartPromise = runOneShot({
+    source,
+    translate: () => ({ terminal: true }),
+    report: { message: () => {}, transcript: () => {}, stderr: () => {} },
+    signal: preStart.signal,
+    missingAnswerMessage: "missing",
+  });
   preStart.abort();
-  assert.deepEqual(await preStartPromise, { status: "clean" });
+  assert.deepEqual(await preStartPromise, { ending: "cancelled" });
   assert.equal(opened, 0);
 
   const controller = new AbortController();
-  const pending = source(
-    { event: () => {}, stderr: () => {} },
-    controller.signal,
-  );
+  const pending = runOneShot({
+    source,
+    translate: () => undefined,
+    report: { message: () => {}, transcript: () => {}, stderr: () => {} },
+    signal: controller.signal,
+    missingAnswerMessage: "missing",
+  });
   await new Promise((resolve) => setImmediate(resolve));
   controller.abort();
-  await pending;
+  assert.deepEqual(await pending, { ending: "cancelled" });
   assert.equal(opened, 1);
   assert.equal(stopped, 1);
 });

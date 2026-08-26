@@ -23,6 +23,35 @@ function spawnFixture(script: string) {
     realSpawn(process.execPath, ["-e", script], options);
 }
 
+function fakeChild(onKill: () => void = () => {}): FakeChild {
+  const child = new EventEmitter() as FakeChild;
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  let closed = false;
+  child.kill = () => {
+    onKill();
+    if (!closed) {
+      closed = true;
+      queueMicrotask(() => child.emit("close", null, null));
+    }
+    return true;
+  };
+  return child;
+}
+
+function sourceForFakeChild(child: FakeChild) {
+  return processJsonSource({
+    command: "fixture",
+    args: [],
+    cwd: "/tmp",
+    childDepth: 1,
+    prompt: "",
+    childName: "fixture",
+    spawn: () => child as unknown as ChildProcess,
+  });
+}
+
 async function runSource(
   script: string,
   overrides: Record<string, unknown> = {},
@@ -53,6 +82,83 @@ test("process source carries depth, prompt, and parsed JSON events", async () =>
   );
   assert.deepEqual(result.events, [{ depth: "4", input: "prompt from stdin" }]);
   assert.deepEqual(result.conclusion, { status: "clean" });
+});
+
+test("process source frames a JSON record split across stdout chunks", async () => {
+  const child = fakeChild();
+  const events: Record<string, unknown>[] = [];
+  const promise = sourceForFakeChild(child)(
+    { event: (event) => events.push(event), stderr: () => {} },
+    new AbortController().signal,
+  );
+  child.stdout.write('{"split":');
+  child.stdout.write("true}\n");
+  child.emit("close", 0, null);
+
+  assert.deepEqual(await promise, { status: "clean" });
+  assert.deepEqual(events, [{ split: true }]);
+});
+
+test("process source flushes a trailing JSON record without a newline", async () => {
+  const child = fakeChild();
+  const events: Record<string, unknown>[] = [];
+  const promise = sourceForFakeChild(child)(
+    { event: (event) => events.push(event), stderr: () => {} },
+    new AbortController().signal,
+  );
+  child.stdout.write('{"trailing":true}');
+  child.emit("close", 0, null);
+
+  assert.deepEqual(await promise, { status: "clean" });
+  assert.deepEqual(events, [{ trailing: true }]);
+});
+
+test("process source rejects a streaming sink throw and cleans up the child", async () => {
+  let killed = 0;
+  const child = fakeChild(() => {
+    killed++;
+  });
+  const controller = new AbortController();
+  const promise = sourceForFakeChild(child)(
+    {
+      event: () => {
+        throw new Error("translator failed while streaming");
+      },
+      stderr: () => {},
+    },
+    controller.signal,
+  );
+  child.stdout.write('{"event":true}\n');
+
+  await assert.rejects(promise, /translator failed while streaming/);
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  assert.equal(killed, 1);
+  assert.equal(child.stdout.listenerCount("data"), 0);
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.listenerCount("error"), 0);
+});
+
+test("process source rejects a final-flush sink throw without an uncaught close error", async () => {
+  const child = fakeChild();
+  const controller = new AbortController();
+  const promise = sourceForFakeChild(child)(
+    {
+      event: () => {
+        throw new Error("translator failed while flushing");
+      },
+      stderr: () => {},
+    },
+    controller.signal,
+  );
+  child.stdout.write('{"event":true}');
+  child.emit("close", 0, null);
+
+  await assert.rejects(promise, /translator failed while flushing/);
+  controller.abort();
+  assert.equal(child.stdout.listenerCount("data"), 0);
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.listenerCount("error"), 0);
 });
 
 test("process source emits a failure diagnostic and a silent stdout tail", async () => {

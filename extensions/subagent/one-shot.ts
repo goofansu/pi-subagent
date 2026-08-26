@@ -61,7 +61,12 @@ export async function runOneShot<E>({
 
   const sink: OneShotSink<E> = {
     event(event) {
-      if (settled || aborted) return;
+      if (settled) return;
+      // An event that started before abort still counts as witnessed even if a
+      // reporter callback requests cancellation synchronously. Events arriving
+      // after abort are forwarded for diagnostics/transcript completeness, but
+      // cannot establish the terminal-answer ordering latch.
+      const wasAborted = aborted;
       let translation: Translation | undefined;
       try {
         translation = translate(event);
@@ -70,18 +75,17 @@ export async function runOneShot<E>({
         throw error;
       }
       if (!translation) return;
-      // Latch before reporting: a reporter callback may synchronously request
-      // cancellation, but the terminal event was already witnessed.
-      if (translation.terminal) terminal = true;
+      if (translation.terminal && !wasAborted) terminal = true;
       if (translation.errorMessage !== undefined)
         witnessedError = translation.errorMessage;
-      // Facts precede transcript replacement within one wire event.
+      // Facts precede transcript replacement within one wire event. Do not
+      // re-check abort between reports: the source is still unsettled.
       for (const fact of translation.facts ?? []) report.message(fact);
       if (translation.transcript !== undefined)
         report.transcript(translation.transcript);
     },
     stderr(chunk) {
-      if (!settled && !aborted) report.stderr(chunk);
+      if (!settled) report.stderr(chunk);
     },
   };
 

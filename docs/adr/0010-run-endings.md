@@ -1,10 +1,25 @@
 # 10. Executors resolve to run endings
 
-Date: 2026-08-27
+Date: 2026-08-26
 
 ## Status
 
-Accepted. Supersedes the outcome-shape consequence of [ADR-0007](0007-harness-seam-with-neutral-facts.md); the facts-plus-resolution split from [ADR-0005](0005-executor-reports-facts.md) stands.
+Accepted. Supersedes only the executor-resolution consequence described in
+[ADR-0005](0005-executor-reports-facts.md) and carried forward in
+[ADR-0007](0007-harness-seam-with-neutral-facts.md); both ADRs' neutral-fact
+and facts-plus-resolution decisions stand.
+
+## Context
+
+The harness seam now carries neutral facts, but executor resolution still used
+process-shaped outcomes: exit codes, backend stop words, and optional error
+text. That exposed transport details to the run fold and made each harness
+encode cancellation and terminal-answer ordering independently.
+
+The one-shot protocol also needs one shared answer to a source's final state.
+A terminal answer witnessed before cancellation must remain authoritative; an
+abort without such an answer must remain cancellation; and a clean source that
+never answers must be a failure with the harness's missing-answer message.
 
 ## Decision
 
@@ -21,10 +36,22 @@ Exit codes and backend stop words do not cross the seam. Process sources turn
 exit details into words locally, and cancellation is represented by the
 cancelled ending. The fold derives the lifecycle once: cancelled and failed
 endings map directly; an answered ending is completed unless its healed record
-contains a fact error message or a fact stop reason of `error`, in which case it
-is failed. A failed ending's optional message is only a fallback and never
+contains a fact error message or a fact stop reason of `error`, in which case
+it is failed. A failed ending's optional message is only a fallback and never
 replaces a fact-borne message.
 
 The One-shot protocol owns terminal-before-abort ordering, missing-answer
 policy, live reporting, source-failure handling, and ending derivation. Each
 harness translates its wire events before they cross the executor seam.
+
+## Consequences
+
+Executors no longer fabricate exit codes or backend cancellation markers, and
+the lifecycle union contains no process fields. Process-backed adapters still
+retain their transport diagnostics locally, while SDK-backed adapters can
+resolve honestly without inventing a process result.
+
+The protocol is tested once through scripted sources and each harness supplies
+only its source and pure translator. Facts remain live and transcript healing
+remains authoritative; the ending's failure message remains a fallback for
+facts or stderr that already explain the failure.

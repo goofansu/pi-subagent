@@ -62,6 +62,10 @@ export function appendStderr(existing: string, chunk: string): string {
 /** The message a cancelled run reports. */
 const CANCELLED_MESSAGE = "Subagent was cancelled";
 
+// Backend stop vocabulary is understood only while folding facts. It is not a
+// domain stop reason and must never be retained on the result.
+const ABORTED_STOP_REASON = "aborted";
+
 /**
  * Derive one terminal lifecycle state from the ending and recorded facts.
  * Backend cancellation vocabulary never reaches the domain result.
@@ -267,7 +271,9 @@ function recordFact(result: SingleResult, fact: Fact): void {
   // A model reported by a harness fact is authoritative, including when it
   // refines the harness-resolved baseline.
   if (fact.model) result.model = fact.model;
-  if (fact.stopReason) result.stopReason = fact.stopReason;
+  if (fact.stopReason && fact.stopReason !== ABORTED_STOP_REASON) {
+    result.stopReason = fact.stopReason;
+  }
   if (fact.errorMessage) result.errorMessage = fact.errorMessage;
 }
 

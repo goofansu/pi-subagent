@@ -5,8 +5,9 @@ Date: 2026-08-25
 ## Status
 
 Accepted. Supersedes the fact-vocabulary consequence of
-[ADR-0005](0005-executor-reports-facts.md); its outcome shape is superseded by
-[ADR-0010](0010-run-endings.md), and the rest of ADR-0005 stands.
+[ADR-0005](0005-executor-reports-facts.md). [ADR-0010](0010-run-endings.md)
+supersedes only the executor-resolution consequence inherited from ADR-0005;
+this ADR's neutral-fact decision remains in force.
 
 ## Context
 
@@ -56,8 +57,9 @@ The claude harness executes via `@anthropic-ai/claude-agent-sdk`'s `query()`
 rather than spawning the CLI and re-parsing stream-json. The run's existing
 `AbortSignal` drives the SDK abort. The adapter resolves to an ending, with
 cancellation normalized to the `cancelled` ending before it reaches the
-domain result; SDK stderr feeds `report.stderr`. Claude children always run with permissions bypassed in this
-version — trust is still forwarded in the request but not yet consulted —
+domain result; SDK stderr feeds `report.stderr`. Claude children always run
+with permissions bypassed in this version — trust is still forwarded in the
+request but not yet consulted —
 and have their agent-spawning tool disallowed so the Depth constraint holds.
 One-shot children (ADR-0003) bind every harness: one-shot is a property of
 Run.

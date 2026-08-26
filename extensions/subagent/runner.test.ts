@@ -278,16 +278,16 @@ test("a rejected executor settles the authoritative run as failed", async () => 
 
 test("INV-3: terminal lifecycle states are final", async () => {
   const cases = [
-    { outcome: { ending: "answered" }, expected: "completed" },
-    { outcome: { ending: "failed" }, expected: "failed" },
+    { ending: { ending: "answered" }, expected: "completed" },
+    { ending: { ending: "failed" }, expected: "failed" },
     {
-      outcome: { ending: "cancelled" },
+      ending: { ending: "cancelled" },
       expected: "cancelled",
     },
   ] as const;
 
-  for (const { expected, outcome } of cases) {
-    const execute: SubagentExecutor = async () => outcome;
+  for (const { expected, ending } of cases) {
+    const execute: SubagentExecutor = async () => ending;
     const times = [100, 700];
 
     const result = await startAndSettle({
@@ -557,15 +557,22 @@ test("a cancellation reason survives registry release until settlement", async (
   }
 });
 
-test("an aborted backend outcome never persists its stop reason in the domain result", async () => {
+test("a backend aborted stop fact never persists in the domain result", async () => {
   const result = await startAndSettle({
     config: agent(),
     description: "cancelled",
     prompt: "go",
-    execute: async () => ({ ending: "cancelled" }),
+    execute: async (run) => {
+      run.report.message({
+        role: "assistant",
+        parts: [],
+        stopReason: "aborted",
+      });
+      return { ending: "answered" };
+    },
   });
 
-  assert.equal(result.lifecycle.phase, "cancelled");
+  assert.equal(result.lifecycle.phase, "completed");
   assert.equal(result.stopReason, undefined);
 });
 
