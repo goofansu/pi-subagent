@@ -13,6 +13,7 @@ import subagentExtension, {
 import { buildNotificationMessage } from "./notification-message.ts";
 import {
   createEmptyResult,
+  type RunEnding,
   type SubagentExecutor,
   type SubagentRun,
 } from "./run.ts";
@@ -220,7 +221,7 @@ test("INV-2 boundary: a successful start is executing, never queued", async () =
 interface BoundaryRun {
   report: SubagentRun["report"];
   signal?: AbortSignal;
-  resolve(ending: import("./run.ts").RunEnding): void;
+  resolve(ending: RunEnding): void;
 }
 
 function runtimeBoundary(

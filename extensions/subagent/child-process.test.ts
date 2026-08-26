@@ -59,7 +59,10 @@ async function runSource(
   const events: Record<string, unknown>[] = [];
   const stderr: string[] = [];
   const sink: OneShotSink<Record<string, unknown>> = {
-    event: (event) => events.push(event),
+    event: (event) => {
+      events.push(event);
+      return undefined;
+    },
     stderr: (chunk) => stderr.push(chunk),
   };
   const source = processJsonSource({
@@ -88,7 +91,13 @@ test("process source frames a JSON record split across stdout chunks", async () 
   const child = fakeChild();
   const events: Record<string, unknown>[] = [];
   const promise = sourceForFakeChild(child)(
-    { event: (event) => events.push(event), stderr: () => {} },
+    {
+      event: (event) => {
+        events.push(event);
+        return undefined;
+      },
+      stderr: () => {},
+    },
     new AbortController().signal,
   );
   child.stdout.write('{"split":');
@@ -103,7 +112,13 @@ test("process source flushes a trailing JSON record without a newline", async ()
   const child = fakeChild();
   const events: Record<string, unknown>[] = [];
   const promise = sourceForFakeChild(child)(
-    { event: (event) => events.push(event), stderr: () => {} },
+    {
+      event: (event) => {
+        events.push(event);
+        return undefined;
+      },
+      stderr: () => {},
+    },
     new AbortController().signal,
   );
   child.stdout.write('{"trailing":true}');
@@ -199,7 +214,10 @@ test("process source drops a complete oversized line from one stdout chunk", asy
   const stderr: string[] = [];
   const promise = sourceForFakeChild(child)(
     {
-      event: (event) => events.push(event),
+      event: (event) => {
+        events.push(event);
+        return undefined;
+      },
       stderr: (chunk) => stderr.push(chunk),
     },
     new AbortController().signal,
@@ -220,7 +238,10 @@ test("process source resynchronizes after an oversized line split across chunks"
   const stderr: string[] = [];
   const promise = sourceForFakeChild(child)(
     {
-      event: (event) => events.push(event),
+      event: (event) => {
+        events.push(event);
+        return undefined;
+      },
       stderr: (chunk) => stderr.push(chunk),
     },
     new AbortController().signal,
@@ -240,7 +261,10 @@ test("process source reports an oversized line when the child exits mid-drop", a
   const stderr: string[] = [];
   const promise = sourceForFakeChild(child)(
     {
-      event: (event) => events.push(event),
+      event: (event) => {
+        events.push(event);
+        return undefined;
+      },
       stderr: (chunk) => stderr.push(chunk),
     },
     new AbortController().signal,
@@ -278,7 +302,7 @@ test("process source reports errors on stderr and cleans up the child", async ()
     spawn: () => child as unknown as ChildProcess,
   });
   const promise = source(
-    { event: () => {}, stderr: (chunk) => stderr.push(chunk) },
+    { event: () => undefined, stderr: (chunk) => stderr.push(chunk) },
     new AbortController().signal,
   );
   queueMicrotask(() => {
@@ -317,7 +341,7 @@ test("abort stops the child and the source settles", async () => {
     },
   });
   const promise = source(
-    { event: () => {}, stderr: () => {} },
+    { event: () => undefined, stderr: () => {} },
     controller.signal,
   );
   controller.abort();
@@ -325,6 +349,6 @@ test("abort stops the child and the source settles", async () => {
   assert.equal(killed, 1);
 });
 
-// Keep the contract key referenced in this source-level test: the process
-// source, not the adapter, owns depth transport.
-assert.equal(DEPTH_ENV_KEY, "PI_SUBAGENT_DEPTH");
+test("the process source owns the child depth environment key", () => {
+  assert.equal(DEPTH_ENV_KEY, "PI_SUBAGENT_DEPTH");
+});

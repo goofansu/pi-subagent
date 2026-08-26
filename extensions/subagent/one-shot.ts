@@ -5,8 +5,13 @@ export type SourceConclusion =
   | { status: "clean" }
   | { status: "failed"; errorMessage?: string };
 
+export interface OneShotEventAcknowledgement {
+  translated: boolean;
+  terminal: boolean;
+}
+
 export interface OneShotSink<E> {
-  event(event: E): void;
+  event(event: E): OneShotEventAcknowledgement | undefined;
   stderr(chunk: string): void;
 }
 
@@ -74,8 +79,9 @@ export async function runOneShot<E>({
         translatorFailed = true;
         throw error;
       }
-      if (!translation) return;
-      if (translation.terminal && !wasAborted) terminal = true;
+      if (!translation) return { translated: false, terminal: false };
+      const terminalTranslation = translation.terminal === true && !wasAborted;
+      if (terminalTranslation) terminal = true;
       if (translation.errorMessage !== undefined)
         witnessedError = translation.errorMessage;
       // Facts precede transcript replacement within one wire event. Do not
@@ -83,6 +89,7 @@ export async function runOneShot<E>({
       for (const fact of translation.facts ?? []) report.message(fact);
       if (translation.transcript !== undefined)
         report.transcript(translation.transcript);
+      return { translated: true, terminal: terminalTranslation };
     },
     stderr(chunk) {
       if (!settled) report.stderr(chunk);
@@ -146,16 +153,14 @@ export function streamSource<E>(
     await Promise.resolve();
     if (signal.aborted) return { status: "clean" };
     let opened: StreamOpenResult<E> | undefined;
-    let abortRequested = false;
     const stop = (): void => {
-      abortRequested = true;
       opened?.stop();
     };
     signal.addEventListener("abort", stop, { once: true });
     try {
       opened = await open(signal, sink);
       if (!opened || signal.aborted) {
-        if (opened && (abortRequested || signal.aborted)) opened.stop();
+        if (opened && signal.aborted) opened.stop();
         return { status: "clean" };
       }
       for await (const event of opened.events) sink.event(event);

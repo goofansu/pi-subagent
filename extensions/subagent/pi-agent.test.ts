@@ -611,7 +611,48 @@ test("the child pi source fails exit 0 without an agent_end event", async () => 
   assert.match(settled.errorMessage ?? "", /valid terminal agent_end event/);
   assert.doesNotMatch(settled.errorMessage ?? "", /"type":"message_end"/);
   assert.match(fullOutput(settled), /partial output/);
+  assert.match(fullOutput(settled), /Last stdout:/);
   assert.doesNotMatch(formatNotification("a1", settled), /partial output/);
+});
+
+test("a translated nonterminal event suppresses stdout on a nonzero exit", async () => {
+  const event = JSON.stringify({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "partial failure" }],
+      stopReason: "stop",
+    },
+  });
+
+  const settled = await runPiFixture(
+    `${emitLines(event)}
+process.exitCode = 7;`,
+  );
+  assert.equal(settled.lifecycle.phase, "failed");
+  assert.equal(settled.errorMessage, "Child pi exited with code 7");
+  assert.doesNotMatch(fullOutput(settled), /Last stdout:/);
+  assert.match(fullOutput(settled), /partial failure/);
+});
+
+test("a translated error event suppresses stdout on a nonzero exit", async () => {
+  const event = JSON.stringify({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      errorMessage: "translated failure",
+    },
+  });
+
+  const settled = await runPiFixture(
+    `${emitLines(event)}
+process.exitCode = 7;`,
+  );
+  assert.equal(settled.lifecycle.phase, "failed");
+  assert.equal(settled.errorMessage, "translated failure");
+  assert.doesNotMatch(fullOutput(settled), /Last stdout:/);
 });
 
 test("the child pi source rejects a structurally invalid agent_end event", async () => {
@@ -625,7 +666,15 @@ test("the child pi source rejects a structurally invalid agent_end event", async
   assert.equal(settled.messages.length, 0);
   assert.match(settled.errorMessage ?? "", /valid terminal agent_end event/);
   assert.doesNotMatch(settled.errorMessage ?? "", /"messages":\{"role"/);
-  assert.doesNotMatch(fullOutput(settled), /"messages":\{"role"/);
+  assert.match(fullOutput(settled), /Last stdout:/);
+  assert.match(fullOutput(settled), /"messages":\{"role"/);
+});
+
+test("a clean child without a terminal answer reports the no-output fallback", async () => {
+  const settled = await runPiFixture("");
+
+  assert.equal(settled.lifecycle.phase, "failed");
+  assert.match(fullOutput(settled), /No stdout was captured\./);
 });
 
 test("the child pi source retains a bounded malformed stdout tail", async () => {
@@ -659,6 +708,27 @@ process.kill(process.pid, "SIGKILL");`,
 
   assert.equal(settled.lifecycle.phase, "completed");
   assert.equal(settled.errorMessage, undefined);
+  assert.doesNotMatch(fullOutput(settled), /Last stdout:/);
+});
+
+test("a terminal answer suppresses stdout on a nonzero exit", async () => {
+  const terminalEvent = JSON.stringify({
+    type: "agent_end",
+    messages: [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer before failure" }],
+        stopReason: "stop",
+      },
+    ],
+  });
+
+  const settled = await runPiFixture(
+    `${emitLines(terminalEvent)}
+process.exitCode = 7;`,
+  );
+  assert.equal(settled.lifecycle.phase, "completed");
+  assert.doesNotMatch(fullOutput(settled), /Last stdout:/);
 });
 
 test("a process error keeps Pi's stderr-only fallback policy", async () => {
@@ -726,6 +796,7 @@ setTimeout(() => {}, 30_000);`,
   assert.equal(settled.stopReason, undefined);
   assert.match(settled.errorMessage ?? "", /Subagent was cancelled/);
   assert.doesNotMatch(settled.errorMessage ?? "", /agent_end/);
+  assert.doesNotMatch(fullOutput(settled), /Last stdout:/);
 });
 
 test("an aborted child that ignores SIGTERM is killed by the escalation", async () => {

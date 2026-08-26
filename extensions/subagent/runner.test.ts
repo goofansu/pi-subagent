@@ -11,6 +11,7 @@ import { createPiHarness } from "./pi-harness.ts";
 import {
   createEmptyResult,
   type Fact,
+  type RunEnding,
   type SubagentExecutor,
   type SubagentRun,
 } from "./run.ts";
@@ -532,7 +533,7 @@ test("a started run stays tracked after it settles, until its delivery", async (
 
 test("a cancellation reason survives registry release until settlement", async () => {
   const runs = createSubagentRuns();
-  let finish: (ending: import("./run.ts").RunEnding) => void = () => {};
+  let finish: (ending: RunEnding) => void = () => {};
   const execute: SubagentExecutor = () =>
     new Promise((resolve) => {
       finish = resolve;

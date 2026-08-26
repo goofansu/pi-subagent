@@ -124,7 +124,8 @@ export function processJsonSource(options: {
 
       const stdout = createNdjsonBuffer();
       let rawStdoutTail = "";
-      let sawEvent = false;
+      let sawTranslatedEvent = false;
+      let sawTerminalTranslation = false;
       let sawStderr = false;
       let processError = false;
       let settled = false;
@@ -205,8 +206,9 @@ export function processJsonSource(options: {
         }
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
           return;
-        sawEvent = true;
-        sink.event(parsed as Record<string, unknown>);
+        const acknowledgement = sink.event(parsed as Record<string, unknown>);
+        if (acknowledgement?.translated) sawTranslatedEvent = true;
+        if (acknowledgement?.terminal) sawTerminalTranslation = true;
       };
       const abort = (): void => {
         if (settled) return;
@@ -272,7 +274,7 @@ export function processJsonSource(options: {
             return;
           }
           if (code === 0) {
-            if (!aborted && !sawStderr && !sawEvent) {
+            if (!aborted && !sawTerminalTranslation) {
               sink.stderr(
                 rawStdoutTail.trim()
                   ? `Last stdout:\n${rawStdoutTail.trim()}`
@@ -283,8 +285,13 @@ export function processJsonSource(options: {
             return;
           }
           // A raw stdout tail is useful only for a silent, actually failing
-          // child. Parsed output and stderr are already better diagnostics.
-          if (!aborted && !sawStderr && !sawEvent && rawStdoutTail.trim()) {
+          // child. Translated output and stderr are already better diagnostics.
+          if (
+            !aborted &&
+            !sawStderr &&
+            !sawTranslatedEvent &&
+            rawStdoutTail.trim()
+          ) {
             sink.stderr(`Last stdout:\n${rawStdoutTail.trim()}`);
           }
           finish({
