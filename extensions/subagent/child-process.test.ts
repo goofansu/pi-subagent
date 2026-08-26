@@ -79,6 +79,39 @@ test("the driver guards stdin errors when a child exits before reading", async (
   // guarded write must resolve the run rather than throw into the parent.
 });
 
+test("a terminal answer witnessed before abort stays authoritative", async () => {
+  const controller = new AbortController();
+  let releaseFirstLine = () => {};
+  const firstLine = new Promise<void>((resolve) => {
+    releaseFirstLine = resolve;
+  });
+  let lines = 0;
+  const resultPromise = runChildProcess({
+    command: "fixture",
+    args: [],
+    cwd: "/tmp",
+    childDepth: 1,
+    prompt: "",
+    signal: controller.signal,
+    spawn: spawnFixture(
+      'process.stdout.write("answer\\n"); process.on("SIGTERM", () => { process.stdout.write("late-answer\\n"); process.exit(143); }); setTimeout(() => {}, 30000);',
+    ),
+    onLine: () => {
+      lines += 1;
+      if (lines === 1) releaseFirstLine();
+      return true;
+    },
+  });
+
+  await firstLine;
+  controller.abort();
+  const result = await resultPromise;
+
+  assert.equal(lines, 2);
+  assert.equal(result.aborted, true);
+  assert.equal(result.terminalBeforeAbort, true);
+});
+
 test("the driver escalates an ignored SIGTERM and cleans up after close", async () => {
   const controller = new AbortController();
   const resultPromise = runChildProcess({

@@ -71,7 +71,7 @@ Codex CLI JSONL events and invocation policy, all confined to its adapter.
    *Review:* the fake implements only the public `Harness` contract; profile
    loading also asks a fake-owned validator to reject an unknown field.
 
-6. [x] **A codex harness would cost one adapter, one registration, its own
+6. [x] **The Codex harness costs one adapter, one registration, its own
    tests — and no dispatcher/lifecycle changes.**
    *Test:* `codex-harness.test.ts` runs the real Codex adapter through the
    shared **Harness Conformance** battery (six scenarios, with transcript

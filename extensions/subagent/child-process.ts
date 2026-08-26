@@ -85,6 +85,8 @@ export interface ChildProcessResult {
   readonly terminalBeforeAbort: boolean;
   /** The bounded raw stdout tail, useful for adapter diagnostics. */
   readonly stdoutTail: string;
+  /** Process creation/runtime error emitted before a normal close. */
+  readonly processError?: string;
 }
 
 export interface RunChildProcessOptions {
@@ -126,12 +128,7 @@ export async function runChildProcess({
   let terminalBeforeAbort = false;
   let rawStdoutTail = "";
 
-  const result = await new Promise<{
-    exitCode?: number;
-    aborted: boolean;
-    terminalBeforeAbort: boolean;
-    stdoutTail: string;
-  }>((resolve) => {
+  const result = await new Promise<ChildProcessResult>((resolve) => {
     const proc = spawn(command, args, getSpawnOptions(cwd, childDepth));
     if (!proc.stdin || !proc.stdout || !proc.stderr) {
       onStderr("Failed to open child stdio pipes\n");
@@ -153,8 +150,10 @@ export async function runChildProcess({
     const stdout = createNdjsonBuffer();
     const processLine = (line: string): void => {
       if (!line.trim()) return;
-      if (onLine(line) === true) {
-        terminalBeforeAbort = !aborted;
+      if (onLine(line) === true && !aborted) {
+        // Once witnessed, a terminal answer remains authoritative. A later
+        // terminal-shaped line after cancellation cannot erase its ordering.
+        terminalBeforeAbort = true;
       }
     };
 
@@ -194,12 +193,15 @@ export async function runChildProcess({
       });
     });
     proc.on("error", (error) => {
+      procClosed = true;
+      cleanupAbort();
       onStderr(`${error.message}\n`);
       resolve({
         exitCode: 1,
         aborted,
         terminalBeforeAbort,
         stdoutTail: rawStdoutTail,
+        processError: error.message,
       });
     });
 

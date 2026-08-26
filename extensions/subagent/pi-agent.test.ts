@@ -201,10 +201,13 @@ async function runPiFixture(
     onEmit?: (result: SingleResult) => void;
     prompt?: string;
     killEscalationMs?: number;
+    spawn?: ChildProcessSpawn;
   } = {},
 ): Promise<SingleResult> {
-  const injectedSpawn: ChildProcessSpawn = (_command, _args, spawnOptions) =>
-    realSpawn(process.execPath, ["-e", script], spawnOptions);
+  const injectedSpawn: ChildProcessSpawn =
+    options.spawn ??
+    ((_command, _args, spawnOptions) =>
+      realSpawn(process.execPath, ["-e", script], spawnOptions));
   const result = createEmptyResult("worker", "Work", 0);
   const report = createRunReporter(result, () => options.onEmit?.(result));
 
@@ -657,6 +660,20 @@ process.kill(process.pid, "SIGKILL");`,
 
   assert.equal(settled.lifecycle.phase, "failed");
   assert.equal(settled.errorMessage, "Child pi exited with code unknown");
+});
+
+test("a process error keeps Pi's stderr-only fallback policy", async () => {
+  const spawn: ChildProcessSpawn = () => {
+    const child = fakePiChild(() => {});
+    queueMicrotask(() => child.emit("error", new Error("fixture spawn error")));
+    return child;
+  };
+
+  const settled = await runPiFixture("", { spawn });
+
+  assert.equal(settled.lifecycle.phase, "failed");
+  assert.equal(settled.errorMessage, undefined);
+  assert.match(settled.stderr, /fixture spawn error/);
 });
 
 test("the child pi driver preserves a nonzero child exit", async () => {

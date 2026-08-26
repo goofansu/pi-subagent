@@ -353,6 +353,9 @@ export async function runPiAgent(
         run.report.stderr(`Last stdout:\n${stdoutTail}`);
       }
       if (child.aborted) return { stopReason: ABORTED_STOP_REASON };
+      // Preserve Pi's pre-extraction policy: a process-level spawn/runtime
+      // error is already in stderr and is not replaced by a close diagnostic.
+      if (child.processError) return { exitCode: child.exitCode };
       return { exitCode: child.exitCode, errorMessage: closeErrorMessage };
     }
     if (child.aborted && !child.terminalBeforeAbort) {
