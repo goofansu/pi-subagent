@@ -345,6 +345,20 @@ test("Claude keeps model metadata from an empty assistant message", () => {
   });
 });
 
+test("Claude translates init provenance as metadata without usage", () => {
+  const [fact] = translateClaudeMessage({
+    type: "system",
+    subtype: "init",
+    model: "claude-opus-5",
+  } as unknown as SDKMessage);
+
+  assert.deepEqual(fact, {
+    role: "metadata",
+    parts: [],
+    model: "claude-opus-5",
+  });
+});
+
 test("Claude keeps terminal facts when a successful result has empty text", () => {
   const [fact] = translateClaudeMessage({
     type: "result",
@@ -352,6 +366,7 @@ test("Claude keeps terminal facts when a successful result has empty text", () =
     is_error: false,
     num_turns: 2,
     stop_reason: "end_turn",
+    model: "claude-sonnet-4-6",
     total_cost_usd: 0.25,
     modelUsage: {
       "claude-sonnet-4-6": {
@@ -432,6 +447,11 @@ test("an empty Claude result carries accounting into the cost widget", async () 
     ({
       async *[Symbol.asyncIterator]() {
         yield {
+          type: "system",
+          subtype: "init",
+          model: "claude-sonnet-4-6",
+        } as unknown as SDKMessage;
+        yield {
           type: "result",
           result: "",
           is_error: false,
@@ -462,7 +482,9 @@ test("an empty Claude result carries accounting into the cost widget", async () 
 
   const result = await started.settled;
   assert.equal(result.lifecycle.phase, "completed");
-  assert.deepEqual(result.messages[0]?.parts, []);
+  assert.equal(result.messages.length, 2);
+  assert.equal(result.messages[1]?.role, "assistant");
+  assert.deepEqual(result.messages[1]?.parts, []);
   assert.equal(result.model, "claude-sonnet-4-6");
   assert.deepEqual(result.usage, {
     input: 10,
@@ -514,6 +536,50 @@ test("Claude uses the SDK error text for an error-flagged success result", () =>
     "API Error: 529 overloaded_error: service is temporarily overloaded",
   );
   assert.deepEqual(fact.parts, []);
+});
+
+test("an auxiliary-only error result preserves the initialized model", async () => {
+  const query: ClaudeQuery = () =>
+    ({
+      async *[Symbol.asyncIterator]() {
+        yield {
+          type: "system",
+          subtype: "init",
+          model: "claude-opus-5",
+        } as unknown as SDKMessage;
+        yield {
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          num_turns: 0,
+          stop_reason: "error",
+          total_cost_usd: 0.001,
+          modelUsage: {
+            "claude-haiku-4-5-20251001": {
+              inputTokens: 1,
+              outputTokens: 1,
+              costUSD: 0.001,
+            },
+          },
+          errors: ["API Error: 529 Overloaded"],
+        } as unknown as SDKMessage;
+      },
+      close() {},
+    }) as never;
+  const started = startSubagent({
+    config: { ...config, fields: { model: "opus", effort: "high" } },
+    description: "review",
+    prompt: "review it",
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs: createSubagentRuns(),
+  });
+
+  const result = await started.settled;
+  assert.equal(result.lifecycle.phase, "failed");
+  assert.equal(result.model, "claude-opus-5");
+  assert.equal(result.messages[0]?.role, "metadata");
+  assert.equal(result.usage.turns, 0);
+  assert.equal(result.usage.cost, 0.001);
 });
 
 test("Claude runs end-to-end through the core run contract", async () => {
@@ -760,7 +826,7 @@ test("Claude cancellation stays cancelled when abort closes the stream gracefull
   }
 });
 
-test("Claude infers the model from one unambiguous terminal usage entry", () => {
+test("Claude does not infer provenance from one terminal usage entry", () => {
   const [fact] = translateClaudeMessage({
     type: "result",
     result: "answer",
@@ -771,10 +837,10 @@ test("Claude infers the model from one unambiguous terminal usage entry", () => 
     },
   } as unknown as SDKMessage);
 
-  assert.equal(fact.model, "claude-sonnet-4-6");
+  assert.equal(fact.model, undefined);
 });
 
-test("Claude preserves the configured model when auxiliary usage is listed first", () => {
+test("Claude does not infer provenance from multiple terminal usage entries", () => {
   const [fact] = translateClaudeMessage({
     type: "result",
     result: "answer",

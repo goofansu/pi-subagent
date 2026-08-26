@@ -150,7 +150,7 @@ export interface SubagentTask {
  * of the executor's write access to a run: it names what happened, and the
  * fold behind these callbacks decides what the record says.
  */
-export type FactRole = "user" | "assistant" | "tool";
+export type FactRole = "user" | "assistant" | "tool" | "metadata";
 
 export type FactPart =
   | { type: "text"; text: string }
@@ -170,7 +170,11 @@ export interface FactUsage {
   turns?: number;
 }
 
-/** The only message vocabulary allowed across a harness executor seam. */
+/**
+ * The only vocabulary allowed across a harness executor seam. Metadata facts
+ * carry provider run metadata without pretending the provider emitted a
+ * conversational message.
+ */
 export interface Fact {
   role: FactRole;
   parts: FactPart[];
@@ -181,7 +185,10 @@ export interface Fact {
 }
 
 export interface RunReporter {
-  /** One harness-neutral fact the child produced. */
+  /**
+   * One harness-neutral fact the child produced. The historical message verb
+   * also carries metadata facts so the executor seam stays stable.
+   */
   message(fact: Fact): void;
   /**
    * The child's terminal transcript snapshot, replacing everything streamed
@@ -279,6 +286,8 @@ function recordFact(result: SingleResult, fact: Fact): void {
   if (usage?.contextTokens !== undefined) {
     result.usage.contextTokens = usage.contextTokens;
   }
+  // Only conversational assistant facts imply a turn. Metadata facts must
+  // report a turn explicitly when the provider event represents one.
   result.usage.turns += usage?.turns ?? (fact.role === "assistant" ? 1 : 0);
   // A model reported by a harness fact is authoritative, including when it
   // refines the harness-resolved baseline.

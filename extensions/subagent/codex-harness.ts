@@ -68,7 +68,7 @@ function usageFact(usage: Record<string, unknown>): Fact {
   const number = (key: string): number =>
     typeof usage[key] === "number" ? usage[key] : 0;
   return {
-    role: "assistant",
+    role: "metadata",
     parts: [],
     usage: {
       input: number("input_tokens"),
@@ -128,9 +128,8 @@ export function translateCodexJsonEvent(
         ? event.message
         : "Codex reported an error";
     report.message({
-      role: "assistant",
+      role: "metadata",
       parts: [],
-      usage: { turns: 0 },
       errorMessage,
     });
     return { terminal: false, errorMessage };
@@ -141,9 +140,8 @@ export function translateCodexJsonEvent(
     const errorMessage =
       typeof error === "string" ? error : "Codex turn failed";
     report.message({
-      role: "assistant",
+      role: "metadata",
       parts: [],
-      usage: { turns: 0 },
       errorMessage,
     });
     return { terminal: false, errorMessage };

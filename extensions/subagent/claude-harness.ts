@@ -117,6 +117,21 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
       ? [{ role: isToolResult ? "tool" : "user", parts }]
       : [];
   }
+  if (
+    wire.type === "system" &&
+    wire.subtype === "init" &&
+    typeof wire.model === "string"
+  ) {
+    // The SDK init message identifies the resolved main-loop model before the
+    // first assistant response, including on runs that fail before answering.
+    return [
+      {
+        role: "metadata",
+        parts: [],
+        model: wire.model,
+      },
+    ];
+  }
   if (wire.type !== "result") return [];
 
   const isError = wire.is_error === true;
@@ -125,7 +140,6 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
       ? contentParts(wire.result)
       : [];
   const modelUsage = isRecord(wire.modelUsage) ? wire.modelUsage : undefined;
-  const modelUsageEntries = modelUsage ? Object.entries(modelUsage) : [];
   let input = 0;
   let output = 0;
   let cacheRead = 0;
@@ -133,15 +147,12 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
   const reportedCost =
     typeof wire.total_cost_usd === "number" ? wire.total_cost_usd : undefined;
   let cost = reportedCost ?? 0;
-  // The SDK result has no model field in some versions. A single usage entry
-  // is an unambiguous answer; multiple entries may include auxiliary models,
-  // so never pick whichever happens to be first.
-  const model =
-    typeof wire.model === "string"
-      ? wire.model
-      : modelUsageEntries.length === 1
-        ? modelUsageEntries[0]?.[0]
-        : undefined;
+  // modelUsage is accounting, not provenance: it includes main-loop,
+  // subagent, sidechain, and internal model calls. Even its sole entry may be
+  // an auxiliary model when the configured model fails before responding.
+  // Tolerate an explicit terminal model for wire compatibility even though
+  // the installed SDK's result type does not currently declare the field.
+  const model = typeof wire.model === "string" ? wire.model : undefined;
   if (modelUsage) {
     for (const value of Object.values(modelUsage)) {
       if (!isRecord(value)) continue;

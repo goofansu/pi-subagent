@@ -162,23 +162,26 @@ comments and ordinary string literals are not.
   hidden.
 - [x] **Transcript healing is authoritative** — a terminal transcript
   replaces streamed facts and all derived error/metadata state, so a transient
-  streamed error cannot survive a clean replacement. A model reported by an
-  assistant or terminal fact is authoritative over the harness-resolved
-  baseline; healing resets to that baseline, then terminal facts may replace
-  it, while absent or ambiguous evidence retains the baseline and no baseline
-  removes stale model metadata. A retained provider error still wins over a
-  generic process-exit diagnostic. *Test:* the Pi and fake harness
-  `terminal-transcript-healing` conformance scenarios cover clean replacement,
-  while adapter and dispatcher fold tests cover the error paths,
-  authoritative-baseline replacement, stale-model removal, and baseline
-  preservation.
+  streamed error cannot survive a clean replacement. A model reported by a
+  metadata, assistant, or terminal fact is authoritative over the
+  harness-resolved baseline; healing resets to that baseline, then terminal
+  facts may replace it. Absent or ambiguous evidence retains the baseline; if
+  there is no baseline, healing removes stale model metadata. A retained
+  provider error still wins over a generic process-exit diagnostic. *Test:*
+  the Pi and fake harness `terminal-transcript-healing` conformance scenarios
+  cover clean replacement, while adapter and dispatcher fold tests cover the
+  error paths, authoritative-baseline replacement, stale-model removal, and
+  baseline preservation.
 - [x] **Empty terminal accounting reaches presentation** — a successful Claude
   result with no text remains a fact, including usage, turns, cost, and stop
-  reason; model provenance comes from an empty/thinking assistant fact or one
-  unambiguous terminal usage entry, never an arbitrary auxiliary entry.
-  *Test:* unpinned Claude integration and widget fixtures render the nonzero
-  cost and assert model/accounting retention; auxiliary-first coverage proves
-  the ambiguous case is not inferred.
+  reason. Model provenance comes from the SDK init message, an assistant fact,
+  or the harness-resolved baseline; `modelUsage` is accounting only because
+  even its sole entry can be an auxiliary model. Undeclared terminal model
+  metadata is tolerated for wire compatibility but is not required.
+  *Test:* the pinned widget fixture renders nonzero cost, the unpinned
+  integration retains streamed provenance and accounting, and single-entry,
+  multiple-entry, and auxiliary-only error coverage proves terminal usage
+  cannot overwrite model provenance.
 - [x] **Claude model validation is aliases-only** — exactly the SDK's
   documented family aliases (`fable`, `opus`, `sonnet`, `haiku`) validate
   synchronously at session start; the alias is passed through unresolved and

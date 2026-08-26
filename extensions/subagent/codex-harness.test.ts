@@ -260,7 +260,7 @@ test("Codex usage adds reasoning output and counts each completed turn", () => {
   );
   assert.deepEqual(facts, [
     {
-      role: "assistant",
+      role: "metadata",
       parts: [],
       usage: {
         input: 33875,
@@ -290,15 +290,13 @@ test("Codex preserves provider error events as error facts", () => {
   );
   assert.deepEqual(facts, [
     {
-      role: "assistant",
+      role: "metadata",
       parts: [],
-      usage: { turns: 0 },
       errorMessage: "service unavailable",
     },
     {
-      role: "assistant",
+      role: "metadata",
       parts: [],
-      usage: { turns: 0 },
       errorMessage: "turn rejected",
     },
   ]);

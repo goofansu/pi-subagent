@@ -34,10 +34,12 @@ reload, quit) cancels whatever is still running.
 **Child pi** — the process a run executes in. One-shot: it takes one prompt on
 stdin and produces one answer. It cannot be steered mid-flight.
 
-**Fact** — a harness-neutral record of something the child did: a message with
-a role and parts (text, tool call) plus usage, model, and stop reason in domain
-units. Facts are the only vocabulary that crosses the executor seam; a wire
-format is translated into facts inside its harness and nowhere else.
+**Fact** — a harness-neutral record of something the child did: usually a
+message with a role and parts (text, tool call) plus usage, model, and stop
+reason in domain units. A metadata fact carries provider run metadata without
+pretending the provider emitted a conversational message; it contributes no
+implicit turn. Facts are the only vocabulary that crosses the executor seam;
+a wire format is translated into facts inside its harness and nowhere else.
 
 **Cancel** — request that a run stop. *Cancelled* is the terminal domain status
 of a run stopped intentionally; the model, the operator, and presentation all
