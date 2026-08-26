@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createSubagentDelivery } from "./delivery.ts";
 import type { Harness } from "./harness.ts";
-import { createHarnessRegistry } from "./harness.ts";
+import {
+  createHarnessRegistry,
+  parseTools,
+  shouldAppendSystemPrompt,
+  validateCommonProfileFields,
+} from "./harness.ts";
 import {
   type HarnessConformanceFixture,
   type HarnessConformanceRig,
@@ -10,7 +15,7 @@ import {
   runHarnessConformance,
 } from "./harness-conformance.ts";
 import { formatNotification } from "./presentation.ts";
-import type { SubagentExecutor } from "./run.ts";
+import { ABORTED_STOP_REASON, type SubagentExecutor } from "./run.ts";
 import { startSubagent } from "./runner.ts";
 import { createSubagentRuns } from "./runs.ts";
 import type { AgentConfig } from "./types.ts";
@@ -30,6 +35,63 @@ const profile: AgentConfig = {
   systemPrompt: "work",
 };
 
+test("common profile accessors normalize tools and default appendSystemPrompt", () => {
+  const config: AgentConfig = {
+    ...profile,
+    fields: { tools: " read, , grep ,, ", appendSystemPrompt: null },
+  };
+
+  assert.deepEqual(parseTools(config, "/agents/fake.md"), ["read", "grep"]);
+  assert.deepEqual(
+    parseTools({ ...config, fields: { tools: ", ," } }, "/agents/fake.md"),
+    [],
+  );
+  assert.equal(
+    parseTools({ ...config, fields: { tools: "" } }, "/agents/fake.md"),
+    undefined,
+  );
+  assert.equal(shouldAppendSystemPrompt(config, "/agents/fake.md"), true);
+  assert.equal(
+    shouldAppendSystemPrompt(
+      { ...config, fields: { appendSystemPrompt: false } },
+      "/agents/fake.md",
+    ),
+    false,
+  );
+});
+
+test("common profile validation owns the shared field list and model hook", () => {
+  const diagnostics = validateCommonProfileFields(
+    {
+      ...profile,
+      fields: { model: "sonnet", unsupported: true },
+    },
+    "/agents/fake.md",
+    {
+      displayName: "Fake",
+      validateModel: (model) =>
+        model === "sonnet" ? undefined : { reason: "bad model" },
+    },
+  );
+
+  assert.deepEqual(diagnostics, [
+    { reason: "Fake harness does not recognize field 'unsupported'" },
+  ]);
+});
+
+test("a registry without the default harness names the missing adapter", () => {
+  const profileWithoutHarness = { ...profile };
+  delete profileWithoutHarness.harness;
+
+  assert.deepEqual(
+    createHarnessRegistry([]).validate(
+      profileWithoutHarness,
+      "/agents/default.md",
+    ),
+    [{ reason: "unknown harness 'pi'" }],
+  );
+});
+
 function fakeHarness(
   onRun: (signal: AbortSignal | undefined) => Promise<void>,
 ): Harness {
@@ -40,7 +102,7 @@ function fakeHarness(
       execute: async (run) => {
         await onRun(run.signal);
         return run.signal?.aborted
-          ? { stopReason: "aborted" }
+          ? { stopReason: ABORTED_STOP_REASON }
           : { exitCode: 0 };
       },
     }),
@@ -119,7 +181,7 @@ function conformanceRig(): HarnessConformanceRig {
             async (run) => {
               childDepth = run.task.childDepth;
               await waitForAbort(run.signal, gate.open);
-              return { stopReason: "aborted" };
+              return { stopReason: ABORTED_STOP_REASON };
             },
             { phase: "cancelled", cancellationReason: "requested" },
             gate.ready,
@@ -137,7 +199,7 @@ function conformanceRig(): HarnessConformanceRig {
                 usage: { turns: 1 },
               });
               await waitForAbort(run.signal, gate.open);
-              return { exitCode: 0, stopReason: "stop" };
+              return { exitCode: 0 };
             },
             {
               phase: "completed",
@@ -308,7 +370,7 @@ test("a Codex-like harness compiles and runs through the unchanged one-shot core
           role: "assistant",
           parts: [{ type: "text", text: "codex fixture" }],
         });
-        return { exitCode: 0, stopReason: "stop" };
+        return { exitCode: 0 };
       },
     }),
   };

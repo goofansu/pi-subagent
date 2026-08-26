@@ -12,6 +12,7 @@ import subagentExtension, {
 } from "./index.ts";
 import { buildNotificationMessage } from "./notification-message.ts";
 import {
+  ABORTED_STOP_REASON,
   createEmptyResult,
   type SubagentExecutor,
   type SubagentOutcome,
@@ -171,6 +172,7 @@ test("agent_start reads the live session's trust and cwd at execute time", async
       start: started.start,
       runs,
       delivery: createSubagentDelivery({ runs, push: () => {} }),
+      harnesses: createHarnessRegistry([]),
     },
   );
 
@@ -273,6 +275,7 @@ function runtimeBoundary(
           harnesses: createHarnessRegistry([harness]),
           runs,
         }),
+      harnesses: createHarnessRegistry([harness]),
     },
   );
   installRunsWidget(
@@ -379,7 +382,7 @@ test("INV-3/INV-6 boundary: cancellation is repeatable and terminal", async () =
 
   await boundary.tools.agent_cancel.execute("cancel-1", { ids: [id] });
   await boundary.tools.agent_cancel.execute("cancel-2", { ids: [id] });
-  boundary.active[0].resolve({ stopReason: "aborted" });
+  boundary.active[0].resolve({ stopReason: ABORTED_STOP_REASON });
   await boundary.flush();
 
   const first = await boundary.tools.agent_await.execute("await-1", {
@@ -401,7 +404,7 @@ test("INV-8 boundary: session shutdown cancels and forgets a tool-started run", 
   assert.equal(boundary.active[0].signal?.aborted, true);
   assert.equal(boundary.runs.list().length, 0);
 
-  boundary.active[0].resolve({ stopReason: "aborted" });
+  boundary.active[0].resolve({ stopReason: ABORTED_STOP_REASON });
   await boundary.flush();
   assert.equal(boundary.pushed.length, 0);
   const result = await boundary.tools.agent_result.execute("result", { id });
@@ -484,6 +487,7 @@ test("agent_start refuses an unknown agent", async () => {
       start: fakeStart(() => {}).start,
       runs,
       delivery: createSubagentDelivery({ runs, push: () => {} }),
+      harnesses: createHarnessRegistry([]),
     },
   );
 
@@ -512,6 +516,7 @@ test("the orchestration primitives are registered", () => {
       start: fakeStart(() => {}).start,
       runs,
       delivery: createSubagentDelivery({ runs, push: () => {} }),
+      harnesses: createHarnessRegistry([]),
     },
   );
 
@@ -795,6 +800,7 @@ test("a delivered report reaches the model and lets it respond", async () => {
             triggerTurn: true,
           }),
       }),
+      harnesses: createHarnessRegistry([]),
     },
   );
 

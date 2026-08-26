@@ -1,11 +1,12 @@
 import type { ParentModel, SubagentExecutor, SubagentTask } from "./run.ts";
-import type { AgentConfig } from "./types.ts";
+import { type AgentConfig, DEFAULT_HARNESS_NAME, EFFORTS } from "./types.ts";
 
 export interface HarnessDiagnostic {
   reason: string;
 }
 
 export interface HarnessValidationContext {
+  /** Available models; omission is treated as an empty catalogue. */
   models?: readonly { provider: string; id: string }[];
 }
 
@@ -13,11 +14,20 @@ export interface HarnessRun {
   execute: SubagentExecutor;
   /** Display metadata resolved in the harness's own vocabulary. */
   model?: string;
-  effort?: string;
 }
 
+/**
+ * The public adapter seam for one-shot subagent execution.
+ *
+ * @see ../../docs/harness-definition-of-done.md
+ * @see ../../docs/adr/0007-harness-seam-with-neutral-facts.md
+ */
 export interface Harness {
   readonly name: string;
+  /**
+   * Validate profile shape and adapter policy. Omitted runtime context carries
+   * no catalogue entries, so adapters may diagnose pinned models as unknown.
+   */
   validate(
     profile: AgentConfig,
     filePath: string,
@@ -33,7 +43,14 @@ export interface HarnessRegistry {
     filePath: string,
     context?: HarnessValidationContext,
   ): HarnessDiagnostic[];
-  names(): readonly string[];
+}
+
+interface CommonProfileFieldValidationOptions {
+  /** Name used in diagnostics, not the registry key. */
+  readonly displayName: string;
+  readonly validateModel?: (
+    model: string | undefined,
+  ) => HarnessDiagnostic | undefined;
 }
 
 export function createHarnessRegistry(
@@ -43,14 +60,13 @@ export function createHarnessRegistry(
   return {
     get: (name) => byName.get(name),
     validate(profile, filePath, context) {
-      const name = profile.harness ?? "pi";
+      const name = profile.harness ?? DEFAULT_HARNESS_NAME;
       const harness = byName.get(name);
       if (!harness) {
         return [{ reason: `unknown harness '${name}'` }];
       }
       return harness.validate(profile, filePath, context);
     },
-    names: () => [...byName.keys()],
   };
 }
 
@@ -68,7 +84,7 @@ export function stringField(
   return raw.trim() || undefined;
 }
 
-export function booleanField(
+function booleanField(
   profile: AgentConfig,
   field: string,
   filePath: string,
@@ -95,7 +111,7 @@ export function effortField(
   return value;
 }
 
-export function unknownFields(
+function unknownFields(
   profile: AgentConfig,
   recognized: readonly string[],
 ): string[] {
@@ -103,4 +119,70 @@ export function unknownFields(
   return Object.keys(profile.fields ?? {}).filter(
     (field) => !allowed.has(field),
   );
+}
+
+// Add a fifth common profile field here and validate/access it below; shared
+// profile vocabulary remains a one-module change rather than an adapter sweep.
+const COMMON_PROFILE_FIELDS = [
+  "model",
+  "effort",
+  "tools",
+  "appendSystemPrompt",
+] as const;
+
+/** Parse the one user-facing comma-separated tools syntax for every harness. */
+export function parseTools(
+  profile: AgentConfig,
+  filePath: string,
+): string[] | undefined {
+  const value = stringField(profile, "tools", filePath);
+  if (value === undefined) return undefined;
+  const tools = value
+    .split(",")
+    .map((tool) => tool.trim())
+    .filter(Boolean);
+  // `[]` is meaningful: passing an explicitly empty list disables tools;
+  // converting it to undefined would silently restore the backend defaults.
+  return tools;
+}
+
+/** Profiles append the native system prompt unless they explicitly opt out. */
+export function shouldAppendSystemPrompt(
+  profile: AgentConfig,
+  filePath: string,
+): boolean {
+  return booleanField(profile, "appendSystemPrompt", filePath) !== false;
+}
+
+/**
+ * Validate the four shared fields, then let each harness apply its own model
+ * rule. Adapter-specific vocabulary remains adapter-owned rather than forming
+ * a central config union.
+ */
+export function validateCommonProfileFields(
+  profile: AgentConfig,
+  filePath: string,
+  options: CommonProfileFieldValidationOptions,
+): HarnessDiagnostic[] {
+  const diagnostics: HarnessDiagnostic[] = unknownFields(
+    profile,
+    COMMON_PROFILE_FIELDS,
+  ).map((field) => ({
+    reason: `${options.displayName} harness does not recognize field '${field}'`,
+  }));
+
+  try {
+    const model = stringField(profile, "model", filePath);
+    // These calls validate field types and values; execution reads them again.
+    effortField(profile, filePath, EFFORTS);
+    parseTools(profile, filePath);
+    shouldAppendSystemPrompt(profile, filePath);
+    const modelDiagnostic = options.validateModel?.(model);
+    if (modelDiagnostic) diagnostics.push(modelDiagnostic);
+  } catch (error) {
+    diagnostics.push({
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return diagnostics;
 }

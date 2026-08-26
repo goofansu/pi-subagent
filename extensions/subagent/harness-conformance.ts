@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHarnessRegistry, type Harness } from "./harness.ts";
 import { getFinalOutput } from "./messages.ts";
+import { ABORTED_STOP_REASON } from "./run.ts";
 import { startSubagent } from "./runner.ts";
 import { createSubagentRuns } from "./runs.ts";
 import type {
@@ -97,7 +98,7 @@ function assertSettled(
 }
 
 function assertNoBackendAbortVocabulary(result: SingleResult): void {
-  assert.notEqual(result.stopReason, "aborted");
+  assert.notEqual(result.stopReason, ABORTED_STOP_REASON);
   assert.doesNotMatch(result.errorMessage ?? "", /aborted/);
 }
 

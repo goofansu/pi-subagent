@@ -194,26 +194,73 @@ test("the pi harness diagnoses models against its catalogue", () => {
     name: "known",
     description: "Known",
     harness: "pi",
-    fields: { model: "ACME/known" },
+    fields: { model: "OpenAI/GPT-5" },
     systemPrompt: "Work.",
   };
   const missing = {
     ...known,
     name: "missing",
-    fields: { model: "acme/missing" },
+    fields: { model: "OpenAI/missing" },
   };
+  const catalogue = [{ provider: "OpenAI", id: "GPT-5" }];
   assert.deepEqual(
-    registry.validate(known, "/agents/known.md", {
-      models: [{ provider: "acme", id: "known" }],
-    }),
+    registry.validate(known, "/agents/known.md", { models: catalogue }),
     [],
   );
+  const prepared = createPiHarness().prepare({
+    config: known,
+    description: "task",
+    prompt: "work",
+    cwd: "/work",
+    childDepth: 1,
+    projectTrusted: false,
+  });
+  assert.equal(
+    prepared.model,
+    "OpenAI/GPT-5",
+    "the model passed at execute time uses the exact spelling validation accepted",
+  );
+  const missingDiagnostics = registry.validate(missing, "/agents/missing.md", {
+    models: catalogue,
+  });
   assert.match(
-    registry.validate(missing, "/agents/missing.md", {
-      models: [{ provider: "acme", id: "known" }],
-    })[0]?.reason ?? "",
+    missingDiagnostics[0]?.reason ?? "",
     /not found in Pi's model catalogue/,
   );
+  assert.match(
+    missingDiagnostics[0]?.reason ?? "",
+    /catalogue models include: OpenAI\/GPT-5/,
+  );
+  assert.match(
+    registry.validate(
+      { ...known, fields: { model: "openAI/GPT-5" } },
+      "/agents/wrong-case.md",
+      { models: catalogue },
+    )[0]?.reason ?? "",
+    /not found in Pi's model catalogue/,
+  );
+});
+
+test("the pi catalogue diagnostic stays bounded", () => {
+  const catalogue = Array.from({ length: 100 }, (_, index) => ({
+    provider: "anthropic",
+    id: `claude-sonnet-4-${index}-20250514`,
+  }));
+  const reason = createHarnessRegistry([createPiHarness()]).validate(
+    {
+      name: "missing",
+      description: "Missing",
+      harness: "pi",
+      fields: { model: "provider/unknown" },
+      systemPrompt: "Work.",
+    },
+    "/agents/missing.md",
+    { models: catalogue },
+  )[0]?.reason;
+
+  assert.ok(reason);
+  assert.ok(reason.length < 700);
+  assert.match(reason, /100 catalogue models total\)\)$/);
 });
 
 test("loadAgentConfigs returns an empty map when directory is missing", () => {
@@ -286,12 +333,6 @@ test("getAgentsDir reads agents from user scope only", () => {
   // system prompt, a model, a tool list, or a description that reaches the
   // calling model's tool guidelines.
   assert.equal(getAgentsDir("/tmp/user-agent"), "/tmp/user-agent/agents");
-});
-
-test("loadAgentConfigs returns nothing for a missing agents directory", async () => {
-  const missing = path.join(await makeTempDir(), "missing");
-
-  assert.equal(loadAgentConfigs(missing).size, 0);
 });
 
 async function writeAgentWithFrontmatter(

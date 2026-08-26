@@ -17,9 +17,14 @@ import {
   getPackageDir,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import { booleanField, stringField } from "./harness.ts";
-import type { RunReporter, SubagentOutcome, SubagentRun } from "./run.ts";
-import { DEPTH_ENV_KEY } from "./run.ts";
+import { parseTools, shouldAppendSystemPrompt } from "./harness.ts";
+import {
+  ABORTED_STOP_REASON,
+  DEPTH_ENV_KEY,
+  type RunReporter,
+  type SubagentOutcome,
+  type SubagentRun,
+} from "./run.ts";
 import type { AgentConfig } from "./types.ts";
 
 export interface PiInvocationRuntime {
@@ -226,11 +231,11 @@ export function buildPiArgs(
   // pi takes the thinking level as its own flag, so nothing has to be spliced
   // into the model string — which is what made a colon ambiguous before.
   if (thinkingLevel) args.push("--thinking", thinkingLevel);
-  const tools = stringField(config, "tools", "profile");
-  if (tools) args.push("--tools", tools);
+  const tools = parseTools(config, "profile");
+  if (tools !== undefined) args.push("--tools", tools.join(","));
   if (systemPromptPath) {
     args.push(
-      booleanField(config, "appendSystemPrompt", "profile") !== false
+      shouldAppendSystemPrompt(config, "profile")
         ? "--append-system-prompt"
         : "--system-prompt",
       systemPromptPath,
@@ -552,7 +557,7 @@ export async function runPiAgent(
     // killed the child (the listener is removed once it closes), so the abort
     // marker travels in the outcome; the dispatcher normalizes the rest.
     if (wasAborted && !terminalAgentEndBeforeAbort) {
-      return { stopReason: "aborted" };
+      return { stopReason: ABORTED_STOP_REASON };
     }
     if (exitCode === 0 && !sawValidAgentEnd) {
       const stdoutTail = rawStdoutTail.trim();

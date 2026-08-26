@@ -50,6 +50,7 @@ test("session start refills stable config and session-fact references", (t) => {
     delivery: { shutdown() {} } as SubagentDelivery,
     sessionPush: createSessionPush(),
     runs: createSubagentRuns(),
+    harnesses: createHarnessRegistry([createPiHarness()]),
     registerFeatures(session, configs) {
       featureRegistrations++;
       liveSession = session;
@@ -124,6 +125,7 @@ test("session shutdown delegates cleanup as one lifecycle operation", () => {
     } as unknown as SubagentDelivery,
     sessionPush: createSessionPush(),
     runs: createSubagentRuns(),
+    harnesses: createHarnessRegistry([createPiHarness()]),
     registerFeatures() {},
   });
 

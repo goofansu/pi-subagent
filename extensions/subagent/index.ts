@@ -28,7 +28,7 @@ interface SubagentToolRuntime {
   delivery: SubagentDelivery;
   runs: SubagentRuns;
   start: typeof startSubagent;
-  harnesses?: HarnessRegistry;
+  harnesses: HarnessRegistry;
 }
 
 /** Production feature registrar: all runtime policy is already composed. */
@@ -319,6 +319,8 @@ export function registerDeliveryEventHandlers(
 
   pi.on("turn_end", (event) => {
     const message = event.message as { stopReason?: string } | undefined;
+    // This is the host turn_end stop reason, not an executor outcome. It
+    // tells delivery that an in-flight notification needs to be retried.
     if (message?.stopReason === "aborted") delivery.turnAborted();
   });
 

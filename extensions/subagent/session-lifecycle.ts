@@ -33,7 +33,7 @@ export interface SessionLifecycleOptions {
   delivery: SubagentDelivery;
   sessionPush: SessionPush;
   runs: SubagentRuns;
-  harnesses?: HarnessRegistry;
+  harnesses: HarnessRegistry;
   registerFeatures(
     session: SessionContext,
     agentConfigs: Map<string, AgentConfig>,

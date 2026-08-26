@@ -226,6 +226,28 @@ test("Claude passes the alias through unresolved for the SDK to interpret", () =
   );
 });
 
+test("Claude shares tools trimming and empty-segment handling with Pi", () => {
+  const options = buildClaudeOptions(
+    { ...task, config: { ...config, fields: { tools: " read, , grep ,, " } } },
+    undefined,
+    undefined,
+    new AbortController(),
+  );
+
+  assert.deepEqual(options.tools, ["read", "grep"]);
+});
+
+test("Claude preserves an explicitly empty tools allowlist", () => {
+  const options = buildClaudeOptions(
+    { ...task, config: { ...config, fields: { tools: ", ," } } },
+    undefined,
+    undefined,
+    new AbortController(),
+  );
+
+  assert.deepEqual(options.tools, []);
+});
+
 test("Claude thinking budgets stay inside the adapter", () => {
   assert.deepEqual(
     buildClaudeOptions(task, "sonnet", "high", new AbortController()).thinking,

@@ -23,6 +23,7 @@ import type {
   SingleResult,
   UsageStats,
 } from "./types.ts";
+import { DEFAULT_HARNESS_NAME } from "./types.ts";
 
 /**
  * Environment variable transporting the child depth. The dispatcher decides
@@ -75,7 +76,7 @@ function terminalLifecycle(
   cancellationReason?: CancellationReason,
 ): Lifecycle {
   const exitCode = outcome.exitCode;
-  if (outcome.stopReason === "aborted") {
+  if (outcome.stopReason === ABORTED_STOP_REASON) {
     return {
       phase: "cancelled",
       finishedAt,
@@ -192,10 +193,19 @@ export interface RunReporter {
   stderr(chunk: string): void;
 }
 
+/** The executor-seam marker for cancellation that killed the child. */
+export const ABORTED_STOP_REASON = "aborted" as const;
+
+/**
+ * Stop reasons an executor may use when settling a run. Provider stop reasons
+ * such as `stop` or `end_turn` belong to reported facts, not this outcome.
+ */
+type SubagentOutcomeStopReason = typeof ABORTED_STOP_REASON | "error";
+
 /**
  * How a run ended, as the executor witnessed it.
  *
- * `stopReason: "aborted"` is the abort marker: only the executor knows
+ * {@link ABORTED_STOP_REASON} is the abort marker: only the executor knows
  * whether a cancellation actually killed the child (a late abort after a
  * clean exit must not count), so it travels in the outcome rather than being
  * inferred from the signal. `stopReason` and `errorMessage` are written only
@@ -205,7 +215,7 @@ export interface RunReporter {
 export interface SubagentOutcome {
   /** Absent when the child exited because of a signal. */
   exitCode?: number;
-  stopReason?: string;
+  stopReason?: SubagentOutcomeStopReason;
   errorMessage?: string;
 }
 
@@ -245,7 +255,7 @@ export function createEmptyResult(
   agent: string,
   description: string,
   startedAt: number,
-  harness = "pi",
+  harness = DEFAULT_HARNESS_NAME,
 ): SingleResult {
   return {
     agent,
@@ -273,7 +283,7 @@ function recordFact(result: SingleResult, fact: Fact): void {
   // A model reported by a harness fact is authoritative, including when it
   // refines the harness-resolved baseline.
   if (fact.model) result.model = fact.model;
-  if (fact.stopReason && fact.stopReason !== "aborted") {
+  if (fact.stopReason && fact.stopReason !== ABORTED_STOP_REASON) {
     result.stopReason = fact.stopReason;
   }
   if (fact.errorMessage) result.errorMessage = fact.errorMessage;
@@ -343,7 +353,7 @@ export function applyOutcome(
   result: SingleResult,
   outcome: SubagentOutcome,
 ): void {
-  if (outcome.stopReason === "aborted") {
+  if (outcome.stopReason === ABORTED_STOP_REASON) {
     // `aborted` is executor mechanism vocabulary. Cancellation lifecycle and
     // its recorded reason are the only domain representation; neither the
     // result nor presentation may retain the backend stop verb.

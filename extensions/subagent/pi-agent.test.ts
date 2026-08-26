@@ -388,7 +388,7 @@ function piConformanceRig(): HarnessConformanceRig {
       const base = (
         expected: HarnessConformanceFixture["expected"],
       ): HarnessConformanceFixture => ({
-        harness: createPiHarness([], { spawn }),
+        harness: createPiHarness({ spawn }),
         expected,
         ...(ready ? { readyForCancellation: ready } : {}),
         depthProbe: () => observedDepth,
@@ -790,6 +790,22 @@ test("buildPiArgs omits the thinking flag when no level applies", () => {
   const args = buildPiArgs(agent(), "sonnet", undefined, undefined);
 
   assert.equal(args.includes("--thinking"), false);
+});
+
+test("buildPiArgs shares tools trimming and empty-segment handling", () => {
+  const args = buildPiArgs(
+    agent({ tools: " read, , grep ,, " }),
+    undefined,
+    undefined,
+  );
+
+  assert.deepEqual(args.slice(-2), ["--tools", "read,grep"]);
+});
+
+test("buildPiArgs preserves an explicitly empty tools allowlist", () => {
+  const args = buildPiArgs(agent({ tools: ", ," }), undefined, undefined);
+
+  assert.deepEqual(args.slice(-2), ["--tools", ""]);
 });
 
 test("buildPiArgs passes tools and explicitly replaces native instructions", () => {

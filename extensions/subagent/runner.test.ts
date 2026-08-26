@@ -8,13 +8,14 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { createHarnessRegistry, type Harness } from "./harness.ts";
 import { createPiHarness } from "./pi-harness.ts";
-import type {
-  Fact,
-  SubagentExecutor,
-  SubagentOutcome,
-  SubagentRun,
+import {
+  ABORTED_STOP_REASON,
+  createEmptyResult,
+  type Fact,
+  type SubagentExecutor,
+  type SubagentOutcome,
+  type SubagentRun,
 } from "./run.ts";
-import { createEmptyResult } from "./run.ts";
 import type { RunSubagentOptions } from "./runner.ts";
 import {
   assertSubagentDepthAvailable,
@@ -75,7 +76,9 @@ function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
 
 /** Keep executor injection behind the same harness seam production uses. */
 function startSubagent(
-  options: RunSubagentOptions & { execute: SubagentExecutor },
+  options: Omit<RunSubagentOptions, "harnesses"> & {
+    execute: SubagentExecutor;
+  },
 ): ReturnType<typeof dispatchSubagent> {
   const { execute, ...dispatchOptions } = options;
   const harness: Harness = {
@@ -155,7 +158,7 @@ test("startSubagent hands the executor resolved dispatch policy", async () => {
   assert.equal("depth" in task, false);
 });
 
-test("the selected harness owns model and effort resolution", () => {
+test("the selected harness resolves models without exposing effort", () => {
   const harness = createPiHarness();
   const task = {
     config: agent({ model: "sonnet", effort: "high" }),
@@ -171,13 +174,13 @@ test("the selected harness owns model and effort resolution", () => {
     thinkingLevel: "low",
   });
   assert.equal(prepared.model, "sonnet");
-  assert.equal(prepared.effort, "high");
+  assert.equal("effort" in prepared, false);
   const inherited = harness.prepare(
     { ...task, config: agent() },
     { provider: "anthropic", id: "claude-opus-4-5", thinkingLevel: "low" },
   );
   assert.equal(inherited.model, "anthropic/claude-opus-4-5");
-  assert.equal(inherited.effort, undefined);
+  assert.equal("effort" in inherited, false);
 });
 
 // ── Depth guard ───────────────────────────────────────────────────────────────
@@ -263,7 +266,6 @@ test("startSubagent publishes progress to the registry, not the transcript", asy
       : undefined,
     4_500,
   );
-  assert.equal(reported.effort, "high");
 });
 
 test("a rejected executor settles the authoritative run as failed", async () => {
@@ -286,12 +288,15 @@ test("a rejected executor settles the authoritative run as failed", async () => 
 
 test("INV-3: terminal lifecycle states are final", async () => {
   const cases = [
-    { exitCode: 0, stopReason: "stop", expected: "completed" },
-    { exitCode: 1, stopReason: "error", expected: "failed" },
-    { exitCode: 1, stopReason: "aborted", expected: "cancelled" },
+    { outcome: { exitCode: 0 }, expected: "completed" },
+    { outcome: { exitCode: 1, stopReason: "error" }, expected: "failed" },
+    {
+      outcome: { exitCode: 1, stopReason: ABORTED_STOP_REASON },
+      expected: "cancelled",
+    },
   ] as const;
 
-  for (const { expected, ...outcome } of cases) {
+  for (const { expected, outcome } of cases) {
     const execute: SubagentExecutor = async () => outcome;
     const times = [100, 700];
 
@@ -450,7 +455,7 @@ test("a transcript snapshot replaces the streamed fold, healing usage", async ()
   assert.equal(result.usage.turns, 1, "the snapshot is authoritative");
 });
 
-test("startSubagent omits effort when the profile does not configure it", async () => {
+test("startSubagent does not retain effort on the result", async () => {
   const recorded = recordingExecutor();
   const result = await startAndSettle({
     config: agent(),
@@ -459,7 +464,6 @@ test("startSubagent omits effort when the profile does not configure it", async 
     execute: recorded.execute,
   });
 
-  assert.equal(result.effort, undefined);
   assert.equal("effort" in result, false);
 });
 
@@ -498,6 +502,20 @@ test("a run cancelled before it starts never spawns a child", async () => {
 });
 
 // ── Registry ──────────────────────────────────────────────────────────────────
+
+test("an unregistered harness name fails loudly at dispatch", () => {
+  assert.throws(
+    () =>
+      dispatchSubagent({
+        config: agent({ harness: "claude" }),
+        description: "task",
+        prompt: "do it",
+        harnesses: createHarnessRegistry([]),
+        runs: createSubagentRuns(),
+      }),
+    /No harness registered for 'claude'/,
+  );
+});
 
 test("a started run stays tracked after it settles, until its delivery", async () => {
   const runs = createSubagentRuns();
@@ -539,7 +557,7 @@ test("a cancellation reason survives registry release until settlement", async (
 
   runs.cancel([started.id], "shutdown");
   runs.release(started.id);
-  finish({ stopReason: "aborted" });
+  finish({ stopReason: ABORTED_STOP_REASON });
   const result = await started.settled;
 
   assert.equal(result.lifecycle.phase, "cancelled");
@@ -554,7 +572,7 @@ test("an aborted backend outcome never persists its stop reason in the domain re
     config: agent(),
     description: "cancelled",
     prompt: "go",
-    execute: async () => ({ stopReason: "aborted" }),
+    execute: async () => ({ stopReason: ABORTED_STOP_REASON }),
   });
 
   assert.equal(result.lifecycle.phase, "cancelled");
@@ -568,7 +586,7 @@ test("the registry can cancel one run without touching the turn", async () => {
     const [id] = runs.list().map((view) => view.id);
     runs.cancel([id]);
     sawAbort = run.signal?.aborted ?? false;
-    return { exitCode: 1, stopReason: "aborted" };
+    return { exitCode: 1, stopReason: ABORTED_STOP_REASON };
   };
 
   const started = startSubagent({

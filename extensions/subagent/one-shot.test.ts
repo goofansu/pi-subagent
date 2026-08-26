@@ -19,7 +19,7 @@ type HarnessContractKeys = Assert<
   Equal<keyof Harness, "name" | "validate" | "prepare">
 >;
 type HarnessRunContractKeys = Assert<
-  Equal<keyof HarnessRun, "execute" | "model" | "effort">
+  Equal<keyof HarnessRun, "execute" | "model">
 >;
 type SubagentTaskContractKeys = Assert<
   Equal<

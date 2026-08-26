@@ -37,6 +37,9 @@ export const EFFORTS = [
 ] as const;
 export type Effort = (typeof EFFORTS)[number];
 
+/** The one harness name used when profile parsing resolves an omitted field. */
+export const DEFAULT_HARNESS_NAME = "pi";
+
 /** A generic profile: only the common fields are interpreted by core. */
 export interface AgentConfig {
   name: string;
@@ -64,7 +67,6 @@ export interface SingleResult {
   /** Display-only activity derived from the most recent tool call. */
   activity?: string;
   model?: string;
-  effort?: string;
   stopReason?: string;
   errorMessage?: string;
 }

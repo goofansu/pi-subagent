@@ -5,12 +5,14 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Harness, HarnessDiagnostic, HarnessRun } from "./harness.ts";
 import {
-  booleanField,
   effortField,
+  parseTools,
+  shouldAppendSystemPrompt,
   stringField,
-  unknownFields,
+  validateCommonProfileFields,
 } from "./harness.ts";
 import {
+  ABORTED_STOP_REASON,
   DEPTH_ENV_KEY,
   type Fact,
   type FactPart,
@@ -215,12 +217,8 @@ export function buildClaudeOptions(
   effort: string | undefined,
   abortController: AbortController,
 ): Options {
-  const tools = stringField(task.config, "tools", "profile")
-    ?.split(",")
-    .map((tool) => tool.trim())
-    .filter(Boolean);
-  const append =
-    booleanField(task.config, "appendSystemPrompt", "profile") !== false;
+  const tools = parseTools(task.config, "profile");
+  const append = shouldAppendSystemPrompt(task.config, "profile");
   const options: Options = {
     cwd: task.cwd,
     model,
@@ -235,7 +233,7 @@ export function buildClaudeOptions(
     // disallowedTools stops in-SDK spawning, this stops a Bash-launched
     // grandchild pi from starting at depth zero.
     env: { ...process.env, [DEPTH_ENV_KEY]: String(task.childDepth) },
-    ...(tools ? { tools } : {}),
+    ...(tools !== undefined ? { tools } : {}),
     systemPrompt: append
       ? {
           type: "preset",
@@ -253,32 +251,15 @@ export function createClaudeHarness(
   return {
     name: "claude",
     validate(profile: AgentConfig, filePath: string): HarnessDiagnostic[] {
-      const diagnostics: HarnessDiagnostic[] = [];
-      for (const field of unknownFields(profile, [
-        "model",
-        "effort",
-        "tools",
-        "appendSystemPrompt",
-      ])) {
-        diagnostics.push({
-          reason: `Claude harness does not recognize field '${field}'`,
-        });
-      }
-      try {
-        const model = stringField(profile, "model", filePath);
-        effortField(profile, filePath, EFFORTS);
-        stringField(profile, "tools", filePath);
-        booleanField(profile, "appendSystemPrompt", filePath);
-        if (model && !isClaudeModel(model))
-          throw new Error(
-            `invalid Claude model '${model}' (expected one of: ${CLAUDE_MODEL_ALIASES.join(", ")})`,
-          );
-      } catch (error) {
-        diagnostics.push({
-          reason: error instanceof Error ? error.message : String(error),
-        });
-      }
-      return diagnostics;
+      return validateCommonProfileFields(profile, filePath, {
+        displayName: "Claude",
+        validateModel: (model) =>
+          model && !isClaudeModel(model)
+            ? {
+                reason: `invalid Claude model '${model}' (expected one of: ${CLAUDE_MODEL_ALIASES.join(", ")})`,
+              }
+            : undefined,
+      });
     },
     prepare(task: SubagentTask, _parentModel?: ParentModel): HarnessRun {
       // The alias is passed through as-is; the SDK resolves it to the
@@ -287,7 +268,6 @@ export function createClaudeHarness(
       const effort = effortField(task.config, "profile", EFFORTS);
       return {
         model,
-        effort,
         execute: async (run) => {
           const controller = new AbortController();
           let stream: Query | undefined;
@@ -308,13 +288,14 @@ export function createClaudeHarness(
             const query = await loadQuery();
             // Loading the SDK is asynchronous. Cancellation can win that race;
             // in that case no provider query may be started.
-            if (controller.signal.aborted) return { stopReason: "aborted" };
+            if (controller.signal.aborted)
+              return { stopReason: ABORTED_STOP_REASON };
             const options = buildClaudeOptions(task, model, effort, controller);
             options.stderr = (data) => run.report.stderr(data);
             stream = query({ prompt: task.prompt, options });
             if (controller.signal.aborted) {
               stream.close();
-              return { stopReason: "aborted" };
+              return { stopReason: ABORTED_STOP_REASON };
             }
             for await (const message of stream) {
               if (
@@ -334,7 +315,7 @@ export function createClaudeHarness(
             }
             streamEnded = true;
             if (abortRequested && !terminalResultBeforeAbort)
-              return { stopReason: "aborted" };
+              return { stopReason: ABORTED_STOP_REASON };
             return errorMessage
               ? { exitCode: 1, stopReason: "error", errorMessage }
               : { exitCode: 0 };
@@ -349,7 +330,7 @@ export function createClaudeHarness(
               controller.signal.aborted ||
               run.signal?.aborted
             )
-              return { stopReason: "aborted" };
+              return { stopReason: ABORTED_STOP_REASON };
             const message =
               error instanceof Error ? error.message : String(error);
             return { exitCode: 1, stopReason: "error", errorMessage: message };

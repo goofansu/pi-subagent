@@ -58,8 +58,11 @@ Pi understands `model`, `effort`, `tools`, and `appendSystemPrompt`.
 `model` is an exact model id (or `provider/model-id`) from Pi's catalogue;
 `effort` is Pi's thinking level; `tools` is a comma-separated Pi tool list;
 and `appendSystemPrompt` defaults to `true` and controls whether the profile
-prompt is appended to or replaces Pi's instructions. A pinned model is checked
-against Pi's loaded catalogue.
+prompt is appended to or replaces Pi's instructions. Empty segments are
+ignored, but a list containing only separators (for example `tools: ", ,"`)
+disables all tools rather than restoring backend defaults. An empty or
+whitespace-only value remains unset and uses backend defaults. A pinned model
+is checked against Pi's loaded catalogue using its exact spelling.
 
 #### Claude profiles
 
@@ -85,8 +88,9 @@ are rejected. It uses the SDK default when `model` is omitted. `effort` is
 translated by the adapter to a thinking-token budget (`off` disables thinking);
 `tools` selects Claude built-in tools (see the [Claude Code tools
 reference](https://code.claude.com/docs/en/tools-reference) to configure the
-list); and `appendSystemPrompt` defaults to `true`, appending the profile to
-Claude Code's default prompt. `false` supplies
+list); empty segments are ignored and an explicitly empty list disables all
+built-in tools. `appendSystemPrompt` defaults to `true`, appending the profile
+to Claude Code's default prompt. `false` supplies
 the profile as the complete system prompt. Claude profiles do not inherit the
 calling model.
 

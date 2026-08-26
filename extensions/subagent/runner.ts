@@ -7,6 +7,7 @@
 import type { HarnessRegistry } from "./harness.ts";
 import type { ParentModel, SubagentOutcome, SubagentTask } from "./run.ts";
 import {
+  ABORTED_STOP_REASON,
   createEmptyResult,
   createRunReporter,
   DEPTH_ENV_KEY,
@@ -14,7 +15,11 @@ import {
 } from "./run.ts";
 import type { SubagentRuns } from "./runs.ts";
 import { subagentRuns } from "./runs.ts";
-import type { AgentConfig, SingleResult } from "./types.ts";
+import {
+  type AgentConfig,
+  DEFAULT_HARNESS_NAME,
+  type SingleResult,
+} from "./types.ts";
 
 const MAX_SUBAGENT_DEPTH = 1;
 
@@ -41,7 +46,7 @@ export interface RunSubagentOptions {
   projectTrusted?: boolean;
   cwd?: string;
   /** Harness resolution is the only backend decision in the dispatcher. */
-  harnesses?: HarnessRegistry;
+  harnesses: HarnessRegistry;
   runs?: SubagentRuns;
   now?: () => number;
 }
@@ -68,9 +73,10 @@ export function startSubagent({
   const currentDepth = getSubagentDepth();
   assertSubagentDepthAvailable(currentDepth);
 
-  const selectedHarness = harnesses?.get(config.harness ?? "pi");
+  const harnessName = config.harness ?? DEFAULT_HARNESS_NAME;
+  const selectedHarness = harnesses.get(harnessName);
   if (!selectedHarness) {
-    throw new Error(`No harness registered for '${config.harness ?? "pi"}'`);
+    throw new Error(`No harness registered for '${harnessName}'`);
   }
 
   const result = createEmptyResult(
@@ -89,7 +95,6 @@ export function startSubagent({
   };
   const prepared = selectedHarness.prepare(task, parentModel);
   if (prepared.model) result.model = prepared.model;
-  if (prepared.effort) result.effort = prepared.effort;
   const controller = new AbortController();
   const forwardAbort = () => controller.abort();
   if (signal) {
@@ -107,7 +112,7 @@ export function startSubagent({
       if (controller.signal.aborted) {
         settleResultLifecycle(
           result,
-          { stopReason: "aborted" },
+          { stopReason: ABORTED_STOP_REASON },
           now(),
           handle.cancellationReason(),
         );

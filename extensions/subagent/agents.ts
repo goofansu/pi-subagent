@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { HarnessRegistry } from "./harness.ts";
-import type { AgentConfig } from "./types.ts";
+import { type AgentConfig, DEFAULT_HARNESS_NAME } from "./types.ts";
 
 export interface InvalidAgentConfig {
   filePath: string;
@@ -78,7 +78,7 @@ export function parseAgentConfig(filePath: string): AgentConfig {
   const description = requiredDescription(frontmatter.description, filePath);
   const harness =
     frontmatter.harness === undefined
-      ? "pi"
+      ? DEFAULT_HARNESS_NAME
       : requiredStringField(frontmatter.harness, "harness", filePath);
   const systemPrompt = body.trim();
   if (!systemPrompt) {
