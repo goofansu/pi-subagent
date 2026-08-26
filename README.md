@@ -107,6 +107,15 @@ the parent working directory is untrusted. This is an intentional sharp edge;
 the trust value is carried for a future policy change. The child cannot spawn
 another agent.
 
+Claude children also inherit the operator's Claude Code environment: filesystem
+settings load as they would for the CLI, so MCP servers registered with
+`claude mcp add` (and the account's claude.ai connectors, when they attach) are
+available to every claude child, unprompted. This is deliberate — different
+harnesses exist to bring different toolsets — and it means registering an MCP
+server in Claude Code also grants it to claude-harness subagents. The `tools`
+field narrows built-in tools only. See
+[ADR 0008](docs/adr/0008-claude-children-inherit-operator-environment.md).
+
 #### Resolution matrix
 
 | Profile | Pi model / effort | Claude model / effort |
