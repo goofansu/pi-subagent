@@ -5,7 +5,11 @@
  * stops at this file.
  */
 
-import { type SpawnOptions, spawn } from "node:child_process";
+import {
+  type ChildProcess,
+  spawn as defaultSpawn,
+  type SpawnOptions,
+} from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -24,6 +28,13 @@ export interface PiInvocationRuntime {
   packageDir: string;
   isPiCli: boolean;
 }
+
+/** The process creation seam for the pi adapter. */
+export type PiSpawn = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => ChildProcess;
 
 const PI_CLI_SCRIPT_PATHS = [
   ["dist", "cli.js"],
@@ -378,8 +389,9 @@ const KILL_ESCALATION_MS = 5_000;
  * executor; see `SubagentExecutor` in `run.ts` for the contract it satisfies,
  * cancellation included.
  *
- * `killEscalationMs` is injected for tests: the SIGTERM→SIGKILL path cannot
- * be exercised at all against a five-second wall-clock wait.
+ * `killEscalationMs` and the spawn function are injected for tests; production
+ * uses the five-second SIGTERM→SIGKILL wait and Node's child-process
+ * implementation.
  */
 export async function runPiAgent(
   run: SubagentRun,
@@ -387,10 +399,12 @@ export async function runPiAgent(
     killEscalationMs = KILL_ESCALATION_MS,
     resolvedModel,
     resolvedThinking,
+    spawn = defaultSpawn,
   }: {
     killEscalationMs?: number;
     resolvedModel?: string;
     resolvedThinking?: string;
+    spawn?: PiSpawn;
   } = {},
 ): Promise<SubagentOutcome> {
   const { task, signal } = run;
@@ -400,6 +414,7 @@ export async function runPiAgent(
   let tmpPromptPath: string | null = null;
   let wasAborted = false;
   let sawValidAgentEnd = false;
+  let terminalAgentEndBeforeAbort = false;
   let rawStdoutTail = "";
 
   // Stderr is an auxiliary diagnostic only. In-band error state belongs to
@@ -469,7 +484,10 @@ export async function runPiAgent(
         }
 
         const event = parsed as Record<string, unknown>;
-        if (isValidAgentEndEvent(event)) sawValidAgentEnd = true;
+        if (isValidAgentEndEvent(event)) {
+          sawValidAgentEnd = true;
+          if (!wasAborted) terminalAgentEndBeforeAbort = true;
+        }
         translatePiJsonEvent(event, report);
       };
 
@@ -490,7 +508,7 @@ export async function runPiAgent(
         if (stdout.overflowed()) {
           report.stderr(OVERSIZED_STDOUT_LINE_MESSAGE);
         }
-        if (code !== 0) {
+        if (code !== 0 && !(code === null && terminalAgentEndBeforeAbort)) {
           closeErrorMessage = `Child pi exited with code ${code ?? "unknown"}`;
           const stdoutTail = rawStdoutTail.trim();
           if (!reportedStderr && stdoutTail) {
@@ -533,7 +551,7 @@ export async function runPiAgent(
     // contract in run.ts. Only this driver knows whether the abort actually
     // killed the child (the listener is removed once it closes), so the abort
     // marker travels in the outcome; the dispatcher normalizes the rest.
-    if (wasAborted) {
+    if (wasAborted && !terminalAgentEndBeforeAbort) {
       return { stopReason: "aborted" };
     }
     if (exitCode === 0 && !sawValidAgentEnd) {
@@ -548,7 +566,10 @@ export async function runPiAgent(
       };
     }
     return {
-      exitCode,
+      // A terminal answer witnessed before cancellation is authoritative even
+      // when killing the now-unneeded child reports no numeric exit code.
+      exitCode:
+        terminalAgentEndBeforeAbort && exitCode === undefined ? 0 : exitCode,
       ...(closeErrorMessage ? { errorMessage: closeErrorMessage } : {}),
     };
   } finally {

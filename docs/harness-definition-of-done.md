@@ -62,15 +62,21 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
 5. [x] **Adding a fake harness requires no core changes.**
    *Test:* `harness.test.ts` runs a fake through dispatcher, registry,
    delivery, presentation, and widget, including cancellation, without
-   starting a Pi child or loading the Claude SDK.
+   starting a Pi child or loading the Claude SDK. Its shared **Harness
+   Conformance** battery also covers backend-crash executor resolution,
+   cancellation normalization, usage folding, child-depth transport, and
+   configuration immutability. That battery is part of the one-adapter cost,
+   not a core change.
    *Review:* the fake implements only the public `Harness` contract; profile
    loading also asks a fake-owned validator to reject an unknown field.
 
 6. [x] **A codex harness would cost one adapter, one registration, its own
    tests — and no dispatcher/lifecycle changes.**
    *Test:* the Codex-like public-contract fixture in `harness.test.ts`
-   compiles and runs through the same dispatcher and lifecycle; it supplies
-   only a registry entry and executor.
+   compiles and runs through the same dispatcher and lifecycle; a new
+   harness's own tests must also run the shared **Harness Conformance**
+   battery. The one-adapter cost is therefore the adapter, its registration,
+   and its battery tests.
 
 7. [x] **Pi wire `Message` objects never leave the pi harness.**
    Translation to facts happens inside the pi executor module, at the edge.
@@ -91,9 +97,10 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
    Claude). Backend `aborted` is normalized at the seam: it never persists in
    `SingleResult.stopReason` or presentation, while lifecycle `cancelled` and
    its reason remain authoritative (see Cancel in `CONTEXT.md`).
-   *Test:* fake-harness test aborts mid-run and asserts the lifecycle
-   settles to cancelled with the recorded reason; adapter tests assert each
-   backend's kill path fires on signal abort.
+   *Test:* the shared **Harness Conformance** battery's `abort-mid-run` and
+   `terminal-answer-then-abort` scenarios assert `aborted` normalization and
+   terminal-answer precedence; adapter tests assert each backend's kill path
+   fires on signal abort.
    *Review:* no harness-specific stop verbs in core; no second cancellation
    channel (no `harness.cancel()` method, no shared flags).
 
@@ -126,9 +133,11 @@ comments and ordinary string literals are not.
   different: it is a latest-value gauge, so the fold replaces it with the
   newest reported context size rather than adding it. A harness that only
   knows totals reports one usage-bearing fact, and never reports the same
-  run's usage both per-message and cumulatively. *Test:* fold accumulation
-  and latest-context fixtures; the Claude adapter test asserts no double
-  count between per-message usage and the terminal result.
+  run's usage both per-message and cumulatively. *Test:* the shared **Harness
+  Conformance** battery's `usage-totals` scenario runs both real adapters
+  through the dispatcher and fold, asserting additive deltas; the Pi and fake
+  rigs also prove latest-context replacement, while the Claude rig proves no
+  double count between per-message usage and the terminal result.
 - [x] **One-shot binds every harness** — one prompt in, one terminal answer
   out (ADR-0003 is a property of Run). *Test:* `one-shot.test.ts` has
   compile-time exact `keyof` assertions for `Harness`, `HarnessRun`, and
@@ -137,11 +146,12 @@ comments and ordinary string literals are not.
 - [x] **Depth binds every harness** — Claude children have their
   agent-spawning tools disallowed, and every executor copies
   `task.childDepth` into its child's environment so a Bash-launched
-  grandchild pi cannot restart at depth zero. *Test:* Claude adapter tests
-  assert both installed SDK spawning tools, `Agent` and `Task`, are
-  disallowed and that `PI_SUBAGENT_DEPTH` is set in the child's env with
-  `process.env` inheritance preserved; the dispatcher depth guard and Pi
-  child-depth transport are also tested.
+  grandchild pi cannot restart at depth zero. *Test:* the shared **Harness
+  Conformance** battery's `child-depth` scenario runs both real adapters and
+  observes the child depth; adapter policy tests assert Claude disallows
+  `Agent` and `Task`, while the adapter rigs assert `PI_SUBAGENT_DEPTH` and
+  preserved `process.env` inheritance. The dispatcher depth guard remains
+  separately tested.
 - [x] **Trust posture is harness policy** — the request carries
   `projectTrusted`; the Claude harness bypasses permissions unconditionally in
   this version. *Test:* Claude adapter test asserts bypass regardless of the
@@ -153,9 +163,11 @@ comments and ordinary string literals are not.
   baseline; healing resets to that baseline, then terminal facts may replace
   it, while absent or ambiguous evidence retains the baseline and no baseline
   removes stale model metadata. A retained provider error still wins over a
-  generic process-exit diagnostic. *Test:* Shadow-Pi fixtures cover the error
-  paths and dispatcher fold tests cover authoritative-baseline replacement,
-  stale-model removal, and baseline preservation.
+  generic process-exit diagnostic. *Test:* the Pi and fake harness
+  `terminal-transcript-healing` conformance scenarios cover clean replacement,
+  while adapter and dispatcher fold tests cover the error paths,
+  authoritative-baseline replacement, stale-model removal, and baseline
+  preservation.
 - [x] **Empty terminal accounting reaches presentation** — a successful Claude
   result with no text remains a fact, including usage, turns, cost, and stop
   reason; model provenance comes from an empty/thinking assistant fact or one

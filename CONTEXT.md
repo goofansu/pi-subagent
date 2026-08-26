@@ -101,6 +101,15 @@ facts through the reporter defined in `run.ts` and resolves to an outcome; it
 never touches the run record. Wire format stops inside the harness — no
 backend's message shapes cross this seam.
 
+**Conformance** — the named battery of required scenarios every harness's
+executor must pass as part of its own tests. It makes the executor
+obligations of `run.ts` mechanical: backend failures resolve as failed,
+backend aborts normalize to
+cancellation, a terminal answer survives a later abort, usage deltas fold with
+latest context gauges, child depth reaches the child, and profile configuration
+stays unchanged. Transcript healing is optional and visibly skipped by
+harnesses that do not support it.
+
 **Presentation** (`presentation.ts`) — how a run and its notification read to a
 human: status tones, verbs, phrases, and notification text. The only module that interprets a lifecycle status for display; the
 delivery module does bookkeeping and asks this one what a notification says.

@@ -3,7 +3,14 @@ import { test } from "node:test";
 import { createSubagentDelivery } from "./delivery.ts";
 import type { Harness } from "./harness.ts";
 import { createHarnessRegistry } from "./harness.ts";
+import {
+  type HarnessConformanceFixture,
+  type HarnessConformanceRig,
+  type HarnessConformanceScenario,
+  runHarnessConformance,
+} from "./harness-conformance.ts";
 import { formatNotification } from "./presentation.ts";
+import type { SubagentExecutor } from "./run.ts";
 import { startSubagent } from "./runner.ts";
 import { createSubagentRuns } from "./runs.ts";
 import type { AgentConfig } from "./types.ts";
@@ -39,6 +46,201 @@ function fakeHarness(
     }),
   };
 }
+
+function fakeExecutorHarness(execute: SubagentExecutor): Harness {
+  return {
+    name: "fake",
+    validate: () => [],
+    prepare: () => ({ execute }),
+  };
+}
+
+function cancellationGate(): {
+  ready: Promise<void>;
+  open: () => void;
+} {
+  let open = () => {};
+  const ready = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { ready, open };
+}
+
+function waitForAbort(
+  signal: AbortSignal | undefined,
+  ready: () => void,
+): Promise<void> {
+  return new Promise((resolve) => {
+    if (!signal || signal.aborted) {
+      ready();
+      resolve();
+      return;
+    }
+    signal.addEventListener("abort", () => resolve(), { once: true });
+    ready();
+  });
+}
+
+function conformanceRig(): HarnessConformanceRig {
+  return {
+    name: "fake",
+    build(scenario: HarnessConformanceScenario): HarnessConformanceFixture {
+      let childDepth: number | undefined;
+      const base = (
+        execute: SubagentExecutor,
+        expected: HarnessConformanceFixture["expected"],
+        readyForCancellation?: Promise<void>,
+      ): HarnessConformanceFixture => ({
+        harness: fakeExecutorHarness(execute),
+        expected,
+        ...(readyForCancellation ? { readyForCancellation } : {}),
+        depthProbe: () => childDepth,
+      });
+
+      switch (scenario) {
+        case "backend-crash":
+          return base(
+            async (run) => {
+              childDepth = run.task.childDepth;
+              return {
+                exitCode: 1,
+                stopReason: "error",
+                errorMessage: "fake backend crashed",
+              };
+            },
+            {
+              phase: "failed",
+              errorMessage: "fake backend crashed",
+            },
+          );
+        case "abort-mid-run": {
+          const gate = cancellationGate();
+          return base(
+            async (run) => {
+              childDepth = run.task.childDepth;
+              await waitForAbort(run.signal, gate.open);
+              return { stopReason: "aborted" };
+            },
+            { phase: "cancelled", cancellationReason: "requested" },
+            gate.ready,
+          );
+        }
+        case "terminal-answer-then-abort": {
+          const gate = cancellationGate();
+          return base(
+            async (run) => {
+              childDepth = run.task.childDepth;
+              run.report.message({
+                role: "assistant",
+                parts: [{ type: "text", text: "terminal answer" }],
+                stopReason: "stop",
+                usage: { turns: 1 },
+              });
+              await waitForAbort(run.signal, gate.open);
+              return { exitCode: 0, stopReason: "stop" };
+            },
+            {
+              phase: "completed",
+              finalOutput: "terminal answer",
+              stopReason: "stop",
+              errorMessage: undefined,
+            },
+            gate.ready,
+          );
+        }
+        case "usage-totals":
+          return base(
+            async (run) => {
+              childDepth = run.task.childDepth;
+              run.report.message({
+                role: "assistant",
+                parts: [{ type: "text", text: "first turn" }],
+                usage: {
+                  input: 7,
+                  output: 3,
+                  cacheRead: 2,
+                  cacheWrite: 1,
+                  cost: 0.2,
+                  contextTokens: 10,
+                  turns: 1,
+                },
+              });
+              run.report.message({
+                role: "assistant",
+                parts: [{ type: "text", text: "second turn" }],
+                usage: {
+                  input: 5,
+                  output: 4,
+                  cacheRead: 1,
+                  cacheWrite: 2,
+                  cost: 0.3,
+                  contextTokens: 20,
+                  turns: 1,
+                },
+              });
+              return { exitCode: 0 };
+            },
+            {
+              phase: "completed",
+              usage: {
+                input: 12,
+                output: 7,
+                cacheRead: 3,
+                cacheWrite: 3,
+                cost: 0.5,
+                contextTokens: 20,
+                turns: 2,
+              },
+            },
+          );
+        case "child-depth":
+          return base(
+            async (run) => {
+              childDepth = run.task.childDepth;
+              return { exitCode: 0 };
+            },
+            { phase: "completed", childDepth: 1 },
+          );
+        case "config-immutable":
+          return base(
+            async (run) => {
+              childDepth = run.task.childDepth;
+              return { exitCode: 0 };
+            },
+            { phase: "completed" },
+          );
+        case "terminal-transcript-healing":
+          return base(
+            async (run) => {
+              childDepth = run.task.childDepth;
+              run.report.message({
+                role: "assistant",
+                parts: [],
+                stopReason: "error",
+                errorMessage: "stale streamed error",
+              });
+              run.report.transcript([
+                {
+                  role: "assistant",
+                  parts: [{ type: "text", text: "healed terminal answer" }],
+                  stopReason: "stop",
+                },
+              ]);
+              return { exitCode: 0 };
+            },
+            {
+              phase: "completed",
+              finalOutput: "healed terminal answer",
+              stopReason: "stop",
+              errorMessage: undefined,
+            },
+          );
+      }
+    },
+  };
+}
+
+runHarnessConformance(conformanceRig());
 
 test("a fake harness reaches dispatcher, registry, delivery, presentation, and widget", async () => {
   const runs = createSubagentRuns();

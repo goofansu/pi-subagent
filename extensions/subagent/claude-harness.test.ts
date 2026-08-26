@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   buildClaudeOptions,
   CLAUDE_MODEL_ALIASES,
@@ -10,6 +10,12 @@ import {
   translateClaudeMessage,
 } from "./claude-harness.ts";
 import { createHarnessRegistry } from "./harness.ts";
+import {
+  type HarnessConformanceFixture,
+  type HarnessConformanceRig,
+  type HarnessConformanceScenario,
+  runHarnessConformance,
+} from "./harness-conformance.ts";
 import { getFinalOutput } from "./messages.ts";
 import { DEPTH_ENV_KEY, type SubagentTask } from "./run.ts";
 import { startSubagent } from "./runner.ts";
@@ -32,6 +38,162 @@ const task: SubagentTask = {
   childDepth: 1,
   projectTrusted: false,
 };
+
+function sdkMessage(value: Record<string, unknown>): SDKMessage {
+  return value as unknown as SDKMessage;
+}
+
+function claudeConformanceRig(): HarnessConformanceRig {
+  return {
+    name: "claude",
+    build(
+      scenario: HarnessConformanceScenario,
+    ): HarnessConformanceFixture | undefined {
+      if (scenario === "terminal-transcript-healing") return undefined;
+
+      let observedDepth: number | undefined;
+      let ready: Promise<void> | undefined;
+      let openReady = () => {};
+      if (
+        scenario === "abort-mid-run" ||
+        scenario === "terminal-answer-then-abort"
+      ) {
+        ready = new Promise<void>((resolve) => {
+          openReady = resolve;
+        });
+      }
+
+      const resultMessage = (result: string) =>
+        sdkMessage({
+          type: "result",
+          result,
+          is_error: false,
+          num_turns: 1,
+          stop_reason: "end_turn",
+          model: "claude-sonnet-4-6",
+          modelUsage: {
+            "claude-sonnet-4-6": {
+              inputTokens: 12,
+              outputTokens: 7,
+              cacheReadInputTokens: 3,
+              cacheCreationInputTokens: 3,
+              costUSD: 0.5,
+            },
+          },
+        });
+
+      const query: ClaudeQuery = ({ options }) => {
+        observedDepth = Number(options?.env?.[DEPTH_ENV_KEY]);
+        assert.equal(
+          options?.env?.PATH,
+          process.env.PATH,
+          "Claude SDK options must inherit the parent environment",
+        );
+
+        let releaseAbort = () => {};
+        const aborted = new Promise<void>((resolve) => {
+          releaseAbort = resolve;
+        });
+        options?.abortController?.signal.addEventListener(
+          "abort",
+          releaseAbort,
+          { once: true },
+        );
+
+        const stream = {
+          async *[Symbol.asyncIterator]() {
+            switch (scenario) {
+              case "backend-crash":
+                throw new Error("fixture Claude backend crashed");
+              case "abort-mid-run":
+                openReady();
+                await aborted;
+                return;
+              case "terminal-answer-then-abort":
+                yield resultMessage("terminal answer");
+                openReady();
+                await aborted;
+                return;
+              case "usage-totals":
+                yield sdkMessage({
+                  type: "assistant",
+                  message: {
+                    model: "claude-sonnet-4-6",
+                    content: [{ type: "text", text: "first turn" }],
+                  },
+                });
+                yield sdkMessage({
+                  type: "assistant",
+                  message: {
+                    model: "claude-sonnet-4-6",
+                    content: [{ type: "text", text: "second turn" }],
+                  },
+                });
+                yield sdkMessage({
+                  ...resultMessage("claude answer"),
+                  num_turns: 2,
+                });
+                return;
+              case "child-depth":
+              case "config-immutable":
+                yield resultMessage("claude answer");
+                return;
+            }
+          },
+          close() {
+            releaseAbort();
+          },
+        };
+        return stream as unknown as Query;
+      };
+
+      const base = (
+        expected: HarnessConformanceFixture["expected"],
+      ): HarnessConformanceFixture => ({
+        harness: createClaudeHarness(async () => query),
+        expected,
+        ...(ready ? { readyForCancellation: ready } : {}),
+        depthProbe: () => observedDepth,
+      });
+
+      switch (scenario) {
+        case "backend-crash":
+          return base({
+            phase: "failed",
+            errorMessage: "fixture Claude backend crashed",
+          });
+        case "abort-mid-run":
+          return base({ phase: "cancelled", cancellationReason: "requested" });
+        case "terminal-answer-then-abort":
+          return base({
+            phase: "completed",
+            finalOutput: "terminal answer",
+            stopReason: "end_turn",
+            errorMessage: undefined,
+          });
+        case "usage-totals":
+          return base({
+            phase: "completed",
+            usage: {
+              input: 12,
+              output: 7,
+              cacheRead: 3,
+              cacheWrite: 3,
+              cost: 0.5,
+              contextTokens: 0,
+              turns: 2,
+            },
+          });
+        case "child-depth":
+          return base({ phase: "completed", childDepth: 1 });
+        case "config-immutable":
+          return base({ phase: "completed" });
+      }
+    },
+  };
+}
+
+runHarnessConformance(claudeConformanceRig());
 
 test("Claude validation accepts exactly the SDK family aliases", () => {
   const harness = createClaudeHarness();
@@ -107,24 +269,27 @@ test("Claude permissions bypass either forwarded trust value and disallow child 
   }
 });
 
-test("Claude children carry the nesting depth and keep the inherited environment", () => {
+test("Claude children carry a nontrivial depth and inherit the environment", () => {
   const marker = "CLAUDE_HARNESS_DEPTH_TEST_MARKER";
+  const previous = process.env[marker];
   process.env[marker] = "inherited";
   try {
     const options = buildClaudeOptions(
-      { ...task, childDepth: 2 },
+      { ...task, childDepth: 7 },
       undefined,
       "off",
       new AbortController(),
     );
-    assert.equal(options.env?.[DEPTH_ENV_KEY], "2");
+    assert.equal(options.env?.[DEPTH_ENV_KEY], "7");
     assert.equal(options.env?.[marker], "inherited");
+    assert.equal(options.env?.PATH, process.env.PATH);
   } finally {
-    delete process.env[marker];
+    if (previous === undefined) delete process.env[marker];
+    else process.env[marker] = previous;
   }
 });
 
-test("SDK messages translate to facts and terminal usage is counted once", () => {
+test("SDK assistant messages translate tool calls without adding turns", () => {
   const assistant = {
     type: "assistant",
     message: {
@@ -134,37 +299,11 @@ test("SDK messages translate to facts and terminal usage is counted once", () =>
       ],
     },
   } as unknown as SDKMessage;
-  const result = {
-    type: "result",
-    result: "answer",
-    is_error: false,
-    num_turns: 1,
-    stop_reason: "end_turn",
-    total_cost_usd: 0.25,
-    modelUsage: {
-      "claude-sonnet-4-6": {
-        inputTokens: 10,
-        outputTokens: 4,
-        cacheReadInputTokens: 2,
-        cacheCreationInputTokens: 1,
-        costUSD: 0.25,
-      },
-    },
-  } as unknown as SDKMessage;
-  const live = translateClaudeMessage(assistant);
-  const terminal = translateClaudeMessage(result);
-  assert.deepEqual(live[0].parts, [
+  const [live] = translateClaudeMessage(assistant);
+  assert.deepEqual(live.parts, [
     { type: "tool_call", name: "Read", arguments: { file_path: "a.ts" } },
   ]);
-  assert.equal(live[0].usage?.turns, 0);
-  assert.deepEqual(terminal[0].usage, {
-    input: 10,
-    output: 4,
-    cacheRead: 2,
-    cacheWrite: 1,
-    cost: 0.25,
-    turns: 1,
-  });
+  assert.equal(live.usage?.turns, 0);
 });
 
 test("Claude keeps model metadata from an empty assistant message", () => {

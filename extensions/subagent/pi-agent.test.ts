@@ -4,10 +4,19 @@
  */
 
 import assert from "node:assert/strict";
+import { type ChildProcess, spawn as realSpawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { PassThrough } from "node:stream";
 import { test } from "node:test";
+import {
+  type HarnessConformanceFixture,
+  type HarnessConformanceRig,
+  type HarnessConformanceScenario,
+  runHarnessConformance,
+} from "./harness-conformance.ts";
 import { getFinalOutput } from "./messages.ts";
 import {
   buildPiArgs,
@@ -15,13 +24,16 @@ import {
   getPiInvocation,
   getSpawnOptions,
   type PiInvocationRuntime,
+  type PiSpawn,
   runPiAgent,
   translatePiJsonEvent,
 } from "./pi-agent.ts";
+import { createPiHarness } from "./pi-harness.ts";
 import { formatNotification, fullOutput } from "./presentation.ts";
 import {
   createEmptyResult,
   createRunReporter,
+  DEPTH_ENV_KEY,
   settleResultLifecycle,
 } from "./run.ts";
 import type { AgentConfig, SingleResult } from "./types.ts";
@@ -174,23 +186,10 @@ test("getPiInvocation preserves child arguments and command boundaries", (t) => 
   assert.deepEqual(args, originalArgs);
 });
 
-/**
- * Put a stand-in `pi` on PATH so the backend's real spawn path runs without a
- * pi install. Returns a restore function.
- */
-function shadowPiBinary(script: string): { dir: string; restore: () => void } {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-bin-"));
-  fs.writeFileSync(path.join(dir, "pi"), script, { mode: 0o755 });
-  const previous = process.env.PATH;
-  process.env.PATH = `${dir}${path.delimiter}${previous ?? ""}`;
-  return {
-    dir,
-    restore: () => {
-      if (previous === undefined) delete process.env.PATH;
-      else process.env.PATH = previous;
-      fs.rmSync(dir, { recursive: true, force: true });
-    },
-  };
+function emitLines(...lines: string[]): string {
+  return lines
+    .map((line) => `process.stdout.write(${JSON.stringify(`${line}\n`)});`)
+    .join("\n");
 }
 
 async function runPiFixture(
@@ -202,36 +201,248 @@ async function runPiFixture(
     killEscalationMs?: number;
   } = {},
 ): Promise<SingleResult> {
-  const shadow = shadowPiBinary(script);
+  const injectedSpawn: PiSpawn = (_command, _args, spawnOptions) =>
+    realSpawn(process.execPath, ["-e", script], spawnOptions);
   const result = createEmptyResult("worker", "Work", 0);
   const report = createRunReporter(result, () => options.onEmit?.(result));
 
-  try {
-    const outcome = await runPiAgent(
-      {
-        task: {
-          config: agent({ systemPrompt: "" }),
-          description: "Work",
-          prompt: options.prompt ?? "do it",
-          cwd: os.tmpdir(),
-          childDepth: 1,
-          projectTrusted: false,
-        },
-        report,
-        signal: options.signal,
+  const outcome = await runPiAgent(
+    {
+      task: {
+        config: agent({ systemPrompt: "" }),
+        description: "Work",
+        prompt: options.prompt ?? "do it",
+        cwd: os.tmpdir(),
+        childDepth: 1,
+        projectTrusted: false,
       },
-      options.killEscalationMs === undefined
+      report,
+      signal: options.signal,
+    },
+    {
+      ...(options.killEscalationMs === undefined
         ? {}
-        : { killEscalationMs: options.killEscalationMs },
-    );
-    // What the dispatcher does with the outcome, so assertions stay written
-    // in result terms.
-    settleResultLifecycle(result, outcome, 1);
-    return result;
-  } finally {
-    shadow.restore();
-  }
+        : { killEscalationMs: options.killEscalationMs }),
+      spawn: injectedSpawn,
+    },
+  );
+  // What the dispatcher does with the outcome, so assertions stay written
+  // in result terms.
+  settleResultLifecycle(result, outcome, 1);
+  return result;
 }
+
+interface FakePiChild extends ChildProcess {
+  finish(code: number | null): void;
+}
+
+function fakePiChild(onKill: () => void): FakePiChild {
+  const child = new EventEmitter() as unknown as FakePiChild;
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  let finished = false;
+  Object.assign(child, {
+    stdin,
+    stdout,
+    stderr,
+    pid: 1,
+    kill: () => {
+      onKill();
+      return true;
+    },
+    finish: (code: number | null) => {
+      if (finished) return;
+      finished = true;
+      stdout.end();
+      stderr.end();
+      queueMicrotask(() => child.emit("close", code, null));
+    },
+  });
+  return child;
+}
+
+function piConformanceRig(): HarnessConformanceRig {
+  return {
+    name: "pi",
+    build(scenario: HarnessConformanceScenario): HarnessConformanceFixture {
+      let observedDepth: number | undefined;
+      let ready: Promise<void> | undefined;
+      let openReady = () => {};
+      if (
+        scenario === "abort-mid-run" ||
+        scenario === "terminal-answer-then-abort"
+      ) {
+        ready = new Promise<void>((resolve) => {
+          openReady = resolve;
+        });
+      }
+
+      const terminal = (text = "pi answer") => ({
+        type: "agent_end",
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            provider: "fixture-provider",
+            model: "fixture-model",
+            stopReason: "stop",
+          },
+        ],
+      });
+      const fixtureUsage = (text: string, usage: Record<string, unknown>) => ({
+        role: "assistant",
+        content: [{ type: "text", text }],
+        usage,
+      });
+
+      const spawn: PiSpawn = (_command, _args, options) => {
+        observedDepth = Number(options.env?.[DEPTH_ENV_KEY]);
+        assert.equal(
+          options.env?.PATH,
+          process.env.PATH,
+          "pi child env must inherit the parent environment",
+        );
+        let child!: FakePiChild;
+        child = fakePiChild(() => {
+          if (
+            scenario === "abort-mid-run" ||
+            scenario === "terminal-answer-then-abort"
+          ) {
+            child.finish(null);
+          }
+        });
+
+        queueMicrotask(() => {
+          switch (scenario) {
+            case "backend-crash":
+              (child.stderr as PassThrough).write("fixture pi crash\n");
+              child.finish(1);
+              break;
+            case "abort-mid-run":
+              openReady();
+              break;
+            case "terminal-answer-then-abort":
+              (child.stdout as PassThrough).write(
+                `${JSON.stringify(terminal())}\n`,
+              );
+              openReady();
+              break;
+            case "usage-totals": {
+              const first = fixtureUsage("first turn", {
+                input: 7,
+                output: 3,
+                cacheRead: 2,
+                cacheWrite: 1,
+                totalTokens: 10,
+                cost: { total: 0.2 },
+              });
+              const second = fixtureUsage("second turn", {
+                input: 5,
+                output: 4,
+                cacheRead: 1,
+                cacheWrite: 2,
+                totalTokens: 20,
+                cost: { total: 0.3 },
+              });
+              (child.stdout as PassThrough).write(
+                `${JSON.stringify({ type: "message_end", message: first })}\n`,
+              );
+              (child.stdout as PassThrough).write(
+                `${JSON.stringify({ type: "message_end", message: second })}\n`,
+              );
+              (child.stdout as PassThrough).write(
+                `${JSON.stringify({
+                  type: "agent_end",
+                  messages: [first, second],
+                })}\n`,
+              );
+              child.finish(0);
+              break;
+            }
+            case "child-depth":
+            case "config-immutable":
+              (child.stdout as PassThrough).write(
+                `${JSON.stringify(terminal())}\n`,
+              );
+              child.finish(0);
+              break;
+            case "terminal-transcript-healing":
+              (child.stdout as PassThrough).write(
+                `${JSON.stringify({
+                  type: "message_end",
+                  message: {
+                    role: "assistant",
+                    content: [],
+                    stopReason: "error",
+                    errorMessage: "stale streamed error",
+                  },
+                })}\n`,
+              );
+              (child.stdout as PassThrough).write(
+                `${JSON.stringify(terminal("healed terminal answer"))}\n`,
+              );
+              child.finish(0);
+              break;
+          }
+        });
+        return child;
+      };
+
+      const base = (
+        expected: HarnessConformanceFixture["expected"],
+      ): HarnessConformanceFixture => ({
+        harness: createPiHarness([], { spawn }),
+        expected,
+        ...(ready ? { readyForCancellation: ready } : {}),
+        depthProbe: () => observedDepth,
+      });
+
+      switch (scenario) {
+        case "backend-crash":
+          return base({
+            phase: "failed",
+            errorMessage: "Child pi exited with code 1",
+          });
+        case "abort-mid-run":
+          return base({ phase: "cancelled", cancellationReason: "requested" });
+        case "terminal-answer-then-abort":
+          return base({
+            phase: "completed",
+            finalOutput: "pi answer",
+            stopReason: "stop",
+            errorMessage: undefined,
+          });
+        case "usage-totals":
+          return base({
+            phase: "completed",
+            usage: {
+              input: 12,
+              output: 7,
+              cacheRead: 3,
+              cacheWrite: 3,
+              cost: 0.5,
+              contextTokens: 20,
+              turns: 2,
+            },
+          });
+        case "child-depth":
+          return base({ phase: "completed", childDepth: 1 });
+        case "config-immutable":
+          return base({ phase: "completed" });
+        case "terminal-transcript-healing":
+          return base({
+            phase: "completed",
+            finalOutput: "healed terminal answer",
+            stopReason: "stop",
+            errorMessage: undefined,
+          });
+      }
+    },
+  };
+}
+
+runHarnessConformance(piConformanceRig());
 
 test("the child pi driver accepts exit 0 after a valid agent_end event", async () => {
   const terminalEvent = JSON.stringify({
@@ -247,9 +458,7 @@ test("the child pi driver accepts exit 0 after a valid agent_end event", async (
     ],
   });
 
-  const settled = await runPiFixture(
-    `#!/bin/sh\nprintf '%s\\n' '${terminalEvent}'\n`,
-  );
+  const settled = await runPiFixture(emitLines(terminalEvent));
 
   assert.equal(
     "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
@@ -258,33 +467,6 @@ test("the child pi driver accepts exit 0 after a valid agent_end event", async (
   assert.equal(settled.stopReason, "stop");
   assert.equal(settled.errorMessage, undefined);
   assert.equal(settled.messages.length, 1);
-});
-
-test("a clean terminal transcript clears an earlier streamed error", async () => {
-  const streamedError = {
-    role: "assistant",
-    content: [],
-    stopReason: "error",
-    errorMessage: "transient provider error",
-  };
-  const cleanTerminal = {
-    role: "assistant",
-    content: [{ type: "text", text: "healed answer" }],
-    provider: "fixture-provider",
-    model: "fixture-model",
-    stopReason: "stop",
-  };
-  const settled = await runPiFixture(
-    `#!/bin/sh
-printf '%s\\n' '${JSON.stringify({ type: "message_end", message: streamedError })}'
-printf '%s\\n' '${JSON.stringify({ type: "agent_end", messages: [cleanTerminal] })}'
-`,
-  );
-
-  assert.equal(settled.lifecycle.phase, "completed");
-  assert.equal(settled.errorMessage, undefined);
-  assert.equal(settled.stopReason, "stop");
-  assert.equal(getFinalOutput(settled.messages), "healed answer");
 });
 
 test("a retained terminal error beats the generic child exit diagnostic", async () => {
@@ -296,33 +478,14 @@ test("a retained terminal error beats the generic child exit diagnostic", async 
     stopReason: "error",
     errorMessage: "provider says the request was rejected",
   };
-  const shadow = shadowPiBinary(`#!/bin/sh
-printf '%s\\n' '${JSON.stringify({ type: "agent_end", messages: [terminalError] })}'
-exit 7
-`);
-  const result = createEmptyResult("worker", "Work", 0);
-  const report = createRunReporter(result, () => {});
+  const result = await runPiFixture(
+    `${emitLines(JSON.stringify({ type: "agent_end", messages: [terminalError] }))}
+process.exitCode = 7;`,
+  );
 
-  try {
-    const outcome = await runPiAgent({
-      task: {
-        config: agent({ systemPrompt: "" }),
-        description: "Work",
-        prompt: "do it",
-        cwd: os.tmpdir(),
-        childDepth: 1,
-        projectTrusted: false,
-      },
-      report,
-    });
-    settleResultLifecycle(result, outcome, 1);
-
-    assert.equal(result.lifecycle.phase, "failed");
-    assert.equal(result.errorMessage, "provider says the request was rejected");
-    assert.equal(result.stopReason, "error");
-  } finally {
-    shadow.restore();
-  }
+  assert.equal(result.lifecycle.phase, "failed");
+  assert.equal(result.errorMessage, "provider says the request was rejected");
+  assert.equal(result.stopReason, "error");
 });
 
 test("toolResult messages survive streamed delivery and transcript healing", async () => {
@@ -341,11 +504,11 @@ test("toolResult messages survive streamed delivery and transcript healing", asy
     isError: false,
   };
   const settled = await runPiFixture(
-    `#!/bin/sh
-printf '%s\\n' '${JSON.stringify({ type: "message_end", message: assistant })}'
-printf '%s\\n' '${JSON.stringify({ type: "message_end", message: toolResult })}'
-printf '%s\\n' '${JSON.stringify({ type: "agent_end", messages: [assistant, toolResult] })}'
-`,
+    emitLines(
+      JSON.stringify({ type: "message_end", message: assistant }),
+      JSON.stringify({ type: "message_end", message: toolResult }),
+      JSON.stringify({ type: "agent_end", messages: [assistant, toolResult] }),
+    ),
   );
 
   assert.equal(settled.lifecycle.phase, "completed");
@@ -375,9 +538,7 @@ test("a thinking-only message keeps its terminal metadata and usage", async () =
     stopReason: "stop",
   };
   const settled = await runPiFixture(
-    `#!/bin/sh
-printf '%s\\n' '${JSON.stringify({ type: "agent_end", messages: [message] })}'
-`,
+    emitLines(JSON.stringify({ type: "agent_end", messages: [message] })),
   );
 
   assert.equal(settled.lifecycle.phase, "completed");
@@ -408,9 +569,7 @@ test("an error-bearing empty message fails an otherwise clean child", async () =
     errorMessage: "fixture in-band error",
   };
   const settled = await runPiFixture(
-    `#!/bin/sh
-printf '%s\\n' '${JSON.stringify({ type: "agent_end", messages: [message] })}'
-`,
+    emitLines(JSON.stringify({ type: "agent_end", messages: [message] })),
   );
 
   assert.equal(settled.lifecycle.phase, "failed");
@@ -431,9 +590,7 @@ test("the child pi driver fails exit 0 without an agent_end event", async () => 
     },
   });
 
-  const settled = await runPiFixture(
-    `#!/bin/sh\nprintf '%s\\n' '${nonterminalEvent}'\n`,
-  );
+  const settled = await runPiFixture(emitLines(nonterminalEvent));
 
   assert.equal(
     "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
@@ -453,9 +610,7 @@ test("the child pi driver rejects a structurally invalid agent_end event", async
     messages: { role: "assistant" },
   });
 
-  const settled = await runPiFixture(
-    `#!/bin/sh\nprintf '%s\\n' '${fakeTerminalEvent}'\n`,
-  );
+  const settled = await runPiFixture(emitLines(fakeTerminalEvent));
 
   assert.equal(
     "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
@@ -471,9 +626,7 @@ test("the child pi driver rejects a structurally invalid agent_end event", async
 test("the child pi driver retains a bounded malformed stdout tail", async () => {
   const malformedOutput = `malformed-${"x".repeat(3000)}-diagnostic-tail`;
 
-  const settled = await runPiFixture(
-    `#!/bin/sh\nprintf '%s\\n' '${malformedOutput}'\n`,
-  );
+  const settled = await runPiFixture(emitLines(malformedOutput));
 
   assert.equal(
     "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
@@ -488,7 +641,9 @@ test("the child pi driver retains a bounded malformed stdout tail", async () => 
 
 test("the child pi driver preserves a nonzero child exit", async () => {
   const settled = await runPiFixture(
-    "#!/bin/sh\nprintf '%s\\n' '{not-json}'\nprintf '%s\\n' 'fixture failure' >&2\nexit 7\n",
+    `process.stdout.write("{not-json}\\n");
+process.stderr.write("fixture failure\\n");
+process.exitCode = 7;`,
   );
 
   assert.equal(
@@ -522,7 +677,8 @@ test("the child pi driver keeps cancellation authoritative over a missing agent_
   });
 
   const settled = await runPiFixture(
-    `#!/bin/sh\nprintf '%s\\n' '${partialEvent}'\nexec sleep 30\n`,
+    `${emitLines(partialEvent)}
+setTimeout(() => {}, 30_000);`,
     {
       signal: controller.signal,
       onEmit: (result) => {
@@ -556,10 +712,11 @@ test("an aborted child that ignores SIGTERM is killed by the escalation", async 
     },
   });
 
-  // `trap '' TERM` before the exec makes SIGTERM a no-op for the child (an
-  // ignored signal survives exec), so only the SIGKILL escalation can end it.
+  // Ignore SIGTERM so only the SIGKILL escalation can end the child.
   const settled = await runPiFixture(
-    `#!/bin/sh\ntrap '' TERM\nprintf '%s\\n' '${partialEvent}'\nexec sleep 30\n`,
+    `process.on("SIGTERM", () => {});
+${emitLines(partialEvent)}
+setTimeout(() => {}, 30_000);`,
     {
       signal: controller.signal,
       killEscalationMs: 100,
@@ -748,10 +905,9 @@ test("the child pi driver ignores an abort that arrives after a clean exit", asy
     ],
   });
 
-  const settled = await runPiFixture(
-    `#!/bin/sh\nprintf '%s\\n' '${terminalEvent}'\n`,
-    { signal: controller.signal },
-  );
+  const settled = await runPiFixture(emitLines(terminalEvent), {
+    signal: controller.signal,
+  });
   // A late cancellation must not retroactively fail a run that already
   // completed, which is what an abort listener left attached would do.
   controller.abort();
@@ -770,7 +926,7 @@ test("a child that exits before reading the prompt does not take the parent down
   // goes away. Without a stdin error handler this surfaces as an unhandled
   // EPIPE in the parent process rather than a failed run.
   const oversizedPrompt = "x".repeat(1024 * 1024);
-  const result = await runPiFixture("#!/bin/sh\nexit 3\n", {
+  const result = await runPiFixture("process.exit(3);", {
     prompt: oversizedPrompt,
   });
 

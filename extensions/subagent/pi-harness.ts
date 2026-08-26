@@ -10,12 +10,17 @@ import {
   stringField,
   unknownFields,
 } from "./harness.ts";
-import { runPiAgent } from "./pi-agent.ts";
+import { type PiSpawn, runPiAgent } from "./pi-agent.ts";
 import type { ParentModel, SubagentTask } from "./run.ts";
 import { type AgentConfig, EFFORTS } from "./types.ts";
 
+export interface PiHarnessOptions {
+  readonly spawn?: PiSpawn;
+}
+
 export function createPiHarness(
   models: readonly { provider: string; id: string }[] = [],
+  options: PiHarnessOptions = {},
 ): Harness {
   return {
     name: "pi",
@@ -73,7 +78,11 @@ export function createPiHarness(
         model,
         effort,
         execute: (run) =>
-          runPiAgent(run, { resolvedModel: model, resolvedThinking: thinking }),
+          runPiAgent(run, {
+            resolvedModel: model,
+            resolvedThinking: thinking,
+            ...(options.spawn ? { spawn: options.spawn } : {}),
+          }),
       };
     },
   };
