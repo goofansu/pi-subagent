@@ -161,10 +161,67 @@ test("the block is a titled rule plus one line per run", () => {
     renderRunLines([view(), view({ id: "b7c2", agent: "review" })], theme, 120),
   );
 
-  assert.match(lines[0], /subagents \(2\)/);
+  assert.match(lines[0], /subagents \(2 running\)/);
   assert.match(lines[1], /explore/);
   assert.match(lines[2], /review/);
   assert.equal(lines.length, 3);
+});
+
+test("the title groups statuses in lifecycle order and omits zero-count groups", () => {
+  const lines = plain(
+    renderRunLines(
+      [
+        view({ id: "cancelled", status: "cancelled" }),
+        view({ id: "failed", status: "failed" }),
+        view({ id: "completed", status: "completed" }),
+        view({ id: "live", status: "running" }),
+        view({ id: "done", status: "completed" }),
+      ],
+      theme,
+      120,
+    ),
+  );
+
+  assert.match(
+    lines[0],
+    /subagents \(1 running, 2 completed, 1 failed, 1 cancelled\)/,
+  );
+  assert.doesNotMatch(lines[0], /0 /);
+});
+
+test("a single settled status reads naturally in the title", () => {
+  const lines = plain(
+    renderRunLines(
+      [
+        view({ id: "done-1", status: "completed" }),
+        view({ id: "done-2", status: "completed" }),
+        view({ id: "done-3", status: "completed" }),
+      ],
+      theme,
+      120,
+    ),
+  );
+
+  assert.match(lines[0], /subagents \(3 completed\)/);
+});
+
+test("a verbose status title stays one truncated rule line when narrow", () => {
+  for (const width of [30, 12]) {
+    const lines = renderRunLines(
+      [
+        view({ id: "live", status: "running" }),
+        view({ id: "done", status: "completed" }),
+        view({ id: "failed", status: "failed" }),
+        view({ id: "cancelled", status: "cancelled" }),
+      ],
+      theme,
+      width,
+    );
+
+    assert.equal(lines.length, 5);
+    assert.ok(visibleWidth(lines[0]) <= width);
+    assert.doesNotMatch(lines[0], /\n/);
+  }
 });
 
 test("running runs sort above settled ones", () => {
@@ -187,7 +244,7 @@ test("a wide fan-out is summarised rather than filling the terminal", () => {
   const lines = plain(renderRunLines(many, theme, 120, 8));
 
   assert.equal(lines.length, 10, "rule + 8 rows + overflow");
-  assert.match(lines[0], /subagents \(20\)/);
+  assert.match(lines[0], /subagents \(20 running\)/);
   assert.match(lines.at(-1) ?? "", /and 12 more/);
 });
 
@@ -252,11 +309,11 @@ test("the widget renders the registry as it is at render time", () => {
   installRunsWidget(host, runs);
   runs.track(createEmptyResult("explore", "look", 0), () => {});
 
-  assert.match(host.render(120)[0], /subagents \(1\)/);
+  assert.match(host.render(120)[0], /subagents \(1 running\)/);
 
   runs.track(createEmptyResult("reviewer", "check", 0), () => {});
 
-  assert.match(host.render(120)[0], /subagents \(2\)/);
+  assert.match(host.render(120)[0], /subagents \(2 running\)/);
 });
 
 test("unsubscribing stops the widget following the registry", () => {

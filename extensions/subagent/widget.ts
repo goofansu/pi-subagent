@@ -13,9 +13,14 @@
  */
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { formatRunStatus, runStatusTone } from "./presentation.ts";
+import {
+  formatRunStatus,
+  LIFECYCLE_STATUS_ORDER,
+  notificationVerb,
+  runStatusTone,
+} from "./presentation.ts";
 import type { RunView, SubagentRuns } from "./runs.ts";
-import type { RenderableTheme } from "./types.ts";
+import type { LifecycleStatus, RenderableTheme } from "./types.ts";
 
 export const WIDGET_KEY = "subagent-runs";
 
@@ -145,6 +150,19 @@ function formatActivityTail(
   return theme.fg("dim", truncateToWidth(` · ${doing}`, remaining, "…"));
 }
 
+/** Summarise every tracked run using presentation's lifecycle vocabulary. */
+function formatStatusSummary(runs: readonly RunView[]): string {
+  const counts = new Map<LifecycleStatus, number>();
+  for (const run of runs) {
+    counts.set(run.status, (counts.get(run.status) ?? 0) + 1);
+  }
+
+  return LIFECYCLE_STATUS_ORDER.flatMap((status) => {
+    const count = counts.get(status) ?? 0;
+    return count > 0 ? [`${count} ${notificationVerb(status)}`] : [];
+  }).join(", ");
+}
+
 /** The whole widget: a titled rule, the rows, and an overflow summary. */
 export function renderRunLines(
   runs: readonly RunView[],
@@ -158,7 +176,7 @@ export function renderRunLines(
   const shown = ordered.slice(0, maxRows);
   const hidden = ordered.length - shown.length;
   const columns = measureColumns(shown);
-  const title = ` subagents (${runs.length}) `;
+  const title = ` subagents (${formatStatusSummary(runs)}) `;
   const fill = Math.max(0, width - 3 - visibleWidth(title));
   const lines = [
     truncateToWidth(

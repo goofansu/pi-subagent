@@ -54,6 +54,11 @@ const STATUS_PRESENTATION: Record<
   },
 };
 
+/** Lifecycle order used by display summaries and the widget rows. */
+export const LIFECYCLE_STATUS_ORDER = Object.freeze(
+  Object.keys(STATUS_PRESENTATION) as LifecycleStatus[],
+);
+
 /** The theme colour a status should be painted in. */
 export function runStatusTone(status: LifecycleStatus): Tone {
   return STATUS_PRESENTATION[status].tone;
