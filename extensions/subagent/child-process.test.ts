@@ -214,7 +214,7 @@ test("process source uses only terminal acknowledgement to suppress a tail", asy
   assert.doesNotMatch(terminal.stderr, /Last stdout:/);
 });
 
-test("issue-03 policy: clean no-terminal exit with stderr suppresses stdout post-mortem", async () => {
+test("clean no-terminal exit with stderr suppresses stdout post-mortem", async () => {
   const result = await runSource(
     'process.stdout.write(JSON.stringify({ kind: "partial" }) + "\\n"); process.stderr.write("runtime warning\\n");',
     {},

@@ -36,6 +36,8 @@ export const CLAUDE_MODEL_ALIASES: readonly string[] = [
   "sonnet",
   "haiku",
 ];
+const MISSING_CLAUDE_ANSWER =
+  "Claude stream ended without a terminal result answer.";
 const THINKING_BUDGETS: Record<string, number> = {
   minimal: 512,
   low: 1_024,
@@ -314,8 +316,7 @@ export function createClaudeHarness(
             translate: translateClaudeMessage,
             report: run.report,
             signal: run.signal,
-            missingAnswerMessage:
-              "Claude stream ended without a terminal result answer.",
+            missingAnswerMessage: MISSING_CLAUDE_ANSWER,
           });
         },
       };
