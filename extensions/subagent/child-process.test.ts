@@ -193,12 +193,79 @@ test("oversized lines resynchronize at the next JSON line", async () => {
   assert.match(result.stderr, /oversized stdout line dropped/);
 });
 
-test("a process error is reported on stderr without a close diagnostic", async () => {
+test("process source drops a complete oversized line from one stdout chunk", async () => {
+  const child = fakeChild();
+  const events: Record<string, unknown>[] = [];
+  const stderr: string[] = [];
+  const promise = sourceForFakeChild(child)(
+    {
+      event: (event) => events.push(event),
+      stderr: (chunk) => stderr.push(chunk),
+    },
+    new AbortController().signal,
+  );
+  child.stdout.write(
+    `${"x".repeat(33 * 1024 * 1024)}\n${JSON.stringify({ ok: true })}\n`,
+  );
+  child.emit("close", 0, null);
+
+  assert.deepEqual(await promise, { status: "clean" });
+  assert.deepEqual(events, [{ ok: true }]);
+  assert.match(stderr.join(""), /oversized stdout line dropped/);
+});
+
+test("process source resynchronizes after an oversized line split across chunks", async () => {
+  const child = fakeChild();
+  const events: Record<string, unknown>[] = [];
+  const stderr: string[] = [];
+  const promise = sourceForFakeChild(child)(
+    {
+      event: (event) => events.push(event),
+      stderr: (chunk) => stderr.push(chunk),
+    },
+    new AbortController().signal,
+  );
+  child.stdout.write("x".repeat(32 * 1024 * 1024 + 1));
+  child.stdout.write(`discarded\n${JSON.stringify({ ok: true })}\n`);
+  child.emit("close", 0, null);
+
+  assert.deepEqual(await promise, { status: "clean" });
+  assert.deepEqual(events, [{ ok: true }]);
+  assert.match(stderr.join(""), /oversized stdout line dropped/);
+});
+
+test("process source reports an oversized line when the child exits mid-drop", async () => {
+  const child = fakeChild();
+  const events: Record<string, unknown>[] = [];
+  const stderr: string[] = [];
+  const promise = sourceForFakeChild(child)(
+    {
+      event: (event) => events.push(event),
+      stderr: (chunk) => stderr.push(chunk),
+    },
+    new AbortController().signal,
+  );
+  child.stdout.write("x".repeat(32 * 1024 * 1024 + 1));
+  // Keep the dropped line oversized after the first reset, but never provide
+  // its terminating newline before the child exits.
+  child.stdout.write("x".repeat(32 * 1024 * 1024 + 1));
+  child.emit("close", 0, null);
+
+  assert.deepEqual(await promise, { status: "clean" });
+  assert.deepEqual(events, []);
+  assert.match(stderr.join(""), /oversized stdout line dropped/);
+});
+
+test("process source reports errors on stderr and cleans up the child", async () => {
   const child = new EventEmitter() as unknown as FakeChild;
   child.stdin = new PassThrough();
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
-  child.kill = () => true;
+  let killed = 0;
+  child.kill = () => {
+    killed++;
+    return true;
+  };
   const stderr: string[] = [];
   const source = processJsonSource({
     command: "fixture",
@@ -207,6 +274,7 @@ test("a process error is reported on stderr without a close diagnostic", async (
     childDepth: 1,
     prompt: "",
     childName: "fixture",
+    killEscalationMs: 60_000,
     spawn: () => child as unknown as ChildProcess,
   });
   const promise = source(
@@ -219,6 +287,10 @@ test("a process error is reported on stderr without a close diagnostic", async (
   });
   assert.deepEqual(await promise, { status: "failed" });
   assert.deepEqual(stderr, ["spawn/runtime error\n"]);
+  assert.equal(killed, 1);
+  assert.equal(child.stdout.listenerCount("data"), 0);
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.listenerCount("error"), 0);
 });
 
 test("abort stops the child and the source settles", async () => {

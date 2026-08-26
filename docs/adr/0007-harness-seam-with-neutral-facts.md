@@ -14,8 +14,8 @@ this ADR's neutral-fact decision remains in force.
 ADR-0005 deliberately let pi-ai's `Message` cross the executor seam while pi
 was the only harness, and named a second harness actually being built as the
 trigger to re-open it and design the domain fact vocabulary. That trigger has
-fired: subagents are to run on the Claude Agent SDK as well as on child pi
-processes, with the orchestration core importing zero pi and zero claude
+fired: subagents are to run on the Claude Agent SDK and Codex CLI as well as
+on child pi processes, with the orchestration core importing zero backend wire
 types.
 
 Today the pi wire shape is consumed above the seam in four places: the fold's
@@ -27,7 +27,7 @@ also speaks pi vocabulary on the input side: model resolution builds pi's
 
 ## Decision
 
-A **Harness** is a named backend (`pi`, `claude`) that validates the
+A **Harness** is a named backend (`pi`, `claude`, `codex`) that validates the
 harness-owned parts of a profile (`model`, `effort`, `tools`,
 `appendSystemPrompt` keep one name, harness-local meaning), resolves model and
 effort in its own vocabulary, and supplies an **Executor** per run. Profiles
@@ -42,10 +42,11 @@ and usage, model, and stop reason in domain units. Each harness translates
 its wire format into facts inside its own module — pi-ai `Message` never
 leaves `pi-agent.ts`, `SDKMessage` never leaves the claude executor. The
 reporter verbs are unchanged (`message`, `transcript`, `stderr`);
-`transcript` remains an optional terminal-snapshot correction a harness may
-never use. Derivation (activity, final output) stays in the fold — the
-ADR-0005 single-derivation-site property is kept; only the wire knowledge
-moves out.
+`transcript` remains an optional terminal-snapshot correction: Pi uses it for
+its terminal message list, while a harness without such a wire snapshot may
+omit it and must not fabricate one. Derivation (activity, final output) stays
+in the fold — the ADR-0005 single-derivation-site property is kept; only the
+wire knowledge moves out.
 
 Input/output/cache counters, turns, and cost on a fact are **additive
 deltas**; the shared fold sums them. `contextTokens` is a latest-value gauge,
@@ -74,7 +75,7 @@ derivation into every harness.
 
 ## Consequences
 
-Core tests run against a fake harness with neither pi nor claude installed;
+Core tests run against a fake harness without importing any backend wire;
 the four test files that fabricate pi-ai messages via casts switch to domain
 fact builders. Adding a backend is one adapter module, one registry entry,
 and its own tests — no dispatcher or lifecycle changes.

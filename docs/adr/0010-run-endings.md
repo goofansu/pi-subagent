@@ -52,6 +52,8 @@ retain their transport diagnostics locally, while SDK-backed adapters can
 resolve honestly without inventing a process result.
 
 The protocol is tested once through scripted sources and each harness supplies
-only its source and pure translator. Facts remain live and transcript healing
-remains authoritative; the ending's failure message remains a fallback for
-facts or stderr that already explain the failure.
+only its source and pure translator. Facts remain live; a harness with a
+terminal snapshot may use transcript healing, while Codex's JSONL has no such
+snapshot and its terminal item remains authoritative as a streamed fact
+without a fabricated replacement. The ending's failure message remains a
+fallback for facts or stderr that already explain the failure.

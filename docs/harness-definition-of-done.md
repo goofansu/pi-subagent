@@ -78,17 +78,21 @@ Codex CLI JSONL events and invocation policy, all confined to its adapter.
 6. [x] **The Codex harness costs one adapter, one registration, its own
    tests — and no dispatcher/lifecycle changes.**
    *Test:* `codex-harness.test.ts` runs the real Codex adapter through the
-   shared **Harness Conformance** battery (nine scenarios, with transcript
-   healing visibly skipped only for Claude), plus wire fixtures and argv validation. The
-   one-adapter cost is therefore the adapter, its registration, and its
-   battery tests.
+   shared **Harness Conformance** battery (all nine scenarios; Claude alone
+   visibly skips snapshot healing). Codex has no transcript snapshot, so its
+   `terminal-transcript-healing` case asserts that multiple terminal JSONL
+   items remain streamed facts and that the final item determines final output,
+   without inventing a transcript replacement. Wire fixtures and argv
+   validation cover the adapter's remaining protocol. The one-adapter cost is
+   therefore the adapter, its registration, and its battery tests.
 
 7. [x] **Pi wire `Message` objects never leave the pi harness.**
    Translation to facts happens inside the pi executor module, at the edge.
    *Test:* pi adapter tests feed NDJSON fixtures and assert emitted *facts*;
-   the boundaries test directly assigns Pi wire ownership to the Pi harness and
-   process source, rejecting Pi wire imports from Claude and other adapters (and
-   rejecting Claude SDK imports from the Pi side).
+   the boundaries test directly assigns Pi wire ownership to the Pi harness,
+   while the neutral process source is checked as core and owns no wire. It
+   rejects Pi wire imports from Claude and other adapters (and rejects Claude
+   SDK imports from the Pi side).
    *Review:* the translator is the only consumer of the wire shape.
 
 8. [x] **Claude SDK message objects never leave the claude harness.**
@@ -126,8 +130,9 @@ each core source file's real import specifiers, follow the transitive core
 module graph, and assert the forbidden modules (`@earendil-works/pi-ai`
 message exports, the pi harness modules, and the Claude SDK) are absent. It
 also checks adapter ownership directly: Pi wire is confined to the Pi
-harness and process source, Claude SDK wire to the Claude adapter, and other
-adapters own neither. The composition module is the sole registration edge;
+harness, Claude SDK wire to the Claude adapter, and other adapters own
+neither; the neutral process source remains in the core graph and owns no
+backend wire. The composition module is the sole registration edge;
 it is allowed to name the adapters. Tool registration and every other core edge
 fail loudly in CI instead of silently in review. Static module forms are edges too;
 comments and ordinary string literals are not.
@@ -174,9 +179,11 @@ comments and ordinary string literals are not.
   there is no baseline, healing removes stale model metadata. A retained
   provider error still wins over a generic process-exit diagnostic. *Test:*
   the Pi and fake harness `terminal-transcript-healing` conformance scenarios
-  cover clean replacement, while adapter and dispatcher fold tests cover the
-  error paths, authoritative-baseline replacement, stale-model removal, and
-  baseline preservation.
+  cover clean replacement. Codex has no transcript snapshot, so its same named
+  scenario covers terminal-item authority and explicitly retains streamed facts
+  rather than pretending a snapshot exists; Claude is the only visible skip.
+  Adapter and dispatcher fold tests cover the error paths, authoritative-baseline
+  replacement, stale-model removal, and baseline preservation.
 - [x] **Empty terminal accounting reaches presentation** — a successful Claude
   result with no text remains a fact, including usage, turns, cost, and stop
   reason. Model provenance comes from the SDK init message, an assistant fact,

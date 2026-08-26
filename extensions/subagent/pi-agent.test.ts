@@ -639,7 +639,7 @@ test("the child pi source retains a bounded malformed stdout tail", async () => 
   assert.doesNotMatch(fullOutput(settled), /malformed-/);
 });
 
-test("a signal death without abort is not hidden by an earlier terminal answer", async () => {
+test("a signal death without abort is hidden by an earlier terminal answer", async () => {
   const terminalEvent = JSON.stringify({
     type: "agent_end",
     messages: [

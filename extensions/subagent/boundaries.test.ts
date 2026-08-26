@@ -110,10 +110,11 @@ export function findForbiddenImports(graphRoot: string = root): string[] {
     .readdirSync(graphRoot)
     .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"));
   // Adapter modules are identified by the production naming convention, not
-  // a frozen inventory. The pi process source is the one legacy exception;
-  // its sibling harness module still follows the convention. A new
-  // codex-harness.ts is therefore excluded from core automatically rather than
-  // silently becoming part of the core graph.
+  // a frozen inventory. pi-agent.ts predates the -harness.ts convention and
+  // remains the explicit Pi adapter exception. The neutral process source is
+  // core and is therefore still walked for forbidden imports. A new
+  // codex-harness.ts is excluded from core automatically rather than silently
+  // becoming part of the core graph.
   const adapterPaths = new Set(
     sourceFiles
       .filter((file) => file.endsWith("-harness.ts") || file === "pi-agent.ts")

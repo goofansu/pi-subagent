@@ -54,7 +54,7 @@ function json(value: unknown): string {
   return `${JSON.stringify(value)}\n`;
 }
 
-function terminal(text = "codex answer"): object {
+function terminal(text = "codex answer"): Record<string, unknown> {
   return {
     type: "item.completed",
     item: { id: "item_2", type: "agent_message", text },
@@ -135,7 +135,12 @@ function codexConformanceRig(): HarnessConformanceRig {
               child.finish(0);
               break;
             case "terminal-transcript-healing":
-              child.stdout.write(json(terminal("codex answer")));
+              // Codex JSONL has no terminal transcript snapshot. Its closest
+              // invariant is that the final terminal item remains an ordinary
+              // streamed fact and wins final-output derivation without a
+              // fabricated transcript replacement.
+              child.stdout.write(json(terminal("codex draft")));
+              child.stdout.write(json(terminal("codex final answer")));
               child.finish(0);
               break;
           }
@@ -203,7 +208,8 @@ function codexConformanceRig(): HarnessConformanceRig {
         case "terminal-transcript-healing":
           return base({
             phase: "completed",
-            finalOutput: "codex answer",
+            finalOutput: "codex final answer",
+            messageCount: 2,
           });
       }
     },
@@ -257,6 +263,15 @@ test("Codex JSONL fixtures translate wire events into facts", () => {
       terminal: true,
     },
   );
+});
+
+test("Codex terminal items are facts, not transcript snapshots", () => {
+  const translation = translateCodexJsonEvent(terminal("final item"));
+  assert.equal(translation?.terminal, true);
+  assert.equal(translation?.transcript, undefined);
+  assert.deepEqual(translation?.facts?.[0]?.parts, [
+    { type: "text", text: "final item" },
+  ]);
 });
 
 test("Codex usage adds reasoning output and counts each completed turn", () => {

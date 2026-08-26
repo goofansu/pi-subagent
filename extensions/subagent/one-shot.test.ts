@@ -162,6 +162,41 @@ test("runOneShot distinguishes cancellation, source errors, and missing answers"
   );
 });
 
+test("runOneShot rejects translator bugs but resolves source failures", async () => {
+  const report: RunReporter = {
+    message: () => {},
+    transcript: () => {},
+    stderr: () => {},
+  };
+  assert.deepEqual(
+    await runOneShot({
+      source: async () => {
+        throw new Error("source failure");
+      },
+      translate: () => undefined,
+      report,
+      missingAnswerMessage: "missing",
+    }),
+    { ending: "failed", errorMessage: "source failure" },
+  );
+
+  const translatorError = new Error("translator bug");
+  await assert.rejects(
+    runOneShot({
+      source: async (sink) => {
+        sink.event("wire event");
+        return { status: "clean" };
+      },
+      translate: () => {
+        throw translatorError;
+      },
+      report,
+      missingAnswerMessage: "missing",
+    }),
+    (error) => error === translatorError,
+  );
+});
+
 test("runOneShot preserves failed conclusion messages, including an absent one", async () => {
   const report: RunReporter = {
     message: () => {},

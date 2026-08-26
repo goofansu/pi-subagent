@@ -122,8 +122,10 @@ harness's executor must pass as part of its own tests: `backend-crash`,
 mechanical: backend failures resolve as failed, backend aborts normalize to
 cancellation, a terminal answer survives a later abort, usage deltas fold with
 latest context gauges, child depth reaches the child, and profile configuration
-stays unchanged. Transcript healing is optional and visibly skipped by
-harnesses that do not support it.
+stays unchanged. Snapshot-capable harnesses heal streamed drift; Codex has no
+transcript snapshot and instead proves its final terminal JSONL item remains an
+authoritative streamed fact without inventing a replacement. Claude is the
+only harness with a visible skip for this scenario.
 
 **Presentation** (`presentation.ts`) — how a run and its notification read to a
 human: status tones, verbs, phrases, tool-outcome prose, and notification text.

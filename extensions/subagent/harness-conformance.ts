@@ -20,7 +20,12 @@ import type {
   UsageStats,
 } from "./types.ts";
 
-/** The neutral scenarios every harness must either implement or skip. */
+/**
+ * The neutral scenarios every harness must either implement or skip. A
+ * snapshot-capable harness heals streamed drift in the final scenario; a
+ * snapshotless harness proves its terminal wire item remains authoritative
+ * without inventing a transcript replacement.
+ */
 export const HARNESS_CONFORMANCE_SCENARIOS = [
   "backend-crash",
   "abort-mid-run",
@@ -46,6 +51,7 @@ export interface HarnessConformanceExpectation {
   errorMessage?: string;
   stderrIncludes?: string;
   stderrExcludes?: string;
+  messageCount?: number;
 }
 
 /**
@@ -103,6 +109,8 @@ function assertSettled(
     assert.match(result.stderr, new RegExp(expected.stderrIncludes));
   if (expected.stderrExcludes !== undefined)
     assert.doesNotMatch(result.stderr, new RegExp(expected.stderrExcludes));
+  if (expected.messageCount !== undefined)
+    assert.equal(result.messages.length, expected.messageCount);
 }
 
 function assertNoBackendAbortVocabulary(result: SingleResult): void {

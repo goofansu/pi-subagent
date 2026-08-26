@@ -171,7 +171,10 @@ export function processJsonSource(options: {
         cleanupAbort();
         detachStreams();
         if (childClosed) detachProcess();
-        else terminate();
+        else {
+          if (processError) detachProcess();
+          terminate();
+        }
         reject(error);
       };
       const finish = (
@@ -184,6 +187,12 @@ export function processJsonSource(options: {
         cleanupAbort();
         detachStreams();
         if (childClosed) detachProcess();
+        else if (processError) {
+          // A process error normally has a follow-up close event, but the
+          // source must also clean up children that emit only error.
+          detachProcess();
+          terminate();
+        }
         resolve(conclusion);
       };
       const processLine = (line: string): void => {
@@ -288,6 +297,10 @@ export function processJsonSource(options: {
       }
 
       proc.stdin.on("error", onStdinError);
+      proc.stdout.on("data", onStdoutData);
+      proc.stderr.on("data", onStderrData);
+      proc.on("error", onProcessError);
+      proc.on("close", onClose);
       if (!signal.aborted) {
         try {
           proc.stdin.write(prompt, "utf-8");
@@ -297,10 +310,6 @@ export function processJsonSource(options: {
           return;
         }
       }
-      proc.stdout.on("data", onStdoutData);
-      proc.stderr.on("data", onStderrData);
-      proc.on("error", onProcessError);
-      proc.on("close", onClose);
       if (aborted || signal.aborted) abort();
       else signal.addEventListener("abort", abort, { once: true });
     });
