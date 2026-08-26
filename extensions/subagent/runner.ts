@@ -5,9 +5,8 @@
  */
 
 import type { HarnessRegistry } from "./harness.ts";
-import type { ParentModel, SubagentOutcome, SubagentTask } from "./run.ts";
+import type { ParentModel, RunEnding, SubagentTask } from "./run.ts";
 import {
-  ABORTED_STOP_REASON,
   createEmptyResult,
   createRunReporter,
   DEPTH_ENV_KEY,
@@ -111,7 +110,7 @@ export function startSubagent({
       if (controller.signal.aborted) {
         settleResultLifecycle(
           result,
-          { stopReason: ABORTED_STOP_REASON },
+          { ending: "cancelled" },
           now(),
           handle.cancellationReason(),
         );
@@ -119,26 +118,21 @@ export function startSubagent({
         return result;
       }
 
-      let outcome: SubagentOutcome;
+      let ending: RunEnding;
       try {
-        outcome = await prepared.execute({
+        ending = await prepared.execute({
           task,
           report,
           signal: controller.signal,
         });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        outcome = {
-          stopReason: "error",
+        ending = {
+          ending: "failed",
           errorMessage: `Executor failed unexpectedly: ${message}`,
         };
       }
-      settleResultLifecycle(
-        result,
-        outcome,
-        now(),
-        handle.cancellationReason(),
-      );
+      settleResultLifecycle(result, ending, now(), handle.cancellationReason());
       emit();
       return result;
     } finally {

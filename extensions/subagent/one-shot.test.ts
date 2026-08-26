@@ -3,8 +3,9 @@ import { test } from "node:test";
 import { createClaudeHarness } from "./claude-harness.ts";
 import { createCodexHarness } from "./codex-harness.ts";
 import type { Harness, HarnessRun } from "./harness.ts";
+import { runOneShot, streamSource } from "./one-shot.ts";
 import { createPiHarness } from "./pi-harness.ts";
-import type { SubagentTask } from "./run.ts";
+import type { Fact, RunReporter, SubagentTask } from "./run.ts";
 import type { AgentConfig } from "./types.ts";
 
 // These assertions are intentionally type-level: runtime key checks cannot
@@ -91,4 +92,201 @@ test("one-shot is an invariant of the public harness/task contract for both adap
     }),
   );
   assertOneShotContract(createCodexHarness());
+});
+
+test("runOneShot applies its ending precedence and message rules", async () => {
+  const controller = new AbortController();
+  const reported: string[] = [];
+  const report: RunReporter = {
+    message: (fact) => {
+      reported.push(`fact:${fact.parts.length}`);
+      if (fact.parts.length === 1) controller.abort();
+    },
+    transcript: (facts) => reported.push(`transcript:${facts.length}`),
+    stderr: (chunk) => reported.push(`stderr:${chunk}`),
+  };
+  const answered = await runOneShot({
+    source: async (sink) => {
+      sink.event({ answer: true });
+      return { status: "failed", errorMessage: "late failure" };
+    },
+    translate: () => ({
+      facts: [{ role: "assistant", parts: [{ type: "text", text: "answer" }] }],
+      terminal: true,
+    }),
+    report,
+    signal: controller.signal,
+    missingAnswerMessage: "missing",
+  });
+  assert.deepEqual(answered, { ending: "answered" });
+  assert.deepEqual(reported, ["fact:1"]);
+});
+
+test("runOneShot distinguishes cancellation, source errors, and missing answers", async () => {
+  const makeReport = (): RunReporter => ({
+    message: () => {},
+    transcript: () => {},
+    stderr: () => {},
+  });
+  const controller = new AbortController();
+  controller.abort();
+  assert.deepEqual(
+    await runOneShot({
+      source: async () => ({ status: "clean" }),
+      translate: () => undefined,
+      report: makeReport(),
+      signal: controller.signal,
+      missingAnswerMessage: "missing",
+    }),
+    { ending: "cancelled" },
+  );
+  assert.deepEqual(
+    await runOneShot({
+      source: async () => {
+        throw new Error("source broke");
+      },
+      translate: () => undefined,
+      report: makeReport(),
+      missingAnswerMessage: "missing",
+    }),
+    { ending: "failed", errorMessage: "source broke" },
+  );
+  assert.deepEqual(
+    await runOneShot({
+      source: async () => ({ status: "clean" }),
+      translate: () => undefined,
+      report: makeReport(),
+      missingAnswerMessage: "missing",
+    }),
+    { ending: "failed", errorMessage: "missing" },
+  );
+});
+
+test("runOneShot absorbs a source throw after abort as cancelled", async () => {
+  const controller = new AbortController();
+  const source = async (
+    _sink: {
+      event: (event: string) => void;
+      stderr: (chunk: string) => void;
+    },
+    signal: AbortSignal,
+  ) => {
+    await new Promise<void>((resolve) =>
+      signal.addEventListener("abort", () => resolve(), { once: true }),
+    );
+    throw new Error("transport stopped");
+  };
+  const promise = runOneShot({
+    source,
+    translate: () => undefined,
+    report: { message: () => {}, transcript: () => {}, stderr: () => {} },
+    signal: controller.signal,
+    missingAnswerMessage: "missing",
+  });
+  controller.abort();
+  assert.deepEqual(await promise, { ending: "cancelled" });
+});
+
+test("runOneShot gives witnessed errors precedence and forwards facts, transcripts, and stderr in order", async () => {
+  const order: string[] = [];
+  const fact = (text: string): Fact => ({
+    role: "assistant",
+    parts: [{ type: "text", text }],
+  });
+  const result = await runOneShot({
+    source: async (sink) => {
+      sink.stderr("diagnostic");
+      sink.event("first");
+      sink.event("second");
+      return { status: "failed", errorMessage: "conclusion" };
+    },
+    translate: (event) =>
+      event === "first"
+        ? { facts: [fact("one")], errorMessage: "first error" }
+        : {
+            facts: [fact("two")],
+            transcript: [fact("healed")],
+            errorMessage: "last error",
+          },
+    report: {
+      message: () => order.push("fact"),
+      transcript: () => order.push("transcript"),
+      stderr: () => order.push("stderr"),
+    },
+    missingAnswerMessage: "missing",
+  });
+  assert.deepEqual(result, { ending: "failed", errorMessage: "last error" });
+  assert.deepEqual(order, ["stderr", "fact", "fact", "transcript"]);
+});
+
+test("runOneShot discards sink calls after source settlement", async () => {
+  let sinkAfterSource:
+    | { event: (event: string) => void; stderr: (chunk: string) => void }
+    | undefined;
+  let reports = 0;
+  const result = await runOneShot({
+    source: async (sink) => {
+      sinkAfterSource = sink;
+      return { status: "clean" };
+    },
+    translate: () => ({ facts: [{ role: "assistant", parts: [] }] }),
+    report: {
+      message: () => {
+        reports++;
+      },
+      transcript: () => {
+        reports++;
+      },
+      stderr: () => {
+        reports++;
+      },
+    },
+    missingAnswerMessage: "missing",
+  });
+  sinkAfterSource?.event("late");
+  sinkAfterSource?.stderr("late");
+  assert.deepEqual(result, { ending: "failed", errorMessage: "missing" });
+  assert.equal(reports, 0);
+});
+
+test("streamSource stops an opened stream and wins a pre-start abort race", async () => {
+  let opened = 0;
+  let stopped = 0;
+  let release = () => {};
+  const source = streamSource(async (signal) => {
+    if (signal.aborted) return undefined;
+    opened++;
+    const done = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return {
+      events: (async function* () {
+        await done;
+        yield* [];
+      })(),
+      stop: () => {
+        stopped++;
+        release();
+      },
+    };
+  });
+  const preStart = new AbortController();
+  const preStartPromise = source(
+    { event: () => {}, stderr: () => {} },
+    preStart.signal,
+  );
+  preStart.abort();
+  assert.deepEqual(await preStartPromise, { status: "clean" });
+  assert.equal(opened, 0);
+
+  const controller = new AbortController();
+  const pending = source(
+    { event: () => {}, stderr: () => {} },
+    controller.signal,
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  await pending;
+  assert.equal(opened, 1);
+  assert.equal(stopped, 1);
 });

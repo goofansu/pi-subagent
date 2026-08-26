@@ -14,12 +14,11 @@ export interface UsageStats {
 export type CancellationReason = "requested" | "shutdown";
 export type Lifecycle =
   | { phase: "running" }
-  | { phase: "completed"; finishedAt: number; exitCode?: number }
-  | { phase: "failed"; finishedAt: number; exitCode?: number }
+  | { phase: "completed"; finishedAt: number }
+  | { phase: "failed"; finishedAt: number }
   | {
       phase: "cancelled";
       finishedAt: number;
-      exitCode?: number;
       reason: CancellationReason;
     };
 export type LifecycleStatus = Lifecycle["phase"];

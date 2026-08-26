@@ -98,11 +98,16 @@ registry and never interprets harness-specific configuration or imports a
 backend's types.
 
 **Executor** — the per-run execution a harness supplies (`pi-agent.ts` is the
-pi harness's; it composes the neutral `child-process.ts` driver). It witnesses
-what the child did: it reports harness-neutral facts through the reporter
-defined in `run.ts` and resolves to an outcome; it never touches the run
-record. Wire format stops inside the harness — no backend's message shapes
+pi harness's; it composes the One-shot protocol and the neutral process source).
+It witnesses what the child did: it reports harness-neutral facts through the
+reporter defined in `run.ts` and resolves to an **ending**; it never touches the
+run record. Wire format stops inside the harness — no backend's message shapes
 cross this seam.
+
+**One-shot protocol** — the module owning terminal-before-abort ordering, the
+missing-answer policy, and ending derivation, whichever source feeds it. It
+runs one source to one ending, reports facts live, and discards calls after
+settlement.
 
 **Conformance** — the named battery of required scenarios every harness's
 executor must pass as part of its own tests. It makes the executor

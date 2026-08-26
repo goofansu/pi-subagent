@@ -65,8 +65,12 @@ Codex CLI JSONL events and invocation policy, all confined to its adapter.
    delivery, presentation, and widget, including cancellation, without
    starting a Pi child or loading the Claude SDK. Its shared **Harness
    Conformance** battery also covers backend-crash executor resolution,
-   cancellation normalization, usage folding, child-depth transport, and
-   configuration immutability. That battery is part of the one-adapter cost,
+   cancellation normalization, usage folding, child-depth transport, configuration
+   immutability, clean answerless termination, and failure after an answer. The
+   battery has nine scenarios: backend-crash, abort-mid-run,
+   terminal-answer-then-abort, usage-totals, child-depth, config-immutable,
+   no-terminal-answer, post-answer-failure, and terminal-transcript-healing.
+   That battery is part of the one-adapter cost,
    not a core change.
    *Review:* the fake implements only the public `Harness` contract; profile
    loading also asks a fake-owned validator to reject an unknown field.
@@ -74,8 +78,8 @@ Codex CLI JSONL events and invocation policy, all confined to its adapter.
 6. [x] **The Codex harness costs one adapter, one registration, its own
    tests — and no dispatcher/lifecycle changes.**
    *Test:* `codex-harness.test.ts` runs the real Codex adapter through the
-   shared **Harness Conformance** battery (six scenarios, with transcript
-   healing visibly skipped), plus wire fixtures and argv validation. The
+   shared **Harness Conformance** battery (nine scenarios, with transcript
+   healing visibly skipped only for Claude), plus wire fixtures and argv validation. The
    one-adapter cost is therefore the adapter, its registration, and its
    battery tests.
 
@@ -95,12 +99,13 @@ Codex CLI JSONL events and invocation policy, all confined to its adapter.
 9. [x] **`AbortSignal` is the only cancellation mechanism core exposes.**
    Core says *why* (cancel reason recorded in the registry, before abort
    fires); the harness owns *how* (SIGTERM/SIGKILL for pi, SDK abort for
-   Claude). Backend `aborted` is normalized at the seam: it never persists in
-   `SingleResult.stopReason` or presentation, while lifecycle `cancelled` and
-   its reason remain authoritative (see Cancel in `CONTEXT.md`).
+   Claude). Cancellation is normalized to the `cancelled` ending at the seam: backend
+   stop words never persist in `SingleResult.stopReason` or presentation, while
+   lifecycle `cancelled` and its reason remain authoritative (see Cancel in
+   `CONTEXT.md`).
    *Test:* the shared **Harness Conformance** battery's `abort-mid-run` and
-   `terminal-answer-then-abort` scenarios assert `aborted` normalization and
-   terminal-answer precedence; adapter tests assert each backend's kill path
+   `terminal-answer-then-abort` scenarios assert cancellation normalization
+   and terminal-answer precedence; adapter tests assert each backend's kill path
    fires on signal abort.
    *Review:* no harness-specific stop verbs in core; no second cancellation
    channel (no `harness.cancel()` method, no shared flags).

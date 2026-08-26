@@ -10,7 +10,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHarnessRegistry, type Harness } from "./harness.ts";
 import { getFinalOutput } from "./messages.ts";
-import { ABORTED_STOP_REASON } from "./run.ts";
 import { startSubagent } from "./runner.ts";
 import { createSubagentRuns } from "./runs.ts";
 import type {
@@ -29,6 +28,8 @@ export const HARNESS_CONFORMANCE_SCENARIOS = [
   "usage-totals",
   "child-depth",
   "config-immutable",
+  "no-terminal-answer",
+  "post-answer-failure",
   "terminal-transcript-healing",
 ] as const;
 
@@ -43,6 +44,8 @@ export interface HarnessConformanceExpectation {
   finalOutput?: string;
   stopReason?: string;
   errorMessage?: string;
+  stderrIncludes?: string;
+  stderrExcludes?: string;
 }
 
 /**
@@ -96,10 +99,14 @@ function assertSettled(
     assert.equal(result.stopReason, expected.stopReason);
   if (expected.errorMessage !== undefined || "errorMessage" in expected)
     assert.equal(result.errorMessage, expected.errorMessage);
+  if (expected.stderrIncludes !== undefined)
+    assert.match(result.stderr, new RegExp(expected.stderrIncludes));
+  if (expected.stderrExcludes !== undefined)
+    assert.doesNotMatch(result.stderr, new RegExp(expected.stderrExcludes));
 }
 
 function assertNoBackendAbortVocabulary(result: SingleResult): void {
-  assert.notEqual(result.stopReason, ABORTED_STOP_REASON);
+  assert.doesNotMatch(result.stopReason ?? "", /aborted/);
   assert.doesNotMatch(result.errorMessage ?? "", /aborted/);
 }
 

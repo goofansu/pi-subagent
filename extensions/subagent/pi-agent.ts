@@ -1,7 +1,7 @@
 /**
  * The pi harness adapter — resolves the pi invocation and translates its
  * NDJSON event stream into neutral facts. Process lifetime belongs to the
- * shared child-process driver; this module keeps pi policy and wire knowledge.
+ * shared child-process source; this module keeps pi policy and wire knowledge.
  */
 
 import * as fs from "node:fs";
@@ -11,14 +11,10 @@ import {
   getPackageDir,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import { type ChildProcessSpawn, runChildProcess } from "./child-process.ts";
+import { type ChildProcessSpawn, processJsonSource } from "./child-process.ts";
 import { parseTools, shouldAppendSystemPrompt } from "./harness.ts";
-import {
-  ABORTED_STOP_REASON,
-  type RunReporter,
-  type SubagentOutcome,
-  type SubagentRun,
-} from "./run.ts";
+import { runOneShot, type Translation } from "./one-shot.ts";
+import type { SubagentRun } from "./run.ts";
 import type { AgentConfig } from "./types.ts";
 
 export interface PiInvocationRuntime {
@@ -235,25 +231,23 @@ function isValidAgentEndEvent(
 /** Translate parsed pi wire events into domain facts at the adapter edge. */
 export function translatePiJsonEvent(
   event: Record<string, unknown>,
-  report: RunReporter,
-): boolean {
+): Translation | undefined {
   if (
     (event.type === "message_end" || event.type === "tool_result_end") &&
     event.message
   ) {
     const fact = piFact(event.message);
-    if (fact) report.message(fact);
-    return true;
+    return fact ? { facts: [fact] } : undefined;
   }
   if (isValidAgentEndEvent(event)) {
-    report.transcript(
-      event.messages
+    return {
+      transcript: event.messages
         .map(piFact)
         .filter((fact): fact is import("./run.ts").Fact => fact !== undefined),
-    );
-    return true;
+      terminal: true,
+    };
   }
-  return false;
+  return undefined;
 }
 
 async function writePromptToTempFile(
@@ -277,28 +271,21 @@ async function writePromptToTempFile(
 export async function runPiAgent(
   run: SubagentRun,
   {
-    killEscalationMs,
     resolvedModel,
     resolvedThinking,
     spawn,
+    killEscalationMs,
   }: {
-    killEscalationMs?: number;
     resolvedModel?: string;
     resolvedThinking?: string;
     spawn?: ChildProcessSpawn;
+    killEscalationMs?: number;
   } = {},
-): Promise<SubagentOutcome> {
+): Promise<import("./run.ts").RunEnding> {
   const { task } = run;
   const { config } = task;
   let tmpPromptDir: string | null = null;
   let tmpPromptPath: string | null = null;
-  let sawValidAgentEnd = false;
-  let reportedStderr = false;
-  const report: RunReporter = {
-    message: (fact) => run.report.message(fact),
-    transcript: (facts) => run.report.transcript(facts),
-    stderr: (chunk) => run.report.stderr(chunk),
-  };
 
   try {
     if (config.systemPrompt) {
@@ -315,66 +302,22 @@ export async function runPiAgent(
       task.projectTrusted,
     );
     const invocation = getPiInvocation(args);
-    const child = await runChildProcess({
-      command: invocation.command,
-      args: invocation.args,
-      cwd: task.cwd,
-      childDepth: task.childDepth,
-      prompt: task.prompt,
+    return await runOneShot({
+      source: processJsonSource({
+        command: invocation.command,
+        args: invocation.args,
+        cwd: task.cwd,
+        childDepth: task.childDepth,
+        prompt: task.prompt,
+        childName: "pi",
+        ...(spawn ? { spawn } : {}),
+        ...(killEscalationMs === undefined ? {} : { killEscalationMs }),
+      }),
+      translate: translatePiJsonEvent,
+      report: run.report,
       signal: run.signal,
-      ...(spawn ? { spawn } : {}),
-      ...(killEscalationMs === undefined ? {} : { killEscalationMs }),
-      onStderr: (chunk) => {
-        reportedStderr = true;
-        run.report.stderr(chunk);
-      },
-      onLine: (line) => {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          return false;
-        }
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          return false;
-        }
-        const event = parsed as Record<string, unknown>;
-        const terminal = isValidAgentEndEvent(event);
-        if (terminal) sawValidAgentEnd = true;
-        translatePiJsonEvent(event, report);
-        return terminal;
-      },
+      missingAnswerMessage: MISSING_AGENT_END_ERROR,
     });
-
-    if (child.exitCode !== 0 && !(child.aborted && child.terminalBeforeAbort)) {
-      const closeErrorMessage = `Child pi exited with code ${child.exitCode ?? "unknown"}`;
-      const stdoutTail = child.stdoutTail.trim();
-      if (!reportedStderr && stdoutTail) {
-        run.report.stderr(`Last stdout:\n${stdoutTail}`);
-      }
-      if (child.aborted) return { stopReason: ABORTED_STOP_REASON };
-      // Preserve Pi's pre-extraction policy: a process-level spawn/runtime
-      // error is already in stderr and is not replaced by a close diagnostic.
-      if (child.processError) return { exitCode: child.exitCode };
-      return { exitCode: child.exitCode, errorMessage: closeErrorMessage };
-    }
-    if (child.aborted && !child.terminalBeforeAbort) {
-      return { stopReason: ABORTED_STOP_REASON };
-    }
-    if (child.exitCode === 0 && !sawValidAgentEnd) {
-      const stdoutTail = child.stdoutTail.trim();
-      run.report.stderr(
-        stdoutTail ? `Last stdout:\n${stdoutTail}` : "No stdout was captured.",
-      );
-      return {
-        exitCode: 1,
-        stopReason: "error",
-        errorMessage: MISSING_AGENT_END_ERROR,
-      };
-    }
-    return {
-      exitCode: child.aborted && child.terminalBeforeAbort ? 0 : child.exitCode,
-    };
   } finally {
     if (tmpPromptPath)
       try {

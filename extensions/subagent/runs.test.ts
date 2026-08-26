@@ -64,7 +64,7 @@ test("a settled run stops accruing elapsed time", () => {
   runs.track(result, () => {});
 
   clock.advance(1_000);
-  settleResultLifecycle(result, { exitCode: 0 }, clock.now());
+  settleResultLifecycle(result, { ending: "answered" }, clock.now());
   clock.advance(10_000);
 
   assert.equal(runs.list()[0].status, "completed");
@@ -148,7 +148,7 @@ test("cancelRunning stops only running runs without using projections", () => {
   runs.track(runningResult("running"), () => runningCancelled++);
   const settled = runningResult("settled");
   runs.track(settled, () => settledCancelled++);
-  settleResultLifecycle(settled, { exitCode: 0 }, clock.now());
+  settleResultLifecycle(settled, { ending: "answered" }, clock.now());
 
   assert.deepEqual(runs.cancelRunning("shutdown"), ["run-1"]);
   assert.equal(runningCancelled, 1);
@@ -161,7 +161,7 @@ test("cancelling an unknown or already-settled run is a no-op", () => {
   const result = runningResult();
   let cancelled = 0;
   runs.track(result, () => cancelled++);
-  settleResultLifecycle(result, { exitCode: 0 }, clock.now());
+  settleResultLifecycle(result, { ending: "answered" }, clock.now());
 
   assert.deepEqual(runs.cancel(["run-1", "nonexistent"], "requested"), []);
   assert.equal(cancelled, 0);

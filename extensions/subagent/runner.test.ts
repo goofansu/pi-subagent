@@ -9,11 +9,9 @@ import { afterEach, beforeEach, test } from "node:test";
 import { createHarnessRegistry, type Harness } from "./harness.ts";
 import { createPiHarness } from "./pi-harness.ts";
 import {
-  ABORTED_STOP_REASON,
   createEmptyResult,
   type Fact,
   type SubagentExecutor,
-  type SubagentOutcome,
   type SubagentRun,
 } from "./run.ts";
 import type { RunSubagentOptions } from "./runner.ts";
@@ -60,7 +58,7 @@ function recordingExecutor(): {
   const execute: SubagentExecutor = async (run) => {
     calls.push(run);
     run.report.message(assistantMessage());
-    return { exitCode: 0 };
+    return { ending: "answered" };
   };
   return { execute, calls };
 }
@@ -121,10 +119,6 @@ test("createEmptyResult starts a run running from its start time", () => {
   assert.equal(result.startedAt, 1_000);
   assert.equal(
     "finishedAt" in result.lifecycle ? result.lifecycle.finishedAt : undefined,
-    undefined,
-  );
-  assert.equal(
-    "exitCode" in result.lifecycle ? result.lifecycle.exitCode : undefined,
     undefined,
   );
   assert.deepEqual(result.messages, []);
@@ -254,10 +248,6 @@ test("startSubagent publishes progress to the registry, not the transcript", asy
     "a run settles exactly once",
   );
   assert.ok(statuses.length >= 3, "progress is published as the run advances");
-  assert.equal(
-    "exitCode" in reported.lifecycle ? reported.lifecycle.exitCode : undefined,
-    0,
-  );
   assert.equal(reported.lifecycle.phase, "completed");
   assert.equal(reported.startedAt, 1_000);
   assert.equal(
@@ -288,10 +278,10 @@ test("a rejected executor settles the authoritative run as failed", async () => 
 
 test("INV-3: terminal lifecycle states are final", async () => {
   const cases = [
-    { outcome: { exitCode: 0 }, expected: "completed" },
-    { outcome: { exitCode: 1, stopReason: "error" }, expected: "failed" },
+    { outcome: { ending: "answered" }, expected: "completed" },
+    { outcome: { ending: "failed" }, expected: "failed" },
     {
-      outcome: { exitCode: 1, stopReason: ABORTED_STOP_REASON },
+      outcome: { ending: "cancelled" },
       expected: "cancelled",
     },
   ] as const;
@@ -333,7 +323,7 @@ test("the fold derives usage and activity from reported messages", async () => {
       parts: [{ type: "text", text: "done" }],
       usage: { input: 3, cost: 0.25, turns: 1 },
     });
-    return { exitCode: 0 };
+    return { ending: "answered" };
   };
 
   const result = await startAndSettle({
@@ -362,7 +352,7 @@ test("an authoritative streamed model replaces the harness baseline", async () =
         parts: [{ type: "text", text: "authoritative" }],
         model: "terminal-model",
       });
-      return { exitCode: 0 };
+      return { ending: "answered" };
     },
   });
 
@@ -387,7 +377,7 @@ test("a terminal transcript model replaces a stale streamed model", async () => 
           model: "terminal-model",
         },
       ]);
-      return { exitCode: 0 };
+      return { ending: "answered" };
     },
   });
 
@@ -408,7 +398,7 @@ test("a terminal transcript removes a stale fact-derived model", async () => {
       run.report.transcript([
         { role: "assistant", parts: [{ type: "text", text: "authoritative" }] },
       ]);
-      return { exitCode: 0 };
+      return { ending: "answered" };
     },
   });
 
@@ -429,7 +419,7 @@ test("transcript healing preserves the harness-resolved baseline model", async (
       run.report.transcript([
         { role: "assistant", parts: [{ type: "text", text: "authoritative" }] },
       ]);
-      return { exitCode: 0 };
+      return { ending: "answered" };
     },
   });
 
@@ -441,7 +431,7 @@ test("a transcript snapshot replaces the streamed fold, healing usage", async ()
     run.report.message(assistantMessage());
     run.report.message(assistantMessage());
     run.report.transcript([assistantMessage()]);
-    return { exitCode: 0 };
+    return { ending: "answered" };
   };
 
   const result = await startAndSettle({
@@ -473,7 +463,7 @@ test("a run cancelled before it starts never spawns a child", async () => {
   let executorCalls = 0;
   const execute: SubagentExecutor = async () => {
     executorCalls++;
-    return { exitCode: 0 };
+    return { ending: "answered" };
   };
   const controller = new AbortController();
   controller.abort();
@@ -522,7 +512,7 @@ test("a started run stays tracked after it settles, until its delivery", async (
   const seen: number[] = [];
   const execute: SubagentExecutor = async () => {
     seen.push(runs.list().length);
-    return { exitCode: 0 };
+    return { ending: "answered" };
   };
 
   const started = startSubagent({
@@ -542,7 +532,7 @@ test("a started run stays tracked after it settles, until its delivery", async (
 
 test("a cancellation reason survives registry release until settlement", async () => {
   const runs = createSubagentRuns();
-  let finish: (outcome: SubagentOutcome) => void = () => {};
+  let finish: (ending: import("./run.ts").RunEnding) => void = () => {};
   const execute: SubagentExecutor = () =>
     new Promise((resolve) => {
       finish = resolve;
@@ -557,7 +547,7 @@ test("a cancellation reason survives registry release until settlement", async (
 
   runs.cancel([started.id], "shutdown");
   runs.release(started.id);
-  finish({ stopReason: ABORTED_STOP_REASON });
+  finish({ ending: "cancelled" });
   const result = await started.settled;
 
   assert.equal(result.lifecycle.phase, "cancelled");
@@ -572,7 +562,7 @@ test("an aborted backend outcome never persists its stop reason in the domain re
     config: agent(),
     description: "cancelled",
     prompt: "go",
-    execute: async () => ({ stopReason: ABORTED_STOP_REASON }),
+    execute: async () => ({ ending: "cancelled" }),
   });
 
   assert.equal(result.lifecycle.phase, "cancelled");
@@ -586,7 +576,7 @@ test("the registry can cancel one run without touching the turn", async () => {
     const [id] = runs.list().map((view) => view.id);
     runs.cancel([id], "requested");
     sawAbort = run.signal?.aborted ?? false;
-    return { exitCode: 1, stopReason: ABORTED_STOP_REASON };
+    return { ending: "cancelled" };
   };
 
   const started = startSubagent({

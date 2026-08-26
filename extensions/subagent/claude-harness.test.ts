@@ -43,6 +43,10 @@ function sdkMessage(value: Record<string, unknown>): SDKMessage {
   return value as unknown as SDKMessage;
 }
 
+function factsFrom(message: SDKMessage) {
+  return translateClaudeMessage(message)?.facts ?? [];
+}
+
 function claudeConformanceRig(): HarnessConformanceRig {
   return {
     name: "claude",
@@ -138,6 +142,11 @@ function claudeConformanceRig(): HarnessConformanceRig {
               case "config-immutable":
                 yield resultMessage("claude answer");
                 return;
+              case "no-terminal-answer":
+                return;
+              case "post-answer-failure":
+                yield resultMessage("claude answer");
+                throw new Error("late Claude failure");
             }
           },
           close() {
@@ -188,6 +197,18 @@ function claudeConformanceRig(): HarnessConformanceRig {
           return base({ phase: "completed", childDepth: 1 });
         case "config-immutable":
           return base({ phase: "completed" });
+        case "no-terminal-answer":
+          return base({
+            phase: "failed",
+            errorMessage:
+              "Claude stream ended without a terminal result answer.",
+          });
+        case "post-answer-failure":
+          return base({
+            phase: "completed",
+            finalOutput: "claude answer",
+            errorMessage: undefined,
+          });
       }
     },
   };
@@ -321,7 +342,7 @@ test("SDK assistant messages translate tool calls without adding turns", () => {
       ],
     },
   } as unknown as SDKMessage;
-  const [live] = translateClaudeMessage(assistant);
+  const [live] = factsFrom(assistant);
   assert.deepEqual(live.parts, [
     { type: "tool_call", name: "Read", arguments: { file_path: "a.ts" } },
   ]);
@@ -329,7 +350,7 @@ test("SDK assistant messages translate tool calls without adding turns", () => {
 });
 
 test("Claude keeps model metadata from an empty assistant message", () => {
-  const [fact] = translateClaudeMessage({
+  const [fact] = factsFrom({
     type: "assistant",
     message: {
       model: "claude-sonnet-4-6",
@@ -346,7 +367,7 @@ test("Claude keeps model metadata from an empty assistant message", () => {
 });
 
 test("Claude translates init provenance as metadata without usage", () => {
-  const [fact] = translateClaudeMessage({
+  const [fact] = factsFrom({
     type: "system",
     subtype: "init",
     model: "claude-opus-5",
@@ -360,7 +381,7 @@ test("Claude translates init provenance as metadata without usage", () => {
 });
 
 test("Claude keeps terminal facts when a successful result has empty text", () => {
-  const [fact] = translateClaudeMessage({
+  const [fact] = factsFrom({
     type: "result",
     subtype: "success",
     is_error: false,
@@ -510,7 +531,7 @@ test("an empty Claude result carries accounting into the cost widget", async () 
 });
 
 test("Claude uses the SDK error text for an error-flagged success result", () => {
-  const [fact] = translateClaudeMessage({
+  const [fact] = factsFrom({
     type: "result",
     // This is the SDK's success-subtype API-error shape: result is the
     // provider diagnostic, not an answer to show the user.
@@ -748,7 +769,7 @@ test("Claude cancellation stays cancelled when abort arrives before a later term
   assert.equal(closeCalled, true);
   assert.equal(result.lifecycle.phase, "cancelled");
   assert.equal(result.stopReason, undefined);
-  assert.equal(result.messages.at(-1)?.parts[0]?.type, "text");
+  assert.equal(result.messages.length, 0);
 });
 
 test("Claude cancellation during SDK loading never invokes query", async () => {
@@ -827,7 +848,7 @@ test("Claude cancellation stays cancelled when abort closes the stream gracefull
 });
 
 test("Claude does not infer provenance from one terminal usage entry", () => {
-  const [fact] = translateClaudeMessage({
+  const [fact] = factsFrom({
     type: "result",
     result: "answer",
     is_error: false,
@@ -841,7 +862,7 @@ test("Claude does not infer provenance from one terminal usage entry", () => {
 });
 
 test("Claude does not infer provenance from multiple terminal usage entries", () => {
-  const [fact] = translateClaudeMessage({
+  const [fact] = factsFrom({
     type: "result",
     result: "answer",
     is_error: false,

@@ -16,7 +16,7 @@ import {
   type HarnessConformanceScenario,
   runHarnessConformance,
 } from "./harness-conformance.ts";
-import { DEPTH_ENV_KEY, type RunReporter } from "./run.ts";
+import { DEPTH_ENV_KEY } from "./run.ts";
 import { type AgentConfig, EFFORTS } from "./types.ts";
 
 interface FakeCodexChild extends EventEmitter {
@@ -98,10 +98,11 @@ function codexConformanceRig(): HarnessConformanceRig {
         queueMicrotask(() => {
           switch (scenario) {
             case "backend-crash":
-              child.stderr.write("ambient models-cache diagnostic\n");
+              child.stdout.write("silent Codex crash diagnostic");
               child.finish(1);
               break;
             case "abort-mid-run":
+              child.stdout.write("silent Codex child tail");
               openReady();
               break;
             case "terminal-answer-then-abort":
@@ -126,11 +127,15 @@ function codexConformanceRig(): HarnessConformanceRig {
               break;
             case "child-depth":
             case "config-immutable":
+            case "post-answer-failure":
               child.stdout.write(json(terminal()));
+              child.finish(scenario === "post-answer-failure" ? 7 : 0);
+              break;
+            case "no-terminal-answer":
               child.finish(0);
               break;
             case "terminal-transcript-healing":
-              child.stdout.write(json(terminal("answer")));
+              child.stdout.write(json(terminal("codex answer")));
               child.finish(0);
               break;
           }
@@ -152,9 +157,14 @@ function codexConformanceRig(): HarnessConformanceRig {
           return base({
             phase: "failed",
             errorMessage: "Child codex exited with code 1",
+            stderrIncludes: "Last stdout:",
           });
         case "abort-mid-run":
-          return base({ phase: "cancelled", cancellationReason: "requested" });
+          return base({
+            phase: "cancelled",
+            cancellationReason: "requested",
+            stderrExcludes: "Last stdout:",
+          });
         case "terminal-answer-then-abort":
           return base({
             phase: "completed",
@@ -178,8 +188,23 @@ function codexConformanceRig(): HarnessConformanceRig {
           return base({ phase: "completed", childDepth: 1 });
         case "config-immutable":
           return base({ phase: "completed" });
+        case "no-terminal-answer":
+          return base({
+            phase: "failed",
+            errorMessage:
+              "Codex exited without a terminal agent message answer.",
+          });
+        case "post-answer-failure":
+          return base({
+            phase: "completed",
+            finalOutput: "codex answer",
+            errorMessage: undefined,
+          });
         case "terminal-transcript-healing":
-          return undefined;
+          return base({
+            phase: "completed",
+            finalOutput: "codex answer",
+          });
       }
     },
   };
@@ -188,77 +213,64 @@ function codexConformanceRig(): HarnessConformanceRig {
 runHarnessConformance(codexConformanceRig());
 
 test("Codex JSONL fixtures translate wire events into facts", () => {
-  const facts: unknown[] = [];
-  const report: RunReporter = {
-    message: (fact) => facts.push(fact),
-    transcript: () => {},
-    stderr: () => {},
-  };
   assert.deepEqual(
-    translateCodexJsonEvent(
-      {
-        type: "item.started",
-        item: {
-          id: "item_1",
-          type: "command_execution",
-          command: "printf hi",
-          aggregated_output: "",
-          exit_code: null,
-          status: "in_progress",
-        },
+    translateCodexJsonEvent({
+      type: "item.started",
+      item: {
+        id: "item_1",
+        type: "command_execution",
+        command: "printf hi",
+        aggregated_output: "",
+        exit_code: null,
+        status: "in_progress",
       },
-      report,
-    ),
-    { terminal: false },
-  );
-  assert.deepEqual(
-    translateCodexJsonEvent(
-      { type: "item.completed", item: { type: "agent_message", text: "done" } },
-      report,
-    ),
-    { terminal: true },
-  );
-  assert.deepEqual(facts, [
+    }),
     {
-      role: "assistant",
-      parts: [
+      facts: [
         {
-          type: "tool_call",
-          name: "command_execution",
-          arguments: { command: "printf hi" },
+          role: "assistant",
+          parts: [
+            {
+              type: "tool_call",
+              name: "command_execution",
+              arguments: { command: "printf hi" },
+            },
+          ],
+          usage: { turns: 0 },
         },
       ],
-      usage: { turns: 0 },
     },
+  );
+  assert.deepEqual(
+    translateCodexJsonEvent({
+      type: "item.completed",
+      item: { type: "agent_message", text: "done" },
+    }),
     {
-      role: "assistant",
-      parts: [{ type: "text", text: "done" }],
-      usage: { turns: 0 },
+      facts: [
+        {
+          role: "assistant",
+          parts: [{ type: "text", text: "done" }],
+          usage: { turns: 0 },
+        },
+      ],
+      terminal: true,
     },
-  ]);
+  );
 });
 
 test("Codex usage adds reasoning output and counts each completed turn", () => {
-  const facts: unknown[] = [];
-  const report: RunReporter = {
-    message: (fact) => facts.push(fact),
-    transcript: () => {},
-    stderr: () => {},
-  };
-  translateCodexJsonEvent(
-    {
-      type: "turn.completed",
-      usage: {
-        input_tokens: 33875,
-        cached_input_tokens: 13824,
-        cache_write_input_tokens: 0,
-        output_tokens: 109,
-        reasoning_output_tokens: 12,
-      },
+  const translation = translateCodexJsonEvent({
+    type: "turn.completed",
+    usage: {
+      input_tokens: 33875,
+      cached_input_tokens: 13824,
+      cache_write_input_tokens: 0,
+      output_tokens: 109,
+      reasoning_output_tokens: 12,
     },
-    report,
-  );
-  assert.deepEqual(facts, [
+  });
+  assert.deepEqual(translation?.facts, [
     {
       role: "metadata",
       parts: [],
@@ -274,32 +286,29 @@ test("Codex usage adds reasoning output and counts each completed turn", () => {
 });
 
 test("Codex preserves provider error events as error facts", () => {
-  const facts: unknown[] = [];
-  const report: RunReporter = {
-    message: (fact) => facts.push(fact),
-    transcript: () => {},
-    stderr: () => {},
-  };
-  translateCodexJsonEvent(
-    { type: "error", message: "service unavailable" },
-    report,
+  const first = translateCodexJsonEvent({
+    type: "error",
+    message: "service unavailable",
+  });
+  const second = translateCodexJsonEvent({
+    type: "turn.failed",
+    error: { message: "turn rejected" },
+  });
+  assert.deepEqual(
+    [first?.facts?.[0], second?.facts?.[0]],
+    [
+      {
+        role: "metadata",
+        parts: [],
+        errorMessage: "service unavailable",
+      },
+      {
+        role: "metadata",
+        parts: [],
+        errorMessage: "turn rejected",
+      },
+    ],
   );
-  translateCodexJsonEvent(
-    { type: "turn.failed", error: { message: "turn rejected" } },
-    report,
-  );
-  assert.deepEqual(facts, [
-    {
-      role: "metadata",
-      parts: [],
-      errorMessage: "service unavailable",
-    },
-    {
-      role: "metadata",
-      parts: [],
-      errorMessage: "turn rejected",
-    },
-  ]);
 });
 
 test("Codex recognizes only model and effort profile fields", () => {

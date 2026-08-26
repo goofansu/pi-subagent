@@ -1,4 +1,4 @@
-import { type ChildProcessSpawn, runChildProcess } from "./child-process.ts";
+import { type ChildProcessSpawn, processJsonSource } from "./child-process.ts";
 import {
   effortField,
   type Harness,
@@ -6,14 +6,8 @@ import {
   type HarnessRun,
   stringField,
 } from "./harness.ts";
-import {
-  ABORTED_STOP_REASON,
-  type Fact,
-  type FactPart,
-  type ParentModel,
-  type RunReporter,
-  type SubagentTask,
-} from "./run.ts";
+import { runOneShot, type Translation } from "./one-shot.ts";
+import type { Fact, FactPart, ParentModel, SubagentTask } from "./run.ts";
 import { type AgentConfig, EFFORTS } from "./types.ts";
 
 const CODEX_PROFILE_FIELDS = ["model", "effort"] as const;
@@ -83,43 +77,49 @@ function usageFact(usage: Record<string, unknown>): Fact {
 /** Translate one Codex JSONL event into neutral facts at the adapter edge. */
 export function translateCodexJsonEvent(
   event: Record<string, unknown>,
-  report: RunReporter,
-): { terminal: boolean; errorMessage?: string } {
+): Translation | undefined {
   if (event.type === "item.started" && isRecord(event.item)) {
     if (
       event.item.type === "command_execution" &&
       typeof event.item.command === "string"
     ) {
-      report.message({
-        role: "assistant",
-        parts: [
+      return {
+        facts: [
           {
-            type: "tool_call",
-            name: "command_execution",
-            arguments: { command: event.item.command },
+            role: "assistant",
+            parts: [
+              {
+                type: "tool_call",
+                name: "command_execution",
+                arguments: { command: event.item.command },
+              },
+            ],
+            usage: { turns: 0 },
           },
         ],
-        usage: { turns: 0 },
-      });
+      };
     }
-    return { terminal: false };
+    return undefined;
   }
 
   if (event.type === "item.completed" && isRecord(event.item)) {
     if (event.item.type === "agent_message") {
-      report.message({
-        role: "assistant",
-        parts: textPart(event.item.text),
-        usage: { turns: 0 },
-      });
-      return { terminal: true };
+      return {
+        facts: [
+          {
+            role: "assistant",
+            parts: textPart(event.item.text),
+            usage: { turns: 0 },
+          },
+        ],
+        terminal: true,
+      };
     }
-    return { terminal: false };
+    return undefined;
   }
 
   if (event.type === "turn.completed") {
-    report.message(usageFact(isRecord(event.usage) ? event.usage : {}));
-    return { terminal: false };
+    return { facts: [usageFact(isRecord(event.usage) ? event.usage : {})] };
   }
 
   if (event.type === "error") {
@@ -127,27 +127,23 @@ export function translateCodexJsonEvent(
       typeof event.message === "string"
         ? event.message
         : "Codex reported an error";
-    report.message({
-      role: "metadata",
-      parts: [],
+    return {
+      facts: [{ role: "metadata", parts: [], errorMessage }],
       errorMessage,
-    });
-    return { terminal: false, errorMessage };
+    };
   }
 
   if (event.type === "turn.failed") {
     const error = isRecord(event.error) ? event.error.message : undefined;
     const errorMessage =
       typeof error === "string" ? error : "Codex turn failed";
-    report.message({
-      role: "metadata",
-      parts: [],
+    return {
+      facts: [{ role: "metadata", parts: [], errorMessage }],
       errorMessage,
-    });
-    return { terminal: false, errorMessage };
+    };
   }
 
-  return { terminal: false };
+  return undefined;
 }
 
 function validateCodexProfile(
@@ -188,71 +184,25 @@ export function createCodexHarness(options: CodexHarnessOptions = {}): Harness {
       const effort = effortField(task.config, "profile", EFFORTS);
       return {
         model,
-        execute: async (run) => {
-          let terminalAnswer = false;
-          let errorMessage: string | undefined;
-          const report: RunReporter = {
-            message: (fact) => run.report.message(fact),
-            transcript: (facts) => run.report.transcript(facts),
-            stderr: (chunk) => run.report.stderr(chunk),
-          };
-          const child = await runChildProcess({
-            command: "codex",
-            args: buildCodexArgs(task.cwd, model, effort),
-            cwd: task.cwd,
-            childDepth: task.childDepth,
-            prompt: codexPrompt(task),
+        execute: (run) =>
+          runOneShot({
+            source: processJsonSource({
+              command: "codex",
+              args: buildCodexArgs(task.cwd, model, effort),
+              cwd: task.cwd,
+              childDepth: task.childDepth,
+              prompt: codexPrompt(task),
+              childName: "codex",
+              ...(options.spawn ? { spawn: options.spawn } : {}),
+              ...(options.killEscalationMs === undefined
+                ? {}
+                : { killEscalationMs: options.killEscalationMs }),
+            }),
+            translate: translateCodexJsonEvent,
+            report: run.report,
             signal: run.signal,
-            ...(options.spawn ? { spawn: options.spawn } : {}),
-            ...(options.killEscalationMs === undefined
-              ? {}
-              : { killEscalationMs: options.killEscalationMs }),
-            onStderr: (chunk) => run.report.stderr(chunk),
-            onLine: (line) => {
-              let parsed: unknown;
-              try {
-                parsed = JSON.parse(line);
-              } catch {
-                return false;
-              }
-              if (!isRecord(parsed)) return false;
-              const translated = translateCodexJsonEvent(parsed, report);
-              if (translated.errorMessage)
-                errorMessage = translated.errorMessage;
-              if (translated.terminal) terminalAnswer = true;
-              return translated.terminal;
-            },
-          });
-
-          if (child.aborted && !child.terminalBeforeAbort) {
-            return { stopReason: ABORTED_STOP_REASON };
-          }
-          if (errorMessage && !terminalAnswer) {
-            return {
-              exitCode: child.exitCode ?? 1,
-              stopReason: "error",
-              errorMessage,
-            };
-          }
-          if (child.exitCode !== 0 && !child.terminalBeforeAbort) {
-            return {
-              exitCode: child.exitCode,
-              stopReason: "error",
-              errorMessage: `Child codex exited with code ${child.exitCode ?? "unknown"}`,
-            };
-          }
-          if (!terminalAnswer) {
-            return {
-              exitCode: 1,
-              stopReason: "error",
-              errorMessage: MISSING_CODEX_ANSWER,
-            };
-          }
-          return {
-            exitCode:
-              child.aborted && child.terminalBeforeAbort ? 0 : child.exitCode,
-          };
-        },
+            missingAnswerMessage: MISSING_CODEX_ANSWER,
+          }),
       };
     },
   };

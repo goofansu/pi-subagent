@@ -12,10 +12,8 @@ import subagentExtension, {
 } from "./index.ts";
 import { buildNotificationMessage } from "./notification-message.ts";
 import {
-  ABORTED_STOP_REASON,
   createEmptyResult,
   type SubagentExecutor,
-  type SubagentOutcome,
   type SubagentRun,
 } from "./run.ts";
 import {
@@ -144,7 +142,6 @@ function fakeStart(onOptions: (options: RunSubagentOptions) => void) {
           result.lifecycle = {
             phase: "completed",
             finishedAt: 10,
-            exitCode: 0,
           };
           resolve(result);
         };
@@ -223,7 +220,7 @@ test("INV-2 boundary: a successful start is executing, never queued", async () =
 interface BoundaryRun {
   report: SubagentRun["report"];
   signal?: AbortSignal;
-  resolve(outcome: SubagentOutcome): void;
+  resolve(ending: import("./run.ts").RunEnding): void;
 }
 
 function runtimeBoundary(
@@ -342,7 +339,7 @@ function runtimeBoundary(
 test("INV-1 boundary: landed run ids are never reused", async () => {
   const boundary = runtimeBoundary(["dup", "dup", "fresh"]);
   const first = await boundary.start();
-  boundary.active[0].resolve({ exitCode: 0 });
+  boundary.active[0].resolve({ ending: "answered" });
   await boundary.flush();
   boundary.events.message_start({
     message: {
@@ -361,8 +358,8 @@ test("INV-3 boundary: completed and failed states are final", async () => {
   const boundary = runtimeBoundary(["completed", "failed"]);
   const completed = await boundary.start();
   const failed = await boundary.start();
-  boundary.active[0].resolve({ exitCode: 0 });
-  boundary.active[1].resolve({ exitCode: 1, errorMessage: "failed" });
+  boundary.active[0].resolve({ ending: "answered" });
+  boundary.active[1].resolve({ ending: "failed", errorMessage: "failed" });
   await boundary.flush();
 
   const before = await boundary.tools.agent_await.execute("await-1", {
@@ -386,7 +383,7 @@ test("INV-3/INV-6 boundary: cancellation is repeatable and terminal", async () =
 
   await boundary.tools.agent_cancel.execute("cancel-1", { ids: [id] });
   await boundary.tools.agent_cancel.execute("cancel-2", { ids: [id] });
-  boundary.active[0].resolve({ stopReason: ABORTED_STOP_REASON });
+  boundary.active[0].resolve({ ending: "cancelled" });
   await boundary.flush();
 
   const first = await boundary.tools.agent_await.execute("await-1", {
@@ -408,7 +405,7 @@ test("INV-8 boundary: session shutdown cancels and forgets a tool-started run", 
   assert.equal(boundary.active[0].signal?.aborted, true);
   assert.equal(boundary.runs.list().length, 0);
 
-  boundary.active[0].resolve({ stopReason: ABORTED_STOP_REASON });
+  boundary.active[0].resolve({ ending: "cancelled" });
   await boundary.flush();
   assert.equal(boundary.pushed.length, 0);
   const result = await boundary.tools.agent_result.execute("result", { id });
@@ -422,7 +419,7 @@ test("INV-9 boundary: lost notification retries once without changing result", a
     role: "assistant",
     parts: [{ type: "text", text: "  answer\n" }],
   });
-  boundary.active[0].resolve({ exitCode: 0 });
+  boundary.active[0].resolve({ ending: "answered" });
   await boundary.flush();
 
   assert.equal(boundary.pushed.length, 1);
@@ -454,7 +451,7 @@ test("INV-9 boundary: a failed notification push preserves the exact result", as
     role: "assistant",
     parts: [{ type: "text", text: "  exact answer\n" }],
   });
-  boundary.active[0].resolve({ exitCode: 0 });
+  boundary.active[0].resolve({ ending: "answered" });
   await boundary.flush();
 
   const result = await boundary.tools.agent_result.execute("result", { id });
@@ -470,7 +467,7 @@ test("INV-10 boundary: widget and result presentation never determine state", as
     role: "assistant",
     parts: [{ type: "text", text: "answer" }],
   });
-  boundary.active[0].resolve({ exitCode: 0 });
+  boundary.active[0].resolve({ ending: "answered" });
   await boundary.flush();
   assert.match(boundary.renderWidget(), /completed/);
 
@@ -874,7 +871,7 @@ test("a settled run is not asked to stop again on quit", async () => {
 
   let stops = 0;
   const result = createEmptyResult("explore", "look", 0);
-  result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
+  result.lifecycle = { phase: "completed", finishedAt: 10 };
   const handle = runtime.runs.track(result, () => stops++);
   try {
     await shutdown({ reason: "quit" }, {});

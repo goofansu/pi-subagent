@@ -1,18 +1,18 @@
 /**
  * The run contract: the record, the facts an executor reports into it, and
- * the outcome that settles it.
+ * the ending that settles it.
  *
  * The dispatcher (`runner.ts`) is the run record's only writer. An executor
  * never holds the record: it witnesses what the child did and reports facts —
  * a transcript message, a terminal transcript snapshot, a stderr chunk —
  * through the {@link RunReporter} this module defines, and resolves to a
- * {@link SubagentOutcome}. The fold from facts to record lives here, beside
+ * {@link RunEnding}. The fold from facts to record lives here, beside
  * the record it writes, and the dispatcher is the only module that invokes
  * it. Everything derived — usage, activity, the per-message model — is
  * computed in the fold, so a terminal snapshot heals any drift the streamed
  * facts accumulated.
  *
- * See docs/adr/0005-executor-reports-facts.md.
+ * See docs/adr/0010-run-endings.md and docs/adr/0005-executor-reports-facts.md.
  */
 
 import { deriveActivity } from "./messages.ts";
@@ -63,45 +63,42 @@ export function appendStderr(existing: string, chunk: string): string {
 const CANCELLED_MESSAGE = "Subagent was cancelled";
 
 /**
- * Derive one terminal lifecycle state from the recorded outcome fields.
- *
- * This is where wire vocabulary becomes domain vocabulary: pi and the
- * executor say `aborted`, the domain says `cancelled`, and nothing above
- * this seam sees the wire word.
+ * Derive one terminal lifecycle state from the ending and recorded facts.
+ * Backend cancellation vocabulary never reaches the domain result.
  */
 function terminalLifecycle(
   result: SingleResult,
-  outcome: SubagentOutcome,
+  ending: RunEnding,
   finishedAt: number,
   cancellationReason?: CancellationReason,
 ): Lifecycle {
-  const exitCode = outcome.exitCode;
-  if (outcome.stopReason === ABORTED_STOP_REASON) {
+  if (ending.ending === "cancelled") {
     return {
       phase: "cancelled",
       finishedAt,
-      ...(exitCode === undefined ? {} : { exitCode }),
       reason: cancellationReason ?? "requested",
     };
   }
-  const phase =
-    exitCode === 0 &&
-    outcome.stopReason !== "error" &&
-    !result.errorMessage &&
-    result.stopReason !== "error"
-      ? "completed"
-      : "failed";
-  return { phase, finishedAt, ...(exitCode === undefined ? {} : { exitCode }) };
+  if (ending.ending === "failed") return { phase: "failed", finishedAt };
+  // An answered ending is demoted only by error state carried by the healed
+  // record. This is deliberately the sole completed/failed rule.
+  return {
+    phase:
+      result.errorMessage || result.stopReason === "error"
+        ? "failed"
+        : "completed",
+    finishedAt,
+  };
 }
 
 /**
  * Settle lifecycle state after a run resolves. The executor reports its
- * outcome; the dispatcher calls this once so lifecycle semantics and finish
+ * ending; the dispatcher calls this once so lifecycle semantics and finish
  * timestamps live in a single place.
  */
 export function settleResultLifecycle(
   result: SingleResult,
-  outcome: SubagentOutcome,
+  ending: RunEnding,
   finishedAt: number,
   cancellationReason?: CancellationReason,
 ): void {
@@ -110,10 +107,10 @@ export function settleResultLifecycle(
       `Cannot settle a subagent result in '${result.lifecycle.phase}' state`,
     );
   }
-  applyOutcome(result, outcome);
+  applyEnding(result, ending);
   result.lifecycle = terminalLifecycle(
     result,
-    outcome,
+    ending,
     finishedAt,
     cancellationReason,
   );
@@ -200,31 +197,11 @@ export interface RunReporter {
   stderr(chunk: string): void;
 }
 
-/** The executor-seam marker for cancellation that killed the child. */
-export const ABORTED_STOP_REASON = "aborted" as const;
-
-/**
- * Stop reasons an executor may use when settling a run. Provider stop reasons
- * such as `stop` or `end_turn` belong to reported facts, not this outcome.
- */
-type SubagentOutcomeStopReason = typeof ABORTED_STOP_REASON | "error";
-
-/**
- * How a run ended, as the executor witnessed it.
- *
- * {@link ABORTED_STOP_REASON} is the abort marker: only the executor knows
- * whether a cancellation actually killed the child (a late abort after a
- * clean exit must not count), so it travels in the outcome rather than being
- * inferred from the signal. `stopReason` and `errorMessage` are written only
- * when present, so facts already folded from the transcript stand unless the
- * ending says otherwise.
- */
-export interface SubagentOutcome {
-  /** Absent when the child exited because of a signal. */
-  exitCode?: number;
-  stopReason?: SubagentOutcomeStopReason;
-  errorMessage?: string;
-}
+/** The honest terminal resolution of an executor. */
+export type RunEnding =
+  | { ending: "answered" }
+  | { ending: "failed"; errorMessage?: string }
+  | { ending: "cancelled" };
 
 /**
  * A run in progress, as the executor sees it: what to do, where to report,
@@ -238,13 +215,11 @@ export interface SubagentRun {
 
 /**
  * Run the task to completion, reporting facts as output arrives and
- * resolving to the outcome. Rejects only when the run could not be
- * represented as an outcome at all — an aborted or failed agent resolves,
- * with `stopReason: "aborted"` or a non-zero `exitCode`. Cancellation in
- * particular must resolve: the host turns a thrown tool error into a bare
- * error string, discarding the partial transcript the run already reported.
+ * resolving to an ending. Cancellation and backend failures resolve as
+ * explicit endings; the dispatcher classifies a thrown executor so partial
+ * facts are retained.
  */
-export type SubagentExecutor = (run: SubagentRun) => Promise<SubagentOutcome>;
+export type SubagentExecutor = (run: SubagentRun) => Promise<RunEnding>;
 
 function emptyUsage(): UsageStats {
   return {
@@ -292,9 +267,7 @@ function recordFact(result: SingleResult, fact: Fact): void {
   // A model reported by a harness fact is authoritative, including when it
   // refines the harness-resolved baseline.
   if (fact.model) result.model = fact.model;
-  if (fact.stopReason && fact.stopReason !== ABORTED_STOP_REASON) {
-    result.stopReason = fact.stopReason;
-  }
+  if (fact.stopReason) result.stopReason = fact.stopReason;
   if (fact.errorMessage) result.errorMessage = fact.errorMessage;
 }
 
@@ -351,29 +324,20 @@ export function createRunReporter(
   };
 }
 
-/**
- * Write an outcome onto the record. An aborted outcome is normalized rather
- * than copied: a killed child's exit code says nothing useful, and a frame
- * can report an error the child then recovered from, so the cancellation —
- * not whatever ending the stream happened to hold — is what the run says
- * ended it. The transcript already folded still stands either way.
- */
-export function applyOutcome(
-  result: SingleResult,
-  outcome: SubagentOutcome,
-): void {
-  if (outcome.stopReason === ABORTED_STOP_REASON) {
-    // `aborted` is executor mechanism vocabulary. Cancellation lifecycle and
-    // its recorded reason are the only domain representation; neither the
-    // result nor presentation may retain the backend stop verb.
+/** Apply only ending data that belongs on the run record. */
+export function applyEnding(result: SingleResult, ending: RunEnding): void {
+  if (ending.ending === "cancelled") {
     delete result.stopReason;
     result.errorMessage = CANCELLED_MESSAGE;
     return;
   }
-  if (outcome.stopReason) result.stopReason = outcome.stopReason;
-  // A process-exit diagnostic is only a fallback. An authoritative terminal
-  // fact may already contain the provider's more useful explanation.
-  if (outcome.errorMessage && !result.errorMessage) {
-    result.errorMessage = outcome.errorMessage;
+  // A process/source diagnostic is only a fallback. An authoritative fact may
+  // already contain the provider's more useful explanation.
+  if (
+    ending.ending === "failed" &&
+    ending.errorMessage &&
+    !result.errorMessage
+  ) {
+    result.errorMessage = ending.errorMessage;
   }
 }

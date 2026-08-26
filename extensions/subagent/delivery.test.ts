@@ -29,14 +29,13 @@ function deferredRun(agent = "explore"): {
     settled,
     finish(output = "the answer") {
       result.messages.push(assistantText(output));
-      result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
+      result.lifecycle = { phase: "completed", finishedAt: 10 };
       resolve(result);
     },
     cancel() {
       result.lifecycle = {
         phase: "cancelled",
         finishedAt: 10,
-        exitCode: 1,
         reason: "requested",
       };
       resolve(result);

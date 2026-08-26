@@ -237,8 +237,8 @@ test("completed, failed, and cancelled notifications carry accounting", () => {
   result.model = "claude-sonnet-4-6";
 
   for (const lifecycle of [
-    { phase: "completed", finishedAt: 10, exitCode: 0 },
-    { phase: "failed", finishedAt: 10, exitCode: 1 },
+    { phase: "completed", finishedAt: 10 },
+    { phase: "failed", finishedAt: 10 },
     { phase: "cancelled", finishedAt: 10, reason: "requested" },
   ] as const) {
     result.lifecycle = lifecycle;
@@ -256,7 +256,7 @@ test("N1/N2: completed notification has a deterministic bounded preview and resu
   result.messages.push(
     assistantText("x".repeat(NOTIFICATION_PREVIEW_CHARACTER_LIMIT + 500)),
   );
-  result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
+  result.lifecycle = { phase: "completed", finishedAt: 10 };
 
   const notification = formatNotification("a1", result);
   assert.ok(notification.length < NOTIFICATION_PREVIEW_CHARACTER_LIMIT + 200);
@@ -266,7 +266,7 @@ test("N1/N2: completed notification has a deterministic bounded preview and resu
 
 test("N3: failed notification carries only the primary error and pointer", () => {
   const result = createEmptyResult("explore", "look", 0);
-  result.lifecycle = { phase: "failed", finishedAt: 10, exitCode: 1 };
+  result.lifecycle = { phase: "failed", finishedAt: 10 };
   result.errorMessage = "model refused";
   result.stderr = "raw secret stderr";
   assert.equal(
@@ -277,7 +277,7 @@ test("N3: failed notification carries only the primary error and pointer", () =>
 
 test("N1: failed notification bounds a pathological error message", () => {
   const result = createEmptyResult("explore", "look", 0);
-  result.lifecycle = { phase: "failed", finishedAt: 10, exitCode: 1 };
+  result.lifecycle = { phase: "failed", finishedAt: 10 };
   result.errorMessage = "y".repeat(NOTIFICATION_PREVIEW_CHARACTER_LIMIT + 500);
 
   const notification = formatNotification("a1", result);
@@ -288,7 +288,7 @@ test("N1: failed notification bounds a pathological error message", () => {
 test("completed results preserve output exactly", () => {
   const result = createEmptyResult("explore", "look", 0);
   result.messages.push(assistantText("  answer\n"));
-  result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
+  result.lifecycle = { phase: "completed", finishedAt: 10 };
 
   assert.equal(fullOutput(result), "  answer\n");
 });
@@ -306,7 +306,7 @@ test("a cancelled notification is terse and contains no partial output", () => {
 test("INV-11: failed and cancelled results label partial output", () => {
   const failed = createEmptyResult("explore", "look", 0);
   failed.messages.push(assistantText("partial finding"));
-  failed.lifecycle = { phase: "failed", finishedAt: 10, exitCode: 1 };
+  failed.lifecycle = { phase: "failed", finishedAt: 10 };
   assert.match(fullOutput(failed), /failed before completing/);
   assert.match(
     fullOutput(failed),
@@ -329,7 +329,7 @@ test("INV-11: failed and cancelled results label partial output", () => {
 
 test("INV-11: failed and cancelled results plainly say when output is absent", () => {
   const failed = createEmptyResult("explore", "look", 0);
-  failed.lifecycle = { phase: "failed", finishedAt: 10, exitCode: 1 };
+  failed.lifecycle = { phase: "failed", finishedAt: 10 };
   assert.equal(
     fullOutput(failed),
     "This run failed before completing.\n\nThe run failed before producing output.",

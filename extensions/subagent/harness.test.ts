@@ -15,7 +15,7 @@ import {
   runHarnessConformance,
 } from "./harness-conformance.ts";
 import { formatNotification } from "./presentation.ts";
-import { ABORTED_STOP_REASON, type SubagentExecutor } from "./run.ts";
+import type { SubagentExecutor } from "./run.ts";
 import { startSubagent } from "./runner.ts";
 import { createSubagentRuns } from "./runs.ts";
 import type { AgentConfig } from "./types.ts";
@@ -102,8 +102,8 @@ function fakeHarness(
       execute: async (run) => {
         await onRun(run.signal);
         return run.signal?.aborted
-          ? { stopReason: ABORTED_STOP_REASON }
-          : { exitCode: 0 };
+          ? { ending: "cancelled" }
+          : { ending: "answered" };
       },
     }),
   };
@@ -146,7 +146,9 @@ function waitForAbort(
 function conformanceRig(): HarnessConformanceRig {
   return {
     name: "fake",
-    build(scenario: HarnessConformanceScenario): HarnessConformanceFixture {
+    build(
+      scenario: HarnessConformanceScenario,
+    ): HarnessConformanceFixture | undefined {
       let childDepth: number | undefined;
       const base = (
         execute: SubagentExecutor,
@@ -165,8 +167,7 @@ function conformanceRig(): HarnessConformanceRig {
             async (run) => {
               childDepth = run.task.childDepth;
               return {
-                exitCode: 1,
-                stopReason: "error",
+                ending: "failed",
                 errorMessage: "fake backend crashed",
               };
             },
@@ -181,7 +182,7 @@ function conformanceRig(): HarnessConformanceRig {
             async (run) => {
               childDepth = run.task.childDepth;
               await waitForAbort(run.signal, gate.open);
-              return { stopReason: ABORTED_STOP_REASON };
+              return { ending: "cancelled" };
             },
             { phase: "cancelled", cancellationReason: "requested" },
             gate.ready,
@@ -199,7 +200,7 @@ function conformanceRig(): HarnessConformanceRig {
                 usage: { turns: 1 },
               });
               await waitForAbort(run.signal, gate.open);
-              return { exitCode: 0 };
+              return { ending: "answered" };
             },
             {
               phase: "completed",
@@ -240,7 +241,7 @@ function conformanceRig(): HarnessConformanceRig {
                   turns: 1,
                 },
               });
-              return { exitCode: 0 };
+              return { ending: "answered" };
             },
             {
               phase: "completed",
@@ -259,7 +260,7 @@ function conformanceRig(): HarnessConformanceRig {
           return base(
             async (run) => {
               childDepth = run.task.childDepth;
-              return { exitCode: 0 };
+              return { ending: "answered" };
             },
             { phase: "completed", childDepth: 1 },
           );
@@ -267,9 +268,33 @@ function conformanceRig(): HarnessConformanceRig {
           return base(
             async (run) => {
               childDepth = run.task.childDepth;
-              return { exitCode: 0 };
+              return { ending: "answered" };
             },
             { phase: "completed" },
+          );
+        case "no-terminal-answer":
+          return base(
+            async (run) => {
+              childDepth = run.task.childDepth;
+              return { ending: "failed", errorMessage: "fake missing answer" };
+            },
+            { phase: "failed", errorMessage: "fake missing answer" },
+          );
+        case "post-answer-failure":
+          return base(
+            async (run) => {
+              childDepth = run.task.childDepth;
+              run.report.message({
+                role: "assistant",
+                parts: [{ type: "text", text: "answer" }],
+              });
+              return { ending: "answered" };
+            },
+            {
+              phase: "completed",
+              finalOutput: "answer",
+              errorMessage: undefined,
+            },
           );
         case "terminal-transcript-healing":
           return base(
@@ -288,7 +313,7 @@ function conformanceRig(): HarnessConformanceRig {
                   stopReason: "stop",
                 },
               ]);
-              return { exitCode: 0 };
+              return { ending: "answered" };
             },
             {
               phase: "completed",
@@ -370,7 +395,7 @@ test("a Codex-like harness compiles and runs through the unchanged one-shot core
           role: "assistant",
           parts: [{ type: "text", text: "codex fixture" }],
         });
-        return { exitCode: 0 };
+        return { ending: "answered" };
       },
     }),
   };

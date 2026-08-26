@@ -11,10 +11,9 @@ import {
   stringField,
   validateCommonProfileFields,
 } from "./harness.ts";
+import { runOneShot, streamSource, type Translation } from "./one-shot.ts";
 import {
-  ABORTED_STOP_REASON,
   DEPTH_ENV_KEY,
-  type Fact,
   type FactPart,
   type ParentModel,
   type SubagentTask,
@@ -86,7 +85,9 @@ function contentParts(content: unknown): FactPart[] {
 }
 
 /** Translate one SDK wire object into domain facts; SDK objects stop here. */
-export function translateClaudeMessage(message: SDKMessage): Fact[] {
+export function translateClaudeMessage(
+  message: SDKMessage,
+): Translation | undefined {
   const wire = message as unknown as Record<string, unknown>;
   if (wire.type === "assistant" && isRecord(wire.message)) {
     const parts = contentParts(wire.message.content);
@@ -95,17 +96,19 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
     // Thinking-only and empty assistant messages still carry model
     // provenance. Keep those metadata-bearing facts even when no content
     // block can cross the harness seam.
-    if (parts.length === 0 && !model) return [];
-    return [
-      {
-        role: "assistant",
-        parts,
-        // Claude reports total turns on its terminal result. Streamed
-        // assistant messages are progress, not additional turns.
-        usage: { turns: 0 },
-        ...(model ? { model } : {}),
-      },
-    ];
+    if (parts.length === 0 && !model) return undefined;
+    return {
+      facts: [
+        {
+          role: "assistant",
+          parts,
+          // Claude reports total turns on its terminal result. Streamed
+          // assistant messages are progress, not additional turns.
+          usage: { turns: 0 },
+          ...(model ? { model } : {}),
+        },
+      ],
+    };
   }
   if (wire.type === "user" && isRecord(wire.message)) {
     const content = wire.message.content;
@@ -114,8 +117,8 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
       content.some((block) => isRecord(block) && block.type === "tool_result");
     const parts = contentParts(content);
     return parts.length > 0
-      ? [{ role: isToolResult ? "tool" : "user", parts }]
-      : [];
+      ? { facts: [{ role: isToolResult ? "tool" : "user", parts }] }
+      : undefined;
   }
   if (
     wire.type === "system" &&
@@ -124,15 +127,17 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
   ) {
     // The SDK init message identifies the resolved main-loop model before the
     // first assistant response, including on runs that fail before answering.
-    return [
-      {
-        role: "metadata",
-        parts: [],
-        model: wire.model,
-      },
-    ];
+    return {
+      facts: [
+        {
+          role: "metadata",
+          parts: [],
+          model: wire.model,
+        },
+      ],
+    };
   }
-  if (wire.type !== "result") return [];
+  if (wire.type !== "result") return undefined;
 
   const isError = wire.is_error === true;
   const resultParts =
@@ -186,25 +191,29 @@ export function translateClaudeMessage(message: SDKMessage): Fact[] {
       : isError
         ? "Claude query reported an error"
         : undefined);
-  return [
-    {
-      role: "assistant",
-      parts: resultParts,
-      usage: {
-        input,
-        output,
-        cacheRead,
-        cacheWrite,
-        cost,
-        turns: typeof wire.num_turns === "number" ? wire.num_turns : 1,
+  return {
+    facts: [
+      {
+        role: "assistant",
+        parts: resultParts,
+        usage: {
+          input,
+          output,
+          cacheRead,
+          cacheWrite,
+          cost,
+          turns: typeof wire.num_turns === "number" ? wire.num_turns : 1,
+        },
+        ...(model ? { model } : {}),
+        ...(typeof wire.stop_reason === "string"
+          ? { stopReason: wire.stop_reason }
+          : {}),
+        ...(errorMessage ? { errorMessage } : {}),
       },
-      ...(model ? { model } : {}),
-      ...(typeof wire.stop_reason === "string"
-        ? { stopReason: wire.stop_reason }
-        : {}),
-      ...(errorMessage ? { errorMessage } : {}),
-    },
-  ];
+    ],
+    terminal: true,
+    ...(errorMessage ? { errorMessage } : {}),
+  };
 }
 
 function isClaudeModel(value: string): boolean {
@@ -279,75 +288,35 @@ export function createClaudeHarness(
       const effort = effortField(task.config, "profile", EFFORTS);
       return {
         model,
-        execute: async (run) => {
-          const controller = new AbortController();
-          let stream: Query | undefined;
-          let streamEnded = false;
-          let terminalResultReceived = false;
-          let terminalResultBeforeAbort = false;
-          let abortRequested = run.signal?.aborted ?? false;
-          let errorMessage: string | undefined;
-          const abort = () => {
-            if (streamEnded) return;
-            abortRequested = true;
-            controller.abort();
-            stream?.close();
-          };
-          if (run.signal?.aborted) controller.abort();
-          else run.signal?.addEventListener("abort", abort, { once: true });
-          try {
+        execute: (run) => {
+          const source = streamSource<SDKMessage>(async (signal, sink) => {
+            const controller = new AbortController();
+            if (signal.aborted) return undefined;
             const query = await loadQuery();
             // Loading the SDK is asynchronous. Cancellation can win that race;
             // in that case no provider query may be started.
-            if (controller.signal.aborted)
-              return { stopReason: ABORTED_STOP_REASON };
+            if (signal.aborted) return undefined;
             const options = buildClaudeOptions(task, model, effort, controller);
-            options.stderr = (data) => run.report.stderr(data);
-            stream = query({ prompt: task.prompt, options });
-            if (controller.signal.aborted) {
+            options.stderr = (data) => sink.stderr(data);
+            const stream = query({ prompt: task.prompt, options });
+            const stop = (): void => {
+              controller.abort();
               stream.close();
-              return { stopReason: ABORTED_STOP_REASON };
+            };
+            if (signal.aborted) {
+              stop();
+              return undefined;
             }
-            for await (const message of stream) {
-              if (
-                (message as { type?: string }).type === "result" &&
-                !terminalResultReceived
-              ) {
-                terminalResultReceived = true;
-                // Ordering is the cancellation contract: a result witnessed
-                // before abort is authoritative, while a queued result after
-                // abort cannot resurrect the run.
-                terminalResultBeforeAbort = !abortRequested;
-              }
-              for (const fact of translateClaudeMessage(message)) {
-                if (fact.errorMessage) errorMessage = fact.errorMessage;
-                run.report.message(fact);
-              }
-            }
-            streamEnded = true;
-            if (abortRequested && !terminalResultBeforeAbort)
-              return { stopReason: ABORTED_STOP_REASON };
-            return errorMessage
-              ? { exitCode: 1, stopReason: "error", errorMessage }
-              : { exitCode: 0 };
-          } catch (error) {
-            if (terminalResultBeforeAbort) {
-              return errorMessage
-                ? { exitCode: 1, stopReason: "error", errorMessage }
-                : { exitCode: 0 };
-            }
-            if (
-              abortRequested ||
-              controller.signal.aborted ||
-              run.signal?.aborted
-            )
-              return { stopReason: ABORTED_STOP_REASON };
-            const message =
-              error instanceof Error ? error.message : String(error);
-            return { exitCode: 1, stopReason: "error", errorMessage: message };
-          } finally {
-            run.signal?.removeEventListener("abort", abort);
-          }
+            return { events: stream, stop };
+          });
+          return runOneShot({
+            source,
+            translate: translateClaudeMessage,
+            report: run.report,
+            signal: run.signal,
+            missingAnswerMessage:
+              "Claude stream ended without a terminal result answer.",
+          });
         },
       };
     },

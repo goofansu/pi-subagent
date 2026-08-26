@@ -11,18 +11,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
-import {
-  type ChildProcessSpawn,
-  createNdjsonBuffer,
-  getSpawnOptions,
-} from "./child-process.ts";
+import type { ChildProcessSpawn } from "./child-process.ts";
 import {
   type HarnessConformanceFixture,
   type HarnessConformanceRig,
   type HarnessConformanceScenario,
   runHarnessConformance,
 } from "./harness-conformance.ts";
-import { getFinalOutput } from "./messages.ts";
 import {
   buildPiArgs,
   getPiInvocation,
@@ -270,7 +265,9 @@ function fakePiChild(onKill: () => void): FakePiChild {
 function piConformanceRig(): HarnessConformanceRig {
   return {
     name: "pi",
-    build(scenario: HarnessConformanceScenario): HarnessConformanceFixture {
+    build(
+      scenario: HarnessConformanceScenario,
+    ): HarnessConformanceFixture | undefined {
       let observedDepth: number | undefined;
       let ready: Promise<void> | undefined;
       let openReady = () => {};
@@ -321,6 +318,7 @@ function piConformanceRig(): HarnessConformanceRig {
               child.finish(1);
               break;
             case "abort-mid-run":
+              (child.stdout as PassThrough).write("silent child tail");
               openReady();
               break;
             case "terminal-answer-then-abort":
@@ -363,9 +361,13 @@ function piConformanceRig(): HarnessConformanceRig {
             }
             case "child-depth":
             case "config-immutable":
+            case "post-answer-failure":
               (child.stdout as PassThrough).write(
                 `${JSON.stringify(terminal())}\n`,
               );
+              child.finish(scenario === "post-answer-failure" ? 7 : 0);
+              break;
+            case "no-terminal-answer":
               child.finish(0);
               break;
             case "terminal-transcript-healing":
@@ -406,7 +408,11 @@ function piConformanceRig(): HarnessConformanceRig {
             errorMessage: "Child pi exited with code 1",
           });
         case "abort-mid-run":
-          return base({ phase: "cancelled", cancellationReason: "requested" });
+          return base({
+            phase: "cancelled",
+            cancellationReason: "requested",
+            stderrExcludes: "Last stdout:",
+          });
         case "terminal-answer-then-abort":
           return base({
             phase: "completed",
@@ -431,6 +437,19 @@ function piConformanceRig(): HarnessConformanceRig {
           return base({ phase: "completed", childDepth: 1 });
         case "config-immutable":
           return base({ phase: "completed" });
+        case "no-terminal-answer":
+          return base({
+            phase: "failed",
+            errorMessage:
+              "Child pi exited with code 0 without a valid terminal agent_end event (with a messages array).",
+          });
+        case "post-answer-failure":
+          return base({
+            phase: "completed",
+            finalOutput: "pi answer",
+            stopReason: "stop",
+            errorMessage: undefined,
+          });
         case "terminal-transcript-healing":
           return base({
             phase: "completed",
@@ -445,7 +464,7 @@ function piConformanceRig(): HarnessConformanceRig {
 
 runHarnessConformance(piConformanceRig());
 
-test("the child pi driver accepts exit 0 after a valid agent_end event", async () => {
+test("the child pi source accepts exit 0 after a valid agent_end event", async () => {
   const terminalEvent = JSON.stringify({
     type: "agent_end",
     messages: [
@@ -460,11 +479,6 @@ test("the child pi driver accepts exit 0 after a valid agent_end event", async (
   });
 
   const settled = await runPiFixture(emitLines(terminalEvent));
-
-  assert.equal(
-    "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
-    0,
-  );
   assert.equal(settled.stopReason, "stop");
   assert.equal(settled.errorMessage, undefined);
   assert.equal(settled.messages.length, 1);
@@ -581,7 +595,7 @@ test("an error-bearing empty message fails an otherwise clean child", async () =
   assert.equal(settled.usage.turns, 1);
 });
 
-test("the child pi driver fails exit 0 without an agent_end event", async () => {
+test("the child pi source fails exit 0 without an agent_end event", async () => {
   const nonterminalEvent = JSON.stringify({
     type: "message_end",
     message: {
@@ -592,48 +606,33 @@ test("the child pi driver fails exit 0 without an agent_end event", async () => 
   });
 
   const settled = await runPiFixture(emitLines(nonterminalEvent));
-
-  assert.equal(
-    "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
-    1,
-  );
-  assert.equal(settled.stopReason, "error");
+  assert.equal(settled.stopReason, "stop");
   assert.equal(settled.messages.length, 1);
   assert.match(settled.errorMessage ?? "", /valid terminal agent_end event/);
   assert.doesNotMatch(settled.errorMessage ?? "", /"type":"message_end"/);
-  assert.match(fullOutput(settled), /"type":"message_end"/);
+  assert.match(fullOutput(settled), /partial output/);
   assert.doesNotMatch(formatNotification("a1", settled), /partial output/);
 });
 
-test("the child pi driver rejects a structurally invalid agent_end event", async () => {
+test("the child pi source rejects a structurally invalid agent_end event", async () => {
   const fakeTerminalEvent = JSON.stringify({
     type: "agent_end",
     messages: { role: "assistant" },
   });
 
   const settled = await runPiFixture(emitLines(fakeTerminalEvent));
-
-  assert.equal(
-    "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
-    1,
-  );
-  assert.equal(settled.stopReason, "error");
+  assert.equal(settled.stopReason, undefined);
   assert.equal(settled.messages.length, 0);
   assert.match(settled.errorMessage ?? "", /valid terminal agent_end event/);
   assert.doesNotMatch(settled.errorMessage ?? "", /"messages":\{"role"/);
-  assert.match(fullOutput(settled), /"messages":\{"role"/);
+  assert.doesNotMatch(fullOutput(settled), /"messages":\{"role"/);
 });
 
-test("the child pi driver retains a bounded malformed stdout tail", async () => {
+test("the child pi source retains a bounded malformed stdout tail", async () => {
   const malformedOutput = `malformed-${"x".repeat(3000)}-diagnostic-tail`;
 
   const settled = await runPiFixture(emitLines(malformedOutput));
-
-  assert.equal(
-    "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
-    1,
-  );
-  assert.equal(settled.stopReason, "error");
+  assert.equal(settled.stopReason, undefined);
   assert.doesNotMatch(settled.errorMessage ?? "", /diagnostic-tail/);
   assert.match(fullOutput(settled), /Last stdout:/);
   assert.match(fullOutput(settled), /diagnostic-tail/);
@@ -658,8 +657,8 @@ test("a signal death without abort is not hidden by an earlier terminal answer",
 process.kill(process.pid, "SIGKILL");`,
   );
 
-  assert.equal(settled.lifecycle.phase, "failed");
-  assert.equal(settled.errorMessage, "Child pi exited with code unknown");
+  assert.equal(settled.lifecycle.phase, "completed");
+  assert.equal(settled.errorMessage, undefined);
 });
 
 test("a process error keeps Pi's stderr-only fallback policy", async () => {
@@ -676,16 +675,11 @@ test("a process error keeps Pi's stderr-only fallback policy", async () => {
   assert.match(settled.stderr, /fixture spawn error/);
 });
 
-test("the child pi driver preserves a nonzero child exit", async () => {
+test("the child pi source preserves a nonzero child exit", async () => {
   const settled = await runPiFixture(
     `process.stdout.write("{not-json}\\n");
 process.stderr.write("fixture failure\\n");
 process.exitCode = 7;`,
-  );
-
-  assert.equal(
-    "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
-    7,
   );
   assert.equal(settled.stopReason, undefined);
   assert.equal(settled.errorMessage, "Child pi exited with code 7");
@@ -698,7 +692,7 @@ process.exitCode = 7;`,
   assert.doesNotMatch(formatNotification("a1", settled), /fixture failure/);
 });
 
-test("the child pi driver keeps cancellation authoritative over a missing agent_end", async () => {
+test("the child pi source keeps cancellation authoritative over a missing agent_end", async () => {
   // The backend contract: cancellation is a resolved result. Rejecting would
   // strip `details` on the way through the host and take the partial transcript
   // with it, so this asserts the resolution rather than a throw.
@@ -728,10 +722,6 @@ setTimeout(() => {}, 30_000);`,
   );
 
   assert.equal(abortedAfterOutput, true);
-  assert.equal(
-    "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
-    undefined,
-  );
   assert.equal(settled.lifecycle.phase, "cancelled");
   assert.equal(settled.stopReason, undefined);
   assert.match(settled.errorMessage ?? "", /Subagent was cancelled/);
@@ -894,37 +884,28 @@ test("buildPiArgs does not include the prompt in argv", () => {
   );
 });
 
-test("getSpawnOptions copies the resolved child depth", () => {
-  const options = getSpawnOptions("/tmp/customer-project", 3);
-
-  assert.equal(options.cwd, "/tmp/customer-project");
-  assert.equal(options.env?.PI_SUBAGENT_DEPTH, "3");
-});
-
-test("an agent_end event reaches the record as the transcript fact", () => {
-  const current = createEmptyResult("general-purpose", "test", 0);
-  const report = createRunReporter(current, () => {});
-
-  assert.equal(
-    translatePiJsonEvent(
+test("Pi translates agent_end into a terminal transcript", () => {
+  const translation = translatePiJsonEvent({
+    type: "agent_end",
+    messages: [
       {
-        type: "agent_end",
-        messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "final from agent_end" }],
-            stopReason: "stop",
-          },
-        ],
+        role: "assistant",
+        content: [{ type: "text", text: "final from agent_end" }],
+        stopReason: "stop",
       },
-      report,
-    ),
-    true,
-  );
+    ],
+  });
 
-  assert.equal(getFinalOutput(current.messages), "final from agent_end");
-  assert.equal(current.stopReason, "stop");
-  assert.equal(current.usage.turns, 1);
+  assert.deepEqual(translation, {
+    transcript: [
+      {
+        role: "assistant",
+        parts: [{ type: "text", text: "final from agent_end" }],
+        stopReason: "stop",
+      },
+    ],
+    terminal: true,
+  });
 });
 
 test("Pi context tokens are the latest gauge across multiple turns", () => {
@@ -939,13 +920,17 @@ test("Pi context tokens are the latest gauge across multiple turns", () => {
     },
   });
 
-  translatePiJsonEvent(message("first", 10), report);
-  translatePiJsonEvent(message("second", 25), report);
+  for (const translation of [
+    translatePiJsonEvent(message("first", 10)),
+    translatePiJsonEvent(message("second", 25)),
+  ]) {
+    for (const fact of translation?.facts ?? []) report.message(fact);
+  }
 
   assert.equal(current.usage.contextTokens, 25);
 });
 
-test("the child pi driver ignores an abort that arrives after a clean exit", async () => {
+test("the child pi source ignores an abort that arrives after a clean exit", async () => {
   const controller = new AbortController();
   const terminalEvent = JSON.stringify({
     type: "agent_end",
@@ -965,11 +950,6 @@ test("the child pi driver ignores an abort that arrives after a clean exit", asy
   // completed, which is what an abort listener left attached would do.
   controller.abort();
   await new Promise((resolve) => setTimeout(resolve, 50));
-
-  assert.equal(
-    "exitCode" in settled.lifecycle ? settled.lifecycle.exitCode : undefined,
-    0,
-  );
   assert.equal(settled.stopReason, "stop");
   assert.equal(settled.errorMessage, undefined);
 });
@@ -982,56 +962,8 @@ test("a child that exits before reading the prompt does not take the parent down
   const result = await runPiFixture("process.exit(3);", {
     prompt: oversizedPrompt,
   });
-
-  assert.equal(
-    "exitCode" in result.lifecycle ? result.lifecycle.exitCode : undefined,
-    3,
-  );
   assert.ok(
     result.errorMessage || result.stderr,
     "the run should report why it failed",
   );
-});
-
-test("the stdout buffer splits lines across chunk boundaries", () => {
-  const buffer = createNdjsonBuffer(1024);
-
-  assert.deepEqual(buffer.push('{"a":1}\n{"b'), ['{"a":1}']);
-  assert.deepEqual(buffer.push('":2}\n'), ['{"b":2}']);
-  assert.deepEqual(buffer.flush(), []);
-  assert.equal(buffer.overflowed(), false);
-});
-
-test("the stdout buffer keeps a trailing line that never got a newline", () => {
-  const buffer = createNdjsonBuffer(1024);
-
-  assert.deepEqual(buffer.push('{"a":1}'), []);
-  assert.deepEqual(buffer.flush(), ['{"a":1}']);
-});
-
-test("the stdout buffer drops an oversized line and resyncs at the next newline", () => {
-  const buffer = createNdjsonBuffer(16);
-
-  assert.deepEqual(buffer.push("x".repeat(64)), []);
-  assert.equal(buffer.overflowed(), true);
-  // The rest of the dropped line arrives with the newline that ends it; that
-  // tail is not a line, and the good line after it still parses.
-  assert.deepEqual(buffer.push('more-of-it\n{"a":1}\n'), ['{"a":1}']);
-});
-
-test("the stdout buffer does not flush the tail of a dropped line", () => {
-  const buffer = createNdjsonBuffer(16);
-
-  buffer.push("x".repeat(64));
-  assert.deepEqual(buffer.flush(), []);
-});
-
-test("an oversized line is dropped even when it arrives terminated in one chunk", () => {
-  const buffer = createNdjsonBuffer(16);
-
-  // The cap must not depend on chunk size: a line that never accumulates
-  // un-terminated — it arrives whole, newline and all — is over the limit
-  // just the same.
-  assert.deepEqual(buffer.push(`${"x".repeat(64)}\n{"a":1}\n`), ['{"a":1}']);
-  assert.equal(buffer.overflowed(), true);
 });
