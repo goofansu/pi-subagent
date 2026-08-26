@@ -4,7 +4,7 @@ import {
   loadAgentConfigsWithDiagnostics,
 } from "./agents.ts";
 import { registerAgentsCommand } from "./agents-command.ts";
-import type { SessionPush, SubagentDelivery } from "./delivery.ts";
+import type { SessionPush } from "./delivery.ts";
 import type { HarnessRegistry } from "./harness.ts";
 import { buildNotificationMessage } from "./notification-message.ts";
 import type { SubagentRuns } from "./runs.ts";
@@ -27,10 +27,20 @@ export interface SessionLifecycle {
   sessionShutdown(): void;
 }
 
+interface SessionLifecyclePi {
+  registerCommand: ExtensionAPI["registerCommand"];
+  sendMessage: ExtensionAPI["sendMessage"];
+}
+
+interface SessionLifecycleDelivery {
+  shutdown(): void;
+}
+
 export interface SessionLifecycleOptions {
-  pi: ExtensionAPI;
+  pi: SessionLifecyclePi;
+  sendUserMessage: ExtensionAPI["sendUserMessage"];
   agentsDir: string;
-  delivery: SubagentDelivery;
+  delivery: SessionLifecycleDelivery;
   sessionPush: SessionPush;
   runs: SubagentRuns;
   harnesses: HarnessRegistry;
@@ -43,6 +53,7 @@ export interface SessionLifecycleOptions {
 /** Own the mutable state and host events of one process-lifetime session seam. */
 export function createSessionLifecycle({
   pi,
+  sendUserMessage,
   agentsDir,
   delivery,
   sessionPush,
@@ -86,7 +97,11 @@ export function createSessionLifecycle({
 
       if (!registered) {
         registered = true;
-        registerAgentsCommand(pi, agentConfigs, agentsDir);
+        registerAgentsCommand(
+          { registerCommand: pi.registerCommand, sendUserMessage },
+          agentConfigs,
+          agentsDir,
+        );
         registerFeatures(sessionContext, agentConfigs);
       }
 

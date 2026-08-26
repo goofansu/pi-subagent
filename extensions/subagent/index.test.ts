@@ -7,7 +7,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createSubagentDelivery, type PushedNotification } from "./delivery.ts";
 import { createHarnessRegistry, type Harness } from "./harness.ts";
 import subagentExtension, {
-  registerDeliveryEventHandlers,
+  createSubagentRuntime,
   registerSubagentFeatureTools,
 } from "./index.ts";
 import { buildNotificationMessage } from "./notification-message.ts";
@@ -23,9 +23,8 @@ import {
   type StartedSubagent,
   startSubagent,
 } from "./runner.ts";
-import { createSubagentRuns, subagentRuns } from "./runs.ts";
+import { createSubagentRuns } from "./runs.ts";
 import type { AgentConfig } from "./types.ts";
-import { installRunsWidget } from "./widget.ts";
 
 // ── Extension registration ───────────────────────────────────────────────────
 
@@ -43,7 +42,7 @@ test("the extension is not exposed inside a subagent Pi process", () => {
 
     const parentEvents: string[] = [];
     delete process.env.PI_SUBAGENT_DEPTH;
-    subagentExtension({
+    createSubagentRuntime({ agentsDir: "/agents" }).attach({
       on(event: string) {
         parentEvents.push(event);
       },
@@ -64,15 +63,10 @@ test("the extension is not exposed inside a subagent Pi process", () => {
 test("interrupt bookkeeping survives turns of any shape", () => {
   const handlers: Record<string, (event: unknown, ctx: unknown) => unknown> =
     {};
-  subagentExtension({
+  createSubagentRuntime({ agentsDir: "/agents" }).attach({
     on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
       handlers[event] = handler;
     },
-    registerCommand() {},
-    registerTool() {},
-    registerMessageRenderer() {},
-    sendMessage() {},
-    getThinkingLevel: () => "off",
   } as unknown as ExtensionAPI);
 
   // The abort path reads the turn's ending; a turn with no message at all
@@ -262,39 +256,41 @@ function runtimeBoundary(
     prepare: () => ({ execute }),
   };
 
-  registerSubagentFeatureTools(
-    pi,
-    { cwd: "/project", projectTrusted: true },
-    new Map([["worker", agentConfig("worker")]]),
-    {
-      runs,
-      delivery,
-      start: (options) =>
-        startSubagent({
-          ...options,
-          harnesses: createHarnessRegistry([harness]),
-          runs,
-        }),
-      harnesses: createHarnessRegistry([harness]),
-    },
-  );
-  installRunsWidget(
-    {
-      setWidget(_key, content) {
-        widgetFactory = content as typeof widgetFactory;
-      },
-    },
-    runs,
-  );
-
-  const events: Record<string, (event: unknown) => void> = {};
+  const events: Record<string, (event: unknown, ctx?: unknown) => void> = {};
   const eventPi = {
-    on(event: string, handler: (event: unknown) => void) {
+    ...pi,
+    on(event: string, handler: (event: unknown, ctx?: unknown) => void) {
       events[event] = handler;
     },
   } as unknown as ExtensionAPI;
-  registerDeliveryEventHandlers(eventPi, delivery);
-  events.session_shutdown = () => delivery.shutdown();
+  const agentsDir = mkdtempSync(path.join(tmpdir(), "subagent-boundary-"));
+  writeAgent(agentsDir, "worker");
+  const runtime = createSubagentRuntime({
+    agentsDir,
+    runs,
+    delivery,
+    harnesses: createHarnessRegistry([harness]),
+    start: (options) =>
+      startSubagent({
+        ...options,
+        harnesses: createHarnessRegistry([harness]),
+        runs,
+      }),
+  });
+  runtime.attach(eventPi);
+  events.session_start?.(
+    {},
+    {
+      cwd: "/project",
+      modelRegistry: { getAll: () => [] },
+      ui: {
+        notify() {},
+        setWidget(_key: string, content: unknown) {
+          widgetFactory = content as typeof widgetFactory;
+        },
+      },
+    },
+  );
 
   const start = async (): Promise<string> => {
     const result = await tools.agent_start.execute(
@@ -542,9 +538,9 @@ interface SessionStartRun {
 }
 
 /**
- * Drive the real extension entry point against a temporary checkout and agent
+ * Drive a fresh composed runtime against a temporary checkout and agent
  * directory, so discovery, trust forwarding, and command registration are
- * exercised the way a session start does.
+ * exercised through the session-start boundary.
  */
 async function startSession(options: {
   cwd: string;
@@ -555,89 +551,86 @@ async function startSession(options: {
   sessionReason?: "startup" | "resume";
   models?: Array<{ provider: string; id: string }>;
 }): Promise<SessionStartRun> {
-  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = options.agentDir;
-  try {
-    let sessionStart:
-      | ((event: unknown, ctx: unknown) => Promise<void>)
-      | undefined;
-    let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
-    let toolGuidelines: string[] = [];
-    const notifications: string[] = [];
-    const widgetKeys: string[] = [];
+  let sessionStart:
+    | ((event: unknown, ctx: unknown) => Promise<void>)
+    | undefined;
+  let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+  let toolGuidelines: string[] = [];
+  const notifications: string[] = [];
+  const widgetKeys: string[] = [];
 
-    subagentExtension({
-      on(
-        event: string,
-        handler: (event: unknown, ctx: unknown) => Promise<void>,
-      ) {
-        if (event === "session_start") sessionStart = handler;
-      },
-      registerCommand(_name: string, commandOptions: unknown) {
-        command = commandOptions as Parameters<
-          ExtensionAPI["registerCommand"]
-        >[1];
-      },
-      registerTool(tool: { name: string; promptGuidelines?: string[] }) {
-        if (tool.name === "agent_start") {
-          toolGuidelines = tool.promptGuidelines ?? [];
-        }
-      },
-      registerMessageRenderer() {},
-      sendMessage() {},
-      getThinkingLevel: () => "off",
-    } as unknown as ExtensionAPI);
+  const runtime = createSubagentRuntime({
+    agentsDir: path.join(options.agentDir, "agents"),
+  });
+  runtime.attach({
+    on(
+      event: string,
+      handler: (event: unknown, ctx: unknown) => Promise<void>,
+    ) {
+      if (event === "session_start") sessionStart = handler;
+    },
+    registerCommand(_name: string, commandOptions: unknown) {
+      command = commandOptions as Parameters<
+        ExtensionAPI["registerCommand"]
+      >[1];
+    },
+    registerTool(tool: { name: string; promptGuidelines?: string[] }) {
+      if (tool.name === "agent_start") {
+        toolGuidelines = tool.promptGuidelines ?? [];
+      }
+    },
+    registerMessageRenderer() {},
+    sendMessage() {},
+    sendUserMessage() {},
+    getThinkingLevel: () => "off",
+  } as unknown as ExtensionAPI);
 
-    assert.ok(sessionStart);
-    await sessionStart(
-      { reason: options.sessionReason ?? "startup" },
-      {
-        cwd: options.cwd,
-        modelRegistry: {
-          getAll: () => options.models ?? [],
+  assert.ok(sessionStart);
+  await sessionStart(
+    { reason: options.sessionReason ?? "startup" },
+    {
+      cwd: options.cwd,
+      modelRegistry: {
+        getAll: () => options.models ?? [],
+      },
+      ...(options.piProjectTrusted === undefined
+        ? {}
+        : { isProjectTrusted: () => options.piProjectTrusted }),
+      ui: {
+        notify(message: string) {
+          notifications.push(message);
         },
-        ...(options.piProjectTrusted === undefined
-          ? {}
-          : { isProjectTrusted: () => options.piProjectTrusted }),
+        setWidget(key: string) {
+          widgetKeys.push(key);
+        },
+      },
+    },
+  );
+
+  return {
+    notifications,
+    widgetKeys,
+    agentNames: toolGuidelines.flatMap(
+      (line) => line.match(/^agent_start ([\w-]+)[.:]/)?.slice(1, 2) ?? [],
+    ),
+    async runAgentsCommand() {
+      options.beforeAgentsCommand?.();
+      assert.ok(command);
+      const commandNotifications: string[] = [];
+      let customOpened = false;
+      await command.handler("", {
         ui: {
           notify(message: string) {
-            notifications.push(message);
+            commandNotifications.push(message);
           },
-          setWidget(key: string) {
-            widgetKeys.push(key);
+          custom: async () => {
+            customOpened = true;
           },
         },
-      },
-    );
-
-    return {
-      notifications,
-      widgetKeys,
-      agentNames: toolGuidelines.flatMap(
-        (line) => line.match(/^agent_start ([\w-]+)[.:]/)?.slice(1, 2) ?? [],
-      ),
-      async runAgentsCommand() {
-        options.beforeAgentsCommand?.();
-        assert.ok(command);
-        const commandNotifications: string[] = [];
-        let customOpened = false;
-        await command.handler("", {
-          ui: {
-            notify(message: string) {
-              commandNotifications.push(message);
-            },
-            custom: async () => {
-              customOpened = true;
-            },
-          },
-        } as unknown as Parameters<typeof command.handler>[1]);
-        return { notifications: commandNotifications, customOpened };
-      },
-    };
-  } finally {
-    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-  }
+      } as unknown as Parameters<typeof command.handler>[1]);
+      return { notifications: commandNotifications, customOpened };
+    },
+  };
 }
 
 function makeCheckout(): { cwd: string; agentDir: string } {
@@ -829,9 +822,13 @@ type ShutdownHandler = (
   ctx: unknown,
 ) => void | Promise<void>;
 
-function captureShutdownHandler(): ShutdownHandler {
+function captureRuntime(): {
+  runtime: ReturnType<typeof createSubagentRuntime>;
+  shutdown: ShutdownHandler;
+} {
   let shutdown: ShutdownHandler | undefined;
-  subagentExtension({
+  const runtime = createSubagentRuntime({ agentsDir: "/agents" });
+  runtime.attach({
     on(event: string, handler: ShutdownHandler) {
       if (event === "session_shutdown") shutdown = handler;
     },
@@ -839,41 +836,42 @@ function captureShutdownHandler(): ShutdownHandler {
     registerTool() {},
     registerMessageRenderer() {},
     sendMessage() {},
+    sendUserMessage() {},
     getThinkingLevel: () => "off",
   } as unknown as ExtensionAPI);
   assert.ok(shutdown);
-  return shutdown;
+  return { runtime, shutdown };
 }
 
 test("INV-8: session shutdown stops every running child and cleans up", async () => {
-  const shutdown = captureShutdownHandler();
+  const { runtime, shutdown } = captureRuntime();
 
   // A report belongs to the conversation that asked for it, so replacement
   // reasons cancel exactly like quit and reload do.
   for (const reason of ["resume", "new", "fork", "reload", "quit"] as const) {
     let stops = 0;
     const result = createEmptyResult("explore", "look", 0);
-    const handle = subagentRuns.track(result, () => stops++);
+    const handle = runtime.runs.track(result, () => stops++);
     try {
       await shutdown({ reason }, {});
       assert.equal(stops, 1, `reason "${reason}" should stop the run`);
     } finally {
-      subagentRuns.release(handle.id);
+      runtime.runs.release(handle.id);
     }
   }
 });
 
 test("a settled run is not asked to stop again on quit", async () => {
-  const shutdown = captureShutdownHandler();
+  const { runtime, shutdown } = captureRuntime();
 
   let stops = 0;
   const result = createEmptyResult("explore", "look", 0);
   result.lifecycle = { phase: "completed", finishedAt: 10, exitCode: 0 };
-  const handle = subagentRuns.track(result, () => stops++);
+  const handle = runtime.runs.track(result, () => stops++);
   try {
     await shutdown({ reason: "quit" }, {});
     assert.equal(stops, 0);
   } finally {
-    subagentRuns.release(handle.id);
+    runtime.runs.release(handle.id);
   }
 });

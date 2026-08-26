@@ -3,8 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createSessionPush, type SubagentDelivery } from "./delivery.ts";
+import { createSessionPush } from "./delivery.ts";
 import { createHarnessRegistry } from "./harness.ts";
 import { createPiHarness } from "./pi-harness.ts";
 import { createSubagentRuns } from "./runs.ts";
@@ -43,11 +42,13 @@ test("session start refills stable config and session-fact references", (t) => {
   const pi = {
     registerCommand() {},
     sendMessage() {},
-  } as unknown as ExtensionAPI;
+    sendUserMessage() {},
+  };
   const lifecycle = createSessionLifecycle({
     pi,
+    sendUserMessage: pi.sendUserMessage,
     agentsDir,
-    delivery: { shutdown() {} } as SubagentDelivery,
+    delivery: { shutdown() {} },
     sessionPush: createSessionPush(),
     runs: createSubagentRuns(),
     harnesses: createHarnessRegistry([createPiHarness()]),
@@ -92,9 +93,10 @@ test("session start diagnoses a pinned Pi model when the catalogue is empty", (t
   );
   const warnings: string[] = [];
   const lifecycle = createSessionLifecycle({
-    pi: { registerCommand() {}, sendMessage() {} } as unknown as ExtensionAPI,
+    pi: { registerCommand() {}, sendMessage() {} },
+    sendUserMessage() {},
     agentsDir,
-    delivery: { shutdown() {} } as SubagentDelivery,
+    delivery: { shutdown() {} },
     sessionPush: createSessionPush(),
     runs: createSubagentRuns(),
     harnesses: createHarnessRegistry([createPiHarness()]),
@@ -118,11 +120,12 @@ test("session start diagnoses a pinned Pi model when the catalogue is empty", (t
 test("session shutdown delegates cleanup as one lifecycle operation", () => {
   let shutdowns = 0;
   const lifecycle = createSessionLifecycle({
-    pi: { registerCommand() {}, sendMessage() {} } as unknown as ExtensionAPI,
+    pi: { registerCommand() {}, sendMessage() {} },
+    sendUserMessage() {},
     agentsDir: path.join(tmpdir(), "no-subagent-profiles-here"),
     delivery: {
       shutdown: () => shutdowns++,
-    } as unknown as SubagentDelivery,
+    },
     sessionPush: createSessionPush(),
     runs: createSubagentRuns(),
     harnesses: createHarnessRegistry([createPiHarness()]),

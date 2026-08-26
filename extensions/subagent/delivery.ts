@@ -11,9 +11,13 @@ import {
   type PushedNotification,
   transitionNotification,
 } from "./notification-delivery.ts";
-import { formatNotification, fullOutput } from "./presentation.ts";
+import {
+  formatExecutorRejection,
+  formatNotification,
+  formatRunningNotificationError,
+  fullOutput,
+} from "./presentation.ts";
 import type { SubagentRuns } from "./runs.ts";
-import { subagentRuns } from "./runs.ts";
 import type { LifecycleStatus, SingleResult } from "./types.ts";
 
 export type { PushedNotification } from "./notification-delivery.ts";
@@ -92,7 +96,7 @@ export const RESULT_STORE_CHARACTER_BUDGET = 2_000_000;
 
 export interface DeliveryOptions {
   push: PushNotification;
-  runs?: SubagentRuns;
+  runs: SubagentRuns;
   /** Injected for tests; defaults to {@link RESULT_STORE_CHARACTER_BUDGET}. */
   resultBudget?: number;
 }
@@ -123,7 +127,7 @@ export interface CancelOutcome {
 
 export interface SubagentDelivery {
   /** Track a started run through settlement, storage, and notification. */
-  register(id: string, settled: Promise<SingleResult>): void;
+  register(id: string, agent: string, settled: Promise<SingleResult>): void;
   /** Whether this id names a known run. */
   has(id: string): boolean;
   /** Observe when named runs become terminal without affecting notifications. */
@@ -153,7 +157,7 @@ interface Pending {
 
 export function createSubagentDelivery({
   push,
-  runs = subagentRuns,
+  runs,
   resultBudget = RESULT_STORE_CHARACTER_BUDGET,
 }: DeliveryOptions): SubagentDelivery {
   const pending = new Map<string, Pending>();
@@ -211,7 +215,7 @@ export function createSubagentDelivery({
 
   const notify = (id: string, result: SingleResult): void => {
     if (result.lifecycle.phase === "running")
-      throw new Error(`Cannot notify for running subagent ${id}`);
+      throw new Error(formatRunningNotificationError(id));
     const notification: PushedNotification = {
       id,
       agent: result.agent,
@@ -223,7 +227,7 @@ export function createSubagentDelivery({
   };
 
   return {
-    register(id, settled) {
+    register(id, agent, settled) {
       const registeredGeneration = generation;
       const entry: Pending = { id, tracked: Promise.resolve() };
       pending.set(id, entry);
@@ -241,20 +245,19 @@ export function createSubagentDelivery({
           pending.delete(id);
           const message =
             error instanceof Error ? error.message : String(error);
+          const rejection = formatExecutorRejection(id, agent, message);
           results.set(id, {
             id,
-            agent: "unknown",
+            agent,
             status: "failed",
-            output:
-              `This run failed before completing.\n\nFailure: ${message}` +
-              "\n\nThe run failed before producing output.",
+            output: rejection.output,
           });
           enforceResultStoreBudget();
           const notification: PushedNotification = {
             id,
-            agent: "unknown",
+            agent,
             status: "failed",
-            text: `Subagent run ${id} ended unexpectedly: ${message}`,
+            text: rejection.notification,
           };
           notifications.set(id, { phase: "pending", notification });
           applyNotificationEvent(id, { type: "push" });

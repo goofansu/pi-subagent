@@ -70,7 +70,7 @@ function harness() {
 test("an unobserved run pushes its notification when it settles", async () => {
   const { pushed, delivery } = harness();
   const run = deferredRun();
-  delivery.register("run-1", run.settled);
+  delivery.register("run-1", run.result.agent, run.settled);
   run.finish("found three call sites");
   await flush();
   assert.equal(pushed.length, 1);
@@ -80,7 +80,7 @@ test("an unobserved run pushes its notification when it settles", async () => {
 test("INV-5: await observes terminality without suppressing notification", async () => {
   const { pushed, delivery } = harness();
   const run = deferredRun();
-  delivery.register("run-1", run.settled);
+  delivery.register("run-1", run.result.agent, run.settled);
   const waiting = delivery.wait(["run-1"]);
   run.finish("the answer");
   const outcome = await waiting;
@@ -95,7 +95,7 @@ test("INV-5: await observes terminality without suppressing notification", async
 test("INV-5: await is repeatable for an already-terminal run", async () => {
   const { delivery } = harness();
   const run = deferredRun();
-  delivery.register("run-1", run.settled);
+  delivery.register("run-1", run.result.agent, run.settled);
   run.finish();
   await flush();
   assert.deepEqual(
@@ -107,7 +107,7 @@ test("INV-5: await is repeatable for an already-terminal run", async () => {
 test("INV-5: timeout and unknown ids are the only special await cases", async () => {
   const { delivery } = harness();
   const run = deferredRun();
-  delivery.register("run-1", run.settled);
+  delivery.register("run-1", run.result.agent, run.settled);
   assert.deepEqual(
     await delivery.wait(["run-1", "missing"], { timeoutMs: 0 }),
     {
@@ -121,7 +121,7 @@ test("INV-5: timeout and unknown ids are the only special await cases", async ()
 test("a cancelled run pushes a cancellation notice when nobody asked", async () => {
   const { pushed, delivery } = harness();
   const run = deferredRun();
-  delivery.register("run-1", run.settled);
+  delivery.register("run-1", run.result.agent, run.settled);
 
   run.cancel();
   await flush();
@@ -134,7 +134,7 @@ test("a cancel stops the run without suppressing its notification", async () => 
   const { pushed, delivery, runs } = harness();
   const run = deferredRun();
   const handle = runs.track(run.result, run.cancel);
-  delivery.register(handle.id, run.settled);
+  delivery.register(handle.id, run.result.agent, run.settled);
 
   const outcome = delivery.cancel([handle.id]);
   await flush();
@@ -157,7 +157,7 @@ test("a cancelled run's outcome is still recallable once its child dies", async 
   const { delivery, runs } = harness();
   const run = deferredRun();
   const handle = runs.track(run.result, run.cancel);
-  delivery.register(handle.id, run.settled);
+  delivery.register(handle.id, run.result.agent, run.settled);
 
   delivery.cancel([handle.id]);
   await flush();
@@ -176,7 +176,7 @@ test("INV-6: repeated cancellation is safe and terminal state is unchanged", asy
   const run = deferredRun();
   // A child that takes its time dying: the cancel never settles the run.
   const handle = runs.track(run.result, () => {});
-  delivery.register(handle.id, run.settled);
+  delivery.register(handle.id, run.result.agent, run.settled);
 
   delivery.cancel([handle.id]);
 
@@ -199,7 +199,7 @@ test("a cancel tells a finished run apart from an id that never existed", async 
   const { delivery, runs } = harness();
   const run = deferredRun();
   const handle = runs.track(run.result, run.cancel);
-  delivery.register(handle.id, run.settled);
+  delivery.register(handle.id, run.result.agent, run.settled);
   run.finish();
   await flush();
 
@@ -216,7 +216,7 @@ test("shutdown stops what is running and delivers nothing anywhere", async () =>
   const { pushed, delivery, runs } = harness();
   const run = deferredRun();
   const handle = runs.track(run.result, run.cancel);
-  delivery.register(handle.id, run.settled);
+  delivery.register(handle.id, run.result.agent, run.settled);
 
   delivery.shutdown();
   await flush();
@@ -239,7 +239,7 @@ test("shutdown clears retention: a report belongs to the session that asked", as
   const { delivery, runs } = harness();
   const run = deferredRun();
   const handle = runs.track(run.result, run.cancel);
-  delivery.register(handle.id, run.settled);
+  delivery.register(handle.id, run.result.agent, run.settled);
   run.finish("the answer");
   await flush();
   assert.ok(delivery.result(handle.id), "delivered, so recallable");
@@ -258,7 +258,7 @@ test("a pushed report keeps its run listed until the message lands", async () =>
   });
   const run = deferredRun();
   const handle = runs.track(run.result, () => {});
-  delivery.register(handle.id, run.settled);
+  delivery.register(handle.id, run.result.agent, run.settled);
 
   // The parent model is mid-turn: pi queues the follow-up, nothing lands.
   run.finish();
@@ -297,7 +297,7 @@ test("INV-9: an interrupt-discarded follow-up is pushed again after settle", asy
   const { pushed, runs, delivery } = queuedHarness();
   const run = deferredRun();
   const handle = runs.track(run.result, () => {});
-  delivery.register(handle.id, run.settled);
+  delivery.register(handle.id, run.result.agent, run.settled);
   run.finish("the answer");
   await flush();
   assert.equal(pushed.length, 1, "queued behind the model's turn");
@@ -318,7 +318,7 @@ test("one landing per run: re-push never double-delivers", async () => {
   const { pushed, runs, delivery } = queuedHarness();
   const run = deferredRun();
   const handle = runs.track(run.result, () => {});
-  delivery.register(handle.id, run.settled);
+  delivery.register(handle.id, run.result.agent, run.settled);
   run.finish();
   await flush();
 
@@ -334,7 +334,7 @@ test("a settle with no preceding abort pushes nothing again", async () => {
   const { pushed, runs, delivery } = queuedHarness();
   const run = deferredRun();
   const handle = runs.track(run.result, () => {});
-  delivery.register(handle.id, run.settled);
+  delivery.register(handle.id, run.result.agent, run.settled);
   run.finish();
   await flush();
 
@@ -347,7 +347,7 @@ test("a report pushed after the abort is left to land on its own", async () => {
   const { pushed, runs, delivery } = queuedHarness();
   const run = deferredRun();
   const handle = runs.track(run.result, () => {});
-  delivery.register(handle.id, run.settled);
+  delivery.register(handle.id, run.result.agent, run.settled);
 
   // The abort precedes the push: this report was never in the cleared queue.
   delivery.turnAborted();
@@ -362,7 +362,7 @@ test("a retry the interrupt discards again is pushed once more", async () => {
   const { pushed, runs, delivery } = queuedHarness();
   const run = deferredRun();
   const handle = runs.track(run.result, () => {});
-  delivery.register(handle.id, run.settled);
+  delivery.register(handle.id, run.result.agent, run.settled);
   run.finish();
   await flush();
 
@@ -378,7 +378,7 @@ test("shutdown forgets what an abort snapshotted", async () => {
   const { pushed, runs, delivery } = queuedHarness();
   const run = deferredRun();
   const handle = runs.track(run.result, () => {});
-  delivery.register(handle.id, run.settled);
+  delivery.register(handle.id, run.result.agent, run.settled);
   run.finish();
   await flush();
 
@@ -395,7 +395,7 @@ test("shutdown releases runs whose pushed reports never landed", async () => {
   const delivery = createSubagentDelivery({ push: () => {}, runs });
   const run = deferredRun();
   const handle = runs.track(run.result, () => {});
-  delivery.register(handle.id, run.settled);
+  delivery.register(handle.id, run.result.agent, run.settled);
   run.finish();
   await flush();
   assert.equal(runs.list().length, 1, "queued behind a session that is ending");
@@ -410,7 +410,7 @@ test("a delivered run is released from the registry", async () => {
   const run = deferredRun();
   runs.track(run.result, () => {});
   const [tracked] = runs.list();
-  delivery.register(tracked.id, run.settled);
+  delivery.register(tracked.id, run.result.agent, run.settled);
 
   assert.equal(runs.list().length, 1);
   run.finish();
@@ -424,7 +424,7 @@ test("a delivered run is released from the registry", async () => {
 test("INV-4: a stored result is durable and repeatable", async () => {
   const { delivery } = harness();
   const run = deferredRun();
-  delivery.register("run-1", run.settled);
+  delivery.register("run-1", run.result.agent, run.settled);
 
   run.finish("the whole answer");
   await flush();
@@ -442,7 +442,7 @@ test("INV-4: a stored result is durable and repeatable", async () => {
 test("retention keeps what the pushed report had to trim", async () => {
   const { reports, delivery } = harness();
   const run = deferredRun();
-  delivery.register("run-1", run.settled);
+  delivery.register("run-1", run.result.agent, run.settled);
   const huge = "x".repeat(NOTIFICATION_PREVIEW_CHARACTER_LIMIT + 5_000);
 
   run.finish(huge);
@@ -458,7 +458,7 @@ test("retention keeps what the pushed report had to trim", async () => {
 test("a run collected by a wait is still readable afterwards", async () => {
   const { delivery } = harness();
   const run = deferredRun();
-  delivery.register("run-1", run.settled);
+  delivery.register("run-1", run.result.agent, run.settled);
 
   const waiting = delivery.wait(["run-1"]);
   run.finish("waited answer");
@@ -482,8 +482,8 @@ test("INV-4: result eviction is oldest-first and unaffected by retrieval", async
   });
   const first = deferredRun();
   const second = deferredRun("reviewer");
-  delivery.register("run-1", first.settled);
-  delivery.register("run-2", second.settled);
+  delivery.register("run-1", first.result.agent, first.settled);
+  delivery.register("run-2", second.result.agent, second.settled);
 
   first.finish("x".repeat(15));
   await flush();
@@ -515,7 +515,7 @@ test("a single over-budget output survives until something newer lands", async (
     resultBudget: 20,
   });
   const huge = deferredRun();
-  delivery.register("run-1", huge.settled);
+  delivery.register("run-1", huge.result.agent, huge.settled);
   huge.finish("x".repeat(50));
   await flush();
 
@@ -526,7 +526,7 @@ test("a single over-budget output survives until something newer lands", async (
   );
 
   const next = deferredRun("reviewer");
-  delivery.register("run-2", next.settled);
+  delivery.register("run-2", next.result.agent, next.settled);
   next.finish("small");
   await flush();
 
@@ -539,7 +539,7 @@ test("a single over-budget output survives until something newer lands", async (
 test("a wait tells a delivered report apart from an id that never existed", async () => {
   const { delivery } = harness();
   const run = deferredRun();
-  delivery.register("run-1", run.settled);
+  delivery.register("run-1", run.result.agent, run.settled);
   run.finish();
   await flush();
 
@@ -555,7 +555,7 @@ test("a wait tells a delivered report apart from an id that never existed", asyn
 test("an id named twice produces one await observation", async () => {
   const { delivery } = harness();
   const run = deferredRun();
-  delivery.register("run-1", run.settled);
+  delivery.register("run-1", run.result.agent, run.settled);
 
   const waiting = delivery.wait(["run-1", "run-1"]);
   run.finish("the answer");
@@ -567,7 +567,7 @@ test("an id named twice produces one await observation", async () => {
 test("a timeout past setTimeout's ceiling waits instead of firing at once", async () => {
   const { delivery } = harness();
   const run = deferredRun();
-  delivery.register("run-1", run.settled);
+  delivery.register("run-1", run.result.agent, run.settled);
 
   // Un-clamped, a delay past 2^31-1 ms fires after one millisecond and the
   // wait would give up while the run was still going.
@@ -586,7 +586,7 @@ test("a timeout past setTimeout's ceiling waits instead of firing at once", asyn
 test("a wait entered with a cancelled turn gives up immediately", async () => {
   const { delivery } = harness();
   const run = deferredRun();
-  delivery.register("run-1", run.settled);
+  delivery.register("run-1", run.result.agent, run.settled);
   const controller = new AbortController();
   controller.abort();
 
@@ -600,14 +600,22 @@ test("a wait entered with a cancelled turn gives up immediately", async () => {
 // ── A push target that fails ─────────────────────────────────────────────────
 
 test("an unexpected executor rejection remains awaitable and retrievable", async () => {
-  const { delivery } = harness();
-  delivery.register("run-1", Promise.reject(new Error("executor bug")));
+  const { delivery, pushed } = harness();
+  delivery.register(
+    "run-1",
+    "explore",
+    Promise.reject(new Error("executor bug")),
+  );
   await flush();
 
   assert.deepEqual((await delivery.wait(["run-1"])).terminal, [
-    { id: "run-1", agent: "unknown", phase: "failed" },
+    { id: "run-1", agent: "explore", phase: "failed" },
   ]);
   assert.match(delivery.result("run-1")?.output ?? "", /executor bug/);
+  assert.match(
+    pushed[0] ?? "",
+    /Subagent explore \(run-1\) failed: executor bug/,
+  );
 });
 
 test("INV-9: notification failure cannot invalidate the stored result", async () => {
@@ -619,7 +627,7 @@ test("INV-9: notification failure cannot invalidate the stored result", async ()
     runs,
   });
   const run = deferredRun();
-  delivery.register("run-1", run.settled);
+  delivery.register("run-1", run.result.agent, run.settled);
 
   run.finish("survives");
   await flush();

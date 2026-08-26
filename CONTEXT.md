@@ -111,8 +111,10 @@ stays unchanged. Transcript healing is optional and visibly skipped by
 harnesses that do not support it.
 
 **Presentation** (`presentation.ts`) — how a run and its notification read to a
-human: status tones, verbs, phrases, and notification text. The only module that interprets a lifecycle status for display; the
-delivery module does bookkeeping and asks this one what a notification says.
+human: status tones, verbs, phrases, tool-outcome prose, and notification text.
+It is the only module that interprets a lifecycle status for display and the
+only producer of model-facing prose about runs; the delivery module does
+bookkeeping and asks this one what a notification says.
 
 **Session lifecycle** (`session-lifecycle.ts`) — owns session start and
 shutdown: refilling stable profile/session-fact references, re-aiming pushes,

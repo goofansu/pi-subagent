@@ -321,7 +321,7 @@ test("a fake harness reaches dispatcher, registry, delivery, presentation, and w
     harnesses: createHarnessRegistry([harness]),
     runs,
   });
-  delivery.register(started.id, started.settled);
+  delivery.register(started.id, profile.name, started.settled);
   const result = await started.settled;
   await delivery.wait([started.id]);
 

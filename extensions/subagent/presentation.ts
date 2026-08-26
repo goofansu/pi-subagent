@@ -125,25 +125,153 @@ export function fullOutput(result: SingleResult): string {
       return "";
     case "completed":
       return output;
-    case "failed": {
-      const partialOutput = output.trim();
-      const sections = ["This run failed before completing."];
-      if (result.errorMessage) sections.push(`Failure: ${result.errorMessage}`);
-      if (result.stderr) sections.push(`Diagnostics:\n\n${result.stderr}`);
-      sections.push(
-        partialOutput
-          ? `Output produced before failure:\n\n${partialOutput}`
-          : "The run failed before producing output.",
-      );
-      return sections.join("\n\n");
-    }
+    case "failed":
+      return formatFailedOutput(result.errorMessage, result.stderr, output);
     case "cancelled": {
       const partialOutput = output.trim();
       return partialOutput
         ? `This run was cancelled before finishing.\n\nOutput produced before cancellation:\n\n${partialOutput}`
-        : "The run was cancelled before producing output.";
+        : fullOutputForCancellation();
     }
   }
+}
+
+function formatFailedOutput(
+  errorMessage: string | undefined,
+  stderr: string,
+  output: string,
+): string {
+  const partialOutput = output.trim();
+  const sections = ["This run failed before completing."];
+  if (errorMessage) sections.push(`Failure: ${errorMessage}`);
+  if (stderr) sections.push(`Diagnostics:\n\n${stderr}`);
+  sections.push(
+    partialOutput
+      ? `Output produced before failure:\n\n${partialOutput}`
+      : "The run failed before producing output.",
+  );
+  return sections.join("\n\n");
+}
+
+export interface AwaitPresentationOutcome {
+  terminal: readonly {
+    id: string;
+    agent: string;
+    phase: Exclude<LifecycleStatus, "running">;
+    reason?: "requested" | "shutdown";
+  }[];
+  stillRunning: readonly string[];
+  unknown: readonly string[];
+}
+
+/** The unknown-agent diagnostic shown at the agent_start boundary. */
+export function formatUnknownAgent(
+  name: string,
+  available: readonly string[],
+): string {
+  return `Unknown agent: "${name}". Available: ${available.join(", ") || "none"}`;
+}
+
+/** The lifecycle-only body returned by agent_await. */
+export function formatAwaitOutcome(outcome: AwaitPresentationOutcome): string {
+  const sections = outcome.terminal.map(
+    (run) =>
+      `${run.agent} (${run.id}): ${run.phase}${
+        run.reason ? ` (${run.reason})` : ""
+      }`,
+  );
+  if (outcome.stillRunning.length > 0)
+    sections.push(`Still running: ${outcome.stillRunning.join(", ")}.`);
+  if (outcome.unknown.length > 0)
+    sections.push(`Unknown run ids: ${outcome.unknown.join(", ")}.`);
+  if (sections.length === 0) sections.push("No run ids were given.");
+  return sections.join("\n\n");
+}
+
+export interface RetainedResultPresentation {
+  id: string;
+  agent: string;
+  status: Exclude<LifecycleStatus, "running">;
+  output: string;
+  evicted?: boolean;
+}
+
+/** The body agent_result presents for a retained result. */
+export function formatResultBody(result: RetainedResultPresentation): string {
+  if (result.output) return result.output;
+  if (result.evicted)
+    return "This run's full output was evicted to bound result-store memory.";
+  if (result.status === "cancelled") return fullOutputForCancellation();
+  return "The run finished without output.";
+}
+
+/** The complete agent_result text, including the stable run identity. */
+export function formatResult(result: RetainedResultPresentation): string {
+  return `${result.agent} (${result.id}):\n\n${formatResultBody(result)}`;
+}
+
+/** The result and notification text for a rejected executor promise. */
+export function formatExecutorRejection(
+  id: string,
+  agent: string,
+  message: string,
+): { output: string; notification: string } {
+  return {
+    output: formatFailedOutput(message, "", ""),
+    notification:
+      `Subagent ${agent} (${id}) failed: ${notificationPreview(message)}` +
+      `\n\nUse agent_result with id ${id} to retrieve the full result.`,
+  };
+}
+
+function fullOutputForCancellation(): string {
+  return "The run was cancelled before producing output.";
+}
+
+/** The error used when a notification is accidentally built for a live run. */
+export function formatRunningNotificationError(id: string): string {
+  return `Cannot notify for running subagent ${id}`;
+}
+
+/** The immediate response from agent_start. */
+export function formatStartResult(agent: string, id: string): string {
+  return (
+    `Started ${agent} as run ${id}. ` +
+    "Its notification will arrive when it finishes; carry on until then."
+  );
+}
+
+export interface CancelPresentationOutcome {
+  cancelled: readonly string[];
+  finished: readonly string[];
+  unknown: readonly string[];
+}
+
+/** The immediate response from agent_cancel. */
+export function formatCancelOutcome(
+  outcome: CancelPresentationOutcome,
+): string {
+  const parts: string[] = [];
+  if (outcome.cancelled.length > 0)
+    parts.push(`Cancelled: ${outcome.cancelled.join(", ")}.`);
+  if (outcome.finished.length > 0)
+    parts.push(
+      `Already finished, result kept: ${outcome.finished.join(", ")}.`,
+    );
+  if (outcome.unknown.length > 0)
+    parts.push(`Unknown run ids: ${outcome.unknown.join(", ")}.`);
+  if (parts.length === 0) parts.push("Nothing to cancel.");
+  return parts.join(" ");
+}
+
+/** A missing or still-running result diagnostic. */
+export function formatAgentResultUnavailable(
+  id: string,
+  known: boolean,
+): string {
+  return known
+    ? `Run ${id} has not finished yet. Its notification will arrive on its own; agent_await blocks for it if you cannot continue without it.`
+    : `No run with id ${id}. Check it against what agent_start returned.`;
 }
 
 /** Small status-specific orientation message for one terminal run. */
@@ -153,7 +281,7 @@ export function formatNotification(id: string, result: SingleResult): string {
 
   switch (result.lifecycle.phase) {
     case "running":
-      throw new Error(`Cannot notify for running subagent ${id}`);
+      throw new Error(formatRunningNotificationError(id));
     case "completed": {
       const output = getFinalOutput(result.messages).trim();
       const preview = output

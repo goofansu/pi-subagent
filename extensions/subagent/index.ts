@@ -5,7 +5,7 @@ import {
 import { Type } from "typebox";
 import { formatAgentGuidelines, getAgentsDir } from "./agents.ts";
 import { createDefaultHarnessRegistry } from "./composition.ts";
-import type { SubagentDelivery } from "./delivery.ts";
+import type { SessionPush, SubagentDelivery } from "./delivery.ts";
 import { createSessionPush, createSubagentDelivery } from "./delivery.ts";
 import type { HarnessRegistry } from "./harness.ts";
 import {
@@ -13,10 +13,17 @@ import {
   parseNotificationMessage,
   renderNotificationMessage,
 } from "./notification-message.ts";
+import {
+  formatAgentResultUnavailable,
+  formatAwaitOutcome,
+  formatCancelOutcome,
+  formatResult,
+  formatStartResult,
+  formatUnknownAgent,
+} from "./presentation.ts";
 import { renderMarkdownResult, renderSubagentCall } from "./render.ts";
 import { getSubagentDepth, startSubagent } from "./runner.ts";
-import type { SubagentRuns } from "./runs.ts";
-import { subagentRuns } from "./runs.ts";
+import { createSubagentRuns, type SubagentRuns } from "./runs.ts";
 import { createSessionLifecycle } from "./session-lifecycle.ts";
 import type { AgentConfig, SessionContext } from "./types.ts";
 
@@ -24,7 +31,7 @@ const ID_LIST = Type.Array(Type.String(), {
   description: "Run ids returned by agent_start",
 });
 
-interface SubagentToolRuntime {
+export interface SubagentToolRuntime {
   delivery: SubagentDelivery;
   runs: SubagentRuns;
   start: typeof startSubagent;
@@ -36,15 +43,9 @@ export function registerSubagentFeatures(
   pi: ExtensionAPI,
   session: SessionContext,
   agentConfigs: Map<string, AgentConfig>,
-  delivery: SubagentDelivery,
-  harnesses: HarnessRegistry,
+  runtime: SubagentToolRuntime,
 ): void {
-  registerSubagentFeatureTools(pi, session, agentConfigs, {
-    delivery,
-    runs: subagentRuns,
-    start: startSubagent,
-    harnesses,
-  });
+  registerSubagentFeatureTools(pi, session, agentConfigs, runtime);
 }
 
 /** Tool seam used by focused tests with a stand-in runtime. */
@@ -65,11 +66,7 @@ export function registerSubagentFeatureTools(
   const requireAgent = (name: string): AgentConfig => {
     const config = agentConfigs.get(name);
     if (config) return config;
-    throw new Error(
-      `Unknown agent: "${name}". Available: ${
-        [...agentConfigs.keys()].join(", ") || "none"
-      }`,
-    );
+    throw new Error(formatUnknownAgent(name, [...agentConfigs.keys()]));
   };
 
   const startDescription =
@@ -111,15 +108,13 @@ export function registerSubagentFeatureTools(
             }
           : undefined,
       });
-      delivery.register(started.id, started.settled);
+      delivery.register(started.id, config.name, started.settled);
 
       return {
         content: [
           {
             type: "text",
-            text:
-              `Started ${config.name} as run ${started.id}. ` +
-              "Its notification will arrive when it finishes; carry on until then.",
+            text: formatStartResult(config.name, started.id),
           },
         ],
         details: undefined,
@@ -156,20 +151,8 @@ export function registerSubagentFeatureTools(
         ...(signal ? { signal } : {}),
       });
 
-      const sections = outcome.terminal.map(
-        (run) =>
-          `${run.agent} (${run.id}): ${run.phase}${
-            run.reason ? ` (${run.reason})` : ""
-          }`,
-      );
-      if (outcome.stillRunning.length > 0)
-        sections.push(`Still running: ${outcome.stillRunning.join(", ")}.`);
-      if (outcome.unknown.length > 0)
-        sections.push(`Unknown run ids: ${outcome.unknown.join(", ")}.`);
-      if (sections.length === 0) sections.push("No run ids were given.");
-
       return {
-        content: [{ type: "text", text: sections.join("\n\n") }],
+        content: [{ type: "text", text: formatAwaitOutcome(outcome) }],
         details: {
           runs: outcome.terminal.map(({ id, agent, phase }) => ({
             id,
@@ -203,31 +186,21 @@ export function registerSubagentFeatureTools(
           content: [
             {
               type: "text",
-              text: delivery.has(params.id)
-                ? `Run ${params.id} has not finished yet. Its notification will ` +
-                  "arrive on its own; agent_await blocks for it if you cannot " +
-                  "continue without it."
-                : `No run with id ${params.id}. Check it against what ` +
-                  "agent_start returned.",
+              text: formatAgentResultUnavailable(
+                params.id,
+                delivery.has(params.id),
+              ),
             },
           ],
           details: undefined,
         };
       }
 
-      const body =
-        retained.output ||
-        (retained.evicted
-          ? "This run's full output was evicted to bound result-store memory."
-          : retained.status === "cancelled"
-            ? "The run was cancelled before it produced output."
-            : "The run finished without output.");
-
       return {
         content: [
           {
             type: "text",
-            text: `${retained.agent} (${retained.id}):\n\n${body}`,
+            text: formatResult(retained),
           },
         ],
         details: {
@@ -259,52 +232,12 @@ export function registerSubagentFeatureTools(
       // terminal result and emits its normal cancellation notification.
       const outcome = delivery.cancel(params.ids);
 
-      const parts: string[] = [];
-      if (outcome.cancelled.length > 0)
-        parts.push(`Cancelled: ${outcome.cancelled.join(", ")}.`);
-      if (outcome.finished.length > 0) {
-        parts.push(
-          `Already finished, result kept: ${outcome.finished.join(", ")}.`,
-        );
-      }
-      if (outcome.unknown.length > 0) {
-        parts.push(`Unknown run ids: ${outcome.unknown.join(", ")}.`);
-      }
-      if (parts.length === 0) parts.push("Nothing to cancel.");
-
       return {
-        content: [{ type: "text", text: parts.join(" ") }],
+        content: [{ type: "text", text: formatCancelOutcome(outcome) }],
         details: undefined,
       };
     },
   });
-}
-
-// ── Process-lifetime state ────────────────────────────────────────────────────
-//
-// Runs are detached from the *turn*, not from the session: every
-// session_shutdown cancels them because notifications and results belong to
-// the conversation that asked. Pi caches the extension factory across session
-// replacement, so this module instance outlives any one session. The stable
-// push seam drops notices that settle during teardown rather than calling a
-// stale ExtensionAPI.
-
-/** Stable push target aimed at the current live session. */
-const sessionPush = createSessionPush();
-
-// The composition module is the only production site that names concrete
-// harnesses. Tool registration resolves profiles through this public registry.
-const harnesses = createDefaultHarnessRegistry();
-
-/** The one delivery for the process, lazily built over the shared registry. */
-let processDelivery: SubagentDelivery | null = null;
-
-function getProcessDelivery(): SubagentDelivery {
-  processDelivery ??= createSubagentDelivery({
-    push: sessionPush.push,
-    runs: subagentRuns,
-  });
-  return processDelivery;
 }
 
 /** Register the session-event boundary that drives notification landing/retry. */
@@ -327,6 +260,80 @@ export function registerDeliveryEventHandlers(
   pi.on("agent_settled", () => delivery.agentSettled());
 }
 
+export interface SubagentRuntimeDependencies {
+  agentsDir: string;
+  runs?: SubagentRuns;
+  sessionPush?: SessionPush;
+  harnesses?: HarnessRegistry;
+  delivery?: SubagentDelivery;
+  start?: typeof startSubagent;
+}
+
+export interface SubagentRuntime {
+  readonly runs: SubagentRuns;
+  readonly sessionPush: SessionPush;
+  readonly delivery: SubagentDelivery;
+  readonly harnesses: HarnessRegistry;
+  attach(pi: ExtensionAPI): void;
+}
+
+/**
+ * Compose one process-lifetime runtime from explicit dependencies.
+ *
+ * The runtime owns the stable registry, push target, delivery, harness
+ * registry, session lifecycle, and host-event wiring. `attach` is separate so
+ * tests can provide a host without coupling the factory to process state.
+ */
+export function createSubagentRuntime(
+  dependencies: SubagentRuntimeDependencies,
+): SubagentRuntime {
+  const runs = dependencies.runs ?? createSubagentRuns();
+  const sessionPush = dependencies.sessionPush ?? createSessionPush();
+  const harnesses = dependencies.harnesses ?? createDefaultHarnessRegistry();
+  const delivery =
+    dependencies.delivery ??
+    createSubagentDelivery({ push: sessionPush.push, runs });
+  const start = dependencies.start ?? startSubagent;
+  let attached = false;
+
+  return {
+    runs,
+    sessionPush,
+    delivery,
+    harnesses,
+    attach(pi) {
+      if (attached) return;
+      attached = true;
+
+      const lifecycle = createSessionLifecycle({
+        pi,
+        sendUserMessage: pi.sendUserMessage,
+        agentsDir: dependencies.agentsDir,
+        delivery,
+        sessionPush,
+        runs,
+        harnesses,
+        registerFeatures: (session, agentConfigs) =>
+          registerSubagentFeatures(pi, session, agentConfigs, {
+            delivery,
+            runs,
+            start,
+            harnesses,
+          }),
+      });
+
+      // The composition root only forwards host events to their owning
+      // modules. Delivery's event handlers remain one stable seam.
+      pi.on("session_start", (_event, ctx) => lifecycle.sessionStart(ctx));
+      pi.on("session_shutdown", () => lifecycle.sessionShutdown());
+      registerDeliveryEventHandlers(pi, delivery);
+    },
+  };
+}
+
+/** The one process-lifetime runtime, created only when the extension is used. */
+let processRuntime: SubagentRuntime | null = null;
+
 export default function subagentExtension(pi: ExtensionAPI) {
   // A Pi child loads installed extensions just like its parent. Keep this
   // extension entirely inert there so the model cannot see and repeatedly
@@ -334,20 +341,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
   // depth check remains the backstop for direct calls.
   if (getSubagentDepth() > 0) return;
 
-  const delivery = getProcessDelivery();
-  const lifecycle = createSessionLifecycle({
-    pi,
+  processRuntime ??= createSubagentRuntime({
     agentsDir: getAgentsDir(getAgentDir()),
-    delivery,
-    sessionPush,
-    runs: subagentRuns,
-    harnesses,
-    registerFeatures: (session, agentConfigs) =>
-      registerSubagentFeatures(pi, session, agentConfigs, delivery, harnesses),
   });
-
-  // The composition root only wires host events to their owning modules.
-  pi.on("session_start", (_event, ctx) => lifecycle.sessionStart(ctx));
-  pi.on("session_shutdown", () => lifecycle.sessionShutdown());
-  registerDeliveryEventHandlers(pi, delivery);
+  processRuntime.attach(pi);
 }

@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  formatAgentResultUnavailable,
+  formatAwaitOutcome,
+  formatCancelOutcome,
   formatDuration,
+  formatExecutorRejection,
   formatNotification,
+  formatResult,
   formatRunStatus,
+  formatStartResult,
+  formatUnknownAgent,
   fullOutput,
   NOTIFICATION_PREVIEW_CHARACTER_LIMIT,
   notificationVerb,
@@ -57,6 +64,59 @@ test("each lifecycle state has a presentation tone", () => {
       runStatusTone,
     ),
     ["warning", "success", "error", "error"],
+  );
+});
+
+test("presentation owns tool outcome prose", () => {
+  assert.equal(
+    formatUnknownAgent("ghost", ["explore", "review"]),
+    'Unknown agent: "ghost". Available: explore, review',
+  );
+  assert.equal(
+    formatAwaitOutcome({
+      terminal: [
+        { id: "run-1", agent: "explore", phase: "completed" },
+        {
+          id: "run-2",
+          agent: "review",
+          phase: "cancelled",
+          reason: "requested",
+        },
+      ],
+      stillRunning: ["run-3"],
+      unknown: ["missing"],
+    }),
+    "explore (run-1): completed\n\nreview (run-2): cancelled (requested)\n\nStill running: run-3.\n\nUnknown run ids: missing.",
+  );
+  assert.equal(
+    formatStartResult("explore", "run-1"),
+    "Started explore as run run-1. Its notification will arrive when it finishes; carry on until then.",
+  );
+  assert.equal(
+    formatCancelOutcome({ cancelled: ["run-1"], finished: [], unknown: [] }),
+    "Cancelled: run-1.",
+  );
+
+  const retained = {
+    id: "run-1",
+    agent: "explore",
+    status: "cancelled" as const,
+    output: "",
+  };
+  assert.equal(
+    formatResult(retained),
+    "explore (run-1):\n\nThe run was cancelled before producing output.",
+  );
+  assert.equal(
+    formatAgentResultUnavailable("missing", false),
+    "No run with id missing. Check it against what agent_start returned.",
+  );
+
+  const rejection = formatExecutorRejection("run-1", "explore", "executor bug");
+  assert.match(rejection.output, /executor bug/);
+  assert.match(
+    rejection.notification,
+    /Subagent explore \(run-1\) failed: executor bug/,
   );
 });
 
