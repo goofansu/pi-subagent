@@ -46,7 +46,6 @@ test("session start refills stable config and session-fact references", (t) => {
   };
   const lifecycle = createSessionLifecycle({
     pi,
-    sendUserMessage: pi.sendUserMessage,
     agentsDir,
     delivery: { shutdown() {} },
     sessionPush: createSessionPush(),
@@ -93,8 +92,11 @@ test("session start diagnoses a pinned Pi model when the catalogue is empty", (t
   );
   const warnings: string[] = [];
   const lifecycle = createSessionLifecycle({
-    pi: { registerCommand() {}, sendMessage() {} },
-    sendUserMessage() {},
+    pi: {
+      registerCommand() {},
+      sendMessage() {},
+      sendUserMessage() {},
+    },
     agentsDir,
     delivery: { shutdown() {} },
     sessionPush: createSessionPush(),
@@ -120,8 +122,11 @@ test("session start diagnoses a pinned Pi model when the catalogue is empty", (t
 test("session shutdown delegates cleanup as one lifecycle operation", () => {
   let shutdowns = 0;
   const lifecycle = createSessionLifecycle({
-    pi: { registerCommand() {}, sendMessage() {} },
-    sendUserMessage() {},
+    pi: {
+      registerCommand() {},
+      sendMessage() {},
+      sendUserMessage() {},
+    },
     agentsDir: path.join(tmpdir(), "no-subagent-profiles-here"),
     delivery: {
       shutdown: () => shutdowns++,

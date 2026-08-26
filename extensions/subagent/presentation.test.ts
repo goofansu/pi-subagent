@@ -67,11 +67,22 @@ test("each lifecycle state has a presentation tone", () => {
   );
 });
 
-test("presentation owns tool outcome prose", () => {
+test("presentation owns agent_start and unknown-agent prose", () => {
   assert.equal(
     formatUnknownAgent("ghost", ["explore", "review"]),
     'Unknown agent: "ghost". Available: explore, review',
   );
+  assert.equal(
+    formatUnknownAgent("ghost", []),
+    'Unknown agent: "ghost". Available: none',
+  );
+  assert.equal(
+    formatStartResult("explore", "run-1"),
+    "Started explore as run run-1. Its notification will arrive when it finishes; carry on until then.",
+  );
+});
+
+test("presentation owns every agent_await outcome", () => {
   assert.equal(
     formatAwaitOutcome({
       terminal: [
@@ -89,34 +100,64 @@ test("presentation owns tool outcome prose", () => {
     "explore (run-1): completed\n\nreview (run-2): cancelled (requested)\n\nStill running: run-3.\n\nUnknown run ids: missing.",
   );
   assert.equal(
-    formatStartResult("explore", "run-1"),
-    "Started explore as run run-1. Its notification will arrive when it finishes; carry on until then.",
+    formatAwaitOutcome({ terminal: [], stillRunning: [], unknown: [] }),
+    "No run ids were given.",
+  );
+});
+
+test("presentation owns every agent_cancel outcome", () => {
+  assert.equal(
+    formatCancelOutcome({
+      cancelled: ["run-1"],
+      finished: ["run-2"],
+      unknown: ["missing"],
+    }),
+    "Cancelled: run-1. Already finished, result kept: run-2. Unknown run ids: missing.",
   );
   assert.equal(
-    formatCancelOutcome({ cancelled: ["run-1"], finished: [], unknown: [] }),
-    "Cancelled: run-1.",
+    formatCancelOutcome({ cancelled: [], finished: [], unknown: [] }),
+    "Nothing to cancel.",
   );
+});
 
+test("presentation owns every agent_result fallback", () => {
   const retained = {
     id: "run-1",
     agent: "explore",
-    status: "cancelled" as const,
+    status: "completed" as const,
     output: "",
   };
   assert.equal(
     formatResult(retained),
-    "explore (run-1):\n\nThe run was cancelled before producing output.",
+    "explore (run-1):\n\nThe run finished without output.",
+  );
+  assert.equal(
+    formatResult({ ...retained, evicted: true }),
+    "explore (run-1):\n\nThis run's full output was evicted to bound result-store memory.",
+  );
+  assert.equal(
+    formatAgentResultUnavailable("run-1", true),
+    "Run run-1 has not finished yet. Its notification will arrive on its own; agent_await blocks for it if you cannot continue without it.",
   );
   assert.equal(
     formatAgentResultUnavailable("missing", false),
     "No run with id missing. Check it against what agent_start returned.",
   );
+});
 
-  const rejection = formatExecutorRejection("run-1", "explore", "executor bug");
-  assert.match(rejection.output, /executor bug/);
-  assert.match(
-    rejection.notification,
-    /Subagent explore \(run-1\) failed: executor bug/,
+test("presentation owns executor-rejection result and notification prose", () => {
+  assert.deepEqual(
+    formatExecutorRejection("run-1", "explore", "executor bug"),
+    {
+      output:
+        "This run failed before completing.\n\nFailure: executor bug\n\nThe run failed before producing output.",
+      notification:
+        "Subagent explore (run-1) failed: executor bug\n\nUse agent_result with id run-1 to retrieve the full result.",
+    },
+  );
+  assert.equal(
+    formatExecutorRejection("run-1", "explore", "").notification,
+    "Subagent explore (run-1) failed: no reason reported\n\nUse agent_result with id run-1 to retrieve the full result.",
   );
 });
 

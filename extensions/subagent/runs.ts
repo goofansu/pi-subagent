@@ -209,6 +209,3 @@ export function createSubagentRuns(
     },
   };
 }
-
-/** The process-wide registry every dispatch reports to. */
-export const subagentRuns: SubagentRuns = createSubagentRuns();

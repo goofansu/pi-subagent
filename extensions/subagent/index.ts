@@ -38,16 +38,6 @@ export interface SubagentToolRuntime {
   harnesses: HarnessRegistry;
 }
 
-/** Production feature registrar: all runtime policy is already composed. */
-export function registerSubagentFeatures(
-  pi: ExtensionAPI,
-  session: SessionContext,
-  agentConfigs: Map<string, AgentConfig>,
-  runtime: SubagentToolRuntime,
-): void {
-  registerSubagentFeatureTools(pi, session, agentConfigs, runtime);
-}
-
 /** Tool seam used by focused tests with a stand-in runtime. */
 export function registerSubagentFeatureTools(
   pi: ExtensionAPI,
@@ -294,27 +284,21 @@ export function createSubagentRuntime(
     dependencies.delivery ??
     createSubagentDelivery({ push: sessionPush.push, runs });
   const start = dependencies.start ?? startSubagent;
-  let attached = false;
-
   return {
     runs,
     sessionPush,
     delivery,
     harnesses,
     attach(pi) {
-      if (attached) return;
-      attached = true;
-
       const lifecycle = createSessionLifecycle({
         pi,
-        sendUserMessage: pi.sendUserMessage,
         agentsDir: dependencies.agentsDir,
         delivery,
         sessionPush,
         runs,
         harnesses,
         registerFeatures: (session, agentConfigs) =>
-          registerSubagentFeatures(pi, session, agentConfigs, {
+          registerSubagentFeatureTools(pi, session, agentConfigs, {
             delivery,
             runs,
             start,

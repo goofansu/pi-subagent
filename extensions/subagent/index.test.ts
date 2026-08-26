@@ -40,20 +40,28 @@ test("the extension is not exposed inside a subagent Pi process", () => {
     } as unknown as ExtensionAPI);
     assert.deepEqual(nestedEvents, []);
 
-    const parentEvents: string[] = [];
+    const firstParentEvents: string[] = [];
+    const secondParentEvents: string[] = [];
     delete process.env.PI_SUBAGENT_DEPTH;
-    createSubagentRuntime({ agentsDir: "/agents" }).attach({
+    subagentExtension({
       on(event: string) {
-        parentEvents.push(event);
+        firstParentEvents.push(event);
       },
     } as unknown as ExtensionAPI);
-    assert.deepEqual(parentEvents, [
+    subagentExtension({
+      on(event: string) {
+        secondParentEvents.push(event);
+      },
+    } as unknown as ExtensionAPI);
+    const expected = [
       "session_start",
       "session_shutdown",
       "message_start",
       "turn_end",
       "agent_settled",
-    ]);
+    ];
+    assert.deepEqual(firstParentEvents, expected);
+    assert.deepEqual(secondParentEvents, expected);
   } finally {
     if (originalDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
     else process.env.PI_SUBAGENT_DEPTH = originalDepth;

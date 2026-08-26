@@ -14,7 +14,6 @@ import {
   settleResultLifecycle,
 } from "./run.ts";
 import type { SubagentRuns } from "./runs.ts";
-import { subagentRuns } from "./runs.ts";
 import {
   type AgentConfig,
   DEFAULT_HARNESS_NAME,
@@ -47,7 +46,7 @@ export interface RunSubagentOptions {
   cwd?: string;
   /** Harness resolution is the only backend decision in the dispatcher. */
   harnesses: HarnessRegistry;
-  runs?: SubagentRuns;
+  runs: SubagentRuns;
   now?: () => number;
 }
 
@@ -67,7 +66,7 @@ export function startSubagent({
   projectTrusted = false,
   cwd = process.cwd(),
   harnesses,
-  runs = subagentRuns,
+  runs,
   now = Date.now,
 }: RunSubagentOptions): StartedSubagent {
   const currentDepth = getSubagentDepth();

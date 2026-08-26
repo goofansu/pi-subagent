@@ -1,12 +1,12 @@
 /**
  * Presentation: how run state, notifications, and retained results read.
  *
- * This is the one module that interprets lifecycle status for display — its
- * tone, verbs, phrases, notification text, and result text. Surfaces (the widget, the transcript renderers) compose
- * their own lines from what this module hands them; none of them decides
- * what a status *means*. Adding or renaming a status is a change here, and
- * the exhaustive table below is what turns the old cross-module hunt into
- * a compile error.
+ * This is the one module that produces model-facing prose about runs,
+ * including lifecycle tones and phrases, notifications, and tool outcomes.
+ * Surfaces compose their own lines from what this module hands them; none of
+ * them decides what a status means. Adding or renaming a status is a change
+ * here, and the exhaustive table below turns the old cross-module hunt into a
+ * compile error.
  */
 
 import { getFinalOutput } from "./messages.ts";
@@ -14,6 +14,9 @@ import type { LifecycleStatus, SingleResult, Tone } from "./types.ts";
 
 /** Maximum characters of completed output included in a notification. */
 export const NOTIFICATION_PREVIEW_CHARACTER_LIMIT = 1_000;
+
+const CANCELLED_WITHOUT_OUTPUT =
+  "The run was cancelled before producing output.";
 
 /**
  * What each status looks and sounds like, in one place.
@@ -131,7 +134,7 @@ export function fullOutput(result: SingleResult): string {
       const partialOutput = output.trim();
       return partialOutput
         ? `This run was cancelled before finishing.\n\nOutput produced before cancellation:\n\n${partialOutput}`
-        : fullOutputForCancellation();
+        : CANCELLED_WITHOUT_OUTPUT;
     }
   }
 }
@@ -201,7 +204,6 @@ export function formatResultBody(result: RetainedResultPresentation): string {
   if (result.output) return result.output;
   if (result.evicted)
     return "This run's full output was evicted to bound result-store memory.";
-  if (result.status === "cancelled") return fullOutputForCancellation();
   return "The run finished without output.";
 }
 
@@ -218,14 +220,21 @@ export function formatExecutorRejection(
 ): { output: string; notification: string } {
   return {
     output: formatFailedOutput(message, "", ""),
-    notification:
-      `Subagent ${agent} (${id}) failed: ${notificationPreview(message)}` +
-      `\n\nUse agent_result with id ${id} to retrieve the full result.`,
+    notification: formatFailedNotification(id, agent, message),
   };
 }
 
-function fullOutputForCancellation(): string {
-  return "The run was cancelled before producing output.";
+function resultPointer(id: string): string {
+  return `Use agent_result with id ${id} to retrieve the full result.`;
+}
+
+function formatFailedNotification(
+  id: string,
+  agent: string,
+  message: string | undefined,
+): string {
+  const reason = notificationPreview(message || "no reason reported");
+  return `Subagent ${agent} (${id}) failed: ${reason}\n\n${resultPointer(id)}`;
 }
 
 /** The error used when a notification is accidentally built for a live run. */
@@ -277,7 +286,7 @@ export function formatAgentResultUnavailable(
 /** Small status-specific orientation message for one terminal run. */
 export function formatNotification(id: string, result: SingleResult): string {
   const name = `${result.agent} (${id})`;
-  const pointer = `Use agent_result with id ${id} to retrieve the full result.`;
+  const pointer = resultPointer(id);
 
   switch (result.lifecycle.phase) {
     case "running":
@@ -289,15 +298,11 @@ export function formatNotification(id: string, result: SingleResult): string {
         : "No output was produced.";
       return `Subagent ${name} completed.\n\n${preview}\n\n${pointer}`;
     }
-    case "failed": {
+    case "failed":
       // Bounded like the completed preview (N1): the primary error is
       // normally short, but nothing upstream guarantees it, and the whole
       // message stays behind agent_result either way.
-      const reason = notificationPreview(
-        result.errorMessage || "no reason reported",
-      );
-      return `Subagent ${name} failed: ${reason}\n\n${pointer}`;
-    }
+      return formatFailedNotification(id, result.agent, result.errorMessage);
     case "cancelled":
       return `Subagent ${name} was cancelled (${result.lifecycle.reason}).`;
   }

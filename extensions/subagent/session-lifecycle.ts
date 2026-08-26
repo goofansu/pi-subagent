@@ -30,6 +30,7 @@ export interface SessionLifecycle {
 interface SessionLifecyclePi {
   registerCommand: ExtensionAPI["registerCommand"];
   sendMessage: ExtensionAPI["sendMessage"];
+  sendUserMessage: ExtensionAPI["sendUserMessage"];
 }
 
 interface SessionLifecycleDelivery {
@@ -38,7 +39,6 @@ interface SessionLifecycleDelivery {
 
 export interface SessionLifecycleOptions {
   pi: SessionLifecyclePi;
-  sendUserMessage: ExtensionAPI["sendUserMessage"];
   agentsDir: string;
   delivery: SessionLifecycleDelivery;
   sessionPush: SessionPush;
@@ -53,7 +53,6 @@ export interface SessionLifecycleOptions {
 /** Own the mutable state and host events of one process-lifetime session seam. */
 export function createSessionLifecycle({
   pi,
-  sendUserMessage,
   agentsDir,
   delivery,
   sessionPush,
@@ -97,11 +96,7 @@ export function createSessionLifecycle({
 
       if (!registered) {
         registered = true;
-        registerAgentsCommand(
-          { registerCommand: pi.registerCommand, sendUserMessage },
-          agentConfigs,
-          agentsDir,
-        );
+        registerAgentsCommand(pi, agentConfigs, agentsDir);
         registerFeatures(sessionContext, agentConfigs);
       }
 
