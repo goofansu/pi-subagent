@@ -396,6 +396,96 @@ test("runOneShot discards sink calls after source settlement", async () => {
   assert.equal(reports, 0);
 });
 
+test("streamSource drains a stream returned after abort during open", async () => {
+  const controller = new AbortController();
+  let signalOpenStarted = () => {};
+  const openStarted = new Promise<void>((resolve) => {
+    signalOpenStarted = resolve;
+  });
+  let releaseOpen = () => {};
+  let releaseEvents = () => {};
+  const eventsReleased = new Promise<void>((resolve) => {
+    releaseEvents = resolve;
+  });
+  let stopCalls = 0;
+  let iterationFinished = false;
+  const source = streamSource<string>(async (signal) => {
+    assert.equal(signal.aborted, false);
+    signalOpenStarted();
+    await new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    assert.equal(signal.aborted, true);
+    return {
+      events: (async function* () {
+        yield "queued";
+        await eventsReleased;
+        iterationFinished = true;
+      })(),
+      stop: () => {
+        stopCalls++;
+      },
+    };
+  });
+  const forwarded: string[] = [];
+  let queuedFact = () => {};
+  const queued = new Promise<void>((resolve) => {
+    queuedFact = resolve;
+  });
+  const pending = runOneShot({
+    source,
+    translate: (event) => ({
+      facts: [
+        {
+          role: "assistant",
+          parts: [{ type: "text", text: event }],
+        },
+      ],
+      terminal: true,
+    }),
+    report: {
+      message: (fact) => {
+        const part = fact.parts[0];
+        forwarded.push(part?.type === "text" ? part.text : "missing");
+        queuedFact();
+      },
+      transcript: () => {},
+      stderr: () => {},
+    },
+    signal: controller.signal,
+    missingAnswerMessage: "missing",
+  });
+
+  await openStarted;
+  controller.abort();
+  releaseOpen();
+
+  // A source that incorrectly returns before draining loses the queued event;
+  // racing settlement against the report makes that regression fail promptly.
+  assert.equal(
+    await Promise.race([
+      pending.then(() => "settled" as const),
+      queued.then(() => "queued" as const),
+    ]),
+    "queued",
+  );
+  assert.equal(stopCalls, 1);
+  assert.equal(iterationFinished, false);
+
+  let settled = false;
+  pending.then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  assert.equal(settled, false);
+
+  releaseEvents();
+  assert.deepEqual(await pending, { ending: "cancelled" });
+  assert.deepEqual(forwarded, ["queued"]);
+  assert.equal(iterationFinished, true);
+  assert.equal(stopCalls, 1);
+});
+
 test("runOneShot composes streamSource's pre-start race without starting work", async () => {
   let opened = 0;
   let stopped = 0;

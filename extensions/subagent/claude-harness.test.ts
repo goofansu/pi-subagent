@@ -769,7 +769,8 @@ test("Claude cancellation stays cancelled when abort arrives before a later term
   assert.equal(closeCalled, true);
   assert.equal(result.lifecycle.phase, "cancelled");
   assert.equal(result.stopReason, undefined);
-  assert.equal(result.messages.length, 0);
+  assert.equal(result.messages.length, 1);
+  assert.equal(getFinalOutput(result.messages), "late answer");
 });
 
 test("Claude cancellation during SDK loading never invokes query", async () => {
@@ -813,14 +814,14 @@ test("Claude cancellation stays cancelled when abort closes the stream gracefull
   let closeCalled = false;
   const query: ClaudeQuery = ({ options }) => {
     queryReady();
+    const abortSignal = options?.abortController?.signal;
     return {
       async *[Symbol.asyncIterator]() {
+        if (abortSignal?.aborted) return;
         await new Promise<void>((resolve) =>
-          options?.abortController?.signal.addEventListener(
-            "abort",
-            () => resolve(),
-            { once: true },
-          ),
+          abortSignal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          }),
         );
       },
       close() {

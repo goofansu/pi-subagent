@@ -153,16 +153,21 @@ export function streamSource<E>(
     await Promise.resolve();
     if (signal.aborted) return { status: "clean" };
     let opened: StreamOpenResult<E> | undefined;
+    let stopCalled = false;
     const stop = (): void => {
-      opened?.stop();
+      if (opened && !stopCalled) {
+        stopCalled = true;
+        opened.stop();
+      }
     };
     signal.addEventListener("abort", stop, { once: true });
     try {
       opened = await open(signal, sink);
-      if (!opened || signal.aborted) {
-        if (opened && signal.aborted) opened.stop();
-        return { status: "clean" };
-      }
+      if (!opened) return { status: "clean" };
+      // An open that was already in flight may still return a stream after
+      // abort. Stop its external work, then drain queued events through the
+      // live sink before allowing the source to settle.
+      if (signal.aborted) stop();
       for await (const event of opened.events) sink.event(event);
       return { status: "clean" };
     } finally {
