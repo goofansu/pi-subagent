@@ -205,8 +205,8 @@ export function processJsonSource(options: {
         }
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
           return;
-        const acknowledgement = sink.event(parsed as Record<string, unknown>);
-        if (acknowledgement?.terminal) sawTerminalAnswer = true;
+        if (sink.event(parsed as Record<string, unknown>) === true)
+          sawTerminalAnswer = true;
       };
       const abort = (): void => {
         if (settled) return;
@@ -253,11 +253,13 @@ export function processJsonSource(options: {
       }
       const shouldReportPostMortem = (): boolean =>
         !aborted && !sawStderr && !sawTerminalAnswer;
-      const lastStdoutDiagnostic = (): string => {
+      const formatLastStdout = (): string | undefined => {
         const stdoutTail = rawStdoutTail.trim();
-        return stdoutTail
-          ? `Last stdout:\n${stdoutTail}`
-          : "No stdout was captured.";
+        return stdoutTail ? `Last stdout:\n${stdoutTail}` : undefined;
+      };
+      const reportCleanExitPostMortem = (): void => {
+        // Legacy clean-missing-answer behavior explains an empty stdout stream.
+        sink.stderr(formatLastStdout() ?? "No stdout was captured.");
       };
 
       function onClose(code: number | null): void {
@@ -281,15 +283,18 @@ export function processJsonSource(options: {
             return;
           }
           if (code === 0) {
-            if (shouldReportPostMortem()) sink.stderr(lastStdoutDiagnostic());
+            if (shouldReportPostMortem()) reportCleanExitPostMortem();
             finish({ status: "clean" });
             return;
           }
           // A raw stdout tail is useful only when the run actually failed and
           // no stderr or terminal answer already explains it. Partial facts,
           // metadata, and provider errors do not replace this bounded tail.
-          if (shouldReportPostMortem() && rawStdoutTail.trim()) {
-            sink.stderr(lastStdoutDiagnostic());
+          // Unlike clean missing-answer, nonzero failure intentionally reports
+          // nothing when stdout is empty; keep that legacy distinction explicit.
+          if (shouldReportPostMortem()) {
+            const diagnostic = formatLastStdout();
+            if (diagnostic) sink.stderr(diagnostic);
           }
           finish({
             status: "failed",

@@ -14,7 +14,7 @@ import {
 import { type ChildProcessSpawn, processJsonSource } from "./child-process.ts";
 import { parseTools, shouldAppendSystemPrompt } from "./harness.ts";
 import { runOneShot, type Translation } from "./one-shot.ts";
-import type { SubagentRun } from "./run.ts";
+import type { Fact, FactPart, RunEnding, SubagentRun } from "./run.ts";
 import type { AgentConfig } from "./types.ts";
 
 export interface PiInvocationRuntime {
@@ -146,7 +146,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function factPart(value: unknown): import("./run.ts").FactPart | undefined {
+function factPart(value: unknown): FactPart | undefined {
   if (typeof value === "string") return { type: "text", text: value };
   if (!isRecord(value) || typeof value.type !== "string") return undefined;
   if (value.type === "text" && typeof value.text === "string") {
@@ -162,7 +162,7 @@ function factPart(value: unknown): import("./run.ts").FactPart | undefined {
   return undefined;
 }
 
-function piFact(value: unknown): import("./run.ts").Fact | undefined {
+function piFact(value: unknown): Fact | undefined {
   if (!isRecord(value)) return undefined;
   const wireRole = value.role;
   const role = wireRole === "toolResult" ? "tool" : wireRole;
@@ -176,7 +176,7 @@ function piFact(value: unknown): import("./run.ts").Fact | undefined {
     : [value.content];
   const parts = rawParts
     .map(factPart)
-    .filter((part): part is import("./run.ts").FactPart => part !== undefined);
+    .filter((part): part is FactPart => part !== undefined);
   // Thinking and provider-specific content blocks do not cross the harness
   // seam, but their message metadata still does. An empty parts array is a
   // meaningful fact when it carries usage, a stop reason, or an error.
@@ -243,7 +243,7 @@ export function translatePiJsonEvent(
     return {
       transcript: event.messages
         .map(piFact)
-        .filter((fact): fact is import("./run.ts").Fact => fact !== undefined),
+        .filter((fact): fact is Fact => fact !== undefined),
       terminal: true,
     };
   }
@@ -281,7 +281,7 @@ export async function runPiAgent(
     spawn?: ChildProcessSpawn;
     killEscalationMs?: number;
   } = {},
-): Promise<import("./run.ts").RunEnding> {
+): Promise<RunEnding> {
   const { task } = run;
   const { config } = task;
   let tmpPromptDir: string | null = null;

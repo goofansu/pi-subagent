@@ -147,9 +147,9 @@ test("runOneShot exposes only truthful terminal acknowledgements", async () => {
   assert.deepEqual(result, { ending: "answered" });
   assert.deepEqual(acknowledgements, [
     undefined,
-    { terminal: false },
-    { terminal: true },
-    { terminal: false },
+    false,
+    true,
+    false,
     undefined,
   ]);
 });

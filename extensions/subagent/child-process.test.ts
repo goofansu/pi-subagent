@@ -55,9 +55,8 @@ function sourceForFakeChild(child: FakeChild) {
 async function runSource(
   script: string,
   overrides: Record<string, unknown> = {},
-  acknowledge: (
-    event: Record<string, unknown>,
-  ) => { terminal: boolean } | undefined = () => undefined,
+  acknowledge: (event: Record<string, unknown>) => boolean | undefined = () =>
+    undefined,
 ) {
   const events: Record<string, unknown>[] = [];
   const stderr: string[] = [];
@@ -196,23 +195,36 @@ test("process source uses only terminal acknowledgement to suppress a tail", asy
   const clean = await runSource(
     'process.stdout.write(JSON.stringify({ kind: "partial" }) + "\\n");',
     {},
-    () => ({ terminal: false }),
+    () => false,
   );
   assert.match(clean.stderr, /Last stdout:/);
 
   const nonterminal = await runSource(
     'process.stdout.write(JSON.stringify({ kind: "partial" }) + "\\n"); process.exitCode = 7;',
     {},
-    () => ({ terminal: false }),
+    () => false,
   );
   assert.match(nonterminal.stderr, /Last stdout:/);
 
   const terminal = await runSource(
     'process.stdout.write(JSON.stringify({ kind: "answer" }) + "\\n"); process.exitCode = 7;',
     {},
-    () => ({ terminal: true }),
+    () => true,
   );
   assert.doesNotMatch(terminal.stderr, /Last stdout:/);
+});
+
+test("issue-03 policy: clean no-terminal exit with stderr suppresses stdout post-mortem", async () => {
+  const result = await runSource(
+    'process.stdout.write(JSON.stringify({ kind: "partial" }) + "\\n"); process.stderr.write("runtime warning\\n");',
+    {},
+    () => false,
+  );
+  // Explicit policy enforcement: an existing stderr diagnostic means the
+  // clean, answerless child is not otherwise silent, so stdout stays hidden.
+  assert.deepEqual(result.conclusion, { status: "clean" });
+  assert.equal(result.stderr, "runtime warning\n");
+  assert.doesNotMatch(result.stderr, /Last stdout:/);
 });
 
 test("process source does not replace an existing stderr diagnostic", async () => {

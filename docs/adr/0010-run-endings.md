@@ -41,8 +41,12 @@ it is failed. A failed ending's optional message is only a fallback and never
 replaces a fact-borne message.
 
 The One-shot protocol owns terminal-before-abort ordering, missing-answer
-policy, live reporting, source-failure handling, and ending derivation. Each
-harness translates its wire events before they cross the executor seam.
+policy, live reporting, source-failure handling, and ending derivation. Its
+source sink has the smallest acknowledgement contract: `true` means a
+terminal answer was witnessed before abort, `false` means a translated event
+was nonterminal or arrived after abort, and `undefined` means the event was
+ignored or arrived after settlement. Each harness translates its wire events
+before they cross the executor seam.
 
 ## Consequences
 

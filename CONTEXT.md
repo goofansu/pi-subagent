@@ -112,7 +112,9 @@ cross this seam.
 **One-shot protocol** — the module owning terminal-before-abort ordering, the
 missing-answer policy, and ending derivation, whichever source feeds it. It
 runs one source to one ending, reports facts live, and discards calls after
-settlement.
+settlement. Its sink returns `true` only for a terminal answer witnessed before
+abort, `false` for a translated nonterminal or post-abort terminal event, and
+`undefined` for ignored or post-settlement events.
 
 **Conformance** — the named battery of nine required scenarios every
 harness's executor must pass as part of its own tests: `backend-crash`,
