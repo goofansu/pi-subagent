@@ -130,11 +130,15 @@ export function processJsonSource(options: {
       let settled = false;
       let childClosed = false;
       let aborted = signal.aborted;
+      let terminationRequested = false;
       let escalation: ReturnType<typeof setTimeout> | undefined;
 
       const cleanupAbort = (): void => {
         signal.removeEventListener("abort", abort);
-        if (escalation !== undefined) clearTimeout(escalation);
+        if (escalation !== undefined) {
+          clearTimeout(escalation);
+          escalation = undefined;
+        }
       };
       const detachStreams = (): void => {
         proc.stdin?.removeListener("error", onStdinError);
@@ -147,23 +151,26 @@ export function processJsonSource(options: {
       };
       const terminate = (): void => {
         if (childClosed) return;
-        try {
-          proc.kill("SIGTERM");
-        } catch {
-          // The process may have exited between the event and this cleanup.
+        if (!terminationRequested) {
+          terminationRequested = true;
+          try {
+            proc.kill("SIGTERM");
+          } catch {
+            // The process may have exited between the event and this cleanup.
+          }
         }
-        if (escalation === undefined) {
-          escalation = setTimeout(() => {
-            if (!childClosed) {
-              try {
-                proc.kill("SIGKILL");
-              } catch {
-                // The process may have exited between the two signals.
-              }
+        if (childClosed || escalation !== undefined) return;
+        escalation = setTimeout(() => {
+          escalation = undefined;
+          if (!childClosed) {
+            try {
+              proc.kill("SIGKILL");
+            } catch {
+              // The process may have exited between the two signals.
             }
-          }, killEscalationMs);
-          escalation.unref?.();
-        }
+          }
+        }, killEscalationMs);
+        escalation.unref?.();
       };
       const fail = (error: unknown): void => {
         if (settled) return;

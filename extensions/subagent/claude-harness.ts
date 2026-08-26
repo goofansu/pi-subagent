@@ -305,10 +305,6 @@ export function createClaudeHarness(
               controller.abort();
               stream.close();
             };
-            if (signal.aborted) {
-              stop();
-              return undefined;
-            }
             return { events: stream, stop };
           });
           return runOneShot({

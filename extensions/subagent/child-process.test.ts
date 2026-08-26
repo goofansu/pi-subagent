@@ -355,6 +355,54 @@ test("process source reports errors on stderr and cleans up the child", async ()
   assert.equal(child.listenerCount("error"), 0);
 });
 
+test("abort followed by process error still escalates an ignored child", async () => {
+  const controller = new AbortController();
+  const child = new EventEmitter() as FakeChild;
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  const signals: string[] = [];
+  child.kill = (signal) => {
+    signals.push(signal);
+    return true;
+  };
+  const stderr: string[] = [];
+  const source = processJsonSource({
+    command: "fixture",
+    args: [],
+    cwd: "/tmp",
+    childDepth: 1,
+    prompt: "",
+    childName: "fixture",
+    killEscalationMs: 10,
+    spawn: () => child as unknown as ChildProcess,
+  });
+  const promise = source(
+    { event: () => undefined, stderr: (chunk) => stderr.push(chunk) },
+    controller.signal,
+  );
+
+  controller.abort();
+  queueMicrotask(() => child.emit("error", new Error("child runtime error")));
+
+  assert.deepEqual(await promise, { status: "failed" });
+  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.deepEqual(stderr, ["child runtime error\n"]);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(child.stdin.listenerCount("error"), 0);
+  assert.equal(child.stdout.listenerCount("data"), 0);
+  assert.equal(child.stderr.listenerCount("data"), 0);
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.listenerCount("error"), 0);
+
+  // The abort listener and escalation timer are both gone after settlement;
+  // a later abort cannot send another signal.
+  controller.abort();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+});
+
 test("abort stops the child without emitting a stdout tail", async () => {
   const controller = new AbortController();
   let killed = 0;
