@@ -80,7 +80,7 @@ Review the requested change and report concrete findings.
 
 Claude validates `model` at session start. It accepts the SDK's aliases
 `fable`, `opus`, `sonnet`, and `haiku`, resolving them to
-`claude-fable-5`, `claude-opus-4-8`, `claude-sonnet-5`, and
+`claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, and
 `claude-haiku-4-5`. It also accepts these explicit IDs:
 `claude-sonnet-5`, `claude-fable-5`, `claude-mythos-5`, `claude-opus-5`,
 `claude-opus-4-8`, `claude-opus-4-7`, `claude-mythos-preview`,

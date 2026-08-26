@@ -72,6 +72,13 @@ const INSTALLED_SDK_LEGACY_MODEL_IDS = [
   "claude-mythos-preview",
 ] as const;
 
+test("Claude SDK family aliases resolve to their installed defaults", () => {
+  assert.equal(resolveClaudeModel("opus"), "claude-opus-5");
+  assert.equal(resolveClaudeModel("sonnet"), "claude-sonnet-5");
+  assert.equal(resolveClaudeModel("haiku"), "claude-haiku-4-5");
+  assert.equal(resolveClaudeModel("fable"), "claude-fable-5");
+});
+
 test("Claude aliases and thinking budgets stay inside the adapter", () => {
   assert.equal(resolveClaudeModel("sonnet"), "claude-sonnet-5");
   assert.deepEqual(

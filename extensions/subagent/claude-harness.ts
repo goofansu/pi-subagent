@@ -24,7 +24,7 @@ import { type AgentConfig, EFFORTS } from "./types.ts";
  */
 export const CLAUDE_MODEL_RESOLUTIONS: Readonly<Record<string, string>> = {
   fable: "claude-fable-5",
-  opus: "claude-opus-4-8",
+  opus: "claude-opus-5",
   sonnet: "claude-sonnet-5",
   haiku: "claude-haiku-4-5",
   "claude-sonnet-5": "claude-sonnet-5",
