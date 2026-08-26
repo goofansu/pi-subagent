@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createDefaultHarnessRegistry } from "./composition.ts";
 import { createHarnessRegistry } from "./harness.ts";
 import { createPiHarness } from "./pi-harness.ts";
+
+test("default composition registers exactly the pi and claude harnesses", () => {
+  const registry = createDefaultHarnessRegistry();
+
+  assert.ok(registry.get("pi"));
+  assert.ok(registry.get("claude"));
+  assert.equal(registry.get("unknown"), undefined);
+});
 
 test("Pi-only composition keeps the core registry executable without Claude", () => {
   const registry = createHarnessRegistry([createPiHarness()]);

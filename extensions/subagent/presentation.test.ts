@@ -7,6 +7,7 @@ import {
   formatDuration,
   formatExecutorRejection,
   formatNotification,
+  formatNotificationAccounting,
   formatResult,
   formatRunStatus,
   formatStartResult,
@@ -109,13 +110,19 @@ test("presentation owns every agent_cancel outcome", () => {
   assert.equal(
     formatCancelOutcome({
       cancelled: ["run-1"],
-      finished: ["run-2"],
+      alreadySettling: ["run-2"],
+      finished: ["run-3"],
       unknown: ["missing"],
     }),
-    "Cancelled: run-1. Already finished, result kept: run-2. Unknown run ids: missing.",
+    "Cancelled: run-1. Already settling: run-2. Already finished, result kept: run-3. Unknown run ids: missing.",
   );
   assert.equal(
-    formatCancelOutcome({ cancelled: [], finished: [], unknown: [] }),
+    formatCancelOutcome({
+      cancelled: [],
+      alreadySettling: [],
+      finished: [],
+      unknown: [],
+    }),
     "Nothing to cancel.",
   );
 });
@@ -165,6 +172,79 @@ test("a completed notification uses lifecycle vocabulary", () => {
   assert.equal(notificationVerb("completed"), "completed");
   assert.equal(notificationVerb("failed"), "failed");
   assert.equal(notificationVerb("cancelled"), "cancelled");
+});
+
+test("notification accounting abbreviates usage and includes the model", () => {
+  assert.equal(
+    formatNotificationAccounting(
+      {
+        input: 12_300,
+        output: 4_500,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0.1242,
+        contextTokens: 0,
+        turns: 3,
+      },
+      "claude-sonnet-4-6",
+    ),
+    "cost $0.1242 · 12.3k in / 4.5k out · 3 turns · claude-sonnet-4-6",
+  );
+});
+
+test("notification accounting omits zero or absent fields", () => {
+  assert.equal(
+    formatNotificationAccounting(
+      {
+        input: 1_200,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        contextTokens: 0,
+        turns: 0,
+      },
+      undefined,
+    ),
+    "1.2k in",
+  );
+  assert.equal(
+    formatNotificationAccounting(
+      {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        contextTokens: 0,
+        turns: 0,
+      },
+      "baseline-model",
+    ),
+    undefined,
+  );
+  assert.equal(formatNotificationAccounting(undefined, "model"), undefined);
+});
+
+test("completed, failed, and cancelled notifications carry accounting", () => {
+  const result = createEmptyResult("explore", "look", 0);
+  result.usage.input = 12_300;
+  result.usage.output = 4_500;
+  result.usage.cost = 0.1242;
+  result.usage.turns = 3;
+  result.model = "claude-sonnet-4-6";
+
+  for (const lifecycle of [
+    { phase: "completed", finishedAt: 10, exitCode: 0 },
+    { phase: "failed", finishedAt: 10, exitCode: 1 },
+    { phase: "cancelled", finishedAt: 10, reason: "requested" },
+  ] as const) {
+    result.lifecycle = lifecycle;
+    assert.match(
+      formatNotification("a1", result),
+      /cost \$0\.1242 · 12\.3k in \/ 4\.5k out · 3 turns · claude-sonnet-4-6$/,
+    );
+  }
 });
 
 // ── Notification and result shape ───────────────────────────────────────────

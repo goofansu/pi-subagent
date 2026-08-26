@@ -18,7 +18,7 @@ import {
   fullOutput,
 } from "./presentation.ts";
 import type { SubagentRuns } from "./runs.ts";
-import type { LifecycleStatus, SingleResult } from "./types.ts";
+import type { SingleResult, TerminalLifecycleStatus } from "./types.ts";
 
 export type { PushedNotification } from "./notification-delivery.ts";
 
@@ -77,7 +77,7 @@ export function createSessionPush(): SessionPush {
 export interface RetainedResult {
   id: string;
   agent: string;
-  status: Exclude<LifecycleStatus, "running">;
+  status: TerminalLifecycleStatus;
   reason?: "requested" | "shutdown";
   /** The run's full final output, untrimmed. Empty once evicted. */
   output: string;
@@ -89,8 +89,9 @@ export interface RetainedResult {
  * Cap on the total characters result store holds across all runs.
  *
  * Without a total budget, a long session of large results would grow without
- * limit. Eviction removes the oldest output first while retaining its terminal
- * metadata. The newest result always survives.
+ * limit. Eviction removes output in result insertion order (oldest first)
+ * while retaining terminal metadata. Retrieval does not change that order, and
+ * the newest result always survives.
  */
 export const RESULT_STORE_CHARACTER_BUDGET = 2_000_000;
 
@@ -104,7 +105,7 @@ export interface DeliveryOptions {
 export interface AwaitResult {
   id: string;
   agent: string;
-  phase: Exclude<LifecycleStatus, "running">;
+  phase: TerminalLifecycleStatus;
   reason?: "requested" | "shutdown";
 }
 
@@ -117,14 +118,20 @@ export interface WaitOutcome {
 }
 
 export interface CancelOutcome {
-  /** Ids this call stopped. Their cancellation is delivered by the caller. */
+  /** Ids the Registry stopped for this call. */
   cancelled: string[];
+  /** Known pending ids the Registry refused because cancellation is underway. */
+  alreadySettling: string[];
   /** Ids that settled before the cancel arrived; their results stand. */
   finished: string[];
   /** Ids that name no run this delivery has ever seen. */
   unknown: string[];
 }
 
+/**
+ * Delivery pushes may synchronously re-enter through `notificationLanded`;
+ * notification state is committed before the push fires.
+ */
 export interface SubagentDelivery {
   /** Track a started run through settlement, storage, and notification. */
   register(id: string, agent: string, settled: Promise<SingleResult>): void;
@@ -165,6 +172,9 @@ export function createSubagentDelivery({
   const notifications = new Map<string, NotificationDeliveryState>();
   let generation = 0;
 
+  // Map insertion order is the result store's eviction order. Results are
+  // never reinserted on retrieval, so the oldest stored result is evicted
+  // first.
   const enforceResultStoreBudget = (): void => {
     let total = 0;
     for (const result of results.values()) total += result.output.length;
@@ -318,15 +328,16 @@ export function createSubagentDelivery({
     cancel(ids) {
       const requested = [...new Set(ids)];
       const cancelled = runs.cancel(requested, "requested");
+      const alreadySettling: string[] = [];
       const finished: string[] = [];
       const unknown: string[] = [];
       for (const id of requested) {
         if (cancelled.includes(id)) continue;
         if (results.has(id)) finished.push(id);
-        else if (pending.has(id)) cancelled.push(id);
+        else if (pending.has(id)) alreadySettling.push(id);
         else unknown.push(id);
       }
-      return { cancelled, finished, unknown };
+      return { cancelled, alreadySettling, finished, unknown };
     },
 
     shutdown() {

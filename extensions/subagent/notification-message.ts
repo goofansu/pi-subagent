@@ -14,7 +14,7 @@ import {
   runStatusTone,
 } from "./presentation.ts";
 import { contentText } from "./render.ts";
-import type { LifecycleStatus, RenderableTheme } from "./types.ts";
+import type { RenderableTheme, TerminalLifecycleStatus } from "./types.ts";
 
 /** The `customType` that routes a notification to the renderer below. */
 export const NOTIFICATION_MESSAGE_TYPE = "subagent-notification";
@@ -22,7 +22,7 @@ export const NOTIFICATION_MESSAGE_TYPE = "subagent-notification";
 export interface NotificationMessageDetails {
   id: string;
   agent: string;
-  status: Exclude<LifecycleStatus, "running">;
+  status: TerminalLifecycleStatus;
 }
 
 /** Everything needed to build one host custom-message payload. */
@@ -31,7 +31,7 @@ export interface NotificationMessage extends NotificationMessageDetails {
   text: string;
 }
 
-export interface NotificationMessagePayload {
+interface NotificationMessagePayload {
   customType: typeof NOTIFICATION_MESSAGE_TYPE;
   content: string;
   display: true;

@@ -17,6 +17,7 @@ import type {
   AgentConfig,
   CancellationReason,
   SingleResult,
+  TerminalLifecycleStatus,
   UsageStats,
 } from "./types.ts";
 
@@ -35,7 +36,7 @@ export type HarnessConformanceScenario =
   (typeof HARNESS_CONFORMANCE_SCENARIOS)[number];
 
 export interface HarnessConformanceExpectation {
-  phase: Exclude<SingleResult["lifecycle"]["phase"], "running">;
+  phase: TerminalLifecycleStatus;
   cancellationReason?: CancellationReason;
   usage?: UsageStats;
   childDepth?: number;

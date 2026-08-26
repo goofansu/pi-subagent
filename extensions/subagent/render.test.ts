@@ -111,7 +111,7 @@ test("headings and lists become structure rather than punctuation", () => {
 
 // ── Collapsed ────────────────────────────────────────────────────────────────
 
-test("a collapsed result is one summary line", () => {
+test("an extension-produced collected result renders its run row", () => {
   const body = `# Findings\n\n${"a long paragraph\n".repeat(40)}`;
   const rendered = render(body, false, oneRun);
 
@@ -205,6 +205,23 @@ test("a result naming no runs falls back rather than saying 0 results", () => {
   const rendered = render("Nothing to wait for.\nmore", false, { runs: [] });
 
   assert.equal(rendered, "Nothing to wait for.");
+});
+
+test("malformed foreign details fall back to the opening line", () => {
+  const component = renderMarkdownResult(
+    {
+      content: "foreign first line\nmore content",
+      details: { runs: "not-an-array" },
+    },
+    { expanded: false, isPartial: false },
+    theme,
+  );
+
+  const rendered = component
+    .render(80)
+    .map((line) => stripVTControlCharacters(line).trimEnd())
+    .join("\n");
+  assert.equal(rendered, "foreign first line");
 });
 
 test("an empty result renders nothing rather than a stray blank", () => {

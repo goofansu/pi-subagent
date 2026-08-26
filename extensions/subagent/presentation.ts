@@ -10,7 +10,13 @@
  */
 
 import { getFinalOutput } from "./messages.ts";
-import type { LifecycleStatus, SingleResult, Tone } from "./types.ts";
+import type {
+  LifecycleStatus,
+  SingleResult,
+  TerminalLifecycleStatus,
+  Tone,
+  UsageStats,
+} from "./types.ts";
 
 /** Maximum characters of completed output included in a notification. */
 export const NOTIFICATION_PREVIEW_CHARACTER_LIMIT = 1_000;
@@ -160,7 +166,7 @@ export interface AwaitPresentationOutcome {
   terminal: readonly {
     id: string;
     agent: string;
-    phase: Exclude<LifecycleStatus, "running">;
+    phase: TerminalLifecycleStatus;
     reason?: "requested" | "shutdown";
   }[];
   stillRunning: readonly string[];
@@ -194,7 +200,7 @@ export function formatAwaitOutcome(outcome: AwaitPresentationOutcome): string {
 export interface RetainedResultPresentation {
   id: string;
   agent: string;
-  status: Exclude<LifecycleStatus, "running">;
+  status: TerminalLifecycleStatus;
   output: string;
   evicted?: boolean;
 }
@@ -252,6 +258,7 @@ export function formatStartResult(agent: string, id: string): string {
 
 export interface CancelPresentationOutcome {
   cancelled: readonly string[];
+  alreadySettling: readonly string[];
   finished: readonly string[];
   unknown: readonly string[];
 }
@@ -263,6 +270,8 @@ export function formatCancelOutcome(
   const parts: string[] = [];
   if (outcome.cancelled.length > 0)
     parts.push(`Cancelled: ${outcome.cancelled.join(", ")}.`);
+  if (outcome.alreadySettling.length > 0)
+    parts.push(`Already settling: ${outcome.alreadySettling.join(", ")}.`);
   if (outcome.finished.length > 0)
     parts.push(
       `Already finished, result kept: ${outcome.finished.join(", ")}.`,
@@ -283,6 +292,56 @@ export function formatAgentResultUnavailable(
     : `No run with id ${id}. Check it against what agent_start returned.`;
 }
 
+function formatTokenCount(value: number): string {
+  const absolute = Math.abs(value);
+  if (absolute < 1_000) return String(value);
+
+  const units = ["", "k", "m", "b", "t"];
+  let unit = 0;
+  let scaled = value;
+  while (Math.abs(scaled) >= 1_000 && unit < units.length - 1) {
+    scaled /= 1_000;
+    unit++;
+  }
+  return `${scaled.toFixed(1)}${units[unit]}`;
+}
+
+/** The trailing accounting line for a notification, when usage was reported. */
+export function formatNotificationAccounting(
+  usage: UsageStats | undefined,
+  model: string | undefined,
+): string | undefined {
+  if (
+    !usage ||
+    !Object.values(usage).some(
+      (value) => typeof value === "number" && value !== 0,
+    )
+  )
+    return undefined;
+
+  const parts: string[] = [];
+  if (usage.cost !== 0) parts.push(`cost $${usage.cost.toFixed(4)}`);
+  if (usage.input !== 0 || usage.output !== 0) {
+    const tokens = [];
+    if (usage.input !== 0) tokens.push(`${formatTokenCount(usage.input)} in`);
+    if (usage.output !== 0)
+      tokens.push(`${formatTokenCount(usage.output)} out`);
+    parts.push(tokens.join(" / "));
+  }
+  if (usage.turns !== 0) parts.push(`${formatTokenCount(usage.turns)} turns`);
+  if (model) parts.push(model);
+  return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+/** Add the accounting line without changing the notification's existing body. */
+function appendNotificationAccounting(
+  notification: string,
+  result: SingleResult,
+): string {
+  const accounting = formatNotificationAccounting(result.usage, result.model);
+  return accounting ? `${notification}\n\n${accounting}` : notification;
+}
+
 /** Small status-specific orientation message for one terminal run. */
 export function formatNotification(id: string, result: SingleResult): string {
   const name = `${result.agent} (${id})`;
@@ -296,14 +355,23 @@ export function formatNotification(id: string, result: SingleResult): string {
       const preview = output
         ? notificationPreview(output)
         : "No output was produced.";
-      return `Subagent ${name} completed.\n\n${preview}\n\n${pointer}`;
+      return appendNotificationAccounting(
+        `Subagent ${name} completed.\n\n${preview}\n\n${pointer}`,
+        result,
+      );
     }
     case "failed":
       // Bounded like the completed preview (N1): the primary error is
       // normally short, but nothing upstream guarantees it, and the whole
       // message stays behind agent_result either way.
-      return formatFailedNotification(id, result.agent, result.errorMessage);
+      return appendNotificationAccounting(
+        formatFailedNotification(id, result.agent, result.errorMessage),
+        result,
+      );
     case "cancelled":
-      return `Subagent ${name} was cancelled (${result.lifecycle.reason}).`;
+      return appendNotificationAccounting(
+        `Subagent ${name} was cancelled (${result.lifecycle.reason}).`,
+        result,
+      );
   }
 }

@@ -39,7 +39,7 @@ export interface RunView {
 }
 
 /** The dispatcher's write access to one tracked run. */
-export interface RunHandle {
+interface RunHandle {
   readonly id: string;
   /** Why cancellation was first requested, if it was. */
   cancellationReason(): CancellationReason | undefined;
@@ -52,7 +52,7 @@ export interface RegistryClock {
   now(): number;
 }
 
-export const systemClock: RegistryClock = {
+const systemClock: RegistryClock = {
   now: () => Date.now(),
 };
 
@@ -62,7 +62,10 @@ export interface SubagentRuns {
    * particular run; the registry calls it and does not care how it works.
    */
   track(result: SingleResult, cancel: () => void): RunHandle;
-  /** Every tracked run, projected for display. */
+  /**
+   * Every tracked run, projected for display, in insertion order (oldest
+   * tracked run first).
+   */
   list(): readonly RunView[];
   /**
    * Drop a run whose notification has reached the model. Unknown ids are ignored,
@@ -70,7 +73,7 @@ export interface SubagentRuns {
    */
   release(id: string): void;
   /** Stop the named runs. Returns the ids that were actually cancelled. */
-  cancel(ids: readonly string[], reason?: CancellationReason): string[];
+  cancel(ids: readonly string[], reason: CancellationReason): string[];
   /** Stop every running run without querying the display projection. */
   cancelRunning(reason: CancellationReason): string[];
   /** Called on every change. Returns an unsubscribe. */
@@ -192,7 +195,7 @@ export function createSubagentRuns(
       return [...runs.values()].map(project);
     },
 
-    cancel: (ids, reason = "requested") => cancel(ids, reason),
+    cancel: (ids, reason) => cancel(ids, reason),
 
     cancelRunning(reason) {
       return cancel(

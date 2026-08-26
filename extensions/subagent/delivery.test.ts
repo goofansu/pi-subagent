@@ -153,6 +153,26 @@ test("a cancel stops the run without suppressing its notification", async () => 
   );
 });
 
+test("notification state is committed before a push can re-enter", async () => {
+  const runs = createSubagentRuns();
+  let delivery: SubagentDelivery;
+  const push = (notification: PushedNotification): void => {
+    // The host may synchronously report the message as landed while push is
+    // still on the stack. Swapping delivery's state write below this call
+    // would leave the run listed forever.
+    delivery.notificationLanded(notification.id);
+  };
+  delivery = createSubagentDelivery({ push, runs });
+  const run = deferredRun();
+  const handle = runs.track(run.result, () => {});
+  delivery.register(handle.id, run.result.agent, run.settled);
+
+  run.finish();
+  await flush();
+
+  assert.equal(runs.list().length, 0);
+});
+
 test("a cancelled run's outcome is still recallable once its child dies", async () => {
   const { delivery, runs } = harness();
   const run = deferredRun();
@@ -183,7 +203,8 @@ test("INV-6: repeated cancellation is safe and terminal state is unchanged", asy
   // Between the cancel and the settle the id must not read as a stranger.
   assert.equal(delivery.has(handle.id), true, "still a known run");
   const again = delivery.cancel([handle.id]);
-  assert.deepEqual(again.cancelled, [handle.id], "cancelling is idempotent");
+  assert.deepEqual(again.cancelled, []);
+  assert.deepEqual(again.alreadySettling, [handle.id]);
   assert.deepEqual(again.unknown, []);
   const outcome = await delivery.wait([handle.id], { timeoutMs: 0 });
   assert.deepEqual(outcome.stillRunning, [handle.id]);
@@ -206,6 +227,7 @@ test("a cancel tells a finished run apart from an id that never existed", async 
   const outcome = delivery.cancel([handle.id, "never-existed"]);
 
   assert.deepEqual(outcome.cancelled, []);
+  assert.deepEqual(outcome.alreadySettling, []);
   assert.deepEqual(outcome.finished, [handle.id]);
   assert.deepEqual(outcome.unknown, ["never-existed"]);
 });
@@ -473,7 +495,7 @@ test("an unknown id recalls nothing rather than throwing", () => {
   assert.equal(delivery.result("never-existed"), undefined);
 });
 
-test("INV-4: result eviction is oldest-first and unaffected by retrieval", async () => {
+test("result-store eviction follows insertion order, not retrieval order", async () => {
   const runs = createSubagentRuns();
   const delivery = createSubagentDelivery({
     push: () => {},

@@ -30,26 +30,31 @@ function runningResult(agent = "explore"): SingleResult {
   return createEmptyResult(agent, "look around", 0);
 }
 
-test("a tracked run is listed with its identity and elapsed time", () => {
+test("list returns tracked runs in insertion order", () => {
   const clock = fakeClock();
   const runs = createSubagentRuns(clock, sequentialIds());
   const result = runningResult();
+  const second = runningResult("reviewer");
 
   const handle = runs.track(result, () => {});
+  const secondHandle = runs.track(second, () => {});
   clock.advance(2_500);
 
   assert.equal(handle.id, "run-1");
-  assert.deepEqual(runs.list(), [
-    {
-      id: "run-1",
-      agent: "explore",
-      harness: "pi",
-      description: "look around",
-      status: "running",
-      elapsedMs: 2_500,
-      cost: 0,
-    },
-  ]);
+  assert.equal(secondHandle.id, "run-2");
+  assert.deepEqual(
+    runs.list().map((run) => run.id),
+    ["run-1", "run-2"],
+  );
+  assert.deepEqual(runs.list()[0], {
+    id: "run-1",
+    agent: "explore",
+    harness: "pi",
+    description: "look around",
+    status: "running",
+    elapsedMs: 2_500,
+    cost: 0,
+  });
 });
 
 test("a settled run stops accruing elapsed time", () => {
@@ -120,7 +125,7 @@ test("cancelling a run calls its canceller and reports what it stopped", () => {
   let cancelled = 0;
   runs.track(runningResult(), () => cancelled++);
 
-  assert.deepEqual(runs.cancel(["run-1"]), ["run-1"]);
+  assert.deepEqual(runs.cancel(["run-1"], "requested"), ["run-1"]);
   assert.equal(cancelled, 1);
 });
 
@@ -158,7 +163,7 @@ test("cancelling an unknown or already-settled run is a no-op", () => {
   runs.track(result, () => cancelled++);
   settleResultLifecycle(result, { exitCode: 0 }, clock.now());
 
-  assert.deepEqual(runs.cancel(["run-1", "nonexistent"]), []);
+  assert.deepEqual(runs.cancel(["run-1", "nonexistent"], "requested"), []);
   assert.equal(cancelled, 0);
 });
 

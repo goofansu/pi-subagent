@@ -72,6 +72,10 @@ export interface CollectedRuns {
   stillRunning?: number;
 }
 
+/**
+ * Guard foreign tool results; extension-produced details are typed at creation,
+ * so this runtime check's only job is defending this renderer at its boundary.
+ */
 function isCollectedRuns(value: unknown): value is CollectedRuns {
   return (
     typeof value === "object" &&

@@ -30,7 +30,7 @@ export const WIDGET_KEY = "subagent-runs";
  * Nothing caps how many runs the model may start, so the widget has to cap
  * itself: a fan-out of thirty would otherwise push the editor off the screen.
  */
-export const MAX_WIDGET_ROWS = 8;
+const MAX_WIDGET_ROWS = 8;
 
 /** Every component in a row is separated by the same amount of space. */
 export const ROW_DELIMITER = "  ";
@@ -43,13 +43,13 @@ export function formatCost(cost: number): string {
 }
 
 /** Widths shared by every visible row so each field starts in one column. */
-export interface RunColumns {
+interface RunColumns {
   agent: number;
   harness: number;
   cost: number;
 }
 
-export function measureColumns(runs: readonly RunView[]): RunColumns {
+function measureColumns(runs: readonly RunView[]): RunColumns {
   const widest = (values: string[]) =>
     values.reduce((max, value) => Math.max(max, visibleWidth(value)), 0);
   return {
@@ -197,7 +197,7 @@ export function renderRunLines(
 }
 
 /** The part of pi's TUI a widget can reach: asking to be redrawn. */
-export interface WidgetTui {
+interface WidgetTui {
   requestRender(): void;
 }
 

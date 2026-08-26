@@ -21,7 +21,11 @@ import {
   formatStartResult,
   formatUnknownAgent,
 } from "./presentation.ts";
-import { renderMarkdownResult, renderSubagentCall } from "./render.ts";
+import {
+  type CollectedRuns,
+  renderMarkdownResult,
+  renderSubagentCall,
+} from "./render.ts";
 import { getSubagentDepth, startSubagent } from "./runner.ts";
 import { createSubagentRuns, type SubagentRuns } from "./runs.ts";
 import { createSessionLifecycle } from "./session-lifecycle.ts";
@@ -141,16 +145,17 @@ export function registerSubagentFeatureTools(
         ...(signal ? { signal } : {}),
       });
 
+      const details: CollectedRuns = {
+        runs: outcome.terminal.map(({ id, agent, phase }) => ({
+          id,
+          agent,
+          status: phase,
+        })),
+        stillRunning: outcome.stillRunning.length,
+      };
       return {
         content: [{ type: "text", text: formatAwaitOutcome(outcome) }],
-        details: {
-          runs: outcome.terminal.map(({ id, agent, phase }) => ({
-            id,
-            agent,
-            status: phase,
-          })),
-          stillRunning: outcome.stillRunning.length,
-        },
+        details,
       };
     },
   });
@@ -186,6 +191,15 @@ export function registerSubagentFeatureTools(
         };
       }
 
+      const details: CollectedRuns = {
+        runs: [
+          {
+            id: retained.id,
+            agent: retained.agent,
+            status: retained.status,
+          },
+        ],
+      };
       return {
         content: [
           {
@@ -193,15 +207,7 @@ export function registerSubagentFeatureTools(
             text: formatResult(retained),
           },
         ],
-        details: {
-          runs: [
-            {
-              id: retained.id,
-              agent: retained.agent,
-              status: retained.status,
-            },
-          ],
-        },
+        details,
       };
     },
   });

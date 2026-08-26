@@ -584,7 +584,7 @@ test("the registry can cancel one run without touching the turn", async () => {
   let sawAbort = false;
   const execute: SubagentExecutor = async (run) => {
     const [id] = runs.list().map((view) => view.id);
-    runs.cancel([id]);
+    runs.cancel([id], "requested");
     sawAbort = run.signal?.aborted ?? false;
     return { exitCode: 1, stopReason: ABORTED_STOP_REASON };
   };
