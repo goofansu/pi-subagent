@@ -10,7 +10,13 @@ import {
   stringField,
   unknownFields,
 } from "./harness.ts";
-import type { Fact, FactPart, ParentModel, SubagentTask } from "./run.ts";
+import {
+  DEPTH_ENV_KEY,
+  type Fact,
+  type FactPart,
+  type ParentModel,
+  type SubagentTask,
+} from "./run.ts";
 import { type AgentConfig, EFFORTS } from "./types.ts";
 
 /**
@@ -223,6 +229,12 @@ export function buildClaudeOptions(
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
     disallowedTools: ["Agent", "Task"],
+    // The SDK's `env` replaces the subprocess environment entirely rather
+    // than merging, so spread process.env to keep the ADR-0008 inheritance.
+    // The depth key closes the other half of the Depth constraint:
+    // disallowedTools stops in-SDK spawning, this stops a Bash-launched
+    // grandchild pi from starting at depth zero.
+    env: { ...process.env, [DEPTH_ENV_KEY]: String(task.childDepth) },
     ...(tools ? { tools } : {}),
     systemPrompt: append
       ? {

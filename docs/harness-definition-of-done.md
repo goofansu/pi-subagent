@@ -135,9 +135,13 @@ comments and ordinary string literals are not.
   `SubagentTask`, plus runtime checks covering both adapters and the absence
   of send, steer, and persistent-session surfaces.
 - [x] **Depth binds every harness** — Claude children have their
-  agent-spawning tools disallowed. *Test:* Claude adapter tests assert both
-  installed SDK spawning tools, `Agent` and `Task`, are disallowed; the
-  dispatcher depth guard and Pi child-depth transport are also tested.
+  agent-spawning tools disallowed, and every executor copies
+  `task.childDepth` into its child's environment so a Bash-launched
+  grandchild pi cannot restart at depth zero. *Test:* Claude adapter tests
+  assert both installed SDK spawning tools, `Agent` and `Task`, are
+  disallowed and that `PI_SUBAGENT_DEPTH` is set in the child's env with
+  `process.env` inheritance preserved; the dispatcher depth guard and Pi
+  child-depth transport are also tested.
 - [x] **Trust posture is harness policy** — the request carries
   `projectTrusted`; the Claude harness bypasses permissions unconditionally in
   this version. *Test:* Claude adapter test asserts bypass regardless of the

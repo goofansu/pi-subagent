@@ -11,7 +11,7 @@ import {
 } from "./claude-harness.ts";
 import { createHarnessRegistry } from "./harness.ts";
 import { getFinalOutput } from "./messages.ts";
-import type { SubagentTask } from "./run.ts";
+import { DEPTH_ENV_KEY, type SubagentTask } from "./run.ts";
 import { startSubagent } from "./runner.ts";
 import { createSubagentRuns } from "./runs.ts";
 import type { AgentConfig } from "./types.ts";
@@ -104,6 +104,23 @@ test("Claude permissions bypass either forwarded trust value and disallow child 
     assert.equal(options.permissionMode, "bypassPermissions");
     assert.equal(options.allowDangerouslySkipPermissions, true);
     assert.deepEqual(options.disallowedTools, ["Agent", "Task"]);
+  }
+});
+
+test("Claude children carry the nesting depth and keep the inherited environment", () => {
+  const marker = "CLAUDE_HARNESS_DEPTH_TEST_MARKER";
+  process.env[marker] = "inherited";
+  try {
+    const options = buildClaudeOptions(
+      { ...task, childDepth: 2 },
+      undefined,
+      "off",
+      new AbortController(),
+    );
+    assert.equal(options.env?.[DEPTH_ENV_KEY], "2");
+    assert.equal(options.env?.[marker], "inherited");
+  } finally {
+    delete process.env[marker];
   }
 });
 
