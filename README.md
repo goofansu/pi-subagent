@@ -1,6 +1,6 @@
 # pi-subagent
 
-Delegate tasks to specialized subagents with isolated context windows in pi. Each subagent runs in its own child pi process and follows [pi's project-trust model](https://pi.dev/docs/latest/security#project-trust).
+Delegate tasks to specialized subagents with isolated context windows in pi. Runs use a named harness: the Pi harness uses a child pi process and [pi's project-trust model](https://pi.dev/docs/latest/security#project-trust), while the Claude harness uses the Claude Agent SDK and currently bypasses permissions unconditionally.
 
 ## Install
 
@@ -149,7 +149,7 @@ The widget is a display. Pi routes keyboard input to the editor, never to a widg
 
 ### Concurrency
 
-Subagents are not capped: every delegated run starts immediately. Each one is a child pi process, so a wide fan-out costs real local resources — see [ADR 0001](docs/adr/0001-unbounded-subagent-concurrency.md) for why the cap and its queue were removed. Runs have no time limit.
+Subagents are not capped: every delegated run starts immediately. A Pi-harness run is a child pi process; a Claude-harness run uses the Claude Agent SDK directly. Either way, a wide fan-out costs real local resources — see [ADR 0001](docs/adr/0001-unbounded-subagent-concurrency.md) for why the cap and its queue were removed. Runs have no time limit.
 
 ### Lifecycle
 
@@ -157,6 +157,6 @@ A run is detached from the turn, not from the session. `Esc` cancels the turn an
 
 ### Security
 
-Project trust is [pi's](https://pi.dev/docs/latest/security#project-trust). The extension resolves none of its own and forwards pi's decision to every child.
+For the Pi harness, project trust is [pi's](https://pi.dev/docs/latest/security#project-trust): the extension resolves none of its own and forwards Pi's decision to every child pi process. The Claude harness uses the Claude Agent SDK instead; it does not consult that trust flag in this version and bypasses permissions unconditionally.
 
 A subagent reads files, writes files, and runs commands as far as its `tools` list allows, and cannot delegate further — delegation is one level deep. A running subagent also cannot be given more input; see [ADR 0003](docs/adr/0003-one-shot-children.md).

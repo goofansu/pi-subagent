@@ -346,6 +346,24 @@ test("the fold derives usage and activity from reported messages", async () => {
   assert.equal(result.activity, "grep: TODO");
 });
 
+test("an authoritative streamed model replaces the harness baseline", async () => {
+  const result = await startAndSettle({
+    config: agent({ model: "baseline-model" }),
+    description: "task",
+    prompt: "go",
+    execute: async (run) => {
+      run.report.message({
+        role: "assistant",
+        parts: [{ type: "text", text: "authoritative" }],
+        model: "terminal-model",
+      });
+      return { exitCode: 0 };
+    },
+  });
+
+  assert.equal(result.model, "terminal-model");
+});
+
 test("a terminal transcript model replaces a stale streamed model", async () => {
   const result = await startAndSettle({
     config: agent(),

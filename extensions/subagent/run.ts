@@ -268,7 +268,9 @@ function recordFact(result: SingleResult, fact: Fact): void {
     result.usage.contextTokens = usage.contextTokens;
   }
   result.usage.turns += usage?.turns ?? (fact.role === "assistant" ? 1 : 0);
-  if (fact.model && !result.model) result.model = fact.model;
+  // A model reported by a harness fact is authoritative, including when it
+  // refines the harness-resolved baseline.
+  if (fact.model) result.model = fact.model;
   if (fact.stopReason && fact.stopReason !== "aborted") {
     result.stopReason = fact.stopReason;
   }
@@ -285,9 +287,9 @@ export function createRunReporter(
   result: SingleResult,
   changed: () => void,
 ): RunReporter {
-  // A model resolved before execution is harness-owned baseline metadata. Any
-  // model first witnessed in streamed facts is provisional and must not survive
-  // replacement of the transcript unless the authoritative facts repeat it.
+  // A model resolved before execution is harness-owned baseline metadata.
+  // Streamed model facts are authoritative for the live result, but transcript
+  // replacement resets to the baseline and only its facts can refine it.
   const baselineModel = result.model;
   const fold = (fact: Fact): void => {
     result.messages.push(fact);
@@ -309,14 +311,15 @@ export function createRunReporter(
       result.messages = [];
       result.usage = emptyUsage();
       delete result.activity;
-      // Clear fact-derived model metadata before folding the authoritative
-      // snapshot. Restore only the harness-resolved baseline if the snapshot
-      // contains no model at all; a terminal fact's model replaces it.
-      delete result.model;
+      // Reset to the captured baseline before folding the authoritative
+      // snapshot. Terminal facts may replace it; absent or ambiguous evidence
+      // leaves the baseline in place, or removes stale metadata when there was
+      // no baseline.
+      if (baselineModel) result.model = baselineModel;
+      else delete result.model;
       delete result.stopReason;
       delete result.errorMessage;
       for (const fact of facts) fold(fact);
-      if (!result.model && baselineModel) result.model = baselineModel;
       refreshActivity();
       changed();
     },

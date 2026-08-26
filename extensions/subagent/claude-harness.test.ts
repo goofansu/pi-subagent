@@ -335,7 +335,7 @@ test("an empty Claude result carries accounting into the cost widget", async () 
   const result = await started.settled;
   assert.equal(result.lifecycle.phase, "completed");
   assert.deepEqual(result.messages[0]?.parts, []);
-  assert.equal(result.model, "claude-sonnet-5");
+  assert.equal(result.model, "claude-sonnet-4-6");
   assert.deepEqual(result.usage, {
     input: 10,
     output: 4,
@@ -445,7 +445,7 @@ test("Claude runs end-to-end through the core run contract", async () => {
   assert.equal(result.lifecycle.phase, "completed");
   assert.equal(getFinalOutput(result.messages), "answer");
   assert.equal(result.stderr, "sdk diagnostic\\n");
-  assert.equal(result.model, "claude-sonnet-5");
+  assert.equal(result.model, "claude-sonnet-4-6");
   assert.equal(result.usage.input, 3);
   assert.equal(result.usage.output, 2);
   assert.equal(result.usage.turns, 2);

@@ -144,11 +144,14 @@ comments and ordinary string literals are not.
   forwarded value. *Review:* the sharp edge is documented, not hidden.
 - [x] **Transcript healing is authoritative** — a terminal transcript
   replaces streamed facts and all derived error/metadata state, so a transient
-  streamed error or fact-derived model cannot survive a clean replacement;
-  harness-resolved baseline model metadata remains available, and a retained
-  provider error still wins over a generic process-exit diagnostic. *Test:*
-  Shadow-Pi fixtures cover the error paths and dispatcher fold tests cover
-  stale-model replacement, removal, and baseline preservation.
+  streamed error cannot survive a clean replacement. A model reported by an
+  assistant or terminal fact is authoritative over the harness-resolved
+  baseline; healing resets to that baseline, then terminal facts may replace
+  it, while absent or ambiguous evidence retains the baseline and no baseline
+  removes stale model metadata. A retained provider error still wins over a
+  generic process-exit diagnostic. *Test:* Shadow-Pi fixtures cover the error
+  paths and dispatcher fold tests cover authoritative-baseline replacement,
+  stale-model removal, and baseline preservation.
 - [x] **Empty terminal accounting reaches presentation** — a successful Claude
   result with no text remains a fact, including usage, turns, cost, and stop
   reason; model provenance comes from an empty/thinking assistant fact or one
