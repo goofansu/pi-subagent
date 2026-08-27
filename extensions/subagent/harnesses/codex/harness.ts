@@ -27,6 +27,8 @@ const ACTIVITY_LIMIT = 120;
 const COMMAND_PREFIX_LIMIT = 60;
 // Only the tail of a command's output can become live activity.
 const OUTPUT_TAIL_LIMIT = 2048;
+// Cap memory and keep each streamed-message delta's preview work constant.
+const AGENT_MESSAGE_TAIL_LIMIT = 2048;
 
 export interface CodexHarnessOptions {
   readonly spawn?: CodexAppServerOptions["spawn"];
@@ -45,6 +47,16 @@ function capped(value: string): string {
   return collapsed(value).slice(0, ACTIVITY_LIMIT);
 }
 
+function cappedTail(value: string): string {
+  // Deltas extend agent messages, so a tail cap keeps the preview current;
+  // reasoning summaries are headlines, so their head cap preserves the lead.
+  return collapsed(value).slice(-ACTIVITY_LIMIT);
+}
+
+function appendTail(tail: string, delta: string, limit: number): string {
+  return (tail + delta.slice(-limit)).slice(-limit);
+}
+
 function commandFromItem(
   item: Extract<ThreadItem, { type: "commandExecution" }>,
 ): string {
@@ -54,14 +66,42 @@ function commandFromItem(
   );
 }
 
-/** The latest non-blank output line, honoring carriage-return progress. */
-function lastOutputLine(tail: string): string | undefined {
+/** The latest non-blank line, honoring carriage-return progress. */
+function lastNonBlankLine(tail: string): string | undefined {
   const lines = tail.split(/\r\n|\r|\n/);
   for (let index = lines.length - 1; index >= 0; index--) {
     const line = lines[index]?.trim();
     if (line) return line;
   }
   return undefined;
+}
+
+function stripMarkdownEmphasis(value: string): string {
+  return value
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/~~([^~\n]+)~~/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/(?<![\w_])_([^_\s](?:[^_\n]*[^_\s])?)_(?![\w_])/g, "$1");
+}
+
+function messagePreview(tail: string): string | undefined {
+  const line = lastNonBlankLine(tail);
+  if (!line || /^(```|~~~)/.test(line)) return undefined;
+  // Whitespace after the terminator prevents decimals and versions splitting.
+  const fragments = line.split(/(?<=[.!?])\s+/);
+  let sentence: string | undefined;
+  for (let index = fragments.length - 1; index >= 0; index--) {
+    const fragment = fragments[index];
+    if (fragment?.trim()) {
+      sentence = fragment;
+      break;
+    }
+  }
+  if (!sentence) return undefined;
+  const prose = stripMarkdownEmphasis(sentence)
+    .replace(/^\s*(?:#{1,6}\s+|>\s*|[-+*]\s+)/, "")
+    .trim();
+  return prose ? cappedTail(prose) : undefined;
 }
 
 function commandProgress(command: string | undefined, line: string): string {
@@ -140,6 +180,7 @@ export function createCodexTranslator(
   const reasoning = new Map<string, string>();
   const commands = new Map<string, string>();
   const outputTails = new Map<string, string>();
+  const agentMessageTails = new Map<string, string>();
   let previousUsage: TokenUsageBreakdown | undefined;
   let completedAgentMessage = false;
 
@@ -153,16 +194,25 @@ export function createCodexTranslator(
     }
 
     if (event.method === "item/agentMessage/delta") {
-      return { activity: "Writing response…" };
+      const itemId = event.params.itemId;
+      const tail = appendTail(
+        agentMessageTails.get(itemId) ?? "",
+        event.params.delta,
+        AGENT_MESSAGE_TAIL_LIMIT,
+      );
+      agentMessageTails.set(itemId, tail);
+      return { activity: messagePreview(tail) ?? "Writing response…" };
     }
 
     if (event.method === "item/commandExecution/outputDelta") {
       const itemId = event.params.itemId;
-      const tail = ((outputTails.get(itemId) ?? "") + event.params.delta).slice(
-        -OUTPUT_TAIL_LIMIT,
+      const tail = appendTail(
+        outputTails.get(itemId) ?? "",
+        event.params.delta,
+        OUTPUT_TAIL_LIMIT,
       );
       outputTails.set(itemId, tail);
-      const line = lastOutputLine(tail);
+      const line = lastNonBlankLine(tail);
       return line
         ? { activity: commandProgress(commands.get(itemId), line) }
         : undefined;
@@ -181,6 +231,7 @@ export function createCodexTranslator(
     if (event.method === "item/completed") {
       const item = event.params.item;
       if (item.type === "agentMessage") {
+        agentMessageTails.delete(item.id);
         completedAgentMessage = true;
         const text = item.text;
         const phase = item.phase;

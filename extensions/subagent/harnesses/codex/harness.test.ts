@@ -94,6 +94,22 @@ function itemCompleted(item: Record<string, unknown>): CodexAppServerEvent {
     completedAtMs: 1,
   });
 }
+
+function agentMessageDelta(
+  translate: ReturnType<typeof createCodexTranslator>,
+  itemId: string,
+  delta: string,
+) {
+  return translate(
+    event("item/agentMessage/delta", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      itemId,
+      delta,
+    }),
+  );
+}
+
 function agent(
   text: string,
   phase: string | undefined = "final_answer",
@@ -516,7 +532,7 @@ test("Codex translator reports normalized live activity", () => {
         delta: "answer",
       }),
     ),
-    { activity: "Writing response…" },
+    { activity: "answer" },
   );
   assert.deepEqual(
     translate(
@@ -548,6 +564,122 @@ test("Codex translator reports normalized live activity", () => {
     )?.activity?.length,
     120,
   );
+});
+
+test("Codex previews streaming agent messages without making them durable", () => {
+  const translate = createCodexTranslator("/work");
+  const delta = (itemId: string, text: string) =>
+    agentMessageDelta(translate, itemId, text);
+
+  assert.deepEqual(delta("message-1", "First"), { activity: "First" });
+  assert.deepEqual(delta("message-1", " sentence. "), {
+    activity: "First sentence.",
+  });
+  assert.deepEqual(delta("message-1", "Second"), { activity: "Second" });
+  assert.deepEqual(delta("message-1", " sentence."), {
+    activity: "Second sentence.",
+  });
+  assert.deepEqual(delta("message-1", "\n\n"), {
+    activity: "Second sentence.",
+  });
+  assert.deepEqual(delta("message-2", "Version v1.2 is ready"), {
+    activity: "Version v1.2 is ready",
+  });
+  assert.deepEqual(delta("message-3", "## **Summary**"), {
+    activity: "Summary",
+  });
+  assert.deepEqual(delta("message-4", "- _ran_ agent_start"), {
+    activity: "ran agent_start",
+  });
+  assert.deepEqual(delta("message-4", " and __checked__ PI_SUBAGENT_DEPTH"), {
+    activity: "ran agent_start and __checked__ PI_SUBAGENT_DEPTH",
+  });
+  assert.deepEqual(delta("message-4", " via agent__start"), {
+    activity:
+      "ran agent_start and __checked__ PI_SUBAGENT_DEPTH via agent__start",
+  });
+  assert.deepEqual(delta("message-5", "```"), {
+    activity: "Writing response…",
+  });
+
+  const preview = delta("message-6", "still ephemeral");
+  assert.deepEqual(preview, { activity: "still ephemeral" });
+});
+
+test("Codex strips only paired unambiguous markdown from prose previews", () => {
+  const translate = createCodexTranslator("/work");
+  const preview = agentMessageDelta(
+    translate,
+    "markdown-and-code",
+    "**bold** _italic_ ~~strike~~ `code` _private __dirname __init__ __checked__ value_ ~/.config *.ts *ptr",
+  );
+
+  assert.deepEqual(preview, {
+    activity:
+      "bold italic strike code _private __dirname __init__ __checked__ value_ ~/.config *.ts *ptr",
+  });
+});
+
+test("Codex previews the advancing tail of a long current sentence", () => {
+  const translate = createCodexTranslator("/work");
+  const delta = (text: string) =>
+    agentMessageDelta(translate, "long-message", text);
+
+  const opening = `Working through ${"the implementation details ".repeat(6)}`;
+  const first = delta(opening)?.activity;
+  const second = delta("and now the final verification is running")?.activity;
+
+  assert.equal(first?.length, 120);
+  assert.match(first ?? "", /implementation details$/);
+  assert.equal(second?.length, 120);
+  assert.match(second ?? "", /final verification is running$/);
+  assert.notEqual(second, first);
+});
+
+test("Codex isolates interleaved message previews and preserves fallback activity", () => {
+  const translate = createCodexTranslator("/work");
+  const delta = (itemId: string, text: string) =>
+    agentMessageDelta(translate, itemId, text);
+
+  assert.deepEqual(delta("one", "First item is "), {
+    activity: "First item is",
+  });
+  assert.deepEqual(delta("two", "Second item is complete."), {
+    activity: "Second item is complete.",
+  });
+  assert.deepEqual(delta("one", "still writing."), {
+    activity: "First item is still writing.",
+  });
+  assert.deepEqual(delta("two", "\n\n"), {
+    activity: "Second item is complete.",
+  });
+  assert.deepEqual(delta("three", "   \n\t"), {
+    activity: "Writing response…",
+  });
+  assert.deepEqual(delta("four", "~~~typescript"), {
+    activity: "Writing response…",
+  });
+});
+
+test("Codex bounds and clears streaming message previews independently", () => {
+  const translate = createCodexTranslator("/work");
+  const delta = (itemId: string, text: string) =>
+    agentMessageDelta(translate, itemId, text);
+  const fullText = `Answer: ${"x".repeat(3_000)}`;
+
+  assert.equal(delta("message-1", fullText)?.activity?.length, 120);
+  assert.deepEqual(
+    translate(
+      itemCompleted({
+        type: "agentMessage",
+        id: "message-1",
+        text: fullText,
+        phase: "final_answer",
+      }),
+    )?.facts?.[0]?.parts,
+    [{ type: "text", text: fullText }],
+  );
+  assert.deepEqual(delta("message-1", "fresh"), { activity: "fresh" });
 });
 
 test("Codex command output deltas surface the latest meaningful line", () => {
