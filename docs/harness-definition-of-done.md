@@ -76,8 +76,8 @@ codex-owned modules (the harness and transport).
    *Review:* the fake implements only the public `Harness` contract; profile
    loading also asks a fake-owned validator to reject an unknown field.
 
-6. [x] **The Codex harness costs one adapter, one registration, its own
-   tests — and no dispatcher/lifecycle changes.**
+6. [x] **The Codex adapter owns two modules, one registration, its own tests —
+   and no dispatcher/lifecycle changes.**
    *Test:* `codex-harness.test.ts` runs the real Codex adapter through the
    shared **Harness Conformance** battery (all nine scenarios; Claude alone
    visibly skips snapshot healing). Codex has no transcript snapshot, so its
@@ -85,8 +85,8 @@ codex-owned modules (the harness and transport).
    messages remain streamed facts and that the final completed agent message
    determines final output, without inventing a transcript replacement. JSON-RPC
    fixtures and protocol validation cover the adapter's remaining behavior. The
-   one-adapter cost is therefore the adapter, its registration, and its battery
-   tests.
+   adapter cost is therefore its harness and transport modules, one harness
+   registration, and its battery tests.
 
 7. [x] **Pi wire `Message` objects never leave the pi harness.**
    Translation to facts happens inside the pi executor module, at the edge.
@@ -105,7 +105,7 @@ codex-owned modules (the harness and transport).
 9. [x] **`AbortSignal` is the only cancellation mechanism core exposes.**
    Core says *why* (cancel reason recorded in the registry, before abort
    fires); the harness owns *how* (SIGTERM/SIGKILL for pi, SDK abort for
-   Claude). Cancellation is normalized to the `cancelled` ending at the seam: backend
+   Claude, and `turn/interrupt` with kill escalation for Codex). Cancellation is normalized to the `cancelled` ending at the seam: backend
    stop words never persist in `SingleResult.stopReason` or presentation, while
    lifecycle `cancelled` and its reason remain authoritative (see Cancel in
    `CONTEXT.md`).
@@ -149,20 +149,20 @@ comments and ordinary string literals are not.
   newest reported context size rather than adding it. A harness that only
   knows totals reports one usage-bearing fact, and never reports the same
   run's usage both per-message and cumulatively. *Test:* the shared **Harness
-  Conformance** battery's `usage-totals` scenario runs both real adapters
+  Conformance** battery's `usage-totals` scenario runs every real harness
   through the dispatcher and fold, asserting additive deltas; the Pi and fake
   rigs also prove latest-context replacement, while the Claude rig proves no
   double count between per-message usage and the terminal result.
 - [x] **One-shot binds every harness** — one prompt in, one terminal answer
   out (ADR-0003 is a property of Run). *Test:* `one-shot.test.ts` has
   compile-time exact `keyof` assertions for `Harness`, `HarnessRun`, and
-  `SubagentTask`, plus runtime checks covering both adapters and the absence
+  `SubagentTask`, plus runtime checks covering every adapter and the absence
   of send, steer, and persistent-session surfaces.
 - [x] **Depth binds every harness** — Claude children have their
   agent-spawning tools disallowed, and every executor copies
   `task.childDepth` into its child's environment so a Bash-launched
   grandchild pi cannot restart at depth zero. *Test:* the shared **Harness
-  Conformance** battery's `child-depth` scenario runs both real adapters and
+  Conformance** battery's `child-depth` scenario runs every real harness and
   observes the child depth; adapter policy tests assert Claude disallows
   `Agent` and `Task`, while the adapter rigs assert `PI_SUBAGENT_DEPTH` and
   preserved `process.env` inheritance. The dispatcher depth guard remains
@@ -171,8 +171,8 @@ comments and ordinary string literals are not.
   `projectTrusted`; the Claude and Codex harnesses bypass unconditionally in
   this version (deliberate parity, ADR-0009), with the forwarded value
   reserved for a future shared posture. *Test:* Claude adapter tests assert
-  bypass regardless of the forwarded value; Codex argv tests assert the
-  bypass flag for either value. *Review:* the sharp edge is documented, not
+  bypass regardless of the forwarded value; Codex App Server handshake tests
+  assert the fixed approval and sandbox policy. *Review:* the sharp edge is documented, not
   hidden.
 - [x] **Transcript healing is authoritative** — a terminal transcript
   replaces streamed facts and all derived error/metadata state, so a transient
