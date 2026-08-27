@@ -16,7 +16,8 @@ how this extension exists at all and are allowed everywhere. A reviewer
 checking items 1–3 is looking for wire/message types, not host-API imports.
 
 "Claude" means everything from `@anthropic-ai/claude-agent-sdk`. "Codex" means
-Codex CLI JSONL events and invocation policy, all confined to its adapter.
+Codex App Server JSON-RPC events and invocation policy, all confined to
+codex-owned modules (the harness and transport).
 
 ## The ten criteria
 
@@ -80,11 +81,12 @@ Codex CLI JSONL events and invocation policy, all confined to its adapter.
    *Test:* `codex-harness.test.ts` runs the real Codex adapter through the
    shared **Harness Conformance** battery (all nine scenarios; Claude alone
    visibly skips snapshot healing). Codex has no transcript snapshot, so its
-   `terminal-transcript-healing` case asserts that multiple terminal JSONL
-   items remain streamed facts and that the final item determines final output,
-   without inventing a transcript replacement. Wire fixtures and argv
-   validation cover the adapter's remaining protocol. The one-adapter cost is
-   therefore the adapter, its registration, and its battery tests.
+   `terminal-transcript-healing` case asserts that multiple completed agent
+   messages remain streamed facts and that the final completed agent message
+   determines final output, without inventing a transcript replacement. JSON-RPC
+   fixtures and protocol validation cover the adapter's remaining behavior. The
+   one-adapter cost is therefore the adapter, its registration, and its battery
+   tests.
 
 7. [x] **Pi wire `Message` objects never leave the pi harness.**
    Translation to facts happens inside the pi executor module, at the edge.
@@ -132,7 +134,9 @@ message exports, the pi harness modules, and the Claude SDK) are absent. It
 also checks adapter ownership directly: Pi wire is confined to the Pi
 harness, Claude SDK wire to the Claude adapter, and other adapters own
 neither; the neutral process source remains in the core graph and owns no
-backend wire. The composition module is the sole registration edge;
+backend wire. Codex's App Server event stream has no transcript snapshot: its
+final completed agent message remains an authoritative streamed fact without a
+fabricated replacement. The composition module is the sole registration edge;
 it is allowed to name the adapters. Tool registration and every other core edge
 fail loudly in CI instead of silently in review. Static module forms are edges too;
 comments and ordinary string literals are not.
@@ -180,8 +184,9 @@ comments and ordinary string literals are not.
   provider error still wins over a generic process-exit diagnostic. *Test:*
   the Pi and fake harness `terminal-transcript-healing` conformance scenarios
   cover clean replacement. Codex has no transcript snapshot, so its same named
-  scenario covers terminal-item authority and explicitly retains streamed facts
-  rather than pretending a snapshot exists; Claude is the only visible skip.
+  scenario covers the final completed agent message's authority and explicitly
+  retains streamed facts rather than pretending a snapshot exists; Claude is
+  the only visible skip.
   Adapter and dispatcher fold tests cover the error paths, authoritative-baseline
   replacement, stale-model removal, and baseline preservation.
 - [x] **Empty terminal accounting reaches presentation** — a successful Claude

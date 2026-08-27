@@ -111,19 +111,27 @@ export function findForbiddenImports(graphRoot: string = root): string[] {
     .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"));
   // Adapter modules are identified by the production naming convention, not
   // a frozen inventory. pi-agent.ts predates the -harness.ts convention and
-  // remains the explicit Pi adapter exception. The neutral process source is
-  // core and is therefore still walked for forbidden imports. A new
-  // codex-harness.ts is excluded from core automatically rather than silently
-  // becoming part of the core graph.
+  // remains the explicit Pi adapter exception. The Codex App Server transport
+  // is also adapter-owned, despite being a transport module rather than a
+  // harness. The neutral process source remains core and is still walked for
+  // forbidden imports.
+  const isHarnessAdapter = (file: string): boolean => {
+    const name = path.basename(file);
+    return name.endsWith("-harness.ts") || name === "pi-agent.ts";
+  };
+  const isAdapter = (file: string): boolean =>
+    isHarnessAdapter(file) || file === "codex-app-server.ts";
   const adapterPaths = new Set(
-    sourceFiles
-      .filter((file) => file.endsWith("-harness.ts") || file === "pi-agent.ts")
-      .map((file) => path.join(graphRoot, file)),
+    sourceFiles.filter(isAdapter).map((file) => path.join(graphRoot, file)),
   );
-  const adapterOwnership = (file: string): "claude" | "pi" | "other" => {
+  const adapterOwnership = (
+    file: string,
+  ): "claude" | "pi" | "codex" | "other" => {
     const name = path.basename(file);
     if (name === "claude-harness.ts") return "claude";
     if (name === "pi-harness.ts" || name === "pi-agent.ts") return "pi";
+    if (name === "codex-harness.ts" || name === "codex-app-server.ts")
+      return "codex";
     return "other";
   };
   const compositionRoot = path.join(graphRoot, "composition.ts");
@@ -135,6 +143,7 @@ export function findForbiddenImports(graphRoot: string = root): string[] {
           .map((specifier) => resolveSourceFile(compositionRoot, specifier))
           .filter((file): file is string => file !== undefined)
           .filter((file) => adapterPaths.has(file))
+          .filter((file) => isHarnessAdapter(file))
       : [],
   );
   const coreFiles = sourceFiles
@@ -164,6 +173,18 @@ export function findForbiddenImports(graphRoot: string = root): string[] {
         const wire = importsClaude ? "Claude SDK" : "Pi wire";
         violations.push(
           `${describe(adapter, graphRoot)} imports forbidden ${wire} package ${specifier}`,
+        );
+        continue;
+      }
+
+      const target = resolveSourceFile(adapter, specifier);
+      if (
+        target &&
+        adapterPaths.has(target) &&
+        adapterOwnership(adapter) !== adapterOwnership(target)
+      ) {
+        violations.push(
+          `${describe(adapter, graphRoot)} imports forbidden foreign adapter ${describe(target, graphRoot)}`,
         );
       }
     }
@@ -343,6 +364,106 @@ test("crossed Claude and Pi adapter wire imports are rejected", (t) => {
   assert.deepEqual(findForbiddenImports(fixtureRoot), [
     "claude-harness.ts imports forbidden Pi wire package @earendil-works/pi-ai",
     "pi-harness.ts imports forbidden Claude SDK package @anthropic-ai/claude-agent-sdk",
+  ]);
+});
+
+test("core cannot import the Codex App Server transport", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-codex-transport-core-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(fixtureRoot, "runner.ts"),
+    'import "./codex-app-server.ts";\n',
+  );
+  fs.writeFileSync(
+    path.join(fixtureRoot, "codex-app-server.ts"),
+    "export {};\n",
+  );
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), [
+    "runner.ts imports forbidden harness adapter codex-app-server.ts",
+  ]);
+});
+
+test("a foreign Claude adapter cannot import the Codex transport", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-codex-transport-claude-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(fixtureRoot, "claude-harness.ts"),
+    'import "./codex-app-server.ts";\n',
+  );
+  fs.writeFileSync(
+    path.join(fixtureRoot, "codex-app-server.ts"),
+    "export {};\n",
+  );
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), [
+    "claude-harness.ts imports forbidden foreign adapter codex-app-server.ts",
+  ]);
+});
+
+test("an unclassified adapter cannot import the Codex transport", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-codex-transport-other-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(fixtureRoot, "mystery-harness.ts"),
+    'import "./codex-app-server.ts";\n',
+  );
+  fs.writeFileSync(
+    path.join(fixtureRoot, "codex-app-server.ts"),
+    "export {};\n",
+  );
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), [
+    "mystery-harness.ts imports forbidden foreign adapter codex-app-server.ts",
+  ]);
+});
+
+test("the Codex harness may import its Codex-owned transport", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-codex-transport-owned-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(fixtureRoot, "composition.ts"),
+    'import "./codex-harness.ts";\n',
+  );
+  fs.writeFileSync(
+    path.join(fixtureRoot, "codex-harness.ts"),
+    'import "./codex-app-server.ts";\n',
+  );
+  fs.writeFileSync(
+    path.join(fixtureRoot, "codex-app-server.ts"),
+    "export {};\n",
+  );
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), []);
+});
+
+test("composition cannot register the Codex transport directly", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(
+      os.tmpdir(),
+      "pi-subagent-boundary-codex-transport-registration-",
+    ),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(fixtureRoot, "composition.ts"),
+    'import "./codex-app-server.ts";\n',
+  );
+  fs.writeFileSync(
+    path.join(fixtureRoot, "codex-app-server.ts"),
+    "export {};\n",
+  );
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), [
+    "composition.ts imports forbidden harness adapter codex-app-server.ts",
   ]);
 });
 

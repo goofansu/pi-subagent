@@ -1,6 +1,6 @@
 # pi-subagent
 
-Delegate tasks to specialized subagents with isolated context windows in pi. Runs use a named harness: `pi`, `claude`, or `codex`. The Pi harness uses a child pi process and [pi's project-trust model](https://pi.dev/docs/latest/security#project-trust), Claude uses the Claude Agent SDK, and Codex uses the installed Codex CLI in headless JSON mode.
+Delegate tasks to specialized subagents with isolated context windows in pi. Runs use a named harness: `pi`, `claude`, or `codex`. The Pi harness uses a child pi process and [pi's project-trust model](https://pi.dev/docs/latest/security#project-trust), Claude uses the Claude Agent SDK, and Codex uses the installed Codex CLI's App Server in headless JSON-RPC mode.
 
 ## Install
 
@@ -110,18 +110,21 @@ field narrows built-in tools only. See
 
 #### Codex profiles
 
-Codex runs `codex exec --json --ephemeral --skip-git-repo-check -C <cwd> -`.
-`model` is passed unvalidated to `-m`; Codex validates it. `effort` accepts
-`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; `off` maps to
-`none` and every other value is passed through to
-`model_reasoning_effort`. Codex does not recognize `tools` or
-`appendSystemPrompt`, so those fields produce profile diagnostics. The profile
-system prompt is prepended to the stdin prompt.
+Codex starts `codex app-server` and runs one ephemeral thread with one
+logical turn over headless JSON-RPC. Semantic turn completion is authoritative;
+process exit is only a fallback or escalation path. `model` is passed through
+unvalidated and Codex validates it. `effort` accepts `off`, `minimal`, `low`,
+`medium`, `high`, `xhigh`, and `max`; `off` maps to `none` and every other value
+is passed through to the App Server's model reasoning configuration. Codex does
+not recognize `tools` or `appendSystemPrompt`, so those fields produce profile
+diagnostics. The profile system prompt is prepended to the task prompt. Each
+run has no resumable provider session: thread, turn, item, and request
+identities remain adapter-local.
 
-Codex children always run with `--dangerously-bypass-approvals-and-sandbox` —
-the same posture as Claude children, whatever the forwarded project-trust
-value says. Codex children are ephemeral and inherit the operator's
-environment; see [ADR 0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md).
+Codex App Server threads use `approvalPolicy: "never"` and
+`sandbox: "danger-full-access"` — the same unconditional bypass posture as
+Claude children, whatever the forwarded project-trust value says. Codex
+threads are ephemeral and inherit the operator's environment; see [ADR 0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md).
 
 #### Resolution matrix
 
@@ -146,15 +149,15 @@ Runs are listed in a widget above the editor, one line each:
 
 ```
 ─── subagents (3) ─────────────────────────────────────────────
- explore      pi      $0.0142  running · grep: getFinalOutput
- reviewer     claude  $0.0031  running · review the delivery module
- implementer  pi      $0.4210  completed in 1m 2s
+ explore      pi      3 turns  running · grep: getFinalOutput
+ reviewer     claude  1 turn   running · review the delivery module
+ implementer  pi      4 turns  completed in 1m 2s
 ```
 
 Each row names the harness immediately after the agent. The agent, harness,
-cost, and status fields align across rows with a two-space delimiter. Running
-activity follows its status with one space on either side of `·`; lifecycle
-state is written in its status colour without a separate icon.
+turn count, and status fields align across rows with a two-space delimiter.
+Running activity follows its status with one space on either side of `·`;
+lifecycle state is written in its status colour without a separate icon.
 
 A running line ends with what the run is doing right now — its most recent tool call, or the run's description before the first one. That tail is also what tells two runs of the same agent apart, and it is the first thing dropped when the terminal is narrow. Run ids appear in tool results and notifications, where the model that acts on them reads them, so the widget does not repeat them; name a run by its agent and task when asking for one to be cancelled.
 
@@ -169,7 +172,7 @@ The widget is a display. Pi routes keyboard input to the editor, never to a widg
 
 ### Concurrency
 
-Subagents are not capped: every delegated run starts immediately. A Pi-harness run is a child pi process; a Claude-harness run uses the Claude Agent SDK directly; a Codex-harness run uses `codex exec` as a child process. Either way, a wide fan-out costs real local resources — see [ADR 0001](docs/adr/0001-unbounded-subagent-concurrency.md) for why the cap and its queue were removed. Runs have no time limit.
+Subagents are not capped: every delegated run starts immediately. A Pi-harness run is a child pi process; a Claude-harness run uses the Claude Agent SDK directly; a Codex-harness run starts `codex app-server` as a child process. Either way, a wide fan-out costs real local resources — see [ADR 0001](docs/adr/0001-unbounded-subagent-concurrency.md) for why the cap and its queue were removed. Runs have no time limit.
 
 ### Lifecycle
 

@@ -25,6 +25,10 @@ the widget lists them. Not "job", not "task", not "call". Notification delivery
 state is a separate state machine, tracked by the delivery module keyed by run
 id — never on the run itself.
 
+**Turn** — one completed provider model turn (response), folded into a run's
+usage and counted by the widget. A turn is provider accounting, not a second
+run or a provider session that can be resumed.
+
 **Detached run** — a run that outlives the turn that started it. Every run
 started by `agent_start` is detached from the turn: `Escape` does not stop it.
 It is not detached from the session — a result belongs to the conversation
@@ -125,9 +129,10 @@ mechanical: backend failures resolve as failed, backend aborts normalize to
 cancellation, a terminal answer survives a later abort, usage deltas fold with
 latest context gauges, child depth reaches the child, and profile configuration
 stays unchanged. Snapshot-capable harnesses heal streamed drift; Codex has no
-transcript snapshot and instead proves its final terminal JSONL item remains an
-authoritative streamed fact without inventing a replacement. Claude is the
-only harness with a visible skip for this scenario.
+transcript snapshot and instead proves its final completed agent message from
+the App Server event stream remains an authoritative streamed fact without
+inventing a replacement. Claude is the only harness with a visible skip for
+this scenario.
 
 **Presentation** (`presentation.ts`) — how a run and its notification read to a
 human: status tones, verbs, phrases, tool-outcome prose, and notification text.
@@ -140,10 +145,10 @@ shutdown: refilling stable profile/session-fact references, re-aiming pushes,
 replacing the widget, one-shot feature registration, warnings, and cleanup.
 The composition root only forwards host events to it.
 
-**Activity** — the one-line summary of what a run is doing right now, derived
-from its most recent tool call by the dispatcher's fold and recorded on the
-run. Display only; the registry projects the field without reading the
-transcript.
+**Activity** — the one-line summary of what a run is doing right now. When
+reported, it is the executor's ephemeral live activity; otherwise it is
+derived from the most recent tool call by the dispatcher's fold. It is display
+only, and settled runs are quiet.
 
 ## Constraints
 
