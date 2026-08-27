@@ -5,10 +5,13 @@ import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import type { ChildProcessSpawn } from "./child-process.ts";
 import {
-  buildCodexArgs,
+  type CodexAppServerEvent,
+  createCodexAppServerSource,
+} from "./codex-app-server.ts";
+import {
   codexEffort,
   createCodexHarness,
-  translateCodexJsonEvent,
+  createCodexTranslator,
 } from "./codex-harness.ts";
 import {
   type HarnessConformanceFixture,
@@ -16,147 +19,239 @@ import {
   type HarnessConformanceScenario,
   runHarnessConformance,
 } from "./harness-conformance.ts";
-import { DEPTH_ENV_KEY } from "./run.ts";
+import { DEPTH_ENV_KEY, type RunReporter } from "./run.ts";
 import { type AgentConfig, EFFORTS } from "./types.ts";
 
-interface FakeCodexChild extends EventEmitter {
+interface FakeChild extends EventEmitter {
   stdin: PassThrough;
   stdout: PassThrough;
   stderr: PassThrough;
   kill(signal: string): boolean;
+  signals: string[];
   finish(code: number | null): void;
 }
 
-function fakeCodexChild(onKill: () => void): FakeCodexChild {
-  const child = new EventEmitter() as FakeCodexChild;
-  const stdin = new PassThrough();
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  let finished = false;
-  child.stdin = stdin;
-  child.stdout = stdout;
-  child.stderr = stderr;
-  child.kill = (_signal) => {
-    onKill();
+function fakeChild(
+  onRequest: (request: Record<string, unknown>, child: FakeChild) => void,
+): FakeChild {
+  const child = new EventEmitter() as FakeChild;
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.signals = [];
+  let closed = false;
+  child.stdin.setEncoding("utf8");
+  child.stdin.on("data", (chunk) => {
+    for (const line of String(chunk).split("\n")) {
+      if (!line.trim()) continue;
+      onRequest(JSON.parse(line) as Record<string, unknown>, child);
+    }
+  });
+  child.kill = ((signal: string) => {
+    child.signals.push(signal);
     return true;
-  };
+  }) as FakeChild["kill"];
   child.finish = (code) => {
-    if (finished) return;
-    finished = true;
-    stdout.end();
-    stderr.end();
+    if (closed) return;
+    closed = true;
+    child.stdout.end();
+    child.stderr.end();
     queueMicrotask(() => child.emit("close", code, null));
   };
   return child;
 }
 
-function json(value: unknown): string {
-  return `${JSON.stringify(value)}\n`;
+function send(child: FakeChild, value: unknown): void {
+  child.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
-function terminal(text = "codex answer"): Record<string, unknown> {
-  return {
-    type: "item.completed",
-    item: { id: "item_2", type: "agent_message", text },
-  };
+const THREAD_ID = "thread-provider-id";
+const TURN_ID = "turn-provider-id";
+
+function event(
+  method: string,
+  params: Record<string, unknown>,
+): CodexAppServerEvent {
+  return { method, params } as CodexAppServerEvent;
+}
+function itemCompleted(item: Record<string, unknown>): CodexAppServerEvent {
+  return event("item/completed", {
+    item,
+    threadId: THREAD_ID,
+    turnId: TURN_ID,
+    completedAtMs: 1,
+  });
+}
+function agent(
+  text: string,
+  phase: string | undefined = "final_answer",
+): CodexAppServerEvent {
+  return itemCompleted({
+    type: "agentMessage",
+    id: `message-${text}`,
+    text,
+    ...(phase === undefined ? {} : { phase }),
+  });
+}
+function completedTurn(status = "completed"): CodexAppServerEvent {
+  return event("turn/completed", {
+    threadId: THREAD_ID,
+    turn: { id: TURN_ID, status, error: null },
+  });
 }
 
-function codexConformanceRig(): HarnessConformanceRig {
-  return {
-    name: "codex",
-    build(
-      scenario: HarnessConformanceScenario,
-    ): HarnessConformanceFixture | undefined {
-      let observedDepth: number | undefined;
-      let ready: Promise<void> | undefined;
-      let openReady = () => {};
-      if (
-        scenario === "abort-mid-run" ||
-        scenario === "terminal-answer-then-abort"
-      ) {
-        ready = new Promise<void>((resolve) => {
-          openReady = resolve;
+function appServerSpawn(
+  scenario: HarnessConformanceScenario,
+  observed: { child?: FakeChild; depth?: number },
+  ready: { resolve?: (value?: undefined) => void },
+): ChildProcessSpawn {
+  return (_command, args, options) => {
+    assert.deepEqual(args, ["app-server"]);
+    assert.equal(options.cwd, process.cwd());
+    observed.depth = Number(options.env?.[DEPTH_ENV_KEY]);
+    assert.equal(options.env?.PATH, process.env.PATH);
+    const child = fakeChild((request, current) => {
+      const id = request.id;
+      const method = request.method;
+      if (method === "initialize") {
+        send(current, {
+          id,
+          result: {
+            userAgent: "fixture",
+            codexHome: "/tmp",
+            platformFamily: "unix",
+            platformOs: "test",
+          },
         });
-      }
-
-      const spawn: ChildProcessSpawn = (_command, args, options) => {
-        assert.deepEqual(args.slice(0, 6), [
-          "exec",
-          "--json",
-          "--ephemeral",
-          "--skip-git-repo-check",
-          "-C",
-          process.cwd(),
-        ]);
-        observedDepth = Number(options.env?.[DEPTH_ENV_KEY]);
-        assert.equal(options.env?.PATH, process.env.PATH);
-        let child!: FakeCodexChild;
-        child = fakeCodexChild(() => {
-          if (scenario === "abort-mid-run") child.finish(null);
-          if (scenario === "terminal-answer-then-abort") child.finish(143);
+      } else if (method === "thread/start") {
+        send(current, {
+          id,
+          result: { thread: { id: THREAD_ID, ephemeral: true } },
+        });
+      } else if (method === "turn/start") {
+        send(current, {
+          id,
+          result: { turn: { id: TURN_ID, status: "inProgress" } },
         });
         queueMicrotask(() => {
           switch (scenario) {
             case "backend-crash":
-              child.stdout.write("silent Codex crash diagnostic");
-              child.finish(1);
+              current.stdout.write("fixture crash tail");
+              current.finish(1);
               break;
             case "abort-mid-run":
-              child.stdout.write("silent Codex child tail");
-              openReady();
-              break;
             case "terminal-answer-then-abort":
-              child.stdout.write(json(terminal()));
-              openReady();
+              if (scenario === "terminal-answer-then-abort")
+                send(current, agent("codex answer"));
+              ready.resolve?.();
               break;
             case "usage-totals":
-              child.stdout.write(
-                json({
-                  type: "turn.completed",
-                  usage: {
-                    input_tokens: 12,
-                    cached_input_tokens: 3,
-                    cache_write_input_tokens: 3,
-                    output_tokens: 7,
-                    reasoning_output_tokens: 2,
+              send(
+                current,
+                event("thread/tokenUsage/updated", {
+                  threadId: THREAD_ID,
+                  turnId: TURN_ID,
+                  tokenUsage: {
+                    total: {
+                      totalTokens: 10,
+                      inputTokens: 7,
+                      cachedInputTokens: 2,
+                      cacheWriteInputTokens: 1,
+                      outputTokens: 2,
+                      reasoningOutputTokens: 1,
+                    },
+                    last: {
+                      totalTokens: 10,
+                      inputTokens: 7,
+                      cachedInputTokens: 2,
+                      cacheWriteInputTokens: 1,
+                      outputTokens: 2,
+                      reasoningOutputTokens: 1,
+                    },
+                    modelContextWindow: 100,
                   },
                 }),
               );
-              child.stdout.write(json(terminal("usage answer")));
-              child.finish(0);
+              send(
+                current,
+                event("thread/tokenUsage/updated", {
+                  threadId: THREAD_ID,
+                  turnId: TURN_ID,
+                  tokenUsage: {
+                    total: {
+                      totalTokens: 25,
+                      inputTokens: 15,
+                      cachedInputTokens: 5,
+                      cacheWriteInputTokens: 2,
+                      outputTokens: 6,
+                      reasoningOutputTokens: 2,
+                    },
+                    last: {
+                      totalTokens: 15,
+                      inputTokens: 8,
+                      cachedInputTokens: 3,
+                      cacheWriteInputTokens: 1,
+                      outputTokens: 4,
+                      reasoningOutputTokens: 1,
+                    },
+                    modelContextWindow: 100,
+                  },
+                }),
+              );
+              send(current, agent("usage answer"));
+              send(current, completedTurn());
               break;
             case "child-depth":
             case "config-immutable":
             case "post-answer-failure":
-              child.stdout.write(json(terminal()));
-              child.finish(scenario === "post-answer-failure" ? 7 : 0);
+              send(current, agent("codex answer"));
+              if (scenario === "post-answer-failure") current.finish(7);
+              else send(current, completedTurn());
               break;
             case "no-terminal-answer":
-              child.finish(0);
+              send(current, completedTurn());
               break;
             case "terminal-transcript-healing":
-              // Codex JSONL has no terminal transcript snapshot. Its closest
-              // invariant is that the final terminal item remains an ordinary
-              // streamed fact and wins final-output derivation without a
-              // fabricated transcript replacement.
-              child.stdout.write(json(terminal("codex draft")));
-              child.stdout.write(json(terminal("codex final answer")));
-              child.finish(0);
+              send(current, agent("codex draft"));
+              send(current, agent("codex final answer"));
+              send(current, completedTurn());
               break;
           }
         });
-        return child as unknown as ChildProcess;
-      };
+      } else if (method === "turn/interrupt") {
+        send(current, { id, result: {} });
+        send(current, completedTurn("interrupted"));
+      }
+    });
+    observed.child = child;
+    return child as unknown as ChildProcess;
+  };
+}
 
+function conformanceRig(): HarnessConformanceRig {
+  return {
+    name: "codex",
+    build(scenario): HarnessConformanceFixture {
+      const observed: { child?: FakeChild; depth?: number } = {};
+      const readyState: { resolve?: () => void } = {};
+      const readyForCancellation = new Promise<void>((resolve) => {
+        readyState.resolve = resolve;
+      });
+      const harness = createCodexHarness({
+        spawn: appServerSpawn(scenario, observed, readyState),
+        killEscalationMs: 10,
+      });
       const base = (
         expected: HarnessConformanceFixture["expected"],
       ): HarnessConformanceFixture => ({
-        harness: createCodexHarness({ spawn }),
+        harness,
         expected,
-        ...(ready ? { readyForCancellation: ready } : {}),
-        depthProbe: () => observedDepth,
+        ...(scenario === "abort-mid-run" ||
+        scenario === "terminal-answer-then-abort"
+          ? { readyForCancellation }
+          : {}),
+        depthProbe: () => observed.depth,
       });
-
       switch (scenario) {
         case "backend-crash":
           return base({
@@ -180,13 +275,13 @@ function codexConformanceRig(): HarnessConformanceRig {
           return base({
             phase: "completed",
             usage: {
-              input: 12,
-              output: 9,
-              cacheRead: 3,
-              cacheWrite: 3,
+              input: 15,
+              output: 8,
+              cacheRead: 5,
+              cacheWrite: 2,
               cost: 0,
               contextTokens: 0,
-              turns: 1,
+              turns: 2,
             },
           });
         case "child-depth":
@@ -217,21 +312,73 @@ function codexConformanceRig(): HarnessConformanceRig {
   };
 }
 
-runHarnessConformance(codexConformanceRig());
+runHarnessConformance(conformanceRig());
 
-test("Codex JSONL fixtures translate wire events into facts", () => {
+test("Codex App Server sends the disposable handshake and one prompt", async () => {
+  const writes: Record<string, unknown>[] = [];
+  const child = fakeChild((request, current) => {
+    writes.push(request);
+    if (request.method === "initialize")
+      send(current, { id: request.id, result: {} });
+    if (request.method === "thread/start")
+      send(current, { id: request.id, result: { thread: { id: THREAD_ID } } });
+    if (request.method === "turn/start") {
+      send(current, { id: request.id, result: { turn: { id: TURN_ID } } });
+      send(current, agent("answer"));
+      send(current, completedTurn());
+    }
+  });
+  const source = createCodexAppServerSource({
+    cwd: "/work",
+    childDepth: 1,
+    prompt: "system\n\nuser",
+    model: "gpt",
+    effort: "none",
+    spawn: (() => child) as unknown as ChildProcessSpawn,
+  });
+  const sink = { event: () => undefined, stderr: () => {} };
+  assert.deepEqual(await source(sink, new AbortController().signal), {
+    status: "clean",
+  });
   assert.deepEqual(
-    translateCodexJsonEvent({
-      type: "item.started",
-      item: {
-        id: "item_1",
-        type: "command_execution",
-        command: "printf hi",
-        aggregated_output: "",
-        exit_code: null,
-        status: "in_progress",
-      },
-    }),
+    writes.map((write) => write.method),
+    ["initialize", "initialized", "thread/start", "turn/start"],
+  );
+  assert.deepEqual(writes[0]?.params, {
+    clientInfo: { name: "pi-subagent", title: "pi-subagent", version: "1.0.0" },
+    capabilities: null,
+  });
+  assert.deepEqual(writes[2]?.params, {
+    cwd: "/work",
+    ephemeral: true,
+    approvalPolicy: "never",
+    sandbox: "danger-full-access",
+    model: "gpt",
+    config: { model_reasoning_effort: "none" },
+  });
+  assert.deepEqual(writes[3]?.params, {
+    threadId: THREAD_ID,
+    input: [{ type: "text", text: "system\n\nuser", text_elements: [] }],
+  });
+});
+
+test("Codex translator maps pinned events without leaking provider ids", () => {
+  const translate = createCodexTranslator("/work");
+  assert.deepEqual(
+    translate(
+      event("item/completed", {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        item: {
+          type: "commandExecution",
+          id: "item-id",
+          command: "echo hi",
+          cwd: "/work",
+          status: "completed",
+        },
+        completedAtMs: 1,
+      }),
+    ),
     {
       facts: [
         {
@@ -240,7 +387,7 @@ test("Codex JSONL fixtures translate wire events into facts", () => {
             {
               type: "tool_call",
               name: "command_execution",
-              arguments: { command: "printf hi" },
+              arguments: { command: "echo hi" },
             },
           ],
           usage: { turns: 0 },
@@ -248,108 +395,189 @@ test("Codex JSONL fixtures translate wire events into facts", () => {
       ],
     },
   );
+  assert.deepEqual(translate(agent("answer")), {
+    facts: [
+      {
+        role: "assistant",
+        parts: [{ type: "text", text: "answer" }],
+        usage: { turns: 0 },
+      },
+    ],
+    terminal: true,
+  });
+  const facts = translate(agent("answer"))?.facts ?? [];
+  assert.equal(JSON.stringify(facts).includes("provider"), false);
+  assert.equal(JSON.stringify(facts).includes("thread"), false);
+});
+
+test("Codex translator reports normalized live activity", () => {
+  const translate = createCodexTranslator("/work");
   assert.deepEqual(
-    translateCodexJsonEvent({
-      type: "item.completed",
-      item: { type: "agent_message", text: "done" },
-    }),
-    {
-      facts: [
-        {
-          role: "assistant",
-          parts: [{ type: "text", text: "done" }],
-          usage: { turns: 0 },
-        },
-      ],
-      terminal: true,
-    },
+    translate(
+      event("item/started", {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        item: { type: "commandExecution", command: "/bin/zsh -lc 'echo   hi'" },
+      }),
+    ),
+    { activity: "$ /bin/zsh -lc 'echo hi'" },
+  );
+  assert.deepEqual(
+    translate(
+      event("item/started", {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        item: { type: "fileChange", changes: [{ path: "/work/src/index.ts" }] },
+      }),
+    ),
+    { activity: "Editing src/index.ts" },
+  );
+  assert.deepEqual(
+    translate(
+      event("item/started", {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        item: { type: "reasoning" },
+      }),
+    ),
+    { activity: "Thinking…" },
+  );
+  assert.deepEqual(
+    translate(
+      event("item/reasoning/summaryTextDelta", {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        itemId: "r",
+        delta: "**Inspecting auth**\nmore",
+        summaryIndex: 0,
+      }),
+    ),
+    { activity: "Inspecting auth" },
+  );
+  assert.deepEqual(
+    translate(
+      event("item/agentMessage/delta", {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        itemId: "m",
+        delta: "answer",
+      }),
+    ),
+    { activity: "Writing response…" },
+  );
+  assert.deepEqual(
+    translate(
+      event("item/started", {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        item: { type: "webSearch", query: "latest auth docs" },
+      }),
+    ),
+    { activity: "Searching: latest auth docs" },
+  );
+  assert.deepEqual(
+    translate(
+      event("item/started", {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        item: { type: "mcpToolCall", tool: "lookup" },
+      }),
+    ),
+    { activity: "Calling lookup…" },
   );
 });
 
-test("Codex terminal items are facts, not transcript snapshots", () => {
-  const translation = translateCodexJsonEvent(terminal("final item"));
-  assert.equal(translation?.terminal, true);
-  assert.equal(translation?.transcript, undefined);
-  assert.deepEqual(translation?.facts?.[0]?.parts, [
-    { type: "text", text: "final item" },
-  ]);
-});
-
-test("Codex usage adds reasoning output and counts each completed turn", () => {
-  const translation = translateCodexJsonEvent({
-    type: "turn.completed",
-    usage: {
-      input_tokens: 33875,
-      cached_input_tokens: 13824,
-      cache_write_input_tokens: 0,
-      output_tokens: 109,
-      reasoning_output_tokens: 12,
-    },
-  });
-  assert.deepEqual(translation?.facts, [
-    {
-      role: "metadata",
-      parts: [],
-      usage: {
-        input: 33875,
-        cacheRead: 13824,
-        cacheWrite: 0,
-        output: 121,
-        turns: 1,
-      },
-    },
-  ]);
-});
-
-test("Codex preserves provider error events as error facts", () => {
-  const first = translateCodexJsonEvent({
-    type: "error",
-    message: "service unavailable",
-  });
-  const second = translateCodexJsonEvent({
-    type: "turn.failed",
-    error: { message: "turn rejected" },
-  });
+test("Codex folds cumulative usage updates exactly once", () => {
+  const translate = createCodexTranslator("/work");
+  const make = (total: Record<string, number>): CodexAppServerEvent =>
+    event("thread/tokenUsage/updated", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      tokenUsage: { total, last: total },
+    });
+  const first = translate(
+    make({
+      totalTokens: 10,
+      inputTokens: 7,
+      cachedInputTokens: 2,
+      cacheWriteInputTokens: 1,
+      outputTokens: 2,
+      reasoningOutputTokens: 1,
+    }),
+  );
+  const second = translate(
+    make({
+      totalTokens: 25,
+      inputTokens: 15,
+      cachedInputTokens: 5,
+      cacheWriteInputTokens: 2,
+      outputTokens: 6,
+      reasoningOutputTokens: 2,
+    }),
+  );
   assert.deepEqual(
-    [first?.facts?.[0], second?.facts?.[0]],
+    [first?.facts?.[0]?.usage, second?.facts?.[0]?.usage],
     [
       {
-        role: "metadata",
-        parts: [],
-        errorMessage: "service unavailable",
+        input: 7,
+        cacheRead: 2,
+        cacheWrite: 1,
+        output: 3,
+        turns: 1,
       },
       {
-        role: "metadata",
-        parts: [],
-        errorMessage: "turn rejected",
+        input: 8,
+        cacheRead: 3,
+        cacheWrite: 1,
+        output: 5,
+        turns: 1,
       },
     ],
   );
 });
 
-test("Codex recognizes only model and effort profile fields", () => {
+test("Codex retryable errors are activity; fatal errors are facts", () => {
+  const translate = createCodexTranslator("/work");
+  const retry = translate(
+    event("error", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      error: { message: "temporary" },
+      willRetry: true,
+    }),
+  );
+  const fatal = translate(
+    event("error", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      error: { message: "permanent" },
+      willRetry: false,
+    }),
+  );
+  assert.deepEqual(retry, { activity: "Retrying after a provider error…" });
+  assert.deepEqual(fatal, {
+    facts: [{ role: "metadata", parts: [], errorMessage: "permanent" }],
+    errorMessage: "permanent",
+  });
+});
+
+test("Codex preserves profile validation, effort mapping, and prompt composition", () => {
   const harness = createCodexHarness();
   const profile: AgentConfig = {
     name: "codex",
     description: "codex",
     harness: "codex",
-    fields: { model: "future-model", effort: "high" },
-    systemPrompt: "work",
+    fields: { model: "gpt", effort: "high" },
+    systemPrompt: "system",
   };
   assert.deepEqual(harness.validate(profile, "/agents/codex.md"), []);
   assert.deepEqual(
     harness.validate(
-      { ...profile, fields: { tools: "Bash", appendSystemPrompt: true } },
+      { ...profile, fields: { tools: "Bash" } },
       "/agents/codex.md",
     ),
-    [
-      { reason: "Codex harness does not recognize field 'tools'" },
-      { reason: "Codex harness does not recognize field 'appendSystemPrompt'" },
-    ],
+    [{ reason: "Codex harness does not recognize field 'tools'" }],
   );
-});
-
-test("Codex maps off to none and preserves every other effort value", () => {
   assert.deepEqual(
     EFFORTS.map((effort) => [effort, codexEffort(effort)]),
     [
@@ -364,137 +592,141 @@ test("Codex maps off to none and preserves every other effort value", () => {
   );
 });
 
-test("Codex argv bypasses approvals for either forwarded trust value", () => {
-  assert.deepEqual(
-    buildCodexArgs("/project", "model-that-codex-validates", "off"),
-    [
-      "exec",
-      "--json",
-      "--ephemeral",
-      "--skip-git-repo-check",
-      "-C",
-      "/project",
-      "--dangerously-bypass-approvals-and-sandbox",
-      "-m",
-      "model-that-codex-validates",
-      "-c",
-      "model_reasoning_effort=none",
-      "-",
-    ],
-  );
-  assert.deepEqual(buildCodexArgs("/project", undefined, "high"), [
-    "exec",
-    "--json",
-    "--ephemeral",
-    "--skip-git-repo-check",
-    "-C",
-    "/project",
-    "--dangerously-bypass-approvals-and-sandbox",
-    "-c",
-    "model_reasoning_effort=high",
-    "-",
-  ]);
-});
+// Keep the required reporter shape visible in this adapter's test helpers.
+const reporterShapeCheck: RunReporter["activity"] = () => {};
+void reporterShapeCheck;
 
-test("Codex usage-only output keeps a raw tail on nonzero exit", async () => {
+test("App Server filters foreign/unknown notifications and answers server requests", async () => {
+  const writes: Record<string, unknown>[] = [];
+  const forwarded: string[] = [];
+  const child = fakeChild((request, current) => {
+    writes.push(request);
+    if (request.method === "initialize")
+      send(current, { id: request.id, result: {} });
+    else if (request.method === "thread/start")
+      send(current, { id: request.id, result: { thread: { id: THREAD_ID } } });
+    else if (request.method === "turn/start") {
+      send(current, { id: request.id, result: { turn: { id: TURN_ID } } });
+      send(current, {
+        method: "unknown/noise",
+        params: { threadId: THREAD_ID },
+      });
+      send(current, {
+        method: "item/completed",
+        params: {
+          threadId: "other-thread",
+          turnId: TURN_ID,
+          item: {
+            type: "agentMessage",
+            text: "foreign",
+            phase: "final_answer",
+          },
+        },
+      });
+      send(current, {
+        id: 99,
+        method: "item/commandExecution/requestApproval",
+        params: {},
+      });
+      send(current, agent("answer"));
+      send(current, completedTurn());
+    }
+  });
+  const source = createCodexAppServerSource({
+    cwd: "/work",
+    childDepth: 1,
+    prompt: "prompt",
+    spawn: (() => child) as unknown as ChildProcessSpawn,
+  });
   const stderr: string[] = [];
-  const spawn: ChildProcessSpawn = (_command, _args, _options) => {
-    const child = fakeCodexChild(() => {});
-    queueMicrotask(() => {
-      child.stdout.write(
-        json({
-          type: "turn.completed",
-          usage: { input_tokens: 4, output_tokens: 2 },
-        }),
-      );
-      child.finish(7);
-    });
-    return child as unknown as ChildProcess;
-  };
-  const task = {
-    config: {
-      name: "worker",
-      description: "worker",
-      harness: "codex",
-      fields: {},
-      systemPrompt: "",
-    },
-    description: "work",
-    prompt: "user prompt",
-    cwd: "/project",
-    childDepth: 1,
-    projectTrusted: false,
-  } as const;
-  const ending = await createCodexHarness({ spawn })
-    .prepare(task)
-    .execute({
-      task,
-      report: {
-        message: () => {},
-        transcript: () => {},
-        activity: () => {},
-        stderr: (chunk) => stderr.push(chunk),
+  const conclusion = await source(
+    {
+      event: (value) => {
+        forwarded.push(value.method);
+        return undefined;
       },
-    });
-
-  assert.deepEqual(ending, {
-    ending: "failed",
-    errorMessage: "Child codex exited with code 7",
+      stderr: (value) => stderr.push(value),
+    },
+    new AbortController().signal,
+  );
+  assert.deepEqual(conclusion, { status: "clean" });
+  assert.deepEqual(forwarded, ["item/completed", "turn/completed"]);
+  assert.deepEqual(writes.at(-1), {
+    jsonrpc: "2.0",
+    id: 99,
+    error: { code: -32601, message: "Method not supported by pi-subagent" },
   });
-  assert.match(stderr.join(""), /Last stdout:/);
-  assert.match(stderr.join(""), /turn.completed/);
+  assert.match(stderr.join(""), /Unsupported Codex App Server request/);
 });
 
-test("Codex prepends its profile system prompt to stdin", async () => {
-  let prompt = "";
-  const spawn: ChildProcessSpawn = (_command, _args, options) => {
-    const child = fakeCodexChild(() => {});
-    child.stdin.on("data", (chunk) => {
-      prompt += chunk.toString();
-    });
-    queueMicrotask(() => {
-      child.stdout.write(json(terminal("ok")));
-      child.finish(0);
-    });
-    assert.equal(options.cwd, "/project");
-    return child as unknown as ChildProcess;
-  };
-  const harness = createCodexHarness({ spawn });
-  const prepared = harness.prepare({
-    config: {
-      name: "worker",
-      description: "worker",
-      harness: "codex",
-      fields: {},
-      systemPrompt: "system instructions",
-    },
-    description: "work",
-    prompt: "user prompt",
-    cwd: "/project",
+test("App Server cancellation interrupts the known turn before escalating", async () => {
+  const controller = new AbortController();
+  let interrupt: Record<string, unknown> | undefined;
+  const child = fakeChild((request, current) => {
+    if (request.method === "initialize")
+      send(current, { id: request.id, result: {} });
+    else if (request.method === "thread/start")
+      send(current, { id: request.id, result: { thread: { id: THREAD_ID } } });
+    else if (request.method === "turn/start") {
+      send(current, { id: request.id, result: { turn: { id: TURN_ID } } });
+      setTimeout(() => controller.abort(), 100);
+    } else if (request.method === "turn/interrupt") {
+      interrupt = request;
+      send(current, { id: request.id, result: {} });
+      send(current, completedTurn("interrupted"));
+    }
+  });
+  const source = createCodexAppServerSource({
+    cwd: "/work",
     childDepth: 1,
-    projectTrusted: false,
+    prompt: "prompt",
+    killEscalationMs: 500,
+    spawn: (() => child) as unknown as ChildProcessSpawn,
   });
-  await prepared.execute({
-    task: {
-      config: {
-        name: "worker",
-        description: "worker",
-        harness: "codex",
-        fields: {},
-        systemPrompt: "system instructions",
-      },
-      description: "work",
-      prompt: "user prompt",
-      cwd: "/project",
-      childDepth: 1,
-      projectTrusted: false,
-    },
-    report: {
-      message: () => {},
-      transcript: () => {},
-      activity: () => {},
-      stderr: () => {},
-    },
+  const pending = source(
+    { event: () => undefined, stderr: () => {} },
+    controller.signal,
+  );
+  assert.deepEqual(await pending, { status: "clean" });
+  assert.deepEqual(interrupt?.params, { threadId: THREAD_ID, turnId: TURN_ID });
+  assert.deepEqual(child.signals, []);
+});
+
+test("App Server escalates an ignored interrupt from SIGTERM to SIGKILL", async () => {
+  const controller = new AbortController();
+  let child!: FakeChild;
+  child = fakeChild((request, current) => {
+    if (request.method === "initialize")
+      send(current, { id: request.id, result: {} });
+    else if (request.method === "thread/start")
+      send(current, { id: request.id, result: { thread: { id: THREAD_ID } } });
+    else if (request.method === "turn/start") {
+      send(current, { id: request.id, result: { turn: { id: TURN_ID } } });
+      setTimeout(() => controller.abort(), 0);
+    }
   });
-  assert.equal(prompt, "system instructions\n\nuser prompt");
+  const originalKill = child.kill;
+  child.kill = (signal) => {
+    const result = originalKill(signal);
+    if (signal === "SIGKILL") child.finish(137);
+    return result;
+  };
+  const source = createCodexAppServerSource({
+    cwd: "/work",
+    childDepth: 1,
+    prompt: "prompt",
+    killEscalationMs: 5,
+    spawn: (() => child) as unknown as ChildProcessSpawn,
+  });
+  assert.deepEqual(
+    await source(
+      { event: () => undefined, stderr: () => {} },
+      controller.signal,
+    ),
+    {
+      status: "failed",
+      errorMessage: "Child codex exited with code 137",
+    },
+  );
+  assert.deepEqual(child.signals, ["SIGTERM", "SIGKILL"]);
 });

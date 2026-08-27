@@ -225,6 +225,9 @@ test("a run's recorded activity is projected, and nothing else is derived", () =
   // The dispatcher's fold records activity on the run; the registry projects
   // the field without looking inside the transcript.
   result.activity = "grep: TODO";
+  result.liveActivity = "Thinking…";
+  assert.equal(runs.list()[0].activity, "Thinking…");
 
+  delete result.liveActivity;
   assert.equal(runs.list()[0].activity, "grep: TODO");
 });
