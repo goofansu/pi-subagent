@@ -1,6 +1,6 @@
 # Vendored Codex App Server protocol snapshot
 
-Generated from codex-cli 0.147.0 with:
+Generated from codex-cli 0.150.1 with:
 
 ```sh
 codex app-server generate-json-schema --out <dir>

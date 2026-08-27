@@ -226,7 +226,7 @@ test("App Server performs the exact handshake and forwards only validated run ev
 });
 
 test("App Server accepts schema-minimum notifications and normalizes optional fields", async () => {
-  // Mirrors the generated protocol schema (codex-cli 0.147.0): the envelope
+  // Mirrors the generated protocol schema (codex-cli 0.150.1): the envelope
   // is method + params only (no emittedAtMs), and optional fields may be
   // absent. Rejecting these shapes would silently drop live notifications,
   // including the authoritative turn/completed settlement.

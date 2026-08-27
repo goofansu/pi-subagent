@@ -109,7 +109,7 @@ interface ItemCompletedParams {
 /**
  * The notifications this transport consumes, shaped by the generated App
  * Server protocol schema (`codex app-server generate-json-schema`, verified
- * against codex-cli 0.147.0 and a live smoke run). The schema envelope is
+ * against codex-cli 0.150.1 and a live smoke run). The schema envelope is
  * `method` + `params` only; the live server also stamps an undeclared
  * `emittedAtMs`, which is ignored rather than required. Parsing demands only
  * schema-required fields and normalizes optional ones so a sparser server
