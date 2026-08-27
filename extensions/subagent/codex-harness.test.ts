@@ -108,7 +108,15 @@ function agent(
 function completedTurn(status = "completed"): CodexAppServerEvent {
   return event("turn/completed", {
     threadId: THREAD_ID,
-    turn: { id: TURN_ID, status, error: null },
+    turn: {
+      id: TURN_ID,
+      items: [],
+      status,
+      error: null,
+      startedAt: null,
+      completedAt: null,
+      durationMs: null,
+    },
   });
 }
 
@@ -465,6 +473,16 @@ test("Codex translator reports normalized live activity", () => {
   );
   assert.deepEqual(
     translate(
+      event("item/started", {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        item: { type: "plan" },
+      }),
+    ),
+    { activity: "Planning…" },
+  );
+  assert.deepEqual(
+    translate(
       event("item/reasoning/summaryTextDelta", {
         threadId: THREAD_ID,
         turnId: TURN_ID,
@@ -505,6 +523,16 @@ test("Codex translator reports normalized live activity", () => {
       }),
     ),
     { activity: "Calling lookup…" },
+  );
+  assert.equal(
+    translate(
+      event("item/started", {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        item: { type: "mcpToolCall", tool: "x".repeat(200) },
+      }),
+    )?.activity?.length,
+    120,
   );
 });
 

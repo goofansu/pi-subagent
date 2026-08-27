@@ -105,7 +105,8 @@ codex-owned modules (the harness and transport).
 9. [x] **`AbortSignal` is the only cancellation mechanism core exposes.**
    Core says *why* (cancel reason recorded in the registry, before abort
    fires); the harness owns *how* (SIGTERM/SIGKILL for pi, SDK abort for
-   Claude, and `turn/interrupt` with kill escalation for Codex). Cancellation is normalized to the `cancelled` ending at the seam: backend
+   Claude, and `turn/interrupt` for Codex, escalating to process signals only
+   when the server is unresponsive). Cancellation is normalized to the `cancelled` ending at the seam: backend
    stop words never persist in `SingleResult.stopReason` or presentation, while
    lifecycle `cancelled` and its reason remain authoritative (see Cancel in
    `CONTEXT.md`).

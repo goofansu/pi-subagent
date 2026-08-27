@@ -2,6 +2,9 @@ import path from "node:path";
 import type {
   CodexAppServerEvent,
   CodexAppServerOptions,
+  ThreadItem,
+  TokenUsageBreakdown,
+  Turn,
 } from "./codex-app-server.ts";
 import { createCodexAppServerSource } from "./codex-app-server.ts";
 import {
@@ -29,10 +32,6 @@ export function codexEffort(effort: string | undefined): string | undefined {
   return effort === "off" ? "none" : effort;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function collapsed(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
@@ -41,15 +40,13 @@ function capped(value: string): string {
   return collapsed(value).slice(0, ACTIVITY_LIMIT);
 }
 
-function commandFromItem(item: Record<string, unknown>): string | undefined {
-  const actions = item.commandActions;
-  if (Array.isArray(actions)) {
-    for (const action of actions) {
-      if (isRecord(action) && typeof action.command === "string")
-        return action.command;
-    }
-  }
-  return typeof item.command === "string" ? item.command : undefined;
+function commandFromItem(
+  item: Extract<ThreadItem, { type: "commandExecution" }>,
+): string {
+  return (
+    item.commandActions?.find((action) => action.command)?.command ??
+    item.command
+  );
 }
 
 function relativePath(cwd: string, value: string): string {
@@ -58,54 +55,32 @@ function relativePath(cwd: string, value: string): string {
   return collapsed(relative || path.basename(value));
 }
 
-function itemActivity(
-  item: Record<string, unknown>,
-  cwd: string,
-): string | undefined {
+function itemActivity(item: ThreadItem, cwd: string): string | undefined {
   switch (item.type) {
-    case "commandExecution": {
-      const command = commandFromItem(item);
-      return command ? capped(`$ ${command}`) : undefined;
-    }
+    case "commandExecution":
+      return capped(`$ ${commandFromItem(item)}`);
     case "fileChange": {
-      const changes = item.changes;
-      const first =
-        Array.isArray(changes) && isRecord(changes[0])
-          ? changes[0].path
-          : undefined;
-      return typeof first === "string"
-        ? capped(`Editing ${relativePath(cwd, first)}`)
-        : undefined;
+      const first = item.changes[0]?.path;
+      return first ? capped(`Editing ${relativePath(cwd, first)}`) : undefined;
     }
     case "reasoning":
       return "Thinking…";
+    case "plan":
+      return "Planning…";
     case "webSearch":
-      return typeof item.query === "string"
-        ? capped(`Searching: ${item.query}`)
-        : undefined;
+      return capped(`Searching: ${item.query}`);
     case "mcpToolCall":
-      return typeof item.tool === "string"
-        ? `Calling ${item.tool}…`
-        : undefined;
+      return capped(`Calling ${item.tool}…`);
     default:
       return undefined;
   }
 }
 
 function usageDelta(
-  current: Record<string, unknown>,
-  previous: Record<string, number> | undefined,
-): { fact: Fact; next: Record<string, number> } {
-  const number = (key: string): number =>
-    typeof current[key] === "number" ? current[key] : 0;
-  const next = {
-    totalTokens: number("totalTokens"),
-    inputTokens: number("inputTokens"),
-    cachedInputTokens: number("cachedInputTokens"),
-    cacheWriteInputTokens: number("cacheWriteInputTokens"),
-    outputTokens: number("outputTokens"),
-    reasoningOutputTokens: number("reasoningOutputTokens"),
-  };
+  current: TokenUsageBreakdown,
+  previous: TokenUsageBreakdown | undefined,
+): { fact: Fact; next: TokenUsageBreakdown } {
+  const next = { ...current };
   const diff = (key: keyof typeof next): number =>
     next[key] - (previous?.[key] ?? 0);
   return {
@@ -124,11 +99,8 @@ function usageDelta(
   };
 }
 
-function terminalTurnError(turn: unknown): string | undefined {
-  if (!isRecord(turn) || !isRecord(turn.error)) return undefined;
-  return typeof turn.error.message === "string"
-    ? turn.error.message
-    : undefined;
+function terminalTurnError(turn: Turn): string | undefined {
+  return turn.error?.message;
 }
 
 function reasoningHeadline(summary: string): string | undefined {
@@ -142,14 +114,12 @@ export function createCodexTranslator(
   cwd: string,
 ): (event: CodexAppServerEvent) => Translation | undefined {
   const reasoning = new Map<string, string>();
-  let previousUsage: Record<string, number> | undefined;
+  let previousUsage: TokenUsageBreakdown | undefined;
   let completedAgentMessage = false;
 
   return (event) => {
     if (event.method === "item/started") {
-      const item = event.params.item;
-      if (!isRecord(item)) return undefined;
-      const activity = itemActivity(item, cwd);
+      const activity = itemActivity(event.params.item, cwd);
       return activity ? { activity } : undefined;
     }
 
@@ -169,10 +139,9 @@ export function createCodexTranslator(
 
     if (event.method === "item/completed") {
       const item = event.params.item;
-      if (!isRecord(item)) return undefined;
       if (item.type === "agentMessage") {
         completedAgentMessage = true;
-        const text = typeof item.text === "string" ? item.text : "";
+        const text = item.text;
         const phase = item.phase;
         return {
           facts: [
@@ -189,41 +158,33 @@ export function createCodexTranslator(
       }
       if (item.type === "commandExecution") {
         const command = commandFromItem(item);
-        return command
-          ? {
-              facts: [
+        return {
+          facts: [
+            {
+              role: "assistant",
+              parts: [
                 {
-                  role: "assistant",
-                  parts: [
-                    {
-                      type: "tool_call",
-                      name: "command_execution",
-                      arguments: { command },
-                    },
-                  ],
-                  usage: { turns: 0 },
+                  type: "tool_call",
+                  name: "command_execution",
+                  arguments: { command },
                 },
               ],
-            }
-          : undefined;
+              usage: { turns: 0 },
+            },
+          ],
+        };
       }
       return undefined;
     }
 
     if (event.method === "thread/tokenUsage/updated") {
-      const tokenUsage = event.params.tokenUsage;
-      if (!isRecord(tokenUsage) || !isRecord(tokenUsage.total))
-        return undefined;
-      const result = usageDelta(tokenUsage.total, previousUsage);
+      const result = usageDelta(event.params.tokenUsage.total, previousUsage);
       previousUsage = result.next;
       return { facts: [result.fact] };
     }
 
     if (event.method === "error") {
-      const error = isRecord(event.params.error)
-        ? event.params.error.message
-        : undefined;
-      if (typeof error !== "string") return undefined;
+      const error = event.params.error.message;
       if (event.params.willRetry === true)
         return { activity: "Retrying after a provider error…" };
       return {
@@ -252,13 +213,6 @@ export function createCodexTranslator(
 
     return undefined;
   };
-}
-
-/** Translate a single event for callers that do not need cumulative state. */
-export function translateCodexJsonEvent(
-  event: CodexAppServerEvent,
-): Translation | undefined {
-  return createCodexTranslator(process.cwd())(event);
 }
 
 function validateCodexProfile(

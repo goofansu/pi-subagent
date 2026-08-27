@@ -3,10 +3,10 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
+import type { ChildProcessSpawn } from "./child-process.ts";
 import {
-  type ChildProcessSpawn,
-  type CodexAppServerNotification,
-  codexAppServerSource,
+  type CodexAppServerEvent,
+  createCodexAppServerSource,
 } from "./codex-app-server.ts";
 import type { OneShotSink } from "./one-shot.ts";
 import { DEPTH_ENV_KEY } from "./run.ts";
@@ -92,7 +92,7 @@ function completed(status = "completed") {
 
 function sourceWith(
   handler: (request: Record<string, unknown>, child: FakeChild) => void,
-  overrides: Partial<Parameters<typeof codexAppServerSource>[0]> = {},
+  overrides: Partial<Parameters<typeof createCodexAppServerSource>[0]> = {},
 ) {
   let child: FakeChild | undefined;
   let replacementKill: ((signal: string) => boolean) | undefined;
@@ -104,7 +104,7 @@ function sourceWith(
     if (replacementKill) child.kill = replacementKill;
     return child as unknown as ChildProcess;
   };
-  const source = codexAppServerSource({
+  const source = createCodexAppServerSource({
     cwd: "/work",
     childDepth: 2,
     prompt: "prompt",
@@ -125,9 +125,9 @@ function sourceWith(
 }
 
 function sinkFor(
-  events: CodexAppServerNotification[],
+  events: CodexAppServerEvent[],
   stderr: string[],
-): OneShotSink<CodexAppServerNotification> {
+): OneShotSink<CodexAppServerEvent> {
   return {
     event: (event) => {
       events.push(event);
@@ -139,7 +139,7 @@ function sinkFor(
 
 test("App Server performs the exact handshake and forwards only validated run events", async () => {
   const requests: Record<string, unknown>[] = [];
-  const forwarded: CodexAppServerNotification[] = [];
+  const forwarded: CodexAppServerEvent[] = [];
   const stderr: string[] = [];
   const rig = sourceWith(
     (request, child) => {
@@ -167,12 +167,12 @@ test("App Server performs the exact handshake and forwards only validated run ev
         );
         child.stdout.write(`${"x".repeat(33 * 1024 * 1024)}\n`);
         child.stdout.write(
-          `${JSON.stringify({ method: "item/started", params: { threadId: "thread-1", turnId: "turn-1", startedAtMs: 3, item: { type: "commandExecution", id: "item-1", command: "echo hi", cwd: "/work", status: "inProgress" } }, emittedAtMs: 3 })}\n`,
+          `${JSON.stringify({ method: "item/started", params: { threadId: "thread-1", turnId: "turn-1", startedAtMs: 3, item: { type: "commandExecution", id: "item-1", command: "echo hi", cwd: "/work", status: "inProgress", aggregatedOutput: null, exitCode: null, durationMs: null } }, emittedAtMs: 3 })}\n`,
         );
         child.stdout.write(`${JSON.stringify(completed())}\n`);
       }
     },
-    { model: "gpt-test", effort: "off" },
+    { model: "gpt-test", effort: "none" },
   );
 
   const conclusion = await rig.source(
@@ -223,6 +223,57 @@ test("App Server performs the exact handshake and forwards only validated run ev
   assert.equal(forwarded[1]?.method, "turn/completed");
   assert.deepEqual(stderr, []);
   rig.child?.emit("close", 0, null);
+});
+
+test("missing stdio rejects after starting child cleanup", async () => {
+  const signals: string[] = [];
+  const child = new EventEmitter() as EventEmitter & {
+    stdin?: undefined;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill(signal: string): boolean;
+  };
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = (signal) => {
+    signals.push(signal);
+    return true;
+  };
+  const source = createCodexAppServerSource({
+    cwd: "/work",
+    childDepth: 2,
+    prompt: "prompt",
+    killEscalationMs: 5,
+    spawn: () => child as unknown as ChildProcess,
+  });
+
+  await assert.rejects(
+    source(sinkFor([], []), new AbortController().signal),
+    /Failed to open Codex App Server stdio pipes/,
+  );
+  assert.deepEqual(signals, ["SIGTERM"]);
+  child.emit("close", 0, null);
+});
+
+test("abort before the turn id is known kills directly", async () => {
+  const requests: Record<string, unknown>[] = [];
+  const signals: string[] = [];
+  const rig = sourceWith((request) => requests.push(request));
+  rig.setKill((signal) => {
+    signals.push(signal);
+    return true;
+  });
+  const controller = new AbortController();
+  const pending = rig.source(sinkFor([], []), controller.signal);
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+
+  assert.deepEqual(await pending, { status: "clean" });
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(
+    requests.some((request) => request.method === "turn/interrupt"),
+    false,
+  );
 });
 
 test("responsive interruption sends turn/interrupt and accepts interrupted completion without killing", async () => {
@@ -337,7 +388,7 @@ test("exit before semantic completion preserves exit diagnostics and survives ba
 test("a silent clean exit reports that no stdout was captured", async () => {
   const stderr: string[] = [];
   let child!: FakeChild;
-  const source = codexAppServerSource({
+  const source = createCodexAppServerSource({
     cwd: "/work",
     childDepth: 2,
     prompt: "prompt",

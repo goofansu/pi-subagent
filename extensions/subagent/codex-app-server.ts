@@ -3,6 +3,7 @@ import {
   spawn as defaultSpawn,
   type SpawnOptions,
 } from "node:child_process";
+import type { ChildProcessSpawn } from "./child-process.ts";
 import type { OneShotSource } from "./one-shot.ts";
 import { DEPTH_ENV_KEY } from "./run.ts";
 
@@ -14,12 +15,6 @@ const CLIENT_INFO = {
   title: "pi-subagent",
   version: "1.0.0",
 } as const;
-
-export type ChildProcessSpawn = (
-  command: string,
-  args: readonly string[],
-  options: SpawnOptions,
-) => ChildProcess;
 
 type JsonObject = Record<string, unknown>;
 type TurnStatus = "completed" | "interrupted" | "failed" | "inProgress";
@@ -45,9 +40,10 @@ export type ThreadItem =
       command: string;
       cwd: string;
       status: "inProgress" | "completed" | "failed" | "declined";
-      aggregatedOutput?: string | null;
-      exitCode?: number | null;
-      durationMs?: number | null;
+      aggregatedOutput: string | null;
+      exitCode: number | null;
+      durationMs: number | null;
+      commandActions?: { type: string; command: string }[];
     }
   | {
       type: "fileChange";
@@ -110,7 +106,7 @@ interface ItemCompletedParams {
   completedAtMs: number;
 }
 
-export type CodexAppServerNotification =
+export type CodexAppServerEvent =
   | { method: "item/started"; params: ItemStartedParams; emittedAtMs: number }
   | {
       method: "item/completed";
@@ -240,11 +236,24 @@ function parseThreadItem(value: unknown): ThreadItem | undefined {
         (value.status === "inProgress" ||
           value.status === "completed" ||
           value.status === "failed" ||
-          value.status === "declined")
+          value.status === "declined") &&
+        (value.aggregatedOutput === null ||
+          typeof value.aggregatedOutput === "string") &&
+        (value.exitCode === null || isNumber(value.exitCode)) &&
+        (value.durationMs === null || isNumber(value.durationMs)) &&
+        (value.commandActions === undefined ||
+          (Array.isArray(value.commandActions) &&
+            value.commandActions.every(
+              (action) =>
+                isRecord(action) &&
+                typeof action.type === "string" &&
+                typeof action.command === "string",
+            )))
         ? (value as ThreadItem)
         : undefined;
     case "fileChange":
-      return Array.isArray(value.changes) &&
+      return "status" in value &&
+        Array.isArray(value.changes) &&
         value.changes.every(
           (change) =>
             isRecord(change) &&
@@ -260,7 +269,9 @@ function parseThreadItem(value: unknown): ThreadItem | undefined {
         ? (value as ThreadItem)
         : undefined;
     case "mcpToolCall":
-      return typeof value.server === "string" && typeof value.tool === "string"
+      return "status" in value &&
+        typeof value.server === "string" &&
+        typeof value.tool === "string"
         ? (value as ThreadItem)
         : undefined;
     case "webSearch":
@@ -308,25 +319,30 @@ function parseTurn(value: unknown): Turn | undefined {
   )
     return undefined;
   const error = value.error === null ? null : parseTurnError(value.error);
-  if (value.error !== null && !error) return undefined;
+  const nullableNumber = (candidate: unknown): candidate is number | null =>
+    candidate === null || isNumber(candidate);
+  if (
+    (value.error !== null && !error) ||
+    !Array.isArray(value.items) ||
+    !nullableNumber(value.startedAt) ||
+    !nullableNumber(value.completedAt) ||
+    !nullableNumber(value.durationMs)
+  )
+    return undefined;
+  const items = value.items.map(parseThreadItem);
+  if (items.some((item) => item === undefined)) return undefined;
   return {
     id: value.id,
-    items: Array.isArray(value.items)
-      ? value.items
-          .map(parseThreadItem)
-          .filter((item): item is ThreadItem => item !== undefined)
-      : [],
+    items: items as ThreadItem[],
     status: value.status,
     error: error ?? null,
-    startedAt: isNumber(value.startedAt) ? value.startedAt : null,
-    completedAt: isNumber(value.completedAt) ? value.completedAt : null,
-    durationMs: isNumber(value.durationMs) ? value.durationMs : null,
+    startedAt: value.startedAt,
+    completedAt: value.completedAt,
+    durationMs: value.durationMs,
   };
 }
 
-function parseNotification(
-  value: unknown,
-): CodexAppServerNotification | undefined {
+function parseNotification(value: unknown): CodexAppServerEvent | undefined {
   if (
     !isRecord(value) ||
     typeof value.method !== "string" ||
@@ -457,10 +473,6 @@ function redactProviderIds(value: string): string {
   );
 }
 
-function codexEffort(effort: string | undefined): string | undefined {
-  return effort === "off" ? "none" : effort;
-}
-
 function spawnOptions(cwd: string, childDepth: number): SpawnOptions {
   return {
     shell: false,
@@ -492,8 +504,8 @@ function threadStartParams(options: CodexAppServerOptions): JsonObject {
     sandbox: "danger-full-access",
   };
   if (options.model) params.model = options.model;
-  const effort = codexEffort(options.effort);
-  if (effort) params.config = { model_reasoning_effort: effort };
+  if (options.effort)
+    params.config = { model_reasoning_effort: options.effort };
   return params;
 }
 
@@ -505,9 +517,9 @@ function turnStartParams(threadId: string, prompt: string): JsonObject {
 }
 
 /** Build one disposable Codex App Server conversation over stdio. */
-export function codexAppServerSource(
+export function createCodexAppServerSource(
   options: CodexAppServerOptions,
-): OneShotSource<CodexAppServerNotification> {
+): OneShotSource<CodexAppServerEvent> {
   const {
     cwd,
     childDepth,
@@ -526,6 +538,30 @@ export function codexAppServerSource(
         return;
       }
       if (!proc.stdin || !proc.stdout || !proc.stderr) {
+        try {
+          let earlyClosed = false;
+          let escalation: ReturnType<typeof setTimeout> | undefined;
+          const onEarlyClose = (): void => {
+            earlyClosed = true;
+            if (escalation !== undefined) clearTimeout(escalation);
+          };
+          proc.once("close", onEarlyClose);
+          proc.stdin?.end();
+          proc.kill("SIGTERM");
+          if (!earlyClosed) {
+            escalation = setTimeout(() => {
+              proc.removeListener("close", onEarlyClose);
+              try {
+                proc.kill("SIGKILL");
+              } catch {
+                // The process may have exited after SIGTERM.
+              }
+            }, killEscalationMs);
+            escalation.unref?.();
+          }
+        } catch {
+          // The partially opened child may already have exited.
+        }
         reject(new Error("Failed to open Codex App Server stdio pipes"));
         return;
       }
@@ -543,9 +579,8 @@ export function codexAppServerSource(
       let droppingLine = false;
       let stdinEnded = false;
       let terminationStarted = false;
-      let terminationMode: "interrupt" | "kill" | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const pendingNotifications: CodexAppServerNotification[] = [];
+      const pendingNotifications: CodexAppServerEvent[] = [];
       const pending = new Map<
         number,
         { resolve: (value: unknown) => void; reject: (error: Error) => void }
@@ -614,7 +649,7 @@ export function codexAppServerSource(
       const beginTermination = (interrupt: boolean): void => {
         if (childClosed || terminationStarted) return;
         terminationStarted = true;
-        terminationMode =
+        const terminationMode =
           interrupt && threadId && turnId ? "interrupt" : "kill";
         if (terminationMode === "interrupt") {
           try {
@@ -723,6 +758,7 @@ export function codexAppServerSource(
           },
         });
         try {
+          sawStderr = true;
           sink.stderr(
             `Codex App Server requested unsupported method '${value.method}'\n`,
           );
@@ -730,9 +766,7 @@ export function codexAppServerSource(
           fail(error);
         }
       };
-      const forwardNotification = (
-        notification: CodexAppServerNotification,
-      ): void => {
+      const forwardNotification = (notification: CodexAppServerEvent): void => {
         if (settled) return;
         if (
           notification.method === "turn/completed" &&
@@ -746,10 +780,7 @@ export function codexAppServerSource(
           return;
         try {
           if (sink.event(notification) === true) sawTerminalAnswer = true;
-          if (
-            notification.method === "turn/completed" &&
-            !(aborted && terminationMode === "kill")
-          )
+          if (notification.method === "turn/completed")
             finish({ status: "clean" }, !aborted);
         } catch (error) {
           fail(error);
@@ -958,9 +989,3 @@ export function codexAppServerSource(
     });
   };
 }
-
-/** Harness-facing alias; provider wire types remain in Codex-owned modules. */
-export type CodexAppServerEvent = CodexAppServerNotification;
-export const createCodexAppServerSource = codexAppServerSource;
-
-export { CLIENT_INFO };
