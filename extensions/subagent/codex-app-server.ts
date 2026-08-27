@@ -631,6 +631,7 @@ export function createCodexAppServerSource(
       const resolveAfterKill = (): void => {
         if (settled) return;
         settled = true;
+        endStdin();
         finishCleanup();
         resolve({ status: "clean" });
       };
@@ -894,7 +895,7 @@ export function createCodexAppServerSource(
             if (!sawStderr && !sawTerminalAnswer) {
               const tail = redactProviderIds(rawStdoutTail.trim());
               sink.stderr(
-                tail ? `Last stdout:\n${tail}` : "No stdout was captured.\n",
+                tail ? `Last stdout:\n${tail}` : "No stdout was captured.",
               );
             }
             finish({ status: "clean" }, false);

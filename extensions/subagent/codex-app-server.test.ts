@@ -325,6 +325,7 @@ test("responsive interruption sends turn/interrupt and accepts interrupted compl
     params: { threadId: "thread-1", turnId: "turn-1" },
   });
   assert.deepEqual(signals, []);
+  assert.equal(rig.child?.stdin.writableEnded, true);
 });
 
 test("an ignored interrupt escalates from SIGTERM to SIGKILL", async () => {
@@ -354,6 +355,7 @@ test("an ignored interrupt escalates from SIGTERM to SIGKILL", async () => {
   controller.abort();
   assert.deepEqual(await pending, { status: "clean" });
   assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(rig.child?.stdin.writableEnded, true);
 });
 
 test("exit before semantic completion preserves exit diagnostics and survives bad stdout", async () => {
@@ -402,7 +404,7 @@ test("a silent clean exit reports that no stdout was captured", async () => {
     await source(sinkFor([], stderr), new AbortController().signal),
     { status: "clean" },
   );
-  assert.deepEqual(stderr, ["No stdout was captured.\n"]);
+  assert.deepEqual(stderr, ["No stdout was captured."]);
 });
 
 test("server requests receive an error response and do not stop the run", async () => {

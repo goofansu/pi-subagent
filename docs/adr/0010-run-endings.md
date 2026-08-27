@@ -7,7 +7,9 @@ Date: 2026-08-26
 Accepted. Supersedes only the executor-resolution consequence described in
 [ADR-0005](0005-executor-reports-facts.md) and carried forward in
 [ADR-0007](0007-harness-seam-with-neutral-facts.md); both ADRs' neutral-fact
-and facts-plus-resolution decisions stand.
+and facts-plus-resolution decisions stand. Codex transport details are refined
+by [ADR-0011](0011-codex-app-server-migration.md); this ADR's domain ending
+precedence remains in force.
 
 ## Context
 
@@ -57,7 +59,7 @@ resolve honestly without inventing a process result.
 
 The protocol is tested once through scripted sources and each harness supplies
 only its source and pure translator. Facts remain live; a harness with a
-terminal snapshot may use transcript healing, while Codex's JSONL has no such
-snapshot and its terminal item remains authoritative as a streamed fact
-without a fabricated replacement. The ending's failure message remains a
+terminal snapshot may use transcript healing, while Codex App Server has no
+such snapshot and its final completed agent message remains authoritative as a
+streamed fact without a fabricated replacement. The ending's failure message remains a
 fallback for facts or stderr that already explain the failure.
