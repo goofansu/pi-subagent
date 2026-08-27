@@ -463,7 +463,7 @@ test("an unpinned empty Claude result carries streamed model and accounting", as
   assert.equal(result.stopReason, "end_turn");
 });
 
-test("an empty Claude result carries accounting into the cost widget", async () => {
+test("an empty Claude result carries turns into the widget", async () => {
   const query: ClaudeQuery = () =>
     ({
       async *[Symbol.asyncIterator]() {
@@ -527,7 +527,7 @@ test("an empty Claude result carries accounting into the cost widget", async () 
     },
     120,
   );
-  assert.match(lines[1] ?? "", /\$0\.2500/);
+  assert.match(lines[1] ?? "", /2 turns/);
 });
 
 test("Claude uses the SDK error text for an error-flagged success result", () => {

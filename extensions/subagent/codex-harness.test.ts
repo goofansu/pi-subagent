@@ -432,6 +432,7 @@ test("Codex usage-only output keeps a raw tail on nonzero exit", async () => {
       report: {
         message: () => {},
         transcript: () => {},
+        activity: () => {},
         stderr: (chunk) => stderr.push(chunk),
       },
     });
@@ -491,6 +492,7 @@ test("Codex prepends its profile system prompt to stdin", async () => {
     report: {
       message: () => {},
       transcript: () => {},
+      activity: () => {},
       stderr: () => {},
     },
   });

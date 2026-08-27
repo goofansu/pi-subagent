@@ -103,6 +103,7 @@ test("runOneShot applies its ending precedence and message rules", async () => {
       if (fact.parts.length === 1) controller.abort();
     },
     transcript: (facts) => reported.push(`transcript:${facts.length}`),
+    activity: () => {},
     stderr: (chunk) => reported.push(`stderr:${chunk}`),
   };
   const answered = await runOneShot({
@@ -122,6 +123,48 @@ test("runOneShot applies its ending precedence and message rules", async () => {
   assert.deepEqual(reported, ["fact:1"]);
 });
 
+test("runOneShot forwards tri-state activity after facts and transcript, then discards it", async () => {
+  const forwarded: string[] = [];
+  let settledSink: { event: (event: string) => unknown } | undefined;
+  const result = await runOneShot({
+    source: async (sink) => {
+      settledSink = sink;
+      sink.event("set");
+      sink.event("clear");
+      sink.event("unchanged");
+      return { status: "clean" } as const;
+    },
+    translate: (event) => {
+      if (event === "set") {
+        return {
+          facts: [{ role: "assistant", parts: [] }],
+          transcript: [],
+          activity: "Reading files",
+        };
+      }
+      if (event === "clear") return { activity: null };
+      if (event === "late") return { activity: "late" };
+      return {};
+    },
+    report: {
+      message: () => forwarded.push("fact"),
+      transcript: () => forwarded.push("transcript"),
+      activity: (activity) => forwarded.push(`activity:${activity ?? "clear"}`),
+      stderr: () => {},
+    },
+    missingAnswerMessage: "missing",
+  });
+
+  settledSink?.event("late");
+  assert.deepEqual(result, { ending: "failed", errorMessage: "missing" });
+  assert.deepEqual(forwarded, [
+    "fact",
+    "transcript",
+    "activity:Reading files",
+    "activity:clear",
+  ]);
+});
+
 test("runOneShot exposes only truthful terminal acknowledgements", async () => {
   const controller = new AbortController();
   const acknowledgements: unknown[] = [];
@@ -138,7 +181,12 @@ test("runOneShot exposes only truthful terminal acknowledgements", async () => {
     },
     translate: (event) =>
       event === "ignored" ? undefined : { terminal: event === "terminal" },
-    report: { message: () => {}, transcript: () => {}, stderr: () => {} },
+    report: {
+      message: () => {},
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
     signal: controller.signal,
     missingAnswerMessage: "missing",
   });
@@ -158,6 +206,7 @@ test("runOneShot distinguishes cancellation, source errors, and missing answers"
   const makeReport = (): RunReporter => ({
     message: () => {},
     transcript: () => {},
+    activity: () => {},
     stderr: () => {},
   });
   const controller = new AbortController();
@@ -198,6 +247,7 @@ test("runOneShot rejects translator bugs but resolves source failures", async ()
   const report: RunReporter = {
     message: () => {},
     transcript: () => {},
+    activity: () => {},
     stderr: () => {},
   };
   assert.deepEqual(
@@ -233,6 +283,7 @@ test("runOneShot preserves failed conclusion messages, including an absent one",
   const report: RunReporter = {
     message: () => {},
     transcript: () => {},
+    activity: () => {},
     stderr: () => {},
   };
   assert.deepEqual(
@@ -272,7 +323,12 @@ test("runOneShot absorbs a source throw after abort as cancelled", async () => {
   const promise = runOneShot({
     source,
     translate: () => undefined,
-    report: { message: () => {}, transcript: () => {}, stderr: () => {} },
+    report: {
+      message: () => {},
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
     signal: controller.signal,
     missingAnswerMessage: "missing",
   });
@@ -303,6 +359,7 @@ test("runOneShot forwards facts, transcripts, and stderr after abort until sourc
     report: {
       message: (fact) => forwarded.push(`fact:${fact.parts[0]?.type}`),
       transcript: () => forwarded.push("transcript"),
+      activity: () => {},
       stderr: (chunk) => forwarded.push(`stderr:${chunk}`),
     },
     signal: controller.signal,
@@ -327,7 +384,12 @@ test("runOneShot does not latch a terminal answer first witnessed after abort", 
       return { status: "clean" };
     },
     translate: () => ({ terminal: true }),
-    report: { message: () => {}, transcript: () => {}, stderr: () => {} },
+    report: {
+      message: () => {},
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
     signal: controller.signal,
     missingAnswerMessage: "missing",
   });
@@ -358,6 +420,7 @@ test("runOneShot gives witnessed errors precedence and forwards facts, transcrip
     report: {
       message: () => order.push("fact"),
       transcript: () => order.push("transcript"),
+      activity: () => {},
       stderr: () => order.push("stderr"),
     },
     missingAnswerMessage: "missing",
@@ -382,6 +445,9 @@ test("runOneShot discards sink calls after source settlement", async () => {
         reports++;
       },
       transcript: () => {
+        reports++;
+      },
+      activity: () => {
         reports++;
       },
       stderr: () => {
@@ -450,6 +516,7 @@ test("streamSource drains a stream returned after abort during open", async () =
         queuedFact();
       },
       transcript: () => {},
+      activity: () => {},
       stderr: () => {},
     },
     signal: controller.signal,
@@ -511,7 +578,12 @@ test("runOneShot composes streamSource's pre-start race without starting work", 
   const preStartPromise = runOneShot({
     source,
     translate: () => ({ terminal: true }),
-    report: { message: () => {}, transcript: () => {}, stderr: () => {} },
+    report: {
+      message: () => {},
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
     signal: preStart.signal,
     missingAnswerMessage: "missing",
   });
@@ -523,7 +595,12 @@ test("runOneShot composes streamSource's pre-start race without starting work", 
   const pending = runOneShot({
     source,
     translate: () => undefined,
-    report: { message: () => {}, transcript: () => {}, stderr: () => {} },
+    report: {
+      message: () => {},
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
     signal: controller.signal,
     missingAnswerMessage: "missing",
   });

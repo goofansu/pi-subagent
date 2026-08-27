@@ -8,9 +8,9 @@
  * through the {@link RunReporter} this module defines, and resolves to a
  * {@link RunEnding}. The fold from facts to record lives here, beside
  * the record it writes, and the dispatcher is the only module that invokes
- * it. Everything derived — usage, activity, the per-message model — is
- * computed in the fold, so a terminal snapshot heals any drift the streamed
- * facts accumulated.
+ * it. Usage, fold-derived activity, and the per-message model are computed in
+ * the fold, while live activity remains a separate ephemeral report, so a
+ * terminal snapshot heals any drift the streamed facts accumulated.
  *
  * See docs/adr/0010-run-endings.md and docs/adr/0005-executor-reports-facts.md.
  */
@@ -112,6 +112,7 @@ export function settleResultLifecycle(
     );
   }
   applyEnding(result, ending);
+  delete result.liveActivity;
   result.lifecycle = terminalLifecycle(
     result,
     ending,
@@ -197,6 +198,8 @@ export interface RunReporter {
    * accumulated, this heals it.
    */
   transcript(facts: Fact[]): void;
+  /** The executor's ephemeral, human-readable live activity; undefined clears it. */
+  activity(activity: string | undefined): void;
   /** A chunk of the child's stderr. */
   stderr(chunk: string): void;
 }
@@ -279,9 +282,10 @@ function recordFact(result: SingleResult, fact: Fact): void {
 
 /**
  * The fold from reported facts to record writes, plus a change signal per
- * fact so whatever is on screen follows along. Usage, activity, and the
- * per-message model refinement are derived here rather than reported, so an
- * executor cannot get them wrong and the transcript snapshot heals them.
+ * fact so whatever is on screen follows along. Usage, fold-derived activity,
+ * and the per-message model refinement are derived here rather than reported,
+ * so an executor cannot get them wrong and the transcript snapshot heals them;
+ * live activity is intentionally a separate ephemeral report.
  */
 export function createRunReporter(
   result: SingleResult,
@@ -299,6 +303,13 @@ export function createRunReporter(
     const activity = deriveActivity(result.messages);
     if (activity) result.activity = activity;
     else delete result.activity;
+  };
+  const reportLiveActivity = (activity: string | undefined): void => {
+    const next = activity?.trim() ? activity : undefined;
+    if (result.liveActivity === next) return;
+    if (next === undefined) delete result.liveActivity;
+    else result.liveActivity = next;
+    changed();
   };
 
   return {
@@ -323,6 +334,7 @@ export function createRunReporter(
       refreshActivity();
       changed();
     },
+    activity: reportLiveActivity,
     stderr(chunk) {
       result.stderr = appendStderr(result.stderr, chunk);
       changed();

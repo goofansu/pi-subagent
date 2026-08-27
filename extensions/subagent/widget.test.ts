@@ -8,8 +8,8 @@ import { createSubagentRuns } from "./runs.ts";
 import type { RenderableTheme } from "./types.ts";
 import type { WidgetComponent, WidgetHost } from "./widget.ts";
 import {
-  formatCost,
   formatRunLine,
+  formatTurns,
   installRunsWidget,
   MAX_AGENT_COLUMN_WIDTH,
   orderRuns,
@@ -32,7 +32,7 @@ function view(overrides: Partial<RunView> = {}): RunView {
     description: "look around",
     status: "running",
     elapsedMs: 12_400,
-    cost: 0.0142,
+    turns: 3,
     ...overrides,
   };
 }
@@ -49,11 +49,11 @@ function columnOf(line: string, needle: string): number {
 
 // ── The line ─────────────────────────────────────────────────────────────────
 
-test("a run line carries agent, harness, cost and status, and nothing else fixed", () => {
+test("a run line carries agent, harness, turns and status, and nothing else fixed", () => {
   const line = stripVTControlCharacters(formatRunLine(view(), theme, 120));
 
   assert.match(line, /explore {2}pi/);
-  assert.match(line, /\$0\.0142/);
+  assert.match(line, /3 turns/);
   assert.match(line, /running/);
   // No live clock: elapsed time would need a once-a-second redraw to stay
   // honest, so a running row names no duration at all.
@@ -71,9 +71,10 @@ test("INV-10: the widget observes runtime state without determining it", () => {
   assert.match(line, /completed in 12\.4s/);
 });
 
-test("cost always reads as money, including zero", () => {
-  assert.equal(formatCost(0), "$0.0000");
-  assert.equal(formatCost(1.5), "$1.5000");
+test("turns use a quiet singular/plural format", () => {
+  assert.equal(formatTurns(0), "—");
+  assert.equal(formatTurns(1), "1 turn");
+  assert.equal(formatTurns(2), "2 turns");
 });
 
 test("a line never exceeds the width it is given", () => {
@@ -86,16 +87,17 @@ test("a line never exceeds the width it is given", () => {
   }
 });
 
-test("cost gives way before status, and status never does", () => {
+test("turns give way before status, and status never does", () => {
   const at = (width: number) =>
     stripVTControlCharacters(formatRunLine(view(), theme, width));
 
   const wide = at(45);
-  assert.match(wide, /\$0\.0142.*running/);
+  assert.match(wide, /3 turns.*running/);
 
-  const noCost = at(22);
-  assert.doesNotMatch(noCost, /\$0\.0142/);
-  assert.match(noCost, /running/);
+  const noTurns = at(22);
+  assert.doesNotMatch(noTurns, /3 turns/);
+  assert.doesNotMatch(noTurns, /npm test/);
+  assert.match(noTurns, /running/);
 
   for (const width of [45, 22, 12]) {
     assert.ok(at(width).length <= width, `width ${width} overflowed`);
@@ -108,7 +110,7 @@ test("fixed row fields use the same space delimiter", () => {
   );
 
   assert.equal(ROW_DELIMITER, "  ");
-  assert.equal(line, "explore  pi  $0.0142  running · bash: npm test");
+  assert.equal(line, "explore  pi  3 turns  running · bash: npm test");
 });
 
 test("long agent names are truncated without hiding later fields", () => {
@@ -129,7 +131,7 @@ test("each field aligns across rows", () => {
         view({
           agent: "tools",
           harness: "claude",
-          cost: 0,
+          turns: 1,
           activity: "second",
         }),
       ],
@@ -140,7 +142,7 @@ test("each field aligns across rows", () => {
 
   for (const [firstNeedle, secondNeedle] of [
     ["pi", "claude"],
-    ["$0.0142", "$0.0000"],
+    ["3 turns", "1 turn"],
     ["running", "running"],
   ]) {
     assert.equal(
@@ -404,6 +406,7 @@ test("the activity is the first thing sacrificed to width", () => {
     ),
   );
 
+  assert.match(narrow, /3 turns/);
   assert.match(narrow, /running$/);
   assert.doesNotMatch(narrow, /npm test/);
 });

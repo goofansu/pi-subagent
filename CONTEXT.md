@@ -145,10 +145,11 @@ shutdown: refilling stable profile/session-fact references, re-aiming pushes,
 replacing the widget, one-shot feature registration, warnings, and cleanup.
 The composition root only forwards host events to it.
 
-**Activity** — the one-line summary of what a run is doing right now. When
-reported, it is the executor's ephemeral live activity; otherwise it is
-derived from the most recent tool call by the dispatcher's fold. It is display
-only, and settled runs are quiet.
+**Activity** — the one-line summary of what a run is doing right now. An
+executor may report ephemeral live activity through the run seam; while it is
+present, the projection prefers it over the dispatcher's fold-derived summary
+of the most recent tool call. Display only: live activity is never transcript
+truth, usage, or final output, and settling clears it so settled runs are quiet.
 
 ## Constraints
 

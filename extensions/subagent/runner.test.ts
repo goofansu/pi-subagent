@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { createHarnessRegistry, type Harness } from "./harness.ts";
+import { getFinalOutput } from "./messages.ts";
 import { createPiHarness } from "./pi-harness.ts";
 import {
   createEmptyResult,
@@ -308,6 +309,47 @@ test("INV-3: terminal lifecycle states are final", async () => {
       700,
     );
   }
+});
+
+test("live activity is display-only, deduplicated, and cleared on settlement", async () => {
+  const runs = createSubagentRuns();
+  let notifications = 0;
+  runs.subscribe(() => {
+    notifications++;
+  });
+  const started = startSubagent({
+    config: agent(),
+    description: "task",
+    prompt: "go",
+    runs,
+    execute: async (run) => {
+      const beforeActivity = notifications;
+      run.report.activity("Reading files");
+      assert.equal(notifications, beforeActivity + 1);
+      run.report.activity("Reading files");
+      assert.equal(notifications, beforeActivity + 1);
+      run.report.activity("   ");
+      assert.equal(notifications, beforeActivity + 2);
+      run.report.activity("Reading files");
+      assert.equal(notifications, beforeActivity + 3);
+      run.report.message({
+        role: "assistant",
+        parts: [{ type: "text", text: "answer" }],
+        usage: { turns: 1 },
+      });
+      const view = runs.list()[0];
+      assert.equal(view?.activity, "Reading files");
+      assert.equal(view?.status, "running");
+      return { ending: "answered" };
+    },
+  });
+
+  const result = await started.settled;
+  assert.equal(result.liveActivity, undefined);
+  assert.equal(result.messages.length, 1);
+  assert.equal(result.usage.turns, 1);
+  assert.equal(getFinalOutput(result.messages), "answer");
+  assert.equal(runs.list()[0]?.activity, undefined);
 });
 
 test("the fold derives usage and activity from reported messages", async () => {

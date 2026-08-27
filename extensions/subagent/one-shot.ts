@@ -23,6 +23,8 @@ export type OneShotSource<E> = (
 export interface Translation {
   facts?: Fact[];
   transcript?: Fact[];
+  /** Live UI activity: absent leaves it unchanged, null clears it. */
+  activity?: string | null;
   terminal?: boolean;
   errorMessage?: string;
 }
@@ -89,6 +91,8 @@ export async function runOneShot<E>({
       for (const fact of translation.facts ?? []) report.message(fact);
       if (translation.transcript !== undefined)
         report.transcript(translation.transcript);
+      if (translation.activity !== undefined)
+        report.activity(translation.activity ?? undefined);
       return terminalTranslation;
     },
     stderr(chunk) {

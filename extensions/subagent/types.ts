@@ -65,6 +65,8 @@ export interface SingleResult {
   usage: UsageStats;
   /** Display-only activity derived from the most recent tool call. */
   activity?: string;
+  /** Executor-reported display activity; cleared when the run settles. */
+  liveActivity?: string;
   model?: string;
   stopReason?: string;
   errorMessage?: string;

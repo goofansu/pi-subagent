@@ -53,7 +53,7 @@ test("list returns tracked runs in insertion order", () => {
     description: "look around",
     status: "running",
     elapsedMs: 2_500,
-    cost: 0,
+    turns: 0,
   });
 });
 
@@ -71,14 +71,14 @@ test("a settled run stops accruing elapsed time", () => {
   assert.equal(runs.list()[0].elapsedMs, 1_000);
 });
 
-test("cost tracks what the run has spent", () => {
+test("turns are projected from folded usage", () => {
   const runs = createSubagentRuns(fakeClock(), sequentialIds());
   const result = runningResult();
   runs.track(result, () => {});
 
-  result.usage.cost = 0.0142;
+  result.usage.turns = 2;
 
-  assert.equal(runs.list()[0].cost, 0.0142);
+  assert.equal(runs.list()[0].turns, 2);
 });
 
 test("a released run leaves the registry", () => {
@@ -196,6 +196,23 @@ test("INV-1: run ids are stable and never reused within a session", () => {
   assert.equal(first.id, "dup");
   assert.equal(second.id, "fresh");
   assert.equal(runs.list().length, 1);
+});
+
+test("live activity takes precedence over folded activity and settles quiet", () => {
+  const clock = fakeClock();
+  const runs = createSubagentRuns(clock, sequentialIds());
+  const result = runningResult();
+  runs.track(result, () => {});
+  result.activity = "grep: TODO";
+  result.liveActivity = "Reading files";
+
+  assert.equal(runs.list()[0].activity, "Reading files");
+  delete result.liveActivity;
+  assert.equal(runs.list()[0].activity, "grep: TODO");
+
+  settleResultLifecycle(result, { ending: "answered" }, clock.now());
+  assert.equal(result.liveActivity, undefined);
+  assert.equal(runs.list()[0].activity, undefined);
 });
 
 test("a run's recorded activity is projected, and nothing else is derived", () => {

@@ -195,8 +195,8 @@ comments and ordinary string literals are not.
   or the harness-resolved baseline; `modelUsage` is accounting only because
   even its sole entry can be an auxiliary model. Undeclared terminal model
   metadata is tolerated for wire compatibility but is not required.
-  *Test:* the pinned widget fixture renders nonzero cost, the unpinned
-  integration retains streamed provenance and accounting, and single-entry,
+  *Test:* the pinned widget fixture retains nonzero usage accounting and turns,
+  the unpinned integration retains streamed provenance and accounting, and single-entry,
   multiple-entry, and auxiliary-only error coverage proves terminal usage
   cannot overwrite model provenance.
 - [x] **Claude model validation is aliases-only** — exactly the SDK's

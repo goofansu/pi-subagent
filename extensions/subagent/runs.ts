@@ -30,10 +30,11 @@ export interface RunView {
    * reads it only once a run settles; nothing redraws to keep it moving.
    */
   elapsedMs: number;
-  cost: number;
+  turns: number;
   /**
-   * What the run is doing right now, derived from its most recent tool call.
-   * Absent until the child's first tool call. Display only.
+   * What the run is doing right now, preferring executor-reported live
+   * activity and falling back to the most recent folded tool call.
+   * Absent until live activity or the child's first tool call. Display only.
    */
   activity?: string;
 }
@@ -157,10 +158,13 @@ export function createSubagentRuns(
       description: result.description,
       status: result.lifecycle.phase,
       elapsedMs: Math.max(0, end - result.startedAt),
-      cost: result.usage.cost,
-      // Recorded by the dispatcher's fold as messages arrive; the registry
-      // never looks inside a transcript.
-      ...(result.activity ? { activity: result.activity } : {}),
+      turns: result.usage.turns,
+      // Recorded by the dispatcher's fold or executor activity reporter; the
+      // registry never looks inside a transcript. Settled rows are quiet.
+      ...(result.lifecycle.phase === "running" &&
+      (result.liveActivity ?? result.activity)
+        ? { activity: result.liveActivity ?? result.activity }
+        : {}),
     };
   };
 

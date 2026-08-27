@@ -38,15 +38,16 @@ export const ROW_DELIMITER = "  ";
 /** Keep profile names from consuming the rest of every widget row. */
 export const MAX_AGENT_COLUMN_WIDTH = 16;
 
-export function formatCost(cost: number): string {
-  return `$${cost.toFixed(4)}`;
+export function formatTurns(turns: number): string {
+  if (turns === 0) return "—";
+  return `${turns} ${turns === 1 ? "turn" : "turns"}`;
 }
 
 /** Widths shared by every visible row so each field starts in one column. */
 interface RunColumns {
   agent: number;
   harness: number;
-  cost: number;
+  turns: number;
 }
 
 function measureColumns(runs: readonly RunView[]): RunColumns {
@@ -58,16 +59,12 @@ function measureColumns(runs: readonly RunView[]): RunColumns {
       widest(runs.map((run) => run.agent)),
     ),
     harness: widest(runs.map((run) => run.harness)),
-    cost: widest(runs.map((run) => formatCost(run.cost))),
+    turns: widest(runs.map((run) => formatTurns(run.turns))),
   };
 }
 
 function padEndToWidth(value: string, width: number): string {
   return value + " ".repeat(Math.max(0, width - visibleWidth(value)));
-}
-
-function padStartToWidth(value: string, width: number): string {
-  return " ".repeat(Math.max(0, width - visibleWidth(value))) + value;
 }
 
 /**
@@ -86,13 +83,13 @@ export function orderRuns(runs: readonly RunView[]): RunView[] {
 const MIN_ACTIVITY_WIDTH = 12;
 
 /**
- * One run as a single line: agent, harness, cost, status, and — while the run
- * is still going — what it is doing right now.
+ * One run as a single line: agent, harness, turns, status, and — while the
+ * run is still going — what it is doing right now.
  *
  * Deliberately no run id and no model. The widget is read by the operator,
  * and a human names a run by its agent and what it is doing; ids live in the
  * tool results and notifications, where the model that acts on them reads
- * them. Cost is dropped when the line will not fit.
+ * them. Turn accounting is dropped when the line will not fit.
  *
  * The activity tail is the first thing sacrificed: it takes whatever width is
  * left after the fixed components, and is skipped entirely when that is too
@@ -113,13 +110,13 @@ export function formatRunLine(
   );
   const harness = theme.fg("dim", padEndToWidth(run.harness, columns.harness));
   const status = theme.fg(tone, formatRunStatus(run));
-  const cost = theme.fg(
+  const turns = theme.fg(
     "dim",
-    padStartToWidth(formatCost(run.cost), columns.cost),
+    padEndToWidth(formatTurns(run.turns), columns.turns),
   );
 
   for (const components of [
-    [agent, harness, cost, status],
+    [agent, harness, turns, status],
     [agent, harness, status],
   ]) {
     const candidate = components.join(ROW_DELIMITER);

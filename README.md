@@ -159,12 +159,12 @@ turn count, and status fields align across rows with a two-space delimiter.
 Running activity follows its status with one space on either side of `·`;
 lifecycle state is written in its status colour without a separate icon.
 
-A running line ends with what the run is doing right now — its most recent tool call, or the run's description before the first one. That tail is also what tells two runs of the same agent apart, and it is the first thing dropped when the terminal is narrow. Run ids appear in tool results and notifications, where the model that acts on them reads them, so the widget does not repeat them; name a run by its agent and task when asking for one to be cancelled.
+A running line ends with what the run is doing right now — executor-reported live activity when available, otherwise its most recent tool call, or the run's description before the first one. That tail is also what tells two runs of the same agent apart, and it is the first thing dropped when the terminal is narrow. Run ids appear in tool results and notifications, where the model that acts on them reads them, so the widget does not repeat them; name a run by its agent and task when asking for one to be cancelled.
 
 The widget appears when the first run starts and disappears once the last notification has landed — a finished run stays listed while its completion notice is waiting to enter the conversation. A fan-out wider than eight runs is summarised rather than filling the screen.
 
 When the terminal is too narrow, components give way in order — the activity
-tail first, then cost.
+tail first, then turn accounting; agent, harness, and status remain.
 
 The widget is a display. Pi routes keyboard input to the editor, never to a widget, so runs are stopped with `agent_cancel` rather than from here.
 
