@@ -43,7 +43,7 @@ export type ThreadItem =
       aggregatedOutput: string | null;
       exitCode: number | null;
       durationMs: number | null;
-      commandActions?: { type: string; command: string }[];
+      commandActions: { type: string; command: string }[];
     }
   | {
       type: "fileChange";
@@ -106,13 +106,18 @@ interface ItemCompletedParams {
   completedAtMs: number;
 }
 
+/**
+ * The notifications this transport consumes, shaped by the generated App
+ * Server protocol schema (`codex app-server generate-json-schema`, verified
+ * against codex-cli 0.147.0 and a live smoke run). The schema envelope is
+ * `method` + `params` only; the live server also stamps an undeclared
+ * `emittedAtMs`, which is ignored rather than required. Parsing demands only
+ * schema-required fields and normalizes optional ones so a sparser server
+ * payload never silently drops a notification.
+ */
 export type CodexAppServerEvent =
-  | { method: "item/started"; params: ItemStartedParams; emittedAtMs: number }
-  | {
-      method: "item/completed";
-      params: ItemCompletedParams;
-      emittedAtMs: number;
-    }
+  | { method: "item/started"; params: ItemStartedParams }
+  | { method: "item/completed"; params: ItemCompletedParams }
   | {
       method: "item/agentMessage/delta";
       params: {
@@ -121,7 +126,15 @@ export type CodexAppServerEvent =
         itemId: string;
         delta: string;
       };
-      emittedAtMs: number;
+    }
+  | {
+      method: "item/commandExecution/outputDelta";
+      params: {
+        threadId: string;
+        turnId: string;
+        itemId: string;
+        delta: string;
+      };
     }
   | {
       method: "item/reasoning/summaryTextDelta";
@@ -132,7 +145,6 @@ export type CodexAppServerEvent =
         delta: string;
         summaryIndex: number;
       };
-      emittedAtMs: number;
     }
   | {
       method: "thread/tokenUsage/updated";
@@ -141,13 +153,8 @@ export type CodexAppServerEvent =
         turnId: string;
         tokenUsage: ThreadTokenUsage;
       };
-      emittedAtMs: number;
     }
-  | {
-      method: "turn/completed";
-      params: { threadId: string; turn: Turn };
-      emittedAtMs: number;
-    }
+  | { method: "turn/completed"; params: { threadId: string; turn: Turn } }
   | {
       method: "error";
       params: {
@@ -156,7 +163,6 @@ export type CodexAppServerEvent =
         threadId: string;
         turnId: string;
       };
-      emittedAtMs: number;
     };
 
 export interface CodexAppServerOptions {
@@ -187,19 +193,15 @@ function isTurnStatus(value: unknown): value is TurnStatus {
 }
 
 function parseTurnError(value: unknown): TurnError | undefined {
+  // Schema requires only `message`; the other fields default to null.
   if (!isRecord(value) || typeof value.message !== "string") return undefined;
-  if (
-    !("codexErrorInfo" in value) ||
-    !("additionalDetails" in value) ||
-    (value.additionalDetails !== null &&
-      typeof value.additionalDetails !== "string")
-  ) {
-    return undefined;
-  }
   return {
     message: value.message,
-    codexErrorInfo: value.codexErrorInfo,
-    additionalDetails: value.additionalDetails,
+    codexErrorInfo: value.codexErrorInfo ?? null,
+    additionalDetails:
+      typeof value.additionalDetails === "string"
+        ? value.additionalDetails
+        : null,
   };
 }
 
@@ -223,34 +225,58 @@ function parseThreadItem(value: unknown): ThreadItem | undefined {
         : undefined;
     case "plan":
       return typeof value.text === "string" ? (value as ThreadItem) : undefined;
-    case "reasoning":
-      return Array.isArray(value.summary) &&
-        value.summary.every((part) => typeof part === "string") &&
-        Array.isArray(value.content) &&
-        value.content.every((part) => typeof part === "string")
-        ? (value as ThreadItem)
+    case "reasoning": {
+      // Schema defaults `summary` and `content` to empty arrays.
+      const strings = (candidate: unknown): string[] | undefined =>
+        candidate === undefined
+          ? []
+          : Array.isArray(candidate) &&
+              candidate.every((part) => typeof part === "string")
+            ? candidate
+            : undefined;
+      const summary = strings(value.summary);
+      const content = strings(value.content);
+      return summary && content
+        ? { type: "reasoning", id: value.id, summary, content }
         : undefined;
-    case "commandExecution":
+    }
+    case "commandExecution": {
+      // aggregatedOutput/exitCode/durationMs are optional in the schema.
+      const commandActions =
+        value.commandActions === undefined
+          ? []
+          : Array.isArray(value.commandActions) &&
+              value.commandActions.every(
+                (action) =>
+                  isRecord(action) &&
+                  typeof action.type === "string" &&
+                  typeof action.command === "string",
+              )
+            ? (value.commandActions as { type: string; command: string }[])
+            : undefined;
       return typeof value.command === "string" &&
         typeof value.cwd === "string" &&
         (value.status === "inProgress" ||
           value.status === "completed" ||
           value.status === "failed" ||
           value.status === "declined") &&
-        (value.aggregatedOutput === null ||
-          typeof value.aggregatedOutput === "string") &&
-        (value.exitCode === null || isNumber(value.exitCode)) &&
-        (value.durationMs === null || isNumber(value.durationMs)) &&
-        (value.commandActions === undefined ||
-          (Array.isArray(value.commandActions) &&
-            value.commandActions.every(
-              (action) =>
-                isRecord(action) &&
-                typeof action.type === "string" &&
-                typeof action.command === "string",
-            )))
-        ? (value as ThreadItem)
+        commandActions
+        ? {
+            type: "commandExecution",
+            id: value.id,
+            command: value.command,
+            cwd: value.cwd,
+            status: value.status,
+            aggregatedOutput:
+              typeof value.aggregatedOutput === "string"
+                ? value.aggregatedOutput
+                : null,
+            exitCode: isNumber(value.exitCode) ? value.exitCode : null,
+            durationMs: isNumber(value.durationMs) ? value.durationMs : null,
+            commandActions,
+          }
         : undefined;
+    }
     case "fileChange":
       return "status" in value &&
         Array.isArray(value.changes) &&
@@ -291,64 +317,60 @@ function parseThreadTokenUsage(value: unknown): ThreadTokenUsage | undefined {
       "totalTokens",
       "inputTokens",
       "cachedInputTokens",
-      "cacheWriteInputTokens",
       "outputTokens",
       "reasoningOutputTokens",
     ] as const;
     if (!fields.every((field) => isNumber(candidate[field]))) return undefined;
-    return Object.fromEntries(
-      fields.map((field) => [field, candidate[field]]),
-    ) as unknown as TokenUsageBreakdown;
+    return {
+      ...(Object.fromEntries(
+        fields.map((field) => [field, candidate[field]]),
+      ) as unknown as Omit<TokenUsageBreakdown, "cacheWriteInputTokens">),
+      // Schema marks cacheWriteInputTokens optional with a default of 0.
+      cacheWriteInputTokens: isNumber(candidate.cacheWriteInputTokens)
+        ? candidate.cacheWriteInputTokens
+        : 0,
+    };
   };
   const total = breakdown(value.total);
   const last = breakdown(value.last);
-  if (
-    !total ||
-    !last ||
-    (value.modelContextWindow !== null && !isNumber(value.modelContextWindow))
-  )
-    return undefined;
-  return { total, last, modelContextWindow: value.modelContextWindow };
+  if (!total || !last) return undefined;
+  return {
+    total,
+    last,
+    modelContextWindow: isNumber(value.modelContextWindow)
+      ? value.modelContextWindow
+      : null,
+  };
 }
 
 function parseTurn(value: unknown): Turn | undefined {
+  // Schema requires only id/items/status; timestamps and error are optional.
   if (
     !isRecord(value) ||
     typeof value.id !== "string" ||
-    !isTurnStatus(value.status)
+    !isTurnStatus(value.status) ||
+    !Array.isArray(value.items)
   )
     return undefined;
-  const error = value.error === null ? null : parseTurnError(value.error);
-  const nullableNumber = (candidate: unknown): candidate is number | null =>
-    candidate === null || isNumber(candidate);
-  if (
-    (value.error !== null && !error) ||
-    !Array.isArray(value.items) ||
-    !nullableNumber(value.startedAt) ||
-    !nullableNumber(value.completedAt) ||
-    !nullableNumber(value.durationMs)
-  )
-    return undefined;
-  const items = value.items.map(parseThreadItem);
-  if (items.some((item) => item === undefined)) return undefined;
+  // The protocol carries item variants this adapter never consumes (hook
+  // prompts, sub-agent activity, …). Skipping them keeps the authoritative
+  // turn/completed settlement signal intact instead of rejecting the turn.
+  const items = value.items
+    .map(parseThreadItem)
+    .filter((item): item is ThreadItem => item !== undefined);
   return {
     id: value.id,
-    items: items as ThreadItem[],
+    items,
     status: value.status,
-    error: error ?? null,
-    startedAt: value.startedAt,
-    completedAt: value.completedAt,
-    durationMs: value.durationMs,
+    error: parseTurnError(value.error) ?? null,
+    startedAt: isNumber(value.startedAt) ? value.startedAt : null,
+    completedAt: isNumber(value.completedAt) ? value.completedAt : null,
+    durationMs: isNumber(value.durationMs) ? value.durationMs : null,
   };
 }
 
 function parseNotification(value: unknown): CodexAppServerEvent | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.method !== "string" ||
-    !isNumber(value.emittedAtMs)
-  )
-    return undefined;
+  if (!isRecord(value) || typeof value.method !== "string") return undefined;
   const params = value.params;
   if (!isRecord(params)) return undefined;
   const threadId = params.threadId;
@@ -370,7 +392,6 @@ function parseNotification(value: unknown): CodexAppServerEvent | undefined {
           turnId: params.turnId,
           startedAtMs: timestamp,
         },
-        emittedAtMs: value.emittedAtMs,
       };
     }
     return {
@@ -381,11 +402,11 @@ function parseNotification(value: unknown): CodexAppServerEvent | undefined {
         turnId: params.turnId,
         completedAtMs: timestamp,
       },
-      emittedAtMs: value.emittedAtMs,
     };
   }
   if (
-    value.method === "item/agentMessage/delta" &&
+    (value.method === "item/agentMessage/delta" ||
+      value.method === "item/commandExecution/outputDelta") &&
     typeof params.turnId === "string" &&
     typeof params.itemId === "string" &&
     typeof params.delta === "string"
@@ -398,7 +419,6 @@ function parseNotification(value: unknown): CodexAppServerEvent | undefined {
         itemId: params.itemId,
         delta: params.delta,
       },
-      emittedAtMs: value.emittedAtMs,
     };
   }
   if (
@@ -417,7 +437,6 @@ function parseNotification(value: unknown): CodexAppServerEvent | undefined {
         delta: params.delta,
         summaryIndex: params.summaryIndex as number,
       },
-      emittedAtMs: value.emittedAtMs,
     };
   }
   if (
@@ -429,18 +448,13 @@ function parseNotification(value: unknown): CodexAppServerEvent | undefined {
       ? {
           method: value.method,
           params: { threadId, turnId: params.turnId, tokenUsage },
-          emittedAtMs: value.emittedAtMs,
         }
       : undefined;
   }
   if (value.method === "turn/completed") {
     const turn = parseTurn(params.turn);
     return turn
-      ? {
-          method: value.method,
-          params: { threadId, turn },
-          emittedAtMs: value.emittedAtMs,
-        }
+      ? { method: value.method, params: { threadId, turn } }
       : undefined;
   }
   if (
@@ -458,7 +472,6 @@ function parseNotification(value: unknown): CodexAppServerEvent | undefined {
             threadId,
             turnId: params.turnId,
           },
-          emittedAtMs: value.emittedAtMs,
         }
       : undefined;
   }

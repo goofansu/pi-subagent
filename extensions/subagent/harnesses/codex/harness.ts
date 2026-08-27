@@ -13,6 +13,7 @@ import type {
   CodexAppServerEvent,
   CodexAppServerOptions,
   ThreadItem,
+  ThreadTokenUsage,
   TokenUsageBreakdown,
   Turn,
 } from "./app-server.ts";
@@ -22,6 +23,10 @@ const CODEX_PROFILE_FIELDS = ["model", "effort"] as const;
 const MISSING_CODEX_ANSWER =
   "Codex exited without a terminal agent message answer.";
 const ACTIVITY_LIMIT = 120;
+// Leave room after the command for its latest output line in the activity.
+const COMMAND_PREFIX_LIMIT = 60;
+// Only the tail of a command's output can become live activity.
+const OUTPUT_TAIL_LIMIT = 2048;
 
 export interface CodexHarnessOptions {
   readonly spawn?: CodexAppServerOptions["spawn"];
@@ -44,9 +49,25 @@ function commandFromItem(
   item: Extract<ThreadItem, { type: "commandExecution" }>,
 ): string {
   return (
-    item.commandActions?.find((action) => action.command)?.command ??
+    item.commandActions.find((action) => action.command)?.command ??
     item.command
   );
+}
+
+/** The latest non-blank output line, honoring carriage-return progress. */
+function lastOutputLine(tail: string): string | undefined {
+  const lines = tail.split(/\r\n|\r|\n/);
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const line = lines[index]?.trim();
+    if (line) return line;
+  }
+  return undefined;
+}
+
+function commandProgress(command: string | undefined, line: string): string {
+  if (!command) return capped(line);
+  const prefix = collapsed(`$ ${command}`).slice(0, COMMAND_PREFIX_LIMIT);
+  return capped(`${prefix} · ${line}`);
 }
 
 function relativePath(cwd: string, value: string): string {
@@ -77,10 +98,10 @@ function itemActivity(item: ThreadItem, cwd: string): string | undefined {
 }
 
 function usageDelta(
-  current: TokenUsageBreakdown,
+  tokenUsage: ThreadTokenUsage,
   previous: TokenUsageBreakdown | undefined,
 ): { fact: Fact; next: TokenUsageBreakdown } {
-  const next = { ...current };
+  const next = { ...tokenUsage.total };
   const diff = (key: keyof typeof next): number =>
     next[key] - (previous?.[key] ?? 0);
   return {
@@ -92,6 +113,9 @@ function usageDelta(
         cacheRead: diff("cachedInputTokens"),
         cacheWrite: diff("cacheWriteInputTokens"),
         output: diff("outputTokens") + diff("reasoningOutputTokens"),
+        // The latest provider request's total is the context-size gauge; the
+        // schema's modelContextWindow is capacity, not occupancy.
+        contextTokens: tokenUsage.last.totalTokens,
         turns: 1,
       },
     },
@@ -114,17 +138,34 @@ export function createCodexTranslator(
   cwd: string,
 ): (event: CodexAppServerEvent) => Translation | undefined {
   const reasoning = new Map<string, string>();
+  const commands = new Map<string, string>();
+  const outputTails = new Map<string, string>();
   let previousUsage: TokenUsageBreakdown | undefined;
   let completedAgentMessage = false;
 
   return (event) => {
     if (event.method === "item/started") {
-      const activity = itemActivity(event.params.item, cwd);
+      const item = event.params.item;
+      if (item.type === "commandExecution")
+        commands.set(item.id, commandFromItem(item));
+      const activity = itemActivity(item, cwd);
       return activity ? { activity } : undefined;
     }
 
     if (event.method === "item/agentMessage/delta") {
       return { activity: "Writing response…" };
+    }
+
+    if (event.method === "item/commandExecution/outputDelta") {
+      const itemId = event.params.itemId;
+      const tail = ((outputTails.get(itemId) ?? "") + event.params.delta).slice(
+        -OUTPUT_TAIL_LIMIT,
+      );
+      outputTails.set(itemId, tail);
+      const line = lastOutputLine(tail);
+      return line
+        ? { activity: commandProgress(commands.get(itemId), line) }
+        : undefined;
     }
 
     if (event.method === "item/reasoning/summaryTextDelta") {
@@ -157,6 +198,8 @@ export function createCodexTranslator(
         };
       }
       if (item.type === "commandExecution") {
+        commands.delete(item.id);
+        outputTails.delete(item.id);
         const command = commandFromItem(item);
         return {
           facts: [
@@ -178,7 +221,7 @@ export function createCodexTranslator(
     }
 
     if (event.method === "thread/tokenUsage/updated") {
-      const result = usageDelta(event.params.tokenUsage.total, previousUsage);
+      const result = usageDelta(event.params.tokenUsage, previousUsage);
       previousUsage = result.next;
       return { facts: [result.fact] };
     }

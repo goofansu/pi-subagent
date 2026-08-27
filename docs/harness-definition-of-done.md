@@ -208,6 +208,24 @@ comments and ordinary string literals are not.
   are diagnosed with their value and the accepted aliases. *Test:* Claude
   harness validation accepts each alias case-insensitively, passes it
   through unresolved, and rejects full IDs and misspellings.
+- [x] **Codex protocol fidelity is schema-derived** — every App Server
+  notification shape the transport consumes is derived from the installed
+  codex's generated protocol schema (`codex app-server generate-json-schema`,
+  verified against codex-cli 0.147.0 plus a live stdio smoke run), never from
+  hand-authored fixtures alone. The parser requires only schema-required
+  fields: the notification envelope is `method` + `params` (the live server's
+  undeclared `emittedAtMs` stamp is ignored, not required), optional fields
+  are normalized to their schema defaults, and unknown item variants inside a
+  completed turn are skipped so the authoritative `turn/completed` settlement
+  survives protocol growth. The drift invariant: an unknown notification
+  method is safely ignored, and an unrecognized server-to-client request is
+  refused with a JSON-RPC method-not-found error — neither can fail the run,
+  because the protocol carries many more notification variants than this
+  adapter consumes. Re-verify against the regenerated schema when the
+  supported Codex version moves. *Test:* the App Server transport tests
+  forward schema-minimum notifications — no envelope timestamp, sparse
+  optional fields, a turn carrying an unknown item type — and drop unknown
+  notification methods while refusing unsupported server requests.
 - [x] **The boundary test proves its negative case** — the production parser,
   resolver, and graph walker reject controlled core-to-adapter and crossed
   adapter-wire edges without changing the working tree. Static imports,

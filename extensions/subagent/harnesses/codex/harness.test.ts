@@ -72,7 +72,7 @@ function event(
   method: string,
   params: Record<string, unknown>,
 ): CodexAppServerEvent {
-  return { method, params, emittedAtMs: 1 } as CodexAppServerEvent;
+  return { method, params } as CodexAppServerEvent;
 }
 
 function initializeResponse(id: unknown): Record<string, unknown> {
@@ -300,7 +300,7 @@ function conformanceRig(): HarnessConformanceRig {
               cacheRead: 5,
               cacheWrite: 2,
               cost: 0,
-              contextTokens: 0,
+              contextTokens: 15,
               turns: 2,
             },
           });
@@ -395,6 +395,10 @@ test("Codex translator maps pinned events without leaking provider ids", () => {
           command: "echo hi",
           cwd: "/work",
           status: "completed",
+          aggregatedOutput: null,
+          exitCode: 0,
+          durationMs: 1,
+          commandActions: [],
         },
         completedAtMs: 1,
       }),
@@ -446,7 +450,17 @@ test("Codex translator reports normalized live activity", () => {
       event("item/started", {
         threadId: THREAD_ID,
         turnId: TURN_ID,
-        item: { type: "commandExecution", command: "/bin/zsh -lc 'echo   hi'" },
+        item: {
+          type: "commandExecution",
+          id: "command-item",
+          command: "/bin/zsh -lc 'echo   hi'",
+          cwd: "/work",
+          status: "inProgress",
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+          commandActions: [],
+        },
       }),
     ),
     { activity: "$ /bin/zsh -lc 'echo hi'" },
@@ -536,6 +550,70 @@ test("Codex translator reports normalized live activity", () => {
   );
 });
 
+test("Codex command output deltas surface the latest meaningful line", () => {
+  const translate = createCodexTranslator("/work");
+  const outputDelta = (itemId: string, delta: string) =>
+    translate(
+      event("item/commandExecution/outputDelta", {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        itemId,
+        delta,
+      }),
+    );
+  translate(
+    event("item/started", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      item: {
+        type: "commandExecution",
+        id: "command-1",
+        command: "npm test",
+        cwd: "/work",
+        status: "inProgress",
+        aggregatedOutput: null,
+        exitCode: null,
+        durationMs: null,
+        commandActions: [],
+      },
+    }),
+  );
+  // Blank output does not overwrite the current activity.
+  assert.equal(outputDelta("command-1", "\n  \n"), undefined);
+  assert.deepEqual(outputDelta("command-1", "PASS src/index.test.ts\n"), {
+    activity: "$ npm test · PASS src/index.test.ts",
+  });
+  // Carriage-return progress rewrites count as the latest line.
+  assert.deepEqual(outputDelta("command-1", "\rTests 12/40"), {
+    activity: "$ npm test · Tests 12/40",
+  });
+  // Output for a command that never announced itself still shows progress.
+  assert.deepEqual(outputDelta("command-2", "compiling worker\n"), {
+    activity: "compiling worker",
+  });
+  // A long command leaves room for the output line.
+  translate(
+    event("item/started", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      item: {
+        type: "commandExecution",
+        id: "command-3",
+        command: `run ${"x".repeat(200)}`,
+        cwd: "/work",
+        status: "inProgress",
+        aggregatedOutput: null,
+        exitCode: null,
+        durationMs: null,
+        commandActions: [],
+      },
+    }),
+  );
+  const long = outputDelta("command-3", "done\n");
+  assert.equal(long?.activity?.endsWith("· done"), true);
+  assert.equal((long?.activity?.length ?? 0) <= 120, true);
+});
+
 test("Codex folds cumulative usage updates exactly once", () => {
   const translate = createCodexTranslator("/work");
   const make = (total: Record<string, number>): CodexAppServerEvent =>
@@ -572,6 +650,7 @@ test("Codex folds cumulative usage updates exactly once", () => {
         cacheRead: 2,
         cacheWrite: 1,
         output: 3,
+        contextTokens: 10,
         turns: 1,
       },
       {
@@ -579,6 +658,7 @@ test("Codex folds cumulative usage updates exactly once", () => {
         cacheRead: 3,
         cacheWrite: 1,
         output: 5,
+        contextTokens: 25,
         turns: 1,
       },
     ],

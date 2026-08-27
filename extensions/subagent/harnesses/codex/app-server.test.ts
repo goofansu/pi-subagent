@@ -225,6 +225,176 @@ test("App Server performs the exact handshake and forwards only validated run ev
   rig.child?.emit("close", 0, null);
 });
 
+test("App Server accepts schema-minimum notifications and normalizes optional fields", async () => {
+  // Mirrors the generated protocol schema (codex-cli 0.147.0): the envelope
+  // is method + params only (no emittedAtMs), and optional fields may be
+  // absent. Rejecting these shapes would silently drop live notifications,
+  // including the authoritative turn/completed settlement.
+  const forwarded: CodexAppServerEvent[] = [];
+  const stderr: string[] = [];
+  const rig = sourceWith((request, child) => {
+    if (request.method === "initialize")
+      response(child, request.id as number, initializeResult());
+    if (request.method === "thread/start")
+      response(child, request.id as number, threadResult());
+    if (request.method === "turn/start") {
+      response(child, request.id as number, turnResult());
+      const send = (value: unknown) =>
+        child.stdout.write(`${JSON.stringify(value)}\n`);
+      send({
+        method: "item/commandExecution/outputDelta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "building...\n",
+        },
+      });
+      send({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          tokenUsage: {
+            total: {
+              totalTokens: 10,
+              inputTokens: 7,
+              cachedInputTokens: 2,
+              outputTokens: 2,
+              reasoningOutputTokens: 1,
+            },
+            last: {
+              totalTokens: 10,
+              inputTokens: 7,
+              cachedInputTokens: 2,
+              outputTokens: 2,
+              reasoningOutputTokens: 1,
+            },
+          },
+        },
+      });
+      send({
+        method: "error",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          error: { message: "retryable" },
+          willRetry: true,
+        },
+      });
+      send({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            itemsView: "notLoaded",
+            items: [
+              { type: "subAgentActivity", id: "future-item" },
+              {
+                type: "commandExecution",
+                id: "item-1",
+                command: "make build",
+                cwd: "/work",
+                status: "completed",
+                commandActions: [],
+              },
+              { type: "reasoning", id: "item-2" },
+            ],
+          },
+        },
+      });
+    }
+  });
+
+  const conclusion = await rig.source(
+    sinkFor(forwarded, stderr),
+    new AbortController().signal,
+  );
+  assert.deepEqual(conclusion, { status: "clean" });
+  assert.deepEqual(forwarded, [
+    {
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        delta: "building...\n",
+      },
+    },
+    {
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        tokenUsage: {
+          total: {
+            totalTokens: 10,
+            inputTokens: 7,
+            cachedInputTokens: 2,
+            cacheWriteInputTokens: 0,
+            outputTokens: 2,
+            reasoningOutputTokens: 1,
+          },
+          last: {
+            totalTokens: 10,
+            inputTokens: 7,
+            cachedInputTokens: 2,
+            cacheWriteInputTokens: 0,
+            outputTokens: 2,
+            reasoningOutputTokens: 1,
+          },
+          modelContextWindow: null,
+        },
+      },
+    },
+    {
+      method: "error",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        error: {
+          message: "retryable",
+          codexErrorInfo: null,
+          additionalDetails: null,
+        },
+        willRetry: true,
+      },
+    },
+    {
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          items: [
+            {
+              type: "commandExecution",
+              id: "item-1",
+              command: "make build",
+              cwd: "/work",
+              status: "completed",
+              aggregatedOutput: null,
+              exitCode: null,
+              durationMs: null,
+              commandActions: [],
+            },
+            { type: "reasoning", id: "item-2", summary: [], content: [] },
+          ],
+          status: "completed",
+          error: null,
+          startedAt: null,
+          completedAt: null,
+          durationMs: null,
+        },
+      },
+    },
+  ]);
+  assert.deepEqual(stderr, []);
+  rig.child?.emit("close", 0, null);
+});
+
 test("missing stdio rejects after starting child cleanup", async () => {
   const signals: string[] = [];
   const child = new EventEmitter() as EventEmitter & {
