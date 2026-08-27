@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  ModelUsage,
+  Query,
+  SDKAssistantMessage,
+  SDKMessage,
+  SDKModelRefusalFallbackMessage,
+  SDKResultError,
+  SDKResultSuccess,
+  SDKSystemMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import { getFinalOutput } from "../../messages.ts";
 import { DEPTH_ENV_KEY, type SubagentTask } from "../../run.ts";
 import { startSubagent } from "../../runner.ts";
@@ -20,7 +29,7 @@ import {
   type ClaudeQuery,
   type ClaudeQueryLoader,
   createClaudeHarness,
-  translateClaudeMessage,
+  createClaudeTranslator,
 } from "./harness.ts";
 
 const config: AgentConfig = {
@@ -39,12 +48,180 @@ const task: SubagentTask = {
   projectTrusted: false,
 };
 
-function sdkMessage(value: Record<string, unknown>): SDKMessage {
-  return value as unknown as SDKMessage;
+const modelUsage = (overrides: Partial<ModelUsage> = {}): ModelUsage => ({
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadInputTokens: 0,
+  cacheCreationInputTokens: 0,
+  webSearchRequests: 0,
+  costUSD: 0,
+  contextWindow: 200_000,
+  maxOutputTokens: 64_000,
+  ...overrides,
+});
+
+const resultUsage: SDKResultSuccess["usage"] = {
+  cache_creation: {
+    ephemeral_1h_input_tokens: 0,
+    ephemeral_5m_input_tokens: 0,
+  },
+  cache_creation_input_tokens: 0,
+  cache_read_input_tokens: 0,
+  fallback_credit: { status: { type: "redeemed" } },
+  inference_geo: "unknown",
+  input_tokens: 0,
+  iterations: [],
+  output_tokens: 0,
+  output_tokens_details: { thinking_tokens: 0 },
+  server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 },
+  service_tier: "standard",
+  speed: "standard",
+};
+
+function assistantMessage(
+  id: string,
+  content: SDKAssistantMessage["message"]["content"],
+  overrides: Partial<SDKAssistantMessage> = {},
+): SDKAssistantMessage {
+  return {
+    type: "assistant",
+    message: {
+      id,
+      container: null,
+      content,
+      context_management: null,
+      diagnostics: null,
+      model: "claude-sonnet-4-6",
+      role: "assistant",
+      stop_details: null,
+      stop_reason: null,
+      stop_sequence: null,
+      type: "message",
+      usage: {
+        cache_creation: null,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        fallback_credit: null,
+        inference_geo: null,
+        input_tokens: 0,
+        iterations: null,
+        output_tokens: 0,
+        output_tokens_details: null,
+        server_tool_use: null,
+        service_tier: "standard",
+        speed: "standard",
+      },
+    },
+    parent_tool_use_id: null,
+    uuid: "00000000-0000-4000-8000-000000000001",
+    session_id: "session-id",
+    ...overrides,
+  };
+}
+
+function resultMessage(
+  result: string,
+  overrides: Partial<SDKResultSuccess> = {},
+): SDKResultSuccess {
+  return {
+    type: "result",
+    subtype: "success",
+    duration_ms: 1,
+    duration_api_ms: 1,
+    is_error: false,
+    num_turns: 1,
+    result,
+    stop_reason: "end_turn",
+    total_cost_usd: 0,
+    usage: resultUsage,
+    modelUsage: {},
+    permission_denials: [],
+    uuid: "00000000-0000-4000-8000-000000000002",
+    session_id: "session-id",
+    ...overrides,
+  };
+}
+
+function errorResultMessage(
+  errors: string[],
+  overrides: Partial<SDKResultError> = {},
+): SDKResultError {
+  return {
+    type: "result",
+    subtype: "error_during_execution",
+    duration_ms: 1,
+    duration_api_ms: 1,
+    is_error: true,
+    num_turns: 0,
+    stop_reason: "error",
+    total_cost_usd: 0,
+    usage: resultUsage,
+    modelUsage: {},
+    permission_denials: [],
+    errors,
+    uuid: "00000000-0000-4000-8000-000000000003",
+    session_id: "session-id",
+    ...overrides,
+  };
+}
+
+function initMessage(model: string): SDKSystemMessage {
+  return {
+    type: "system",
+    subtype: "init",
+    apiKeySource: "none",
+    claude_code_version: "1.0.0",
+    cwd: "/work",
+    tools: [],
+    mcp_servers: [],
+    model,
+    permissionMode: "bypassPermissions",
+    slash_commands: [],
+    output_style: "default",
+    skills: [],
+    plugins: [],
+    uuid: "00000000-0000-4000-8000-000000000004",
+    session_id: "session-id",
+  };
+}
+
+function refusalFallback(): SDKModelRefusalFallbackMessage {
+  return {
+    type: "system",
+    subtype: "model_refusal_fallback",
+    trigger: "refusal",
+    direction: "retry",
+    scope: "session",
+    original_model: "claude-sonnet-4-6",
+    fallback_model: "claude-opus-4-6",
+    request_id: "request-1",
+    retracted_message_uuids: ["00000000-0000-4000-8000-000000000001"],
+    refused_user_message_uuid: "00000000-0000-4000-8000-000000000005",
+    content: "Retrying with the fallback model",
+    uuid: "00000000-0000-4000-8000-000000000006",
+    session_id: "session-id",
+  };
 }
 
 function factsFrom(message: SDKMessage) {
-  return translateClaudeMessage(message)?.facts ?? [];
+  return createClaudeTranslator()(message)?.facts ?? [];
+}
+
+async function runClaudeMessages(messages: SDKMessage[]) {
+  const query: ClaudeQuery = () =>
+    ({
+      async *[Symbol.asyncIterator]() {
+        yield* messages;
+      },
+      close() {},
+    }) as never;
+  return startSubagent({
+    config,
+    description: "Claude fixture run",
+    prompt: "do it",
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs: createSubagentRuns(),
+  }).settled;
 }
 
 function claudeConformanceRig(): HarnessConformanceRig {
@@ -66,25 +243,6 @@ function claudeConformanceRig(): HarnessConformanceRig {
           openReady = resolve;
         });
       }
-
-      const resultMessage = (result: string) =>
-        sdkMessage({
-          type: "result",
-          result,
-          is_error: false,
-          num_turns: 1,
-          stop_reason: "end_turn",
-          model: "claude-sonnet-4-6",
-          modelUsage: {
-            "claude-sonnet-4-6": {
-              inputTokens: 12,
-              outputTokens: 7,
-              cacheReadInputTokens: 3,
-              cacheCreationInputTokens: 3,
-              costUSD: 0.5,
-            },
-          },
-        });
 
       const query: ClaudeQuery = ({ options }) => {
         observedDepth = Number(options?.env?.[DEPTH_ENV_KEY]);
@@ -119,23 +277,24 @@ function claudeConformanceRig(): HarnessConformanceRig {
                 await aborted;
                 return;
               case "usage-totals":
-                yield sdkMessage({
-                  type: "assistant",
-                  message: {
-                    model: "claude-sonnet-4-6",
-                    content: [{ type: "text", text: "first turn" }],
-                  },
-                });
-                yield sdkMessage({
-                  type: "assistant",
-                  message: {
-                    model: "claude-sonnet-4-6",
-                    content: [{ type: "text", text: "second turn" }],
-                  },
-                });
-                yield sdkMessage({
-                  ...resultMessage("claude answer"),
+                yield assistantMessage("msg-1", [
+                  { type: "text", text: "first turn", citations: null },
+                ]);
+                yield assistantMessage("msg-2", [
+                  { type: "text", text: "second turn", citations: null },
+                ]);
+                yield resultMessage("claude answer", {
                   num_turns: 2,
+                  total_cost_usd: 0.5,
+                  modelUsage: {
+                    "claude-sonnet-4-6": modelUsage({
+                      inputTokens: 12,
+                      outputTokens: 7,
+                      cacheReadInputTokens: 3,
+                      cacheCreationInputTokens: 3,
+                      costUSD: 0.5,
+                    }),
+                  },
                 });
                 return;
               case "child-depth":
@@ -332,46 +491,39 @@ test("Claude children carry a nontrivial depth and inherit the environment", () 
   }
 });
 
-test("SDK assistant messages translate tool calls without adding turns", () => {
-  const assistant = {
-    type: "assistant",
-    message: {
-      model: "claude-sonnet-4-6",
-      content: [
-        { type: "tool_use", name: "Read", input: { file_path: "a.ts" } },
-      ],
+test("SDK assistant messages translate tool calls with one turn delta", () => {
+  const assistant = assistantMessage("msg-tool", [
+    {
+      type: "tool_use",
+      id: "tool-1",
+      name: "Read",
+      input: { file_path: "a.ts" },
     },
-  } as unknown as SDKMessage;
+  ]);
   const [live] = factsFrom(assistant);
   assert.deepEqual(live.parts, [
     { type: "tool_call", name: "Read", arguments: { file_path: "a.ts" } },
   ]);
-  assert.equal(live.usage?.turns, 0);
+  assert.equal(live.usage?.turns, 1);
 });
 
 test("Claude keeps model metadata from an empty assistant message", () => {
-  const [fact] = factsFrom({
-    type: "assistant",
-    message: {
-      model: "claude-sonnet-4-6",
-      content: [{ type: "thinking", thinking: "planning" }],
-    },
-  } as unknown as SDKMessage);
+  const [fact] = factsFrom(
+    assistantMessage("msg-thinking", [
+      { type: "thinking", thinking: "planning", signature: "signature" },
+    ]),
+  );
 
   assert.deepEqual(fact, {
     role: "assistant",
     parts: [],
-    usage: { turns: 0 },
+    usage: { turns: 1 },
     model: "claude-sonnet-4-6",
   });
 });
 
 test("Claude translates init provenance as metadata without usage", () => {
-  const [fact] = factsFrom({
-    type: "system",
-    subtype: "init",
-    model: "claude-opus-5",
-  } as unknown as SDKMessage);
+  const [fact] = factsFrom(initMessage("claude-opus-5"));
 
   assert.deepEqual(fact, {
     role: "metadata",
@@ -381,24 +533,25 @@ test("Claude translates init provenance as metadata without usage", () => {
 });
 
 test("Claude keeps terminal facts when a successful result has empty text", () => {
-  const [fact] = factsFrom({
-    type: "result",
-    subtype: "success",
-    is_error: false,
-    num_turns: 2,
-    stop_reason: "end_turn",
-    model: "claude-sonnet-4-6",
-    total_cost_usd: 0.25,
-    modelUsage: {
-      "claude-sonnet-4-6": {
-        inputTokens: 10,
-        outputTokens: 4,
-        cacheReadInputTokens: 2,
-        cacheCreationInputTokens: 1,
-        costUSD: 0.25,
+  const terminalWithCompatibleModel = {
+    ...resultMessage("", {
+      num_turns: 2,
+      total_cost_usd: 0.25,
+      modelUsage: {
+        "claude-sonnet-4-6": modelUsage({
+          inputTokens: 10,
+          outputTokens: 4,
+          cacheReadInputTokens: 2,
+          cacheCreationInputTokens: 1,
+          costUSD: 0.25,
+        }),
       },
-    },
-  } as unknown as SDKMessage);
+    }),
+    // The harness deliberately tolerates this older/alternate wire field even
+    // though the installed SDK result type does not currently declare it.
+    model: "claude-sonnet-4-6",
+  };
+  const [fact] = factsFrom(terminalWithCompatibleModel);
 
   assert.deepEqual(fact, {
     role: "assistant",
@@ -420,28 +573,41 @@ test("an unpinned empty Claude result carries streamed model and accounting", as
   const query: ClaudeQuery = () =>
     ({
       async *[Symbol.asyncIterator]() {
-        yield {
-          type: "assistant",
-          message: {
-            model: "claude-haiku-4-5-20251001",
-            content: [{ type: "thinking", thinking: "planning" }],
+        yield assistantMessage(
+          "msg-thinking",
+          [
+            {
+              type: "thinking",
+              thinking: "planning",
+              signature: "signature",
+            },
+          ],
+          {
+            message: {
+              ...assistantMessage("template", []).message,
+              id: "msg-thinking",
+              model: "claude-haiku-4-5-20251001",
+              content: [
+                {
+                  type: "thinking",
+                  thinking: "planning",
+                  signature: "signature",
+                },
+              ],
+            },
           },
-        } as unknown as SDKMessage;
-        yield {
-          type: "result",
-          result: "",
-          is_error: false,
+        );
+        yield resultMessage("", {
           num_turns: 2,
-          stop_reason: "end_turn",
           total_cost_usd: 0.25,
           modelUsage: {
-            "claude-haiku-4-5-20251001": {
+            "claude-haiku-4-5-20251001": modelUsage({
               inputTokens: 10,
               outputTokens: 4,
               costUSD: 0.25,
-            },
+            }),
           },
-        } as unknown as SDKMessage;
+        });
       },
       close() {},
     }) as never;
@@ -475,52 +641,30 @@ test("Claude shows completed provider turns while it is still running", async ()
   const query: ClaudeQuery = () =>
     ({
       async *[Symbol.asyncIterator]() {
-        yield {
-          type: "assistant",
-          message: {
-            id: "msg-1",
-            model: "claude-sonnet-4-6",
-            content: [{ type: "tool_use", name: "Read", input: {} }],
-          },
-          parent_tool_use_id: null,
-        } as unknown as SDKMessage;
+        const firstResponseId = "msg_01K3CLAUDETURN000000000000";
+        yield assistantMessage(
+          firstResponseId,
+          [{ type: "tool_use", id: "tool-1", name: "Read", input: {} }],
+          { uuid: "00000000-0000-4000-8000-000000000011" },
+        );
         // A second block from the same API response is not another turn.
-        yield {
-          type: "assistant",
-          message: {
-            id: "msg-1",
-            model: "claude-sonnet-4-6",
-            content: [{ type: "text", text: "Reading" }],
-          },
-          parent_tool_use_id: null,
-        } as unknown as SDKMessage;
+        yield assistantMessage(
+          firstResponseId,
+          [{ type: "text", text: "Reading", citations: null }],
+          { uuid: "00000000-0000-4000-8000-000000000012" },
+        );
         // Sidechain model responses do not belong to the main-loop turn total.
-        yield {
-          type: "assistant",
-          message: {
-            id: "sidechain-msg",
-            model: "claude-haiku-4-5-20251001",
-            content: [{ type: "text", text: "auxiliary work" }],
-          },
-          parent_tool_use_id: "tool-1",
-        } as unknown as SDKMessage;
-        yield {
-          type: "assistant",
-          message: {
-            id: "msg-2",
-            model: "claude-sonnet-4-6",
-            content: [{ type: "text", text: "Done" }],
-          },
-          parent_tool_use_id: null,
-        } as unknown as SDKMessage;
+        yield assistantMessage(
+          "sidechain-msg",
+          [{ type: "text", text: "auxiliary work", citations: null }],
+          { parent_tool_use_id: "tool-1" },
+        );
+        yield assistantMessage("msg-2", [
+          { type: "text", text: "Done", citations: null },
+        ]);
         assistantReported();
         await resultReleased;
-        yield {
-          type: "result",
-          result: "done",
-          is_error: false,
-          num_turns: 2,
-        } as unknown as SDKMessage;
+        yield resultMessage("done", { num_turns: 5 });
       },
       close() {},
     }) as never;
@@ -549,35 +693,228 @@ test("Claude shows completed provider turns while it is still running", async ()
 
   releaseResult();
   const result = await started.settled;
-  assert.equal(result.usage.turns, 2, "terminal total stays authoritative");
+  assert.equal(result.usage.turns, 5, "a higher terminal total catches up");
+});
+
+test("Claude translator stamps one nonnegative integer delta on each accounting event", () => {
+  const translate = createClaudeTranslator();
+  const events: SDKMessage[] = [
+    assistantMessage("msg-1", [
+      { type: "text", text: "first", citations: null },
+    ]),
+    assistantMessage("msg-1", [
+      { type: "text", text: "same response", citations: null },
+    ]),
+    assistantMessage(
+      "sidechain-msg",
+      [{ type: "text", text: "sidechain", citations: null }],
+      { parent_tool_use_id: "tool-1" },
+    ),
+    resultMessage("done", { num_turns: 1 }),
+  ];
+
+  for (const event of events) {
+    const translation = translate(event);
+    assert.ok(translation);
+    assert.equal(translation.facts?.length, 1);
+    const accountingFacts =
+      translation.facts?.filter((fact) => fact.usage?.turns !== undefined) ??
+      [];
+    assert.equal(accountingFacts.length, 1);
+    const delta = accountingFacts[0]?.usage?.turns;
+    assert.equal(Number.isFinite(delta), true);
+    assert.equal(Number.isInteger(delta), true);
+    assert.ok((delta ?? -1) >= 0);
+  }
+
+  const [metadata] = translate(initMessage("claude-sonnet-4-6"))?.facts ?? [];
+  assert.equal(metadata?.role, "metadata");
+  assert.equal(metadata?.usage, undefined);
+});
+
+test("Claude preserves observed turns when an error result reports zero", async () => {
+  const result = await runClaudeMessages([
+    assistantMessage("msg-1", [
+      { type: "text", text: "first", citations: null },
+    ]),
+    assistantMessage("msg-2", [
+      { type: "text", text: "second", citations: null },
+    ]),
+    errorResultMessage(["backend failed"], { num_turns: 0 }),
+  ]);
+
+  assert.equal(result.lifecycle.phase, "failed");
+  assert.equal(result.usage.turns, 2);
+});
+
+test("Claude preserves observed turns when a terminal total is missing", async () => {
+  const terminal = resultMessage("done", { num_turns: 3 }) as unknown as Record<
+    string,
+    unknown
+  >;
+  delete terminal.num_turns;
+  const result = await runClaudeMessages([
+    assistantMessage("msg-1", [
+      { type: "text", text: "first", citations: null },
+    ]),
+    assistantMessage("msg-2", [
+      { type: "text", text: "second", citations: null },
+    ]),
+    assistantMessage("msg-3", [
+      { type: "text", text: "third", citations: null },
+    ]),
+    terminal as unknown as SDKMessage,
+  ]);
+
+  assert.equal(result.lifecycle.phase, "completed");
+  assert.equal(result.usage.turns, 3);
+});
+
+test("Claude preserves observed turns for invalid terminal totals", async () => {
+  for (const numTurns of [Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5]) {
+    const terminal = resultMessage("done") as unknown as Record<
+      string,
+      unknown
+    >;
+    terminal.num_turns = numTurns;
+    const result = await runClaudeMessages([
+      assistantMessage("msg-1", [
+        { type: "text", text: "first", citations: null },
+      ]),
+      assistantMessage("msg-2", [
+        { type: "text", text: "second", citations: null },
+      ]),
+      terminal as unknown as SDKMessage,
+    ]);
+
+    assert.equal(result.lifecycle.phase, "completed");
+    assert.equal(result.usage.turns, 2, String(numTurns));
+  }
+});
+
+test("Claude treats an absent parent id as a root response", async () => {
+  const assistant = assistantMessage("msg-1", [
+    { type: "text", text: "older SDK response", citations: null },
+  ]);
+  const { parent_tool_use_id: _missing, ...withoutParent } = assistant;
+  const result = await runClaudeMessages([
+    withoutParent as SDKMessage,
+    resultMessage("done", { num_turns: 0 }),
+  ]);
+
+  assert.equal(result.usage.turns, 1);
+});
+
+test("Claude refusal fallback keeps the accepted additive overcount", async () => {
+  const result = await runClaudeMessages([
+    assistantMessage("refused-msg", [
+      { type: "text", text: "partial refusal leg", citations: null },
+    ]),
+    assistantMessage(
+      "fallback-msg",
+      [{ type: "text", text: "fallback answer", citations: null }],
+      {
+        supersedes: ["00000000-0000-4000-8000-000000000001"],
+      },
+    ),
+    refusalFallback(),
+    resultMessage("fallback answer", { num_turns: 1 }),
+  ]);
+
+  assert.equal(result.lifecycle.phase, "completed");
+  assert.equal(result.usage.turns, 2);
+});
+
+test("Claude cancellation preserves provisional turns", async () => {
+  const runs = createSubagentRuns();
+  let observationsReported = () => {};
+  const reported = new Promise<void>((resolve) => {
+    observationsReported = resolve;
+  });
+  let releaseAbort = () => {};
+  const aborted = new Promise<void>((resolve) => {
+    releaseAbort = resolve;
+  });
+  const query: ClaudeQuery = ({ options }) => {
+    options?.abortController?.signal.addEventListener("abort", releaseAbort, {
+      once: true,
+    });
+    return {
+      async *[Symbol.asyncIterator]() {
+        yield assistantMessage("msg-1", [
+          { type: "text", text: "first", citations: null },
+        ]);
+        yield assistantMessage("msg-2", [
+          { type: "text", text: "second", citations: null },
+        ]);
+        observationsReported();
+        await aborted;
+      },
+      close() {
+        releaseAbort();
+      },
+    } as never;
+  };
+  const started = startSubagent({
+    config,
+    description: "cancel after Claude observations",
+    prompt: "do it",
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs,
+  });
+
+  await reported;
+  runs.cancel([started.id], "requested");
+  const result = await started.settled;
+
+  assert.equal(result.lifecycle.phase, "cancelled");
+  assert.equal(result.usage.turns, 2);
+});
+
+test("Claude backend failure preserves provisional turns", async () => {
+  const query: ClaudeQuery = () =>
+    ({
+      async *[Symbol.asyncIterator]() {
+        yield assistantMessage("msg-1", [
+          { type: "text", text: "first", citations: null },
+        ]);
+        yield assistantMessage("msg-2", [
+          { type: "text", text: "second", citations: null },
+        ]);
+        throw new Error("backend failed after responses");
+      },
+      close() {},
+    }) as never;
+  const result = await startSubagent({
+    config,
+    description: "Claude backend failure after observations",
+    prompt: "do it",
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs: createSubagentRuns(),
+  }).settled;
+
+  assert.equal(result.lifecycle.phase, "failed");
+  assert.equal(result.usage.turns, 2);
 });
 
 test("an empty Claude result carries turns into the widget", async () => {
   const query: ClaudeQuery = () =>
     ({
       async *[Symbol.asyncIterator]() {
-        yield {
-          type: "system",
-          subtype: "init",
-          model: "claude-sonnet-4-6",
-        } as unknown as SDKMessage;
-        yield {
-          type: "result",
-          result: "",
-          is_error: false,
+        yield initMessage("claude-sonnet-4-6");
+        yield resultMessage("", {
           num_turns: 2,
-          stop_reason: "end_turn",
           total_cost_usd: 0.25,
           modelUsage: {
-            "claude-sonnet-4-6": {
+            "claude-sonnet-4-6": modelUsage({
               inputTokens: 10,
               outputTokens: 4,
               cacheReadInputTokens: 2,
               cacheCreationInputTokens: 1,
               costUSD: 0.25,
-            },
+            }),
           },
-        } as unknown as SDKMessage;
+        });
       },
       close() {},
     }) as never;
@@ -620,26 +957,19 @@ test("an empty Claude result carries turns into the widget", async () => {
 });
 
 test("Claude uses the SDK error text for an error-flagged success result", () => {
-  const [fact] = factsFrom({
-    type: "result",
-    // This is the SDK's success-subtype API-error shape: result is the
-    // provider diagnostic, not an answer to show the user.
-    result:
+  const [fact] = factsFrom(
+    resultMessage(
+      // This is the SDK's success-subtype API-error shape: result is the
+      // provider diagnostic, not an answer to show the user.
       "API Error: 529 overloaded_error: service is temporarily overloaded",
-    subtype: "success",
-    duration_ms: 1200,
-    duration_api_ms: 1100,
-    is_error: true,
-    num_turns: 1,
-    stop_reason: "end_turn",
-    total_cost_usd: 0.01,
-    usage: { input_tokens: 10, output_tokens: 0 },
-    modelUsage: {},
-    permission_denials: [],
-    errors: [],
-    uuid: "result-uuid",
-    session_id: "session-id",
-  } as unknown as SDKMessage);
+      {
+        duration_ms: 1200,
+        duration_api_ms: 1100,
+        is_error: true,
+        total_cost_usd: 0.01,
+      },
+    ),
+  );
 
   assert.equal(
     fact.errorMessage,
@@ -652,27 +982,17 @@ test("an auxiliary-only error result preserves the initialized model", async () 
   const query: ClaudeQuery = () =>
     ({
       async *[Symbol.asyncIterator]() {
-        yield {
-          type: "system",
-          subtype: "init",
-          model: "claude-opus-5",
-        } as unknown as SDKMessage;
-        yield {
-          type: "result",
-          subtype: "error_during_execution",
-          is_error: true,
-          num_turns: 0,
-          stop_reason: "error",
+        yield initMessage("claude-opus-5");
+        yield errorResultMessage(["API Error: 529 Overloaded"], {
           total_cost_usd: 0.001,
           modelUsage: {
-            "claude-haiku-4-5-20251001": {
+            "claude-haiku-4-5-20251001": modelUsage({
               inputTokens: 1,
               outputTokens: 1,
               costUSD: 0.001,
-            },
+            }),
           },
-          errors: ["API Error: 529 Overloaded"],
-        } as unknown as SDKMessage;
+        });
       },
       close() {},
     }) as never;
@@ -697,43 +1017,28 @@ test("Claude runs end-to-end through the core run contract", async () => {
     options?.stderr?.("sdk diagnostic\\n");
     return {
       async *[Symbol.asyncIterator]() {
-        yield {
-          type: "assistant",
-          message: {
-            model: "claude-sonnet-4-6",
-            content: [{ type: "text", text: "live" }],
-          },
-        } as unknown as SDKMessage;
-        yield {
-          type: "assistant",
-          message: {
-            model: "claude-sonnet-4-6",
-            content: [{ type: "text", text: "second live turn" }],
-          },
-        } as unknown as SDKMessage;
-        yield {
-          type: "result",
-          result: "answer",
-          is_error: false,
+        yield assistantMessage("msg-1", [
+          { type: "text", text: "live", citations: null },
+        ]);
+        yield assistantMessage("msg-2", [
+          { type: "text", text: "second live turn", citations: null },
+        ]);
+        yield resultMessage("answer", {
           num_turns: 2,
           total_cost_usd: 0.1,
           modelUsage: {
-            "claude-haiku-4-5-20251001": {
+            "claude-haiku-4-5-20251001": modelUsage({
               inputTokens: 1,
               outputTokens: 1,
-              cacheReadInputTokens: 0,
-              cacheCreationInputTokens: 0,
               costUSD: 0.02,
-            },
-            "claude-sonnet-4-6": {
+            }),
+            "claude-sonnet-4-6": modelUsage({
               inputTokens: 2,
               outputTokens: 1,
-              cacheReadInputTokens: 0,
-              cacheCreationInputTokens: 0,
               costUSD: 0.08,
-            },
+            }),
           },
-        } as unknown as SDKMessage;
+        });
       },
       close() {},
     } as never;
@@ -769,16 +1074,7 @@ test("Claude keeps a terminal result when the terminal fact arrives before abort
     return {
       async *[Symbol.asyncIterator]() {
         resultReceived = true;
-        yield {
-          type: "result",
-          result: "answer",
-          subtype: "success",
-          is_error: false,
-          num_turns: 1,
-          stop_reason: "end_turn",
-          model: "claude-sonnet-4-6",
-          modelUsage: {},
-        } as unknown as SDKMessage;
+        yield resultMessage("answer");
         await streamReleased;
       },
       close() {
@@ -827,15 +1123,7 @@ test("Claude cancellation stays cancelled when abort arrives before a later term
         // The abort closes the stream, but this SDK-shaped fixture still
         // delivers its queued terminal result afterward.
         await resultReleased;
-        yield {
-          type: "result",
-          result: "late answer",
-          subtype: "success",
-          is_error: false,
-          num_turns: 1,
-          stop_reason: "end_turn",
-          model: "claude-sonnet-4-6",
-        } as unknown as SDKMessage;
+        yield resultMessage("late answer");
       },
       close() {
         closeCalled = true;
@@ -938,30 +1226,35 @@ test("Claude cancellation stays cancelled when abort closes the stream gracefull
 });
 
 test("Claude does not infer provenance from one terminal usage entry", () => {
-  const [fact] = factsFrom({
-    type: "result",
-    result: "answer",
-    is_error: false,
-    num_turns: 1,
-    modelUsage: {
-      "claude-sonnet-4-6": { inputTokens: 10, outputTokens: 4 },
-    },
-  } as unknown as SDKMessage);
+  const [fact] = factsFrom(
+    resultMessage("answer", {
+      modelUsage: {
+        "claude-sonnet-4-6": modelUsage({
+          inputTokens: 10,
+          outputTokens: 4,
+        }),
+      },
+    }),
+  );
 
   assert.equal(fact.model, undefined);
 });
 
 test("Claude does not infer provenance from multiple terminal usage entries", () => {
-  const [fact] = factsFrom({
-    type: "result",
-    result: "answer",
-    is_error: false,
-    num_turns: 1,
-    modelUsage: {
-      "claude-haiku-4-5-20251001": { inputTokens: 2, outputTokens: 1 },
-      "claude-sonnet-4-6": { inputTokens: 10, outputTokens: 4 },
-    },
-  } as unknown as SDKMessage);
+  const [fact] = factsFrom(
+    resultMessage("answer", {
+      modelUsage: {
+        "claude-haiku-4-5-20251001": modelUsage({
+          inputTokens: 2,
+          outputTokens: 1,
+        }),
+        "claude-sonnet-4-6": modelUsage({
+          inputTokens: 10,
+          outputTokens: 4,
+        }),
+      },
+    }),
+  );
 
   assert.equal(fact.model, undefined);
   assert.equal(fact.usage?.input, 12);

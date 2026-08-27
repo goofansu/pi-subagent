@@ -149,8 +149,17 @@ comments and ordinary string literals are not.
   different: it is a latest-value gauge, so the fold replaces it with the
   newest reported context size rather than adding it. A harness that only
   knows totals reports one usage-bearing fact, and never reports the same
-  run's usage both per-message and cumulatively. *Test:* the shared **Harness
-  Conformance** battery's `usage-totals` scenario runs every real harness
+  run's usage both per-message and cumulatively. Turn deltas are nonnegative
+  finite integers. Claude provisionally emits one turn per unique root
+  assistant message id (treating a missing parent as root, deduplicating block
+  events, excluding non-null sidechains, and counting aborted frames), then
+  uses a valid terminal total only to raise the count. Missing message ids and
+  malformed totals contribute zero; cancellation, backend failure, and lower
+  terminal totals preserve provisional progress.
+  Refusal-fallback retractions deliberately do not decrement additive Facts,
+  accepting a bounded overcount so later catch-up remains synchronized.
+  *Test:* the shared **Harness Conformance** battery's `usage-totals`
+  scenario runs every real harness
   through the dispatcher and fold, asserting additive deltas; the Pi and fake
   rigs also prove latest-context replacement, while the Claude rig proves no
   double count between per-message usage and the terminal result.

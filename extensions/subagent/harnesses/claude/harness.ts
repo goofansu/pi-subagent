@@ -19,6 +19,7 @@ import {
   stringField,
   validateCommonProfileFields,
 } from "../contract.ts";
+import { createClaudeTurnCounter } from "./turns.ts";
 
 /**
  * The SDK documents these family aliases and resolves each to its current
@@ -87,9 +88,7 @@ function contentParts(content: unknown): FactPart[] {
 }
 
 /** Translate one SDK wire object into domain facts; SDK objects stop here. */
-export function translateClaudeMessage(
-  message: SDKMessage,
-): Translation | undefined {
+function translateClaudeMessage(message: SDKMessage): Translation | undefined {
   const wire = message as unknown as Record<string, unknown>;
   if (wire.type === "assistant" && isRecord(wire.message)) {
     const parts = contentParts(wire.message.content);
@@ -104,9 +103,6 @@ export function translateClaudeMessage(
         {
           role: "assistant",
           parts,
-          // Claude reports total turns on its terminal result. Streamed
-          // assistant messages are progress, not additional turns.
-          usage: { turns: 0 },
           ...(model ? { model } : {}),
         },
       ],
@@ -204,7 +200,6 @@ export function translateClaudeMessage(
           cacheRead,
           cacheWrite,
           cost,
-          turns: typeof wire.num_turns === "number" ? wire.num_turns : 1,
         },
         ...(model ? { model } : {}),
         ...(typeof wire.stop_reason === "string"
@@ -219,8 +214,8 @@ export function translateClaudeMessage(
 }
 
 /**
- * Add live turn deltas to Claude's block-level stream while preserving the
- * terminal result's authoritative total.
+ * Add live turn deltas to Claude's block-level stream and reconcile terminal
+ * totals only when they raise the count already emitted.
  *
  * The SDK can emit several assistant events for one Messages API response —
  * one per completed content block — and sidechain responses use the same wire
@@ -230,29 +225,24 @@ export function translateClaudeMessage(
 export function createClaudeTranslator(): (
   message: SDKMessage,
 ) => Translation | undefined {
-  const rootMessageIds = new Set<string>();
-  let foldedTurns = 0;
+  const turnCounter = createClaudeTurnCounter();
 
   return (message) => {
     const translation = translateClaudeMessage(message);
+    const turnDelta = turnCounter.countFor(message);
     if (!translation) return undefined;
 
     const wire = message as unknown as Record<string, unknown>;
-    const fact = translation.facts?.[0];
-    if (
-      wire.type === "assistant" &&
-      wire.parent_tool_use_id === null &&
-      isRecord(wire.message) &&
-      typeof wire.message.id === "string" &&
-      !rootMessageIds.has(wire.message.id)
-    ) {
-      rootMessageIds.add(wire.message.id);
-      foldedTurns += 1;
-      if (fact?.usage) fact.usage.turns = 1;
-    } else if (wire.type === "result" && fact?.usage) {
-      const total = fact.usage.turns ?? 0;
-      fact.usage.turns = total - foldedTurns;
-      foldedTurns = total;
+    if (wire.type === "assistant" || wire.type === "result") {
+      const accountingFact = translation.facts?.find(
+        (fact) => fact.role === "assistant",
+      );
+      if (accountingFact) {
+        accountingFact.usage = {
+          ...accountingFact.usage,
+          turns: turnDelta,
+        };
+      }
     }
 
     return translation;

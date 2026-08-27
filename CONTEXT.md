@@ -27,7 +27,15 @@ id — never on the run itself.
 
 **Turn** — one completed provider model turn (response), folded into a run's
 usage and counted by the widget. A turn is provider accounting, not a second
-run or a provider session that can be resumed.
+run or a provider session that can be resumed. Claude provisionally counts one
+unique root assistant message id (including aborted frames), treating a
+missing parent id as root for compatibility, deduplicating its block-level
+events, and excluding non-null sidechains. Its terminal total can raise that
+count but never lower it, so cancellation and backend failure preserve already
+observed progress. Missing message ids contribute nothing until a usable
+terminal total can catch up; missing or invalid totals are ignored. Refusal
+fallback retractions cannot retract additive Facts, so their bounded overcount
+is accepted rather than desynchronizing later catch-up.
 
 **Detached run** — a run that outlives the turn that started it. Every run
 started by `agent_start` is detached from the turn: `Escape` does not stop it.

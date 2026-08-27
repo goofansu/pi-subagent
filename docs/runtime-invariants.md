@@ -10,8 +10,19 @@ adapters alone know provider wire messages and translate them into `Fact`
 records. The dispatcher,
 fold, registry, presentation, and widget consume only those facts.
 Input/output/cache counters, turns, and cost on a fact are additive deltas and
-the fold sums them; `contextTokens` is a latest-value gauge, so the fold
+the fold sums them. Usage turn deltas are nonnegative finite integers;
+`contextTokens` is a latest-value gauge, so the fold
 replaces it with the newest reported context size rather than adding it.
+Claude emits provisional deltas for unique assistant message ids whose parent
+tool-use id is nullish; a missing parent is root-compatible, while a non-null
+parent is a sidechain. It reconciles a usable terminal `num_turns` only by
+raising the emitted count. Missing message ids contribute no provisional delta,
+while a missing, non-finite, negative, or fractional terminal total contributes
+zero. Provisional progress is durable if cancellation or backend failure
+prevents a terminal result, or if a terminal result reports a lower total.
+Claude refusal-fallback `supersedes` and `retracted_message_uuids` do not
+decrement prior Facts; the resulting bounded overcount is an accepted
+consequence of additive accounting.
 Cancellation crosses the seam only as an `AbortSignal`; each adapter owns its
 child-specific stop mechanism. Backend
 `aborted` is normalized at the seam: the domain records lifecycle `cancelled`
