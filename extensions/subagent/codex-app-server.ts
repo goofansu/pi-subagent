@@ -658,7 +658,6 @@ export function createCodexAppServerSource(
             // Escalation remains the fallback if the request cannot be sent.
           }
           if (settled) return;
-          endStdin();
           scheduleKill("SIGTERM");
         } else {
           endStdin();
