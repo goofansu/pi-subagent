@@ -107,7 +107,7 @@ function usageDelta(
     reasoningOutputTokens: number("reasoningOutputTokens"),
   };
   const diff = (key: keyof typeof next): number =>
-    Math.max(0, next[key] - (previous?.[key] ?? 0));
+    next[key] - (previous?.[key] ?? 0);
   return {
     fact: {
       role: "metadata",
@@ -124,10 +124,11 @@ function usageDelta(
   };
 }
 
-function terminalTurnError(turn: Record<string, unknown>): string | undefined {
-  if (!isRecord(turn.error) || typeof turn.error.message !== "string")
-    return undefined;
-  return turn.error.message;
+function terminalTurnError(turn: unknown): string | undefined {
+  if (!isRecord(turn) || !isRecord(turn.error)) return undefined;
+  return typeof turn.error.message === "string"
+    ? turn.error.message
+    : undefined;
 }
 
 function reasoningHeadline(summary: string): string | undefined {
@@ -145,9 +146,8 @@ export function createCodexTranslator(
   let completedAgentMessage = false;
 
   return (event) => {
-    const params = event.params;
     if (event.method === "item/started") {
-      const item = params.item;
+      const item = event.params.item;
       if (!isRecord(item)) return undefined;
       const activity = itemActivity(item, cwd);
       return activity ? { activity } : undefined;
@@ -158,8 +158,8 @@ export function createCodexTranslator(
     }
 
     if (event.method === "item/reasoning/summaryTextDelta") {
-      const itemId = params.itemId;
-      const delta = params.delta;
+      const itemId = event.params.itemId;
+      const delta = event.params.delta;
       if (typeof itemId !== "string" || typeof delta !== "string")
         return undefined;
       const summary = (reasoning.get(itemId) ?? "") + delta;
@@ -168,7 +168,7 @@ export function createCodexTranslator(
     }
 
     if (event.method === "item/completed") {
-      const item = params.item;
+      const item = event.params.item;
       if (!isRecord(item)) return undefined;
       if (item.type === "agentMessage") {
         completedAgentMessage = true;
@@ -211,7 +211,7 @@ export function createCodexTranslator(
     }
 
     if (event.method === "thread/tokenUsage/updated") {
-      const tokenUsage = params.tokenUsage;
+      const tokenUsage = event.params.tokenUsage;
       if (!isRecord(tokenUsage) || !isRecord(tokenUsage.total))
         return undefined;
       const result = usageDelta(tokenUsage.total, previousUsage);
@@ -220,9 +220,11 @@ export function createCodexTranslator(
     }
 
     if (event.method === "error") {
-      const error = isRecord(params.error) ? params.error.message : undefined;
+      const error = isRecord(event.params.error)
+        ? event.params.error.message
+        : undefined;
       if (typeof error !== "string") return undefined;
-      if (params.willRetry === true)
+      if (event.params.willRetry === true)
         return { activity: "Retrying after a provider error…" };
       return {
         facts: [{ role: "metadata", parts: [], errorMessage: error }],
@@ -231,7 +233,7 @@ export function createCodexTranslator(
     }
 
     if (event.method === "turn/completed") {
-      const turn = isRecord(params.turn) ? params.turn : {};
+      const turn = event.params.turn;
       const errorMessage = terminalTurnError(turn);
       const status = turn.status;
       return {

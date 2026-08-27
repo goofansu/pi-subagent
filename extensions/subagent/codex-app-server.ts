@@ -1,125 +1,464 @@
-import type { SpawnOptions } from "node:child_process";
-import { type ChildProcess, spawn as defaultSpawn } from "node:child_process";
-import type { ChildProcessSpawn } from "./child-process.ts";
+import {
+  type ChildProcess,
+  spawn as defaultSpawn,
+  type SpawnOptions,
+} from "node:child_process";
 import type { OneShotSource } from "./one-shot.ts";
 import { DEPTH_ENV_KEY } from "./run.ts";
 
-const DEFAULT_KILL_ESCALATION_MS = 5_000;
 const STDOUT_LINE_LIMIT = 32 * 1024 * 1024;
-const RAW_STDOUT_TAIL_LIMIT = 2_000;
-const OVERSIZED_LINE_MESSAGE =
-  "[... oversized stdout line dropped; resyncing at the next newline ...]\n";
+const RAW_STDOUT_TAIL_LIMIT = 2000;
+const DEFAULT_KILL_ESCALATION_MS = 5000;
+const CLIENT_INFO = {
+  name: "pi-subagent",
+  title: "pi-subagent",
+  version: "1.0.0",
+} as const;
 
-export interface AppServerClientInfo {
-  name: string;
-  title: string | null;
-  version: string;
+export type ChildProcessSpawn = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => ChildProcess;
+
+type JsonObject = Record<string, unknown>;
+type TurnStatus = "completed" | "interrupted" | "failed" | "inProgress";
+export interface TurnError {
+  message: string;
+  codexErrorInfo: unknown | null;
+  additionalDetails: string | null;
 }
+
+export type ThreadItem =
+  | { type: "userMessage"; id: string; content: unknown[] }
+  | {
+      type: "agentMessage";
+      id: string;
+      text: string;
+      phase?: "commentary" | "final_answer" | null;
+    }
+  | { type: "plan"; id: string; text: string }
+  | { type: "reasoning"; id: string; summary: string[]; content: string[] }
+  | {
+      type: "commandExecution";
+      id: string;
+      command: string;
+      cwd: string;
+      status: "inProgress" | "completed" | "failed" | "declined";
+      aggregatedOutput?: string | null;
+      exitCode?: number | null;
+      durationMs?: number | null;
+    }
+  | {
+      type: "fileChange";
+      id: string;
+      changes: {
+        path: string;
+        kind:
+          | { type: "add" }
+          | { type: "delete" }
+          | { type: "update"; move_path: string | null };
+        diff: string;
+      }[];
+      status: unknown;
+    }
+  | {
+      type: "mcpToolCall";
+      id: string;
+      server: string;
+      tool: string;
+      status: unknown;
+    }
+  | { type: "webSearch"; id: string; query: string };
+
+export interface Turn {
+  id: string;
+  items: ThreadItem[];
+  status: TurnStatus;
+  error: TurnError | null;
+  startedAt: number | null;
+  completedAt: number | null;
+  durationMs: number | null;
+}
+
+export interface ThreadTokenUsage {
+  total: TokenUsageBreakdown;
+  last: TokenUsageBreakdown;
+  modelContextWindow: number | null;
+}
+
+export interface TokenUsageBreakdown {
+  totalTokens: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+}
+
+interface ItemStartedParams {
+  item: ThreadItem;
+  threadId: string;
+  turnId: string;
+  startedAtMs: number;
+}
+
+interface ItemCompletedParams {
+  item: ThreadItem;
+  threadId: string;
+  turnId: string;
+  completedAtMs: number;
+}
+
+export type CodexAppServerNotification =
+  | { method: "item/started"; params: ItemStartedParams; emittedAtMs: number }
+  | {
+      method: "item/completed";
+      params: ItemCompletedParams;
+      emittedAtMs: number;
+    }
+  | {
+      method: "item/agentMessage/delta";
+      params: {
+        threadId: string;
+        turnId: string;
+        itemId: string;
+        delta: string;
+      };
+      emittedAtMs: number;
+    }
+  | {
+      method: "item/reasoning/summaryTextDelta";
+      params: {
+        threadId: string;
+        turnId: string;
+        itemId: string;
+        delta: string;
+        summaryIndex: number;
+      };
+      emittedAtMs: number;
+    }
+  | {
+      method: "thread/tokenUsage/updated";
+      params: {
+        threadId: string;
+        turnId: string;
+        tokenUsage: ThreadTokenUsage;
+      };
+      emittedAtMs: number;
+    }
+  | {
+      method: "turn/completed";
+      params: { threadId: string; turn: Turn };
+      emittedAtMs: number;
+    }
+  | {
+      method: "error";
+      params: {
+        error: TurnError;
+        willRetry: boolean;
+        threadId: string;
+        turnId: string;
+      };
+      emittedAtMs: number;
+    };
 
 export interface CodexAppServerOptions {
-  cwd: string;
-  childDepth: number;
-  prompt: string;
-  model?: string;
-  effort?: string;
-  spawn?: ChildProcessSpawn;
-  killEscalationMs?: number;
-  clientInfo?: AppServerClientInfo;
+  readonly cwd: string;
+  readonly childDepth: number;
+  readonly prompt: string;
+  readonly model?: string;
+  readonly effort?: string;
+  readonly spawn?: ChildProcessSpawn;
+  readonly killEscalationMs?: number;
 }
 
-interface JsonRpcResponse {
-  id: string | number;
-  result?: unknown;
-  error?: { code?: number; message?: string; data?: unknown };
-}
-
-interface PinnedEvent {
-  method:
-    | "item/started"
-    | "item/completed"
-    | "item/agentMessage/delta"
-    | "item/reasoning/summaryTextDelta"
-    | "thread/tokenUsage/updated"
-    | "turn/completed"
-    | "error";
-  params: Record<string, unknown>;
-}
-
-export type CodexAppServerEvent = PinnedEvent;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isRecord(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isId(value: unknown): value is string | number {
-  return typeof value === "string" || typeof value === "number";
+function isNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
-function hasStrings(
-  value: Record<string, unknown>,
-  ...keys: string[]
-): boolean {
-  return keys.every((key) => typeof value[key] === "string");
-}
-
-function isTokenBreakdown(value: unknown): boolean {
+function isTurnStatus(value: unknown): value is TurnStatus {
   return (
-    isRecord(value) &&
-    [
+    value === "completed" ||
+    value === "interrupted" ||
+    value === "failed" ||
+    value === "inProgress"
+  );
+}
+
+function parseTurnError(value: unknown): TurnError | undefined {
+  if (!isRecord(value) || typeof value.message !== "string") return undefined;
+  if (
+    !("codexErrorInfo" in value) ||
+    !("additionalDetails" in value) ||
+    (value.additionalDetails !== null &&
+      typeof value.additionalDetails !== "string")
+  ) {
+    return undefined;
+  }
+  return {
+    message: value.message,
+    codexErrorInfo: value.codexErrorInfo,
+    additionalDetails: value.additionalDetails,
+  };
+}
+
+function parseThreadItem(value: unknown): ThreadItem | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.type !== "string" ||
+    typeof value.id !== "string"
+  )
+    return undefined;
+  switch (value.type) {
+    case "userMessage":
+      return Array.isArray(value.content) ? (value as ThreadItem) : undefined;
+    case "agentMessage":
+      return typeof value.text === "string" &&
+        (value.phase === undefined ||
+          value.phase === null ||
+          value.phase === "commentary" ||
+          value.phase === "final_answer")
+        ? (value as ThreadItem)
+        : undefined;
+    case "plan":
+      return typeof value.text === "string" ? (value as ThreadItem) : undefined;
+    case "reasoning":
+      return Array.isArray(value.summary) &&
+        value.summary.every((part) => typeof part === "string") &&
+        Array.isArray(value.content) &&
+        value.content.every((part) => typeof part === "string")
+        ? (value as ThreadItem)
+        : undefined;
+    case "commandExecution":
+      return typeof value.command === "string" &&
+        typeof value.cwd === "string" &&
+        (value.status === "inProgress" ||
+          value.status === "completed" ||
+          value.status === "failed" ||
+          value.status === "declined")
+        ? (value as ThreadItem)
+        : undefined;
+    case "fileChange":
+      return Array.isArray(value.changes) &&
+        value.changes.every(
+          (change) =>
+            isRecord(change) &&
+            typeof change.path === "string" &&
+            typeof change.diff === "string" &&
+            isRecord(change.kind) &&
+            (change.kind.type === "add" ||
+              change.kind.type === "delete" ||
+              (change.kind.type === "update" &&
+                (change.kind.move_path === null ||
+                  typeof change.kind.move_path === "string"))),
+        )
+        ? (value as ThreadItem)
+        : undefined;
+    case "mcpToolCall":
+      return typeof value.server === "string" && typeof value.tool === "string"
+        ? (value as ThreadItem)
+        : undefined;
+    case "webSearch":
+      return typeof value.query === "string"
+        ? (value as ThreadItem)
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
+function parseThreadTokenUsage(value: unknown): ThreadTokenUsage | undefined {
+  if (!isRecord(value)) return undefined;
+  const breakdown = (candidate: unknown): TokenUsageBreakdown | undefined => {
+    if (!isRecord(candidate)) return undefined;
+    const fields = [
       "totalTokens",
       "inputTokens",
       "cachedInputTokens",
       "cacheWriteInputTokens",
       "outputTokens",
       "reasoningOutputTokens",
-    ].every((key) => typeof value[key] === "number")
+    ] as const;
+    if (!fields.every((field) => isNumber(candidate[field]))) return undefined;
+    return Object.fromEntries(
+      fields.map((field) => [field, candidate[field]]),
+    ) as unknown as TokenUsageBreakdown;
+  };
+  const total = breakdown(value.total);
+  const last = breakdown(value.last);
+  if (
+    !total ||
+    !last ||
+    (value.modelContextWindow !== null && !isNumber(value.modelContextWindow))
+  )
+    return undefined;
+  return { total, last, modelContextWindow: value.modelContextWindow };
+}
+
+function parseTurn(value: unknown): Turn | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    !isTurnStatus(value.status)
+  )
+    return undefined;
+  const error = value.error === null ? null : parseTurnError(value.error);
+  if (value.error !== null && !error) return undefined;
+  return {
+    id: value.id,
+    items: Array.isArray(value.items)
+      ? value.items
+          .map(parseThreadItem)
+          .filter((item): item is ThreadItem => item !== undefined)
+      : [],
+    status: value.status,
+    error: error ?? null,
+    startedAt: isNumber(value.startedAt) ? value.startedAt : null,
+    completedAt: isNumber(value.completedAt) ? value.completedAt : null,
+    durationMs: isNumber(value.durationMs) ? value.durationMs : null,
+  };
+}
+
+function parseNotification(
+  value: unknown,
+): CodexAppServerNotification | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.method !== "string" ||
+    !isNumber(value.emittedAtMs)
+  )
+    return undefined;
+  const params = value.params;
+  if (!isRecord(params)) return undefined;
+  const threadId = params.threadId;
+  if (typeof threadId !== "string") return undefined;
+  if (value.method === "item/started" || value.method === "item/completed") {
+    const item = parseThreadItem(params.item);
+    const timestamp =
+      value.method === "item/started"
+        ? params.startedAtMs
+        : params.completedAtMs;
+    if (!item || typeof params.turnId !== "string" || !isNumber(timestamp))
+      return undefined;
+    if (value.method === "item/started") {
+      return {
+        method: value.method,
+        params: {
+          item,
+          threadId,
+          turnId: params.turnId,
+          startedAtMs: timestamp,
+        },
+        emittedAtMs: value.emittedAtMs,
+      };
+    }
+    return {
+      method: value.method,
+      params: {
+        item,
+        threadId,
+        turnId: params.turnId,
+        completedAtMs: timestamp,
+      },
+      emittedAtMs: value.emittedAtMs,
+    };
+  }
+  if (
+    value.method === "item/agentMessage/delta" &&
+    typeof params.turnId === "string" &&
+    typeof params.itemId === "string" &&
+    typeof params.delta === "string"
+  ) {
+    return {
+      method: value.method,
+      params: {
+        threadId,
+        turnId: params.turnId,
+        itemId: params.itemId,
+        delta: params.delta,
+      },
+      emittedAtMs: value.emittedAtMs,
+    };
+  }
+  if (
+    value.method === "item/reasoning/summaryTextDelta" &&
+    typeof params.turnId === "string" &&
+    typeof params.itemId === "string" &&
+    typeof params.delta === "string" &&
+    Number.isInteger(params.summaryIndex)
+  ) {
+    return {
+      method: value.method,
+      params: {
+        threadId,
+        turnId: params.turnId,
+        itemId: params.itemId,
+        delta: params.delta,
+        summaryIndex: params.summaryIndex as number,
+      },
+      emittedAtMs: value.emittedAtMs,
+    };
+  }
+  if (
+    value.method === "thread/tokenUsage/updated" &&
+    typeof params.turnId === "string"
+  ) {
+    const tokenUsage = parseThreadTokenUsage(params.tokenUsage);
+    return tokenUsage
+      ? {
+          method: value.method,
+          params: { threadId, turnId: params.turnId, tokenUsage },
+          emittedAtMs: value.emittedAtMs,
+        }
+      : undefined;
+  }
+  if (value.method === "turn/completed") {
+    const turn = parseTurn(params.turn);
+    return turn
+      ? {
+          method: value.method,
+          params: { threadId, turn },
+          emittedAtMs: value.emittedAtMs,
+        }
+      : undefined;
+  }
+  if (
+    value.method === "error" &&
+    typeof params.turnId === "string" &&
+    typeof params.willRetry === "boolean"
+  ) {
+    const error = parseTurnError(params.error);
+    return error
+      ? {
+          method: value.method,
+          params: {
+            error,
+            willRetry: params.willRetry,
+            threadId,
+            turnId: params.turnId,
+          },
+          emittedAtMs: value.emittedAtMs,
+        }
+      : undefined;
+  }
+  return undefined;
+}
+
+/** Keep provider identity out of the persisted stderr post-mortem. */
+function redactProviderIds(value: string): string {
+  return value.replace(
+    /"(threadId|turnId|itemId|sessionId|id)"\s*:\s*("[^"]*"|-?\d+)/g,
+    '"$1":"[redacted]"',
   );
 }
 
-function isPinnedEvent(value: unknown): value is PinnedEvent {
-  if (!isRecord(value) || typeof value.method !== "string") return false;
-  const params = value.params;
-  if (!isRecord(params)) return false;
-  if (value.method === "item/started" || value.method === "item/completed") {
-    return (
-      hasStrings(params, "threadId", "turnId") &&
-      isRecord(params.item) &&
-      typeof params.item.type === "string"
-    );
-  }
-  if (value.method === "item/agentMessage/delta") {
-    return hasStrings(params, "threadId", "turnId", "itemId", "delta");
-  }
-  if (value.method === "item/reasoning/summaryTextDelta") {
-    return (
-      hasStrings(params, "threadId", "turnId", "itemId", "delta") &&
-      typeof params.summaryIndex === "number"
-    );
-  }
-  if (value.method === "thread/tokenUsage/updated") {
-    return (
-      hasStrings(params, "threadId", "turnId") &&
-      isRecord(params.tokenUsage) &&
-      isTokenBreakdown(params.tokenUsage.total) &&
-      isTokenBreakdown(params.tokenUsage.last)
-    );
-  }
-  if (value.method === "turn/completed") {
-    return (
-      hasStrings(params, "threadId") &&
-      isRecord(params.turn) &&
-      hasStrings(params.turn, "id", "status")
-    );
-  }
-  if (value.method === "error") {
-    return (
-      hasStrings(params, "threadId", "turnId") &&
-      typeof params.willRetry === "boolean" &&
-      isRecord(params.error) &&
-      typeof params.error.message === "string"
-    );
-  }
-  return false;
+function codexEffort(effort: string | undefined): string | undefined {
+  return effort === "off" ? "none" : effort;
 }
 
 function spawnOptions(cwd: string, childDepth: number): SpawnOptions {
@@ -131,87 +470,51 @@ function spawnOptions(cwd: string, childDepth: number): SpawnOptions {
   };
 }
 
-interface LineParser {
-  (chunk: string): void;
-  flush(): void;
+function initializeParams(): JsonObject {
+  return { clientInfo: CLIENT_INFO, capabilities: null };
 }
 
-function lineParser(
-  onLine: (line: string) => void,
-  onOversized: () => void,
-): LineParser {
-  let buffer = "";
-  let dropping = false;
-  const parse = ((chunk: string): void => {
-    buffer += chunk;
-    while (true) {
-      const newline = buffer.indexOf("\n");
-      if (newline < 0) break;
-      const line = buffer.slice(0, newline);
-      buffer = buffer.slice(newline + 1);
-      if (dropping) {
-        dropping = false;
-      } else if (line.length <= STDOUT_LINE_LIMIT) {
-        onLine(line);
-      } else {
-        onOversized();
-      }
-    }
-    if (!dropping && buffer.length > STDOUT_LINE_LIMIT) {
-      dropping = true;
-      buffer = "";
-      onOversized();
-    }
-  }) as LineParser;
-  parse.flush = (): void => {
-    if (dropping) return;
-    const trailing = buffer;
-    buffer = "";
-    if (trailing.trim()) {
-      if (trailing.length <= STDOUT_LINE_LIMIT) onLine(trailing);
-      else onOversized();
-    }
+function isInitializeResponse(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.userAgent === "string" &&
+    typeof value.codexHome === "string" &&
+    typeof value.platformFamily === "string" &&
+    typeof value.platformOs === "string"
+  );
+}
+
+function threadStartParams(options: CodexAppServerOptions): JsonObject {
+  const params: JsonObject = {
+    cwd: options.cwd,
+    ephemeral: true,
+    approvalPolicy: "never",
+    sandbox: "danger-full-access",
   };
-  return parse;
+  if (options.model) params.model = options.model;
+  const effort = codexEffort(options.effort);
+  if (effort) params.config = { model_reasoning_effort: effort };
+  return params;
 }
 
-function requestError(response: JsonRpcResponse): Error {
-  return new Error(
-    response.error?.message ??
-      `Codex App Server rejected request ${response.id}`,
-  );
+function turnStartParams(threadId: string, prompt: string): JsonObject {
+  return {
+    threadId,
+    input: [{ type: "text", text: prompt, text_elements: [] }],
+  };
 }
 
-/** App Server diagnostics cannot turn wire identities into run state. */
-function redactProviderIds(value: string): string {
-  return value.replace(
-    /"(threadId|turnId|itemId|sessionId|id)"\s*:\s*("[^"]*"|-?\d+)/g,
-    '"$1":"[redacted]"',
-  );
-}
-
-/**
- * Run one disposable App Server conversation. JSON-RPC ids and provider ids
- * are consumed here and never enter the harness translator or run facts.
- */
-export function createCodexAppServerSource(
+/** Build one disposable Codex App Server conversation over stdio. */
+export function codexAppServerSource(
   options: CodexAppServerOptions,
-): OneShotSource<CodexAppServerEvent> {
+): OneShotSource<CodexAppServerNotification> {
   const {
     cwd,
     childDepth,
     prompt,
-    model,
-    effort,
     spawn = defaultSpawn,
     killEscalationMs = DEFAULT_KILL_ESCALATION_MS,
-    clientInfo = {
-      name: "pi-subagent",
-      title: "pi-subagent",
-      version: "1.0.0",
-    },
   } = options;
-
   return async (sink, signal) => {
     if (signal.aborted) return { status: "clean" };
     return new Promise((resolve, reject) => {
@@ -230,272 +533,348 @@ export function createCodexAppServerSource(
       let nextId = 1;
       let threadId: string | undefined;
       let turnId: string | undefined;
-      let processClosed = false;
-      let processError = false;
-      let semanticallySettled = false;
+      let settled = false;
+      let childClosed = false;
       let aborted = signal.aborted;
-      let sawTerminalAnswer = false;
       let sawStderr = false;
+      let sawTerminalAnswer = false;
       let rawStdoutTail = "";
-      let escalation: ReturnType<typeof setTimeout> | undefined;
-      let terminationRequested = false;
+      let lineBuffer = "";
+      let droppingLine = false;
+      let stdinEnded = false;
+      let terminationStarted = false;
+      let terminationMode: "interrupt" | "kill" | undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const pendingNotifications: CodexAppServerNotification[] = [];
       const pending = new Map<
-        string,
+        number,
         { resolve: (value: unknown) => void; reject: (error: Error) => void }
       >();
 
-      const clearEscalation = (): void => {
-        if (escalation !== undefined) {
-          clearTimeout(escalation);
-          escalation = undefined;
+      const clearTimer = (): void => {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+          timer = undefined;
         }
       };
-      const terminate = (immediate = true): void => {
-        if (processClosed || terminationRequested) return;
-        terminationRequested = true;
-        const killTerm = (): void => {
-          if (processClosed) return;
-          try {
-            proc.kill("SIGTERM");
-          } catch {
-            // The child can exit between the event and cleanup.
-          }
-          escalation = setTimeout(() => {
-            escalation = undefined;
-            if (!processClosed) {
-              try {
-                proc.kill("SIGKILL");
-              } catch {
-                // The process may have exited between escalation stages.
-              }
-            }
-          }, killEscalationMs);
-          escalation.unref?.();
-        };
-        if (immediate) killTerm();
-        else {
-          escalation = setTimeout(() => {
-            escalation = undefined;
-            killTerm();
-          }, killEscalationMs);
-          escalation.unref?.();
-        }
+      const detachProcess = (): void => {
+        proc.removeListener("error", onProcessError);
+        proc.removeListener("close", onClose);
       };
-      const removeListeners = (keepClose = false): void => {
-        signal.removeEventListener("abort", onAbort);
-        proc.stdin?.removeListener("error", onStdinError);
+      const detachStreams = (): void => {
         proc.stdout?.removeListener("data", onStdoutData);
         proc.stderr?.removeListener("data", onStderrData);
-        proc.removeListener("error", onProcessError);
-        if (!keepClose) proc.removeListener("close", onClose);
+        proc.stdin?.removeListener("error", onStdinError);
       };
-      const cleanup = (kill: boolean): void => {
-        clearEscalation();
-        removeListeners();
+      const rejectPending = (error: Error): void => {
+        for (const request of pending.values()) request.reject(error);
+        pending.clear();
+      };
+      const finishCleanup = (): void => {
+        clearTimer();
+        signal.removeEventListener("abort", onAbort);
+        detachStreams();
+        detachProcess();
+        rejectPending(new Error("Codex App Server transport closed"));
+      };
+      const endStdin = (): void => {
+        if (stdinEnded) return;
+        stdinEnded = true;
         try {
           proc.stdin?.end();
         } catch {
-          // Closing an already closed pipe is harmless cleanup.
+          // The child may have closed stdin during teardown.
         }
-        if (kill) terminate();
       };
-      const settle = (
+      const kill = (stage: "SIGTERM" | "SIGKILL"): void => {
+        try {
+          proc.kill(stage);
+        } catch {
+          // The child may have exited between escalation stages.
+        }
+      };
+      const resolveAfterKill = (): void => {
+        if (settled) return;
+        settled = true;
+        finishCleanup();
+        resolve({ status: "clean" });
+      };
+      const scheduleKill = (stage: "SIGTERM" | "SIGKILL"): void => {
+        clearTimer();
+        timer = setTimeout(() => {
+          timer = undefined;
+          if (childClosed) return;
+          kill(stage);
+          if (stage === "SIGTERM") scheduleKill("SIGKILL");
+          else if (settled) finishCleanup();
+          else resolveAfterKill();
+        }, killEscalationMs);
+        timer.unref?.();
+      };
+      const beginTermination = (interrupt: boolean): void => {
+        if (childClosed || terminationStarted) return;
+        terminationStarted = true;
+        terminationMode =
+          interrupt && threadId && turnId ? "interrupt" : "kill";
+        if (terminationMode === "interrupt") {
+          try {
+            sendRequest("turn/interrupt", { threadId, turnId }).catch(() => {});
+          } catch {
+            // Escalation remains the fallback if the request cannot be sent.
+          }
+          if (settled) return;
+          endStdin();
+          scheduleKill("SIGTERM");
+        } else {
+          endStdin();
+          kill("SIGTERM");
+          scheduleKill("SIGKILL");
+        }
+      };
+      const finish = (
         conclusion:
           | { status: "clean" }
           | { status: "failed"; errorMessage?: string },
-        kill: boolean,
+        terminate: boolean,
       ): void => {
-        if (semanticallySettled) return;
-        semanticallySettled = true;
-        for (const waiter of pending.values())
-          waiter.reject(new Error("Codex App Server source settled"));
-        pending.clear();
-        cleanup(kill);
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        detachStreams();
+        if (terminate) beginTermination(false);
+        else {
+          endStdin();
+          clearTimer();
+          detachProcess();
+          rejectPending(new Error("Codex App Server transport settled"));
+        }
         resolve(conclusion);
       };
       const fail = (error: unknown): void => {
-        if (semanticallySettled) return;
-        semanticallySettled = true;
-        for (const waiter of pending.values())
-          waiter.reject(
-            error instanceof Error ? error : new Error(String(error)),
-          );
-        pending.clear();
-        cleanup(true);
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        detachStreams();
+        beginTermination(false);
         reject(error);
       };
-      const stdin = proc.stdin;
-      const write = (value: unknown): void => {
-        stdin.write(`${JSON.stringify(value)}\n`, "utf8");
+      const write = (value: JsonObject): void => {
+        if (settled) return;
+        proc.stdin?.write(`${JSON.stringify(value)}\n`, "utf8");
       };
-      const request = (method: string, params: unknown): Promise<unknown> => {
+      const sendNotification = (method: string, params?: JsonObject): void => {
+        const value: JsonObject = { method };
+        if (params) value.params = params;
+        write(value);
+      };
+      function sendRequest(
+        method: string,
+        params: JsonObject,
+      ): Promise<unknown> {
         const id = nextId++;
-        return new Promise((resolveRequest, rejectRequest) => {
-          pending.set(String(id), {
-            resolve: resolveRequest,
-            reject: rejectRequest,
-          });
-          try {
-            write({ jsonrpc: "2.0", id, method, params });
-          } catch (error) {
-            pending.delete(String(id));
-            rejectRequest(
-              error instanceof Error ? error : new Error(String(error)),
-            );
-          }
-        });
-      };
-      const earlyEvents: PinnedEvent[] = [];
-      const forwardEvent = (value: PinnedEvent): void => {
-        const params = value.params;
-        if (params.threadId !== threadId) return;
+        const response = new Promise<unknown>(
+          (requestResolve, requestReject) => {
+            pending.set(id, { resolve: requestResolve, reject: requestReject });
+          },
+        );
+        try {
+          write({ jsonrpc: "2.0", id, method, params });
+        } catch (error) {
+          pending.delete(id);
+          throw error;
+        }
+        return response;
+      }
+      const responseError = (value: unknown): string | undefined =>
+        isRecord(value) && typeof value.message === "string"
+          ? value.message
+          : undefined;
+      const handleResponse = (value: JsonObject): void => {
         if (
-          value.method !== "turn/completed" &&
-          params.turnId !== undefined &&
-          params.turnId !== turnId
+          !Number.isInteger(value.id) ||
+          (!("result" in value) && !("error" in value))
+        )
+          return;
+        const request = pending.get(value.id as number);
+        if (!request) return;
+        pending.delete(value.id as number);
+        if ("error" in value) {
+          request.reject(
+            new Error(
+              responseError(value.error) ?? "Codex App Server request failed",
+            ),
+          );
+        } else request.resolve(value.result);
+      };
+      const handleServerRequest = (value: JsonObject): void => {
+        const id = value.id;
+        if (
+          (typeof id !== "number" && typeof id !== "string") ||
+          (typeof id === "number" && !Number.isInteger(id)) ||
+          typeof value.method !== "string"
+        )
+          return;
+        write({
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32601,
+            message: "Method not supported by pi-subagent",
+          },
+        });
+        try {
+          sink.stderr(
+            `Codex App Server requested unsupported method '${value.method}'\n`,
+          );
+        } catch (error) {
+          fail(error);
+        }
+      };
+      const forwardNotification = (
+        notification: CodexAppServerNotification,
+      ): void => {
+        if (settled) return;
+        if (
+          notification.method === "turn/completed" &&
+          notification.params.turn.id !== turnId
+        )
+          return;
+        if (
+          "turnId" in notification.params &&
+          notification.params.turnId !== turnId
         )
           return;
         try {
-          if (sink.event(value)) sawTerminalAnswer = true;
+          if (sink.event(notification) === true) sawTerminalAnswer = true;
           if (
-            value.method === "turn/completed" &&
-            isRecord(params.turn) &&
-            params.turn.id === turnId
-          ) {
-            settle({ status: "clean" }, true);
-          }
+            notification.method === "turn/completed" &&
+            !(aborted && terminationMode === "kill")
+          )
+            finish({ status: "clean" }, !aborted);
         } catch (error) {
           fail(error);
         }
       };
-      const stdout = lineParser(
-        (line) => {
-          if (!line.trim()) return;
-          let value: unknown;
-          try {
-            value = JSON.parse(line);
-          } catch {
-            return;
-          }
-          if (!isRecord(value)) return;
-          if (isId(value.id) && ("result" in value || "error" in value)) {
-            const waiter = pending.get(String(value.id));
-            if (!waiter) return;
-            pending.delete(String(value.id));
-            const response = value as unknown as JsonRpcResponse;
-            if (isRecord(response.error)) waiter.reject(requestError(response));
-            else waiter.resolve(response.result);
-            return;
-          }
-          if (typeof value.method === "string" && isId(value.id)) {
-            // No approval request is expected under the fixed policy, but a
-            // response prevents an accidental server-side deadlock.
-            try {
-              write({
-                jsonrpc: "2.0",
-                id: value.id,
-                error: {
-                  code: -32601,
-                  message: "Method not supported by pi-subagent",
-                },
-              });
-              sink.stderr(
-                `Unsupported Codex App Server request: ${value.method}\n`,
-              );
-            } catch (error) {
-              fail(error);
-            }
-            return;
-          }
-          if (isPinnedEvent(value)) {
-            // A server may flush item events in the same turn as the
-            // turn/start response. The response continuation has not assigned
-            // turnId yet, so retain those events until it does.
-            if (value.params.threadId === threadId && turnId === undefined)
-              earlyEvents.push(value);
-            else forwardEvent(value);
-          }
-        },
-        () => {
-          sawStderr = true;
-          try {
-            sink.stderr(OVERSIZED_LINE_MESSAGE);
-          } catch (error) {
-            fail(error);
-          }
-        },
-      );
-      const onStdoutData = (data: Buffer | string): void => {
+      const processLine = (line: string): void => {
+        if (!line.trim()) return;
+        let value: unknown;
         try {
-          const chunk = data.toString();
-          rawStdoutTail = `${rawStdoutTail}${chunk}`.slice(
-            -RAW_STDOUT_TAIL_LIMIT,
-          );
-          stdout(chunk);
+          value = JSON.parse(line);
+        } catch {
+          return;
+        }
+        if (!isRecord(value)) return;
+        if (typeof value.method === "string") {
+          if ("id" in value) handleServerRequest(value);
+          else {
+            const notification = parseNotification(value);
+            if (
+              !notification ||
+              !threadId ||
+              notification.params.threadId !== threadId
+            )
+              return;
+            if (!turnId) {
+              pendingNotifications.push(notification);
+              return;
+            }
+            forwardNotification(notification);
+          }
+        } else handleResponse(value);
+      };
+      const processChunk = (chunk: Buffer | string): void => {
+        const text = chunk.toString();
+        rawStdoutTail = (rawStdoutTail + text).slice(-RAW_STDOUT_TAIL_LIMIT);
+        let rest = text;
+        while (rest) {
+          if (droppingLine) {
+            const newline = rest.indexOf("\n");
+            if (newline < 0) return;
+            droppingLine = false;
+            rest = rest.slice(newline + 1);
+            continue;
+          }
+          lineBuffer += rest;
+          rest = "";
+          while (true) {
+            const newline = lineBuffer.indexOf("\n");
+            if (newline < 0) {
+              if (lineBuffer.length > STDOUT_LINE_LIMIT) {
+                lineBuffer = "";
+                droppingLine = true;
+              }
+              return;
+            }
+            const line = lineBuffer.slice(0, newline);
+            lineBuffer = lineBuffer.slice(newline + 1);
+            if (line.length <= STDOUT_LINE_LIMIT) processLine(line);
+            if (settled) return;
+          }
+        }
+      };
+      function onStdoutData(data: Buffer | string): void {
+        try {
+          processChunk(data);
         } catch (error) {
           fail(error);
         }
-      };
-      const onStderrData = (data: Buffer | string): void => {
+      }
+      function onStderrData(data: Buffer | string): void {
         sawStderr = true;
         try {
           sink.stderr(data.toString());
         } catch (error) {
           fail(error);
         }
-      };
-      const onStdinError = (error: Error): void => {
+      }
+      function onStdinError(error: Error): void {
         sawStderr = true;
         try {
           sink.stderr(`stdin: ${error.message}\n`);
         } catch (sinkError) {
           fail(sinkError);
         }
-      };
-      const onProcessError = (error: Error): void => {
-        if (semanticallySettled) return;
-        processError = true;
+      }
+      function onProcessError(error: Error): void {
+        if (settled) return;
         sawStderr = true;
         try {
           sink.stderr(`${error.message}\n`);
-          settle({ status: "failed" }, true);
         } catch (sinkError) {
           fail(sinkError);
-        }
-      };
-      const postMortem = (): void => {
-        if (aborted || sawStderr || sawTerminalAnswer) return;
-        const tail = redactProviderIds(rawStdoutTail.trim());
-        try {
-          sink.stderr(
-            tail ? `Last stdout:\n${tail}` : "No stdout was captured.",
-          );
-        } catch (error) {
-          fail(error);
-        }
-      };
-      const onClose = (code: number | null): void => {
-        processClosed = true;
-        clearEscalation();
-        try {
-          stdout.flush();
-        } catch (error) {
-          fail(error);
           return;
         }
-        if (semanticallySettled) {
-          removeListeners();
+        finish({ status: "failed" }, true);
+      }
+      function onClose(code: number | null): void {
+        childClosed = true;
+        clearTimer();
+        rejectPending(new Error("Codex App Server exited before its response"));
+        if (settled) {
+          finishCleanup();
           return;
         }
         try {
-          if (processError) {
-            settle({ status: "failed" }, false);
-          } else if (code === 0) {
-            postMortem();
-            settle({ status: "clean" }, false);
+          if (lineBuffer.length > 0 && lineBuffer.length <= STDOUT_LINE_LIMIT)
+            processLine(lineBuffer);
+          lineBuffer = "";
+          if (settled) return;
+          if (aborted) finish({ status: "clean" }, false);
+          else if (code === 0) {
+            if (!sawStderr && !sawTerminalAnswer) {
+              const tail = redactProviderIds(rawStdoutTail.trim());
+              sink.stderr(
+                tail ? `Last stdout:\n${tail}` : "No stdout was captured.\n",
+              );
+            }
+            finish({ status: "clean" }, false);
           } else {
-            postMortem();
-            settle(
+            if (!sawStderr && !sawTerminalAnswer && rawStdoutTail.trim()) {
+              sink.stderr(
+                `Last stdout:\n${redactProviderIds(rawStdoutTail.trim())}`,
+              );
+            }
+            finish(
               {
                 status: "failed",
                 errorMessage: `Child codex exited with code ${code ?? "unknown"}`,
@@ -506,74 +885,82 @@ export function createCodexAppServerSource(
         } catch (error) {
           fail(error);
         }
-      };
+      }
       const onAbort = (): void => {
-        if (semanticallySettled) return;
+        if (settled) return;
         aborted = true;
-        if (threadId && turnId) {
-          // Claim the escalation slot before writing: the fake and a real
-          // server can answer synchronously while this callback is running.
-          // A completed notification then clears the pending timer.
-          terminate(false);
-          request("turn/interrupt", { threadId, turnId }).catch(() => {});
-        } else {
-          terminate();
-        }
+        beginTermination(Boolean(threadId && turnId));
       };
 
-      proc.stdin.on("error", onStdinError);
       proc.stdout.on("data", onStdoutData);
       proc.stderr.on("data", onStderrData);
+      proc.stdin.on("error", onStdinError);
       proc.on("error", onProcessError);
       proc.on("close", onClose);
       signal.addEventListener("abort", onAbort, { once: true });
-      if (signal.aborted) onAbort();
 
-      const protocol = async (): Promise<void> => {
+      const start = async (): Promise<void> => {
         try {
-          await request("initialize", { clientInfo, capabilities: null });
-          if (semanticallySettled) return;
-          write({ method: "initialized" });
-          const threadParams: Record<string, unknown> = {
-            cwd,
-            ephemeral: true,
-            approvalPolicy: "never",
-            sandbox: "danger-full-access",
-          };
-          if (model !== undefined) threadParams.model = model;
-          if (effort !== undefined)
-            threadParams.config = { model_reasoning_effort: effort };
-          const threadResult = await request("thread/start", threadParams);
-          if (!isRecord(threadResult) || !isRecord(threadResult.thread))
-            throw new Error("Codex App Server returned an invalid thread");
-          if (typeof threadResult.thread.id !== "string")
-            throw new Error("Codex App Server returned a thread without an id");
-          threadId = threadResult.thread.id;
-          const turnResult = await request("turn/start", {
-            threadId,
-            input: [{ type: "text", text: prompt, text_elements: [] }],
-          });
+          const initialize = await sendRequest(
+            "initialize",
+            initializeParams(),
+          );
+          if (!isInitializeResponse(initialize))
+            throw new Error(
+              "Codex App Server returned an invalid initialize response",
+            );
+          if (settled || signal.aborted) return;
+          sendNotification("initialized");
+          const thread = await sendRequest(
+            "thread/start",
+            threadStartParams(options),
+          );
           if (
-            !isRecord(turnResult) ||
-            !isRecord(turnResult.turn) ||
-            typeof turnResult.turn.id !== "string"
+            !isRecord(thread) ||
+            !isRecord(thread.thread) ||
+            typeof thread.thread.id !== "string"
           )
-            throw new Error("Codex App Server returned an invalid turn");
-          turnId = turnResult.turn.id;
-          for (const earlyEvent of earlyEvents.splice(0))
-            forwardEvent(earlyEvent);
-          if (aborted) onAbort();
+            throw new Error(
+              "Codex App Server returned an invalid thread/start response",
+            );
+          threadId = thread.thread.id;
+          if (settled || signal.aborted) return;
+          const turn = await sendRequest(
+            "turn/start",
+            turnStartParams(threadId, prompt),
+          );
+          if (
+            !isRecord(turn) ||
+            !isRecord(turn.turn) ||
+            typeof turn.turn.id !== "string"
+          )
+            throw new Error(
+              "Codex App Server returned an invalid turn/start response",
+            );
+          turnId = turn.turn.id;
+          for (const notification of pendingNotifications.splice(0))
+            forwardNotification(notification);
+          if (signal.aborted) beginTermination(true);
         } catch (error) {
-          if (!semanticallySettled) {
-            if (aborted) settle({ status: "clean" }, true);
-            else fail(error);
-          }
+          if (!settled)
+            finish(
+              {
+                status: "failed",
+                errorMessage:
+                  error instanceof Error ? error.message : String(error),
+              },
+              true,
+            );
         }
       };
-      void protocol();
+      if (signal.aborted) onAbort();
+      else void start();
     });
   };
 }
 
-/** Short alias for callers that name sources rather than factories. */
-export const codexAppServerSource = createCodexAppServerSource;
+/** Harness-facing alias; provider wire types remain in Codex-owned modules. */
+export type CodexAppServerEvent = CodexAppServerNotification;
+export const createCodexAppServerSource = codexAppServerSource;
+
+export { CLIENT_INFO };

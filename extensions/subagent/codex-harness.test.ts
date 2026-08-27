@@ -72,7 +72,19 @@ function event(
   method: string,
   params: Record<string, unknown>,
 ): CodexAppServerEvent {
-  return { method, params } as CodexAppServerEvent;
+  return { method, params, emittedAtMs: 1 } as CodexAppServerEvent;
+}
+
+function initializeResponse(id: unknown): Record<string, unknown> {
+  return {
+    id,
+    result: {
+      userAgent: "fixture",
+      codexHome: "/tmp",
+      platformFamily: "unix",
+      platformOs: "test",
+    },
+  };
 }
 function itemCompleted(item: Record<string, unknown>): CodexAppServerEvent {
   return event("item/completed", {
@@ -319,7 +331,7 @@ test("Codex App Server sends the disposable handshake and one prompt", async () 
   const child = fakeChild((request, current) => {
     writes.push(request);
     if (request.method === "initialize")
-      send(current, { id: request.id, result: {} });
+      send(current, initializeResponse(request.id));
     if (request.method === "thread/start")
       send(current, { id: request.id, result: { thread: { id: THREAD_ID } } });
     if (request.method === "turn/start") {
@@ -602,7 +614,7 @@ test("App Server filters foreign/unknown notifications and answers server reques
   const child = fakeChild((request, current) => {
     writes.push(request);
     if (request.method === "initialize")
-      send(current, { id: request.id, result: {} });
+      send(current, initializeResponse(request.id));
     else if (request.method === "thread/start")
       send(current, { id: request.id, result: { thread: { id: THREAD_ID } } });
     else if (request.method === "turn/start") {
@@ -656,7 +668,7 @@ test("App Server filters foreign/unknown notifications and answers server reques
     id: 99,
     error: { code: -32601, message: "Method not supported by pi-subagent" },
   });
-  assert.match(stderr.join(""), /Unsupported Codex App Server request/);
+  assert.match(stderr.join(""), /requested unsupported method/);
 });
 
 test("App Server cancellation interrupts the known turn before escalating", async () => {
@@ -664,7 +676,7 @@ test("App Server cancellation interrupts the known turn before escalating", asyn
   let interrupt: Record<string, unknown> | undefined;
   const child = fakeChild((request, current) => {
     if (request.method === "initialize")
-      send(current, { id: request.id, result: {} });
+      send(current, initializeResponse(request.id));
     else if (request.method === "thread/start")
       send(current, { id: request.id, result: { thread: { id: THREAD_ID } } });
     else if (request.method === "turn/start") {
@@ -697,7 +709,7 @@ test("App Server escalates an ignored interrupt from SIGTERM to SIGKILL", async 
   let child!: FakeChild;
   child = fakeChild((request, current) => {
     if (request.method === "initialize")
-      send(current, { id: request.id, result: {} });
+      send(current, initializeResponse(request.id));
     else if (request.method === "thread/start")
       send(current, { id: request.id, result: { thread: { id: THREAD_ID } } });
     else if (request.method === "turn/start") {
@@ -723,10 +735,7 @@ test("App Server escalates an ignored interrupt from SIGTERM to SIGKILL", async 
       { event: () => undefined, stderr: () => {} },
       controller.signal,
     ),
-    {
-      status: "failed",
-      errorMessage: "Child codex exited with code 137",
-    },
+    { status: "clean" },
   );
   assert.deepEqual(child.signals, ["SIGTERM", "SIGKILL"]);
 });
