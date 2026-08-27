@@ -417,6 +417,15 @@ test("Codex translator maps pinned events without leaking provider ids", () => {
     ],
     terminal: true,
   });
+  assert.equal(translate(agent("legacy answer", undefined))?.terminal, true);
+
+  const commentary = createCodexTranslator("/work");
+  assert.equal(commentary(agent("working", "commentary"))?.terminal, false);
+  assert.deepEqual(commentary(completedTurn()), {
+    terminal: true,
+    activity: null,
+  });
+
   const facts = translate(agent("answer"))?.facts ?? [];
   assert.equal(JSON.stringify(facts).includes("provider"), false);
   assert.equal(JSON.stringify(facts).includes("thread"), false);

@@ -4,7 +4,9 @@ Date: 2026-08-26
 
 ## Status
 
-Accepted.
+Accepted. Codex execution details are refined by
+[ADR-0011](0011-codex-app-server-migration.md); this ADR's trust posture and
+environment-inheritance decision remains in force.
 
 ## Context
 
@@ -23,16 +25,16 @@ a new security posture.
 
 ## Decision
 
-Every Codex child runs with `--dangerously-bypass-approvals-and-sandbox`,
-regardless of the forwarded trust value — parity with the Claude harness's
-unconditional bypass. The `projectTrusted` value stays in the run request,
-forwarded but not consulted, reserved for a future policy change that should
-arrive for the non-pi harnesses together rather than one adapter at a time.
+Every Codex App Server thread uses `approvalPolicy: "never"` and
+`sandbox: "danger-full-access"`, regardless of the forwarded trust value —
+parity with the Claude harness's unconditional bypass. The `projectTrusted`
+value stays in the run request, forwarded but not consulted, reserved for a
+future policy change that should arrive for the non-pi harnesses together
+rather than one adapter at a time.
 
-Every Codex child runs `codex exec --json --ephemeral`; ephemeral mode avoids
-session files for one-shot runs. The child inherits the operator environment
-and Codex user configuration. The adapter does not pass an ignore-user-config
-flag, so configured MCP servers and hooks remain available deliberately —
+Every Codex child runs `codex app-server` and creates an ephemeral thread for
+the one-shot run. The child inherits the operator environment and Codex user
+configuration. Configured MCP servers and hooks remain available deliberately —
 the same inheritance rationale as ADR-0008.
 
 The Codex adapter accepts `model` and `effort`. Model values are passed through
@@ -40,7 +42,7 @@ unvalidated for Codex to check. The shared seven-value effort scale maps
 `off` to Codex's `none` and passes every other value through. Codex has no
 per-run system-prompt append channel and no supported tool allowlist in this
 adapter: `appendSystemPrompt` and `tools` are diagnostics. The profile system
-prompt is prepended to the stdin prompt.
+prompt is prepended to the turn's text input.
 
 ## Considered alternative
 

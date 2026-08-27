@@ -331,6 +331,7 @@ test("exit before semantic completion preserves exit diagnostics and survives ba
   });
   assert.match(stderr.join(""), /Last stdout:/);
   assert.match(stderr.join(""), /not json/);
+  assert.doesNotMatch(stderr.join(""), /thread-1|turn-1/);
 });
 
 test("a silent clean exit reports that no stdout was captured", async () => {
