@@ -221,8 +221,11 @@ comments and ordinary string literals are not.
   method is safely ignored, and an unrecognized server-to-client request is
   refused with a JSON-RPC method-not-found error — neither can fail the run,
   because the protocol carries many more notification variants than this
-  adapter consumes. Re-verify against the regenerated schema when the
-  supported Codex version moves. *Test:* the App Server transport tests
+  adapter consumes. The contract snapshot is vendored in
+  `docs/codex-protocol/`; when the codex CLI moves, re-verify via the
+  `codex-upgrade` skill (`.agents/skills/codex-upgrade/SKILL.md`), which
+  diffs the regenerated schema and runs the live smoke in
+  `scripts/codex-live-smoke.mjs`. *Test:* the App Server transport tests
   forward schema-minimum notifications — no envelope timestamp, sparse
   optional fields, a turn carrying an unknown item type — and drop unknown
   notification methods while refusing unsupported server requests.
