@@ -218,6 +218,47 @@ export function translateClaudeMessage(
   };
 }
 
+/**
+ * Add live turn deltas to Claude's block-level stream while preserving the
+ * terminal result's authoritative total.
+ *
+ * The SDK can emit several assistant events for one Messages API response —
+ * one per completed content block — and sidechain responses use the same wire
+ * type. A provider turn is therefore one unique root assistant message id,
+ * not one assistant event.
+ */
+export function createClaudeTranslator(): (
+  message: SDKMessage,
+) => Translation | undefined {
+  const rootMessageIds = new Set<string>();
+  let foldedTurns = 0;
+
+  return (message) => {
+    const translation = translateClaudeMessage(message);
+    if (!translation) return undefined;
+
+    const wire = message as unknown as Record<string, unknown>;
+    const fact = translation.facts?.[0];
+    if (
+      wire.type === "assistant" &&
+      wire.parent_tool_use_id === null &&
+      isRecord(wire.message) &&
+      typeof wire.message.id === "string" &&
+      !rootMessageIds.has(wire.message.id)
+    ) {
+      rootMessageIds.add(wire.message.id);
+      foldedTurns += 1;
+      if (fact?.usage) fact.usage.turns = 1;
+    } else if (wire.type === "result" && fact?.usage) {
+      const total = fact.usage.turns ?? 0;
+      fact.usage.turns = total - foldedTurns;
+      foldedTurns = total;
+    }
+
+    return translation;
+  };
+}
+
 function isClaudeModel(value: string): boolean {
   return CLAUDE_MODEL_ALIASES.includes(value.toLowerCase());
 }
@@ -309,7 +350,7 @@ export function createClaudeHarness(
           });
           return runOneShot({
             source,
-            translate: translateClaudeMessage,
+            translate: createClaudeTranslator(),
             report: run.report,
             signal: run.signal,
             missingAnswerMessage: MISSING_CLAUDE_ANSWER,

@@ -463,6 +463,95 @@ test("an unpinned empty Claude result carries streamed model and accounting", as
   assert.equal(result.stopReason, "end_turn");
 });
 
+test("Claude shows completed provider turns while it is still running", async () => {
+  let assistantReported = () => {};
+  const reported = new Promise<void>((resolve) => {
+    assistantReported = resolve;
+  });
+  let releaseResult = () => {};
+  const resultReleased = new Promise<void>((resolve) => {
+    releaseResult = resolve;
+  });
+  const query: ClaudeQuery = () =>
+    ({
+      async *[Symbol.asyncIterator]() {
+        yield {
+          type: "assistant",
+          message: {
+            id: "msg-1",
+            model: "claude-sonnet-4-6",
+            content: [{ type: "tool_use", name: "Read", input: {} }],
+          },
+          parent_tool_use_id: null,
+        } as unknown as SDKMessage;
+        // A second block from the same API response is not another turn.
+        yield {
+          type: "assistant",
+          message: {
+            id: "msg-1",
+            model: "claude-sonnet-4-6",
+            content: [{ type: "text", text: "Reading" }],
+          },
+          parent_tool_use_id: null,
+        } as unknown as SDKMessage;
+        // Sidechain model responses do not belong to the main-loop turn total.
+        yield {
+          type: "assistant",
+          message: {
+            id: "sidechain-msg",
+            model: "claude-haiku-4-5-20251001",
+            content: [{ type: "text", text: "auxiliary work" }],
+          },
+          parent_tool_use_id: "tool-1",
+        } as unknown as SDKMessage;
+        yield {
+          type: "assistant",
+          message: {
+            id: "msg-2",
+            model: "claude-sonnet-4-6",
+            content: [{ type: "text", text: "Done" }],
+          },
+          parent_tool_use_id: null,
+        } as unknown as SDKMessage;
+        assistantReported();
+        await resultReleased;
+        yield {
+          type: "result",
+          result: "done",
+          is_error: false,
+          num_turns: 2,
+        } as unknown as SDKMessage;
+      },
+      close() {},
+    }) as never;
+  const runs = createSubagentRuns();
+  const started = startSubagent({
+    config,
+    description: "live Claude turns",
+    prompt: "do it",
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs,
+  });
+
+  await reported;
+  assert.equal(runs.list()[0]?.status, "running");
+  assert.equal(runs.list()[0]?.turns, 2);
+  const lines = renderRunLines(
+    runs.list(),
+    {
+      fg: (_color, text) => text,
+      bg: (_color, text) => text,
+      bold: (text) => text,
+    },
+    120,
+  );
+  assert.match(lines[1] ?? "", /2 turns.*running/);
+
+  releaseResult();
+  const result = await started.settled;
+  assert.equal(result.usage.turns, 2, "terminal total stays authoritative");
+});
+
 test("an empty Claude result carries turns into the widget", async () => {
   const query: ClaudeQuery = () =>
     ({
