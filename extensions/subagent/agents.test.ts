@@ -11,8 +11,8 @@ import {
   loadAgentConfigsWithDiagnostics,
   parseAgentConfig,
 } from "./agents.ts";
-import { createHarnessRegistry, type Harness } from "./harness.ts";
-import { createPiHarness } from "./pi-harness.ts";
+import { createHarnessRegistry, type Harness } from "./harnesses/contract.ts";
+import { createPiHarness } from "./harnesses/pi/harness.ts";
 import { EFFORTS } from "./types.ts";
 
 const tempDirs: string[] = [];

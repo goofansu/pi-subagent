@@ -1,25 +1,25 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createSubagentDelivery } from "./delivery.ts";
-import type { Harness } from "./harness.ts";
-import {
-  createHarnessRegistry,
-  parseTools,
-  shouldAppendSystemPrompt,
-  validateCommonProfileFields,
-} from "./harness.ts";
+import { createSubagentDelivery } from "../delivery.ts";
+import { formatNotification } from "../presentation.ts";
+import type { SubagentExecutor } from "../run.ts";
+import { startSubagent } from "../runner.ts";
+import { createSubagentRuns } from "../runs.ts";
+import type { AgentConfig } from "../types.ts";
+import { renderRunLines } from "../widget.ts";
 import {
   type HarnessConformanceFixture,
   type HarnessConformanceRig,
   type HarnessConformanceScenario,
   runHarnessConformance,
-} from "./harness-conformance.ts";
-import { formatNotification } from "./presentation.ts";
-import type { SubagentExecutor } from "./run.ts";
-import { startSubagent } from "./runner.ts";
-import { createSubagentRuns } from "./runs.ts";
-import type { AgentConfig } from "./types.ts";
-import { renderRunLines } from "./widget.ts";
+} from "./conformance.ts";
+import type { Harness } from "./contract.ts";
+import {
+  createHarnessRegistry,
+  parseTools,
+  shouldAppendSystemPrompt,
+  validateCommonProfileFields,
+} from "./contract.ts";
 
 const plainTheme = {
   fg: (_color: string, text: string) => text,

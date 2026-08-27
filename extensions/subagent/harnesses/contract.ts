@@ -1,5 +1,5 @@
-import type { ParentModel, SubagentExecutor, SubagentTask } from "./run.ts";
-import { type AgentConfig, DEFAULT_HARNESS_NAME, EFFORTS } from "./types.ts";
+import type { ParentModel, SubagentExecutor, SubagentTask } from "../run.ts";
+import { type AgentConfig, DEFAULT_HARNESS_NAME, EFFORTS } from "../types.ts";
 
 export interface HarnessDiagnostic {
   reason: string;
@@ -19,8 +19,8 @@ export interface HarnessRun {
 /**
  * The public adapter seam for one-shot subagent execution.
  *
- * @see ../../docs/harness-definition-of-done.md
- * @see ../../docs/adr/0007-harness-seam-with-neutral-facts.md
+ * @see ../../../docs/harness-definition-of-done.md
+ * @see ../../../docs/adr/0007-harness-seam-with-neutral-facts.md
  */
 export interface Harness {
   readonly name: string;

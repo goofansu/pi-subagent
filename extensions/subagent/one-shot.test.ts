@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createClaudeHarness } from "./claude-harness.ts";
-import { createCodexHarness } from "./codex-harness.ts";
-import type { Harness, HarnessRun } from "./harness.ts";
+import { createClaudeHarness } from "./harnesses/claude/harness.ts";
+import { createCodexHarness } from "./harnesses/codex/harness.ts";
+import type { Harness, HarnessRun } from "./harnesses/contract.ts";
+import { createPiHarness } from "./harnesses/pi/harness.ts";
 import { runOneShot, streamSource } from "./one-shot.ts";
-import { createPiHarness } from "./pi-harness.ts";
 import type { Fact, RunReporter, SubagentTask } from "./run.ts";
 import type { AgentConfig } from "./types.ts";
 

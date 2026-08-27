@@ -3,13 +3,13 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
-import type { ChildProcessSpawn } from "./child-process.ts";
+import type { ChildProcessSpawn } from "../../child-process.ts";
+import type { OneShotSink } from "../../one-shot.ts";
+import { DEPTH_ENV_KEY } from "../../run.ts";
 import {
   type CodexAppServerEvent,
   createCodexAppServerSource,
-} from "./codex-app-server.ts";
-import type { OneShotSink } from "./one-shot.ts";
-import { DEPTH_ENV_KEY } from "./run.ts";
+} from "./app-server.ts";
 
 interface FakeChild extends EventEmitter {
   stdin: PassThrough;

@@ -24,9 +24,9 @@ codex-owned modules (the harness and transport).
 1. [x] **`runner.ts` imports no pi-harness or Claude types.**
    No `runPiAgent` import, no pi `provider/id` model building, no pi
    thinking-scale vocabulary — resolution lives in the harness.
-   *Test:* the boundaries test parses real import specifiers and walks the
-   dispatcher's transitive core-module graph; it contains neither `pi-agent`
-   nor `@earendil-works/pi-ai` nor the claude SDK.
+    *Test:* the boundaries test parses real import specifiers and walks the
+    dispatcher's transitive core-module graph; it contains neither
+    `harnesses/pi` nor `@earendil-works/pi-ai` nor the claude SDK.
    *Review:* the executor arrives via the harness resolved from the profile;
    any `if (harness === ...)` branch in the dispatcher is a defect.
 
@@ -62,7 +62,7 @@ codex-owned modules (the harness and transport).
    core execution and the graph checker do not require Claude.
 
 5. [x] **Adding a fake harness requires no core changes.**
-   *Test:* `harness.test.ts` runs a fake through dispatcher, registry,
+    *Test:* `harnesses/contract.test.ts` runs a fake through dispatcher, registry,
    delivery, presentation, and widget, including cancellation, without
    starting a Pi child or loading the Claude SDK. Its shared **Harness
    Conformance** battery also covers backend-crash executor resolution,
@@ -78,7 +78,7 @@ codex-owned modules (the harness and transport).
 
 6. [x] **The Codex adapter owns two modules, one registration, its own tests —
    and no dispatcher/lifecycle changes.**
-   *Test:* `codex-harness.test.ts` runs the real Codex adapter through the
+    *Test:* `harnesses/codex/harness.test.ts` runs the real Codex adapter through the
    shared **Harness Conformance** battery (all nine scenarios; Claude alone
    visibly skips snapshot healing). Codex has no transcript snapshot, so its
    `terminal-transcript-healing` case asserts that multiple completed agent

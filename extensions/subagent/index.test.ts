@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createSubagentDelivery, type PushedNotification } from "./delivery.ts";
-import { createHarnessRegistry, type Harness } from "./harness.ts";
+import { createHarnessRegistry, type Harness } from "./harnesses/contract.ts";
 import subagentExtension, {
   createSubagentRuntime,
   registerSubagentFeatureTools,

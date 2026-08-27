@@ -106,8 +106,8 @@ run. A profile names its harness; core resolves that name through the harness
 registry and never interprets harness-specific configuration or imports a
 backend's types.
 
-**Executor** — the per-run execution a harness supplies (`pi-agent.ts` is the
-pi harness's; it composes the One-shot protocol and the neutral process source).
+**Executor** — the per-run execution a harness supplies (`harnesses/pi/agent.ts`
+is the pi harness's; it composes the One-shot protocol and the neutral process source).
 It witnesses what the child did: it reports harness-neutral facts through the
 reporter defined in `run.ts` and resolves to an **ending**; it never touches the
 run record. Wire format stops inside the harness — no backend's message shapes

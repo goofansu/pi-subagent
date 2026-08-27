@@ -4,7 +4,7 @@
  * module never branches on a backend.
  */
 
-import type { HarnessRegistry } from "./harness.ts";
+import type { HarnessRegistry } from "./harnesses/contract.ts";
 import type { ParentModel, RunEnding, SubagentTask } from "./run.ts";
 import {
   createEmptyResult,

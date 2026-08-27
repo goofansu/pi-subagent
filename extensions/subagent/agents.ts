@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import type { HarnessRegistry } from "./harness.ts";
+import type { HarnessRegistry } from "./harnesses/contract.ts";
 import { type AgentConfig, DEFAULT_HARNESS_NAME } from "./types.ts";
 
 export interface InvalidAgentConfig {

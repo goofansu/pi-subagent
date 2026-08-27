@@ -3,9 +3,9 @@ import {
   spawn as defaultSpawn,
   type SpawnOptions,
 } from "node:child_process";
-import type { ChildProcessSpawn } from "./child-process.ts";
-import type { OneShotSource } from "./one-shot.ts";
-import { DEPTH_ENV_KEY } from "./run.ts";
+import type { ChildProcessSpawn } from "../../child-process.ts";
+import type { OneShotSource } from "../../one-shot.ts";
+import { DEPTH_ENV_KEY } from "../../run.ts";
 
 const STDOUT_LINE_LIMIT = 32 * 1024 * 1024;
 const RAW_STDOUT_TAIL_LIMIT = 2000;

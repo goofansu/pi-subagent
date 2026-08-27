@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDefaultHarnessRegistry } from "./composition.ts";
-import { createHarnessRegistry } from "./harness.ts";
-import { createPiHarness } from "./pi-harness.ts";
+import { createHarnessRegistry } from "./harnesses/contract.ts";
+import { createPiHarness } from "./harnesses/pi/harness.ts";
 
 test("default composition registers the pi, claude, and codex harnesses", () => {
   const registry = createDefaultHarnessRegistry();

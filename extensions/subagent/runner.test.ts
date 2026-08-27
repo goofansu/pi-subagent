@@ -6,9 +6,9 @@
 
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
-import { createHarnessRegistry, type Harness } from "./harness.ts";
+import { createHarnessRegistry, type Harness } from "./harnesses/contract.ts";
+import { createPiHarness } from "./harnesses/pi/harness.ts";
 import { getFinalOutput } from "./messages.ts";
-import { createPiHarness } from "./pi-harness.ts";
 import {
   createEmptyResult,
   type Fact,

@@ -8,17 +8,17 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createHarnessRegistry, type Harness } from "./harness.ts";
-import { getFinalOutput } from "./messages.ts";
-import { startSubagent } from "./runner.ts";
-import { createSubagentRuns } from "./runs.ts";
+import { getFinalOutput } from "../messages.ts";
+import { startSubagent } from "../runner.ts";
+import { createSubagentRuns } from "../runs.ts";
 import type {
   AgentConfig,
   CancellationReason,
   SingleResult,
   TerminalLifecycleStatus,
   UsageStats,
-} from "./types.ts";
+} from "../types.ts";
+import { createHarnessRegistry, type Harness } from "./contract.ts";
 
 /**
  * The neutral scenarios every harness must either implement or skip. A

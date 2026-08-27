@@ -11,11 +11,14 @@ import {
   getPackageDir,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import { type ChildProcessSpawn, processJsonSource } from "./child-process.ts";
-import { parseTools, shouldAppendSystemPrompt } from "./harness.ts";
-import { runOneShot, type Translation } from "./one-shot.ts";
-import type { Fact, FactPart, RunEnding, SubagentRun } from "./run.ts";
-import type { AgentConfig } from "./types.ts";
+import {
+  type ChildProcessSpawn,
+  processJsonSource,
+} from "../../child-process.ts";
+import { runOneShot, type Translation } from "../../one-shot.ts";
+import type { Fact, FactPart, RunEnding, SubagentRun } from "../../run.ts";
+import type { AgentConfig } from "../../types.ts";
+import { parseTools, shouldAppendSystemPrompt } from "../contract.ts";
 
 export interface PiInvocationRuntime {
   execPath: string;

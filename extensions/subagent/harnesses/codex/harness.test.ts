@@ -3,24 +3,24 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
-import type { ChildProcessSpawn } from "./child-process.ts";
-import {
-  type CodexAppServerEvent,
-  createCodexAppServerSource,
-} from "./codex-app-server.ts";
-import {
-  codexEffort,
-  createCodexHarness,
-  createCodexTranslator,
-} from "./codex-harness.ts";
+import type { ChildProcessSpawn } from "../../child-process.ts";
+import { DEPTH_ENV_KEY, type RunReporter } from "../../run.ts";
+import { type AgentConfig, EFFORTS } from "../../types.ts";
 import {
   type HarnessConformanceFixture,
   type HarnessConformanceRig,
   type HarnessConformanceScenario,
   runHarnessConformance,
-} from "./harness-conformance.ts";
-import { DEPTH_ENV_KEY, type RunReporter } from "./run.ts";
-import { type AgentConfig, EFFORTS } from "./types.ts";
+} from "../conformance.ts";
+import {
+  type CodexAppServerEvent,
+  createCodexAppServerSource,
+} from "./app-server.ts";
+import {
+  codexEffort,
+  createCodexHarness,
+  createCodexTranslator,
+} from "./harness.ts";
 
 interface FakeChild extends EventEmitter {
   stdin: PassThrough;

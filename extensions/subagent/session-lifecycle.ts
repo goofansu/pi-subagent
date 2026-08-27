@@ -5,7 +5,7 @@ import {
 } from "./agents.ts";
 import { registerAgentsCommand } from "./agents-command.ts";
 import type { SessionPush } from "./delivery.ts";
-import type { HarnessRegistry } from "./harness.ts";
+import type { HarnessRegistry } from "./harnesses/contract.ts";
 import { buildNotificationMessage } from "./notification-message.ts";
 import type { SubagentRuns } from "./runs.ts";
 import type { AgentConfig, SessionContext } from "./types.ts";

@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { getFinalOutput } from "../../messages.ts";
+import { DEPTH_ENV_KEY, type SubagentTask } from "../../run.ts";
+import { startSubagent } from "../../runner.ts";
+import { createSubagentRuns } from "../../runs.ts";
+import type { AgentConfig } from "../../types.ts";
+import { renderRunLines } from "../../widget.ts";
+import {
+  type HarnessConformanceFixture,
+  type HarnessConformanceRig,
+  type HarnessConformanceScenario,
+  runHarnessConformance,
+} from "../conformance.ts";
+import { createHarnessRegistry } from "../contract.ts";
 import {
   buildClaudeOptions,
   CLAUDE_MODEL_ALIASES,
@@ -8,20 +21,7 @@ import {
   type ClaudeQueryLoader,
   createClaudeHarness,
   translateClaudeMessage,
-} from "./claude-harness.ts";
-import { createHarnessRegistry } from "./harness.ts";
-import {
-  type HarnessConformanceFixture,
-  type HarnessConformanceRig,
-  type HarnessConformanceScenario,
-  runHarnessConformance,
-} from "./harness-conformance.ts";
-import { getFinalOutput } from "./messages.ts";
-import { DEPTH_ENV_KEY, type SubagentTask } from "./run.ts";
-import { startSubagent } from "./runner.ts";
-import { createSubagentRuns } from "./runs.ts";
-import type { AgentConfig } from "./types.ts";
-import { renderRunLines } from "./widget.ts";
+} from "./harness.ts";
 
 const config: AgentConfig = {
   name: "worker",

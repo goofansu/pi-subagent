@@ -1,18 +1,18 @@
-import type { ChildProcessSpawn } from "./child-process.ts";
+import type { ChildProcessSpawn } from "../../child-process.ts";
+import type { ParentModel, SubagentTask } from "../../run.ts";
+import { type AgentConfig, EFFORTS } from "../../types.ts";
 import type {
   Harness,
   HarnessDiagnostic,
   HarnessRun,
   HarnessValidationContext,
-} from "./harness.ts";
+} from "../contract.ts";
 import {
   effortField,
   stringField,
   validateCommonProfileFields,
-} from "./harness.ts";
-import { runPiAgent } from "./pi-agent.ts";
-import type { ParentModel, SubagentTask } from "./run.ts";
-import { type AgentConfig, EFFORTS } from "./types.ts";
+} from "../contract.ts";
+import { runPiAgent } from "./agent.ts";
 
 const MAX_CATALOGUE_DIAGNOSTIC_CHARS = 512;
 

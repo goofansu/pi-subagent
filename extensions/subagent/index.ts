@@ -7,7 +7,7 @@ import { formatAgentGuidelines, getAgentsDir } from "./agents.ts";
 import { createDefaultHarnessRegistry } from "./composition.ts";
 import type { SessionPush, SubagentDelivery } from "./delivery.ts";
 import { createSessionPush, createSubagentDelivery } from "./delivery.ts";
-import type { HarnessRegistry } from "./harness.ts";
+import type { HarnessRegistry } from "./harnesses/contract.ts";
 import {
   NOTIFICATION_MESSAGE_TYPE,
   parseNotificationMessage,

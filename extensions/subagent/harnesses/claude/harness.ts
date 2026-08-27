@@ -3,22 +3,22 @@ import type {
   Query,
   SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { Harness, HarnessDiagnostic, HarnessRun } from "./harness.ts";
+import { runOneShot, streamSource, type Translation } from "../../one-shot.ts";
+import {
+  DEPTH_ENV_KEY,
+  type FactPart,
+  type ParentModel,
+  type SubagentTask,
+} from "../../run.ts";
+import { type AgentConfig, EFFORTS } from "../../types.ts";
+import type { Harness, HarnessDiagnostic, HarnessRun } from "../contract.ts";
 import {
   effortField,
   parseTools,
   shouldAppendSystemPrompt,
   stringField,
   validateCommonProfileFields,
-} from "./harness.ts";
-import { runOneShot, streamSource, type Translation } from "./one-shot.ts";
-import {
-  DEPTH_ENV_KEY,
-  type FactPart,
-  type ParentModel,
-  type SubagentTask,
-} from "./run.ts";
-import { type AgentConfig, EFFORTS } from "./types.ts";
+} from "../contract.ts";
 
 /**
  * The SDK documents these family aliases and resolves each to its current

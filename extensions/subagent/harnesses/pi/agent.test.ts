@@ -11,29 +11,29 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
-import type { ChildProcessSpawn } from "./child-process.ts";
+import type { ChildProcessSpawn } from "../../child-process.ts";
+import { formatNotification, fullOutput } from "../../presentation.ts";
+import {
+  createEmptyResult,
+  createRunReporter,
+  DEPTH_ENV_KEY,
+  settleResultLifecycle,
+} from "../../run.ts";
+import type { AgentConfig, SingleResult } from "../../types.ts";
 import {
   type HarnessConformanceFixture,
   type HarnessConformanceRig,
   type HarnessConformanceScenario,
   runHarnessConformance,
-} from "./harness-conformance.ts";
+} from "../conformance.ts";
 import {
   buildPiArgs,
   getPiInvocation,
   type PiInvocationRuntime,
   runPiAgent,
   translatePiJsonEvent,
-} from "./pi-agent.ts";
-import { createPiHarness } from "./pi-harness.ts";
-import { formatNotification, fullOutput } from "./presentation.ts";
-import {
-  createEmptyResult,
-  createRunReporter,
-  DEPTH_ENV_KEY,
-  settleResultLifecycle,
-} from "./run.ts";
-import type { AgentConfig, SingleResult } from "./types.ts";
+} from "./agent.ts";
+import { createPiHarness } from "./harness.ts";
 
 function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
