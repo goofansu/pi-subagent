@@ -117,21 +117,36 @@ export function registerSubagentFeatureTools(
   });
 
   const waitDescription =
-    "Wait for started subagents to become terminal and return lifecycle state only. " +
-    "Use only when you cannot proceed; the answer arrives via notification and agent_result.";
+    "Block until named runs finish and return lifecycle state: identity and " +
+    "status, never output. Awaiting does not make a run finish sooner — its " +
+    "notification arrives on its own either way — so the normal move after " +
+    "agent_start is to end your turn. If this returns still-running, the run " +
+    "is not done: stop there, do not call again.";
+
+  // Guidelines from every tool are flattened into one unattributed list, so
+  // each bullet has to name the tool it governs.
+  const waitGuidelines = [
+    "agent_await is for a barrier you cannot restructure: several runs whose " +
+      "combined lifecycle state gates one next step, with no other work available.",
+    "After agent_start, keep working on anything that does not depend on the " +
+      "run; when nothing is left, end the turn instead of calling agent_await.",
+    "One agent_await per barrier — a still-running or timed-out agent_await is " +
+      "not a reason to call it again.",
+  ];
 
   pi.registerTool({
     name: "agent_await",
     label: "Await subagents",
     description: waitDescription,
     promptSnippet: waitDescription,
+    promptGuidelines: waitGuidelines,
     parameters: Type.Object({
       ids: ID_LIST,
       timeout_seconds: Type.Optional(
         Type.Number({
           description:
             "Give up waiting after this long. The runs keep going and notify " +
-            "on their own.",
+            "on their own; do not await them again.",
         }),
       ),
     }),

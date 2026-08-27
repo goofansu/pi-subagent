@@ -143,7 +143,7 @@ test("presentation owns every agent_result fallback", () => {
   );
   assert.equal(
     formatAgentResultUnavailable("run-1", true),
-    "Run run-1 has not finished yet. Its notification will arrive on its own; agent_await blocks for it if you cannot continue without it.",
+    "Run run-1 has not finished yet. Its notification will arrive on its own; end your turn.",
   );
   assert.equal(
     formatAgentResultUnavailable("missing", false),
