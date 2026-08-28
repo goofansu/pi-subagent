@@ -288,7 +288,7 @@ export function formatAgentResultUnavailable(
   known: boolean,
 ): string {
   return known
-    ? `Run ${id} has not finished yet. Its notification will arrive on its own; end your turn.`
+    ? `Run ${id} has not finished yet. Its notification will arrive on its own; agent_await blocks until it does.`
     : `No run with id ${id}. Check it against what agent_start returned.`;
 }
 

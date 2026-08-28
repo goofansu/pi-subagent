@@ -116,37 +116,46 @@ export function registerSubagentFeatureTools(
     },
   });
 
+  // pi documents promptSnippet as one line for the Available tools section, so
+  // the full contract stays in the description instead of shipping twice.
+  const waitSnippet =
+    "Block until named runs finish; returns lifecycle state only, never output.";
+
   const waitDescription =
     "Block until named runs finish and return lifecycle state: identity and " +
-    "status, never output. Awaiting does not make a run finish sooner — its " +
-    "notification arrives on its own either way — so the normal move after " +
-    "agent_start is to end your turn. If this returns still-running, the run " +
-    "is not done: stop there, do not call again.";
+    "status, never output. Awaiting does not make a run finish sooner, and the " +
+    "completion notification arrives either way — but holding the turn keeps " +
+    "the answer in front of you, so wait here whenever the run's answer is the " +
+    "only thing left to do. Pass every id you are waiting on in one call. " +
+    "A still-running result means the timeout expired, not that the run broke.";
 
   // Guidelines from every tool are flattened into one unattributed list, so
   // each bullet has to name the tool it governs.
   const waitGuidelines = [
-    "agent_await is for a barrier you cannot restructure: several runs whose " +
-      "combined lifecycle state gates one next step, with no other work available.",
-    "After agent_start, keep working on anything that does not depend on the " +
-      "run; when nothing is left, end the turn instead of calling agent_await.",
-    "One agent_await per barrier — a still-running or timed-out agent_await is " +
-      "not a reason to call it again.",
+    "After agent_start, do the work that does not depend on the run first; " +
+      "when only the run's answer is left, call agent_await instead of ending " +
+      "the turn.",
+    "One agent_await covers a whole barrier: pass every id at once, with a " +
+      "timeout_seconds that comfortably exceeds the work you delegated.",
+    "agent_await returning still-running means it timed out, not that the run " +
+      "failed — the notification still arrives on its own, so do not " +
+      "immediately await the same ids again.",
   ];
 
   pi.registerTool({
     name: "agent_await",
     label: "Await subagents",
     description: waitDescription,
-    promptSnippet: waitDescription,
+    promptSnippet: waitSnippet,
     promptGuidelines: waitGuidelines,
     parameters: Type.Object({
       ids: ID_LIST,
       timeout_seconds: Type.Optional(
         Type.Number({
           description:
-            "Give up waiting after this long. The runs keep going and notify " +
-            "on their own; do not await them again.",
+            "Give up waiting after this long. Prefer a value that comfortably " +
+            "exceeds the delegated work; the runs keep going after a timeout " +
+            "and notify on their own.",
         }),
       ),
     }),
