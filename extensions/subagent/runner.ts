@@ -4,6 +4,7 @@
  * module never branches on a backend.
  */
 
+import { createControlGate } from "./control-mailbox.ts";
 import type { HarnessRegistry } from "./harnesses/contract.ts";
 import type { ParentModel, RunEnding, SubagentTask } from "./run.ts";
 import {
@@ -93,14 +94,20 @@ export function startSubagent({
   };
   const prepared = selectedHarness.prepare(task, parentModel);
   if (prepared.model) result.model = prepared.model;
+  const controlGate = createControlGate(prepared.supportedControls);
   const controller = new AbortController();
-  const forwardAbort = () => controller.abort();
+  const abortExecutor = () => controller.abort();
+  const handle = runs.track(result, abortExecutor, controlGate);
+  const forwardAbort = () => {
+    // External and tool-driven cancellation share the Registry's synchronous
+    // reason-recording and Control-gate linearization point.
+    runs.cancel([handle.id], "requested");
+  };
   if (signal) {
-    if (signal.aborted) controller.abort();
+    if (signal.aborted) forwardAbort();
     else signal.addEventListener("abort", forwardAbort, { once: true });
   }
 
-  const handle = runs.track(result, forwardAbort);
   const emit = () => handle.changed();
   const report = createRunReporter(result, emit);
 
@@ -108,6 +115,7 @@ export function startSubagent({
     try {
       emit();
       if (controller.signal.aborted) {
+        controlGate.close();
         settleResultLifecycle(
           result,
           { ending: "cancelled" },
@@ -124,6 +132,7 @@ export function startSubagent({
           task,
           report,
           signal: controller.signal,
+          controls: controlGate.controls,
         });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
@@ -132,10 +141,14 @@ export function startSubagent({
           errorMessage: `Executor failed unexpectedly: ${message}`,
         };
       }
+      // Settlement closes admission and drops pending Controls before the
+      // lifecycle becomes terminal; neither path waits for queue drainage.
+      controlGate.close();
       settleResultLifecycle(result, ending, now(), handle.cancellationReason());
       emit();
       return result;
     } finally {
+      controlGate.close();
       signal?.removeEventListener("abort", forwardAbort);
     }
   })();

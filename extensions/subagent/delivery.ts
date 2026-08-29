@@ -5,6 +5,7 @@
  * known to be lost.
  */
 
+import { isValidControlText } from "./control-mailbox.ts";
 import {
   type NotificationDeliveryEvent,
   type NotificationDeliveryState,
@@ -128,6 +129,17 @@ export interface CancelOutcome {
   unknown: string[];
 }
 
+export type SteerOutcome =
+  | "invalid"
+  | "unknown run"
+  | "already completed"
+  | "already failed"
+  | "already cancelled"
+  | "not steerable"
+  | "unsupported"
+  | "queue full"
+  | "accepted";
+
 /**
  * Delivery pushes may synchronously re-enter through `notificationLanded`;
  * notification state is committed before the push fires.
@@ -144,6 +156,8 @@ export interface SubagentDelivery {
   ): Promise<WaitOutcome>;
   /** Request cancellation. The eventual result and notification are unchanged. */
   cancel(ids: readonly string[]): CancelOutcome;
+  /** Synchronously admit steering text or classify why that is impossible. */
+  steer(id: string, text: string): SteerOutcome;
   /** Confirm that this run's pushed notification entered the conversation. */
   notificationLanded(id: string): void;
   /** Mark queued, unlanded notifications as known lost after an interrupt. */
@@ -338,6 +352,19 @@ export function createSubagentDelivery({
         else unknown.push(id);
       }
       return { cancelled, alreadySettling, finished, unknown };
+    },
+
+    steer(id, text) {
+      // Validation precedes identity lookup, so malformed text has one answer
+      // whether or not the supplied Run id exists.
+      if (!isValidControlText(text)) return "invalid";
+
+      const stored = results.get(id);
+      if (stored) return `already ${stored.status}`;
+      if (!pending.has(id)) return "unknown run";
+
+      const outcome = runs.offer(id, { type: "steer", text });
+      return outcome === "unknown" ? "unknown run" : outcome;
     },
 
     shutdown() {

@@ -28,6 +28,16 @@ child-specific stop mechanism. Backend
 `aborted` is normalized at the seam: the domain records lifecycle `cancelled`
 and its reason, never an `aborted` stop reason.
 
+A prepared Run declares its neutral Control capability. Supported Runs receive
+one bounded, single-consumer FIFO Control stream; unsupported Runs receive an
+already-done stream and no live queue. Cancellation records its reason and
+closes Control admission synchronously before the executor's `AbortSignal`
+fires. Settlement and Session shutdown also close admission without draining
+pending Controls. Pi and Claude declare no Control support. Codex advertises
+steering and maps its neutral FIFO stream to serial native `turn/steer`
+requests; provider-confirmed correlated user items are the only steering
+events that become Facts, and every provider identity remains adapter-local.
+
 ## INV-1 — Run identity is stable
 
 A run ID identifies exactly one subagent run within the current session.

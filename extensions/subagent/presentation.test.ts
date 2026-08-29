@@ -9,6 +9,7 @@ import {
   formatResult,
   formatRunStatus,
   formatStartResult,
+  formatSteerOutcome,
   formatUnknownAgent,
   formatWaitOutcome,
   fullOutput,
@@ -123,6 +124,45 @@ test("presentation owns every agent_cancel outcome", () => {
       unknown: [],
     }),
     "Nothing to cancel.",
+  );
+});
+
+test("presentation owns every agent_steer outcome and states local-admission semantics", () => {
+  assert.equal(
+    formatSteerOutcome("run-1", "accepted"),
+    "Steering accepted for run run-1. The complete message was synchronously admitted to its local bounded mailbox. This does not mean the Harness dequeued it, a provider accepted it, or a model consumed it. Do not resend this steering message in a retry loop.",
+  );
+  assert.equal(
+    formatSteerOutcome("run-1", "invalid"),
+    "Cannot steer run run-1: invalid message. Use non-whitespace text no longer than 16 KiB of UTF-8.",
+  );
+  assert.equal(
+    formatSteerOutcome("run-1", "unknown run"),
+    "Cannot steer run run-1: unknown run. Check it against what agent_start returned.",
+  );
+  assert.equal(
+    formatSteerOutcome("run-1", "already completed"),
+    "Cannot steer run run-1: already completed.",
+  );
+  assert.equal(
+    formatSteerOutcome("run-1", "already failed"),
+    "Cannot steer run run-1: already failed.",
+  );
+  assert.equal(
+    formatSteerOutcome("run-1", "already cancelled"),
+    "Cannot steer run run-1: already cancelled.",
+  );
+  assert.equal(
+    formatSteerOutcome("run-1", "not steerable"),
+    "Cannot steer run run-1: it is cancelling or its Control gate is closed.",
+  );
+  assert.equal(
+    formatSteerOutcome("run-1", "unsupported"),
+    "Cannot steer run run-1: this prepared Run does not support steering.",
+  );
+  assert.equal(
+    formatSteerOutcome("run-1", "queue full"),
+    "Cannot steer run run-1: its Control mailbox is full. Do not retry steering in a loop.",
   );
 });
 

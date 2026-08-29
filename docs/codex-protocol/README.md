@@ -13,10 +13,21 @@ Only the two files the Codex adapter's contract depends on are vendored:
   `extensions/subagent/harnesses/codex/app-server.ts` demands only
   schema-required fields from the notifications it consumes.
 - `ClientRequest.json` — the requests the transport sends (`initialize`,
-  `thread/start`, `turn/start`, `turn/interrupt`).
+  `thread/start`, `turn/start`, `turn/steer`, `turn/interrupt`).
 
 After upgrading the codex CLI, regenerate and overwrite these files, then
 `git diff` them: a newly required field or a renamed method in a consumed
 shape is drift the adapter must absorb; added optional fields and new
 notification variants are already tolerated. The full upgrade procedure is
 the `codex-upgrade` skill in `.agents/skills/codex-upgrade/SKILL.md`.
+
+For a non-mutating check against the currently installed pinned CLI, run:
+
+```sh
+npm run codex:protocol:check
+```
+
+The generated request snapshot includes native `turn/steer`; the server
+snapshot includes the `userMessage` item and client correlation field consumed
+by the adapter. Focused schema-minimum and steering-correlation tests verify
+that the request and event shapes used by the transport remain synchronized.

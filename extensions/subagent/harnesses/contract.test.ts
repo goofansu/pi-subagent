@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createSubagentDelivery } from "../delivery.ts";
 import { formatNotification } from "../presentation.ts";
-import type { SubagentExecutor } from "../run.ts";
+import type { RunControl, SubagentExecutor } from "../run.ts";
 import { startSubagent } from "../runner.ts";
 import { createSubagentRuns } from "../runs.ts";
 import type { AgentConfig } from "../types.ts";
@@ -99,6 +99,7 @@ function fakeHarness(
     name: "fake",
     validate: () => [],
     prepare: () => ({
+      supportedControls: [],
       execute: async (run) => {
         await onRun(run.signal);
         return run.signal?.aborted
@@ -109,11 +110,14 @@ function fakeHarness(
   };
 }
 
-function fakeExecutorHarness(execute: SubagentExecutor): Harness {
+function fakeExecutorHarness(
+  execute: SubagentExecutor,
+  supportedControls: readonly RunControl["type"][] = [],
+): Harness {
   return {
     name: "fake",
     validate: () => [],
-    prepare: () => ({ execute }),
+    prepare: () => ({ execute, supportedControls }),
   };
 }
 
@@ -154,10 +158,12 @@ function conformanceRig(): HarnessConformanceRig {
         execute: SubagentExecutor,
         expected: HarnessConformanceFixture["expected"],
         readyForCancellation?: Promise<void>,
+        steering?: HarnessConformanceFixture["steering"],
       ): HarnessConformanceFixture => ({
-        harness: fakeExecutorHarness(execute),
+        harness: fakeExecutorHarness(execute, steering ? ["steer"] : []),
         expected,
         ...(readyForCancellation ? { readyForCancellation } : {}),
+        ...(steering ? { steering } : {}),
         depthProbe: () => childDepth,
       });
 
@@ -322,6 +328,74 @@ function conformanceRig(): HarnessConformanceRig {
               errorMessage: undefined,
             },
           );
+        case "steering-single-consumed":
+        case "steering-fifo-consumed": {
+          const offeredTexts =
+            scenario === "steering-single-consumed"
+              ? ["first guidance"]
+              : ["first guidance", "second guidance"];
+          const receivedTexts: string[] = [];
+          let activeProviderControls = 0;
+          let providerControlStarts = 0;
+          let maxConcurrentProviderControls = 0;
+          let openReady = () => {};
+          const ready = new Promise<void>((resolve) => {
+            openReady = resolve;
+          });
+          let releaseFirstProviderControl = () => {};
+          const firstProviderControlResponse = new Promise<void>((resolve) => {
+            releaseFirstProviderControl = resolve;
+          });
+          return base(
+            async (run) => {
+              openReady();
+              const controls = run.controls[Symbol.asyncIterator]();
+              for (const expectedText of offeredTexts) {
+                const next = await controls.next();
+                assert.equal(next.done, false);
+                assert.equal(next.value?.type, "steer");
+                assert.equal(next.value?.text, expectedText);
+                providerControlStarts++;
+                activeProviderControls++;
+                maxConcurrentProviderControls = Math.max(
+                  maxConcurrentProviderControls,
+                  activeProviderControls,
+                );
+                receivedTexts.push(next.value.text);
+                if (providerControlStarts === 1)
+                  await firstProviderControlResponse;
+                run.report.message({
+                  role: "user",
+                  parts: [
+                    { type: "text", text: `confirmed: ${next.value.text}` },
+                  ],
+                });
+                activeProviderControls--;
+              }
+              run.report.message({
+                role: "assistant",
+                parts: [{ type: "text", text: "controlled answer" }],
+              });
+              return { ending: "answered" };
+            },
+            {
+              phase: "completed",
+              finalOutput: "controlled answer",
+              userFactTexts: offeredTexts.map((text) => `confirmed: ${text}`),
+            },
+            undefined,
+            {
+              ready,
+              offeredTexts,
+              expectedOutcome: "accepted",
+              release: releaseFirstProviderControl,
+              receivedTexts: () => receivedTexts,
+              providerControlStarts: () => providerControlStarts,
+              maxConcurrentProviderControls: () =>
+                maxConcurrentProviderControls,
+            },
+          );
+        }
       }
     },
   };
@@ -390,6 +464,7 @@ test("a Codex-like harness compiles and runs through the unchanged one-shot core
     name: "codex",
     validate: () => [],
     prepare: () => ({
+      supportedControls: [],
       execute: async (run) => {
         run.report.message({
           role: "assistant",

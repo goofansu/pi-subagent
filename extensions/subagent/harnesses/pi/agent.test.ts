@@ -12,6 +12,7 @@ import * as path from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import type { ChildProcessSpawn } from "../../child-process.ts";
+import { createControlGate } from "../../control-mailbox.ts";
 import { formatNotification, fullOutput } from "../../presentation.ts";
 import {
   createEmptyResult,
@@ -218,6 +219,7 @@ async function runPiFixture(
       },
       report,
       signal: options.signal,
+      controls: createControlGate([]).controls,
     },
     {
       ...(options.killEscalationMs === undefined
@@ -271,9 +273,12 @@ function piConformanceRig(): HarnessConformanceRig {
       let observedDepth: number | undefined;
       let ready: Promise<void> | undefined;
       let openReady = () => {};
+      let releaseSteering = () => {};
+      const childInputChunks: string[] = [];
       if (
         scenario === "abort-mid-run" ||
-        scenario === "terminal-answer-then-abort"
+        scenario === "terminal-answer-then-abort" ||
+        scenario.startsWith("steering-")
       ) {
         ready = new Promise<void>((resolve) => {
           openReady = resolve;
@@ -310,6 +315,9 @@ function piConformanceRig(): HarnessConformanceRig {
           if (scenario === "abort-mid-run") child.finish(null);
           if (scenario === "terminal-answer-then-abort") child.finish(143);
         });
+        const childStdin = child.stdin as PassThrough;
+        childStdin.setEncoding("utf8");
+        childStdin.on("data", (chunk) => childInputChunks.push(String(chunk)));
 
         queueMicrotask(() => {
           switch (scenario) {
@@ -387,6 +395,16 @@ function piConformanceRig(): HarnessConformanceRig {
               );
               child.finish(0);
               break;
+            case "steering-single-consumed":
+            case "steering-fifo-consumed":
+              releaseSteering = () => {
+                (child.stdout as PassThrough).write(
+                  `${JSON.stringify(terminal("unsupported steering answer"))}\n`,
+                );
+                child.finish(0);
+              };
+              openReady();
+              break;
           }
         });
         return child;
@@ -458,6 +476,31 @@ function piConformanceRig(): HarnessConformanceRig {
             stopReason: "stop",
             errorMessage: undefined,
           });
+        case "steering-single-consumed":
+        case "steering-fifo-consumed": {
+          const offeredTexts =
+            scenario === "steering-single-consumed"
+              ? ["first guidance"]
+              : ["first guidance", "second guidance"];
+          const fixture = base({
+            phase: "completed",
+            finalOutput: "unsupported steering answer",
+            userFactTexts: [],
+          });
+          return {
+            ...fixture,
+            steering: {
+              ready: ready as Promise<void>,
+              offeredTexts,
+              expectedOutcome: "unsupported",
+              release: () => releaseSteering(),
+              receivedTexts: () => childInputChunks.slice(1),
+              providerControlStarts: () =>
+                Math.max(0, childInputChunks.length - 1),
+              maxConcurrentProviderControls: () => 0,
+            },
+          };
+        }
       }
     },
   };

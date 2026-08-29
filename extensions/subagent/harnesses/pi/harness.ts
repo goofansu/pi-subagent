@@ -79,6 +79,7 @@ export function createPiHarness(options: PiHarnessOptions = {}): Harness {
         effort ?? (profileModel ? undefined : parentModel?.thinkingLevel);
       return {
         model,
+        supportedControls: [],
         execute: (run) =>
           runPiAgent(run, {
             resolvedModel: model,

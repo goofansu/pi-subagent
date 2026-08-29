@@ -1,5 +1,5 @@
 import path from "node:path";
-import { runOneShot, type Translation } from "../../one-shot.ts";
+import type { Translation } from "../../one-shot.ts";
 import type { Fact, ParentModel, SubagentTask } from "../../run.ts";
 import { type AgentConfig, EFFORTS } from "../../types.ts";
 import {
@@ -17,7 +17,7 @@ import type {
   TokenUsageBreakdown,
   Turn,
 } from "./app-server.ts";
-import { createCodexAppServerSource } from "./app-server.ts";
+import { runCodexAppServer } from "./app-server.ts";
 
 const CODEX_PROFILE_FIELDS = ["model", "effort"] as const;
 const MISSING_CODEX_ANSWER =
@@ -337,7 +337,7 @@ function codexPrompt(task: SubagentTask): string {
     : task.prompt;
 }
 
-/** Create the Codex one-shot harness using the App Server transport. */
+/** Create the Codex one-shot harness using the ordered App Server Run. */
 export function createCodexHarness(options: CodexHarnessOptions = {}): Harness {
   return {
     name: "codex",
@@ -347,23 +347,23 @@ export function createCodexHarness(options: CodexHarnessOptions = {}): Harness {
       const effort = codexEffort(effortField(task.config, "profile", EFFORTS));
       return {
         model,
+        supportedControls: ["steer"],
         execute: (run) =>
-          runOneShot({
-            source: createCodexAppServerSource({
-              cwd: task.cwd,
-              childDepth: task.childDepth,
-              prompt: codexPrompt(task),
-              model,
-              effort,
-              ...(options.spawn ? { spawn: options.spawn } : {}),
-              ...(options.killEscalationMs === undefined
-                ? {}
-                : { killEscalationMs: options.killEscalationMs }),
-            }),
+          runCodexAppServer({
+            cwd: task.cwd,
+            childDepth: task.childDepth,
+            prompt: codexPrompt(task),
+            model,
+            effort,
             translate: createCodexTranslator(task.cwd),
             report: run.report,
             signal: run.signal,
+            controls: run.controls,
             missingAnswerMessage: MISSING_CODEX_ANSWER,
+            ...(options.spawn ? { spawn: options.spawn } : {}),
+            ...(options.killEscalationMs === undefined
+              ? {}
+              : { killEscalationMs: options.killEscalationMs }),
           }),
       };
     },

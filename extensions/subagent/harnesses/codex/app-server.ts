@@ -4,11 +4,18 @@ import {
   type SpawnOptions,
 } from "node:child_process";
 import type { ChildProcessSpawn } from "../../child-process.ts";
-import type { OneShotSource } from "../../one-shot.ts";
-import { DEPTH_ENV_KEY } from "../../run.ts";
+import type { Translation } from "../../one-shot.ts";
+import {
+  DEPTH_ENV_KEY,
+  type Fact,
+  type RunControl,
+  type RunEnding,
+  type RunReporter,
+} from "../../run.ts";
 
 const STDOUT_LINE_LIMIT = 32 * 1024 * 1024;
 const RAW_STDOUT_TAIL_LIMIT = 2000;
+const STEERING_DIAGNOSTIC_LIMIT = 1024;
 const DEFAULT_KILL_ESCALATION_MS = 5000;
 const CLIENT_INFO = {
   name: "pi-subagent",
@@ -18,6 +25,48 @@ const CLIENT_INFO = {
 
 type JsonObject = Record<string, unknown>;
 type TurnStatus = "completed" | "interrupted" | "failed" | "inProgress";
+
+export interface CodexAppServerJsonRpcError {
+  readonly code: number;
+  readonly message: string;
+  readonly data?: unknown;
+}
+
+/** A request rejected by the App Server itself. */
+export class CodexAppServerRequestError extends Error {
+  readonly kind = "server-request" as const;
+  readonly code: number;
+  readonly data: unknown;
+
+  constructor(readonly jsonRpcError: CodexAppServerJsonRpcError) {
+    super(jsonRpcError.message);
+    this.name = "CodexAppServerRequestError";
+    this.code = jsonRpcError.code;
+    this.data = jsonRpcError.data;
+  }
+}
+
+export type CodexAppServerTransportRejectionReason =
+  | "semantic-settled"
+  | "transport-settled"
+  | "child-exited";
+
+/** A request rejected because this transport reached a lifecycle boundary. */
+export class CodexAppServerTransportError extends Error {
+  readonly kind = "transport-lifecycle" as const;
+
+  constructor(readonly reason: CodexAppServerTransportRejectionReason) {
+    super(
+      reason === "semantic-settled"
+        ? "Codex App Server transport settled"
+        : reason === "transport-settled"
+          ? "Codex App Server transport closed"
+          : "Codex App Server exited before its response",
+    );
+    this.name = "CodexAppServerTransportError";
+  }
+}
+
 export interface TurnError {
   message: string;
   codexErrorInfo: unknown | null;
@@ -25,7 +74,12 @@ export interface TurnError {
 }
 
 export type ThreadItem =
-  | { type: "userMessage"; id: string; content: unknown[] }
+  | {
+      type: "userMessage";
+      id: string;
+      clientId?: string | null;
+      content: unknown[];
+    }
   | {
       type: "agentMessage";
       id: string;
@@ -171,12 +225,37 @@ export interface CodexAppServerOptions {
   readonly prompt: string;
   readonly model?: string;
   readonly effort?: string;
+  readonly onRequestRejection?: (error: Error) => void;
   readonly spawn?: ChildProcessSpawn;
   readonly killEscalationMs?: number;
 }
 
+export interface CodexAppServerRunOptions extends CodexAppServerOptions {
+  readonly translate: (event: CodexAppServerEvent) => Translation | undefined;
+  readonly report: RunReporter;
+  readonly signal?: AbortSignal;
+  readonly controls?: AsyncIterable<RunControl>;
+  readonly missingAnswerMessage: string;
+}
+
 function isRecord(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseCodexAppServerResponseError(
+  value: unknown,
+): CodexAppServerJsonRpcError | undefined {
+  if (
+    !isRecord(value) ||
+    !Number.isInteger(value.code) ||
+    typeof value.message !== "string"
+  )
+    return undefined;
+  return {
+    code: value.code as number,
+    message: value.message,
+    data: value.data,
+  };
 }
 
 function isNumber(value: unknown): value is number {
@@ -214,7 +293,12 @@ function parseThreadItem(value: unknown): ThreadItem | undefined {
     return undefined;
   switch (value.type) {
     case "userMessage":
-      return Array.isArray(value.content) ? (value as ThreadItem) : undefined;
+      return Array.isArray(value.content) &&
+        (value.clientId === undefined ||
+          value.clientId === null ||
+          typeof value.clientId === "string")
+        ? (value as ThreadItem)
+        : undefined;
     case "agentMessage":
       return typeof value.text === "string" &&
         (value.phase === undefined ||
@@ -481,9 +565,14 @@ function parseNotification(value: unknown): CodexAppServerEvent | undefined {
 /** Keep provider identity out of the persisted stderr post-mortem. */
 function redactProviderIds(value: string): string {
   return value.replace(
-    /"(threadId|turnId|itemId|sessionId|id)"\s*:\s*("[^"]*"|-?\d+)/g,
+    /"(clientUserMessageId|expectedTurnId|correlationId|conversationId|requestId|threadId|turnId|itemId|sessionId|clientId|id)"\s*:\s*("[^"]*"|-?\d+)/g,
     '"$1":"[redacted]"',
   );
+}
+
+function steeringDiagnostic(error: CodexAppServerRequestError): string {
+  const value = `Steering rejected: ${redactProviderIds(error.message)}`;
+  return `${value.slice(0, STEERING_DIAGNOSTIC_LIMIT - 1)}\n`;
 }
 
 function spawnOptions(cwd: string, childDepth: number): SpawnOptions {
@@ -529,476 +618,825 @@ function turnStartParams(threadId: string, prompt: string): JsonObject {
   };
 }
 
-/** Build one disposable Codex App Server conversation over stdio. */
-export function createCodexAppServerSource(
-  options: CodexAppServerOptions,
-): OneShotSource<CodexAppServerEvent> {
+function turnSteerParams(
+  threadId: string,
+  turnId: string,
+  text: string,
+  clientUserMessageId: string,
+): JsonObject {
+  return {
+    threadId,
+    expectedTurnId: turnId,
+    input: [{ type: "text", text, text_elements: [] }],
+    clientUserMessageId,
+  };
+}
+
+function correlatedSteeringFact(
+  event: CodexAppServerEvent,
+  pendingCorrelations: ReadonlySet<string>,
+  consumedItems: ReadonlySet<string>,
+):
+  | {
+      readonly correlation: string;
+      readonly itemId: string;
+      readonly fact: Fact;
+    }
+  | undefined {
+  if (event.method !== "item/started" && event.method !== "item/completed")
+    return undefined;
+  const item = event.params.item;
+  if (
+    item.type !== "userMessage" ||
+    consumedItems.has(item.id) ||
+    typeof item.clientId !== "string" ||
+    !pendingCorrelations.has(item.clientId)
+  )
+    return undefined;
+  const parts = item.content.flatMap((content) =>
+    isRecord(content) &&
+    content.type === "text" &&
+    typeof content.text === "string"
+      ? [{ type: "text" as const, text: content.text }]
+      : [],
+  );
+  return parts.length > 0
+    ? {
+        correlation: item.clientId,
+        itemId: item.id,
+        fact: { role: "user", parts },
+      }
+    : undefined;
+}
+
+type CodexRunOccurrence =
+  | { readonly type: "provider-message"; readonly value: JsonObject }
+  | { readonly type: "cancel" }
+  | { readonly type: "stderr"; readonly chunk: string }
+  | { readonly type: "stdin-error"; readonly error: Error }
+  | { readonly type: "process-error"; readonly error: Error }
+  | { readonly type: "process-close"; readonly code: number | null }
+  | { readonly type: "escalation"; readonly stage: "SIGTERM" | "SIGKILL" };
+
+interface OrderedOccurrence {
+  readonly sequence: number;
+  readonly occurrence: CodexRunOccurrence;
+}
+
+interface PendingRequest {
+  readonly accept: (value: unknown) => void;
+  readonly reject: (error: Error) => void;
+  readonly settleOnTransport: boolean;
+}
+
+type SourceConclusion =
+  | { readonly status: "clean" }
+  | { readonly status: "failed"; readonly errorMessage?: string };
+
+/**
+ * Run one disposable Codex App Server conversation. All externally occurring
+ * inputs receive an ingress sequence before this engine interprets them; this
+ * function is also the sole producer of the executor's terminal Ending.
+ */
+export function runCodexAppServer(
+  options: CodexAppServerRunOptions,
+): Promise<RunEnding> {
   const {
     cwd,
     childDepth,
     prompt,
+    translate,
+    report,
+    signal = new AbortController().signal,
+    controls = (async function* () {})(),
+    missingAnswerMessage,
+    onRequestRejection,
     spawn = defaultSpawn,
     killEscalationMs = DEFAULT_KILL_ESCALATION_MS,
   } = options;
-  return async (sink, signal) => {
-    if (signal.aborted) return { status: "clean" };
-    return new Promise((resolve, reject) => {
-      let proc: ChildProcess;
+  if (signal.aborted) return Promise.resolve({ ending: "cancelled" });
+
+  return new Promise((resolve, reject) => {
+    let proc: ChildProcess;
+    try {
+      proc = spawn("codex", ["app-server"], spawnOptions(cwd, childDepth));
+    } catch (error) {
+      resolve({
+        ending: "failed",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    if (!proc.stdin || !proc.stdout || !proc.stderr) {
       try {
-        proc = spawn("codex", ["app-server"], spawnOptions(cwd, childDepth));
-      } catch (error) {
-        reject(error);
-        return;
+        let earlyClosed = false;
+        let escalation: ReturnType<typeof setTimeout> | undefined;
+        const onEarlyClose = (): void => {
+          earlyClosed = true;
+          if (escalation !== undefined) clearTimeout(escalation);
+        };
+        proc.once("close", onEarlyClose);
+        proc.stdin?.end();
+        proc.kill("SIGTERM");
+        if (!earlyClosed) {
+          escalation = setTimeout(() => {
+            proc.removeListener("close", onEarlyClose);
+            try {
+              proc.kill("SIGKILL");
+            } catch {
+              // The process may have exited after SIGTERM.
+            }
+          }, killEscalationMs);
+          escalation.unref?.();
+        }
+      } catch {
+        // The partially opened child may already have exited.
       }
-      if (!proc.stdin || !proc.stdout || !proc.stderr) {
-        try {
-          let earlyClosed = false;
-          let escalation: ReturnType<typeof setTimeout> | undefined;
-          const onEarlyClose = (): void => {
-            earlyClosed = true;
-            if (escalation !== undefined) clearTimeout(escalation);
-          };
-          proc.once("close", onEarlyClose);
-          proc.stdin?.end();
-          proc.kill("SIGTERM");
-          if (!earlyClosed) {
-            escalation = setTimeout(() => {
-              proc.removeListener("close", onEarlyClose);
-              try {
-                proc.kill("SIGKILL");
-              } catch {
-                // The process may have exited after SIGTERM.
-              }
-            }, killEscalationMs);
-            escalation.unref?.();
-          }
-        } catch {
-          // The partially opened child may already have exited.
-        }
-        reject(new Error("Failed to open Codex App Server stdio pipes"));
-        return;
+      resolve({
+        ending: "failed",
+        errorMessage: "Failed to open Codex App Server stdio pipes",
+      });
+      return;
+    }
+
+    let nextRequestId = 1;
+    let nextSequence = 1;
+    let threadId: string | undefined;
+    let turnId: string | undefined;
+    let cancellationSequence: number | undefined;
+    let endingSettled = false;
+    let childClosed = false;
+    let sawStderr = false;
+    let terminalAnswer = false;
+    let witnessedError: string | undefined;
+    let rawStdoutTail = "";
+    let lineBuffer = "";
+    let droppingLine = false;
+    let stdinEnded = false;
+    let terminationStarted = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let draining = false;
+    let framingStdout = false;
+    let reducingSequence: number | undefined;
+    const queue: OrderedOccurrence[] = [];
+    const earlyNotifications: {
+      readonly sequence: number;
+      readonly notification: CodexAppServerEvent;
+    }[] = [];
+    const pending = new Map<number, PendingRequest>();
+    const pendingSteeringCorrelations = new Set<string>();
+    const consumedSteeringItems = new Set<string>();
+    const controlIterator = controls[Symbol.asyncIterator]();
+    let controlPumpClosed = false;
+    let announceRunIdentity!: () => void;
+    const runIdentityReady = new Promise<void>((resolve) => {
+      announceRunIdentity = resolve;
+    });
+
+    const notifyRequestRejection = (error: Error): void => {
+      try {
+        onRequestRejection?.(error);
+      } catch {
+        // Diagnostics must not become a second settlement path.
       }
-
-      let nextId = 1;
-      let threadId: string | undefined;
-      let turnId: string | undefined;
-      let settled = false;
-      let childClosed = false;
-      let aborted = signal.aborted;
-      let sawStderr = false;
-      let sawTerminalAnswer = false;
-      let rawStdoutTail = "";
-      let lineBuffer = "";
-      let droppingLine = false;
-      let stdinEnded = false;
-      let terminationStarted = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const pendingNotifications: CodexAppServerEvent[] = [];
-      const pending = new Map<
-        number,
-        { resolve: (value: unknown) => void; reject: (error: Error) => void }
-      >();
-
-      const clearTimer = (): void => {
-        if (timer !== undefined) {
-          clearTimeout(timer);
-          timer = undefined;
-        }
+    };
+    const rejectPending = (error: Error): void => {
+      const requests = [...pending.values()];
+      pending.clear();
+      for (const request of requests) {
+        notifyRequestRejection(error);
+        if (request.settleOnTransport) request.reject(error);
+      }
+    };
+    const closeControlPump = (): void => {
+      if (controlPumpClosed) return;
+      controlPumpClosed = true;
+      pendingSteeringCorrelations.clear();
+      consumedSteeringItems.clear();
+      announceRunIdentity();
+      const returned = controlIterator.return?.();
+      if (returned) void Promise.resolve(returned).catch(() => {});
+    };
+    const clearTimer = (): void => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    };
+    const detachProcess = (): void => {
+      proc.removeListener("error", onProcessError);
+      proc.removeListener("close", onClose);
+    };
+    const detachStreams = (): void => {
+      proc.stdout?.removeListener("data", onStdoutData);
+      proc.stderr?.removeListener("data", onStderrData);
+      proc.stdin?.removeListener("error", onStdinError);
+    };
+    const finishCleanup = (): void => {
+      clearTimer();
+      signal.removeEventListener("abort", onAbort);
+      detachStreams();
+      detachProcess();
+      rejectPending(new CodexAppServerTransportError("transport-settled"));
+    };
+    const endStdin = (): void => {
+      if (stdinEnded) return;
+      stdinEnded = true;
+      try {
+        proc.stdin?.end();
+      } catch {
+        // The child may have closed stdin during teardown.
+      }
+    };
+    const kill = (stage: "SIGTERM" | "SIGKILL"): void => {
+      try {
+        proc.kill(stage);
+      } catch {
+        // The child may have exited between escalation stages.
+      }
+    };
+    const cancellationPrecedes = (sequence: number | undefined): boolean =>
+      cancellationSequence !== undefined &&
+      (sequence === undefined || cancellationSequence <= sequence);
+    const endingFrom = (
+      conclusion: SourceConclusion,
+      conclusionSequence: number | undefined,
+    ): RunEnding => {
+      if (terminalAnswer) return { ending: "answered" };
+      if (cancellationPrecedes(conclusionSequence))
+        return { ending: "cancelled" };
+      if (conclusion.status === "failed") {
+        const errorMessage = witnessedError ?? conclusion.errorMessage;
+        return {
+          ending: "failed",
+          ...(errorMessage === undefined ? {} : { errorMessage }),
+        };
+      }
+      return {
+        ending: "failed",
+        errorMessage: witnessedError ?? missingAnswerMessage,
       };
-      const detachProcess = (): void => {
-        proc.removeListener("error", onProcessError);
-        proc.removeListener("close", onClose);
-      };
-      const detachStreams = (): void => {
-        proc.stdout?.removeListener("data", onStdoutData);
-        proc.stderr?.removeListener("data", onStderrData);
-        proc.stdin?.removeListener("error", onStdinError);
-      };
-      const rejectPending = (error: Error): void => {
-        for (const request of pending.values()) request.reject(error);
-        pending.clear();
-      };
-      const finishCleanup = (): void => {
-        clearTimer();
-        signal.removeEventListener("abort", onAbort);
-        detachStreams();
-        detachProcess();
-        rejectPending(new Error("Codex App Server transport closed"));
-      };
-      const endStdin = (): void => {
-        if (stdinEnded) return;
-        stdinEnded = true;
-        try {
-          proc.stdin?.end();
-        } catch {
-          // The child may have closed stdin during teardown.
-        }
-      };
-      const kill = (stage: "SIGTERM" | "SIGKILL"): void => {
-        try {
-          proc.kill(stage);
-        } catch {
-          // The child may have exited between escalation stages.
-        }
-      };
-      const resolveAfterKill = (): void => {
-        if (settled) return;
-        settled = true;
-        endStdin();
-        finishCleanup();
-        resolve({ status: "clean" });
-      };
-      const scheduleKill = (stage: "SIGTERM" | "SIGKILL"): void => {
-        clearTimer();
-        timer = setTimeout(() => {
-          timer = undefined;
-          if (childClosed) return;
-          kill(stage);
-          if (stage === "SIGTERM") scheduleKill("SIGKILL");
-          else if (settled) finishCleanup();
-          else resolveAfterKill();
-        }, killEscalationMs);
-        timer.unref?.();
-      };
-      const beginTermination = (interrupt: boolean): void => {
-        if (childClosed || terminationStarted) return;
-        terminationStarted = true;
-        const terminationMode =
-          interrupt && threadId && turnId ? "interrupt" : "kill";
-        if (terminationMode === "interrupt") {
-          try {
-            sendRequest("turn/interrupt", { threadId, turnId }).catch(() => {});
-          } catch {
-            // Escalation remains the fallback if the request cannot be sent.
-          }
-          if (settled) return;
-          scheduleKill("SIGTERM");
-        } else {
-          endStdin();
-          kill("SIGTERM");
-          scheduleKill("SIGKILL");
-        }
-      };
-      const finish = (
-        conclusion:
-          | { status: "clean" }
-          | { status: "failed"; errorMessage?: string },
-        terminate: boolean,
-      ): void => {
-        if (settled) return;
-        settled = true;
-        signal.removeEventListener("abort", onAbort);
-        detachStreams();
-        if (terminate) beginTermination(false);
-        else {
-          endStdin();
-          clearTimer();
-          detachProcess();
-          rejectPending(new Error("Codex App Server transport settled"));
-        }
-        resolve(conclusion);
-      };
-      const fail = (error: unknown): void => {
-        if (settled) return;
-        settled = true;
-        signal.removeEventListener("abort", onAbort);
-        detachStreams();
-        beginTermination(false);
-        reject(error);
-      };
-      const write = (value: JsonObject): void => {
-        if (settled) return;
-        proc.stdin?.write(`${JSON.stringify(value)}\n`, "utf8");
-      };
-      const sendNotification = (method: string, params?: JsonObject): void => {
-        const value: JsonObject = { method };
-        if (params) value.params = params;
-        write(value);
-      };
-      function sendRequest(
-        method: string,
-        params: JsonObject,
-      ): Promise<unknown> {
-        const id = nextId++;
-        const response = new Promise<unknown>(
-          (requestResolve, requestReject) => {
-            pending.set(id, { resolve: requestResolve, reject: requestReject });
-          },
+    };
+    const settle = (conclusion: SourceConclusion): void => {
+      if (endingSettled) return;
+      endingSettled = true;
+      closeControlPump();
+      resolve(endingFrom(conclusion, reducingSequence));
+    };
+    const failExecution = (error: unknown): void => {
+      if (endingSettled) return;
+      endingSettled = true;
+      closeControlPump();
+      signal.removeEventListener("abort", onAbort);
+      detachStreams();
+      beginTermination(false);
+      rejectPending(new CodexAppServerTransportError("transport-settled"));
+      reject(error);
+    };
+    const scheduleKill = (stage: "SIGTERM" | "SIGKILL"): void => {
+      clearTimer();
+      timer = setTimeout(() => {
+        timer = undefined;
+        admit({ type: "escalation", stage });
+      }, killEscalationMs);
+      timer.unref?.();
+    };
+    const beginTermination = (interrupt: boolean): void => {
+      if (childClosed || terminationStarted) return;
+      terminationStarted = true;
+      if (interrupt && threadId && turnId) {
+        sendRequest(
+          "turn/interrupt",
+          { threadId, turnId },
+          () => {},
+          () => {},
         );
-        try {
-          write({ jsonrpc: "2.0", id, method, params });
-        } catch (error) {
-          pending.delete(id);
-          throw error;
-        }
-        return response;
+        if (!endingSettled) scheduleKill("SIGTERM");
+        return;
       }
-      const responseError = (value: unknown): string | undefined =>
-        isRecord(value) && typeof value.message === "string"
-          ? value.message
-          : undefined;
-      const handleResponse = (value: JsonObject): void => {
-        if (
-          !Number.isInteger(value.id) ||
-          (!("result" in value) && !("error" in value))
-        )
-          return;
-        const request = pending.get(value.id as number);
-        if (!request) return;
-        pending.delete(value.id as number);
-        if ("error" in value) {
-          request.reject(
-            new Error(
-              responseError(value.error) ?? "Codex App Server request failed",
-            ),
-          );
-        } else request.resolve(value.result);
-      };
-      const handleServerRequest = (value: JsonObject): void => {
-        const id = value.id;
-        if (
-          (typeof id !== "number" && typeof id !== "string") ||
-          (typeof id === "number" && !Number.isInteger(id)) ||
-          typeof value.method !== "string"
-        )
-          return;
-        write({
-          jsonrpc: "2.0",
-          id,
-          error: {
-            code: -32601,
-            message: "Method not supported by pi-subagent",
-          },
-        });
-        try {
-          sawStderr = true;
-          sink.stderr(
-            `Codex App Server requested unsupported method '${value.method}'\n`,
-          );
-        } catch (error) {
-          fail(error);
-        }
-      };
-      const forwardNotification = (notification: CodexAppServerEvent): void => {
-        if (settled) return;
-        if (
-          notification.method === "turn/completed" &&
-          notification.params.turn.id !== turnId
-        )
-          return;
-        if (
-          "turnId" in notification.params &&
-          notification.params.turnId !== turnId
-        )
-          return;
-        try {
-          if (sink.event(notification) === true) sawTerminalAnswer = true;
-          if (notification.method === "turn/completed")
-            finish({ status: "clean" }, !aborted);
-        } catch (error) {
-          fail(error);
-        }
-      };
-      const processLine = (line: string): void => {
-        if (!line.trim()) return;
-        let value: unknown;
-        try {
-          value = JSON.parse(line);
-        } catch {
-          return;
-        }
-        if (!isRecord(value)) return;
-        if (typeof value.method === "string") {
-          if ("id" in value) handleServerRequest(value);
-          else {
-            const notification = parseNotification(value);
-            if (
-              !notification ||
-              !threadId ||
-              notification.params.threadId !== threadId
-            )
-              return;
-            if (!turnId) {
-              pendingNotifications.push(notification);
-              return;
-            }
-            forwardNotification(notification);
-          }
-        } else handleResponse(value);
-      };
-      const processChunk = (chunk: Buffer | string): void => {
-        const text = chunk.toString();
-        rawStdoutTail = (rawStdoutTail + text).slice(-RAW_STDOUT_TAIL_LIMIT);
-        let rest = text;
-        while (rest) {
-          if (droppingLine) {
-            const newline = rest.indexOf("\n");
-            if (newline < 0) return;
-            droppingLine = false;
-            rest = rest.slice(newline + 1);
-            continue;
-          }
-          lineBuffer += rest;
-          rest = "";
-          while (true) {
-            const newline = lineBuffer.indexOf("\n");
-            if (newline < 0) {
-              if (lineBuffer.length > STDOUT_LINE_LIMIT) {
-                lineBuffer = "";
-                droppingLine = true;
-              }
-              return;
-            }
-            const line = lineBuffer.slice(0, newline);
-            lineBuffer = lineBuffer.slice(newline + 1);
-            if (line.length <= STDOUT_LINE_LIMIT) processLine(line);
-            if (settled) return;
-          }
-        }
-      };
-      function onStdoutData(data: Buffer | string): void {
-        try {
-          processChunk(data);
-        } catch (error) {
-          fail(error);
-        }
-      }
-      function onStderrData(data: Buffer | string): void {
-        sawStderr = true;
-        try {
-          sink.stderr(data.toString());
-        } catch (error) {
-          fail(error);
-        }
-      }
-      function onStdinError(error: Error): void {
-        sawStderr = true;
-        try {
-          sink.stderr(`stdin: ${error.message}\n`);
-        } catch (sinkError) {
-          fail(sinkError);
-        }
-      }
-      function onProcessError(error: Error): void {
-        if (settled) return;
-        sawStderr = true;
-        try {
-          sink.stderr(`${error.message}\n`);
-        } catch (sinkError) {
-          fail(sinkError);
-          return;
-        }
-        finish({ status: "failed" }, true);
-      }
-      function onClose(code: number | null): void {
-        childClosed = true;
+      endStdin();
+      kill("SIGTERM");
+      scheduleKill("SIGKILL");
+    };
+    const finish = (
+      conclusion: SourceConclusion,
+      terminate: boolean,
+      requestSettlement: CodexAppServerTransportRejectionReason,
+    ): void => {
+      if (endingSettled) return;
+      signal.removeEventListener("abort", onAbort);
+      detachStreams();
+      rejectPending(new CodexAppServerTransportError(requestSettlement));
+      if (terminate) beginTermination(false);
+      else {
+        endStdin();
         clearTimer();
-        rejectPending(new Error("Codex App Server exited before its response"));
-        if (settled) {
-          finishCleanup();
-          return;
-        }
-        try {
-          if (lineBuffer.length > 0 && lineBuffer.length <= STDOUT_LINE_LIMIT)
-            processLine(lineBuffer);
-          lineBuffer = "";
-          if (settled) return;
-          if (aborted) finish({ status: "clean" }, false);
-          else if (code === 0) {
-            if (!sawStderr && !sawTerminalAnswer) {
-              const tail = redactProviderIds(rawStdoutTail.trim());
-              sink.stderr(
-                tail ? `Last stdout:\n${tail}` : "No stdout was captured.",
-              );
-            }
-            finish({ status: "clean" }, false);
-          } else {
-            if (!sawStderr && !sawTerminalAnswer && rawStdoutTail.trim()) {
-              sink.stderr(
-                `Last stdout:\n${redactProviderIds(rawStdoutTail.trim())}`,
-              );
-            }
-            finish(
-              {
-                status: "failed",
-                errorMessage: `Child codex exited with code ${code ?? "unknown"}`,
-              },
-              false,
-            );
-          }
-        } catch (error) {
-          fail(error);
-        }
+        detachProcess();
       }
-      const onAbort = (): void => {
-        if (settled) return;
-        aborted = true;
-        beginTermination(Boolean(threadId && turnId));
-      };
-
-      proc.stdout.on("data", onStdoutData);
-      proc.stderr.on("data", onStderrData);
-      proc.stdin.on("error", onStdinError);
-      proc.on("error", onProcessError);
-      proc.on("close", onClose);
-      signal.addEventListener("abort", onAbort, { once: true });
-
-      const start = async (): Promise<void> => {
-        try {
-          const initialize = await sendRequest(
-            "initialize",
-            initializeParams(),
-          );
-          if (!isInitializeResponse(initialize))
-            throw new Error(
-              "Codex App Server returned an invalid initialize response",
-            );
-          if (settled || signal.aborted) return;
-          sendNotification("initialized");
-          const thread = await sendRequest(
-            "thread/start",
-            threadStartParams(options),
-          );
-          if (
-            !isRecord(thread) ||
-            !isRecord(thread.thread) ||
-            typeof thread.thread.id !== "string"
-          )
-            throw new Error(
-              "Codex App Server returned an invalid thread/start response",
-            );
-          threadId = thread.thread.id;
-          if (settled || signal.aborted) return;
-          const turn = await sendRequest(
-            "turn/start",
-            turnStartParams(threadId, prompt),
-          );
+      settle(conclusion);
+    };
+    const reportStderr = (chunk: string): boolean => {
+      sawStderr = true;
+      try {
+        report.stderr(chunk);
+        return true;
+      } catch (error) {
+        finish(
+          {
+            status: "failed",
+            errorMessage:
+              error instanceof Error ? error.message : String(error),
+          },
+          true,
+          "transport-settled",
+        );
+        return false;
+      }
+    };
+    const write = (value: JsonObject): boolean => {
+      if (endingSettled) return false;
+      try {
+        proc.stdin?.write(`${JSON.stringify(value)}\n`, "utf8");
+        return true;
+      } catch (error) {
+        reportStderr(
+          `stdin: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        finish({ status: "failed" }, true, "transport-settled");
+        return false;
+      }
+    };
+    const sendNotification = (method: string, params?: JsonObject): void => {
+      const value: JsonObject = { method };
+      if (params) value.params = params;
+      write(value);
+    };
+    function sendRequest(
+      method: string,
+      params: JsonObject,
+      accept: (value: unknown) => void,
+      rejectRequest: (error: Error) => void,
+      settleOnTransport = false,
+    ): void {
+      if (endingSettled) {
+        rejectRequest(new CodexAppServerTransportError("transport-settled"));
+        return;
+      }
+      const id = nextRequestId++;
+      pending.set(id, { accept, reject: rejectRequest, settleOnTransport });
+      if (!write({ jsonrpc: "2.0", id, method, params })) pending.delete(id);
+    }
+    const sendControl = (control: RunControl): Promise<void> => {
+      if (!threadId || !turnId || controlPumpClosed) return Promise.resolve();
+      const clientUserMessageId = globalThis.crypto.randomUUID();
+      pendingSteeringCorrelations.add(clientUserMessageId);
+      return new Promise((resolveControl) => {
+        sendRequest(
+          "turn/steer",
+          turnSteerParams(
+            threadId as string,
+            turnId as string,
+            control.text,
+            clientUserMessageId,
+          ),
+          () => resolveControl(),
+          (error) => {
+            pendingSteeringCorrelations.delete(clientUserMessageId);
+            if (error instanceof CodexAppServerRequestError)
+              reportStderr(steeringDiagnostic(error));
+            resolveControl();
+          },
+          true,
+        );
+      });
+    };
+    const pumpControls = async (): Promise<void> => {
+      while (!controlPumpClosed) {
+        const next = await controlIterator.next();
+        if (next.done || controlPumpClosed) return;
+        await runIdentityReady;
+        if (controlPumpClosed) return;
+        await sendControl(next.value);
+      }
+    };
+    const responseError = (value: unknown): string | undefined =>
+      isRecord(value) && typeof value.message === "string"
+        ? value.message
+        : undefined;
+    const startupFailure = (error: Error): void => {
+      finish(
+        { status: "failed", errorMessage: error.message },
+        true,
+        "transport-settled",
+      );
+    };
+    const startTurn = (): void => {
+      if (!threadId || endingSettled || cancellationSequence !== undefined)
+        return;
+      sendRequest(
+        "turn/start",
+        turnStartParams(threadId, prompt),
+        (turn) => {
           if (
             !isRecord(turn) ||
             !isRecord(turn.turn) ||
             typeof turn.turn.id !== "string"
-          )
-            throw new Error(
-              "Codex App Server returned an invalid turn/start response",
+          ) {
+            startupFailure(
+              new Error(
+                "Codex App Server returned an invalid turn/start response",
+              ),
             );
+            return;
+          }
           turnId = turn.turn.id;
-          for (const notification of pendingNotifications.splice(0))
-            forwardNotification(notification);
-          if (signal.aborted) beginTermination(true);
-        } catch (error) {
-          if (!settled)
-            finish(
-              {
-                status: "failed",
-                errorMessage:
-                  error instanceof Error ? error.message : String(error),
-              },
-              true,
+          announceRunIdentity();
+          flushEarlyNotifications();
+        },
+        startupFailure,
+      );
+    };
+    const startThread = (): void => {
+      if (endingSettled || cancellationSequence !== undefined) return;
+      sendRequest(
+        "thread/start",
+        threadStartParams(options),
+        (thread) => {
+          if (
+            !isRecord(thread) ||
+            !isRecord(thread.thread) ||
+            typeof thread.thread.id !== "string"
+          ) {
+            startupFailure(
+              new Error(
+                "Codex App Server returned an invalid thread/start response",
+              ),
             );
+            return;
+          }
+          threadId = thread.thread.id;
+          startTurn();
+        },
+        startupFailure,
+      );
+    };
+    const start = (): void => {
+      sendRequest(
+        "initialize",
+        initializeParams(),
+        (initialize) => {
+          if (!isInitializeResponse(initialize)) {
+            startupFailure(
+              new Error(
+                "Codex App Server returned an invalid initialize response",
+              ),
+            );
+            return;
+          }
+          if (endingSettled || cancellationSequence !== undefined) return;
+          sendNotification("initialized");
+          startThread();
+        },
+        startupFailure,
+      );
+    };
+    const handleResponse = (value: JsonObject): void => {
+      if (
+        !Number.isInteger(value.id) ||
+        (!("result" in value) && !("error" in value))
+      )
+        return;
+      const request = pending.get(value.id as number);
+      if (!request) return;
+      pending.delete(value.id as number);
+      if ("error" in value) {
+        const jsonRpcError = parseCodexAppServerResponseError(value.error);
+        const rejection = jsonRpcError
+          ? new CodexAppServerRequestError(jsonRpcError)
+          : new Error(
+              responseError(value.error) ?? "Codex App Server request failed",
+            );
+        notifyRequestRejection(rejection);
+        request.reject(rejection);
+      } else request.accept(value.result);
+    };
+    const handleServerRequest = (value: JsonObject): void => {
+      const id = value.id;
+      if (
+        (typeof id !== "number" && typeof id !== "string") ||
+        (typeof id === "number" && !Number.isInteger(id)) ||
+        typeof value.method !== "string"
+      )
+        return;
+      write({
+        jsonrpc: "2.0",
+        id,
+        error: {
+          code: -32601,
+          message: "Method not supported by pi-subagent",
+        },
+      });
+      reportStderr(
+        `Codex App Server requested unsupported method '${value.method}'\n`,
+      );
+    };
+    const applyTranslation = (
+      sequence: number,
+      notification: CodexAppServerEvent,
+    ): void => {
+      let translation: Translation | undefined;
+      const steering = correlatedSteeringFact(
+        notification,
+        pendingSteeringCorrelations,
+        consumedSteeringItems,
+      );
+      try {
+        translation = translate(notification);
+      } catch (error) {
+        failExecution(error);
+        return;
+      }
+      if ((!translation && !steering) || endingSettled) return;
+      if (
+        translation?.terminal === true &&
+        (cancellationSequence === undefined || sequence < cancellationSequence)
+      )
+        terminalAnswer = true;
+      if (translation?.errorMessage !== undefined)
+        witnessedError = translation.errorMessage;
+      try {
+        if (steering) {
+          report.message(steering.fact);
+          pendingSteeringCorrelations.delete(steering.correlation);
+          consumedSteeringItems.add(steering.itemId);
         }
-      };
-      if (signal.aborted) onAbort();
-      else void start();
-    });
-  };
+        for (const fact of translation?.facts ?? []) report.message(fact);
+        if (translation?.transcript !== undefined)
+          report.transcript(translation.transcript);
+        if (translation?.activity !== undefined)
+          report.activity(translation.activity ?? undefined);
+      } catch (error) {
+        finish(
+          {
+            status: "failed",
+            errorMessage:
+              error instanceof Error ? error.message : String(error),
+          },
+          true,
+          "transport-settled",
+        );
+      }
+    };
+    const matchesRunIdentity = (notification: CodexAppServerEvent): boolean => {
+      if (!threadId || notification.params.threadId !== threadId) return false;
+      if (!turnId) return false;
+      return notification.method === "turn/completed"
+        ? notification.params.turn.id === turnId
+        : notification.params.turnId === turnId;
+    };
+    const forwardNotification = (
+      sequence: number,
+      notification: CodexAppServerEvent,
+    ): void => {
+      if (endingSettled || !matchesRunIdentity(notification)) return;
+      applyTranslation(sequence, notification);
+      if (!endingSettled && notification.method === "turn/completed")
+        finish(
+          { status: "clean" },
+          !cancellationPrecedes(sequence),
+          "semantic-settled",
+        );
+    };
+    function flushEarlyNotifications(): void {
+      if (!threadId || !turnId || endingSettled) return;
+      const retained = earlyNotifications.splice(0);
+      for (const entry of retained) {
+        forwardNotification(entry.sequence, entry.notification);
+        if (endingSettled) return;
+      }
+    }
+    const handleProviderMessage = (
+      sequence: number,
+      value: JsonObject,
+    ): void => {
+      if (typeof value.method === "string") {
+        if ("id" in value) {
+          handleServerRequest(value);
+          return;
+        }
+        const notification = parseNotification(value);
+        if (!notification) return;
+        if (!threadId || !turnId) {
+          earlyNotifications.push({ sequence, notification });
+          return;
+        }
+        forwardNotification(sequence, notification);
+        return;
+      }
+      handleResponse(value);
+    };
+    const handleProcessClose = (
+      sequence: number,
+      code: number | null,
+    ): void => {
+      childClosed = true;
+      clearTimer();
+      rejectPending(new CodexAppServerTransportError("child-exited"));
+      if (endingSettled) {
+        finishCleanup();
+        return;
+      }
+      if (cancellationPrecedes(sequence)) {
+        finish({ status: "clean" }, false, "child-exited");
+        return;
+      }
+      if (code === 0) {
+        if (!sawStderr && !terminalAnswer) {
+          const tail = redactProviderIds(rawStdoutTail.trim());
+          if (
+            !reportStderr(
+              tail ? `Last stdout:\n${tail}` : "No stdout was captured.",
+            )
+          )
+            return;
+        }
+        finish({ status: "clean" }, false, "child-exited");
+        return;
+      }
+      if (!sawStderr && !terminalAnswer && rawStdoutTail.trim()) {
+        if (
+          !reportStderr(
+            `Last stdout:\n${redactProviderIds(rawStdoutTail.trim())}`,
+          )
+        )
+          return;
+      }
+      finish(
+        {
+          status: "failed",
+          errorMessage: `Child codex exited with code ${code ?? "unknown"}`,
+        },
+        false,
+        "child-exited",
+      );
+    };
+    const reduce = ({ sequence, occurrence }: OrderedOccurrence): void => {
+      if (
+        endingSettled &&
+        occurrence.type !== "process-close" &&
+        occurrence.type !== "escalation"
+      )
+        return;
+      switch (occurrence.type) {
+        case "provider-message":
+          handleProviderMessage(sequence, occurrence.value);
+          return;
+        case "cancel":
+          beginTermination(Boolean(threadId && turnId));
+          return;
+        case "stderr":
+          reportStderr(occurrence.chunk);
+          return;
+        case "stdin-error":
+          reportStderr(`stdin: ${occurrence.error.message}\n`);
+          return;
+        case "process-error":
+          if (!reportStderr(`${occurrence.error.message}\n`)) return;
+          finish({ status: "failed" }, true, "transport-settled");
+          return;
+        case "process-close":
+          handleProcessClose(sequence, occurrence.code);
+          return;
+        case "escalation":
+          if (childClosed) return;
+          kill(occurrence.stage);
+          if (occurrence.stage === "SIGTERM") scheduleKill("SIGKILL");
+          else if (endingSettled) finishCleanup();
+          else {
+            endStdin();
+            finishCleanup();
+            settle({ status: "clean" });
+          }
+      }
+    };
+    function drainQueue(): void {
+      if (draining) return;
+      draining = true;
+      try {
+        while (queue.length > 0) {
+          const next = queue.shift();
+          if (next) {
+            reducingSequence = next.sequence;
+            reduce(next);
+          }
+        }
+      } finally {
+        reducingSequence = undefined;
+        draining = false;
+      }
+    }
+    function admit(occurrence: CodexRunOccurrence): void {
+      if (
+        endingSettled &&
+        occurrence.type !== "process-close" &&
+        occurrence.type !== "escalation"
+      )
+        return;
+      const ordered = { sequence: nextSequence++, occurrence };
+      if (occurrence.type === "cancel" && cancellationSequence === undefined)
+        cancellationSequence = ordered.sequence;
+      queue.push(ordered);
+      if (!framingStdout) drainQueue();
+    }
+    const processLine = (line: string): void => {
+      if (!line.trim()) return;
+      let value: unknown;
+      try {
+        value = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (isRecord(value)) admit({ type: "provider-message", value });
+    };
+    const processChunk = (chunk: Buffer | string): void => {
+      const text = chunk.toString();
+      rawStdoutTail = (rawStdoutTail + text).slice(-RAW_STDOUT_TAIL_LIMIT);
+      let rest = text;
+      while (rest) {
+        if (droppingLine) {
+          const newline = rest.indexOf("\n");
+          if (newline < 0) return;
+          droppingLine = false;
+          rest = rest.slice(newline + 1);
+          continue;
+        }
+        lineBuffer += rest;
+        rest = "";
+        while (true) {
+          const newline = lineBuffer.indexOf("\n");
+          if (newline < 0) {
+            if (lineBuffer.length > STDOUT_LINE_LIMIT) {
+              lineBuffer = "";
+              droppingLine = true;
+            }
+            return;
+          }
+          const line = lineBuffer.slice(0, newline);
+          lineBuffer = lineBuffer.slice(newline + 1);
+          if (line.length <= STDOUT_LINE_LIMIT) processLine(line);
+          if (endingSettled) return;
+        }
+      }
+    };
+    function onStdoutData(data: Buffer | string): void {
+      framingStdout = true;
+      try {
+        processChunk(data);
+      } catch (error) {
+        failExecution(error);
+      } finally {
+        framingStdout = false;
+        drainQueue();
+      }
+    }
+    function onStderrData(data: Buffer | string): void {
+      admit({ type: "stderr", chunk: data.toString() });
+    }
+    function onStdinError(error: Error): void {
+      admit({ type: "stdin-error", error });
+    }
+    function onProcessError(error: Error): void {
+      admit({ type: "process-error", error });
+    }
+    function onClose(code: number | null): void {
+      framingStdout = true;
+      try {
+        if (!endingSettled) {
+          if (lineBuffer.length > 0 && lineBuffer.length <= STDOUT_LINE_LIMIT)
+            processLine(lineBuffer);
+          lineBuffer = "";
+        }
+        admit({ type: "process-close", code });
+      } finally {
+        framingStdout = false;
+        drainQueue();
+      }
+    }
+    function onAbort(): void {
+      admit({ type: "cancel" });
+    }
+
+    proc.stdout.on("data", onStdoutData);
+    proc.stderr.on("data", onStderrData);
+    proc.stdin.on("error", onStdinError);
+    proc.on("error", onProcessError);
+    proc.on("close", onClose);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+    else {
+      void pumpControls().catch(() => {});
+      start();
+    }
+  });
 }

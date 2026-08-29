@@ -18,6 +18,7 @@ import {
   formatCancelOutcome,
   formatResult,
   formatStartResult,
+  formatSteerOutcome,
   formatUnknownAgent,
   formatWaitOutcome,
 } from "./presentation.ts";
@@ -254,6 +255,38 @@ export function registerSubagentFeatureTools(
 
       return {
         content: [{ type: "text", text: formatCancelOutcome(outcome) }],
+        details: undefined,
+      };
+    },
+  });
+
+  const steerDescription =
+    "Send one guidance message to an active subagent Run. `accepted` means " +
+    "only that the complete message synchronously entered its local bounded " +
+    "mailbox. It does not mean the Harness dequeued it, a provider accepted " +
+    "it, or a model consumed it. Do not retry repeatedly or resend a " +
+    "steering message in a loop.";
+
+  pi.registerTool({
+    name: "agent_steer",
+    label: "Steer subagent",
+    description: steerDescription,
+    promptSnippet: steerDescription,
+    parameters: Type.Object({
+      id: Type.String({ description: "A run id returned by agent_start" }),
+      message: Type.String({
+        description:
+          "Guidance for the active Run; admitted text is preserved exactly",
+      }),
+    }),
+    renderResult: renderMarkdownResult,
+
+    async execute(_toolCallId, params) {
+      const outcome = delivery.steer(params.id, params.message);
+      return {
+        content: [
+          { type: "text", text: formatSteerOutcome(params.id, outcome) },
+        ],
         details: undefined,
       };
     },

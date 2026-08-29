@@ -34,8 +34,8 @@ must fold exactly once, and a completed answer must survive a later interrupt.
 
 2. **Provider identity is adapter-local.** Thread, turn, item, and request ids
    are transport identity. They never enter facts, the Run record, history, or
-   presentation. The adapter offers no resume, steer, or persisted provider
-   session surface.
+   presentation. Native steering is correlated entirely inside the adapter;
+   the adapter offers no resume or persisted provider session surface.
 
 3. **Live activity is ephemeral.** The harness-neutral live-activity channel
    sits beside durable facts. It is for the live UI only, never transcript

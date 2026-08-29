@@ -68,9 +68,14 @@ codex-owned modules (the harness and transport).
    Conformance** battery also covers backend-crash executor resolution,
    cancellation normalization, usage folding, child-depth transport, configuration
    immutability, clean answerless termination, and failure after an answer. The
-   battery has nine scenarios: backend-crash, abort-mid-run,
+   battery has eleven scenarios: backend-crash, abort-mid-run,
    terminal-answer-then-abort, usage-totals, child-depth, config-immutable,
-   no-terminal-answer, post-answer-failure, and terminal-transcript-healing.
+   no-terminal-answer, post-answer-failure, terminal-transcript-healing,
+   steering-single-consumed, and steering-fifo-consumed. The two steering
+   scenarios are capability-aware: supported adapters prove serial FIFO
+   consumption and neutral user Facts; unsupported adapters prove truthful
+   rejection with zero provider-control work. Shared code never checks a
+   harness name.
    That battery is part of the one-adapter cost,
    not a core change.
    *Review:* the fake implements only the public `Harness` contract; profile
@@ -79,7 +84,7 @@ codex-owned modules (the harness and transport).
 6. [x] **The Codex adapter owns two modules, one registration, its own tests —
    and no dispatcher/lifecycle changes.**
     *Test:* `harnesses/codex/harness.test.ts` runs the real Codex adapter through the
-   shared **Harness Conformance** battery (all nine scenarios; Claude alone
+   shared **Harness Conformance** battery (all eleven scenarios; Claude alone
    visibly skips snapshot healing). Codex has no transcript snapshot, so its
    `terminal-transcript-healing` case asserts that multiple completed agent
    messages remain streamed facts and that the final completed agent message
@@ -165,9 +170,11 @@ comments and ordinary string literals are not.
   double count between per-message usage and the terminal result.
 - [x] **One-shot binds every harness** — one prompt in, one terminal answer
   out (ADR-0003 is a property of Run). *Test:* `one-shot.test.ts` has
-  compile-time exact `keyof` assertions for `Harness`, `HarnessRun`, and
-  `SubagentTask`, plus runtime checks covering every adapter and the absence
-  of send, steer, and persistent-session surfaces.
+  compile-time exact `keyof` assertions for `Harness`, `HarnessRun`,
+  `SubagentTask`, and `SubagentRun`, plus runtime checks covering every adapter.
+  Prepared Runs declare neutral Control capability, and executors receive only
+  a neutral Control stream — never send/control methods or persistent provider
+  sessions. Codex declares steering support; Pi and Claude declare none.
 - [x] **Depth binds every harness** — Claude children have their
   agent-spawning tools disallowed, and every executor copies
   `task.childDepth` into its child's environment so a Bash-launched
@@ -244,3 +251,13 @@ comments and ordinary string literals are not.
   no-substitution dynamic imports, and property-access requires are covered;
   comments and ordinary strings remain ignored. *Test:* the checker runs
   against disposable fixture roots and the real production graph.
+- [x] **Steering has one release gate** — capability-aware Harness Conformance
+  runs for the controlled harness and all production adapters; Codex transport
+  fixtures repeat Control-versus-cancellation and Control-versus-terminal
+  ingress order 32 times without timing delays; generated schemas are
+  byte-compared with the pinned installed CLI; and the authenticated live smoke
+  admits uniquely marked guidance, observes its correlated neutral user Fact,
+  retrieves a Result reflecting it, proves interruption, prints
+  `CODEX_STEERING_LIVE_SMOKE_PASS`, and cleans up on every exit path. Run
+  `npm run check` for the local quality gates and `npm run release:check` for
+  the quota-spending final gate.

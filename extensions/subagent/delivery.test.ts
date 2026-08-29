@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createControlGate } from "./control-mailbox.ts";
 import type { PushedNotification, SubagentDelivery } from "./delivery.ts";
 import { createSessionPush, createSubagentDelivery } from "./delivery.ts";
 import { NOTIFICATION_PREVIEW_CHARACTER_LIMIT } from "./presentation.ts";
@@ -231,6 +232,115 @@ test("a cancel tells a finished run apart from an id that never existed", async 
   assert.deepEqual(outcome.unknown, ["never-existed"]);
 });
 
+test("steering validates before Run lookup and preserves admitted text exactly", async () => {
+  const { delivery, runs } = harness();
+
+  assert.equal(delivery.steer("missing", " \n\t"), "invalid");
+  assert.equal(delivery.steer("missing", "🙂".repeat(4_097)), "invalid");
+  assert.equal(delivery.steer("missing", "guidance"), "unknown run");
+
+  const run = deferredRun();
+  const gate = createControlGate(["steer"]);
+  const handle = runs.track(run.result, run.cancel, gate);
+  delivery.register(handle.id, run.result.agent, run.settled);
+  const controls = gate.controls[Symbol.asyncIterator]();
+  const exact = "  preserve\nthis text \t";
+
+  assert.equal(delivery.steer(handle.id, exact), "accepted");
+  assert.deepEqual(await controls.next(), {
+    done: false,
+    value: { type: "steer", text: exact },
+  });
+});
+
+test("steering outcomes follow settled, cancelling, unsupported, and backpressure precedence", async () => {
+  const { delivery, runs } = harness();
+
+  const unsupported = deferredRun();
+  const unsupportedHandle = runs.track(
+    unsupported.result,
+    unsupported.cancel,
+    createControlGate([]),
+  );
+  delivery.register(
+    unsupportedHandle.id,
+    unsupported.result.agent,
+    unsupported.settled,
+  );
+  assert.equal(delivery.steer(unsupportedHandle.id, "guidance"), "unsupported");
+
+  const full = deferredRun();
+  const fullHandle = runs.track(
+    full.result,
+    full.cancel,
+    createControlGate(["steer"]),
+  );
+  delivery.register(fullHandle.id, full.result.agent, full.settled);
+  for (let index = 0; index < 16; index++) {
+    assert.equal(delivery.steer(fullHandle.id, "guidance"), "accepted");
+  }
+  assert.equal(delivery.steer(fullHandle.id, "guidance"), "queue full");
+
+  const cancelling = deferredRun();
+  const cancellingHandle = runs.track(
+    cancelling.result,
+    () => {},
+    createControlGate(["steer"]),
+  );
+  delivery.register(
+    cancellingHandle.id,
+    cancelling.result.agent,
+    cancelling.settled,
+  );
+  delivery.cancel([cancellingHandle.id]);
+  assert.equal(
+    delivery.steer(cancellingHandle.id, "guidance"),
+    "not steerable",
+  );
+
+  unsupported.finish();
+  await flush();
+  assert.equal(
+    delivery.steer(unsupportedHandle.id, "guidance"),
+    "already completed",
+  );
+
+  const cancelled = deferredRun();
+  const cancelledHandle = runs.track(cancelled.result, cancelled.cancel);
+  delivery.register(
+    cancelledHandle.id,
+    cancelled.result.agent,
+    cancelled.settled,
+  );
+  cancelled.cancel();
+  await flush();
+  assert.equal(
+    delivery.steer(cancelledHandle.id, "guidance"),
+    "already cancelled",
+  );
+
+  const failed = createEmptyResult("reviewer", "task", 0);
+  failed.lifecycle = { phase: "failed", finishedAt: 10 };
+  delivery.register("failed-run", failed.agent, Promise.resolve(failed));
+  await flush();
+  assert.equal(delivery.steer("failed-run", "guidance"), "already failed");
+});
+
+test("terminal Run identity remains steer-classifiable until Session shutdown clears it", async () => {
+  const { delivery, runs } = harness();
+  const run = deferredRun();
+  const handle = runs.track(run.result, run.cancel, createControlGate([]));
+  delivery.register(handle.id, run.result.agent, run.settled);
+  run.finish();
+  await flush();
+
+  assert.equal(runs.list().length, 0);
+  assert.equal(delivery.steer(handle.id, "late guidance"), "already completed");
+
+  delivery.shutdown();
+  assert.equal(delivery.steer(handle.id, "late guidance"), "unknown run");
+});
+
 // ── Shutdown ─────────────────────────────────────────────────────────────────
 
 test("shutdown stops what is running and delivers nothing anywhere", async () => {
@@ -254,6 +364,21 @@ test("shutdown stops what is running and delivers nothing anywhere", async () =>
     undefined,
     "a run the session never heard from is not recallable in the next one",
   );
+});
+
+test("Session shutdown closes a controlled Run mailbox without waiting for queued Controls", async () => {
+  const { delivery, runs } = harness();
+  const run = deferredRun();
+  const gate = createControlGate(["steer"]);
+  const handle = runs.track(run.result, () => {}, gate);
+  delivery.register(handle.id, run.result.agent, run.settled);
+  assert.equal(delivery.steer(handle.id, "discard on shutdown"), "accepted");
+  const controls = gate.controls[Symbol.asyncIterator]();
+
+  delivery.shutdown();
+
+  assert.deepEqual(await controls.next(), { done: true, value: undefined });
+  assert.equal(delivery.steer(handle.id, "after shutdown"), "unknown run");
 });
 
 test("shutdown clears retention: a report belongs to the session that asked", async () => {

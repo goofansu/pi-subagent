@@ -4,7 +4,8 @@ Date: 2026-08-23
 
 ## Status
 
-Accepted.
+Accepted. [ADR-0012](0012-ordered-codex-steering.md) supersedes this ADR's
+no-mid-run-guidance consequence while preserving the one-shot Run decision.
 
 ## Context
 
@@ -27,18 +28,19 @@ spawn-stream-exit.
 
 ## Decision
 
-Children stay one-shot: one prompt in, one terminal result out. There is no `agent_send`
-or equivalent primitive, and none is planned.
+Children stay one-shot: one initial prompt in, one terminal result out. There
+is no follow-up or resume operation against an idle child, and none is planned.
 
-The orchestration surface is deliberately the process algebra — spawn
-(`agent_start`), join (`agent_wait`), cancel (`agent_cancel`) — with no
-operation that reaches inside a running child.
+The original orchestration surface was deliberately the process algebra —
+spawn (`agent_start`), join (`agent_wait`), cancel (`agent_cancel`). ADR-0012
+adds bounded guidance to an active Codex Run without retaining an idle child or
+creating a resumable provider session.
 
 ## Consequences
 
-Correcting a subagent that is going the wrong way means cancelling it and
-starting a new one with a better prompt. This is accepted: the prompt is cheap
-to rewrite and the cancel path already exists.
+Pi and Claude Runs still require cancellation and a new Run to correct their
+direction. Codex may accept bounded guidance only while its one active Turn is
+running; the child still settles and is cleaned up with that one-shot Run.
 
 Reading a finished run does not require a live child, only retention, so
 `agent_result` is provided without reopening this decision. Follow-up work

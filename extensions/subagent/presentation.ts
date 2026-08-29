@@ -9,6 +9,7 @@
  * compile error.
  */
 
+import type { SteerOutcome } from "./delivery.ts";
 import { getFinalOutput } from "./messages.ts";
 import type {
   LifecycleStatus,
@@ -280,6 +281,35 @@ export function formatCancelOutcome(
     parts.push(`Unknown run ids: ${outcome.unknown.join(", ")}.`);
   if (parts.length === 0) parts.push("Nothing to cancel.");
   return parts.join(" ");
+}
+
+/** The immediate response from agent_steer. */
+export function formatSteerOutcome(id: string, outcome: SteerOutcome): string {
+  switch (outcome) {
+    case "accepted":
+      return (
+        `Steering accepted for run ${id}. The complete message was ` +
+        "synchronously admitted to its local bounded mailbox. This does not " +
+        "mean the Harness dequeued it, a provider accepted it, or a model " +
+        "consumed it. Do not resend this steering message in a retry loop."
+      );
+    case "invalid":
+      return `Cannot steer run ${id}: invalid message. Use non-whitespace text no longer than 16 KiB of UTF-8.`;
+    case "unknown run":
+      return `Cannot steer run ${id}: unknown run. Check it against what agent_start returned.`;
+    case "already completed":
+      return `Cannot steer run ${id}: already completed.`;
+    case "already failed":
+      return `Cannot steer run ${id}: already failed.`;
+    case "already cancelled":
+      return `Cannot steer run ${id}: already cancelled.`;
+    case "not steerable":
+      return `Cannot steer run ${id}: it is cancelling or its Control gate is closed.`;
+    case "unsupported":
+      return `Cannot steer run ${id}: this prepared Run does not support steering.`;
+    case "queue full":
+      return `Cannot steer run ${id}: its Control mailbox is full. Do not retry steering in a loop.`;
+  }
 }
 
 /** A missing or still-running result diagnostic. */

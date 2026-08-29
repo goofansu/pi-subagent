@@ -12,6 +12,7 @@ import { getFinalOutput } from "./messages.ts";
 import {
   createEmptyResult,
   type Fact,
+  type RunControl,
   type RunEnding,
   type SubagentExecutor,
   type SubagentRun,
@@ -152,6 +153,59 @@ test("startSubagent hands the executor resolved dispatch policy", async () => {
   assert.equal(task.childDepth, 1);
   assert.equal("parentModel" in task, false);
   assert.equal("depth" in task, false);
+});
+
+test("a controlled Harness receives admitted Controls through the executor seam in FIFO order", async () => {
+  let releaseExecutor = () => {};
+  const executorGate = new Promise<void>((resolve) => {
+    releaseExecutor = resolve;
+  });
+  const received: string[] = [];
+  const harness: Harness = {
+    name: "controlled",
+    validate: () => [],
+    prepare: () => ({
+      supportedControls: ["steer"],
+      execute: async (run) => {
+        await executorGate;
+        for await (const control of run.controls) {
+          received.push(control.text);
+          if (received.length === 2) break;
+        }
+        run.report.message({
+          role: "assistant",
+          parts: [{ type: "text", text: "followed both Controls" }],
+        });
+        return { ending: "answered" };
+      },
+    }),
+  };
+  const runs = createSubagentRuns();
+  const started = dispatchSubagent({
+    config: agent({ harness: "controlled" }),
+    description: "task",
+    prompt: "work",
+    harnesses: createHarnessRegistry([harness]),
+    runs,
+  });
+
+  assert.equal(
+    runs.offer(started.id, { type: "steer", text: "first" }),
+    "accepted",
+  );
+  assert.equal(
+    runs.offer(started.id, { type: "steer", text: "second" }),
+    "accepted",
+  );
+  releaseExecutor();
+  const result = await started.settled;
+
+  assert.deepEqual(received, ["first", "second"]);
+  assert.equal(result.lifecycle.phase, "completed");
+  assert.equal(
+    runs.offer(started.id, { type: "steer", text: "after settlement" }),
+    "already completed",
+  );
 });
 
 test("the selected harness resolves models without exposing effort", () => {
@@ -531,6 +585,138 @@ test("a run cancelled before it starts never spawns a child", async () => {
   assert.equal(
     "finishedAt" in result.lifecycle ? result.lifecycle.finishedAt : undefined,
     500,
+  );
+});
+
+test("a Control admitted before cancellation may be discarded without changing the cancelled ending", async () => {
+  let executorReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    executorReady = resolve;
+  });
+  let allowConsumption = () => {};
+  const consumptionGate = new Promise<void>((resolve) => {
+    allowConsumption = resolve;
+  });
+  const consumed: string[] = [];
+  const harness: Harness = {
+    name: "controlled",
+    validate: () => [],
+    prepare: () => ({
+      supportedControls: ["steer"],
+      execute: async (run) => {
+        executorReady();
+        await consumptionGate;
+        for await (const control of run.controls) consumed.push(control.text);
+        return run.signal?.aborted
+          ? { ending: "cancelled" }
+          : { ending: "answered" };
+      },
+    }),
+  };
+  const runs = createSubagentRuns();
+  const started = dispatchSubagent({
+    config: agent({ harness: "controlled" }),
+    description: "task",
+    prompt: "work",
+    harnesses: createHarnessRegistry([harness]),
+    runs,
+  });
+  await ready;
+
+  assert.equal(
+    runs.offer(started.id, { type: "steer", text: "admitted first" }),
+    "accepted",
+  );
+  assert.deepEqual(runs.cancel([started.id], "requested"), [started.id]);
+  assert.equal(
+    runs.offer(started.id, { type: "steer", text: "after cancellation" }),
+    "not steerable",
+  );
+  allowConsumption();
+
+  const result = await started.settled;
+  assert.deepEqual(consumed, []);
+  assert.equal(result.lifecycle.phase, "cancelled");
+  if (result.lifecycle.phase === "cancelled") {
+    assert.equal(result.lifecycle.reason, "requested");
+  }
+});
+
+test("external cancellation uses the Registry cancellation linearization point", async () => {
+  let executorReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    executorReady = resolve;
+  });
+  const external = new AbortController();
+  const harness: Harness = {
+    name: "controlled",
+    validate: () => [],
+    prepare: () => ({
+      supportedControls: ["steer"],
+      execute: async (run) => {
+        executorReady();
+        await new Promise<void>((resolve) => {
+          if (run.signal?.aborted) resolve();
+          else
+            run.signal?.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+        });
+        return { ending: "cancelled" };
+      },
+    }),
+  };
+  const runs = createSubagentRuns();
+  const started = dispatchSubagent({
+    config: agent({ harness: "controlled" }),
+    description: "task",
+    prompt: "work",
+    signal: external.signal,
+    harnesses: createHarnessRegistry([harness]),
+    runs,
+  });
+  await ready;
+
+  external.abort();
+  assert.equal(
+    runs.offer(started.id, { type: "steer", text: "too late" }),
+    "not steerable",
+  );
+  const result = await started.settled;
+  assert.equal(result.lifecycle.phase, "cancelled");
+  if (result.lifecycle.phase === "cancelled") {
+    assert.equal(result.lifecycle.reason, "requested");
+  }
+});
+
+test("startup failure closes a controlled Run mailbox without draining it", async () => {
+  let waiting: Promise<IteratorResult<RunControl>> | undefined;
+  const harness: Harness = {
+    name: "controlled",
+    validate: () => [],
+    prepare: () => ({
+      supportedControls: ["steer"],
+      execute: async (run) => {
+        waiting = run.controls[Symbol.asyncIterator]().next();
+        throw new Error("startup failed");
+      },
+    }),
+  };
+  const runs = createSubagentRuns();
+  const started = dispatchSubagent({
+    config: agent({ harness: "controlled" }),
+    description: "task",
+    prompt: "work",
+    harnesses: createHarnessRegistry([harness]),
+    runs,
+  });
+
+  const result = await started.settled;
+  assert.equal(result.lifecycle.phase, "failed");
+  assert.deepEqual(await waiting, { done: true, value: undefined });
+  assert.equal(
+    runs.offer(started.id, { type: "steer", text: "too late" }),
+    "already failed",
   );
 });
 

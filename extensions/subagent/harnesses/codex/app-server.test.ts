@@ -5,10 +5,13 @@ import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import type { ChildProcessSpawn } from "../../child-process.ts";
 import type { OneShotSink } from "../../one-shot.ts";
-import { DEPTH_ENV_KEY } from "../../run.ts";
+import { DEPTH_ENV_KEY, type RunControl } from "../../run.ts";
 import {
   type CodexAppServerEvent,
-  createCodexAppServerSource,
+  type CodexAppServerOptions,
+  CodexAppServerRequestError,
+  CodexAppServerTransportError,
+  runCodexAppServer,
 } from "./app-server.ts";
 
 interface FakeChild extends EventEmitter {
@@ -92,7 +95,8 @@ function completed(status = "completed") {
 
 function sourceWith(
   handler: (request: Record<string, unknown>, child: FakeChild) => void,
-  overrides: Partial<Parameters<typeof createCodexAppServerSource>[0]> = {},
+  overrides: Partial<CodexAppServerOptions> = {},
+  controls: AsyncIterable<RunControl> = (async function* () {})(),
 ) {
   let child: FakeChild | undefined;
   let replacementKill: ((signal: string) => boolean) | undefined;
@@ -104,14 +108,33 @@ function sourceWith(
     if (replacementKill) child.kill = replacementKill;
     return child as unknown as ChildProcess;
   };
-  const source = createCodexAppServerSource({
-    cwd: "/work",
-    childDepth: 2,
-    prompt: "prompt",
-    spawn,
-    killEscalationMs: 5,
-    ...overrides,
-  });
+  const source = (
+    sink: OneShotSink<CodexAppServerEvent>,
+    signal: AbortSignal,
+  ) =>
+    runCodexAppServer({
+      cwd: "/work",
+      childDepth: 2,
+      prompt: "prompt",
+      spawn,
+      killEscalationMs: 5,
+      ...overrides,
+      translate: (event) => {
+        const terminal = sink.event(event) === true;
+        return {
+          terminal: terminal || event.method === "turn/completed",
+        };
+      },
+      report: {
+        message: () => {},
+        transcript: () => {},
+        activity: () => {},
+        stderr: sink.stderr,
+      },
+      signal,
+      controls,
+      missingAnswerMessage: "missing answer",
+    });
   return {
     source,
     get child() {
@@ -123,6 +146,311 @@ function sourceWith(
     },
   };
 }
+
+test("a Control admitted before provider identity is known is retained for native turn steering", async (t) => {
+  const requests: Record<string, unknown>[] = [];
+  let initializeRequest: Record<string, unknown> | undefined;
+  let controlTaken!: () => void;
+  const taken = new Promise<void>((resolve) => {
+    controlTaken = resolve;
+  });
+  let steerSent!: () => void;
+  const steered = new Promise<void>((resolve) => {
+    steerSent = resolve;
+  });
+  const controls = (async function* (): AsyncIterable<RunControl> {
+    controlTaken();
+    yield { type: "steer", text: "Use the indexed implementation." };
+  })();
+  const rig = sourceWith(
+    (request, child) => {
+      requests.push(request);
+      if (request.method === "initialize") initializeRequest = request;
+      if (request.method === "thread/start")
+        response(child, request.id as number, threadResult());
+      if (request.method === "turn/start")
+        response(child, request.id as number, turnResult());
+      if (request.method === "turn/steer") {
+        response(child, request.id as number, {});
+        steerSent();
+        child.stdout.write(`${JSON.stringify(completed())}\n`);
+      }
+    },
+    {},
+    controls,
+  );
+
+  const controller = new AbortController();
+  const pending = rig.source(sinkFor([], []), controller.signal);
+  t.after(async () => {
+    controller.abort();
+    rig.child?.finish(0);
+    await pending;
+  });
+  assert.equal(
+    await Promise.race([
+      taken.then(() => true),
+      new Promise<false>((resolve) => setImmediate(() => resolve(false))),
+    ]),
+    true,
+  );
+  assert.equal(
+    requests.some((request) => request.method === "turn/steer"),
+    false,
+  );
+  assert.ok(initializeRequest && rig.child);
+  response(rig.child, initializeRequest.id as number, initializeResult());
+  await steered;
+
+  const steer = requests.find((request) => request.method === "turn/steer");
+  const steerParams = steer?.params as Record<string, unknown> | undefined;
+  assert.equal(typeof steerParams?.clientUserMessageId, "string");
+  assert.deepEqual(steer, {
+    jsonrpc: "2.0",
+    id: 4,
+    method: "turn/steer",
+    params: {
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      input: [
+        {
+          type: "text",
+          text: "Use the indexed implementation.",
+          text_elements: [],
+        },
+      ],
+      clientUserMessageId: steerParams?.clientUserMessageId,
+    },
+  });
+  assert.deepEqual(await pending, { ending: "answered" });
+});
+
+test("multiple Controls are delivered serially in FIFO admission order", async () => {
+  const steerRequests: Record<string, unknown>[] = [];
+  let firstSent!: () => void;
+  const first = new Promise<void>((resolve) => {
+    firstSent = resolve;
+  });
+  let secondSent!: () => void;
+  const second = new Promise<void>((resolve) => {
+    secondSent = resolve;
+  });
+  const controls = (async function* (): AsyncIterable<RunControl> {
+    yield { type: "steer", text: "first guidance" };
+    yield { type: "steer", text: "second guidance" };
+  })();
+  const rig = sourceWith(
+    (request, child) => {
+      if (request.method === "initialize")
+        response(child, request.id as number, initializeResult());
+      if (request.method === "thread/start")
+        response(child, request.id as number, threadResult());
+      if (request.method === "turn/start")
+        response(child, request.id as number, turnResult());
+      if (request.method !== "turn/steer") return;
+      steerRequests.push(request);
+      if (steerRequests.length === 1) firstSent();
+      if (steerRequests.length === 2) {
+        response(child, request.id as number, {});
+        secondSent();
+        child.stdout.write(`${JSON.stringify(completed())}\n`);
+      }
+    },
+    {},
+    controls,
+  );
+
+  const pending = rig.source(sinkFor([], []), new AbortController().signal);
+  await first;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(steerRequests.length, 1);
+  const firstRequest = steerRequests[0];
+  assert.ok(firstRequest);
+  const firstParams = firstRequest.params as Record<string, unknown>;
+  assert.equal(
+    (firstParams.input as Array<Record<string, unknown>>)[0]?.text,
+    "first guidance",
+  );
+  response(rig.child as FakeChild, firstRequest.id as number, {});
+  await second;
+  const secondRequest = steerRequests[1];
+  assert.ok(secondRequest);
+  const secondParams = secondRequest.params as Record<string, unknown>;
+  assert.equal(
+    (secondParams.input as Array<Record<string, unknown>>)[0]?.text,
+    "second guidance",
+  );
+  assert.notEqual(
+    firstParams.clientUserMessageId,
+    secondParams.clientUserMessageId,
+  );
+  assert.deepEqual(await pending, { ending: "answered" });
+});
+
+test("an active-Turn steering refusal is a bounded redacted diagnostic, not the Run ending", async () => {
+  const stderr: string[] = [];
+  const controls = (async function* (): AsyncIterable<RunControl> {
+    yield { type: "steer", text: "review this" };
+  })();
+  const providerIdentity = {
+    threadId: "secret-thread",
+    turnId: "secret-turn",
+    expectedTurnId: "secret-expected-turn",
+    itemId: "secret-item",
+    sessionId: "secret-session",
+    clientId: "secret-client",
+    clientUserMessageId: "secret-correlation",
+    id: 99,
+  };
+  const rig = sourceWith(
+    (request, child) => {
+      if (request.method === "initialize")
+        response(child, request.id as number, initializeResult());
+      if (request.method === "thread/start")
+        response(child, request.id as number, threadResult());
+      if (request.method === "turn/start")
+        response(child, request.id as number, turnResult());
+      if (request.method === "turn/steer") {
+        child.stdout.write(
+          `${JSON.stringify({
+            id: request.id,
+            error: {
+              code: -32001,
+              message: `cannot steer a review turn ${JSON.stringify(providerIdentity)}${"x".repeat(5000)}`,
+              data: {
+                codexErrorInfo: {
+                  activeTurnNotSteerable: { turnKind: "review" },
+                },
+              },
+            },
+          })}\n`,
+        );
+        child.stdout.write(`${JSON.stringify(completed())}\n`);
+      }
+    },
+    {},
+    controls,
+  );
+
+  assert.deepEqual(
+    await rig.source(sinkFor([], stderr), new AbortController().signal),
+    { ending: "answered" },
+  );
+  assert.equal(stderr.length, 1);
+  assert.match(
+    stderr[0] ?? "",
+    /^Steering rejected: cannot steer a review turn/,
+  );
+  assert.ok((stderr[0]?.length ?? 0) <= 1050);
+  assert.doesNotMatch(
+    stderr[0] ?? "",
+    /secret-thread|secret-turn|secret-expected-turn|secret-item|secret-session|secret-client|secret-correlation/,
+  );
+});
+
+const DETERMINISTIC_RACE_REPETITIONS = 32;
+
+test("repeated terminal-before-Control settlement closes the pump and answers once", async () => {
+  for (
+    let iteration = 0;
+    iteration < DETERMINISTIC_RACE_REPETITIONS;
+    iteration++
+  ) {
+    const steerRequests: Record<string, unknown>[] = [];
+    const rejections: Error[] = [];
+    let pumpClosed!: () => void;
+    const closed = new Promise<void>((resolve) => {
+      pumpClosed = resolve;
+    });
+    const controls = (async function* (): AsyncIterable<RunControl> {
+      try {
+        yield { type: "steer", text: `first-${iteration}` };
+        yield { type: "steer", text: `discarded-${iteration}` };
+      } finally {
+        pumpClosed();
+      }
+    })();
+    const rig = sourceWith(
+      (request, child) => {
+        if (request.method === "initialize")
+          response(child, request.id as number, initializeResult());
+        if (request.method === "thread/start")
+          response(child, request.id as number, threadResult());
+        if (request.method === "turn/start")
+          response(child, request.id as number, turnResult());
+        if (request.method === "turn/steer") {
+          steerRequests.push(request);
+          child.stdout.write(`${JSON.stringify(completed())}\n`);
+        }
+      },
+      { onRequestRejection: (error) => rejections.push(error) },
+      controls,
+    );
+
+    const pending = rig.source(sinkFor([], []), new AbortController().signal);
+    assert.deepEqual(await pending, { ending: "answered" });
+    await closed;
+    assert.equal(steerRequests.length, 1);
+    assert.equal(rejections.length, 1);
+    assert.ok(rejections[0] instanceof CodexAppServerTransportError);
+    assert.equal(rejections[0].reason, "semantic-settled");
+
+    rig.child?.stdout.write(
+      `${JSON.stringify({
+        id: steerRequests[0]?.id,
+        error: { code: 17, message: "late steering rejection" },
+      })}\n`,
+    );
+    rig.child?.emit("close", 7, null);
+    assert.deepEqual(await pending, { ending: "answered" });
+    assert.equal(rejections.length, 1);
+  }
+});
+
+test("repeated cancellation-before-Control-response settlement stays cancelled once", async () => {
+  for (
+    let iteration = 0;
+    iteration < DETERMINISTIC_RACE_REPETITIONS;
+    iteration++
+  ) {
+    const controller = new AbortController();
+    let steerRequest: Record<string, unknown> | undefined;
+    const rig = sourceWith(
+      (request, child) => {
+        if (request.method === "initialize")
+          response(child, request.id as number, initializeResult());
+        if (request.method === "thread/start")
+          response(child, request.id as number, threadResult());
+        if (request.method === "turn/start")
+          response(child, request.id as number, turnResult());
+        if (request.method === "turn/steer") {
+          steerRequest = request;
+          controller.abort();
+        }
+        if (request.method === "turn/interrupt")
+          child.stdout.write(`${JSON.stringify(completed("interrupted"))}\n`);
+      },
+      {},
+      (async function* (): AsyncIterable<RunControl> {
+        yield { type: "steer", text: `racing guidance ${iteration}` };
+      })(),
+    );
+
+    const pending = rig.source(sinkFor([], []), controller.signal);
+    assert.deepEqual(await pending, { ending: "cancelled" });
+    assert.ok(steerRequest);
+    rig.child?.stdout.write(
+      `${JSON.stringify({ id: steerRequest.id, result: {} })}\n`,
+    );
+    rig.child?.stdout.write(
+      `${JSON.stringify({
+        id: steerRequest.id,
+        error: { code: -32000, message: "late refusal" },
+      })}\n`,
+    );
+    assert.deepEqual(await pending, { ending: "cancelled" });
+  }
+});
 
 function sinkFor(
   events: CodexAppServerEvent[],
@@ -179,7 +507,7 @@ test("App Server performs the exact handshake and forwards only validated run ev
     sinkFor(forwarded, stderr),
     new AbortController().signal,
   );
-  assert.deepEqual(conclusion, { status: "clean" });
+  assert.deepEqual(conclusion, { ending: "answered" });
   assert.deepEqual(
     requests.map((request) => request.method),
     ["initialize", "initialized", "thread/start", "turn/start"],
@@ -312,7 +640,7 @@ test("App Server accepts schema-minimum notifications and normalizes optional fi
     sinkFor(forwarded, stderr),
     new AbortController().signal,
   );
-  assert.deepEqual(conclusion, { status: "clean" });
+  assert.deepEqual(conclusion, { ending: "answered" });
   assert.deepEqual(forwarded, [
     {
       method: "item/commandExecution/outputDelta",
@@ -395,6 +723,225 @@ test("App Server accepts schema-minimum notifications and normalizes optional fi
   rig.child?.emit("close", 0, null);
 });
 
+test("server request rejections preserve their JSON-RPC error", async () => {
+  const rejections: Error[] = [];
+  const data = {
+    expectedTurnId: "turn-1",
+    actualTurnId: "turn-2",
+  };
+  const rig = sourceWith(
+    (request, child) => {
+      if (request.method === "initialize")
+        child.stdout.write(
+          `${JSON.stringify({
+            id: request.id,
+            error: {
+              code: -32042,
+              message: "thread precondition failed",
+              data,
+            },
+          })}\n`,
+        );
+      if (request.method === "initialize") {
+        child.stdout.write(
+          `${JSON.stringify({
+            id: request.id,
+            error: {
+              code: -32043,
+              message: "duplicate response must be ignored",
+            },
+          })}\n`,
+        );
+        child.stdout.write(
+          `${JSON.stringify({
+            id: 999,
+            error: {
+              code: -32044,
+              message: "unknown response must be ignored",
+            },
+          })}\n`,
+        );
+      }
+    },
+    { onRequestRejection: (error) => rejections.push(error) },
+  );
+
+  assert.deepEqual(
+    await rig.source(sinkFor([], []), new AbortController().signal),
+    {
+      ending: "failed",
+      errorMessage: "thread precondition failed",
+    },
+  );
+  const rejection = rejections[0];
+  assert.ok(rejection instanceof CodexAppServerRequestError);
+  assert.equal(rejection.kind, "server-request");
+  assert.equal(rejection.code, -32042);
+  assert.equal(rejection.message, "thread precondition failed");
+  assert.deepEqual(rejection.data, data);
+  assert.deepEqual(rejection.jsonRpcError, {
+    code: -32042,
+    message: "thread precondition failed",
+    data,
+  });
+  assert.equal(rejections.length, 1);
+});
+
+test("invalid startup responses retain targeted operator diagnostics", async () => {
+  const cases = [
+    {
+      stage: "initialize",
+      message: "Codex App Server returned an invalid initialize response",
+    },
+    {
+      stage: "thread/start",
+      message: "Codex App Server returned an invalid thread/start response",
+    },
+    {
+      stage: "turn/start",
+      message: "Codex App Server returned an invalid turn/start response",
+    },
+  ] as const;
+
+  for (const { stage, message } of cases) {
+    const rig = sourceWith((request, child) => {
+      if (request.method === "initialize")
+        response(
+          child,
+          request.id as number,
+          stage === "initialize" ? {} : initializeResult(),
+        );
+      if (request.method === "thread/start")
+        response(
+          child,
+          request.id as number,
+          stage === "thread/start" ? {} : threadResult(),
+        );
+      if (request.method === "turn/start")
+        response(child, request.id as number, {});
+    });
+
+    assert.deepEqual(
+      await rig.source(sinkFor([], []), new AbortController().signal),
+      { ending: "failed", errorMessage: message },
+    );
+    rig.child?.emit("close", 0, null);
+  }
+});
+
+test("semantic settlement rejects pending requests as transport lifecycle cleanup", async () => {
+  const rejections: Error[] = [];
+  let turnStarted!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    turnStarted = resolve;
+  });
+  const rig = sourceWith(
+    (request, child) => {
+      if (request.method === "initialize")
+        response(child, request.id as number, initializeResult());
+      if (request.method === "thread/start")
+        response(child, request.id as number, threadResult());
+      if (request.method === "turn/start") {
+        response(child, request.id as number, turnResult());
+        turnStarted();
+      }
+      if (request.method === "turn/interrupt")
+        child.stdout.write(`${JSON.stringify(completed("interrupted"))}\n`);
+    },
+    { onRequestRejection: (error) => rejections.push(error) },
+  );
+  const controller = new AbortController();
+  const pending = rig.source(sinkFor([], []), controller.signal);
+  await ready;
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+
+  assert.deepEqual(await pending, { ending: "cancelled" });
+  assert.equal(rejections.length, 1);
+  const rejection = rejections[0];
+  assert.ok(rejection instanceof CodexAppServerTransportError);
+  assert.equal(rejection.kind, "transport-lifecycle");
+  assert.equal(rejection.reason, "semantic-settled");
+  assert.equal(rejection.message, "Codex App Server transport settled");
+});
+
+test("transport settlement rejects each pending request once and clears correlation", async () => {
+  const rejections: Error[] = [];
+  const rig = sourceWith(() => {}, {
+    onRequestRejection: (error) => rejections.push(error),
+  });
+  const controller = new AbortController();
+  const pending = rig.source(sinkFor([], []), controller.signal);
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+
+  assert.deepEqual(await pending, { ending: "cancelled" });
+  assert.equal(rejections.length, 1);
+  const rejection = rejections[0];
+  assert.ok(rejection instanceof CodexAppServerTransportError);
+  assert.equal(rejection.reason, "transport-settled");
+  assert.equal(rejection.message, "Codex App Server transport closed");
+
+  rig.child?.stdout.write(
+    `${JSON.stringify({
+      id: 1,
+      error: { code: -32045, message: "late response must be ignored" },
+    })}\n`,
+  );
+  rig.child?.emit("close", 0, null);
+  assert.equal(rejections.length, 1);
+});
+
+test("process failure classifies pending requests as transport settlement", async () => {
+  const rejections: Error[] = [];
+  const stderr: string[] = [];
+  const rig = sourceWith(
+    (request, child) => {
+      if (request.method === "initialize")
+        queueMicrotask(() => child.emit("error", new Error("transport broke")));
+    },
+    { onRequestRejection: (error) => rejections.push(error) },
+  );
+
+  assert.deepEqual(
+    await rig.source(sinkFor([], stderr), new AbortController().signal),
+    { ending: "failed" },
+  );
+  assert.deepEqual(stderr, ["transport broke\n"]);
+  assert.equal(rejections.length, 1);
+  const rejection = rejections[0];
+  assert.ok(rejection instanceof CodexAppServerTransportError);
+  assert.equal(rejection.reason, "transport-settled");
+});
+
+test("child exit rejects each pending request once as transport lifecycle cleanup", async () => {
+  const rejections: Error[] = [];
+  const rig = sourceWith(
+    (request, child) => {
+      if (request.method === "initialize") child.finish(7);
+    },
+    { onRequestRejection: (error) => rejections.push(error) },
+  );
+
+  assert.deepEqual(
+    await rig.source(sinkFor([], []), new AbortController().signal),
+    {
+      ending: "failed",
+      errorMessage: "Child codex exited with code 7",
+    },
+  );
+  assert.equal(rejections.length, 1);
+  const rejection = rejections[0];
+  assert.ok(rejection instanceof CodexAppServerTransportError);
+  assert.equal(rejection.reason, "child-exited");
+  assert.equal(
+    rejection.message,
+    "Codex App Server exited before its response",
+  );
+  rig.child?.emit("close", 7, null);
+  assert.equal(rejections.length, 1);
+});
+
 test("missing stdio rejects after starting child cleanup", async () => {
   const signals: string[] = [];
   const child = new EventEmitter() as EventEmitter & {
@@ -409,18 +956,26 @@ test("missing stdio rejects after starting child cleanup", async () => {
     signals.push(signal);
     return true;
   };
-  const source = createCodexAppServerSource({
+  const pending = runCodexAppServer({
     cwd: "/work",
     childDepth: 2,
     prompt: "prompt",
     killEscalationMs: 5,
     spawn: () => child as unknown as ChildProcess,
+    translate: () => undefined,
+    report: {
+      message: () => {},
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
+    missingAnswerMessage: "missing answer",
   });
 
-  await assert.rejects(
-    source(sinkFor([], []), new AbortController().signal),
-    /Failed to open Codex App Server stdio pipes/,
-  );
+  assert.deepEqual(await pending, {
+    ending: "failed",
+    errorMessage: "Failed to open Codex App Server stdio pipes",
+  });
   assert.deepEqual(signals, ["SIGTERM"]);
   child.emit("close", 0, null);
 });
@@ -438,7 +993,7 @@ test("abort before the turn id is known kills directly", async () => {
   await new Promise((resolve) => setImmediate(resolve));
   controller.abort();
 
-  assert.deepEqual(await pending, { status: "clean" });
+  assert.deepEqual(await pending, { ending: "cancelled" });
   assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
   assert.equal(
     requests.some((request) => request.method === "turn/interrupt"),
@@ -477,7 +1032,7 @@ test("responsive interruption sends turn/interrupt and accepts interrupted compl
   await ready;
   await new Promise((resolve) => setImmediate(resolve));
   controller.abort();
-  assert.deepEqual(await pending, { status: "clean" });
+  assert.deepEqual(await pending, { ending: "cancelled" });
   assert.deepEqual(
     requests.map((request) => request.method),
     [
@@ -523,9 +1078,97 @@ test("an ignored interrupt escalates from SIGTERM to SIGKILL", async () => {
   await started;
   await new Promise((resolve) => setImmediate(resolve));
   controller.abort();
-  assert.deepEqual(await pending, { status: "clean" });
+  assert.deepEqual(await pending, { ending: "cancelled" });
   assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
   assert.equal(rig.child?.stdin.writableEnded, true);
+});
+
+test("semantic settlement completes unresponsive child escalation and removes listeners", async () => {
+  const signals: string[] = [];
+  const rig = sourceWith((request, child) => {
+    if (request.method === "initialize")
+      response(child, request.id as number, initializeResult());
+    if (request.method === "thread/start")
+      response(child, request.id as number, threadResult());
+    if (request.method === "turn/start") {
+      response(child, request.id as number, turnResult());
+      child.stdout.write(`${JSON.stringify(completed())}\n`);
+    }
+  });
+  rig.setKill((signal) => {
+    signals.push(signal);
+    return true;
+  });
+
+  assert.deepEqual(
+    await rig.source(sinkFor([], []), new AbortController().signal),
+    { ending: "answered" },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 15));
+
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(rig.child?.listenerCount("error"), 0);
+  assert.equal(rig.child?.listenerCount("close"), 0);
+  assert.equal(rig.child?.stdout.listenerCount("data"), 0);
+  assert.equal(rig.child?.stderr.listenerCount("data"), 0);
+  assert.equal(rig.child?.stdin.listenerCount("error"), 0);
+});
+
+test("cancellation racing process error and close finalizes once without retained work", async () => {
+  const signals: string[] = [];
+  const rejections: Error[] = [];
+  const unhandled: unknown[] = [];
+  let ready!: () => void;
+  const started = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  const rig = sourceWith(
+    (request, child) => {
+      if (request.method === "initialize")
+        response(child, request.id as number, initializeResult());
+      if (request.method === "thread/start")
+        response(child, request.id as number, threadResult());
+      if (request.method === "turn/start") {
+        response(child, request.id as number, turnResult());
+        ready();
+      }
+    },
+    { onRequestRejection: (error) => rejections.push(error) },
+  );
+  rig.setKill((signal) => {
+    signals.push(signal);
+    return true;
+  });
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const controller = new AbortController();
+    const pending = rig.source(sinkFor([], []), controller.signal);
+    await started;
+    controller.abort();
+    rig.child?.emit("error", new Error("process raced cancellation"));
+    rig.child?.finish(7);
+
+    assert.deepEqual(await pending, { ending: "cancelled" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(signals, []);
+    assert.equal(rejections.length, 1);
+    assert.ok(rejections[0] instanceof CodexAppServerTransportError);
+    assert.equal(
+      (rejections[0] as CodexAppServerTransportError).reason,
+      "transport-settled",
+    );
+    assert.equal(rig.child?.listenerCount("error"), 0);
+    assert.equal(rig.child?.listenerCount("close"), 0);
+    assert.equal(rig.child?.stdout.listenerCount("data"), 0);
+    assert.equal(rig.child?.stderr.listenerCount("data"), 0);
+    assert.equal(rig.child?.stdin.listenerCount("error"), 0);
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.removeListener("unhandledRejection", onUnhandled);
+  }
 });
 
 test("exit before semantic completion preserves exit diagnostics and survives bad stdout", async () => {
@@ -539,7 +1182,20 @@ test("exit before semantic completion preserves exit diagnostics and survives ba
       response(child, request.id as number, turnResult());
       child.stdout.write("not json\n");
       child.stdout.write(
-        `${JSON.stringify({ method: "item/started", params: {} })}\n`,
+        `${JSON.stringify({
+          method: "item/started",
+          params: {
+            threadId: "secret-thread",
+            turnId: "secret-turn",
+            expectedTurnId: "secret-expected-turn",
+            itemId: "secret-item",
+            sessionId: "secret-session",
+            requestId: "secret-request",
+            clientId: "secret-client",
+            clientUserMessageId: "secret-correlation",
+            id: 99,
+          },
+        })}\n`,
       );
       child.finish(7);
     }
@@ -549,18 +1205,75 @@ test("exit before semantic completion preserves exit diagnostics and survives ba
     new AbortController().signal,
   );
   assert.deepEqual(conclusion, {
-    status: "failed",
+    ending: "failed",
     errorMessage: "Child codex exited with code 7",
   });
   assert.match(stderr.join(""), /Last stdout:/);
   assert.match(stderr.join(""), /not json/);
-  assert.doesNotMatch(stderr.join(""), /thread-1|turn-1/);
+  assert.doesNotMatch(
+    stderr.join(""),
+    /thread-1|turn-1|secret-thread|secret-turn|secret-expected-turn|secret-item|secret-session|secret-request|secret-client|secret-correlation/,
+  );
+});
+
+test("a trailing provider message and close are ordered before cancellation from reporting", async () => {
+  const controller = new AbortController();
+  const stderr: string[] = [];
+  const rig = sourceWith((request, child) => {
+    if (request.method === "initialize")
+      response(child, request.id as number, initializeResult());
+    if (request.method === "thread/start")
+      response(child, request.id as number, threadResult());
+    if (request.method === "turn/start") {
+      response(child, request.id as number, turnResult());
+      child.stdout.write(
+        JSON.stringify({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            tokenUsage: {
+              total: {
+                totalTokens: 1,
+                inputTokens: 1,
+                cachedInputTokens: 0,
+                outputTokens: 0,
+                reasoningOutputTokens: 0,
+              },
+              last: {
+                totalTokens: 1,
+                inputTokens: 1,
+                cachedInputTokens: 0,
+                outputTokens: 0,
+                reasoningOutputTokens: 0,
+              },
+            },
+          },
+        }),
+      );
+      child.finish(7);
+    }
+  });
+
+  assert.deepEqual(
+    await rig.source(
+      {
+        event: () => {
+          controller.abort();
+          return undefined;
+        },
+        stderr: (chunk) => stderr.push(chunk),
+      },
+      controller.signal,
+    ),
+    { ending: "failed", errorMessage: "Child codex exited with code 7" },
+  );
 });
 
 test("a silent clean exit reports that no stdout was captured", async () => {
   const stderr: string[] = [];
   let child!: FakeChild;
-  const source = createCodexAppServerSource({
+  const pending = runCodexAppServer({
     cwd: "/work",
     childDepth: 2,
     prompt: "prompt",
@@ -569,11 +1282,19 @@ test("a silent clean exit reports that no stdout was captured", async () => {
       queueMicrotask(() => child.finish(0));
       return child as unknown as ChildProcess;
     },
+    translate: () => undefined,
+    report: {
+      message: () => {},
+      transcript: () => {},
+      activity: () => {},
+      stderr: (chunk) => stderr.push(chunk),
+    },
+    missingAnswerMessage: "missing answer",
   });
-  assert.deepEqual(
-    await source(sinkFor([], stderr), new AbortController().signal),
-    { status: "clean" },
-  );
+  assert.deepEqual(await pending, {
+    ending: "failed",
+    errorMessage: "missing answer",
+  });
   assert.deepEqual(stderr, ["No stdout was captured."]);
 });
 
@@ -598,7 +1319,7 @@ test("server requests receive an error response and do not stop the run", async 
     sinkFor([], stderr),
     new AbortController().signal,
   );
-  assert.deepEqual(conclusion, { status: "clean" });
+  assert.deepEqual(conclusion, { ending: "answered" });
   assert.deepEqual(replies, [
     {
       jsonrpc: "2.0",

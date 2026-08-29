@@ -321,6 +321,7 @@ export function createClaudeHarness(
       const effort = effortField(task.config, "profile", EFFORTS);
       return {
         model,
+        supportedControls: [],
         execute: (run) => {
           const source = streamSource<SDKMessage>(async (signal, sink) => {
             const controller = new AbortController();

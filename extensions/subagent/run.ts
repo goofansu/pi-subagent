@@ -147,6 +147,9 @@ export interface SubagentTask {
   readonly projectTrusted: boolean;
 }
 
+/** Guidance admitted to a Run while its original execution is active. */
+export type RunControl = { type: "steer"; text: string };
+
 /**
  * The facts an executor may report while its child works. This is the whole
  * of the executor's write access to a run: it names what happened, and the
@@ -218,6 +221,8 @@ export interface SubagentRun {
   readonly task: SubagentTask;
   readonly report: RunReporter;
   readonly signal?: AbortSignal;
+  /** The prepared Run's one neutral, single-consumer Control stream. */
+  readonly controls: AsyncIterable<RunControl>;
 }
 
 /**

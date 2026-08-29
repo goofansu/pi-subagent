@@ -235,16 +235,25 @@ function claudeConformanceRig(): HarnessConformanceRig {
       let observedDepth: number | undefined;
       let ready: Promise<void> | undefined;
       let openReady = () => {};
+      let releaseSteering = () => {};
+      let queryCalls = 0;
+      const queryPrompts: string[] = [];
       if (
         scenario === "abort-mid-run" ||
-        scenario === "terminal-answer-then-abort"
+        scenario === "terminal-answer-then-abort" ||
+        scenario.startsWith("steering-")
       ) {
         ready = new Promise<void>((resolve) => {
           openReady = resolve;
         });
       }
+      const steeringReleased = new Promise<void>((resolve) => {
+        releaseSteering = resolve;
+      });
 
-      const query: ClaudeQuery = ({ options }) => {
+      const query: ClaudeQuery = ({ options, prompt }) => {
+        queryCalls++;
+        queryPrompts.push(prompt);
         observedDepth = Number(options?.env?.[DEPTH_ENV_KEY]);
         assert.equal(
           options?.env?.PATH,
@@ -306,6 +315,12 @@ function claudeConformanceRig(): HarnessConformanceRig {
               case "post-answer-failure":
                 yield resultMessage("claude answer");
                 throw new Error("late Claude failure");
+              case "steering-single-consumed":
+              case "steering-fifo-consumed":
+                openReady();
+                await steeringReleased;
+                yield resultMessage("unsupported steering answer");
+                return;
             }
           },
           close() {
@@ -368,6 +383,30 @@ function claudeConformanceRig(): HarnessConformanceRig {
             finalOutput: "claude answer",
             errorMessage: undefined,
           });
+        case "steering-single-consumed":
+        case "steering-fifo-consumed": {
+          const offeredTexts =
+            scenario === "steering-single-consumed"
+              ? ["first guidance"]
+              : ["first guidance", "second guidance"];
+          const fixture = base({
+            phase: "completed",
+            finalOutput: "unsupported steering answer",
+            userFactTexts: [],
+          });
+          return {
+            ...fixture,
+            steering: {
+              ready: ready as Promise<void>,
+              offeredTexts,
+              expectedOutcome: "unsupported",
+              release: () => releaseSteering(),
+              receivedTexts: () => queryPrompts.slice(1),
+              providerControlStarts: () => Math.max(0, queryCalls - 1),
+              maxConcurrentProviderControls: () => 0,
+            },
+          };
+        }
       }
     },
   };

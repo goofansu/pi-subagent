@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createControlGate } from "./control-mailbox.ts";
 import { createSubagentDelivery, type PushedNotification } from "./delivery.ts";
 import { createHarnessRegistry, type Harness } from "./harnesses/contract.ts";
 import subagentExtension, {
@@ -262,7 +263,7 @@ function runtimeBoundary(
   const harness: Harness = {
     name: "pi",
     validate: () => [],
-    prepare: () => ({ execute }),
+    prepare: () => ({ execute, supportedControls: [] }),
   };
 
   const events: Record<string, (event: unknown, ctx?: unknown) => void> = {};
@@ -529,6 +530,7 @@ test("the orchestration primitives are registered", () => {
     "agent_cancel",
     "agent_result",
     "agent_start",
+    "agent_steer",
     "agent_wait",
   ]);
   assert.equal(tools.agent_wait.label, "Wait for subagents");
@@ -546,6 +548,44 @@ test("the orchestration primitives are registered", () => {
     /agent_await/,
   );
   assert.equal(tools.agent_await, undefined);
+});
+
+test("agent_steer reports local admission and crosses the public tool seam exactly", async () => {
+  const { pi, tools } = collectTools();
+  const runs = createSubagentRuns();
+  const gate = createControlGate(["steer"]);
+  const result = createEmptyResult("explore", "task", 0);
+  const handle = runs.track(result, () => {}, gate);
+  const delivery = createSubagentDelivery({ runs, push: () => {} });
+  delivery.register(handle.id, result.agent, new Promise(() => {}));
+  registerSubagentFeatureTools(
+    pi,
+    { cwd: "/project", projectTrusted: true },
+    new Map(),
+    {
+      start: fakeStart(() => {}).start,
+      runs,
+      delivery,
+      harnesses: createHarnessRegistry([]),
+    },
+  );
+  const controls = gate.controls[Symbol.asyncIterator]();
+  const message = "  correct the scope exactly  ";
+
+  const response = await tools.agent_steer.execute("steer", {
+    id: handle.id,
+    message,
+  });
+
+  assert.match(response.content[0].text, /synchronously admitted/);
+  assert.match(response.content[0].text, /does not mean the Harness dequeued/);
+  assert.match(response.content[0].text, /Do not resend/);
+  assert.deepEqual(await controls.next(), {
+    done: false,
+    value: { type: "steer", text: message },
+  });
+  assert.match(tools.agent_steer.description ?? "", /local bounded mailbox/);
+  assert.match(tools.agent_steer.description ?? "", /Do not retry repeatedly/);
 });
 
 // ── Session-start discovery ──────────────────────────────────────────────────

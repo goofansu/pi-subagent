@@ -25,6 +25,23 @@ the widget lists them. Not "job", not "task", not "call". Notification delivery
 state is a separate state machine, tracked by the delivery module keyed by run
 id — never on the run itself.
 
+**Control** — bounded, harness-neutral guidance offered while a Run is active.
+The only Control is steering text. `accepted` means the complete text entered
+the Run's local FIFO mailbox synchronously; it does not claim that the Harness
+dequeued it, a provider accepted it, or a model consumed it. A prepared Run
+declares supported Controls, and unsupported Runs have no live mailbox. Pi and
+Claude declare no Control support. Codex consumes steering serially through
+the active App Server Turn; only a correlated provider user-message item, not
+local admission or request acceptance, becomes a neutral user Fact.
+
+**Ingress order** — the adapter-local order assigned when a complete external
+occurrence enters the executor, before translation, reporting, or Promise
+continuations can delay it. Codex orders provider events, Controls,
+cancellation, process outcomes, and escalation this way because its semantic
+Turn and native steering share one App Server connection. This does not turn a
+Run id into stable Subagent identity: Phase 1 still ships no resume operation,
+provider-session handle, or second Run on a retained child.
+
 **Turn** — one completed provider model turn (response), folded into a run's
 usage and counted by the widget. A turn is provider accounting, not a second
 run or a provider session that can be resumed. Claude provisionally counts one
@@ -118,8 +135,9 @@ backend's types.
 is the pi harness's; it composes the One-shot protocol and the neutral process source).
 It witnesses what the child did: it reports harness-neutral facts through the
 reporter defined in `run.ts` and resolves to an **ending**; it never touches the
-run record. Wire format stops inside the harness — no backend's message shapes
-cross this seam.
+run record. A supported prepared Run also receives one neutral Control stream;
+there is no Harness control method or provider session in core. Wire format
+stops inside the harness — no backend's message shapes cross this seam.
 
 **One-shot protocol** — the module owning terminal-before-abort ordering, the
 missing-answer policy, and ending derivation, whichever source feeds it. It

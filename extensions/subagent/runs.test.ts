@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createControlGate } from "./control-mailbox.ts";
 import { createEmptyResult, settleResultLifecycle } from "./run.ts";
 import type { RegistryClock } from "./runs.ts";
 import { createSubagentRuns } from "./runs.ts";
@@ -127,6 +128,51 @@ test("cancelling a run calls its canceller and reports what it stopped", () => {
 
   assert.deepEqual(runs.cancel(["run-1"], "requested"), ["run-1"]);
   assert.equal(cancelled, 1);
+});
+
+test("cancellation records its reason and closes Control admission before aborting executor work", () => {
+  const runs = createSubagentRuns(fakeClock(), sequentialIds());
+  const gate = createControlGate(["steer"]);
+  const handle = runs.track(
+    runningResult(),
+    () => {
+      assert.deepEqual(gate.state(), {
+        supportedControls: ["steer"],
+        closed: true,
+        cancellationReason: "requested",
+      });
+      assert.equal(
+        runs.offer(handle.id, { type: "steer", text: "too late" }),
+        "not steerable",
+      );
+    },
+    gate,
+  );
+
+  assert.equal(
+    runs.offer(handle.id, { type: "steer", text: "before cancellation" }),
+    "accepted",
+  );
+  assert.deepEqual(runs.cancel([handle.id], "requested"), [handle.id]);
+});
+
+test("settled and unknown Runs refuse Control admission deterministically", () => {
+  const clock = fakeClock();
+  const runs = createSubagentRuns(clock, sequentialIds());
+  const gate = createControlGate(["steer"]);
+  const result = runningResult();
+  const handle = runs.track(result, () => {}, gate);
+
+  assert.equal(
+    runs.offer("missing", { type: "steer", text: "guidance" }),
+    "unknown",
+  );
+  settleResultLifecycle(result, { ending: "answered" }, clock.now());
+  assert.equal(
+    runs.offer(handle.id, { type: "steer", text: "too late" }),
+    "already completed",
+  );
+  assert.equal(gate.state().closed, true);
 });
 
 test("the first cancellation reason wins across repeated requests", () => {

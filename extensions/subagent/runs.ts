@@ -12,6 +12,12 @@
  * point the conversation names the run and the registry's display job is done.
  */
 
+import {
+  type ControlGate,
+  type ControlGateOffer,
+  createControlGate,
+} from "./control-mailbox.ts";
+import type { RunControl } from "./run.ts";
 import type {
   CancellationReason,
   LifecycleStatus,
@@ -62,7 +68,13 @@ export interface SubagentRuns {
    * Put a run under the registry's care. `cancel` is whatever stops this
    * particular run; the registry calls it and does not care how it works.
    */
-  track(result: SingleResult, cancel: () => void): RunHandle;
+  track(
+    result: SingleResult,
+    cancel: () => void,
+    controlGate?: ControlGate,
+  ): RunHandle;
+  /** Synchronously offer one neutral Control to a tracked Run. */
+  offer(id: string, control: RunControl): RunControlOffer;
   /**
    * Every tracked run, projected for display, in insertion order (oldest
    * tracked run first).
@@ -81,11 +93,19 @@ export interface SubagentRuns {
   subscribe(listener: () => void): () => void;
 }
 
+export type RunControlOffer =
+  | ControlGateOffer
+  | "unknown"
+  | "already completed"
+  | "already failed"
+  | "already cancelled";
+
 interface TrackedRun {
   id: string;
   result: SingleResult;
   cancel: () => void;
   cancellationReason?: CancellationReason;
+  controlGate: ControlGate;
 }
 
 function isTerminal(status: LifecycleStatus): boolean {
@@ -138,6 +158,7 @@ export function createSubagentRuns(
       // Record before forwarding the abort: settlement can run from the
       // callback, and must observe the reason that caused it.
       run.cancellationReason = reason;
+      run.controlGate.cancel(reason);
       run.cancel();
       cancelled.push(id);
     }
@@ -169,13 +190,13 @@ export function createSubagentRuns(
   };
 
   return {
-    track(result, cancel) {
+    track(result, cancel, controlGate = createControlGate([])) {
       // Short ids can collide. An id remains unavailable after release because
       // run identity is stable for the whole session, not merely while live.
       let id = generateId();
       while (issuedIds.has(id)) id = generateId();
       issuedIds.add(id);
-      const tracked: TrackedRun = { id, result, cancel };
+      const tracked: TrackedRun = { id, result, cancel, controlGate };
       runs.set(id, tracked);
       notify();
 
@@ -190,8 +211,22 @@ export function createSubagentRuns(
       };
     },
 
+    offer(id, control) {
+      const run = runs.get(id);
+      if (!run) return "unknown";
+      const phase = run.result.lifecycle.phase;
+      if (phase !== "running") {
+        run.controlGate.close();
+        return `already ${phase}`;
+      }
+      return run.controlGate.offer(control);
+    },
+
     release(id) {
-      if (!runs.delete(id)) return;
+      const run = runs.get(id);
+      if (!run) return;
+      run.controlGate.close();
+      runs.delete(id);
       notify();
     },
 

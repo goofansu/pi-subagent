@@ -1,4 +1,9 @@
-import type { ParentModel, SubagentExecutor, SubagentTask } from "../run.ts";
+import type {
+  ParentModel,
+  RunControl,
+  SubagentExecutor,
+  SubagentTask,
+} from "../run.ts";
 import { type AgentConfig, DEFAULT_HARNESS_NAME, EFFORTS } from "../types.ts";
 
 export interface HarnessDiagnostic {
@@ -14,6 +19,8 @@ export interface HarnessRun {
   execute: SubagentExecutor;
   /** Display metadata resolved in the harness's own vocabulary. */
   model?: string;
+  /** Neutral Controls this prepared Run can consume through its executor. */
+  supportedControls: readonly RunControl["type"][];
 }
 
 /**

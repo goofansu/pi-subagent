@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import type { ChildProcessSpawn } from "../../child-process.ts";
-import { DEPTH_ENV_KEY, type RunReporter } from "../../run.ts";
+import { DEPTH_ENV_KEY, type RunControl, type RunReporter } from "../../run.ts";
 import { type AgentConfig, EFFORTS } from "../../types.ts";
 import {
   type HarnessConformanceFixture,
@@ -14,7 +14,8 @@ import {
 } from "../conformance.ts";
 import {
   type CodexAppServerEvent,
-  createCodexAppServerSource,
+  type CodexAppServerOptions,
+  runCodexAppServer,
 } from "./app-server.ts";
 import {
   codexEffort,
@@ -65,8 +66,43 @@ function send(child: FakeChild, value: unknown): void {
   child.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+function createTestAppServerRun(options: CodexAppServerOptions) {
+  return (
+    sink: {
+      event(event: CodexAppServerEvent): boolean | undefined;
+      stderr(chunk: string): void;
+    },
+    signal: AbortSignal,
+  ) =>
+    runCodexAppServer({
+      ...options,
+      translate: (value) => ({
+        terminal:
+          sink.event(value) === true || value.method === "turn/completed",
+      }),
+      report: {
+        message: () => {},
+        transcript: () => {},
+        activity: () => {},
+        stderr: sink.stderr,
+      },
+      signal,
+      missingAnswerMessage: "missing answer",
+    });
+}
+
 const THREAD_ID = "thread-provider-id";
 const TURN_ID = "turn-provider-id";
+
+interface ConformanceObservation {
+  child?: FakeChild;
+  depth?: number;
+  receivedControlTexts: string[];
+  providerControlStarts: number;
+  activeProviderControls: number;
+  maxConcurrentProviderControls: number;
+  releaseProviderControl?: () => void;
+}
 
 function event(
   method: string,
@@ -138,7 +174,7 @@ function completedTurn(status = "completed"): CodexAppServerEvent {
 
 function appServerSpawn(
   scenario: HarnessConformanceScenario,
-  observed: { child?: FakeChild; depth?: number },
+  observed: ConformanceObservation,
   ready: { resolve?: (value?: undefined) => void },
 ): ChildProcessSpawn {
   return (_command, args, options) => {
@@ -252,8 +288,52 @@ function appServerSpawn(
               send(current, agent("codex final answer"));
               send(current, completedTurn());
               break;
+            case "steering-single-consumed":
+            case "steering-fifo-consumed":
+              ready.resolve?.();
+              break;
           }
         });
+      } else if (method === "turn/steer") {
+        const params = request.params as Record<string, unknown>;
+        const input = params.input as Array<Record<string, unknown>>;
+        const text = input[0]?.text;
+        assert.equal(typeof text, "string");
+        observed.providerControlStarts++;
+        observed.activeProviderControls++;
+        observed.maxConcurrentProviderControls = Math.max(
+          observed.maxConcurrentProviderControls,
+          observed.activeProviderControls,
+        );
+        observed.receivedControlTexts.push(text as string);
+        const expectedControls =
+          scenario === "steering-single-consumed" ? 1 : 2;
+        const acknowledge = (): void => {
+          send(current, { id, result: {} });
+          send(
+            current,
+            itemCompleted({
+              type: "userMessage",
+              id: `confirmed-${observed.providerControlStarts}`,
+              clientId: params.clientUserMessageId,
+              content: [
+                {
+                  type: "text",
+                  text: `confirmed: ${text as string}`,
+                  text_elements: [],
+                },
+              ],
+            }),
+          );
+          observed.activeProviderControls--;
+          if (observed.providerControlStarts === expectedControls) {
+            send(current, agent("controlled answer"));
+            send(current, completedTurn());
+          }
+        };
+        if (observed.providerControlStarts === 1)
+          observed.releaseProviderControl = acknowledge;
+        else acknowledge();
       } else if (method === "turn/interrupt") {
         send(current, { id, result: {} });
         send(current, completedTurn("interrupted"));
@@ -268,7 +348,12 @@ function conformanceRig(): HarnessConformanceRig {
   return {
     name: "codex",
     build(scenario): HarnessConformanceFixture {
-      const observed: { child?: FakeChild; depth?: number } = {};
+      const observed: ConformanceObservation = {
+        receivedControlTexts: [],
+        providerControlStarts: 0,
+        activeProviderControls: 0,
+        maxConcurrentProviderControls: 0,
+      };
       const readyState: { resolve?: () => void } = {};
       const readyForCancellation = new Promise<void>((resolve) => {
         readyState.resolve = resolve;
@@ -343,6 +428,36 @@ function conformanceRig(): HarnessConformanceRig {
             finalOutput: "codex final answer",
             messageCount: 2,
           });
+        case "steering-single-consumed":
+        case "steering-fifo-consumed": {
+          const offeredTexts =
+            scenario === "steering-single-consumed"
+              ? ["first guidance"]
+              : ["first guidance", "second guidance"];
+          const fixture = base({
+            phase: "completed",
+            finalOutput: "controlled answer",
+            userFactTexts: offeredTexts.map((text) => `confirmed: ${text}`),
+          });
+          return {
+            ...fixture,
+            steering: {
+              ready: readyForCancellation,
+              offeredTexts,
+              expectedOutcome: "accepted",
+              release: () => {
+                assert.ok(observed.releaseProviderControl);
+                const release = observed.releaseProviderControl;
+                observed.releaseProviderControl = undefined;
+                release();
+              },
+              receivedTexts: () => observed.receivedControlTexts,
+              providerControlStarts: () => observed.providerControlStarts,
+              maxConcurrentProviderControls: () =>
+                observed.maxConcurrentProviderControls,
+            },
+          };
+        }
       }
     },
   };
@@ -364,7 +479,7 @@ test("Codex App Server sends the disposable handshake and one prompt", async () 
       send(current, completedTurn());
     }
   });
-  const source = createCodexAppServerSource({
+  const source = createTestAppServerRun({
     cwd: "/work",
     childDepth: 1,
     prompt: "system\n\nuser",
@@ -374,7 +489,7 @@ test("Codex App Server sends the disposable handshake and one prompt", async () 
   });
   const sink = { event: () => undefined, stderr: () => {} };
   assert.deepEqual(await source(sink, new AbortController().signal), {
-    status: "clean",
+    ending: "answered",
   });
   assert.deepEqual(
     writes.map((write) => write.method),
@@ -396,6 +511,426 @@ test("Codex App Server sends the disposable handshake and one prompt", async () 
     threadId: THREAD_ID,
     input: [{ type: "text", text: "system\n\nuser", text_elements: [] }],
   });
+});
+
+test("a completed Codex answer admitted before cancellation remains authoritative", async () => {
+  const controller = new AbortController();
+  const facts: Parameters<RunReporter["message"]>[0][] = [];
+  const child = fakeChild((request, current) => {
+    if (request.method === "initialize")
+      send(current, initializeResponse(request.id));
+    else if (request.method === "thread/start")
+      send(current, { id: request.id, result: { thread: { id: THREAD_ID } } });
+    else if (request.method === "turn/start") {
+      // The complete notification has entered stdout first, but the response
+      // that establishes Turn identity has not. Cancellation must not overtake
+      // that retained ingress when identity arrives afterward.
+      send(current, agent("answer before cancellation"));
+      controller.abort();
+      send(current, { id: request.id, result: { turn: { id: TURN_ID } } });
+    }
+  });
+  const harness = createCodexHarness({
+    spawn: (() => child) as unknown as ChildProcessSpawn,
+    killEscalationMs: 1,
+  });
+  const execution = harness.prepare({
+    config: {
+      name: "codex",
+      description: "codex",
+      harness: "codex",
+      fields: {},
+      systemPrompt: "",
+    },
+    description: "codex",
+    prompt: "prompt",
+    cwd: process.cwd(),
+    childDepth: 1,
+    projectTrusted: false,
+  });
+
+  const ending = await execution.execute({
+    task: {
+      config: {
+        name: "codex",
+        description: "codex",
+        harness: "codex",
+        fields: {},
+        systemPrompt: "",
+      },
+      description: "codex",
+      prompt: "prompt",
+      cwd: process.cwd(),
+      childDepth: 1,
+      projectTrusted: false,
+    },
+    report: {
+      message: (fact) => facts.push(fact),
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
+    signal: controller.signal,
+    controls: (async function* () {})(),
+  });
+
+  assert.deepEqual(ending, { ending: "answered" });
+  assert.deepEqual(facts, [
+    {
+      role: "assistant",
+      parts: [{ type: "text", text: "answer before cancellation" }],
+      usage: { turns: 0 },
+    },
+  ]);
+});
+
+test("a completed Codex answer first admitted after cancellation is not authoritative", async () => {
+  const controller = new AbortController();
+  const facts: Parameters<RunReporter["message"]>[0][] = [];
+  const child = fakeChild((request, current) => {
+    if (request.method === "initialize")
+      send(current, initializeResponse(request.id));
+    else if (request.method === "thread/start")
+      send(current, { id: request.id, result: { thread: { id: THREAD_ID } } });
+    else if (request.method === "turn/start") {
+      controller.abort();
+      send(current, agent("answer after cancellation"));
+      send(current, { id: request.id, result: { turn: { id: TURN_ID } } });
+    }
+  });
+  const task = {
+    config: {
+      name: "codex",
+      description: "codex",
+      harness: "codex",
+      fields: {},
+      systemPrompt: "",
+    },
+    description: "codex",
+    prompt: "prompt",
+    cwd: process.cwd(),
+    childDepth: 1,
+    projectTrusted: false,
+  } as const;
+  const execution = createCodexHarness({
+    spawn: (() => child) as unknown as ChildProcessSpawn,
+    killEscalationMs: 1,
+  }).prepare(task);
+
+  const ending = await execution.execute({
+    task,
+    report: {
+      message: (fact) => facts.push(fact),
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
+    signal: controller.signal,
+    controls: (async function* () {})(),
+  });
+
+  assert.deepEqual(ending, { ending: "cancelled" });
+  assert.deepEqual(facts, [
+    {
+      role: "assistant",
+      parts: [{ type: "text", text: "answer after cancellation" }],
+      usage: { turns: 0 },
+    },
+  ]);
+});
+
+test("complete messages in one stdout ingress precede cancellation from reporting", async () => {
+  const controller = new AbortController();
+  const facts: Parameters<RunReporter["message"]>[0][] = [];
+  const usage = event("thread/tokenUsage/updated", {
+    threadId: THREAD_ID,
+    turnId: TURN_ID,
+    tokenUsage: {
+      total: {
+        totalTokens: 1,
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+      },
+      last: {
+        totalTokens: 1,
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+      },
+      modelContextWindow: 100,
+    },
+  });
+  const child = fakeChild((request, current) => {
+    if (request.method === "initialize")
+      send(current, initializeResponse(request.id));
+    else if (request.method === "thread/start")
+      send(current, { id: request.id, result: { thread: { id: THREAD_ID } } });
+    else if (request.method === "turn/start") {
+      send(current, { id: request.id, result: { turn: { id: TURN_ID } } });
+      current.stdout.write(
+        `${[usage, agent("answer already in ingress"), completedTurn()]
+          .map((message) => JSON.stringify(message))
+          .join("\n")}\n`,
+      );
+    }
+  });
+  const task = {
+    config: {
+      name: "codex",
+      description: "codex",
+      harness: "codex",
+      fields: {},
+      systemPrompt: "",
+    },
+    description: "codex",
+    prompt: "prompt",
+    cwd: process.cwd(),
+    childDepth: 1,
+    projectTrusted: false,
+  } as const;
+  const execution = createCodexHarness({
+    spawn: (() => child) as unknown as ChildProcessSpawn,
+    killEscalationMs: 1,
+  }).prepare(task);
+
+  const ending = await execution.execute({
+    task,
+    report: {
+      message: (fact) => {
+        facts.push(fact);
+        if (fact.role === "metadata") controller.abort();
+      },
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
+    signal: controller.signal,
+    controls: (async function* () {})(),
+  });
+
+  assert.deepEqual(ending, { ending: "answered" });
+  assert.equal(facts.at(-1)?.role, "assistant");
+});
+
+test("only correlated provider consumption creates one neutral steering Fact", async (t) => {
+  const controller = new AbortController();
+  const facts: Parameters<RunReporter["message"]>[0][] = [];
+  let steerRequest: Record<string, unknown> | undefined;
+  let steerSent!: () => void;
+  const steered = new Promise<void>((resolve) => {
+    steerSent = resolve;
+  });
+  const child = fakeChild((request, current) => {
+    if (request.method === "initialize")
+      send(current, initializeResponse(request.id));
+    else if (request.method === "thread/start")
+      send(current, { id: request.id, result: { thread: { id: THREAD_ID } } });
+    else if (request.method === "turn/start")
+      send(current, { id: request.id, result: { turn: { id: TURN_ID } } });
+    else if (request.method === "turn/steer") {
+      steerRequest = request;
+      send(current, { id: request.id, result: {} });
+      steerSent();
+    }
+  });
+  const task = {
+    config: {
+      name: "codex",
+      description: "codex",
+      harness: "codex",
+      fields: {},
+      systemPrompt: "",
+    },
+    description: "codex",
+    prompt: "prompt",
+    cwd: process.cwd(),
+    childDepth: 1,
+    projectTrusted: false,
+  } as const;
+  const execution = createCodexHarness({
+    spawn: (() => child) as unknown as ChildProcessSpawn,
+    killEscalationMs: 1,
+  }).prepare(task);
+  const controls = (async function* (): AsyncIterable<RunControl> {
+    yield { type: "steer", text: "locally accepted guidance" };
+  })();
+
+  const pending = execution.execute({
+    task,
+    report: {
+      message: (fact) => facts.push(fact),
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
+    signal: controller.signal,
+    controls,
+  });
+  t.after(async () => {
+    controller.abort();
+    child.finish(0);
+    await pending;
+  });
+  assert.equal(
+    await Promise.race([
+      steered.then(() => true),
+      new Promise<false>((resolve) => setImmediate(() => resolve(false))),
+    ]),
+    true,
+  );
+  assert.deepEqual(facts, []);
+  const correlation = (
+    steerRequest?.params as Record<string, unknown> | undefined
+  )?.clientUserMessageId;
+  assert.equal(typeof correlation, "string");
+  const userItem = {
+    type: "userMessage",
+    id: "provider-user-item",
+    clientId: correlation,
+    content: [
+      { type: "text", text: "provider-confirmed guidance", text_elements: [] },
+    ],
+  };
+  send(
+    child,
+    event("item/started", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      item: userItem,
+      startedAtMs: 1,
+    }),
+  );
+  send(child, itemCompleted(userItem));
+  send(
+    child,
+    itemCompleted({
+      ...userItem,
+      id: "repeated-correlation-item",
+    }),
+  );
+  send(
+    child,
+    itemCompleted({
+      ...userItem,
+      id: "unknown-correlation-item",
+      clientId: "unknown-correlation",
+    }),
+  );
+  send(
+    child,
+    itemCompleted({
+      type: "userMessage",
+      id: "absent-correlation-item",
+      content: userItem.content,
+    }),
+  );
+  send(
+    child,
+    itemCompleted({
+      type: "userMessage",
+      id: "null-correlation-item",
+      clientId: null,
+      content: userItem.content,
+    }),
+  );
+  send(child, agent("answer"));
+  send(child, completedTurn());
+
+  assert.deepEqual(await pending, { ending: "answered" });
+  assert.deepEqual(facts, [
+    {
+      role: "user",
+      parts: [{ type: "text", text: "provider-confirmed guidance" }],
+    },
+    {
+      role: "assistant",
+      parts: [{ type: "text", text: "answer" }],
+      usage: { turns: 0 },
+    },
+  ]);
+});
+
+test("a steering server rejection racing semantic completion preserves the answer", async () => {
+  const facts: Parameters<RunReporter["message"]>[0][] = [];
+  const stderr: string[] = [];
+  const child = fakeChild((request, current) => {
+    if (request.method === "initialize")
+      send(current, initializeResponse(request.id));
+    else if (request.method === "thread/start")
+      send(current, { id: request.id, result: { thread: { id: THREAD_ID } } });
+    else if (request.method === "turn/start")
+      send(current, { id: request.id, result: { turn: { id: TURN_ID } } });
+    else if (request.method === "turn/steer") {
+      current.stdout.write(
+        `${[
+          {
+            id: request.id,
+            error: {
+              code: 7,
+              message: "active turn refused steering",
+              data: {
+                codexErrorInfo: {
+                  activeTurnNotSteerable: { turnKind: "compact" },
+                },
+              },
+            },
+          },
+          agent("semantic answer"),
+          completedTurn(),
+        ]
+          .map((message) => JSON.stringify(message))
+          .join("\n")}\n`,
+      );
+    }
+  });
+  const task = {
+    config: {
+      name: "codex",
+      description: "codex",
+      harness: "codex",
+      fields: {},
+      systemPrompt: "",
+    },
+    description: "codex",
+    prompt: "prompt",
+    cwd: process.cwd(),
+    childDepth: 1,
+    projectTrusted: false,
+  } as const;
+  const execution = createCodexHarness({
+    spawn: (() => child) as unknown as ChildProcessSpawn,
+    killEscalationMs: 1,
+  }).prepare(task);
+
+  const ending = await execution.execute({
+    task,
+    report: {
+      message: (fact) => facts.push(fact),
+      transcript: () => {},
+      activity: () => {},
+      stderr: (chunk) => stderr.push(chunk),
+    },
+    controls: (async function* (): AsyncIterable<RunControl> {
+      yield { type: "steer", text: "racing guidance" };
+    })(),
+  });
+
+  assert.deepEqual(ending, { ending: "answered" });
+  assert.deepEqual(facts, [
+    {
+      role: "assistant",
+      parts: [{ type: "text", text: "semantic answer" }],
+      usage: { turns: 0 },
+    },
+  ]);
+  assert.deepEqual(stderr, [
+    "Steering rejected: active turn refused steering\n",
+  ]);
 });
 
 test("Codex translator maps pinned events without leaking provider ids", () => {
@@ -853,6 +1388,28 @@ test("Codex preserves profile validation, effort mapping, and prompt composition
   );
 });
 
+test("prepared Codex Runs advertise steering", () => {
+  const harness = createCodexHarness();
+  const config: AgentConfig = {
+    name: "codex",
+    description: "codex",
+    harness: "codex",
+    fields: {},
+    systemPrompt: "",
+  };
+
+  const prepared = harness.prepare({
+    config,
+    description: "codex",
+    prompt: "prompt",
+    cwd: "/work",
+    childDepth: 1,
+    projectTrusted: false,
+  });
+
+  assert.deepEqual(prepared.supportedControls, ["steer"]);
+});
+
 // Keep the required reporter shape visible in this adapter's test helpers.
 const reporterShapeCheck: RunReporter["activity"] = () => {};
 void reporterShapeCheck;
@@ -893,7 +1450,7 @@ test("App Server filters foreign/unknown notifications and answers server reques
       send(current, completedTurn());
     }
   });
-  const source = createCodexAppServerSource({
+  const source = createTestAppServerRun({
     cwd: "/work",
     childDepth: 1,
     prompt: "prompt",
@@ -910,7 +1467,7 @@ test("App Server filters foreign/unknown notifications and answers server reques
     },
     new AbortController().signal,
   );
-  assert.deepEqual(conclusion, { status: "clean" });
+  assert.deepEqual(conclusion, { ending: "answered" });
   assert.deepEqual(forwarded, ["item/completed", "turn/completed"]);
   assert.deepEqual(writes.at(-1), {
     jsonrpc: "2.0",
@@ -937,7 +1494,7 @@ test("App Server cancellation interrupts the known turn before escalating", asyn
       send(current, completedTurn("interrupted"));
     }
   });
-  const source = createCodexAppServerSource({
+  const source = createTestAppServerRun({
     cwd: "/work",
     childDepth: 1,
     prompt: "prompt",
@@ -948,7 +1505,7 @@ test("App Server cancellation interrupts the known turn before escalating", asyn
     { event: () => undefined, stderr: () => {} },
     controller.signal,
   );
-  assert.deepEqual(await pending, { status: "clean" });
+  assert.deepEqual(await pending, { ending: "cancelled" });
   assert.deepEqual(interrupt?.params, { threadId: THREAD_ID, turnId: TURN_ID });
   assert.deepEqual(child.signals, []);
 });
@@ -972,7 +1529,7 @@ test("App Server escalates an ignored interrupt from SIGTERM to SIGKILL", async 
     if (signal === "SIGKILL") child.finish(137);
     return result;
   };
-  const source = createCodexAppServerSource({
+  const source = createTestAppServerRun({
     cwd: "/work",
     childDepth: 1,
     prompt: "prompt",
@@ -984,7 +1541,7 @@ test("App Server escalates an ignored interrupt from SIGTERM to SIGKILL", async 
       { event: () => undefined, stderr: () => {} },
       controller.signal,
     ),
-    { status: "clean" },
+    { ending: "cancelled" },
   );
   assert.deepEqual(child.signals, ["SIGTERM", "SIGKILL"]);
 });

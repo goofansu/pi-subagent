@@ -8,10 +8,15 @@
   ],
   "license": "MIT",
   "scripts": {
+    "check": "npm run typecheck && npm run lint && npm run test:conformance && npm test && npm run codex:protocol:check",
+    "codex:protocol:check": "node scripts/check-codex-protocol.mjs",
+    "codex:smoke": "node --import tsx scripts/codex-live-smoke.mjs",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "prepare": "node .husky/install.mjs",
+    "release:check": "npm run check && npm run codex:smoke",
     "test": "node --import tsx --import ./extensions/subagent/suite-setup.ts --test",
+    "test:conformance": "node --import tsx --import ./extensions/subagent/suite-setup.ts --test extensions/subagent/harnesses/contract.test.ts extensions/subagent/harnesses/pi/agent.test.ts extensions/subagent/harnesses/claude/harness.test.ts extensions/subagent/harnesses/codex/harness.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {

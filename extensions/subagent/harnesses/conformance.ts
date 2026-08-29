@@ -8,6 +8,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createSubagentDelivery, type SteerOutcome } from "../delivery.ts";
 import { getFinalOutput } from "../messages.ts";
 import { startSubagent } from "../runner.ts";
 import { createSubagentRuns } from "../runs.ts";
@@ -36,6 +37,8 @@ export const HARNESS_CONFORMANCE_SCENARIOS = [
   "no-terminal-answer",
   "post-answer-failure",
   "terminal-transcript-healing",
+  "steering-single-consumed",
+  "steering-fifo-consumed",
 ] as const;
 
 export type HarnessConformanceScenario =
@@ -52,6 +55,22 @@ export interface HarnessConformanceExpectation {
   stderrIncludes?: string;
   stderrExcludes?: string;
   messageCount?: number;
+  userFactTexts?: readonly string[];
+}
+
+export interface HarnessConformanceSteering {
+  /** Resolves once the executor is active and the scenario may offer Controls. */
+  readonly ready: Promise<void>;
+  /** Guidance the shared public seam offers, in admission order. */
+  readonly offeredTexts: readonly string[];
+  /** Capability-derived public outcome for every offered Control. */
+  readonly expectedOutcome: Extract<SteerOutcome, "accepted" | "unsupported">;
+  /** Releases the fixture after the suite observes provider delivery in flight. */
+  readonly release: () => void;
+  /** Adapter-boundary observations, with provider identity already removed. */
+  readonly receivedTexts: () => readonly string[];
+  readonly providerControlStarts: () => number;
+  readonly maxConcurrentProviderControls: () => number;
 }
 
 /**
@@ -64,6 +83,7 @@ export interface HarnessConformanceFixture {
   readonly harness: Harness;
   readonly expected: HarnessConformanceExpectation;
   readonly readyForCancellation?: Promise<void>;
+  readonly steering?: HarnessConformanceSteering;
   readonly depthProbe: () => number | undefined;
 }
 
@@ -111,6 +131,19 @@ function assertSettled(
     assert.doesNotMatch(result.stderr, new RegExp(expected.stderrExcludes));
   if (expected.messageCount !== undefined)
     assert.equal(result.messages.length, expected.messageCount);
+  if (expected.userFactTexts !== undefined) {
+    assert.deepEqual(
+      result.messages
+        .filter((fact) => fact.role === "user")
+        .map((fact) =>
+          fact.parts
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join(""),
+        ),
+      expected.userFactTexts,
+    );
+  }
 }
 
 function assertNoBackendAbortVocabulary(result: SingleResult): void {
@@ -142,6 +175,38 @@ export function runHarnessConformance(rig: HarnessConformanceRig): void {
         harnesses: createHarnessRegistry([fixture.harness]),
         runs,
       });
+
+      if (scenario.startsWith("steering-")) {
+        assert.ok(
+          fixture.steering,
+          `${scenario} must provide steering observations`,
+        );
+        const delivery = createSubagentDelivery({ runs, push: () => {} });
+        delivery.register(started.id, config.name, started.settled);
+        await fixture.steering.ready;
+        assert.deepEqual(
+          fixture.steering.offeredTexts.map((text) =>
+            delivery.steer(started.id, text),
+          ),
+          fixture.steering.offeredTexts.map(
+            () => fixture.steering?.expectedOutcome,
+          ),
+        );
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        const expectedInFlight =
+          fixture.steering.expectedOutcome === "accepted" ? 1 : 0;
+        assert.equal(
+          fixture.steering.providerControlStarts(),
+          expectedInFlight,
+          "only the first provider Control may start before its response",
+        );
+        assert.equal(
+          fixture.steering.maxConcurrentProviderControls(),
+          expectedInFlight,
+          "provider Control delivery must remain serial while the first response is held",
+        );
+        fixture.steering.release();
+      }
 
       if (
         scenario === "abort-mid-run" ||
@@ -178,6 +243,24 @@ export function runHarnessConformance(rig: HarnessConformanceRig): void {
       if (scenario === "abort-mid-run") assertNoBackendAbortVocabulary(result);
       if (scenario === "child-depth") {
         assert.equal(fixture.depthProbe(), fixture.expected.childDepth);
+      }
+      if (scenario.startsWith("steering-")) {
+        assert.ok(fixture.steering);
+        const expectedStarts =
+          fixture.steering.expectedOutcome === "accepted"
+            ? fixture.steering.offeredTexts.length
+            : 0;
+        assert.deepEqual(
+          fixture.steering.receivedTexts(),
+          fixture.steering.expectedOutcome === "accepted"
+            ? fixture.steering.offeredTexts
+            : [],
+        );
+        assert.equal(fixture.steering.providerControlStarts(), expectedStarts);
+        assert.equal(
+          fixture.steering.maxConcurrentProviderControls(),
+          expectedStarts > 0 ? 1 : 0,
+        );
       }
     });
   }

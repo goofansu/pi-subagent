@@ -12,16 +12,39 @@ pi install https://github.com/goofansu/pi-subagent
 
 - `/agents` lists loaded agent profiles, shows their prompts, and hands one a task. With no agents configured, it prints the directory to add one to.
 
-Delegation uses four tools. A subagent runs detached from the turn that started it, so starting one and retrieving its answer are separate steps:
+Delegation uses five tools. A subagent runs detached from the turn that started it, so starting one and retrieving its answer are separate steps:
 
 | Tool | What it does |
 | --- | --- |
 | `agent_start` | Starts a run and returns a run id immediately. Takes `agent`, `description`, and `prompt`; the profile decides the model, effort, and tools. A completion notification arrives when the run finishes. |
 | `agent_wait` | Waits for named runs to become terminal and returns lifecycle state only. Takes an optional `timeout_seconds`; waiting never suppresses notifications or consumes results. |
 | `agent_cancel` | Stops named runs; partial output remains available after cancellation settles. |
+| `agent_steer` | Offers bounded guidance to an active run. Acceptance means local mailbox admission only. Codex delivers accepted guidance serially to its active Turn; Pi and Claude report steering as unsupported. |
 | `agent_result` | Reads a finished run's authoritative full output by id. |
 
 Every terminal output is stored for `agent_result`. A small completion notification is pushed independently, and `agent_wait` only observes lifecycle state. See [ADR 0006](docs/adr/0006-completion-notifications-and-result-store.md).
+
+### Steering an active Run
+
+Call `agent_steer` with the Run id returned by `agent_start` and one guidance
+message. An `accepted` response is deliberately narrow: the complete message
+entered that Run's bounded local FIFO mailbox synchronously. It does not mean
+the harness dequeued it, Codex accepted it, or the model consumed it, so do not
+resend accepted guidance in a retry loop. Only a provider-confirmed correlated
+user item becomes transcript truth in the eventual Result.
+
+Codex is the only steering-capable harness in this release. Pi and Claude
+return `unsupported` without starting provider-control work. A cancelling Run
+or a closed Control gate returns `not steerable`; a terminal Run reports
+`already completed`, `already failed`, or `already cancelled`; an unknown id
+reports `unknown run`. These are too-late outcomes and never reopen or mutate a
+terminal Result.
+
+Each active steering-capable Run accepts at most 16 pending messages, 16 KiB
+of UTF-8 per message, and 64 KiB of pending UTF-8 in total. Whitespace-only or
+oversize text is `invalid`; saturation is `queue full`. Dequeueing releases
+capacity, while cancellation, settlement, startup failure, and Session
+shutdown synchronously close the mailbox and discard anything still pending.
 
 A pushed notification appears as a single collapsed line and expands with the same key that expands tool output. Completed notifications contain a bounded preview; failed notifications contain the primary error; cancelled notifications are terse. Every notification points to `agent_result` when more detail is available, and notification delivery never determines whether the full result is stored.
 
@@ -119,7 +142,9 @@ is passed through to the App Server's model reasoning configuration. Codex does
 not recognize `tools` or `appendSystemPrompt`, so those fields produce profile
 diagnostics. The profile system prompt is prepended to the task prompt. Each
 run has no resumable provider session: thread, turn, item, and request
-identities remain adapter-local.
+identities remain adapter-local. Accepted steering is sent serially through
+native `turn/steer`; transcript truth appears only when the provider confirms
+consumption with a correlated user-message item.
 
 Codex App Server threads use `approvalPolicy: "never"` and
 `sandbox: "danger-full-access"` — the same unconditional bypass posture as
@@ -182,4 +207,13 @@ A run is detached from the turn, not from the session. `Esc` cancels the turn an
 
 For the Pi harness, project trust is [pi's](https://pi.dev/docs/latest/security#project-trust): the extension resolves none of its own and forwards Pi's decision to every child pi process. The Claude and Codex harnesses do not consult that trust flag in this version: Claude bypasses permissions unconditionally, and Codex always bypasses approvals and sandbox — deliberate parity, with the forwarded value reserved for a future shared posture, documented in [ADR 0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md).
 
-A subagent reads files, writes files, and runs commands as far as its `tools` list allows, and cannot delegate further — delegation is one level deep. A running subagent also cannot be given more input; see [ADR 0003](docs/adr/0003-one-shot-children.md).
+A subagent reads files, writes files, and runs commands as far as its `tools` list allows, and cannot delegate further — delegation is one level deep. The neutral `agent_steer` operation is supported by Codex through its active native Turn; Pi and Claude report it as unsupported. See [ADR 0003](docs/adr/0003-one-shot-children.md) for the one-shot Run behavior.
+
+## Release verification
+
+`npm run check` runs typechecking, lint, shared Harness Conformance for the
+controlled harness and every production adapter, the full test suite, and a
+byte-for-byte generated Codex protocol check (`npm run codex:protocol:check`).
+`npm run release:check` adds the Codex smoke (`npm run codex:smoke`), which is
+an authenticated live steering/interrupt run and must print
+`CODEX_STEERING_LIVE_SMOKE_PASS`. The live smoke spends Codex quota.
