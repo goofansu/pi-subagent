@@ -67,9 +67,9 @@ Retrieval is observational: it does not consume the result, pin it, or affect
 eviction priority. Storage lifetime is bounded by the store's memory budget,
 never by whether the model happened to retrieve a result.
 
-## INV-5 — Await is observational
+## INV-5 — Wait is observational
 
-`agent_await` waits for named runs to become terminal and returns their
+`agent_wait` waits for named runs to become terminal and returns their
 lifecycle state — id, agent, terminal phase — and nothing else: no preview,
 no output, no error text.
 

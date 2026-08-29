@@ -93,6 +93,9 @@ interface SentMessage {
 
 interface RegisteredTools {
   [name: string]: {
+    label?: string;
+    description?: string;
+    promptSnippet?: string;
     promptGuidelines?: string[];
     execute(
       toolCallId: string,
@@ -363,13 +366,13 @@ test("INV-3 boundary: completed and failed states are final", async () => {
   boundary.active[1].resolve({ ending: "failed", errorMessage: "failed" });
   await boundary.flush();
 
-  const before = await boundary.tools.agent_await.execute("await-1", {
+  const before = await boundary.tools.agent_wait.execute("wait-1", {
     ids: [completed, failed],
   });
   await boundary.tools.agent_cancel.execute("cancel", {
     ids: [completed, failed],
   });
-  const after = await boundary.tools.agent_await.execute("await-2", {
+  const after = await boundary.tools.agent_wait.execute("wait-2", {
     ids: [completed, failed],
   });
 
@@ -387,11 +390,11 @@ test("INV-3/INV-6 boundary: cancellation is repeatable and terminal", async () =
   boundary.active[0].resolve({ ending: "cancelled" });
   await boundary.flush();
 
-  const first = await boundary.tools.agent_await.execute("await-1", {
+  const first = await boundary.tools.agent_wait.execute("wait-1", {
     ids: [id],
   });
   await boundary.tools.agent_cancel.execute("cancel-3", { ids: [id] });
-  const second = await boundary.tools.agent_await.execute("await-2", {
+  const second = await boundary.tools.agent_wait.execute("wait-2", {
     ids: [id],
   });
   assert.match(first.content[0].text, /cancelled/);
@@ -523,11 +526,26 @@ test("the orchestration primitives are registered", () => {
   );
 
   assert.deepEqual(Object.keys(tools).sort(), [
-    "agent_await",
     "agent_cancel",
     "agent_result",
     "agent_start",
+    "agent_wait",
   ]);
+  assert.equal(tools.agent_wait.label, "Wait for subagents");
+  assert.equal(
+    tools.agent_wait.promptSnippet,
+    "Block until named runs finish; returns lifecycle state only, never output.",
+  );
+  assert.doesNotMatch(tools.agent_wait.description ?? "", /agent_await/);
+  assert.match(
+    (tools.agent_wait.promptGuidelines ?? []).join("\n"),
+    /agent_wait/,
+  );
+  assert.doesNotMatch(
+    (tools.agent_wait.promptGuidelines ?? []).join("\n"),
+    /agent_await/,
+  );
+  assert.equal(tools.agent_await, undefined);
 });
 
 // ── Session-start discovery ──────────────────────────────────────────────────

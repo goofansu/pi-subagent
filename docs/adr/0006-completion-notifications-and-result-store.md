@@ -19,7 +19,7 @@ A pushed completion notification provides orientation only: identity and
 status, a bounded deterministic preview for success, the primary error for
 failure, or a terse cancellation notice. The result store is authoritative.
 
-The intentional bounded duplication between await and notifications: await
+The intentional bounded duplication between wait and notifications: wait
 communicates terminality, the notification orientation, the result tool
 authoritative output — do not "fix" the duplication by reinventing claims.
 

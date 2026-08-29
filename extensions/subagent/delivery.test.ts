@@ -76,7 +76,7 @@ test("an unobserved run pushes its notification when it settles", async () => {
   assert.match(pushed[0], /explore \(run-1\) completed/);
 });
 
-test("INV-5: await observes terminality without suppressing notification", async () => {
+test("INV-5: wait observes terminality without suppressing notification", async () => {
   const { pushed, delivery } = harness();
   const run = deferredRun();
   delivery.register("run-1", run.result.agent, run.settled);
@@ -91,7 +91,7 @@ test("INV-5: await observes terminality without suppressing notification", async
   assert.doesNotMatch(JSON.stringify(outcome), /the answer/);
 });
 
-test("INV-5: await is repeatable for an already-terminal run", async () => {
+test("INV-5: wait is repeatable for an already-terminal run", async () => {
   const { delivery } = harness();
   const run = deferredRun();
   delivery.register("run-1", run.result.agent, run.settled);
@@ -103,7 +103,7 @@ test("INV-5: await is repeatable for an already-terminal run", async () => {
   );
 });
 
-test("INV-5: timeout and unknown ids are the only special await cases", async () => {
+test("INV-5: timeout and unknown ids are the only special wait cases", async () => {
   const { delivery } = harness();
   const run = deferredRun();
   delivery.register("run-1", run.result.agent, run.settled);
@@ -573,7 +573,7 @@ test("a wait tells a delivered report apart from an id that never existed", asyn
   assert.deepEqual(outcome.unknown, ["never-existed"]);
 });
 
-test("an id named twice produces one await observation", async () => {
+test("an id named twice produces one wait observation", async () => {
   const { delivery } = harness();
   const run = deferredRun();
   delivery.register("run-1", run.result.agent, run.settled);
@@ -620,7 +620,7 @@ test("a wait entered with a cancelled turn gives up immediately", async () => {
 
 // ── A push target that fails ─────────────────────────────────────────────────
 
-test("an unexpected executor rejection remains awaitable and retrievable", async () => {
+test("an unexpected executor rejection remains observable by wait and retrievable", async () => {
   const { delivery, pushed } = harness();
   delivery.register(
     "run-1",

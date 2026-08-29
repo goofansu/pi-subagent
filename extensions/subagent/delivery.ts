@@ -1,6 +1,6 @@
 /**
  * Completion notification delivery and the authoritative result store.
- * Await observes terminality; it never owns delivery or mutates stored results.
+ * Wait observes terminality; it never owns delivery or mutates stored results.
  * Notifications remain landing-tracked so an interrupt can re-push a notice
  * known to be lost.
  */
@@ -102,7 +102,7 @@ export interface DeliveryOptions {
   resultBudget?: number;
 }
 
-export interface AwaitResult {
+export interface WaitResult {
   id: string;
   agent: string;
   phase: TerminalLifecycleStatus;
@@ -110,8 +110,8 @@ export interface AwaitResult {
 }
 
 export interface WaitOutcome {
-  terminal: AwaitResult[];
-  /** Ids still running when the await gave up. */
+  terminal: WaitResult[];
+  /** Ids still running when the wait gave up. */
   stillRunning: string[];
   /** Ids that name no run this runtime has ever seen. */
   unknown: string[];
@@ -287,7 +287,7 @@ export function createSubagentDelivery({
         options,
       );
 
-      const terminal: AwaitResult[] = [];
+      const terminal: WaitResult[] = [];
       const stillRunning: string[] = [];
       const unknown: string[] = [];
       for (const id of requested) {

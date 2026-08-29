@@ -31,7 +31,7 @@ Children stay one-shot: one prompt in, one terminal result out. There is no `age
 or equivalent primitive, and none is planned.
 
 The orchestration surface is deliberately the process algebra — spawn
-(`agent_start`), join (`agent_await`), cancel (`agent_cancel`) — with no
+(`agent_start`), join (`agent_wait`), cancel (`agent_cancel`) — with no
 operation that reaches inside a running child.
 
 ## Consequences

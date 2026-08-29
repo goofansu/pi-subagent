@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   formatAgentResultUnavailable,
-  formatAwaitOutcome,
   formatCancelOutcome,
   formatDuration,
   formatExecutorRejection,
@@ -11,6 +10,7 @@ import {
   formatRunStatus,
   formatStartResult,
   formatUnknownAgent,
+  formatWaitOutcome,
   fullOutput,
   NOTIFICATION_PREVIEW_CHARACTER_LIMIT,
   notificationVerb,
@@ -82,9 +82,9 @@ test("presentation owns agent_start and unknown-agent prose", () => {
   );
 });
 
-test("presentation owns every agent_await outcome", () => {
+test("presentation owns every agent_wait outcome", () => {
   assert.equal(
-    formatAwaitOutcome({
+    formatWaitOutcome({
       terminal: [
         { id: "run-1", agent: "explore", phase: "completed" },
         {
@@ -100,7 +100,7 @@ test("presentation owns every agent_await outcome", () => {
     "explore (run-1): completed\n\nreview (run-2): cancelled (requested)\n\nStill running: run-3.\n\nUnknown run ids: missing.",
   );
   assert.equal(
-    formatAwaitOutcome({ terminal: [], stillRunning: [], unknown: [] }),
+    formatWaitOutcome({ terminal: [], stillRunning: [], unknown: [] }),
     "No run ids were given.",
   );
 });
@@ -143,7 +143,7 @@ test("presentation owns every agent_result fallback", () => {
   );
   assert.equal(
     formatAgentResultUnavailable("run-1", true),
-    "Run run-1 has not finished yet. Its notification will arrive on its own; agent_await blocks until it does.",
+    "Run run-1 has not finished yet. Its notification will arrive on its own; agent_wait blocks until it does.",
   );
   assert.equal(
     formatAgentResultUnavailable("missing", false),

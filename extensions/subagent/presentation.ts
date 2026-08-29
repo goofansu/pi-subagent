@@ -162,7 +162,7 @@ function formatFailedOutput(
   return sections.join("\n\n");
 }
 
-export interface AwaitPresentationOutcome {
+export interface WaitPresentationOutcome {
   terminal: readonly {
     id: string;
     agent: string;
@@ -181,8 +181,8 @@ export function formatUnknownAgent(
   return `Unknown agent: "${name}". Available: ${available.join(", ") || "none"}`;
 }
 
-/** The lifecycle-only body returned by agent_await. */
-export function formatAwaitOutcome(outcome: AwaitPresentationOutcome): string {
+/** The lifecycle-only body returned by agent_wait. */
+export function formatWaitOutcome(outcome: WaitPresentationOutcome): string {
   const sections = outcome.terminal.map(
     (run) =>
       `${run.agent} (${run.id}): ${run.phase}${
@@ -288,7 +288,7 @@ export function formatAgentResultUnavailable(
   known: boolean,
 ): string {
   return known
-    ? `Run ${id} has not finished yet. Its notification will arrive on its own; agent_await blocks until it does.`
+    ? `Run ${id} has not finished yet. Its notification will arrive on its own; agent_wait blocks until it does.`
     : `No run with id ${id}. Check it against what agent_start returned.`;
 }
 

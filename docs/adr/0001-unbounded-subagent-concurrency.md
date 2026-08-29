@@ -17,7 +17,7 @@ calls really does start five children at once.
 Moving to fire-and-forget delegation (`agent_start`) changed what a queue means.
 The model receives a run id immediately and treats the run as started. A queued
 run is therefore a receipt for work that is not running: the widget shows a row
-doing nothing, `agent_await` blocks on a child that has not spawned, and the
+doing nothing, `agent_wait` blocks on a child that has not spawned, and the
 model's model of the world is wrong in a way it cannot detect.
 
 A cap with immediate refusal instead of queueing was considered. It keeps the

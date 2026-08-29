@@ -75,9 +75,9 @@ the result itself. Pushed is not landed: pi may hold a follow-up while the model
 is mid-turn. If an interrupt discards it, the notification is pushed again
 after the agent settles. One landing per notification is the invariant.
 
-**Await** — `agent_await` observes terminality only. It returns run identity and
+**Wait** — `agent_wait` observes terminality only. It returns run identity and
 terminal lifecycle state, never output, and does not suppress notifications or
-affect the result store. Repeated awaits return the same lifecycle state.
+affect the result store. Repeated waits return the same lifecycle state.
 
 **Result store** — the authoritative home of every terminal run's output,
 addressable by id from the moment the run settles. `agent_result` observes a

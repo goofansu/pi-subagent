@@ -15,11 +15,11 @@ import {
 } from "./notification-message.ts";
 import {
   formatAgentResultUnavailable,
-  formatAwaitOutcome,
   formatCancelOutcome,
   formatResult,
   formatStartResult,
   formatUnknownAgent,
+  formatWaitOutcome,
 } from "./presentation.ts";
 import {
   type CollectedRuns,
@@ -123,7 +123,7 @@ export function registerSubagentFeatureTools(
 
   const waitDescription =
     "Block until named runs finish and return lifecycle state: identity and " +
-    "status, never output. Awaiting does not make a run finish sooner, and the " +
+    "status, never output. Waiting does not make a run finish sooner, and the " +
     "completion notification arrives either way — but holding the turn keeps " +
     "the answer in front of you, so wait here whenever the run's answer is the " +
     "only thing left to do. Pass every id you are waiting on in one call. " +
@@ -133,18 +133,18 @@ export function registerSubagentFeatureTools(
   // each bullet has to name the tool it governs.
   const waitGuidelines = [
     "After agent_start, do the work that does not depend on the run first; " +
-      "when only the run's answer is left, call agent_await instead of ending " +
+      "when only the run's answer is left, call agent_wait instead of ending " +
       "the turn.",
-    "One agent_await covers a whole barrier: pass every id at once, with a " +
+    "One agent_wait covers a whole barrier: pass every id at once, with a " +
       "timeout_seconds that comfortably exceeds the work you delegated.",
-    "agent_await returning still-running means it timed out, not that the run " +
+    "agent_wait returning still-running means it timed out, not that the run " +
       "failed — the notification still arrives on its own, so do not " +
-      "immediately await the same ids again.",
+      "immediately call agent_wait for the same ids again.",
   ];
 
   pi.registerTool({
-    name: "agent_await",
-    label: "Await subagents",
+    name: "agent_wait",
+    label: "Wait for subagents",
     description: waitDescription,
     promptSnippet: waitSnippet,
     promptGuidelines: waitGuidelines,
@@ -178,7 +178,7 @@ export function registerSubagentFeatureTools(
         stillRunning: outcome.stillRunning.length,
       };
       return {
-        content: [{ type: "text", text: formatAwaitOutcome(outcome) }],
+        content: [{ type: "text", text: formatWaitOutcome(outcome) }],
         details,
       };
     },

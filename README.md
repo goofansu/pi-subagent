@@ -17,11 +17,11 @@ Delegation uses four tools. A subagent runs detached from the turn that started 
 | Tool | What it does |
 | --- | --- |
 | `agent_start` | Starts a run and returns a run id immediately. Takes `agent`, `description`, and `prompt`; the profile decides the model, effort, and tools. A completion notification arrives when the run finishes. |
-| `agent_await` | Waits for named runs to become terminal and returns lifecycle state only. Takes an optional `timeout_seconds`; awaiting never suppresses notifications or consumes results. |
+| `agent_wait` | Waits for named runs to become terminal and returns lifecycle state only. Takes an optional `timeout_seconds`; waiting never suppresses notifications or consumes results. |
 | `agent_cancel` | Stops named runs; partial output remains available after cancellation settles. |
 | `agent_result` | Reads a finished run's authoritative full output by id. |
 
-Every terminal output is stored for `agent_result`. A small completion notification is pushed independently, and `agent_await` only observes lifecycle state. See [ADR 0006](docs/adr/0006-completion-notifications-and-result-store.md).
+Every terminal output is stored for `agent_result`. A small completion notification is pushed independently, and `agent_wait` only observes lifecycle state. See [ADR 0006](docs/adr/0006-completion-notifications-and-result-store.md).
 
 A pushed notification appears as a single collapsed line and expands with the same key that expands tool output. Completed notifications contain a bounded preview; failed notifications contain the primary error; cancelled notifications are terse. Every notification points to `agent_result` when more detail is available, and notification delivery never determines whether the full result is stored.
 

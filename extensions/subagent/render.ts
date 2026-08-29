@@ -68,7 +68,7 @@ export function contentText(
 /** Which runs a collected result covers, for the line shown when collapsed. */
 export interface CollectedRuns {
   runs: Array<{ id: string; agent: string; status: LifecycleStatus }>;
-  /** Runs asked for that had not finished. Only `agent_await` produces these. */
+  /** Runs asked for that had not finished. Only `agent_wait` produces these. */
   stillRunning?: number;
 }
 
