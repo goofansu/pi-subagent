@@ -64,6 +64,10 @@ export function registerSubagentFeatureTools(
     throw new Error(formatUnknownAgent(name, [...agentConfigs.keys()]));
   };
 
+  // pi documents promptSnippet as one line for the Available tools section, so
+  // each snippet is a period-less phrase while the full contract stays in description.
+  const startSnippet =
+    "Start a subagent on a task and return its run id immediately";
   const startDescription =
     "Start a subagent on a task and return immediately. Returns a run id, " +
     "not the answer: a completion notification arrives when it finishes. " +
@@ -73,7 +77,7 @@ export function registerSubagentFeatureTools(
     name: "agent_start",
     label: "Start subagent",
     description: startDescription,
-    promptSnippet: startDescription,
+    promptSnippet: startSnippet,
     promptGuidelines: guidelines,
     parameters: Type.Object({
       agent: Type.String({ description: "The agent to run the task" }),
@@ -117,10 +121,8 @@ export function registerSubagentFeatureTools(
     },
   });
 
-  // pi documents promptSnippet as one line for the Available tools section, so
-  // the full contract stays in the description instead of shipping twice.
   const waitSnippet =
-    "Block until named runs finish; returns lifecycle state only, never output.";
+    "Block until named runs finish and return lifecycle state only, never output";
 
   const waitDescription =
     "Block until named runs finish and return lifecycle state: identity and " +
@@ -185,6 +187,7 @@ export function registerSubagentFeatureTools(
     },
   });
 
+  const resultSnippet = "Fetch a finished subagent's full output by run id";
   const resultDescription =
     "Fetch a finished subagent's full output by run id. Use it when a notification " +
     "points to the result, or to re-read a run you were told about earlier.";
@@ -193,7 +196,7 @@ export function registerSubagentFeatureTools(
     name: "agent_result",
     label: "Read subagent result",
     description: resultDescription,
-    promptSnippet: resultDescription,
+    promptSnippet: resultSnippet,
     parameters: Type.Object({
       id: Type.String({ description: "A run id returned by agent_start" }),
     }),
@@ -237,6 +240,7 @@ export function registerSubagentFeatureTools(
     },
   });
 
+  const cancelSnippet = "Stop subagents whose work is no longer needed";
   const cancelDescription =
     "Stop subagents whose work is no longer needed. Partial output remains " +
     "available through agent_result after cancellation settles.";
@@ -245,7 +249,7 @@ export function registerSubagentFeatureTools(
     name: "agent_cancel",
     label: "Cancel subagents",
     description: cancelDescription,
-    promptSnippet: cancelDescription,
+    promptSnippet: cancelSnippet,
     parameters: Type.Object({ ids: ID_LIST }),
 
     async execute(_toolCallId, params) {
@@ -260,6 +264,7 @@ export function registerSubagentFeatureTools(
     },
   });
 
+  const steerSnippet = "Send one guidance message to an active subagent run";
   const steerDescription =
     "Send one guidance message to an active subagent Run. `accepted` means " +
     "only that the complete message synchronously entered its local bounded " +
@@ -271,7 +276,7 @@ export function registerSubagentFeatureTools(
     name: "agent_steer",
     label: "Steer subagent",
     description: steerDescription,
-    promptSnippet: steerDescription,
+    promptSnippet: steerSnippet,
     parameters: Type.Object({
       id: Type.String({ description: "A run id returned by agent_start" }),
       message: Type.String({

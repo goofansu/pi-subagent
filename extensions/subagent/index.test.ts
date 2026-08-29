@@ -534,9 +534,19 @@ test("the orchestration primitives are registered", () => {
     "agent_wait",
   ]);
   assert.equal(tools.agent_wait.label, "Wait for subagents");
-  assert.equal(
-    tools.agent_wait.promptSnippet,
-    "Block until named runs finish; returns lifecycle state only, never output.",
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(tools).map(([name, tool]) => [name, tool.promptSnippet]),
+    ),
+    {
+      agent_cancel: "Stop subagents whose work is no longer needed",
+      agent_result: "Fetch a finished subagent's full output by run id",
+      agent_start:
+        "Start a subagent on a task and return its run id immediately",
+      agent_steer: "Send one guidance message to an active subagent run",
+      agent_wait:
+        "Block until named runs finish and return lifecycle state only, never output",
+    },
   );
   assert.doesNotMatch(tools.agent_wait.description ?? "", /agent_await/);
   assert.match(
