@@ -5,8 +5,9 @@ Date: 2026-08-26
 ## Status
 
 Accepted. Codex execution details are refined by
-[ADR-0011](0011-codex-app-server-migration.md); this ADR's trust posture and
-environment-inheritance decision remains in force.
+[ADR-0011](0011-codex-app-server-migration.md) and
+[ADR-0015](0015-codex-conversation-across-disposable-attempts.md); this ADR's
+trust posture and environment-inheritance decision remains in force.
 
 ## Context
 
@@ -32,17 +33,17 @@ value stays in the run request, forwarded but not consulted, reserved for a
 future policy change that should arrive for the non-pi harnesses together
 rather than one adapter at a time.
 
-Every Codex child runs `codex app-server` and creates an ephemeral thread for
-the one-shot run. The child inherits the operator environment and Codex user
-configuration. Configured MCP servers and hooks remain available deliberately —
-the same inheritance rationale as ADR-0008.
+Every Codex Run starts a fresh `codex app-server` Attempt attached to the
+adapter's non-ephemeral Conversation. Each child inherits the operator
+environment and Codex user configuration. Configured MCP servers and hooks
+remain available deliberately — the same inheritance rationale as ADR-0008.
 
 The Codex adapter accepts `model` and `effort`. Model values are passed through
 unvalidated for Codex to check. The shared seven-value effort scale maps
 `off` to Codex's `none` and passes every other value through. Codex has no
 per-run system-prompt append channel and no supported tool allowlist in this
-adapter: `appendSystemPrompt` and `tools` are diagnostics. The profile system
-prompt is prepended to the turn's text input.
+adapter: `appendSystemPrompt` and `tools` are diagnostics. The Profile system
+prompt initializes the Conversation on its first successful attachment.
 
 ## Considered alternative
 

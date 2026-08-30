@@ -6,7 +6,11 @@
 
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
-import { createHarnessRegistry, type Harness } from "./harnesses/contract.ts";
+import {
+  createHarnessRegistry,
+  type Harness,
+  type HarnessAdapter,
+} from "./harnesses/contract.ts";
 import { createPiHarness } from "./harnesses/pi/harness.ts";
 import { getFinalOutput } from "./messages.ts";
 import {
@@ -14,16 +18,17 @@ import {
   type Fact,
   type RunControl,
   type RunEnding,
+  type SubagentContext,
   type SubagentExecutor,
   type SubagentRun,
+  type SubagentTask,
 } from "./run.ts";
-import type { RunSubagentOptions } from "./runner.ts";
-import {
-  assertSubagentDepthAvailable,
-  startSubagent as dispatchSubagent,
-  getSubagentDepth,
-} from "./runner.ts";
+import { assertSubagentDepthAvailable, getSubagentDepth } from "./runner.ts";
 import { createSubagentRuns } from "./runs.ts";
+import {
+  startSubagent as dispatchSubagent,
+  type RunSubagentOptions,
+} from "./standalone-run-helper.ts";
 import type { AgentConfig, SingleResult } from "./types.ts";
 
 // The depth guard reads the environment, so an inherited depth — these tests run
@@ -56,14 +61,18 @@ function assistantMessage(): Fact {
 function recordingExecutor(): {
   execute: SubagentExecutor;
   calls: SubagentRun[];
+  contexts: SubagentContext[];
+  tasks: SubagentTask[];
 } {
   const calls: SubagentRun[] = [];
+  const contexts: SubagentContext[] = [];
+  const tasks: SubagentTask[] = [];
   const execute: SubagentExecutor = async (run) => {
     calls.push(run);
     run.report.message(assistantMessage());
     return { ending: "answered" };
   };
-  return { execute, calls };
+  return { execute, calls, contexts, tasks };
 }
 
 function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -75,20 +84,43 @@ function agent(overrides: Partial<AgentConfig> = {}): AgentConfig {
   };
 }
 
+function controlledAdapter(
+  prepareRun: HarnessAdapter["prepareRun"],
+  close: HarnessAdapter["close"] = async () => {},
+): HarnessAdapter {
+  return {
+    capabilities: { resume: false },
+    model: undefined,
+    prepareRun,
+    close,
+  };
+}
+
 /** Keep executor injection behind the same harness seam production uses. */
 function startSubagent(
   options: Omit<RunSubagentOptions, "harnesses"> & {
     execute: SubagentExecutor;
+    observations?: {
+      contexts: SubagentContext[];
+      tasks: SubagentTask[];
+    };
   },
 ): ReturnType<typeof dispatchSubagent> {
-  const { execute, ...dispatchOptions } = options;
+  const { execute, observations, ...dispatchOptions } = options;
   const harness: Harness = {
     name: "pi",
     validate: () => [],
-    prepare: (task, parentModel) => ({
-      ...createPiHarness().prepare(task, parentModel),
-      execute,
-    }),
+    prepare: (context) => {
+      observations?.contexts.push(context);
+      const adapter = createPiHarness().prepare(context);
+      return {
+        ...adapter,
+        prepareRun: (task) => {
+          observations?.tasks.push(task);
+          return { ...adapter.prepareRun(task), execute };
+        },
+      };
+    },
   };
   return dispatchSubagent({
     ...dispatchOptions,
@@ -104,6 +136,10 @@ function startSubagent(
 async function startAndSettle(
   options: Omit<RunSubagentOptions, "runs" | "harnesses"> & {
     execute: SubagentExecutor;
+    observations?: {
+      contexts: SubagentContext[];
+      tasks: SubagentTask[];
+    };
   },
 ): Promise<SingleResult> {
   const started = startSubagent({
@@ -145,12 +181,21 @@ test("startSubagent hands the executor resolved dispatch policy", async () => {
     },
     cwd: "/tmp/workspace",
     execute: recorded.execute,
+    observations: recorded,
   });
 
-  const { task } = recorded.calls[0];
-  assert.equal(task.cwd, "/tmp/workspace");
+  const [context] = recorded.contexts;
+  const [task] = recorded.tasks;
+  assert.equal(context.cwd, "/tmp/workspace");
+  assert.equal(context.childDepth, 1);
+  assert.deepEqual(context.parentModel, {
+    provider: "anthropic",
+    id: "claude-opus-4-5",
+    thinkingLevel: "high",
+  });
   assert.equal(task.prompt, "do it");
-  assert.equal(task.childDepth, 1);
+  assert.equal("config" in task, false);
+  assert.equal("cwd" in task, false);
   assert.equal("parentModel" in task, false);
   assert.equal("depth" in task, false);
 });
@@ -164,21 +209,22 @@ test("a controlled Harness receives admitted Controls through the executor seam 
   const harness: Harness = {
     name: "controlled",
     validate: () => [],
-    prepare: () => ({
-      supportedControls: ["steer"],
-      execute: async (run) => {
-        await executorGate;
-        for await (const control of run.controls) {
-          received.push(control.text);
-          if (received.length === 2) break;
-        }
-        run.report.message({
-          role: "assistant",
-          parts: [{ type: "text", text: "followed both Controls" }],
-        });
-        return { ending: "answered" };
-      },
-    }),
+    prepare: () =>
+      controlledAdapter(() => ({
+        supportedControls: ["steer"],
+        execute: async (run) => {
+          await executorGate;
+          for await (const control of run.controls) {
+            received.push(control.text);
+            if (received.length === 2) break;
+          }
+          run.report.message({
+            role: "assistant",
+            parts: [{ type: "text", text: "followed both Controls" }],
+          });
+          return { ending: "answered" };
+        },
+      })),
   };
   const runs = createSubagentRuns();
   const started = dispatchSubagent({
@@ -210,25 +256,21 @@ test("a controlled Harness receives admitted Controls through the executor seam 
 
 test("the selected harness resolves models without exposing effort", () => {
   const harness = createPiHarness();
-  const task = {
+  const context: SubagentContext = {
     config: agent({ model: "sonnet", effort: "high" }),
-    description: "task",
-    prompt: "do it",
     cwd: "/tmp",
     childDepth: 1,
     projectTrusted: false,
+    parentModel: {
+      provider: "anthropic",
+      id: "claude-opus-4-5",
+      thinkingLevel: "low",
+    },
   };
-  const prepared = harness.prepare(task, {
-    provider: "anthropic",
-    id: "claude-opus-4-5",
-    thinkingLevel: "low",
-  });
+  const prepared = harness.prepare(context);
   assert.equal(prepared.model, "sonnet");
   assert.equal("effort" in prepared, false);
-  const inherited = harness.prepare(
-    { ...task, config: agent() },
-    { provider: "anthropic", id: "claude-opus-4-5", thinkingLevel: "low" },
-  );
+  const inherited = harness.prepare({ ...context, config: agent() });
   assert.equal(inherited.model, "anthropic/claude-opus-4-5");
   assert.equal("effort" in inherited, false);
 });
@@ -554,7 +596,83 @@ test("startSubagent does not retain effort on the result", async () => {
   assert.equal("effort" in result, false);
 });
 
+test("the standalone one-Run test composition closes its adapter after settlement", async () => {
+  let adapter: HarnessAdapter | undefined;
+  let releaseCount = 0;
+  const harness: Harness = {
+    name: "controlled",
+    validate: () => [],
+    prepare: () => {
+      let closed = false;
+      adapter = controlledAdapter(
+        () => ({
+          supportedControls: [],
+          execute: async (run) => {
+            run.report.message(assistantMessage());
+            return { ending: "answered" };
+          },
+        }),
+        async () => {
+          if (closed) return;
+          closed = true;
+          releaseCount++;
+        },
+      );
+      return adapter;
+    },
+  };
+  const started = dispatchSubagent({
+    config: agent({ harness: "controlled" }),
+    description: "task",
+    prompt: "work",
+    harnesses: createHarnessRegistry([harness]),
+    runs: createSubagentRuns(),
+  });
+
+  assert.equal((await started.settled).lifecycle.phase, "completed");
+  assert.equal(releaseCount, 1);
+  await adapter?.close();
+  await adapter?.close();
+  assert.equal(releaseCount, 1);
+});
+
 // ── Cancellation ──────────────────────────────────────────────────────────────
+
+test("a run cancelled before execution closes its adapter without invoking it", async () => {
+  let executorCalls = 0;
+  let closeCalls = 0;
+  const controller = new AbortController();
+  controller.abort();
+  const harness: Harness = {
+    name: "controlled",
+    validate: () => [],
+    prepare: () =>
+      controlledAdapter(
+        () => ({
+          supportedControls: [],
+          execute: async () => {
+            executorCalls++;
+            return { ending: "answered" };
+          },
+        }),
+        async () => {
+          closeCalls++;
+        },
+      ),
+  };
+  const started = dispatchSubagent({
+    config: agent({ harness: "controlled" }),
+    description: "task",
+    prompt: "work",
+    signal: controller.signal,
+    harnesses: createHarnessRegistry([harness]),
+    runs: createSubagentRuns(),
+  });
+
+  assert.equal((await started.settled).lifecycle.phase, "cancelled");
+  assert.equal(executorCalls, 0);
+  assert.equal(closeCalls, 1);
+});
 
 test("a run cancelled before it starts never spawns a child", async () => {
   let executorCalls = 0;
@@ -598,20 +716,28 @@ test("a Control admitted before cancellation may be discarded without changing t
     allowConsumption = resolve;
   });
   const consumed: string[] = [];
+  let closeCalls = 0;
   const harness: Harness = {
     name: "controlled",
     validate: () => [],
-    prepare: () => ({
-      supportedControls: ["steer"],
-      execute: async (run) => {
-        executorReady();
-        await consumptionGate;
-        for await (const control of run.controls) consumed.push(control.text);
-        return run.signal?.aborted
-          ? { ending: "cancelled" }
-          : { ending: "answered" };
-      },
-    }),
+    prepare: () =>
+      controlledAdapter(
+        () => ({
+          supportedControls: ["steer"],
+          execute: async (run) => {
+            executorReady();
+            await consumptionGate;
+            for await (const control of run.controls)
+              consumed.push(control.text);
+            return run.signal?.aborted
+              ? { ending: "cancelled" }
+              : { ending: "answered" };
+          },
+        }),
+        async () => {
+          closeCalls++;
+        },
+      ),
   };
   const runs = createSubagentRuns();
   const started = dispatchSubagent({
@@ -640,6 +766,7 @@ test("a Control admitted before cancellation may be discarded without changing t
   if (result.lifecycle.phase === "cancelled") {
     assert.equal(result.lifecycle.reason, "requested");
   }
+  assert.equal(closeCalls, 1);
 });
 
 test("external cancellation uses the Registry cancellation linearization point", async () => {
@@ -651,20 +778,21 @@ test("external cancellation uses the Registry cancellation linearization point",
   const harness: Harness = {
     name: "controlled",
     validate: () => [],
-    prepare: () => ({
-      supportedControls: ["steer"],
-      execute: async (run) => {
-        executorReady();
-        await new Promise<void>((resolve) => {
-          if (run.signal?.aborted) resolve();
-          else
-            run.signal?.addEventListener("abort", () => resolve(), {
-              once: true,
-            });
-        });
-        return { ending: "cancelled" };
-      },
-    }),
+    prepare: () =>
+      controlledAdapter(() => ({
+        supportedControls: ["steer"],
+        execute: async (run) => {
+          executorReady();
+          await new Promise<void>((resolve) => {
+            if (run.signal?.aborted) resolve();
+            else
+              run.signal?.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+          });
+          return { ending: "cancelled" };
+        },
+      })),
   };
   const runs = createSubagentRuns();
   const started = dispatchSubagent({
@@ -694,13 +822,14 @@ test("startup failure closes a controlled Run mailbox without draining it", asyn
   const harness: Harness = {
     name: "controlled",
     validate: () => [],
-    prepare: () => ({
-      supportedControls: ["steer"],
-      execute: async (run) => {
-        waiting = run.controls[Symbol.asyncIterator]().next();
-        throw new Error("startup failed");
-      },
-    }),
+    prepare: () =>
+      controlledAdapter(() => ({
+        supportedControls: ["steer"],
+        execute: async (run) => {
+          waiting = run.controls[Symbol.asyncIterator]().next();
+          throw new Error("startup failed");
+        },
+      })),
   };
   const runs = createSubagentRuns();
   const started = dispatchSubagent({
@@ -842,9 +971,10 @@ test("startSubagent forwards Pi's project-trust decision to the child", async ()
     prompt: "do it",
     projectTrusted: true,
     execute: recorded.execute,
+    observations: recorded,
   });
 
-  assert.equal(recorded.calls[0].task.projectTrusted, true);
+  assert.equal(recorded.contexts[0].projectTrusted, true);
 });
 
 test("startSubagent denies project trust when the caller reports none", async () => {
@@ -855,8 +985,9 @@ test("startSubagent denies project trust when the caller reports none", async ()
     description: "task",
     prompt: "do it",
     execute: recorded.execute,
+    observations: recorded,
   });
 
   // A caller that says nothing must not be read as trusting the directory.
-  assert.equal(recorded.calls[0].task.projectTrusted, false);
+  assert.equal(recorded.contexts[0].projectTrusted, false);
 });

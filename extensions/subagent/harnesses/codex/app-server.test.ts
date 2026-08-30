@@ -20,6 +20,7 @@ interface FakeChild extends EventEmitter {
   stderr: PassThrough;
   kill(signal: string): boolean;
   finish(code: number | null): void;
+  ignoreStdinEnd: boolean;
 }
 
 function fakeChild(
@@ -29,6 +30,7 @@ function fakeChild(
   child.stdin = new PassThrough();
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
+  child.ignoreStdinEnd = false;
   let closed = false;
   child.stdin.setEncoding("utf8");
   let input = "";
@@ -50,6 +52,9 @@ function fakeChild(
     child.stderr.end();
     queueMicrotask(() => child.emit("close", code, null));
   };
+  child.stdin.on("finish", () => {
+    if (!child.ignoreStdinEnd) child.finish(0);
+  });
   return child;
 }
 
@@ -100,11 +105,13 @@ function sourceWith(
 ) {
   let child: FakeChild | undefined;
   let replacementKill: ((signal: string) => boolean) | undefined;
+  let ignoreStdinEnd = false;
   const spawn: ChildProcessSpawn = (_command, _args, options) => {
     assert.equal(options.cwd, "/work");
     assert.equal(options.env?.[DEPTH_ENV_KEY], "2");
     assert.equal(options.env?.PATH, process.env.PATH);
     child = fakeChild(handler);
+    child.ignoreStdinEnd = ignoreStdinEnd;
     if (replacementKill) child.kill = replacementKill;
     return child as unknown as ChildProcess;
   };
@@ -143,6 +150,10 @@ function sourceWith(
     setKill(handler: (signal: string) => boolean) {
       replacementKill = handler;
       if (child) child.kill = handler;
+    },
+    ignoreStdinEnd() {
+      ignoreStdinEnd = true;
+      if (child) child.ignoreStdinEnd = true;
     },
   };
 }
@@ -287,7 +298,7 @@ test("multiple Controls are delivered serially in FIFO admission order", async (
   assert.deepEqual(await pending, { ending: "answered" });
 });
 
-test("an active-Turn steering refusal is a bounded redacted diagnostic, not the Run ending", async () => {
+test("a resumed active-Turn steering refusal is a bounded redacted diagnostic, not the Run ending", async () => {
   const stderr: string[] = [];
   const controls = (async function* (): AsyncIterable<RunControl> {
     yield { type: "steer", text: "review this" };
@@ -306,7 +317,7 @@ test("an active-Turn steering refusal is a bounded redacted diagnostic, not the 
     (request, child) => {
       if (request.method === "initialize")
         response(child, request.id as number, initializeResult());
-      if (request.method === "thread/start")
+      if (request.method === "thread/resume")
         response(child, request.id as number, threadResult());
       if (request.method === "turn/start")
         response(child, request.id as number, turnResult());
@@ -328,7 +339,7 @@ test("an active-Turn steering refusal is a bounded redacted diagnostic, not the 
         child.stdout.write(`${JSON.stringify(completed())}\n`);
       }
     },
-    {},
+    { continuationThreadId: "thread-1" },
     controls,
   );
 
@@ -350,7 +361,7 @@ test("an active-Turn steering refusal is a bounded redacted diagnostic, not the 
 
 const DETERMINISTIC_RACE_REPETITIONS = 32;
 
-test("repeated terminal-before-Control settlement closes the pump and answers once", async () => {
+test("repeated resumed completion-before-Control settlement closes the pump and answers once", async () => {
   for (
     let iteration = 0;
     iteration < DETERMINISTIC_RACE_REPETITIONS;
@@ -374,7 +385,7 @@ test("repeated terminal-before-Control settlement closes the pump and answers on
       (request, child) => {
         if (request.method === "initialize")
           response(child, request.id as number, initializeResult());
-        if (request.method === "thread/start")
+        if (request.method === "thread/resume")
           response(child, request.id as number, threadResult());
         if (request.method === "turn/start")
           response(child, request.id as number, turnResult());
@@ -383,7 +394,10 @@ test("repeated terminal-before-Control settlement closes the pump and answers on
           child.stdout.write(`${JSON.stringify(completed())}\n`);
         }
       },
-      { onRequestRejection: (error) => rejections.push(error) },
+      {
+        continuationThreadId: "thread-1",
+        onRequestRejection: (error) => rejections.push(error),
+      },
       controls,
     );
 
@@ -407,7 +421,7 @@ test("repeated terminal-before-Control settlement closes the pump and answers on
   }
 });
 
-test("repeated cancellation-before-Control-response settlement stays cancelled once", async () => {
+test("repeated resumed cancellation-before-Control-response stays cancelled once", async () => {
   for (
     let iteration = 0;
     iteration < DETERMINISTIC_RACE_REPETITIONS;
@@ -419,7 +433,7 @@ test("repeated cancellation-before-Control-response settlement stays cancelled o
       (request, child) => {
         if (request.method === "initialize")
           response(child, request.id as number, initializeResult());
-        if (request.method === "thread/start")
+        if (request.method === "thread/resume")
           response(child, request.id as number, threadResult());
         if (request.method === "turn/start")
           response(child, request.id as number, turnResult());
@@ -430,7 +444,7 @@ test("repeated cancellation-before-Control-response settlement stays cancelled o
         if (request.method === "turn/interrupt")
           child.stdout.write(`${JSON.stringify(completed("interrupted"))}\n`);
       },
-      {},
+      { continuationThreadId: "thread-1" },
       (async function* (): AsyncIterable<RunControl> {
         yield { type: "steer", text: `racing guidance ${iteration}` };
       })(),
@@ -531,7 +545,7 @@ test("App Server performs the exact handshake and forwards only validated run ev
     method: "thread/start",
     params: {
       cwd: "/work",
-      ephemeral: true,
+      ephemeral: false,
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       model: "gpt-test",
@@ -829,6 +843,34 @@ test("invalid startup responses retain targeted operator diagnostics", async () 
   }
 });
 
+test("spawn failures return a bounded redacted diagnostic", async () => {
+  const secret = "thread-provider-secret";
+  const conclusion = await runCodexAppServer({
+    cwd: "/work",
+    childDepth: 1,
+    prompt: "prompt",
+    spawn: () => {
+      throw new Error(
+        `spawn failed {"threadId":"${secret}"} ${"detail ".repeat(400)}`,
+      );
+    },
+    translate: () => undefined,
+    report: {
+      message: () => {},
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
+    missingAnswerMessage: "missing answer",
+  });
+
+  assert.equal(conclusion.ending, "failed");
+  assert.ok(conclusion.errorMessage);
+  assert.ok(conclusion.errorMessage.length <= 1024);
+  assert.doesNotMatch(conclusion.errorMessage, new RegExp(secret));
+  assert.match(conclusion.errorMessage, /"threadId":"\[redacted\]"/);
+});
+
 test("semantic settlement rejects pending requests as transport lifecycle cleanup", async () => {
   const rejections: Error[] = [];
   let turnStarted!: () => void;
@@ -865,7 +907,7 @@ test("semantic settlement rejects pending requests as transport lifecycle cleanu
   assert.equal(rejection.message, "Codex App Server transport settled");
 });
 
-test("transport settlement rejects each pending request once and clears correlation", async () => {
+test("pre-identity cancellation rejects each pending request once on child cleanup", async () => {
   const rejections: Error[] = [];
   const rig = sourceWith(() => {}, {
     onRequestRejection: (error) => rejections.push(error),
@@ -879,8 +921,11 @@ test("transport settlement rejects each pending request once and clears correlat
   assert.equal(rejections.length, 1);
   const rejection = rejections[0];
   assert.ok(rejection instanceof CodexAppServerTransportError);
-  assert.equal(rejection.reason, "transport-settled");
-  assert.equal(rejection.message, "Codex App Server transport closed");
+  assert.equal(rejection.reason, "child-exited");
+  assert.equal(
+    rejection.message,
+    "Codex App Server exited before its response",
+  );
 
   rig.child?.stdout.write(
     `${JSON.stringify({
@@ -942,7 +987,7 @@ test("child exit rejects each pending request once as transport lifecycle cleanu
   assert.equal(rejections.length, 1);
 });
 
-test("missing stdio rejects after starting child cleanup", async () => {
+test("missing stdio fails only after child cleanup is complete", async () => {
   const signals: string[] = [];
   const child = new EventEmitter() as EventEmitter & {
     stdin?: undefined;
@@ -972,20 +1017,32 @@ test("missing stdio rejects after starting child cleanup", async () => {
     missingAnswerMessage: "missing answer",
   });
 
+  let settled = false;
+  void pending.then(() => {
+    settled = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.equal(child.listenerCount("close"), 1);
+
+  child.emit("close", 0, null);
   assert.deepEqual(await pending, {
     ending: "failed",
     errorMessage: "Failed to open Codex App Server stdio pipes",
   });
   assert.deepEqual(signals, ["SIGTERM"]);
-  child.emit("close", 0, null);
+  assert.equal(child.listenerCount("close"), 0);
 });
 
 test("abort before the turn id is known kills directly", async () => {
   const requests: Record<string, unknown>[] = [];
   const signals: string[] = [];
   const rig = sourceWith((request) => requests.push(request));
+  rig.ignoreStdinEnd();
   rig.setKill((signal) => {
     signals.push(signal);
+    if (signal === "SIGKILL") queueMicrotask(() => rig.child?.finish(137));
     return true;
   });
   const controller = new AbortController();
@@ -1069,8 +1126,10 @@ test("an ignored interrupt escalates from SIGTERM to SIGKILL", async () => {
       ready();
     }
   });
+  rig.ignoreStdinEnd();
   rig.setKill((signal) => {
     signals.push(signal);
+    if (signal === "SIGKILL") queueMicrotask(() => rig.child?.finish(137));
     return true;
   });
   const controller = new AbortController();
@@ -1095,8 +1154,10 @@ test("semantic settlement completes unresponsive child escalation and removes li
       child.stdout.write(`${JSON.stringify(completed())}\n`);
     }
   });
+  rig.ignoreStdinEnd();
   rig.setKill((signal) => {
     signals.push(signal);
+    if (signal === "SIGKILL") queueMicrotask(() => rig.child?.finish(137));
     return true;
   });
 
@@ -1114,57 +1175,66 @@ test("semantic settlement completes unresponsive child escalation and removes li
   assert.equal(rig.child?.stdin.listenerCount("error"), 0);
 });
 
-test("cancellation racing process error and close finalizes once without retained work", async () => {
-  const signals: string[] = [];
-  const rejections: Error[] = [];
+test("repeated resumed cancellation racing process close finalizes once without retained work", async () => {
   const unhandled: unknown[] = [];
-  let ready!: () => void;
-  const started = new Promise<void>((resolve) => {
-    ready = resolve;
-  });
-  const rig = sourceWith(
-    (request, child) => {
-      if (request.method === "initialize")
-        response(child, request.id as number, initializeResult());
-      if (request.method === "thread/start")
-        response(child, request.id as number, threadResult());
-      if (request.method === "turn/start") {
-        response(child, request.id as number, turnResult());
-        ready();
-      }
-    },
-    { onRequestRejection: (error) => rejections.push(error) },
-  );
-  rig.setKill((signal) => {
-    signals.push(signal);
-    return true;
-  });
   const onUnhandled = (reason: unknown): void => {
     unhandled.push(reason);
   };
   process.on("unhandledRejection", onUnhandled);
   try {
-    const controller = new AbortController();
-    const pending = rig.source(sinkFor([], []), controller.signal);
-    await started;
-    controller.abort();
-    rig.child?.emit("error", new Error("process raced cancellation"));
-    rig.child?.finish(7);
+    for (
+      let iteration = 0;
+      iteration < DETERMINISTIC_RACE_REPETITIONS;
+      iteration++
+    ) {
+      const signals: string[] = [];
+      const rejections: Error[] = [];
+      let ready!: () => void;
+      const started = new Promise<void>((resolve) => {
+        ready = resolve;
+      });
+      const rig = sourceWith(
+        (request, child) => {
+          if (request.method === "initialize")
+            response(child, request.id as number, initializeResult());
+          if (request.method === "thread/resume")
+            response(child, request.id as number, threadResult());
+          if (request.method === "turn/start") {
+            response(child, request.id as number, turnResult());
+            ready();
+          }
+        },
+        {
+          continuationThreadId: "thread-1",
+          onRequestRejection: (error) => rejections.push(error),
+        },
+      );
+      rig.setKill((signal) => {
+        signals.push(signal);
+        return true;
+      });
+      const controller = new AbortController();
+      const pending = rig.source(sinkFor([], []), controller.signal);
+      await started;
+      controller.abort();
+      rig.child?.emit("error", new Error("process raced cancellation"));
+      rig.child?.finish(7);
 
-    assert.deepEqual(await pending, { ending: "cancelled" });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual(signals, []);
-    assert.equal(rejections.length, 1);
-    assert.ok(rejections[0] instanceof CodexAppServerTransportError);
-    assert.equal(
-      (rejections[0] as CodexAppServerTransportError).reason,
-      "transport-settled",
-    );
-    assert.equal(rig.child?.listenerCount("error"), 0);
-    assert.equal(rig.child?.listenerCount("close"), 0);
-    assert.equal(rig.child?.stdout.listenerCount("data"), 0);
-    assert.equal(rig.child?.stderr.listenerCount("data"), 0);
-    assert.equal(rig.child?.stdin.listenerCount("error"), 0);
+      assert.deepEqual(await pending, { ending: "cancelled" });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(signals, []);
+      assert.equal(rejections.length, 1);
+      assert.ok(rejections[0] instanceof CodexAppServerTransportError);
+      assert.equal(
+        (rejections[0] as CodexAppServerTransportError).reason,
+        "transport-settled",
+      );
+      assert.equal(rig.child?.listenerCount("error"), 0);
+      assert.equal(rig.child?.listenerCount("close"), 0);
+      assert.equal(rig.child?.stdout.listenerCount("data"), 0);
+      assert.equal(rig.child?.stderr.listenerCount("data"), 0);
+      assert.equal(rig.child?.stdin.listenerCount("error"), 0);
+    }
     assert.deepEqual(unhandled, []);
   } finally {
     process.removeListener("unhandledRejection", onUnhandled);

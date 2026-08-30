@@ -17,6 +17,7 @@ import {
   formatAgentResultUnavailable,
   formatCancelOutcome,
   formatResult,
+  formatResumeOutcome,
   formatStartResult,
   formatSteerOutcome,
   formatUnknownAgent,
@@ -27,20 +28,19 @@ import {
   renderMarkdownResult,
   renderSubagentCall,
 } from "./render.ts";
-import { getSubagentDepth, startSubagent } from "./runner.ts";
+import { getSubagentDepth } from "./runner.ts";
 import { createSubagentRuns, type SubagentRuns } from "./runs.ts";
 import { createSessionLifecycle } from "./session-lifecycle.ts";
+import { createSubagentManager, type SubagentManager } from "./subagents.ts";
 import type { AgentConfig, SessionContext } from "./types.ts";
 
 const ID_LIST = Type.Array(Type.String(), {
-  description: "Run ids returned by agent_start",
+  description: "Run ids returned by agent_start or agent_resume",
 });
 
 export interface SubagentToolRuntime {
   delivery: SubagentDelivery;
-  runs: SubagentRuns;
-  start: typeof startSubagent;
-  harnesses: HarnessRegistry;
+  subagents: Pick<SubagentManager, "start" | "resume">;
 }
 
 /** Tool seam used by focused tests with a stand-in runtime. */
@@ -50,7 +50,7 @@ export function registerSubagentFeatureTools(
   agentConfigs: Map<string, AgentConfig>,
   runtime: SubagentToolRuntime,
 ): void {
-  const { delivery, runs, start, harnesses } = runtime;
+  const { delivery, subagents } = runtime;
   pi.registerMessageRenderer(
     NOTIFICATION_MESSAGE_TYPE,
     renderNotificationMessage,
@@ -67,11 +67,12 @@ export function registerSubagentFeatureTools(
   // pi documents promptSnippet as one line for the Available tools section, so
   // each snippet is a period-less phrase while the full contract stays in description.
   const startSnippet =
-    "Start a subagent on a task and return its run id immediately";
+    "Create a stable subagent and return its identity and first run id immediately";
   const startDescription =
-    "Start a subagent on a task and return immediately. Returns a run id, " +
-    "not the answer: a completion notification arrives when it finishes. " +
-    "Do not guess at what it will say.";
+    "Create a stable Session-scoped subagent and immediately start its first Run. " +
+    "Returns distinct Subagent and Run ids, not the answer. Use the Run id for " +
+    "agent_wait, agent_result, agent_cancel, and agent_steer; a completion " +
+    "notification arrives when the Run finishes. Do not guess at what it will say.";
 
   pi.registerTool({
     name: "agent_start",
@@ -91,14 +92,12 @@ export function registerSubagentFeatureTools(
 
       // Deliberately no signal. The turn's cancellation must not reach a
       // detached run: the point of starting one is that it outlives the turn.
-      const started = start({
+      const started = subagents.start({
         config,
         description: params.description,
         prompt: params.prompt,
         projectTrusted: session.projectTrusted,
         cwd: session.cwd,
-        runs,
-        harnesses,
         parentModel: ctx.model
           ? {
               provider: ctx.model.provider,
@@ -107,14 +106,68 @@ export function registerSubagentFeatureTools(
             }
           : undefined,
       });
-      delivery.register(started.id, config.name, started.settled);
+      delivery.register(
+        started.runId,
+        config.name,
+        started.settled,
+        started.subagentId,
+      );
 
       return {
         content: [
           {
             type: "text",
-            text: formatStartResult(config.name, started.id),
+            text: formatStartResult(
+              config.name,
+              started.subagentId,
+              started.runId,
+            ),
           },
+        ],
+        details: undefined,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "agent_resume",
+    label: "Resume subagent",
+    description:
+      "Immediately start a new asynchronous Run on an idle stable Subagent, retaining only Harness-private Conversation context. " +
+      "Pass a Subagent id returned by agent_start, not a Run id. Returns the new Run id immediately, not the answer; " +
+      "use that Run id for wait, result, cancellation, and steering. Active Subagents reject resume without queueing.",
+    promptSnippet:
+      "Resume an idle stable subagent and return its new run id immediately",
+    promptGuidelines: [
+      "agent_resume takes the stable Subagent id from agent_start; agent_wait, agent_result, agent_cancel, and agent_steer take Run ids.",
+      "agent_resume returns immediately with a new Run id, not the answer; continue independent work and use agent_wait when only that Run remains.",
+    ],
+    parameters: Type.Object({
+      id: Type.String({
+        description: "A stable Subagent id returned by agent_start",
+      }),
+      description: Type.String({ description: "Label for this new Run" }),
+      prompt: Type.String({ description: "The full next task brief" }),
+    }),
+    renderResult: renderMarkdownResult,
+
+    async execute(_toolCallId, params) {
+      const outcome = subagents.resume({
+        subagentId: params.id,
+        description: params.description,
+        prompt: params.prompt,
+      });
+      if (outcome.outcome === "started") {
+        delivery.register(
+          outcome.runId,
+          outcome.agent,
+          outcome.settled,
+          params.id,
+        );
+      }
+      return {
+        content: [
+          { type: "text", text: formatResumeOutcome(params.id, outcome) },
         ],
         details: undefined,
       };
@@ -125,7 +178,7 @@ export function registerSubagentFeatureTools(
     "Block until named runs finish and return lifecycle state only, never output";
 
   const waitDescription =
-    "Block until named runs finish and return lifecycle state: identity and " +
+    "Block until named Runs finish by Run id and return lifecycle state: identity and " +
     "status, never output. Waiting does not make a run finish sooner, and the " +
     "completion notification arrives either way — but holding the turn keeps " +
     "the answer in front of you, so wait here whenever the run's answer is the " +
@@ -135,7 +188,7 @@ export function registerSubagentFeatureTools(
   // Guidelines from every tool are flattened into one unattributed list, so
   // each bullet has to name the tool it governs.
   const waitGuidelines = [
-    "After agent_start, do the work that does not depend on the run first; " +
+    "After agent_start or agent_resume, do the work that does not depend on the Run first; " +
       "when only the run's answer is left, call agent_wait instead of ending " +
       "the turn.",
     "One agent_wait covers a whole barrier: pass every id at once, with a " +
@@ -198,7 +251,9 @@ export function registerSubagentFeatureTools(
     description: resultDescription,
     promptSnippet: resultSnippet,
     parameters: Type.Object({
-      id: Type.String({ description: "A run id returned by agent_start" }),
+      id: Type.String({
+        description: "A Run id returned by agent_start or agent_resume",
+      }),
     }),
     renderResult: renderMarkdownResult,
 
@@ -242,8 +297,9 @@ export function registerSubagentFeatureTools(
 
   const cancelSnippet = "Stop subagents whose work is no longer needed";
   const cancelDescription =
-    "Stop subagents whose work is no longer needed. Partial output remains " +
-    "available through agent_result after cancellation settles.";
+    "Stop Runs whose work is no longer needed by Run id; never pass a stable Subagent id. " +
+    "Partial output remains available through agent_result after cancellation settles, " +
+    "and cancellation does not close the owning Subagent.";
 
   pi.registerTool({
     name: "agent_cancel",
@@ -278,7 +334,9 @@ export function registerSubagentFeatureTools(
     description: steerDescription,
     promptSnippet: steerSnippet,
     parameters: Type.Object({
-      id: Type.String({ description: "A run id returned by agent_start" }),
+      id: Type.String({
+        description: "A Run id returned by agent_start or agent_resume",
+      }),
       message: Type.String({
         description:
           "Guidance for the active Run; admitted text is preserved exactly",
@@ -324,7 +382,7 @@ export interface SubagentRuntimeDependencies {
   sessionPush?: SessionPush;
   harnesses?: HarnessRegistry;
   delivery?: SubagentDelivery;
-  start?: typeof startSubagent;
+  subagents?: SubagentManager;
 }
 
 export interface SubagentRuntime {
@@ -332,6 +390,7 @@ export interface SubagentRuntime {
   readonly sessionPush: SessionPush;
   readonly delivery: SubagentDelivery;
   readonly harnesses: HarnessRegistry;
+  readonly subagents: SubagentManager;
   attach(pi: ExtensionAPI): void;
 }
 
@@ -351,12 +410,14 @@ export function createSubagentRuntime(
   const delivery =
     dependencies.delivery ??
     createSubagentDelivery({ push: sessionPush.push, runs });
-  const start = dependencies.start ?? startSubagent;
+  const subagents =
+    dependencies.subagents ?? createSubagentManager({ harnesses, runs });
   return {
     runs,
     sessionPush,
     delivery,
     harnesses,
+    subagents,
     attach(pi) {
       const lifecycle = createSessionLifecycle({
         pi,
@@ -365,12 +426,11 @@ export function createSubagentRuntime(
         sessionPush,
         runs,
         harnesses,
+        subagents,
         registerFeatures: (session, agentConfigs) =>
           registerSubagentFeatureTools(pi, session, agentConfigs, {
             delivery,
-            runs,
-            start,
-            harnesses,
+            subagents,
           }),
       });
 

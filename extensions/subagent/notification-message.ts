@@ -20,7 +20,10 @@ import type { RenderableTheme, TerminalLifecycleStatus } from "./types.ts";
 export const NOTIFICATION_MESSAGE_TYPE = "subagent-notification";
 
 export interface NotificationMessageDetails {
+  /** Run id used for landing and every Run-scoped operation. */
   id: string;
+  /** Stable owning Subagent id, included only for orientation. */
+  subagentId: string;
   agent: string;
   status: TerminalLifecycleStatus;
 }
@@ -42,12 +45,12 @@ interface NotificationMessagePayload {
 export function buildNotificationMessage(
   notification: NotificationMessage,
 ): NotificationMessagePayload {
-  const { id, agent, status, text } = notification;
+  const { id, subagentId, agent, status, text } = notification;
   return {
     customType: NOTIFICATION_MESSAGE_TYPE,
     content: text,
     display: true,
-    details: { id, agent, status },
+    details: { id, subagentId, agent, status },
   };
 }
 
@@ -61,6 +64,7 @@ function isDetails(value: unknown): value is NotificationMessageDetails {
   const details = value as Record<string, unknown>;
   return (
     typeof details.id === "string" &&
+    typeof details.subagentId === "string" &&
     typeof details.agent === "string" &&
     (details.status === "completed" ||
       details.status === "failed" ||
@@ -102,7 +106,7 @@ export function formatNotificationSummary(
 
   const line =
     theme.fg("toolTitle", theme.bold(details.agent)) +
-    theme.fg("dim", ` (${details.id}) `) +
+    theme.fg("dim", ` (subagent ${details.subagentId}, run ${details.id}) `) +
     theme.fg(tone, verb) +
     theme.fg("dim", ` · ${formatCharacterCount(characters)}`);
 

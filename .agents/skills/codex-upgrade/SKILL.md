@@ -20,12 +20,14 @@ being defended lives in the protocol-fidelity item of
    ```sh
    codex app-server generate-json-schema --out /tmp/codex-schema
    cp /tmp/codex-schema/ServerNotification.json /tmp/codex-schema/ClientRequest.json docs/codex-protocol/
+   cp /tmp/codex-schema/v2/ThreadResumeResponse.json docs/codex-protocol/v2/
    git diff docs/codex-protocol/
    ```
 
    Review every diff hunk that touches a shape the adapter consumes — the
-   notification methods named in `CodexAppServerEvent` and the requests sent
-   by the transport, both in
+   notification methods named in `CodexAppServerEvent`, the requests sent by
+   the transport, and the resumed-thread attachment response consumed by
+   `thread/resume`, all in
    `extensions/subagent/harnesses/codex/app-server.ts`. Classify each hunk:
    a new optional field or a new notification/item variant is tolerated by
    design; a newly required field, a renamed method, or a changed enum value

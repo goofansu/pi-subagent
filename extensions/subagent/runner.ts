@@ -1,12 +1,12 @@
 /**
- * The dispatcher. It enforces depth, owns the run record, and settles
- * lifecycle state. Backend policy is supplied by the selected harness; this
- * module never branches on a backend.
+ * The Dispatcher owns each Run record and settles lifecycle state. Admission
+ * policy and adapter lifetime belong to the Subagent manager; this module
+ * never branches on a backend.
  */
 
 import { createControlGate } from "./control-mailbox.ts";
-import type { HarnessRegistry } from "./harnesses/contract.ts";
-import type { ParentModel, RunEnding, SubagentTask } from "./run.ts";
+import type { HarnessAdapter } from "./harnesses/contract.ts";
+import type { RunEnding, SubagentTask } from "./run.ts";
 import {
   createEmptyResult,
   createRunReporter,
@@ -14,11 +14,7 @@ import {
   settleResultLifecycle,
 } from "./run.ts";
 import type { SubagentRuns } from "./runs.ts";
-import {
-  type AgentConfig,
-  DEFAULT_HARNESS_NAME,
-  type SingleResult,
-} from "./types.ts";
+import type { SingleResult } from "./types.ts";
 
 const MAX_SUBAGENT_DEPTH = 1;
 
@@ -36,64 +32,53 @@ export function assertSubagentDepthAvailable(currentDepth: number): void {
   }
 }
 
-export interface RunSubagentOptions {
-  config: AgentConfig;
-  description: string;
-  prompt: string;
-  signal?: AbortSignal;
-  parentModel?: ParentModel;
-  projectTrusted?: boolean;
-  cwd?: string;
-  /** Harness resolution is the only backend decision in the dispatcher. */
-  harnesses: HarnessRegistry;
-  runs: SubagentRuns;
-  now?: () => number;
-}
-
 /** A run that has started, named before it has finished. */
 export interface StartedSubagent {
-  /** Registry id, available immediately to the caller. */
+  /** Registry Run id, available immediately to the caller. */
   readonly id: string;
   readonly settled: Promise<SingleResult>;
 }
 
-export function startSubagent({
-  config,
+/** Inputs for one Run on an adapter whose lifetime is owned elsewhere. */
+export interface DispatchSubagentRunOptions {
+  subagentId: string;
+  agent: string;
+  harness: string;
+  description: string;
+  prompt: string;
+  adapter: HarnessAdapter;
+  signal?: AbortSignal;
+  runs: SubagentRuns;
+  now?: () => number;
+}
+
+/**
+ * Dispatch one Run without owning the prepared Subagent adapter.
+ *
+ * The Session-scoped manager owns adapter lifetime; this function remains the
+ * sole writer of the Run record, fold, Control gate, and terminal lifecycle.
+ */
+export function dispatchSubagentRun({
+  subagentId,
+  agent,
+  harness,
   description,
   prompt,
+  adapter,
   signal,
-  parentModel,
-  projectTrusted = false,
-  cwd = process.cwd(),
-  harnesses,
   runs,
   now = Date.now,
-}: RunSubagentOptions): StartedSubagent {
-  const currentDepth = getSubagentDepth();
-  assertSubagentDepthAvailable(currentDepth);
-
-  const harnessName = config.harness ?? DEFAULT_HARNESS_NAME;
-  const selectedHarness = harnesses.get(harnessName);
-  if (!selectedHarness) {
-    throw new Error(`No harness registered for '${harnessName}'`);
-  }
-
+}: DispatchSubagentRunOptions): StartedSubagent {
   const result = createEmptyResult(
-    config.name,
+    agent,
     description,
     now(),
-    selectedHarness.name,
+    harness,
+    subagentId,
   );
-  const task: SubagentTask = {
-    config,
-    description,
-    prompt,
-    cwd,
-    childDepth: currentDepth + 1,
-    projectTrusted,
-  };
-  const prepared = selectedHarness.prepare(task, parentModel);
-  if (prepared.model) result.model = prepared.model;
+  const task: SubagentTask = { description, prompt };
+  const prepared = adapter.prepareRun(task);
+  if (adapter.model) result.model = adapter.model;
   const controlGate = createControlGate(prepared.supportedControls);
   const controller = new AbortController();
   const abortExecutor = () => controller.abort();
@@ -129,7 +114,6 @@ export function startSubagent({
       let ending: RunEnding;
       try {
         ending = await prepared.execute({
-          task,
           report,
           signal: controller.signal,
           controls: controlGate.controls,

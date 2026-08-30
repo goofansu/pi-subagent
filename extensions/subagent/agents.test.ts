@@ -209,8 +209,6 @@ test("the pi harness diagnoses models against its catalogue", () => {
   );
   const prepared = createPiHarness().prepare({
     config: known,
-    description: "task",
-    prompt: "work",
     cwd: "/work",
     childDepth: 1,
     projectTrusted: false,

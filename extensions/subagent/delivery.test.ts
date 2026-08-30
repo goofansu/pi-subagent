@@ -1,13 +1,40 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createControlGate } from "./control-mailbox.ts";
-import type { PushedNotification, SubagentDelivery } from "./delivery.ts";
-import { createSessionPush, createSubagentDelivery } from "./delivery.ts";
+import type {
+  DeliveryOptions,
+  PushedNotification,
+  SubagentDelivery,
+} from "./delivery.ts";
+import {
+  createSubagentDelivery as createProductionDelivery,
+  createSessionPush,
+} from "./delivery.ts";
 import { NOTIFICATION_PREVIEW_CHARACTER_LIMIT } from "./presentation.ts";
 import type { Fact } from "./run.ts";
 import { createEmptyResult } from "./run.ts";
 import { createSubagentRuns } from "./runs.ts";
 import type { SingleResult } from "./types.ts";
+
+type TestDelivery = Omit<SubagentDelivery, "register"> & {
+  register(
+    id: string,
+    agent: string,
+    settled: Promise<SingleResult>,
+    subagentId?: string,
+  ): void;
+};
+
+/** Keep direct delivery tests concise while production registration requires an owner. */
+function createSubagentDelivery(options: DeliveryOptions): TestDelivery {
+  const delivery = createProductionDelivery(options);
+  return {
+    ...delivery,
+    register(id, agent, settled, subagentId = "subagent-test") {
+      delivery.register(id, agent, settled, subagentId);
+    },
+  };
+}
 
 function assistantText(text: string): Fact {
   return { role: "assistant", parts: [{ type: "text", text }] };
@@ -57,7 +84,7 @@ function harness() {
   // Pushes land immediately here, as in an idle session. Tests about the
   // pushed-but-not-landed gap build their own delivery with a push that
   // never lands.
-  let delivery: SubagentDelivery;
+  let delivery: TestDelivery;
   const push = (report: PushedNotification): void => {
     reports.push(report);
     pushed.push(report.text);
@@ -74,7 +101,7 @@ test("an unobserved run pushes its notification when it settles", async () => {
   run.finish("found three call sites");
   await flush();
   assert.equal(pushed.length, 1);
-  assert.match(pushed[0], /explore \(run-1\) completed/);
+  assert.match(pushed[0], /explore \(subagent-test\), run run-1 completed/);
 });
 
 test("INV-5: wait observes terminality without suppressing notification", async () => {
@@ -155,7 +182,7 @@ test("a cancel stops the run without suppressing its notification", async () => 
 
 test("notification state is committed before a push can re-enter", async () => {
   const runs = createSubagentRuns();
-  let delivery: SubagentDelivery;
+  let delivery: TestDelivery;
   const push = (notification: PushedNotification): void => {
     // The host may synchronously report the message as landed while push is
     // still on the stack. Swapping delivery's state write below this call
@@ -184,6 +211,7 @@ test("a cancelled run's outcome is still recallable once its child dies", async 
 
   assert.deepEqual(delivery.result(handle.id), {
     id: handle.id,
+    subagentId: "subagent-test",
     agent: "explore",
     status: "cancelled",
     reason: "requested",
@@ -577,6 +605,7 @@ test("INV-4: a stored result is durable and repeatable", async () => {
 
   const expected = {
     id: "run-1",
+    subagentId: "subagent-test",
     agent: "explore",
     status: "completed" as const,
     output: "the whole answer",
@@ -641,6 +670,7 @@ test("INV-4: result-store eviction follows insertion order, not retrieval order"
 
   assert.deepEqual(delivery.result("run-1"), {
     id: "run-1",
+    subagentId: "subagent-test",
     agent: "explore",
     status: "completed",
     output: "",
@@ -760,7 +790,7 @@ test("an unexpected executor rejection remains observable by wait and retrievabl
   assert.match(delivery.result("run-1")?.output ?? "", /executor bug/);
   assert.match(
     pushed[0] ?? "",
-    /Subagent explore \(run-1\) failed: executor bug/,
+    /Subagent explore \(subagent-test\), run run-1 failed: executor bug/,
   );
 });
 
@@ -786,6 +816,7 @@ test("INV-9: notification failure cannot invalidate the stored result", async ()
 function report(id: string): PushedNotification {
   return {
     id,
+    subagentId: "subagent-test",
     agent: "explore",
     status: "completed",
     text: id,

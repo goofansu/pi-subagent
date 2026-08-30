@@ -16,6 +16,7 @@ import {
 const STDOUT_LINE_LIMIT = 32 * 1024 * 1024;
 const RAW_STDOUT_TAIL_LIMIT = 2000;
 const STEERING_DIAGNOSTIC_LIMIT = 1024;
+const RESULT_DIAGNOSTIC_LIMIT = 1024;
 const DEFAULT_KILL_ESCALATION_MS = 5000;
 const CLIENT_INFO = {
   name: "pi-subagent",
@@ -225,6 +226,10 @@ export interface CodexAppServerOptions {
   readonly prompt: string;
   readonly model?: string;
   readonly effort?: string;
+  /** Adapter-private provider Conversation identity to attach on this Attempt. */
+  readonly continuationThreadId?: string;
+  /** Retain an identity only after its current Turn has started successfully. */
+  readonly onThreadAttached?: (threadId: string) => void;
   readonly onRequestRejection?: (error: Error) => void;
   readonly spawn?: ChildProcessSpawn;
   readonly killEscalationMs?: number;
@@ -570,8 +575,15 @@ function redactProviderIds(value: string): string {
   );
 }
 
-function steeringDiagnostic(error: CodexAppServerRequestError): string {
-  const value = `Steering rejected: ${redactProviderIds(error.message)}`;
+function boundedRedactedDiagnostic(value: string): string {
+  return redactProviderIds(value).slice(0, RESULT_DIAGNOSTIC_LIMIT);
+}
+
+function steeringDiagnostic(
+  error: CodexAppServerRequestError,
+  redact: (value: string) => string = redactProviderIds,
+): string {
+  const value = `Steering rejected: ${redact(error.message)}`;
   return `${value.slice(0, STEERING_DIAGNOSTIC_LIMIT - 1)}\n`;
 }
 
@@ -601,7 +613,23 @@ function isInitializeResponse(value: unknown): boolean {
 function threadStartParams(options: CodexAppServerOptions): JsonObject {
   const params: JsonObject = {
     cwd: options.cwd,
-    ephemeral: true,
+    ephemeral: false,
+    approvalPolicy: "never",
+    sandbox: "danger-full-access",
+  };
+  if (options.model) params.model = options.model;
+  if (options.effort)
+    params.config = { model_reasoning_effort: options.effort };
+  return params;
+}
+
+function threadResumeParams(
+  options: CodexAppServerOptions,
+  threadId: string,
+): JsonObject {
+  const params: JsonObject = {
+    threadId,
+    cwd: options.cwd,
     approvalPolicy: "never",
     sandbox: "danger-full-access",
   };
@@ -723,25 +751,32 @@ export function runCodexAppServer(
     } catch (error) {
       resolve({
         ending: "failed",
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage: boundedRedactedDiagnostic(
+          error instanceof Error ? error.message : String(error),
+        ),
       });
       return;
     }
 
     if (!proc.stdin || !proc.stdout || !proc.stderr) {
+      let earlyClosed = false;
+      let escalation: ReturnType<typeof setTimeout> | undefined;
+      const finishEarlyCleanup = (): void => {
+        if (earlyClosed) return;
+        earlyClosed = true;
+        if (escalation !== undefined) clearTimeout(escalation);
+        proc.removeListener("close", finishEarlyCleanup);
+        resolve({
+          ending: "failed",
+          errorMessage: "Failed to open Codex App Server stdio pipes",
+        });
+      };
+      proc.once("close", finishEarlyCleanup);
       try {
-        let earlyClosed = false;
-        let escalation: ReturnType<typeof setTimeout> | undefined;
-        const onEarlyClose = (): void => {
-          earlyClosed = true;
-          if (escalation !== undefined) clearTimeout(escalation);
-        };
-        proc.once("close", onEarlyClose);
         proc.stdin?.end();
         proc.kill("SIGTERM");
         if (!earlyClosed) {
           escalation = setTimeout(() => {
-            proc.removeListener("close", onEarlyClose);
             try {
               proc.kill("SIGKILL");
             } catch {
@@ -753,10 +788,6 @@ export function runCodexAppServer(
       } catch {
         // The partially opened child may already have exited.
       }
-      resolve({
-        ending: "failed",
-        errorMessage: "Failed to open Codex App Server stdio pipes",
-      });
       return;
     }
 
@@ -766,6 +797,9 @@ export function runCodexAppServer(
     let turnId: string | undefined;
     let cancellationSequence: number | undefined;
     let endingSettled = false;
+    let settledEnding: RunEnding | undefined;
+    let settledError: unknown;
+    let completionDelivered = false;
     let childClosed = false;
     let sawStderr = false;
     let terminalAnswer = false;
@@ -787,6 +821,9 @@ export function runCodexAppServer(
     const pending = new Map<number, PendingRequest>();
     const pendingSteeringCorrelations = new Set<string>();
     const consumedSteeringItems = new Set<string>();
+    const providerIdentities = new Set<string>();
+    if (options.continuationThreadId)
+      providerIdentities.add(options.continuationThreadId);
     const controlIterator = controls[Symbol.asyncIterator]();
     let controlPumpClosed = false;
     let announceRunIdentity!: () => void;
@@ -800,6 +837,16 @@ export function runCodexAppServer(
       } catch {
         // Diagnostics must not become a second settlement path.
       }
+    };
+    const redactDiagnostic = (value: string): string => {
+      let redacted = redactProviderIds(value);
+      const identities = [...providerIdentities].sort(
+        (left, right) => right.length - left.length,
+      );
+      for (const identity of identities) {
+        if (identity) redacted = redacted.split(identity).join("[redacted]");
+      }
+      return redacted.slice(0, RESULT_DIAGNOSTIC_LIMIT);
     };
     const rejectPending = (error: Error): void => {
       const requests = [...pending.values()];
@@ -833,12 +880,19 @@ export function runCodexAppServer(
       proc.stderr?.removeListener("data", onStderrData);
       proc.stdin?.removeListener("error", onStdinError);
     };
+    const completeAfterCleanup = (): void => {
+      if (completionDelivered || !endingSettled) return;
+      completionDelivered = true;
+      if (settledError !== undefined) reject(settledError);
+      else resolve(settledEnding as RunEnding);
+    };
     const finishCleanup = (): void => {
       clearTimer();
       signal.removeEventListener("abort", onAbort);
       detachStreams();
       detachProcess();
       rejectPending(new CodexAppServerTransportError("transport-settled"));
+      completeAfterCleanup();
     };
     const endStdin = (): void => {
       if (stdinEnded) return;
@@ -882,17 +936,19 @@ export function runCodexAppServer(
       if (endingSettled) return;
       endingSettled = true;
       closeControlPump();
-      resolve(endingFrom(conclusion, reducingSequence));
+      settledEnding = endingFrom(conclusion, reducingSequence);
+      if (childClosed) finishCleanup();
     };
     const failExecution = (error: unknown): void => {
       if (endingSettled) return;
       endingSettled = true;
+      settledError = error;
       closeControlPump();
       signal.removeEventListener("abort", onAbort);
       detachStreams();
       beginTermination(false);
       rejectPending(new CodexAppServerTransportError("transport-settled"));
-      reject(error);
+      if (childClosed) finishCleanup();
     };
     const scheduleKill = (stage: "SIGTERM" | "SIGKILL"): void => {
       clearTimer();
@@ -929,17 +985,13 @@ export function runCodexAppServer(
       detachStreams();
       rejectPending(new CodexAppServerTransportError(requestSettlement));
       if (terminate) beginTermination(false);
-      else {
-        endStdin();
-        clearTimer();
-        detachProcess();
-      }
+      else if (!childClosed) endStdin();
       settle(conclusion);
     };
     const reportStderr = (chunk: string): boolean => {
       sawStderr = true;
       try {
-        report.stderr(chunk);
+        report.stderr(redactDiagnostic(chunk));
         return true;
       } catch (error) {
         finish(
@@ -991,6 +1043,7 @@ export function runCodexAppServer(
       if (!threadId || !turnId || controlPumpClosed) return Promise.resolve();
       const clientUserMessageId = globalThis.crypto.randomUUID();
       pendingSteeringCorrelations.add(clientUserMessageId);
+      providerIdentities.add(clientUserMessageId);
       return new Promise((resolveControl) => {
         sendRequest(
           "turn/steer",
@@ -1004,7 +1057,7 @@ export function runCodexAppServer(
           (error) => {
             pendingSteeringCorrelations.delete(clientUserMessageId);
             if (error instanceof CodexAppServerRequestError)
-              reportStderr(steeringDiagnostic(error));
+              reportStderr(steeringDiagnostic(error, redactDiagnostic));
             resolveControl();
           },
           true,
@@ -1026,7 +1079,7 @@ export function runCodexAppServer(
         : undefined;
     const startupFailure = (error: Error): void => {
       finish(
-        { status: "failed", errorMessage: error.message },
+        { status: "failed", errorMessage: redactDiagnostic(error.message) },
         true,
         "transport-settled",
       );
@@ -1034,9 +1087,10 @@ export function runCodexAppServer(
     const startTurn = (): void => {
       if (!threadId || endingSettled || cancellationSequence !== undefined)
         return;
+      const attachedThreadId = threadId;
       sendRequest(
         "turn/start",
-        turnStartParams(threadId, prompt),
+        turnStartParams(attachedThreadId, prompt),
         (turn) => {
           if (
             !isRecord(turn) ||
@@ -1051,35 +1105,61 @@ export function runCodexAppServer(
             return;
           }
           turnId = turn.turn.id;
+          providerIdentities.add(turnId);
+          try {
+            options.onThreadAttached?.(attachedThreadId);
+          } catch (error) {
+            failExecution(error);
+            return;
+          }
           announceRunIdentity();
           flushEarlyNotifications();
         },
         startupFailure,
       );
     };
-    const startThread = (): void => {
+    const attachThread = (
+      method: "thread/start" | "thread/resume",
+      params: JsonObject,
+      expectedThreadId?: string,
+    ): void => {
       if (endingSettled || cancellationSequence !== undefined) return;
       sendRequest(
-        "thread/start",
-        threadStartParams(options),
+        method,
+        params,
         (thread) => {
           if (
             !isRecord(thread) ||
             !isRecord(thread.thread) ||
-            typeof thread.thread.id !== "string"
+            typeof thread.thread.id !== "string" ||
+            (expectedThreadId !== undefined &&
+              thread.thread.id !== expectedThreadId)
           ) {
             startupFailure(
               new Error(
-                "Codex App Server returned an invalid thread/start response",
+                `Codex App Server returned an invalid ${method} response`,
               ),
             );
             return;
           }
           threadId = thread.thread.id;
+          providerIdentities.add(threadId);
           startTurn();
         },
         startupFailure,
       );
+    };
+    const startThread = (): void => {
+      const continuation = options.continuationThreadId;
+      if (continuation) {
+        attachThread(
+          "thread/resume",
+          threadResumeParams(options, continuation),
+          continuation,
+        );
+      } else {
+        attachThread("thread/start", threadStartParams(options));
+      }
     };
     const start = (): void => {
       sendRequest(
@@ -1146,6 +1226,24 @@ export function runCodexAppServer(
       notification: CodexAppServerEvent,
     ): void => {
       let translation: Translation | undefined;
+      if (notification.method === "turn/completed") {
+        providerIdentities.add(notification.params.turn.id);
+        for (const item of notification.params.turn.items)
+          providerIdentities.add(item.id);
+      } else {
+        providerIdentities.add(notification.params.turnId);
+        if (
+          notification.method === "item/started" ||
+          notification.method === "item/completed"
+        )
+          providerIdentities.add(notification.params.item.id);
+        else if (
+          notification.method === "item/agentMessage/delta" ||
+          notification.method === "item/commandExecution/outputDelta" ||
+          notification.method === "item/reasoning/summaryTextDelta"
+        )
+          providerIdentities.add(notification.params.itemId);
+      }
       const steering = correlatedSteeringFact(
         notification,
         pendingSteeringCorrelations,
@@ -1156,6 +1254,26 @@ export function runCodexAppServer(
       } catch (error) {
         failExecution(error);
         return;
+      }
+      if (translation) {
+        translation = {
+          ...translation,
+          ...(translation.errorMessage === undefined
+            ? {}
+            : { errorMessage: redactDiagnostic(translation.errorMessage) }),
+          ...(translation.facts
+            ? {
+                facts: translation.facts.map((fact) =>
+                  fact.errorMessage === undefined
+                    ? fact
+                    : {
+                        ...fact,
+                        errorMessage: redactDiagnostic(fact.errorMessage),
+                      },
+                ),
+              }
+            : {}),
+        };
       }
       if ((!translation && !steering) || endingSettled) return;
       if (
@@ -1312,12 +1430,7 @@ export function runCodexAppServer(
           if (childClosed) return;
           kill(occurrence.stage);
           if (occurrence.stage === "SIGTERM") scheduleKill("SIGKILL");
-          else if (endingSettled) finishCleanup();
-          else {
-            endStdin();
-            finishCleanup();
-            settle({ status: "clean" });
-          }
+          else endStdin();
       }
     };
     function drainQueue(): void {

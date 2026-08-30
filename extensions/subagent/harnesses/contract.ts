@@ -1,6 +1,6 @@
 import type {
-  ParentModel,
   RunControl,
+  SubagentContext,
   SubagentExecutor,
   SubagentTask,
 } from "../run.ts";
@@ -15,16 +15,33 @@ export interface HarnessValidationContext {
   models?: readonly { provider: string; id: string }[];
 }
 
+export interface HarnessCapabilities {
+  /** Whether this adapter can continue its private Conversation in a later Run. */
+  readonly resume: boolean;
+}
+
+/** One independently prepared execution on a Subagent-scoped adapter. */
 export interface HarnessRun {
   execute: SubagentExecutor;
-  /** Display metadata resolved in the harness's own vocabulary. */
-  model?: string;
   /** Neutral Controls this prepared Run can consume through its executor. */
   supportedControls: readonly RunControl["type"][];
 }
 
 /**
- * The public adapter seam for one-shot subagent execution.
+ * One prepared Subagent adapter. Provider Conversation state may live only in
+ * this instance and is never returned through the neutral contract.
+ */
+export interface HarnessAdapter {
+  readonly capabilities: HarnessCapabilities;
+  /** Display metadata resolved once from the Subagent's fixed policy. */
+  readonly model?: string;
+  prepareRun(task: SubagentTask): HarnessRun;
+  /** Release adapter-owned state. Safe to await more than once. */
+  close(): Promise<void>;
+}
+
+/**
+ * The public Harness factory seam for Subagent-scoped execution.
  *
  * @see ../../../docs/harness-definition-of-done.md
  * @see ../../../docs/adr/0007-harness-seam-with-neutral-facts.md
@@ -40,7 +57,7 @@ export interface Harness {
     filePath: string,
     context?: HarnessValidationContext,
   ): HarnessDiagnostic[];
-  prepare(task: SubagentTask, parentModel?: ParentModel): HarnessRun;
+  prepare(context: SubagentContext): HarnessAdapter;
 }
 
 export interface HarnessRegistry {

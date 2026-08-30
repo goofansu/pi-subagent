@@ -200,6 +200,7 @@ export function formatWaitOutcome(outcome: WaitPresentationOutcome): string {
 
 export interface RetainedResultPresentation {
   id: string;
+  subagentId: string;
   agent: string;
   status: TerminalLifecycleStatus;
   output: string;
@@ -216,18 +217,19 @@ export function formatResultBody(result: RetainedResultPresentation): string {
 
 /** The complete agent_result text, including the stable run identity. */
 export function formatResult(result: RetainedResultPresentation): string {
-  return `${result.agent} (${result.id}):\n\n${formatResultBody(result)}`;
+  return `${result.agent} (subagent ${result.subagentId}), run ${result.id}:\n\n${formatResultBody(result)}`;
 }
 
 /** The result and notification text for a rejected executor promise. */
 export function formatExecutorRejection(
   id: string,
+  subagentId: string,
   agent: string,
   message: string,
 ): { output: string; notification: string } {
   return {
     output: formatFailedOutput(message, "", ""),
-    notification: formatFailedNotification(id, agent, message),
+    notification: formatFailedNotification(id, subagentId, agent, message),
   };
 }
 
@@ -237,11 +239,12 @@ function resultPointer(id: string): string {
 
 function formatFailedNotification(
   id: string,
+  subagentId: string,
   agent: string,
   message: string | undefined,
 ): string {
   const reason = notificationPreview(message || "no reason reported");
-  return `Subagent ${agent} (${id}) failed: ${reason}\n\n${resultPointer(id)}`;
+  return `Subagent ${agent} (${subagentId}), run ${id} failed: ${reason}\n\n${resultPointer(id)}`;
 }
 
 /** The error used when a notification is accidentally built for a live run. */
@@ -250,11 +253,50 @@ export function formatRunningNotificationError(id: string): string {
 }
 
 /** The immediate response from agent_start. */
-export function formatStartResult(agent: string, id: string): string {
+export function formatStartResult(
+  agent: string,
+  subagentId: string,
+  runId: string,
+): string {
   return (
-    `Started ${agent} as run ${id}. ` +
-    "Its notification will arrive when it finishes; carry on until then."
+    `Started ${agent}:\nsubagent id ${subagentId}\nrun id ${runId}\n\n` +
+    `Use run id ${runId} for agent_wait, agent_result, agent_cancel, and agent_steer. ` +
+    "Its notification will arrive when the Run finishes; carry on until then."
   );
+}
+
+export type ResumePresentationOutcome =
+  | { outcome: "started"; runId: string }
+  | { outcome: "unknown subagent" | "already running" | "unsupported" };
+
+/** The immediate result from agent_resume. */
+export function formatResumeOutcome(
+  subagentId: string,
+  result: ResumePresentationOutcome,
+): string {
+  switch (result.outcome) {
+    case "started":
+      return (
+        `Resumed subagent ${subagentId}:\nrun id ${result.runId}\n\n` +
+        `agent_resume returns immediately, not with the answer. Use run id ${result.runId} ` +
+        "for agent_wait, agent_result, agent_cancel, and agent_steer; its own notification will arrive when this Run finishes."
+      );
+    case "unknown subagent":
+      return (
+        `Cannot resume subagent ${subagentId}: unknown Subagent. ` +
+        "Use a Subagent id returned by agent_start in this Session, not a Run id."
+      );
+    case "already running":
+      return (
+        `Cannot resume subagent ${subagentId}: it already has an active Run. ` +
+        "The request was not queued and no provider work was started."
+      );
+    case "unsupported":
+      return (
+        `Cannot resume subagent ${subagentId}: its Harness does not support resume. ` +
+        "No Run or provider work was started."
+      );
+  }
 }
 
 export interface CancelPresentationOutcome {
@@ -374,7 +416,7 @@ function appendNotificationAccounting(
 
 /** Small status-specific orientation message for one terminal run. */
 export function formatNotification(id: string, result: SingleResult): string {
-  const name = `${result.agent} (${id})`;
+  const name = `${result.agent} (${result.subagentId}), run ${id}`;
   const pointer = resultPointer(id);
 
   switch (result.lifecycle.phase) {
@@ -395,7 +437,12 @@ export function formatNotification(id: string, result: SingleResult): string {
       // normally short, but nothing upstream guarantees it, and the whole
       // message stays behind agent_result either way.
       return appendNotificationAccounting(
-        formatFailedNotification(id, result.agent, result.errorMessage),
+        formatFailedNotification(
+          id,
+          result.subagentId,
+          result.agent,
+          result.errorMessage,
+        ),
         result,
       );
     case "cancelled":

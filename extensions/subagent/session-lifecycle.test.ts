@@ -48,6 +48,7 @@ test("session start refills stable config and session-fact references", (t) => {
     pi,
     agentsDir,
     delivery: { shutdown() {} },
+    subagents: { shutdown: async () => {} },
     sessionPush: createSessionPush(),
     runs: createSubagentRuns(),
     harnesses: createHarnessRegistry([createPiHarness()]),
@@ -99,6 +100,7 @@ test("session start diagnoses a pinned Pi model when the catalogue is empty", (t
     },
     agentsDir,
     delivery: { shutdown() {} },
+    subagents: { shutdown: async () => {} },
     sessionPush: createSessionPush(),
     runs: createSubagentRuns(),
     harnesses: createHarnessRegistry([createPiHarness()]),
@@ -131,6 +133,7 @@ test("session shutdown delegates cleanup as one lifecycle operation", () => {
     delivery: {
       shutdown: () => shutdowns++,
     },
+    subagents: { shutdown: async () => {} },
     sessionPush: createSessionPush(),
     runs: createSubagentRuns(),
     harnesses: createHarnessRegistry([createPiHarness()]),

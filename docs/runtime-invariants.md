@@ -5,10 +5,16 @@ These invariants define the correctness contract of the subagent runtime.
 ## Harness seam
 
 Runs are one-shot and backend-neutral. A profile names a harness (default
-`pi`); the registry resolves it before dispatch. Pi, Claude, and Codex harness
-adapters alone know provider wire messages and translate them into `Fact`
-records. The dispatcher,
-fold, registry, presentation, and widget consume only those facts.
+`pi`); the registry resolves it before dispatch. Harness preparation receives
+only fixed Subagent inputs and returns one adapter instance. That adapter may
+own private provider Conversation state, declares neutral capabilities,
+prepares each Run from its description and prompt, and closes idempotently.
+The Session-scoped Subagent manager creates one adapter, starts the first Run,
+and retains the adapter when that Run settles; the dispatcher owns the Run but
+never adapter lifetime. Session shutdown closes idle and active adapters. Core
+receives no provider continuation handle. Pi, Claude, and Codex adapters alone
+know provider wire messages and translate them into `Fact` records. The
+dispatcher, fold, registry, presentation, and widget consume only those facts.
 Input/output/cache counters, turns, and cost on a fact are additive deltas and
 the fold sums them. Usage turn deltas are nonnegative finite integers;
 `contextTokens` is a latest-value gauge, so the fold
@@ -28,9 +34,41 @@ child-specific stop mechanism. Backend
 `aborted` is normalized at the seam: the domain records lifecycle `cancelled`
 and its reason, never an `aborted` stop reason.
 
-A prepared Run declares its neutral Control capability. Supported Runs receive
-one bounded, single-consumer FIFO Control stream; unsupported Runs receive an
-already-done stream and no live queue. Cancellation records its reason and
+An adapter's neutral `resume` capability is the sole admission authority above
+the Harness seam; core never branches on a harness name. Production Codex
+declares resume supported, while Pi and Claude declare it unsupported and start
+no continuation work. A Codex adapter retains only its provider Conversation
+identity and cumulative usage baseline. A successful resume reuses the adapter
+created from the fixed Subagent context but creates a fresh per-Run execution,
+reporter, AbortSignal, Control stream, Result, usage fold, lifecycle, and
+notification.
+
+Every Codex Run owns one disposable Attempt: a fresh App Server child is
+initialized, then creates or resumes the adapter-owned thread and starts one
+new Turn. The first accepted Turn creates a non-ephemeral thread and includes
+the fixed Profile role; local continuation retention begins only after
+`turn/start` succeeds, so a rejected first Turn cannot lose that role on a
+later Run. Later attachments use native `thread/resume` and send only the new
+Run prompt. Resume reapplies cwd, model, effort, approval, sandbox, inherited
+environment, and child depth. Attachment Turns and notifications not matching
+the adapter-owned thread plus current Turn are discarded.
+Conversation-cumulative accounting is differenced from the retained baseline,
+while attachment-local counters are translated from zero; only the current Run
+receives the resulting usage. Run settlement waits for child exit and complete
+transport and Control cleanup, leaving an idle Subagent with continuation
+metadata but no live process resource.
+
+Continuation loss fails only the current Run with bounded redacted diagnostics.
+It never creates a replacement thread, replays core history, retries the Run,
+forks the thread, or rolls back the Conversation. The installed Codex CLI owns
+provider-thread storage and retention. Session shutdown closes the local
+adapter and forgets its in-memory association, making that continuation
+unaddressable to the extension in later Sessions.
+
+A prepared Run declares its neutral Control capability. Every execution
+receives a fresh reporter, AbortSignal, and Control stream. Supported Runs
+receive one bounded, single-consumer FIFO Control stream; unsupported Runs
+receive an already-done stream and no live queue. Cancellation records its reason and
 closes Control admission synchronously before the executor's `AbortSignal`
 fires. Settlement and Session shutdown also close admission without draining
 pending Controls. Pi and Claude declare no Control support. Codex advertises
@@ -38,15 +76,21 @@ steering and maps its neutral FIFO stream to serial native `turn/steer`
 requests; provider-confirmed correlated user items are the only steering
 events that become Facts, and every provider identity remains adapter-local.
 
-## INV-1 — Run identity is stable
+## INV-1 — Subagent and Run identities are stable
 
-A run ID identifies exactly one subagent run within the current session.
+A Subagent ID identifies exactly one Session-scoped Subagent. A Run ID
+identifies exactly one one-shot Run owned by a Subagent. The two identity kinds
+are distinct, locally generated, and never provider identities.
 
-A run ID is never reused for another run.
+Neither identity is reused within the Session, including after notification
+landing releases a Run's live display record. Run-scoped operations never
+redirect a Subagent id.
 
 ## INV-2 — Successful start means running
 
-If `agent_start` succeeds, the run has been admitted and is actually running.
+If `agent_start` succeeds, one Subagent and its first Run have been created
+atomically, both identities have been returned, and the Run is actually
+running. The Subagent has no preceding empty state.
 
 There is no hidden queued state.
 
@@ -55,6 +99,21 @@ If the concurrency limit is reached, `agent_start` fails instead.
 *Status: the no-queue half holds today. The fail-at-limit half is a target —
 the current runtime is deliberately uncapped (ADR-0001); enforcing a limit
 re-opens that decision and needs its own ADR.*
+
+## INV-2A — Successful resume means a new Run is running
+
+`agent_resume` accepts only a stable Subagent id, a description for the next
+Run, and its full prompt. If the Subagent is known, idle, open, and its adapter
+advertises resume, admission synchronously moves it to running and returns a
+new Run id immediately rather than an answer.
+
+An active or settling Subagent rejects resume without queueing or preparing
+provider work. Two concurrent calls have one synchronous winner. An unknown,
+Run, stale, wrong-kind, or prior-Session id is an unknown Subagent; an idle
+non-resumable Subagent reports unsupported. Completed, failed, and cancelled
+Runs return an open Subagent to idle only after settlement. Each Run's terminal
+Result is immutable and independently retrievable; resuming can neither append
+to nor replace an earlier Run's Result or notification.
 
 ## INV-3 — Terminal states are final
 
@@ -100,10 +159,14 @@ concurrency limit.
 *Status: target — the current runtime is deliberately uncapped (ADR-0001).
 Do not regression-test this invariant until the limit exists.*
 
-## INV-8 — Shutdown cleans up running work
+## INV-8 — Shutdown closes every Subagent
 
-When the parent session shuts down, every running subagent is asked to stop
-and is eventually cleaned up.
+When the parent Session shuts down, every Subagent is marked closed before
+active-Run cancellation is forwarded. Idle and active adapters are closed,
+Results and notifications are cleared, and all local identities are forgotten.
+Late Run settlement cannot move a closed Subagent back to idle or notify the
+next Session. Closing admission also makes later resume calls unknown, and
+pending Controls from an active Run are discarded rather than inherited.
 
 ## INV-9 — Results do not depend on notifications
 

@@ -6,7 +6,8 @@ Date: 2026-08-29
 
 Accepted. Supersedes ADR-0003 only where it ruled out guidance during a
 running child; the one-shot Run and absence of idle resume remain in force.
-Refines ADR-0011's Codex ordering and provider-identity decisions.
+ADR-0013 supersedes only this ADR's claim that no stable Subagent identity
+exists. Refines ADR-0011's Codex ordering and provider-identity decisions.
 
 ## Context
 
@@ -49,12 +50,16 @@ or a resume surface.
 ## Consequences
 
 Codex may accept guidance during its one active Turn while Pi and Claude remain
-truthfully unsupported. Runs are still one-shot: there is no stable Subagent
-identity distinct from the Run id, no retained idle child, and no
-`agent_resume` or provider-session handle.
+truthfully unsupported. At this decision, Runs were still the only identity:
+there was no stable Subagent distinct from the Run id, no retained idle child,
+and no `agent_resume` or provider-session handle. ADR-0013 later adds the local
+Subagent identity and retains an adapter, but still no idle child, resume
+operation, or provider-session handle.
 
 Harness Conformance can test capability rather than adapter names. Deterministic
 fixtures control ingress directly and repeat terminal and cancellation races;
-they do not sleep or retry until green. A live pinned-CLI smoke remains part of
-the release gate because generated schemas and fake transports cannot prove
-provider consumption.
+they do not sleep or retry until green. ADR-0013 later adds a stable local
+Subagent above the one-shot Run and retains its adapter while idle, without yet
+adding resume or exposing provider identity. A live pinned-CLI smoke remains
+part of the release gate because generated schemas and fake transports cannot
+prove provider consumption.

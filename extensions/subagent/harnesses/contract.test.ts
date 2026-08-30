@@ -2,9 +2,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createSubagentDelivery } from "../delivery.ts";
 import { formatNotification } from "../presentation.ts";
-import type { RunControl, SubagentExecutor } from "../run.ts";
-import { startSubagent } from "../runner.ts";
+import type {
+  Fact,
+  RunControl,
+  RunReporter,
+  SubagentExecutor,
+  SubagentRun,
+} from "../run.ts";
 import { createSubagentRuns } from "../runs.ts";
+import { startSubagent } from "../standalone-run-helper.ts";
 import type { AgentConfig } from "../types.ts";
 import { renderRunLines } from "../widget.ts";
 import {
@@ -13,7 +19,7 @@ import {
   type HarnessConformanceScenario,
   runHarnessConformance,
 } from "./conformance.ts";
-import type { Harness } from "./contract.ts";
+import type { Harness, HarnessAdapter } from "./contract.ts";
 import {
   createHarnessRegistry,
   parseTools,
@@ -79,6 +85,85 @@ test("common profile validation owns the shared field list and model hook", () =
   ]);
 });
 
+test("one prepared adapter owns private state across independent Runs and closes idempotently", async () => {
+  const releases: string[] = [];
+  const adapters: HarnessAdapter[] = [];
+  const statefulHarness: Harness = {
+    name: "stateful",
+    validate: () => [],
+    prepare: () => {
+      const conversation: string[] = [];
+      let closed = false;
+      const adapter: HarnessAdapter = {
+        capabilities: { resume: false },
+        model: undefined,
+        prepareRun: (task) => ({
+          supportedControls: [],
+          execute: async (run) => {
+            conversation.push(task.prompt);
+            run.report.message({
+              role: "assistant",
+              parts: [{ type: "text", text: conversation.join(" -> ") }],
+            });
+            return { ending: "answered" };
+          },
+        }),
+        close: async () => {
+          if (closed) return;
+          closed = true;
+          releases.push("released");
+        },
+      };
+      adapters.push(adapter);
+      return adapter;
+    },
+  };
+  const context = {
+    config: profile,
+    cwd: "/work",
+    childDepth: 1,
+    projectTrusted: false,
+  };
+  const facts: Fact[] = [];
+  const report: RunReporter = {
+    message: (fact) => facts.push(fact),
+    transcript: () => {},
+    activity: () => {},
+    stderr: () => {},
+  };
+  const execution: SubagentRun = {
+    report,
+    signal: new AbortController().signal,
+    controls: (async function* () {})(),
+  };
+
+  const adapter = statefulHarness.prepare(context);
+  assert.deepEqual(adapter.capabilities, { resume: false });
+  await adapter
+    .prepareRun({ description: "first", prompt: "remember alpha" })
+    .execute(execution);
+  await adapter
+    .prepareRun({ description: "second", prompt: "use beta" })
+    .execute({ ...execution, signal: new AbortController().signal });
+
+  assert.deepEqual(
+    facts.map((fact) => fact.parts[0]),
+    [
+      { type: "text", text: "remember alpha" },
+      { type: "text", text: "remember alpha -> use beta" },
+    ],
+  );
+  await adapter.close();
+  await adapter.close();
+  assert.deepEqual(releases, ["released"]);
+
+  const neverExecuted = statefulHarness.prepare(context);
+  await neverExecuted.close();
+  await neverExecuted.close();
+  assert.deepEqual(releases, ["released", "released"]);
+  assert.equal(adapters.length, 2);
+});
+
 test("a registry without the default harness names the missing adapter", () => {
   const profileWithoutHarness = { ...profile };
   delete profileWithoutHarness.harness;
@@ -99,13 +184,18 @@ function fakeHarness(
     name: "fake",
     validate: () => [],
     prepare: () => ({
-      supportedControls: [],
-      execute: async (run) => {
-        await onRun(run.signal);
-        return run.signal?.aborted
-          ? { ending: "cancelled" }
-          : { ending: "answered" };
-      },
+      capabilities: { resume: false },
+      model: undefined,
+      prepareRun: () => ({
+        supportedControls: [],
+        execute: async (run) => {
+          await onRun(run.signal);
+          return run.signal?.aborted
+            ? { ending: "cancelled" }
+            : { ending: "answered" };
+        },
+      }),
+      close: async () => {},
     }),
   };
 }
@@ -113,11 +203,20 @@ function fakeHarness(
 function fakeExecutorHarness(
   execute: SubagentExecutor,
   supportedControls: readonly RunControl["type"][] = [],
+  onPrepare?: (childDepth: number) => void,
 ): Harness {
   return {
     name: "fake",
     validate: () => [],
-    prepare: () => ({ execute, supportedControls }),
+    prepare: (context) => {
+      onPrepare?.(context.childDepth);
+      return {
+        capabilities: { resume: false },
+        model: undefined,
+        prepareRun: () => ({ execute, supportedControls }),
+        close: async () => {},
+      };
+    },
   };
 }
 
@@ -160,7 +259,13 @@ function conformanceRig(): HarnessConformanceRig {
         readyForCancellation?: Promise<void>,
         steering?: HarnessConformanceFixture["steering"],
       ): HarnessConformanceFixture => ({
-        harness: fakeExecutorHarness(execute, steering ? ["steer"] : []),
+        harness: fakeExecutorHarness(
+          execute,
+          steering ? ["steer"] : [],
+          (depth) => {
+            childDepth = depth;
+          },
+        ),
         expected,
         ...(readyForCancellation ? { readyForCancellation } : {}),
         ...(steering ? { steering } : {}),
@@ -170,8 +275,7 @@ function conformanceRig(): HarnessConformanceRig {
       switch (scenario) {
         case "backend-crash":
           return base(
-            async (run) => {
-              childDepth = run.task.childDepth;
+            async () => {
               return {
                 ending: "failed",
                 errorMessage: "fake backend crashed",
@@ -186,7 +290,6 @@ function conformanceRig(): HarnessConformanceRig {
           const gate = cancellationGate();
           return base(
             async (run) => {
-              childDepth = run.task.childDepth;
               await waitForAbort(run.signal, gate.open);
               return { ending: "cancelled" };
             },
@@ -198,7 +301,6 @@ function conformanceRig(): HarnessConformanceRig {
           const gate = cancellationGate();
           return base(
             async (run) => {
-              childDepth = run.task.childDepth;
               run.report.message({
                 role: "assistant",
                 parts: [{ type: "text", text: "terminal answer" }],
@@ -220,7 +322,6 @@ function conformanceRig(): HarnessConformanceRig {
         case "usage-totals":
           return base(
             async (run) => {
-              childDepth = run.task.childDepth;
               run.report.message({
                 role: "assistant",
                 parts: [{ type: "text", text: "first turn" }],
@@ -264,24 +365,21 @@ function conformanceRig(): HarnessConformanceRig {
           );
         case "child-depth":
           return base(
-            async (run) => {
-              childDepth = run.task.childDepth;
+            async () => {
               return { ending: "answered" };
             },
             { phase: "completed", childDepth: 1 },
           );
         case "config-immutable":
           return base(
-            async (run) => {
-              childDepth = run.task.childDepth;
+            async () => {
               return { ending: "answered" };
             },
             { phase: "completed" },
           );
         case "no-terminal-answer":
           return base(
-            async (run) => {
-              childDepth = run.task.childDepth;
+            async () => {
               return { ending: "failed", errorMessage: "fake missing answer" };
             },
             { phase: "failed", errorMessage: "fake missing answer" },
@@ -289,7 +387,6 @@ function conformanceRig(): HarnessConformanceRig {
         case "post-answer-failure":
           return base(
             async (run) => {
-              childDepth = run.task.childDepth;
               run.report.message({
                 role: "assistant",
                 parts: [{ type: "text", text: "answer" }],
@@ -305,7 +402,6 @@ function conformanceRig(): HarnessConformanceRig {
         case "terminal-transcript-healing":
           return base(
             async (run) => {
-              childDepth = run.task.childDepth;
               run.report.message({
                 role: "assistant",
                 parts: [],
@@ -420,7 +516,12 @@ test("a fake harness reaches dispatcher, registry, delivery, presentation, and w
     harnesses: createHarnessRegistry([harness]),
     runs,
   });
-  delivery.register(started.id, profile.name, started.settled);
+  delivery.register(
+    started.id,
+    profile.name,
+    started.settled,
+    "subagent-unmanaged",
+  );
   const result = await started.settled;
   await delivery.wait([started.id]);
 
@@ -464,14 +565,19 @@ test("a Codex-like harness compiles and runs through the unchanged one-shot core
     name: "codex",
     validate: () => [],
     prepare: () => ({
-      supportedControls: [],
-      execute: async (run) => {
-        run.report.message({
-          role: "assistant",
-          parts: [{ type: "text", text: "codex fixture" }],
-        });
-        return { ending: "answered" };
-      },
+      capabilities: { resume: false },
+      model: undefined,
+      prepareRun: () => ({
+        supportedControls: [],
+        execute: async (run) => {
+          run.report.message({
+            role: "assistant",
+            parts: [{ type: "text", text: "codex fixture" }],
+          });
+          return { ending: "answered" };
+        },
+      }),
+      close: async () => {},
     }),
   };
   const started = startSubagent({

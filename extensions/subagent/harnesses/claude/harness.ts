@@ -7,11 +7,14 @@ import { runOneShot, streamSource, type Translation } from "../../one-shot.ts";
 import {
   DEPTH_ENV_KEY,
   type FactPart,
-  type ParentModel,
-  type SubagentTask,
+  type SubagentContext,
 } from "../../run.ts";
 import { type AgentConfig, EFFORTS } from "../../types.ts";
-import type { Harness, HarnessDiagnostic, HarnessRun } from "../contract.ts";
+import type {
+  Harness,
+  HarnessAdapter,
+  HarnessDiagnostic,
+} from "../contract.ts";
 import {
   effortField,
   parseTools,
@@ -265,15 +268,15 @@ export function claudeThinking(
 }
 
 export function buildClaudeOptions(
-  task: SubagentTask,
+  context: SubagentContext,
   model: string | undefined,
   effort: string | undefined,
   abortController: AbortController,
 ): Options {
-  const tools = parseTools(task.config, "profile");
-  const append = shouldAppendSystemPrompt(task.config, "profile");
+  const tools = parseTools(context.config, "profile");
+  const append = shouldAppendSystemPrompt(context.config, "profile");
   const options: Options = {
-    cwd: task.cwd,
+    cwd: context.cwd,
     model,
     abortController,
     thinking: claudeThinking(effort),
@@ -285,15 +288,15 @@ export function buildClaudeOptions(
     // The depth key closes the other half of the Depth constraint:
     // disallowedTools stops in-SDK spawning, this stops a Bash-launched
     // grandchild pi from starting at depth zero.
-    env: { ...process.env, [DEPTH_ENV_KEY]: String(task.childDepth) },
+    env: { ...process.env, [DEPTH_ENV_KEY]: String(context.childDepth) },
     ...(tools !== undefined ? { tools } : {}),
     systemPrompt: append
       ? {
           type: "preset",
           preset: "claude_code",
-          append: task.config.systemPrompt,
+          append: context.config.systemPrompt,
         }
-      : task.config.systemPrompt,
+      : context.config.systemPrompt,
   };
   return options;
 }
@@ -314,39 +317,52 @@ export function createClaudeHarness(
             : undefined,
       });
     },
-    prepare(task: SubagentTask, _parentModel?: ParentModel): HarnessRun {
+    prepare(context: SubagentContext): HarnessAdapter {
       // The alias is passed through as-is; the SDK resolves it to the
       // family's current default ID.
-      const model = stringField(task.config, "model", "profile")?.toLowerCase();
-      const effort = effortField(task.config, "profile", EFFORTS);
+      const model = stringField(
+        context.config,
+        "model",
+        "profile",
+      )?.toLowerCase();
+      const effort = effortField(context.config, "profile", EFFORTS);
       return {
+        capabilities: { resume: false },
         model,
-        supportedControls: [],
-        execute: (run) => {
-          const source = streamSource<SDKMessage>(async (signal, sink) => {
-            const controller = new AbortController();
-            if (signal.aborted) return undefined;
-            const query = await loadQuery();
-            // Loading the SDK is asynchronous. Cancellation can win that race;
-            // in that case no provider query may be started.
-            if (signal.aborted) return undefined;
-            const options = buildClaudeOptions(task, model, effort, controller);
-            options.stderr = (data) => sink.stderr(data);
-            const stream = query({ prompt: task.prompt, options });
-            const stop = (): void => {
-              controller.abort();
-              stream.close();
-            };
-            return { events: stream, stop };
-          });
-          return runOneShot({
-            source,
-            translate: createClaudeTranslator(),
-            report: run.report,
-            signal: run.signal,
-            missingAnswerMessage: MISSING_CLAUDE_ANSWER,
-          });
-        },
+        prepareRun: (task) => ({
+          supportedControls: [],
+          execute: (run) => {
+            const source = streamSource<SDKMessage>(async (signal, sink) => {
+              const controller = new AbortController();
+              if (signal.aborted) return undefined;
+              const query = await loadQuery();
+              // Loading the SDK is asynchronous. Cancellation can win that race;
+              // in that case no provider query may be started.
+              if (signal.aborted) return undefined;
+              const options = buildClaudeOptions(
+                context,
+                model,
+                effort,
+                controller,
+              );
+              options.stderr = (data) => sink.stderr(data);
+              const stream = query({ prompt: task.prompt, options });
+              const stop = (): void => {
+                controller.abort();
+                stream.close();
+              };
+              return { events: stream, stop };
+            });
+            return runOneShot({
+              source,
+              translate: createClaudeTranslator(),
+              report: run.report,
+              signal: run.signal,
+              missingAnswerMessage: MISSING_CLAUDE_ANSWER,
+            });
+          },
+        }),
+        close: async () => {},
       };
     },
   };

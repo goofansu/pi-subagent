@@ -2,11 +2,23 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createClaudeHarness } from "./harnesses/claude/harness.ts";
 import { createCodexHarness } from "./harnesses/codex/harness.ts";
-import type { Harness, HarnessRun } from "./harnesses/contract.ts";
+import type {
+  Harness,
+  HarnessAdapter,
+  HarnessCapabilities,
+  HarnessRun,
+} from "./harnesses/contract.ts";
 import { createPiHarness } from "./harnesses/pi/harness.ts";
 import { runOneShot, streamSource } from "./one-shot.ts";
-import type { Fact, RunReporter, SubagentRun, SubagentTask } from "./run.ts";
-import type { AgentConfig } from "./types.ts";
+import type {
+  Fact,
+  RunEnding,
+  RunReporter,
+  SubagentContext,
+  SubagentRun,
+  SubagentTask,
+} from "./run.ts";
+import type { AgentConfig, SingleResult } from "./types.ts";
 
 // These assertions are intentionally type-level: runtime key checks cannot
 // stop a future optional send/steer/session member from widening the contract.
@@ -20,31 +32,74 @@ type Assert<Value extends true> = Value;
 type HarnessContractKeys = Assert<
   Equal<keyof Harness, "name" | "validate" | "prepare">
 >;
-type HarnessRunContractKeys = Assert<
-  Equal<keyof HarnessRun, "execute" | "model" | "supportedControls">
+type HarnessAdapterContractKeys = Assert<
+  Equal<keyof HarnessAdapter, "capabilities" | "model" | "prepareRun" | "close">
 >;
-type SubagentTaskContractKeys = Assert<
+type HarnessCapabilitiesContractKeys = Assert<
+  Equal<keyof HarnessCapabilities, "resume">
+>;
+type HarnessRunContractKeys = Assert<
+  Equal<keyof HarnessRun, "execute" | "supportedControls">
+>;
+type SubagentContextContractKeys = Assert<
   Equal<
-    keyof SubagentTask,
-    | "config"
-    | "description"
-    | "prompt"
-    | "cwd"
-    | "childDepth"
-    | "projectTrusted"
+    keyof SubagentContext,
+    "config" | "cwd" | "childDepth" | "projectTrusted" | "parentModel"
   >
 >;
+type SubagentTaskContractKeys = Assert<
+  Equal<keyof SubagentTask, "description" | "prompt">
+>;
 type SubagentRunContractKeys = Assert<
-  Equal<keyof SubagentRun, "task" | "report" | "signal" | "controls">
+  Equal<keyof SubagentRun, "report" | "signal" | "controls">
+>;
+type FactContractKeys = Assert<
+  Equal<
+    keyof Fact,
+    "role" | "parts" | "usage" | "model" | "stopReason" | "errorMessage"
+  >
+>;
+type RunEndingContract = Assert<
+  Equal<
+    RunEnding,
+    | { ending: "answered" }
+    | { ending: "failed"; errorMessage?: string }
+    | { ending: "cancelled" }
+  >
+>;
+type SingleResultContractKeys = Assert<
+  Equal<
+    keyof SingleResult,
+    | "agent"
+    | "subagentId"
+    | "harness"
+    | "description"
+    | "lifecycle"
+    | "startedAt"
+    | "messages"
+    | "stderr"
+    | "usage"
+    | "activity"
+    | "liveActivity"
+    | "model"
+    | "stopReason"
+    | "errorMessage"
+  >
 >;
 
 // Keep the aliases above instantiated under noUnusedLocals configurations.
 const contractKeyAssertions: [
   HarnessContractKeys,
+  HarnessAdapterContractKeys,
+  HarnessCapabilitiesContractKeys,
   HarnessRunContractKeys,
+  SubagentContextContractKeys,
   SubagentTaskContractKeys,
   SubagentRunContractKeys,
-] = [true, true, true, true];
+  FactContractKeys,
+  RunEndingContract,
+  SingleResultContractKeys,
+] = [true, true, true, true, true, true, true, true, true, true];
 
 const config: AgentConfig = {
   name: "worker",
@@ -53,59 +108,87 @@ const config: AgentConfig = {
   systemPrompt: "Work.",
 };
 
-const task: SubagentTask = {
+const context: SubagentContext = {
   config,
-  description: "one shot",
-  prompt: "do one thing",
   cwd: "/work",
   childDepth: 1,
   projectTrusted: true,
+  parentModel: { provider: "test", id: "parent" },
 };
 
-function assertOneShotContract(
+const task: SubagentTask = {
+  description: "one shot",
+  prompt: "do one thing",
+};
+
+async function assertOneShotContract(
   harness: Harness,
   supportedControls: HarnessRun["supportedControls"],
-): void {
+  resume = false,
+): Promise<void> {
   assert.deepEqual(Object.keys(harness).sort(), [
     "name",
     "prepare",
     "validate",
   ]);
-  const prepared = harness.prepare(task);
+  const adapter = harness.prepare(context);
+  assert.deepEqual(adapter.capabilities, { resume });
+  assert.equal(typeof adapter.close, "function");
+  const prepared = adapter.prepareRun(task);
   assert.equal(typeof prepared.execute, "function");
   assert.deepEqual(prepared.supportedControls, supportedControls);
   assert.deepEqual(Object.keys(prepared).sort(), [
     "execute",
-    "model",
     "supportedControls",
   ]);
-  assert.equal("send" in harness, false);
-  assert.equal("steer" in harness, false);
-  assert.equal("session" in harness, false);
+  assert.deepEqual(Object.keys(adapter).sort(), [
+    "capabilities",
+    "close",
+    "model",
+    "prepareRun",
+  ]);
+  assert.equal("send" in adapter, false);
+  assert.equal("steer" in adapter, false);
+  assert.equal("session" in adapter, false);
+  assert.equal("thread" in adapter, false);
+  assert.equal("continuation" in adapter, false);
+  await adapter.close();
+  await adapter.close();
 }
 
-test("production Harnesses remain one-shot while only Codex advertises steering", () => {
-  assert.deepEqual(Object.keys(task).sort(), [
+test("production Harnesses remain one-shot while only Codex advertises resume", async () => {
+  assert.deepEqual(Object.keys(context).sort(), [
     "childDepth",
     "config",
     "cwd",
-    "description",
+    "parentModel",
     "projectTrusted",
-    "prompt",
   ]);
+  assert.deepEqual(Object.keys(task).sort(), ["description", "prompt"]);
   assert.equal("send" in task, false);
   assert.equal("steer" in task, false);
   assert.equal("session" in task, false);
 
-  assert.deepEqual(contractKeyAssertions, [true, true, true, true]);
-  assertOneShotContract(createPiHarness(), []);
-  assertOneShotContract(
+  assert.deepEqual(contractKeyAssertions, [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+  ]);
+  await assertOneShotContract(createPiHarness(), []);
+  await assertOneShotContract(
     createClaudeHarness(async () => {
       throw new Error("execution is not part of this contract fixture");
     }),
     [],
   );
-  assertOneShotContract(createCodexHarness(), ["steer"]);
+  await assertOneShotContract(createCodexHarness(), ["steer"], true);
 });
 
 test("runOneShot applies its ending precedence and message rules", async () => {

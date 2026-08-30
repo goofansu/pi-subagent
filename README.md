@@ -12,17 +12,24 @@ pi install https://github.com/goofansu/pi-subagent
 
 - `/agents` lists loaded agent profiles, shows their prompts, and hands one a task. With no agents configured, it prints the directory to add one to.
 
-Delegation uses five tools. A subagent runs detached from the turn that started it, so starting one and retrieving its answer are separate steps:
+Delegation uses six tools. `agent_start` creates a stable, Session-scoped Subagent and immediately starts its first one-shot Run. The Run is detached from the turn that started it, so starting work and retrieving its answer are separate steps:
 
 | Tool | What it does |
 | --- | --- |
-| `agent_start` | Starts a run and returns a run id immediately. Takes `agent`, `description`, and `prompt`; the profile decides the model, effort, and tools. A completion notification arrives when the run finishes. |
+| `agent_start` | Creates a stable Subagent, starts its first Run, and immediately returns distinct Subagent and Run ids. Takes `agent`, `description`, and `prompt`; the profile decides the model, effort, and tools. |
+| `agent_resume` | Targets an idle Subagent id with a new `description` and full `prompt`, starts a distinct Run immediately, and returns its Run id rather than an answer. It never queues behind an active Run. |
 | `agent_wait` | Waits for named runs to become terminal and returns lifecycle state only. Takes an optional `timeout_seconds`; waiting never suppresses notifications or consumes results. |
 | `agent_cancel` | Stops named runs; partial output remains available after cancellation settles. |
 | `agent_steer` | Offers bounded guidance to an active run. Acceptance means local mailbox admission only. Codex delivers accepted guidance serially to its active Turn; Pi and Claude report steering as unsupported. |
 | `agent_result` | Reads a finished run's authoritative full output by id. |
 
-Every terminal output is stored for `agent_result`. A small completion notification is pushed independently, and `agent_wait` only observes lifecycle state. See [ADR 0006](docs/adr/0006-completion-notifications-and-result-store.md).
+Every terminal output is stored for `agent_result` under its Run id and records its owning Subagent for orientation. A small completion notification names both identities and is pushed independently; `agent_wait` only observes Run lifecycle state. See [ADR 0006](docs/adr/0006-completion-notifications-and-result-store.md), [ADR 0013](docs/adr/0013-stable-subagent-identity.md), and [ADR 0014](docs/adr/0014-controlled-agent-resume.md).
+
+`agent_resume` is capability-aware. Codex can resume an idle Subagent within
+the current Session; Pi and Claude report resume as unsupported and start no
+provider continuation work. The Subagent id is used only for `agent_resume`;
+`agent_wait`, `agent_result`, `agent_cancel`, and `agent_steer` always use the
+distinct Run id returned by `agent_start` or `agent_resume`.
 
 ### Steering an active Run
 
@@ -133,23 +140,34 @@ field narrows built-in tools only. See
 
 #### Codex profiles
 
-Codex starts `codex app-server` and runs one ephemeral thread with one
-logical turn over headless JSON-RPC. Semantic turn completion is authoritative;
-process exit is only a fallback or escalation path. `model` is passed through
-unvalidated and Codex validates it. `effort` accepts `off`, `minimal`, `low`,
-`medium`, `high`, `xhigh`, and `max`; `off` maps to `none` and every other value
-is passed through to the App Server's model reasoning configuration. Codex does
-not recognize `tools` or `appendSystemPrompt`, so those fields produce profile
-diagnostics. The profile system prompt is prepended to the task prompt. Each
-run has no resumable provider session: thread, turn, item, and request
-identities remain adapter-local. Accepted steering is sent serially through
-native `turn/steer`; transcript truth appears only when the provider confirms
-consumption with a correlated user-message item.
+Codex starts a fresh `codex app-server` Attempt for every Run and attaches it
+to one non-ephemeral, adapter-owned provider Conversation. The first Attempt
+creates the thread and sends the Profile role with the first Run prompt; later
+Attempts use native `thread/resume` and send only the new prompt. Each Attempt
+has one logical Turn over headless JSON-RPC, and the child and all transport
+state are gone before the Subagent becomes idle. Semantic turn completion is
+authoritative; process exit is the cleanup boundary plus a fallback or
+escalation path. `model` is passed through unvalidated and Codex validates it.
+`effort` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`;
+`off` maps to `none` and every other value is passed through to the App Server's
+model reasoning configuration. Codex does not recognize `tools` or
+`appendSystemPrompt`, so those fields produce profile diagnostics. The Profile
+system prompt initializes the retained Conversation once. Provider thread,
+Turn, item, request, session, and correlation identities remain adapter-local.
+Accepted steering is sent serially through native `turn/steer`; transcript
+truth appears only when the provider confirms consumption with a correlated
+user-message item.
+
+The installed Codex CLI owns storage and retention of the non-ephemeral
+provider thread. The extension keeps only a Session-scoped in-memory association
+to it: Session shutdown forgets that association, so cross-Session recovery and
+extension-managed provider-thread deletion are not supported.
 
 Codex App Server threads use `approvalPolicy: "never"` and
 `sandbox: "danger-full-access"` — the same unconditional bypass posture as
 Claude children, whatever the forwarded project-trust value says. Codex
-threads are ephemeral and inherit the operator's environment; see [ADR 0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md).
+Attempts inherit the operator's environment and reapply the fixed policy on
+every attachment; see [ADR 0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md).
 
 #### Resolution matrix
 
@@ -160,9 +178,11 @@ threads are ephemeral and inherit the operator's environment; see [ADR 0009](doc
 | `model` only | profile model / Pi default thinking | profile alias / SDK default | profile model / Codex default |
 | both | profile model / profile effort | profile alias / profile budget | profile model / profile effort |
 
-All harnesses are one-shot: one prompt in and one terminal answer out. The
-adapter translates provider messages into neutral facts; profiles and the rest
-of the runtime never depend on provider wire types.
+Every Run is one-shot: one prompt in and one terminal answer out. A Codex
+Subagent may own several sequential Runs through its retained Conversation;
+Pi and Claude Subagents cannot resume in this release. The adapter translates
+provider messages into neutral facts; profiles and the rest of the runtime
+never depend on provider wire types.
 
 ### Agent lookup
 
@@ -197,11 +217,19 @@ The widget is a display. Pi routes keyboard input to the editor, never to a widg
 
 ### Concurrency
 
-Subagents are not capped: every delegated run starts immediately. A Pi-harness run is a child pi process; a Claude-harness run uses the Claude Agent SDK directly; a Codex-harness run starts `codex app-server` as a child process. Either way, a wide fan-out costs real local resources — see [ADR 0001](docs/adr/0001-unbounded-subagent-concurrency.md) for why the cap and its queue were removed. Runs have no time limit.
+Subagents are not capped: every successful `agent_start` creates a running Subagent with its first Run immediately. A Pi-harness run is a child pi process; a Claude-harness run uses the Claude Agent SDK directly; a Codex-harness run starts `codex app-server` as a child process. Either way, a wide fan-out costs real local resources — see [ADR 0001](docs/adr/0001-unbounded-subagent-concurrency.md) for why the cap and its queue were removed. Runs have no time limit.
 
 ### Lifecycle
 
-A run is detached from the turn, not from the session. `Esc` cancels the turn and leaves the runs going; `agent_cancel` stops a single one. Anything that ends the session — switching, forking, resuming, `/new`, `/reload`, quitting pi — stops every running subagent: notifications and results belong to the conversation that asked for them, and the next session's model has no context to act on answers it never asked for.
+A Run is detached from the turn, not from the Session. `Esc` cancels the turn and leaves Runs going; `agent_cancel` stops one Run by Run id. Any terminal Run leaves its open Subagent idle and retains the prepared adapter. `agent_resume` can synchronously claim an idle Codex Subagent and start a fresh Run, but rejects an active Subagent without queueing; Pi and Claude report unsupported. Each Run has its own lifecycle, Result, notification, reporter, cancellation signal, usage fold, and Control mailbox; settlement discards pending guidance rather than carrying it into the next Run. There is no idle-Subagent widget yet.
+
+Anything that ends the Session — switching, forking, resuming, `/new`, `/reload`, or quitting pi — first closes every idle and running Subagent, then cancels active Runs, closes every retained adapter, and clears notifications and Results. Neither identity nor output crosses into the next Session.
+
+There is no persistence layer, cross-Session resume, manual Subagent close
+tool, or provider-neutral continuation token. The installed Codex CLI retains
+its own non-ephemeral provider threads according to its storage policy; the
+extension neither recovers nor deletes them after its Session-scoped
+association is forgotten.
 
 ### Security
 
@@ -211,9 +239,11 @@ A subagent reads files, writes files, and runs commands as far as its `tools` li
 
 ## Release verification
 
-`npm run check` runs typechecking, lint, shared Harness Conformance for the
-controlled harness and every production adapter, the full test suite, and a
-byte-for-byte generated Codex protocol check (`npm run codex:protocol:check`).
-`npm run release:check` adds the Codex smoke (`npm run codex:smoke`), which is
-an authenticated live steering/interrupt run and must print
-`CODEX_STEERING_LIVE_SMOKE_PASS`. The live smoke spends Codex quota.
+`npm run check` runs typechecking, lint, per-Run Harness Conformance, repeated
+managed Subagent conformance for the controlled harness and every production
+adapter, the full test suite, and a byte-for-byte generated Codex protocol
+check (`npm run codex:protocol:check`). `npm run release:check` adds both
+authenticated Codex gates: `npm run codex:smoke` preserves the live
+steering/interruption proof and prints `CODEX_STEERING_LIVE_SMOKE_PASS`, while
+`npm run codex:resume-smoke` proves start–idle–resume through two disposable
+Attempts and prints `CODEX_RESUME_LIVE_SMOKE_PASS`. Both spend Codex quota.

@@ -13,8 +13,8 @@ import {
   createCodexTranslator,
 } from "../extensions/subagent/harnesses/codex/harness.ts";
 import { createHarnessRegistry } from "../extensions/subagent/harnesses/contract.ts";
-import { startSubagent } from "../extensions/subagent/runner.ts";
 import { createSubagentRuns } from "../extensions/subagent/runs.ts";
+import { startSubagent } from "../extensions/subagent/standalone-run-helper.ts";
 
 const LIVE_TIMEOUT_MS = 240_000;
 const SUCCESS_MARKER = "CODEX_STEERING_LIVE_SMOKE_PASS";

@@ -6,7 +6,11 @@ import path from "node:path";
 const repository = path.resolve(import.meta.dirname, "..");
 const generated = mkdtempSync(path.join(tmpdir(), "codex-protocol-check-"));
 const snapshotDirectory = path.join(repository, "docs", "codex-protocol");
-const snapshotFiles = ["ClientRequest.json", "ServerNotification.json"];
+const snapshotFiles = [
+  "ClientRequest.json",
+  "ServerNotification.json",
+  "v2/ThreadResumeResponse.json",
+];
 
 try {
   const version = execFileSync("codex", ["--version"], {

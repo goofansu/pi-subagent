@@ -1,29 +1,29 @@
 import assert from "node:assert/strict";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ChildProcessSpawn } from "./child-process.ts";
 import { createControlGate } from "./control-mailbox.ts";
 import { createSubagentDelivery, type PushedNotification } from "./delivery.ts";
+import { createCodexHarness } from "./harnesses/codex/harness.ts";
 import { createHarnessRegistry, type Harness } from "./harnesses/contract.ts";
 import subagentExtension, {
   createSubagentRuntime,
   registerSubagentFeatureTools,
 } from "./index.ts";
 import { buildNotificationMessage } from "./notification-message.ts";
-import {
-  createEmptyResult,
-  type RunEnding,
-  type SubagentExecutor,
-  type SubagentRun,
-} from "./run.ts";
-import {
-  type RunSubagentOptions,
-  type StartedSubagent,
-  startSubagent,
-} from "./runner.ts";
+import { createEmptyResult, type RunEnding, type SubagentRun } from "./run.ts";
 import { createSubagentRuns } from "./runs.ts";
+import {
+  createSubagentManager,
+  type StartedManagedSubagent,
+  type StartManagedSubagentOptions,
+} from "./subagents.ts";
 import type { AgentConfig } from "./types.ts";
 
 // ── Extension registration ───────────────────────────────────────────────────
@@ -135,13 +135,22 @@ function collectTools(): {
 }
 
 /** A stand-in for a started run that settles when the test says so. */
-function fakeStart(onOptions: (options: RunSubagentOptions) => void) {
+function fakeStart(onOptions: (options: StartManagedSubagentOptions) => void) {
   let settle: (() => void) | undefined;
-  const start = (options: RunSubagentOptions): StartedSubagent => {
+  const start = (
+    options: StartManagedSubagentOptions,
+  ): StartedManagedSubagent => {
     onOptions(options);
-    const result = createEmptyResult(options.config.name, "task", 0);
+    const result = createEmptyResult(
+      options.config.name,
+      "task",
+      0,
+      "pi",
+      "subagent-1",
+    );
     return {
-      id: "run-1",
+      subagentId: "subagent-1",
+      runId: "run-1",
       settled: new Promise((resolve) => {
         settle = () => {
           result.lifecycle = {
@@ -153,7 +162,11 @@ function fakeStart(onOptions: (options: RunSubagentOptions) => void) {
       }),
     };
   };
-  return { start, settle: () => settle?.() };
+  return {
+    start,
+    resume: () => ({ outcome: "unknown subagent" as const }),
+    settle: () => settle?.(),
+  };
 }
 
 test("agent_start reads the live session's trust and cwd at execute time", async () => {
@@ -173,10 +186,8 @@ test("agent_start reads the live session's trust and cwd at execute time", async
     session,
     new Map([["worker", agentConfig("worker")]]),
     {
-      start: started.start,
-      runs,
+      subagents: { start: started.start, resume: started.resume },
       delivery: createSubagentDelivery({ runs, push: () => {} }),
-      harnesses: createHarnessRegistry([]),
     },
   );
 
@@ -213,24 +224,56 @@ test("agent_start reads the live session's trust and cwd at execute time", async
   assert.equal(executeTrustChecks, 0);
 });
 
-test("INV-2 boundary: a successful start is executing, never queued", async () => {
+test("agent_start returns distinct Subagent and first-Run identities immediately", async () => {
   const boundary = runtimeBoundary(["run-1"]);
-  const id = await boundary.start();
 
-  assert.equal(id, "run-1");
+  const response = await boundary.tools.agent_start.execute(
+    "call",
+    { agent: "worker", description: "task", prompt: "work" },
+    undefined,
+    undefined,
+    {},
+  );
+  const text = response.content[0].text;
+  const subagentId = text.match(/subagent id (subagent-\S+)/)?.[1];
+  const runId = text.match(/run id (run-\S+)/)?.[1];
+
+  assert.ok(subagentId);
+  assert.equal(runId, "run-1");
+  assert.notEqual(subagentId, runId);
+  assert.match(
+    text,
+    /Use run id run-1 for agent_wait, agent_result, agent_cancel, and agent_steer/,
+  );
   assert.equal(boundary.active.length, 1, "the stand-in executor is running");
   assert.equal(boundary.runs.list()[0].status, "running");
 });
 
 interface BoundaryRun {
+  controls: SubagentRun["controls"];
   report: SubagentRun["report"];
   signal?: AbortSignal;
+  task: { description: string; prompt: string };
   resolve(ending: RunEnding): void;
 }
 
 function runtimeBoundary(
   ids: string[],
-  { pushThrows = false }: { pushThrows?: boolean } = {},
+  {
+    pushThrows = false,
+    subagentIds,
+    resumable = false,
+    steerable = false,
+    resultBudget,
+    times,
+  }: {
+    pushThrows?: boolean;
+    subagentIds?: string[];
+    resumable?: boolean;
+    steerable?: boolean;
+    resultBudget?: number;
+    times?: number[];
+  } = {},
 ) {
   const { pi, tools } = collectTools();
   const runs = createSubagentRuns({ now: () => 0 }, () => {
@@ -241,12 +284,14 @@ function runtimeBoundary(
   const pushed: PushedNotification[] = [];
   const delivery = createSubagentDelivery({
     runs,
+    ...(resultBudget === undefined ? {} : { resultBudget }),
     push: (notification) => {
       pushed.push(notification);
       if (pushThrows) throw new Error("push failed");
     },
   });
   const active: BoundaryRun[] = [];
+  const adapterCloses: number[] = [];
   let widgetFactory:
     | ((
         tui: { requestRender(): void },
@@ -256,14 +301,50 @@ function runtimeBoundary(
         },
       ) => { render(width: number): string[] })
     | undefined;
-  const execute: SubagentExecutor = (run) =>
-    new Promise((resolve) =>
-      active.push({ report: run.report, signal: run.signal, resolve }),
-    );
   const harness: Harness = {
     name: "pi",
     validate: () => [],
-    prepare: () => ({ execute, supportedControls: [] }),
+    prepare: () => {
+      const index = adapterCloses.push(0) - 1;
+      let closed = false;
+      let semanticMarker: string | undefined;
+      return {
+        capabilities: { resume: resumable },
+        model: undefined,
+        prepareRun: (task) => ({
+          execute: (run) => {
+            const marker = task.prompt.match(/^remember: (.+)$/)?.[1];
+            if (marker) semanticMarker = marker;
+            if (task.prompt === "recall marker") {
+              run.report.message({
+                role: "assistant",
+                parts: [
+                  {
+                    type: "text",
+                    text: `private marker: ${semanticMarker ?? "missing"}`,
+                  },
+                ],
+              });
+            }
+            return new Promise((resolve) =>
+              active.push({
+                report: run.report,
+                signal: run.signal,
+                controls: run.controls,
+                task,
+                resolve,
+              }),
+            );
+          },
+          supportedControls: steerable ? ["steer"] : [],
+        }),
+        close: async () => {
+          if (closed) return;
+          closed = true;
+          adapterCloses[index]++;
+        },
+      };
+    },
   };
 
   const events: Record<string, (event: unknown, ctx?: unknown) => void> = {};
@@ -275,34 +356,51 @@ function runtimeBoundary(
   } as unknown as ExtensionAPI;
   const agentsDir = mkdtempSync(path.join(tmpdir(), "subagent-boundary-"));
   writeAgent(agentsDir, "worker");
+  const harnesses = createHarnessRegistry([harness]);
+  let subagentSequence = 0;
   const runtime = createSubagentRuntime({
     agentsDir,
     runs,
     delivery,
-    harnesses: createHarnessRegistry([harness]),
-    start: (options) =>
-      startSubagent({
-        ...options,
-        harnesses: createHarnessRegistry([harness]),
-        runs,
-      }),
+    harnesses,
+    subagents: createSubagentManager({
+      harnesses,
+      runs,
+      ...(times
+        ? {
+            now: () =>
+              times.shift() ?? assert.fail("unexpected manager clock read"),
+          }
+        : {}),
+      generateSubagentId: () => {
+        if (!subagentIds) return `subagent-${++subagentSequence}`;
+        const id = subagentIds.shift();
+        assert.ok(id, "ran out of boundary-test Subagent ids");
+        return id;
+      },
+    }),
   });
   runtime.attach(eventPi);
-  events.session_start?.(
-    {},
-    {
-      cwd: "/project",
-      modelRegistry: { getAll: () => [] },
-      ui: {
-        notify() {},
-        setWidget(_key: string, content: unknown) {
-          widgetFactory = content as typeof widgetFactory;
+  const beginSession = () =>
+    events.session_start?.(
+      {},
+      {
+        cwd: "/project",
+        modelRegistry: { getAll: () => [] },
+        ui: {
+          notify() {},
+          setWidget(_key: string, content: unknown) {
+            widgetFactory = content as typeof widgetFactory;
+          },
         },
       },
-    },
-  );
+    );
+  beginSession();
 
-  const start = async (): Promise<string> => {
+  const startIdentities = async (): Promise<{
+    subagentId: string;
+    runId: string;
+  }> => {
     const result = await tools.agent_start.execute(
       "call",
       { agent: "worker", description: "task", prompt: "work" },
@@ -310,10 +408,14 @@ function runtimeBoundary(
       undefined,
       {},
     );
-    const id = result.content[0].text.match(/run (\S+)/)?.[1];
-    assert.ok(id);
-    return id.replace(/\.$/, "");
+    const text = result.content[0].text;
+    const subagentId = text.match(/subagent id (\S+)/)?.[1];
+    const runId = text.match(/run id (\S+)/)?.[1];
+    assert.ok(subagentId);
+    assert.ok(runId);
+    return { subagentId, runId };
   };
+  const start = async (): Promise<string> => (await startIdentities()).runId;
   const flush = () => new Promise((resolve) => setImmediate(resolve));
 
   const renderWidget = (): string => {
@@ -333,13 +435,801 @@ function runtimeBoundary(
     runs,
     pushed,
     active,
+    adapterCloses,
     events,
+    beginSession,
     delivery,
     start,
+    startIdentities,
     flush,
     renderWidget,
   };
 }
+
+test("agent_resume starts a distinct Run with retained private Harness context", async () => {
+  const boundary = runtimeBoundary(["run-first", "run-second", "run-third"], {
+    resumable: true,
+    times: [100, 200, 300, 400, 500, 600],
+  });
+  const first = await boundary.tools.agent_start.execute(
+    "start",
+    {
+      agent: "worker",
+      description: "establish context",
+      prompt: "remember: heliotrope",
+    },
+    undefined,
+    undefined,
+    {},
+  );
+  const subagentId = first.content[0].text.match(/subagent id (\S+)/)?.[1];
+  assert.ok(subagentId);
+
+  boundary.active[0].report.message({
+    role: "assistant",
+    parts: [{ type: "text", text: "marker stored" }],
+    usage: { input: 7, output: 1, turns: 1 },
+  });
+  boundary.active[0].resolve({ ending: "answered" });
+  await boundary.flush();
+  const firstResultBefore = structuredClone(
+    boundary.delivery.result("run-first"),
+  );
+
+  const resumed = await boundary.tools.agent_resume.execute("resume", {
+    id: subagentId,
+    description: "use retained context",
+    prompt: "recall marker",
+  });
+
+  assert.match(resumed.content[0].text, /run id run-second/);
+  assert.match(resumed.content[0].text, /returns immediately/i);
+  assert.equal(boundary.active.length, 2);
+  assert.deepEqual(
+    boundary.adapterCloses,
+    [0],
+    "resume reuses the one adapter prepared from fixed creation policy",
+  );
+  assert.deepEqual(boundary.active[1].task, {
+    description: "use retained context",
+    prompt: "recall marker",
+  });
+  assert.notStrictEqual(boundary.active[1].report, boundary.active[0].report);
+  assert.notStrictEqual(boundary.active[1].signal, boundary.active[0].signal);
+  assert.notStrictEqual(
+    boundary.active[1].controls,
+    boundary.active[0].controls,
+  );
+  boundary.active[1].resolve({ ending: "answered" });
+  await boundary.flush();
+
+  assert.equal(boundary.pushed.length, 2);
+  assert.deepEqual(
+    boundary.delivery.result("run-first"),
+    firstResultBefore,
+    "the first Result remains byte-for-byte unchanged",
+  );
+  const secondResult = boundary.delivery.result("run-second");
+  assert.equal(secondResult?.subagentId, subagentId);
+  assert.equal(secondResult?.output, "private marker: heliotrope");
+  assert.doesNotMatch(secondResult?.output ?? "", /marker stored/);
+  assert.match(boundary.pushed[0].text, /7 in \/ 1 out · 1 turn/);
+  assert.doesNotMatch(boundary.pushed[1].text, /7 in|1 out/);
+  assert.match(boundary.pushed[1].text, /1 turn/);
+
+  const afterCompletedResume = await boundary.tools.agent_resume.execute(
+    "resume-after-completed-resume",
+    {
+      id: subagentId,
+      description: "third goal",
+      prompt: "continue after completion",
+    },
+  );
+  assert.match(afterCompletedResume.content[0].text, /run id run-third/);
+  assert.equal(boundary.active.length, 3);
+});
+
+test("public tools retain a Codex Conversation across disposable Attempts with independent Results", async () => {
+  interface CodexFixtureChild extends EventEmitter {
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    signals: string[];
+    kill(signal: string): boolean;
+    finish(code: number | null): void;
+  }
+
+  const providerThreadId = "provider-thread-secret";
+  const providerTurnIds = ["provider-turn-first", "provider-turn-second"];
+  const providerRequests: Record<string, unknown>[][] = [[], []];
+  const children: CodexFixtureChild[] = [];
+  const order: string[] = [];
+  let retainedMarker: string | undefined;
+  const sendProvider = (child: CodexFixtureChild, value: unknown): void => {
+    child.stdout.write(`${JSON.stringify(value)}\n`);
+  };
+  const spawn: ChildProcessSpawn = (_command, args, options) => {
+    const attempt = children.length;
+    const turnId = providerTurnIds[attempt];
+    assert.ok(turnId, "unexpected extra Codex Attempt");
+    assert.deepEqual(args, ["app-server"]);
+    assert.equal(options.cwd, "/fixed/project");
+    assert.equal(options.env?.PI_SUBAGENT_DEPTH, "1");
+    assert.equal(options.env?.PATH, process.env.PATH);
+
+    const child = new EventEmitter() as CodexFixtureChild;
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.signals = [];
+    let finished = false;
+    child.finish = (code) => {
+      if (finished) return;
+      finished = true;
+      child.stdout.end();
+      child.stderr.end();
+      queueMicrotask(() => child.emit("close", code, null));
+    };
+    child.kill = (signal) => {
+      child.signals.push(signal);
+      if (signal === "SIGTERM") queueMicrotask(() => child.finish(0));
+      return true;
+    };
+    child.stdin.setEncoding("utf8");
+    child.stdin.on("finish", () => child.finish(0));
+    child.stdin.on("data", (chunk) => {
+      for (const line of String(chunk).split("\n")) {
+        if (!line.trim()) continue;
+        const request = JSON.parse(line) as Record<string, unknown>;
+        providerRequests[attempt]?.push(request);
+        order.push(`${attempt + 1}:${String(request.method)}`);
+        if (request.method === "initialize") {
+          sendProvider(child, {
+            id: request.id,
+            result: {
+              userAgent: "fixture",
+              codexHome: "/tmp",
+              platformFamily: "unix",
+              platformOs: "test",
+            },
+          });
+        } else if (request.method === "thread/start") {
+          sendProvider(child, {
+            id: request.id,
+            result: { thread: { id: providerThreadId, turns: [] } },
+          });
+        } else if (request.method === "thread/resume") {
+          sendProvider(child, {
+            id: request.id,
+            result: {
+              thread: {
+                id: providerThreadId,
+                turns: [
+                  {
+                    id: providerTurnIds[0],
+                    items: [
+                      {
+                        type: "agentMessage",
+                        id: "attached-provider-item",
+                        text: "first public answer",
+                        phase: "final_answer",
+                      },
+                    ],
+                    status: "completed",
+                  },
+                ],
+              },
+            },
+          });
+        } else if (request.method === "turn/start") {
+          const params = request.params as Record<string, unknown>;
+          const input = params.input as Array<Record<string, unknown>>;
+          const prompt = input[0]?.text;
+          assert.equal(typeof prompt, "string");
+          if (attempt === 0) {
+            retainedMarker = String(prompt).match(/remember (\w+)/)?.[1];
+          } else {
+            assert.equal(prompt, "recall the marker");
+          }
+          sendProvider(child, {
+            id: request.id,
+            result: { turn: { id: turnId, status: "inProgress" } },
+          });
+          const answer =
+            attempt === 0
+              ? "first public answer"
+              : `retained marker: ${retainedMarker ?? "missing"}`;
+          sendProvider(child, {
+            method: "item/completed",
+            params: {
+              threadId: providerThreadId,
+              turnId,
+              item: {
+                type: "agentMessage",
+                id: `provider-item-${attempt + 1}`,
+                text: answer,
+                phase: "final_answer",
+              },
+              completedAtMs: 1,
+            },
+          });
+          sendProvider(child, {
+            method: "turn/completed",
+            params: {
+              threadId: providerThreadId,
+              turn: {
+                id: turnId,
+                items: [],
+                status: "completed",
+                error: null,
+                startedAt: null,
+                completedAt: null,
+                durationMs: null,
+              },
+            },
+          });
+        }
+      }
+    });
+    children.push(child);
+    order.push(`spawn-${attempt + 1}`);
+    return child as unknown as ChildProcess;
+  };
+
+  const { pi, tools } = collectTools();
+  const events: Record<string, (event: unknown, ctx?: unknown) => unknown> = {};
+  const eventPi = {
+    ...pi,
+    on(event: string, handler: (event: unknown, ctx?: unknown) => unknown) {
+      events[event] = handler;
+    },
+  } as unknown as ExtensionAPI;
+  const agentsDir = mkdtempSync(path.join(tmpdir(), "codex-public-tools-"));
+  writeAgent(agentsDir, "codex-worker", undefined, "codex");
+  const runIds = ["run-codex-first", "run-codex-second"];
+  const runs = createSubagentRuns({ now: () => 0 }, () => {
+    const id = runIds.shift();
+    assert.ok(id);
+    return id;
+  });
+  const pushed: PushedNotification[] = [];
+  const delivery = createSubagentDelivery({
+    runs,
+    push: (notification) => pushed.push(notification),
+  });
+  const harnesses = createHarnessRegistry([
+    createCodexHarness({ spawn, killEscalationMs: 20 }),
+  ]);
+  const subagents = createSubagentManager({
+    harnesses,
+    runs,
+    generateSubagentId: () => "subagent-codex",
+  });
+  createSubagentRuntime({
+    agentsDir,
+    runs,
+    delivery,
+    harnesses,
+    subagents,
+  }).attach(eventPi);
+  events.session_start?.(
+    {},
+    {
+      cwd: "/fixed/project",
+      modelRegistry: { getAll: () => [] },
+      ui: { notify() {}, setWidget() {} },
+    },
+  );
+
+  const start = await tools.agent_start.execute(
+    "start-codex",
+    {
+      agent: "codex-worker",
+      description: "establish context",
+      prompt: "remember violet",
+    },
+    undefined,
+    undefined,
+    {},
+  );
+  assert.match(start.content[0].text, /subagent id subagent-codex/);
+  assert.match(start.content[0].text, /run id run-codex-first/);
+  const firstWait = await tools.agent_wait.execute("wait-first", {
+    ids: ["run-codex-first"],
+  });
+  assert.match(firstWait.content[0].text, /completed/);
+  const first = await tools.agent_result.execute("result-first", {
+    id: "run-codex-first",
+  });
+  assert.match(first.content[0].text, /first public answer/);
+  const firstStored = structuredClone(delivery.result("run-codex-first"));
+
+  const resume = await tools.agent_resume.execute("resume-codex", {
+    id: "subagent-codex",
+    description: "recall context",
+    prompt: "recall the marker",
+  });
+  assert.match(resume.content[0].text, /run id run-codex-second/);
+  const secondWait = await tools.agent_wait.execute("wait-second", {
+    ids: ["run-codex-second"],
+  });
+  assert.match(secondWait.content[0].text, /completed/);
+  const second = await tools.agent_result.execute("result-second", {
+    id: "run-codex-second",
+  });
+  assert.match(second.content[0].text, /retained marker: violet/);
+  assert.doesNotMatch(second.content[0].text, /first public answer/);
+  assert.deepEqual(delivery.result("run-codex-first"), firstStored);
+  assert.deepEqual(
+    pushed.map(({ id, subagentId, status }) => ({ id, subagentId, status })),
+    [
+      {
+        id: "run-codex-first",
+        subagentId: "subagent-codex",
+        status: "completed",
+      },
+      {
+        id: "run-codex-second",
+        subagentId: "subagent-codex",
+        status: "completed",
+      },
+    ],
+  );
+  assert.deepEqual(order, [
+    "spawn-1",
+    "1:initialize",
+    "1:initialized",
+    "1:thread/start",
+    "1:turn/start",
+    "spawn-2",
+    "2:initialize",
+    "2:initialized",
+    "2:thread/resume",
+    "2:turn/start",
+  ]);
+  const publicState = JSON.stringify({ first, second, pushed });
+  assert.doesNotMatch(
+    publicState,
+    /provider-thread-secret|provider-turn|provider-item|attached-provider/,
+  );
+  for (const child of children) {
+    assert.equal(child.listenerCount("close"), 0);
+    assert.equal(child.stdout.listenerCount("data"), 0);
+    assert.equal(child.stderr.listenerCount("data"), 0);
+    assert.equal(child.stdin.listenerCount("error"), 0);
+  }
+
+  await events.session_shutdown?.({ reason: "new" });
+  assert.equal(delivery.result("run-codex-first"), undefined);
+  assert.equal(delivery.result("run-codex-second"), undefined);
+  const afterShutdown = await tools.agent_resume.execute("resume-closed", {
+    id: "subagent-codex",
+    description: "closed",
+    prompt: "must not attach",
+  });
+  assert.match(afterShutdown.content[0].text, /unknown Subagent/);
+  assert.equal(children.length, 2);
+});
+
+test("agent_resume has one synchronous winner and never queues behind settlement", async () => {
+  const boundary = runtimeBoundary(["run-first", "run-winner"], {
+    resumable: true,
+  });
+  const started = await boundary.startIdentities();
+
+  const active = await boundary.tools.agent_resume.execute("active", {
+    id: started.subagentId,
+    description: "too early",
+    prompt: "must not queue",
+  });
+  assert.match(active.content[0].text, /already has an active Run/);
+  assert.match(active.content[0].text, /not queued/);
+  assert.equal(boundary.active.length, 1);
+
+  boundary.active[0].resolve({ ending: "answered" });
+  const settling = await boundary.tools.agent_resume.execute("settling", {
+    id: started.subagentId,
+    description: "still too early",
+    prompt: "must not queue",
+  });
+  assert.match(settling.content[0].text, /already has an active Run/);
+  assert.equal(boundary.active.length, 1);
+
+  await boundary.flush();
+  const winnerPromise = boundary.tools.agent_resume.execute("winner", {
+    id: started.subagentId,
+    description: "winner",
+    prompt: "start now",
+  });
+  const loserPromise = boundary.tools.agent_resume.execute("loser", {
+    id: started.subagentId,
+    description: "loser",
+    prompt: "must not queue",
+  });
+  const [winner, loser] = await Promise.all([winnerPromise, loserPromise]);
+
+  assert.match(winner.content[0].text, /run id run-winner/);
+  assert.match(loser.content[0].text, /already has an active Run/);
+  assert.equal(boundary.active.length, 2, "only the winning Run was prepared");
+  assert.deepEqual(boundary.active[1].task, {
+    description: "winner",
+    prompt: "start now",
+  });
+});
+
+test("agent_resume distinguishes unsupported and unknown Subagent identities", async () => {
+  const unsupported = runtimeBoundary(["run-pi"]);
+  const pi = await unsupported.startIdentities();
+  unsupported.active[0].resolve({ ending: "answered" });
+  await unsupported.flush();
+
+  const unsupportedResult = await unsupported.tools.agent_resume.execute(
+    "unsupported",
+    {
+      id: pi.subagentId,
+      description: "next",
+      prompt: "continue",
+    },
+  );
+  assert.match(unsupportedResult.content[0].text, /does not support resume/);
+  assert.match(unsupportedResult.content[0].text, /No Run or provider work/);
+  assert.equal(unsupported.active.length, 1);
+
+  const resumable = runtimeBoundary(["run-controlled"], { resumable: true });
+  const controlled = await resumable.startIdentities();
+  for (const id of ["subagent-missing", controlled.runId]) {
+    const result = await resumable.tools.agent_resume.execute("unknown", {
+      id,
+      description: "next",
+      prompt: "continue",
+    });
+    assert.match(result.content[0].text, /unknown Subagent/);
+    assert.match(result.content[0].text, /not a Run id/);
+  }
+  assert.equal(resumable.active.length, 1);
+
+  await resumable.events.session_shutdown({ reason: "new" });
+  resumable.beginSession();
+  const stale = await resumable.tools.agent_resume.execute("stale", {
+    id: controlled.subagentId,
+    description: "next Session",
+    prompt: "must not continue",
+  });
+  assert.match(stale.content[0].text, /unknown Subagent/);
+  assert.equal(resumable.active.length, 1);
+});
+
+test("cancel settlement, pending Controls, and notification landing stay Run-scoped across resume", async () => {
+  const boundary = runtimeBoundary(["run-first", "run-second", "run-third"], {
+    resumable: true,
+    steerable: true,
+  });
+  const started = await boundary.startIdentities();
+
+  const staleControl = await boundary.tools.agent_steer.execute("steer-old", {
+    id: started.runId,
+    message: "discard me",
+  });
+  assert.match(staleControl.content[0].text, /Steering accepted/);
+  await boundary.tools.agent_cancel.execute("cancel-old", {
+    ids: [started.runId],
+  });
+  assert.equal(boundary.active[0].signal?.aborted, true);
+
+  const beforeCancelSettles = await boundary.tools.agent_resume.execute(
+    "resume-early",
+    {
+      id: started.subagentId,
+      description: "too early",
+      prompt: "must not queue",
+    },
+  );
+  assert.match(beforeCancelSettles.content[0].text, /active Run/);
+
+  boundary.active[0].resolve({ ending: "cancelled" });
+  await boundary.flush();
+  const resumed = await boundary.tools.agent_resume.execute("resume-second", {
+    id: started.subagentId,
+    description: "fresh run",
+    prompt: "fresh prompt",
+  });
+  assert.match(resumed.content[0].text, /run id run-second/);
+  assert.deepEqual(
+    await boundary.active[0].controls[Symbol.asyncIterator]().next(),
+    { done: true, value: undefined },
+    "the cancelled Run discards its pending guidance",
+  );
+
+  await boundary.tools.agent_steer.execute("steer-new", {
+    id: "run-second",
+    message: "fresh guidance",
+  });
+  assert.deepEqual(
+    await boundary.active[1].controls[Symbol.asyncIterator]().next(),
+    {
+      done: false,
+      value: { type: "steer", text: "fresh guidance" },
+    },
+  );
+
+  assert.equal(boundary.pushed.length, 1);
+  assert.deepEqual(
+    boundary.runs.list().map(({ id, status }) => ({ id, status })),
+    [
+      { id: "run-first", status: "cancelled" },
+      { id: "run-second", status: "running" },
+    ],
+    "resume before notification landing neither releases nor merges the old Run",
+  );
+  boundary.events.message_start({
+    message: {
+      role: "custom",
+      customType: "subagent-notification",
+      details: {
+        id: "run-first",
+        subagentId: started.subagentId,
+        agent: "worker",
+        status: "cancelled",
+      },
+    },
+  });
+  assert.deepEqual(
+    boundary.runs.list().map(({ id }) => id),
+    ["run-second"],
+  );
+
+  await boundary.tools.agent_cancel.execute("cancel-second", {
+    ids: ["run-second"],
+  });
+  boundary.active[1].resolve({ ending: "cancelled" });
+  await boundary.flush();
+  const afterCancellation = await boundary.tools.agent_resume.execute(
+    "resume-third",
+    {
+      id: started.subagentId,
+      description: "after cancellation",
+      prompt: "new goal",
+    },
+  );
+  assert.match(afterCancellation.content[0].text, /run id run-third/);
+  assert.equal(boundary.active.length, 3);
+});
+
+test("a failed resumed Run returns its open Subagent to idle", async () => {
+  const boundary = runtimeBoundary(["run-first", "run-failed", "run-after"], {
+    resumable: true,
+  });
+  const started = await boundary.startIdentities();
+  boundary.active[0].resolve({ ending: "answered" });
+  await boundary.flush();
+  await boundary.tools.agent_resume.execute("resume-failed", {
+    id: started.subagentId,
+    description: "failure",
+    prompt: "fail",
+  });
+  boundary.active[1].resolve({
+    ending: "failed",
+    errorMessage: "controlled failure",
+  });
+  await boundary.flush();
+
+  const afterFailure = await boundary.tools.agent_resume.execute(
+    "resume-after-failure",
+    {
+      id: started.subagentId,
+      description: "recovery",
+      prompt: "continue honestly",
+    },
+  );
+  assert.match(afterFailure.content[0].text, /run id run-after/);
+  assert.equal(boundary.active.length, 3);
+});
+
+test("shutdown wins resume admission synchronously and late settlement cannot reopen the Subagent", async () => {
+  const idleBoundary = runtimeBoundary(["run-idle"], { resumable: true });
+  const idle = await idleBoundary.startIdentities();
+  idleBoundary.active[0].resolve({ ending: "answered" });
+  await idleBoundary.flush();
+
+  const shutdown = idleBoundary.events.session_shutdown({ reason: "new" });
+  const afterShutdownStarted = await idleBoundary.tools.agent_resume.execute(
+    "resume-after-shutdown",
+    {
+      id: idle.subagentId,
+      description: "closed",
+      prompt: "must not start",
+    },
+  );
+  assert.match(afterShutdownStarted.content[0].text, /unknown Subagent/);
+  assert.equal(idleBoundary.active.length, 1);
+  await shutdown;
+
+  const activeBoundary = runtimeBoundary(["run-first", "run-resumed"], {
+    resumable: true,
+  });
+  const active = await activeBoundary.startIdentities();
+  activeBoundary.active[0].resolve({ ending: "answered" });
+  await activeBoundary.flush();
+  await activeBoundary.tools.agent_resume.execute("resume-wins", {
+    id: active.subagentId,
+    description: "active at shutdown",
+    prompt: "work",
+  });
+  assert.equal(activeBoundary.active[1].signal?.aborted, false);
+
+  await activeBoundary.events.session_shutdown({ reason: "new" });
+  assert.equal(activeBoundary.active[1].signal?.aborted, true);
+  activeBoundary.active[1].resolve({ ending: "cancelled" });
+  await activeBoundary.flush();
+  const afterLateSettlement = await activeBoundary.tools.agent_resume.execute(
+    "late-settlement",
+    {
+      id: active.subagentId,
+      description: "must stay closed",
+      prompt: "must not start",
+    },
+  );
+  assert.match(afterLateSettlement.content[0].text, /unknown Subagent/);
+  assert.equal(activeBoundary.active.length, 2);
+});
+
+test("resuming neither pins old Result output nor changes per-Run eviction order", async () => {
+  const boundary = runtimeBoundary(["run-first", "run-second"], {
+    resumable: true,
+    resultBudget: 10,
+  });
+  const started = await boundary.startIdentities();
+  boundary.active[0].report.message({
+    role: "assistant",
+    parts: [{ type: "text", text: "first" }],
+  });
+  boundary.active[0].resolve({ ending: "answered" });
+  await boundary.flush();
+  assert.equal(boundary.delivery.result("run-first")?.output, "first");
+  await boundary.tools.agent_result.execute("read-first", { id: "run-first" });
+
+  await boundary.tools.agent_resume.execute("resume", {
+    id: started.subagentId,
+    description: "second",
+    prompt: "second",
+  });
+  assert.equal(
+    boundary.delivery.result("run-first")?.output,
+    "first",
+    "admission itself does not consume or evict the old Result",
+  );
+  boundary.active[1].report.message({
+    role: "assistant",
+    parts: [{ type: "text", text: "second" }],
+  });
+  boundary.active[1].resolve({ ending: "answered" });
+  await boundary.flush();
+
+  assert.deepEqual(boundary.delivery.result("run-first"), {
+    id: "run-first",
+    subagentId: started.subagentId,
+    agent: "worker",
+    status: "completed",
+    output: "",
+    evicted: true,
+  });
+  assert.equal(boundary.delivery.result("run-second")?.output, "second");
+});
+
+test("first-Run settlement retains an idle Subagent and orients Result and notification", async () => {
+  const boundary = runtimeBoundary([
+    "run-completed",
+    "run-failed",
+    "run-cancelled",
+  ]);
+  const starts = await Promise.all([
+    boundary.startIdentities(),
+    boundary.startIdentities(),
+    boundary.startIdentities(),
+  ]);
+  boundary.active[0].report.message({
+    role: "assistant",
+    parts: [{ type: "text", text: "answer" }],
+  });
+  boundary.active[0].resolve({ ending: "answered" });
+  boundary.active[1].resolve({ ending: "failed", errorMessage: "broken" });
+  boundary.active[2].resolve({ ending: "cancelled" });
+  await boundary.flush();
+
+  assert.deepEqual(boundary.adapterCloses, [0, 0, 0]);
+  assert.equal(boundary.pushed.length, 3);
+  for (const [index, started] of starts.entries()) {
+    assert.equal(boundary.pushed[index].subagentId, started.subagentId);
+    assert.equal(boundary.pushed[index].id, started.runId);
+    assert.match(boundary.pushed[index].text, new RegExp(started.subagentId));
+    assert.match(boundary.pushed[index].text, new RegExp(started.runId));
+    assert.equal(
+      boundary.delivery.result(started.runId)?.subagentId,
+      started.subagentId,
+    );
+  }
+
+  const presented = await boundary.tools.agent_result.execute("result", {
+    id: starts[0].runId,
+  });
+  assert.match(presented.content[0].text, /subagent subagent-1/);
+  assert.match(presented.content[0].text, /run run-completed/);
+});
+
+test("Run-scoped tools never redirect a Subagent id and landing retains its adapter", async () => {
+  const boundary = runtimeBoundary(["run-1"]);
+  const started = await boundary.startIdentities();
+
+  const wait = await boundary.tools.agent_wait.execute("wait", {
+    ids: [started.subagentId],
+    timeout_seconds: 0,
+  });
+  const result = await boundary.tools.agent_result.execute("result", {
+    id: started.subagentId,
+  });
+  const cancel = await boundary.tools.agent_cancel.execute("cancel", {
+    ids: [started.subagentId],
+  });
+  const steer = await boundary.tools.agent_steer.execute("steer", {
+    id: started.subagentId,
+    message: "guidance",
+  });
+
+  assert.match(wait.content[0].text, /Unknown run ids: subagent-1/);
+  assert.match(result.content[0].text, /No run with id subagent-1/);
+  assert.match(cancel.content[0].text, /Unknown run ids: subagent-1/);
+  assert.match(steer.content[0].text, /unknown run/);
+  assert.equal(boundary.active[0].signal?.aborted, false);
+
+  boundary.active[0].resolve({ ending: "answered" });
+  await boundary.flush();
+  boundary.events.message_start({
+    message: {
+      role: "custom",
+      customType: "subagent-notification",
+      details: {
+        id: started.runId,
+        subagentId: started.subagentId,
+        agent: "worker",
+        status: "completed",
+      },
+    },
+  });
+
+  assert.equal(boundary.runs.list().length, 0);
+  assert.deepEqual(boundary.adapterCloses, [0]);
+});
+
+test("Subagent ids and landed Run ids are never reused within a Session", async () => {
+  const boundary = runtimeBoundary(["run-dup", "run-dup", "run-fresh"], {
+    subagentIds: ["subagent-dup", "subagent-dup", "subagent-fresh"],
+  });
+  const first = await boundary.startIdentities();
+  boundary.active[0].resolve({ ending: "answered" });
+  await boundary.flush();
+  boundary.events.message_start({
+    message: {
+      role: "custom",
+      customType: "subagent-notification",
+      details: {
+        id: first.runId,
+        subagentId: first.subagentId,
+        agent: "worker",
+        status: "completed",
+      },
+    },
+  });
+
+  const second = await boundary.startIdentities();
+  assert.deepEqual(first, {
+    subagentId: "subagent-dup",
+    runId: "run-dup",
+  });
+  assert.deepEqual(second, {
+    subagentId: "subagent-fresh",
+    runId: "run-fresh",
+  });
+});
 
 test("INV-1 boundary: landed run ids are never reused", async () => {
   const boundary = runtimeBoundary(["dup", "dup", "fresh"]);
@@ -350,7 +1240,12 @@ test("INV-1 boundary: landed run ids are never reused", async () => {
     message: {
       role: "custom",
       customType: "subagent-notification",
-      details: { id: first },
+      details: {
+        id: first,
+        subagentId: "subagent-1",
+        agent: "worker",
+        status: "completed",
+      },
     },
   });
 
@@ -417,6 +1312,41 @@ test("INV-8 boundary: session shutdown cancels and forgets a tool-started run", 
   assert.match(result.content[0].text, /No run with id/);
 });
 
+test("shutdown closes idle and active Subagents before late settlement can notify", async () => {
+  const boundary = runtimeBoundary(["run-idle", "run-active"]);
+  const idle = await boundary.startIdentities();
+  const active = await boundary.startIdentities();
+  boundary.active[0].resolve({ ending: "answered" });
+  await boundary.flush();
+  assert.deepEqual(boundary.adapterCloses, [0, 0]);
+
+  await boundary.events.session_shutdown({ reason: "new" });
+  assert.equal(boundary.active[1].signal?.aborted, true);
+  assert.deepEqual(boundary.adapterCloses, [1, 1]);
+  assert.equal(boundary.runs.list().length, 0);
+  assert.equal(boundary.delivery.result(idle.runId), undefined);
+
+  boundary.active[1].resolve({ ending: "cancelled" });
+  await boundary.flush();
+  assert.deepEqual(boundary.adapterCloses, [1, 1]);
+  assert.equal(boundary.pushed.length, 1, "only the pre-shutdown Run notified");
+  assert.equal(boundary.delivery.result(active.runId), undefined);
+});
+
+test("Session cleanup forgets both local identity sets", async () => {
+  const boundary = runtimeBoundary(["run-1", "run-1"], {
+    subagentIds: ["subagent-1", "subagent-1"],
+  });
+  const first = await boundary.startIdentities();
+  await boundary.events.session_shutdown({ reason: "new" });
+  boundary.active[0].resolve({ ending: "cancelled" });
+  await boundary.flush();
+
+  boundary.beginSession();
+  const second = await boundary.startIdentities();
+  assert.deepEqual(second, first);
+});
+
 test("INV-9 boundary: lost notification retries once without changing result", async () => {
   const boundary = runtimeBoundary(["run-1"]);
   const id = await boundary.start();
@@ -437,7 +1367,12 @@ test("INV-9 boundary: lost notification retries once without changing result", a
     message: {
       role: "custom",
       customType: "subagent-notification",
-      details: { id },
+      details: {
+        id,
+        subagentId: "subagent-1",
+        agent: "worker",
+        status: "completed",
+      },
     },
   };
   boundary.events.message_start(landed);
@@ -490,10 +1425,8 @@ test("agent_start refuses an unknown agent", async () => {
     { cwd: "/project", projectTrusted: true },
     new Map(),
     {
-      start: fakeStart(() => {}).start,
-      runs,
+      subagents: fakeStart(() => {}),
       delivery: createSubagentDelivery({ runs, push: () => {} }),
-      harnesses: createHarnessRegistry([]),
     },
   );
 
@@ -519,16 +1452,15 @@ test("the orchestration primitives are registered", () => {
     { cwd: "/project", projectTrusted: true },
     new Map(),
     {
-      start: fakeStart(() => {}).start,
-      runs,
+      subagents: fakeStart(() => {}),
       delivery: createSubagentDelivery({ runs, push: () => {} }),
-      harnesses: createHarnessRegistry([]),
     },
   );
 
   assert.deepEqual(Object.keys(tools).sort(), [
     "agent_cancel",
     "agent_result",
+    "agent_resume",
     "agent_start",
     "agent_steer",
     "agent_wait",
@@ -541,14 +1473,32 @@ test("the orchestration primitives are registered", () => {
     {
       agent_cancel: "Stop subagents whose work is no longer needed",
       agent_result: "Fetch a finished subagent's full output by run id",
+      agent_resume:
+        "Resume an idle stable subagent and return its new run id immediately",
       agent_start:
-        "Start a subagent on a task and return its run id immediately",
+        "Create a stable subagent and return its identity and first run id immediately",
       agent_steer: "Send one guidance message to an active subagent run",
       agent_wait:
         "Block until named runs finish and return lifecycle state only, never output",
     },
   );
   assert.doesNotMatch(tools.agent_wait.description ?? "", /agent_await/);
+  assert.match(
+    tools.agent_resume.description ?? "",
+    /Subagent id returned by agent_start, not a Run id/,
+  );
+  assert.match(
+    tools.agent_resume.description ?? "",
+    /Returns the new Run id immediately, not the answer/,
+  );
+  assert.match(
+    (tools.agent_resume.promptGuidelines ?? []).join("\n"),
+    /agent_resume takes the stable Subagent id.*agent_wait.*take Run ids/,
+  );
+  assert.match(
+    tools.agent_cancel.description ?? "",
+    /never pass a stable Subagent id/,
+  );
   assert.match(
     (tools.agent_wait.promptGuidelines ?? []).join("\n"),
     /agent_wait/,
@@ -567,16 +1517,19 @@ test("agent_steer reports local admission and crosses the public tool seam exact
   const result = createEmptyResult("explore", "task", 0);
   const handle = runs.track(result, () => {}, gate);
   const delivery = createSubagentDelivery({ runs, push: () => {} });
-  delivery.register(handle.id, result.agent, new Promise(() => {}));
+  delivery.register(
+    handle.id,
+    result.agent,
+    new Promise(() => {}),
+    result.subagentId,
+  );
   registerSubagentFeatureTools(
     pi,
     { cwd: "/project", projectTrusted: true },
     new Map(),
     {
-      start: fakeStart(() => {}).start,
-      runs,
+      subagents: fakeStart(() => {}),
       delivery,
-      harnesses: createHarnessRegistry([]),
     },
   );
   const controls = gate.controls[Symbol.asyncIterator]();
@@ -857,8 +1810,7 @@ test("a delivered report reaches the model and lets it respond", async () => {
     { cwd: "/project", projectTrusted: true },
     new Map([["worker", agentConfig("worker")]]),
     {
-      start: started.start,
-      runs,
+      subagents: { start: started.start, resume: started.resume },
       delivery: createSubagentDelivery({
         runs,
         push: (notification) =>
@@ -867,7 +1819,6 @@ test("a delivered report reaches the model and lets it respond", async () => {
             triggerTurn: true,
           }),
       }),
-      harnesses: createHarnessRegistry([]),
     },
   );
 

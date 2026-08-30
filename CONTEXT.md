@@ -18,12 +18,42 @@ the harness does not recognize is a diagnostic, not a silent pass-through.
 Named after the agent, so `explore.md` defines `explore`. Read only from user
 scope; see `getAgentsDir`.
 
-**Run** — one execution of one profile against one prompt. A run is one-shot —
-one prompt in, one terminal answer out — whichever harness executes it. A run
-has an id, a lifecycle, a transcript, and usage. The registry holds runs, and
-the widget lists them. Not "job", not "task", not "call". Notification delivery
-state is a separate state machine, tracked by the delivery module keyed by run
+**Subagent** — a stable, Session-scoped asynchronous identity created from one
+Profile. A Subagent is **running** with exactly one active Run, **idle** with no
+active Run, or **closed**. Creation moves directly to running with its first Run;
+there is no empty or queued state. The manager owns its Profile association,
+prepared Harness adapter, lifecycle, and active-Run relationship. A terminal
+Run leaves an open Subagent idle, while Session shutdown closes it. A Subagent
+id is local, distinct from every Run id, and never a provider identity. A
+successful `agent_resume` synchronously claims a resumable idle Subagent and
+starts its next Run; an active Subagent rejects resume rather than queueing it.
+
+**Run** — one execution of one Subagent's profile against one prompt. A run is
+one-shot — one prompt in, one terminal answer out — whichever harness executes
+it. A run has its own local id, lifecycle, transcript, usage, immutable terminal
+Result, and owning Subagent. The registry holds live-display runs, and the
+widget lists them. Not "job", not "task", not "call". Notification delivery
+state is a separate state machine, tracked by the delivery module keyed by Run
 id — never on the run itself.
+
+**Resume** — the asynchronous orchestration operation that accepts a stable
+Subagent id plus the next Run's description and full prompt. It returns the new
+Run id immediately rather than an answer. Resume never rebinds the fixed
+Profile, Harness adapter, working directory, child depth, resolved policy, or
+trust posture, and core never receives a provider continuation token. Pi,
+and Claude remain truthfully unsupported. Production Codex resumes its
+adapter-private Conversation through a fresh Attempt within the current
+Session.
+
+**Conversation** — provider-owned semantic context that may span multiple Runs
+of one Subagent. Its continuation identity and accounting baseline stay inside
+the prepared adapter; it is neither a Subagent nor a Run and never crosses the
+Harness seam.
+
+**Attempt** — one disposable provider attachment used to execute one Run
+against a Conversation. A Codex Attempt owns one fresh App Server child,
+initialization, current Turn, translator, accounting fold, Control pump, and
+cleanup boundary; no Attempt remains alive while its Subagent is idle.
 
 **Control** — bounded, harness-neutral guidance offered while a Run is active.
 The only Control is steering text. `accepted` means the complete text entered
@@ -38,9 +68,9 @@ local admission or request acceptance, becomes a neutral user Fact.
 occurrence enters the executor, before translation, reporting, or Promise
 continuations can delay it. Codex orders provider events, Controls,
 cancellation, process outcomes, and escalation this way because its semantic
-Turn and native steering share one App Server connection. This does not turn a
-Run id into stable Subagent identity: Phase 1 still ships no resume operation,
-provider-session handle, or second Run on a retained child.
+Turn and native steering share one App Server connection. Provider ordering
+and identity remain adapter-local; neither a local Subagent id nor a Run id is
+a provider thread, Turn, item, request, or correlation identity.
 
 **Turn** — one completed provider model turn (response), folded into a run's
 usage and counted by the widget. A turn is provider accounting, not a second
@@ -55,7 +85,7 @@ fallback retractions cannot retract additive Facts, so their bounded overcount
 is accepted rather than desynchronizing later catch-up.
 
 **Detached run** — a run that outlives the turn that started it. Every run
-started by `agent_start` is detached from the turn: `Escape` does not stop it.
+started by `agent_start` or `agent_resume` is detached from the turn: `Escape` does not stop it.
 It is not detached from the session — a result belongs to the conversation
 that asked for it, so every `session_shutdown` (switch, fork, resume, new,
 reload, quit) cancels whatever is still running.
@@ -83,12 +113,14 @@ cancelled at the executor seam and never shown above it.
 
 ## Delivery
 
-**Result** — the authoritative terminal output for a run. It is written to the
-result store when the run settles and observed with `agent_result`.
+**Result** — the authoritative terminal output for a Run. It records the
+owning Subagent for orientation, is written to the result store when the Run
+settles, and remains authoritatively retrieved by Run id with `agent_result`.
 
 **Notification** — a small status-specific completion notice pushed as a
-follow-up message. It orients the model and points to `agent_result`; it is not
-the result itself. Pushed is not landed: pi may hold a follow-up while the model
+follow-up message. It identifies both the owning Subagent and the specific Run,
+orients the model, and points to `agent_result` by Run id; it is not the Result
+itself. Pushed is not landed: pi may hold a follow-up while the model
 is mid-turn. If an interrupt discards it, the notification is pushed again
 after the agent settles. One landing per notification is the invariant.
 
@@ -112,30 +144,47 @@ crash guard for the teardown race, never a cross-session delivery channel.
 
 ## Modules
 
-**Registry** — the module owning the set of live runs and their lifetime.
-Everything that displays or acts on runs reads it; the dispatcher is the only
-module that adds runs, and notification delivery is the only module that releases them —
-when the notification actually lands in the conversation, nowhere else.
+**Subagent manager** (`subagents.ts`) — the Session-scoped owner of Subagent
+records, lifecycle, fixed Profile association, prepared adapter lifetime, and
+active-Run relationship. It creates a Subagent and first Run atomically, retains
+the adapter while idle, synchronously admits at most one resumed Run, marks
+every Subagent closed before shutdown cancellation, and cannot be reopened by
+late settlement.
+
+**Registry** — the module owning the set of live-display Runs and their
+lifetime. Everything that displays or acts on Runs reads it; the dispatcher is
+the only module that adds Runs, and notification delivery is the only module
+that releases them — when the notification actually lands in the conversation,
+nowhere else. Released identities remain spent until Session shutdown resets
+the registry.
 
 **Projection** (`RunView`) — an immutable row derived from a run for display.
 Callers never touch the mutable run record.
 
-**Dispatcher** (`runner.ts`) — the rules that hold for every run whatever it
-does: the nesting guard, lifecycle settlement, and sole ownership of the run
-record — executors report facts, and the fold in `run.ts`, invoked only by
-the dispatcher, is what writes them.
+**Dispatcher** (`runner.ts`) — the rules that hold for every Run whatever it
+does: lifecycle settlement and sole ownership of the Run record — executors
+report facts, and the fold in `run.ts`, invoked only by the dispatcher, is what
+writes them. The manager supplies a retained prepared adapter; dispatch creates
+a fresh Result, Control gate, reporter, and execution for the Run and does not
+own adapter lifetime.
 
 **Harness** — a named backend (`pi`, `claude`, `codex`) that knows how to run profiles:
-it validates the harness-owned parts of a profile and supplies an executor per
-run. A profile names its harness; core resolves that name through the harness
-registry and never interprets harness-specific configuration or imports a
-backend's types.
+it validates the harness-owned parts of a profile and prepares one
+Subagent-scoped adapter from the fixed Profile, working directory, child depth,
+project trust, and inherited parent-model policy. A profile names its harness;
+core resolves that name through the harness registry and never interprets
+harness-specific configuration or imports a backend's types. The prepared
+adapter is the only object allowed to retain provider Conversation state. It
+declares neutral capabilities, prepares independent per-Run executions, and
+closes idempotently; provider continuation never crosses this seam.
 
-**Executor** — the per-run execution a harness supplies (`harnesses/pi/agent.ts`
-is the pi harness's; it composes the One-shot protocol and the neutral process source).
-It witnesses what the child did: it reports harness-neutral facts through the
-reporter defined in `run.ts` and resolves to an **ending**; it never touches the
-run record. A supported prepared Run also receives one neutral Control stream;
+**Executor** — the per-Run execution a prepared adapter supplies
+(`harnesses/pi/agent.ts` is the pi harness's; it composes the One-shot protocol
+and the neutral process source). Each execution is prepared from only that
+Run's description and prompt, then receives a fresh reporter, AbortSignal, and
+Control stream. It witnesses what the child did: it reports harness-neutral
+facts through the reporter defined in `run.ts` and resolves to an **ending**;
+it never touches the run record. Steering support is declared per prepared Run;
 there is no Harness control method or provider session in core. Wire format
 stops inside the harness — no backend's message shapes cross this seam.
 
@@ -166,10 +215,12 @@ It is the only module that interprets a lifecycle status for display and the
 only producer of model-facing prose about runs; the delivery module does
 bookkeeping and asks this one what a notification says.
 
-**Session lifecycle** (`session-lifecycle.ts`) — owns session start and
+**Session lifecycle** (`session-lifecycle.ts`) — owns Session start and
 shutdown: refilling stable profile/session-fact references, re-aiming pushes,
-replacing the widget, one-shot feature registration, warnings, and cleanup.
-The composition root only forwards host events to it.
+replacing the widget, one-shot feature registration, warnings, and ordered
+cleanup. Shutdown unbinds delivery, asks the manager to close Subagents and
+cancel active Runs, then clears delivery and live Run state. The composition
+root only forwards host events to it.
 
 **Activity** — the one-line summary of what a run is doing right now. An
 executor may report ephemeral live activity through the run seam; while it is
@@ -191,9 +242,9 @@ own. Applying it is harness policy: pi forwards it to its child; claude and
 codex do not consult it yet — their policy is a constant bypass, the forwarded
 value reserved for a future shared posture (ADR-0009).
 
-**Shutdown** — every `session_shutdown` stops every running run, drops every
-unlanded notification, and clears the result store, so neither a notification
-nor a stored result follows the operator into the next session. The next
-session's model never started these runs and has no context to act on their
-answers; after quit or reload nothing could notify about them at all. The delivery
-module owns this as one operation (`shutdown`).
+**Shutdown** — every `session_shutdown` first marks every Subagent closed, then
+forwards cancellation to active Runs, closes idle and active adapters, drops
+every unlanded notification, clears the Result store, releases live display
+state, and forgets local Subagent and Run identities. A late settlement cannot
+move a closed Subagent to idle or notify the next Session. The next Session's
+model never started these Runs and has no context to act on their answers.

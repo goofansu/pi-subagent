@@ -77,6 +77,8 @@ export function createSessionPush(): SessionPush {
  */
 export interface RetainedResult {
   id: string;
+  /** Stable owner retained for orientation; lookup remains keyed by Run id. */
+  subagentId: string;
   agent: string;
   status: TerminalLifecycleStatus;
   reason?: "requested" | "shutdown";
@@ -146,7 +148,12 @@ export type SteerOutcome =
  */
 export interface SubagentDelivery {
   /** Track a started run through settlement, storage, and notification. */
-  register(id: string, agent: string, settled: Promise<SingleResult>): void;
+  register(
+    id: string,
+    agent: string,
+    settled: Promise<SingleResult>,
+    subagentId: string,
+  ): void;
   /** Whether this id names a known run. */
   has(id: string): boolean;
   /** Observe when named runs become terminal without affecting notifications. */
@@ -172,6 +179,7 @@ export interface SubagentDelivery {
 
 interface Pending {
   id: string;
+  subagentId: string;
   tracked: Promise<void>;
   result?: SingleResult;
 }
@@ -207,6 +215,7 @@ export function createSubagentDelivery({
     if (result.lifecycle.phase === "running") return;
     results.set(id, {
       id,
+      subagentId: result.subagentId,
       agent: result.agent,
       status: result.lifecycle.phase,
       ...(result.lifecycle.phase === "cancelled"
@@ -242,6 +251,7 @@ export function createSubagentDelivery({
       throw new Error(formatRunningNotificationError(id));
     const notification: PushedNotification = {
       id,
+      subagentId: result.subagentId,
       agent: result.agent,
       status: result.lifecycle.phase,
       text: formatNotification(id, result),
@@ -251,9 +261,13 @@ export function createSubagentDelivery({
   };
 
   return {
-    register(id, agent, settled) {
+    register(id, agent, settled, subagentId) {
       const registeredGeneration = generation;
-      const entry: Pending = { id, tracked: Promise.resolve() };
+      const entry: Pending = {
+        id,
+        subagentId,
+        tracked: Promise.resolve(),
+      };
       pending.set(id, entry);
       entry.tracked = (async () => {
         try {
@@ -269,9 +283,15 @@ export function createSubagentDelivery({
           pending.delete(id);
           const message =
             error instanceof Error ? error.message : String(error);
-          const rejection = formatExecutorRejection(id, agent, message);
+          const rejection = formatExecutorRejection(
+            id,
+            subagentId,
+            agent,
+            message,
+          );
           results.set(id, {
             id,
+            subagentId,
             agent,
             status: "failed",
             output: rejection.output,
@@ -279,6 +299,7 @@ export function createSubagentDelivery({
           enforceResultStoreBudget();
           const notification: PushedNotification = {
             id,
+            subagentId,
             agent,
             status: "failed",
             text: rejection.notification,
@@ -376,6 +397,7 @@ export function createSubagentDelivery({
       pending.clear();
       notifications.clear();
       results.clear();
+      runs.reset();
     },
   };
 }

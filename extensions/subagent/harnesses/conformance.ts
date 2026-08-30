@@ -10,8 +10,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createSubagentDelivery, type SteerOutcome } from "../delivery.ts";
 import { getFinalOutput } from "../messages.ts";
-import { startSubagent } from "../runner.ts";
 import { createSubagentRuns } from "../runs.ts";
+import { startSubagent } from "../standalone-run-helper.ts";
 import type {
   AgentConfig,
   CancellationReason,
@@ -182,7 +182,12 @@ export function runHarnessConformance(rig: HarnessConformanceRig): void {
           `${scenario} must provide steering observations`,
         );
         const delivery = createSubagentDelivery({ runs, push: () => {} });
-        delivery.register(started.id, config.name, started.settled);
+        delivery.register(
+          started.id,
+          config.name,
+          started.settled,
+          "subagent-unmanaged",
+        );
         await fixture.steering.ready;
         assert.deepEqual(
           fixture.steering.offeredTexts.map((text) =>

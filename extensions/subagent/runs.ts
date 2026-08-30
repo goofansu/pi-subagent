@@ -89,6 +89,11 @@ export interface SubagentRuns {
   cancel(ids: readonly string[], reason: CancellationReason): string[];
   /** Stop every running run without querying the display projection. */
   cancelRunning(reason: CancellationReason): string[];
+  /**
+   * Forget all live display records and spent Run identities at the Session boundary.
+   * Callers must cancel active work before resetting.
+   */
+  reset(): void;
   /** Called on every change. Returns an unsubscribe. */
   subscribe(listener: () => void): () => void;
 }
@@ -113,7 +118,7 @@ function isTerminal(status: LifecycleStatus): boolean {
 }
 
 function shortId(): string {
-  return globalThis.crypto.randomUUID().slice(0, 8);
+  return `run-${globalThis.crypto.randomUUID().slice(0, 8)}`;
 }
 
 export function createSubagentRuns(
@@ -243,6 +248,14 @@ export function createSubagentRuns(
           .map((run) => run.id),
         reason,
       );
+    },
+
+    reset() {
+      for (const run of runs.values()) run.controlGate.close();
+      const changed = runs.size > 0;
+      runs.clear();
+      issuedIds.clear();
+      if (changed) notify();
     },
 
     subscribe(listener) {

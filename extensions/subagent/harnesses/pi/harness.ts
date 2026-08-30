@@ -1,10 +1,10 @@
 import type { ChildProcessSpawn } from "../../child-process.ts";
-import type { ParentModel, SubagentTask } from "../../run.ts";
+import type { SubagentContext } from "../../run.ts";
 import { type AgentConfig, EFFORTS } from "../../types.ts";
 import type {
   Harness,
+  HarnessAdapter,
   HarnessDiagnostic,
-  HarnessRun,
   HarnessValidationContext,
 } from "../contract.ts";
 import {
@@ -67,25 +67,34 @@ export function createPiHarness(options: PiHarnessOptions = {}): Harness {
         },
       });
     },
-    prepare(task: SubagentTask, parentModel?: ParentModel): HarnessRun {
-      const profileModel = stringField(task.config, "model", "profile");
-      const effort = effortField(task.config, "profile", EFFORTS);
+    prepare(context: SubagentContext): HarnessAdapter {
+      const profileModel = stringField(context.config, "model", "profile");
+      const effort = effortField(context.config, "profile", EFFORTS);
       // Validation accepts the exact catalogue spelling and execution passes
       // that same spelling through to pi.
       const model =
         profileModel ??
-        (parentModel ? `${parentModel.provider}/${parentModel.id}` : undefined);
+        (context.parentModel
+          ? `${context.parentModel.provider}/${context.parentModel.id}`
+          : undefined);
       const thinking =
-        effort ?? (profileModel ? undefined : parentModel?.thinkingLevel);
+        effort ??
+        (profileModel ? undefined : context.parentModel?.thinkingLevel);
       return {
+        capabilities: { resume: false },
         model,
-        supportedControls: [],
-        execute: (run) =>
-          runPiAgent(run, {
-            resolvedModel: model,
-            resolvedThinking: thinking,
-            ...(options.spawn ? { spawn: options.spawn } : {}),
-          }),
+        prepareRun: (task) => ({
+          supportedControls: [],
+          execute: (run) =>
+            runPiAgent(run, {
+              context,
+              task,
+              resolvedModel: model,
+              resolvedThinking: thinking,
+              ...(options.spawn ? { spawn: options.spawn } : {}),
+            }),
+        }),
+        close: async () => {},
       };
     },
   };

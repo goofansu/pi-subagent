@@ -5,7 +5,15 @@ Date: 2026-08-23
 ## Status
 
 Accepted. [ADR-0012](0012-ordered-codex-steering.md) supersedes this ADR's
-no-mid-run-guidance consequence while preserving the one-shot Run decision.
+no-mid-run-guidance consequence. [ADR-0013](0013-stable-subagent-identity.md)
+adds stable Session-scoped identity and idle adapter retention above Runs.
+Both preserve the one-shot Run decision. [ADR-0014](0014-controlled-agent-resume.md)
+supersedes only this ADR's rejection of follow-up orchestration: resume creates
+a new one-shot Run rather than reopening the old one. [ADR-0015](0015-codex-conversation-across-disposable-attempts.md)
+adds Codex Conversation retention without retaining a child process.
+[ADR-0016](0016-codex-resume-release-contract.md) records the release contract:
+Codex resume reopens follow-up only above the one-shot Run boundary, so every
+goal still owns one immutable Result.
 
 ## Context
 
@@ -40,7 +48,10 @@ creating a resumable provider session.
 
 Pi and Claude Runs still require cancellation and a new Run to correct their
 direction. Codex may accept bounded guidance only while its one active Turn is
-running; the child still settles and is cleaned up with that one-shot Run.
+running; its disposable Attempt still settles and is cleaned up with that
+one-shot Run even though the prepared adapter retains Conversation identity.
+ADR-0013 retains the Subagent-scoped adapter after settlement, not the child
+process or the Run's Control mailbox.
 
 Reading a finished run does not require a live child, only retention, so
 `agent_result` is provided without reopening this decision. Follow-up work

@@ -32,7 +32,8 @@ function details(
   overrides: Partial<NotificationMessageDetails> = {},
 ): NotificationMessageDetails {
   return {
-    id: "a3f81c2b",
+    id: "run-a3f81c2b",
+    subagentId: "subagent-b7e29d4c",
     agent: "explore",
     status: "completed",
     ...overrides,
@@ -51,7 +52,8 @@ test("a summary names the agent, the run and the size", () => {
   const line = summary(details(), 2_400);
 
   assert.match(line, /explore/);
-  assert.match(line, /a3f81c2b/);
+  assert.match(line, /run-a3f81c2b/);
+  assert.match(line, /subagent-b7e29d4c/);
   assert.match(line, /completed/);
   assert.match(line, /2\.4k characters/);
   assert.match(line, /to expand/);

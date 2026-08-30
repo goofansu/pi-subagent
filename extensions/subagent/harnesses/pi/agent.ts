@@ -16,7 +16,14 @@ import {
   processJsonSource,
 } from "../../child-process.ts";
 import { runOneShot, type Translation } from "../../one-shot.ts";
-import type { Fact, FactPart, RunEnding, SubagentRun } from "../../run.ts";
+import type {
+  Fact,
+  FactPart,
+  RunEnding,
+  SubagentContext,
+  SubagentRun,
+  SubagentTask,
+} from "../../run.ts";
 import type { AgentConfig } from "../../types.ts";
 import { parseTools, shouldAppendSystemPrompt } from "../contract.ts";
 
@@ -274,19 +281,22 @@ async function writePromptToTempFile(
 export async function runPiAgent(
   run: SubagentRun,
   {
+    context,
+    task,
     resolvedModel,
     resolvedThinking,
     spawn,
     killEscalationMs,
   }: {
+    context: SubagentContext;
+    task: SubagentTask;
     resolvedModel?: string;
     resolvedThinking?: string;
     spawn?: ChildProcessSpawn;
     killEscalationMs?: number;
-  } = {},
+  },
 ): Promise<RunEnding> {
-  const { task } = run;
-  const { config } = task;
+  const { config } = context;
   let tmpPromptDir: string | null = null;
   let tmpPromptPath: string | null = null;
 
@@ -302,15 +312,15 @@ export async function runPiAgent(
       resolvedModel,
       tmpPromptPath ?? undefined,
       resolvedThinking,
-      task.projectTrusted,
+      context.projectTrusted,
     );
     const invocation = getPiInvocation(args);
     return await runOneShot({
       source: processJsonSource({
         command: invocation.command,
         args: invocation.args,
-        cwd: task.cwd,
-        childDepth: task.childDepth,
+        cwd: context.cwd,
+        childDepth: context.childDepth,
         prompt: task.prompt,
         childName: "pi",
         ...(spawn ? { spawn } : {}),

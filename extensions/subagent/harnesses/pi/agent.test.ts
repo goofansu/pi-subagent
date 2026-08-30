@@ -209,19 +209,21 @@ async function runPiFixture(
 
   const ending = await runPiAgent(
     {
-      task: {
-        config: agent({ systemPrompt: "" }),
-        description: "Work",
-        prompt: options.prompt ?? "do it",
-        cwd: os.tmpdir(),
-        childDepth: 1,
-        projectTrusted: false,
-      },
       report,
       signal: options.signal,
       controls: createControlGate([]).controls,
     },
     {
+      context: {
+        config: agent({ systemPrompt: "" }),
+        cwd: os.tmpdir(),
+        childDepth: 1,
+        projectTrusted: false,
+      },
+      task: {
+        description: "Work",
+        prompt: options.prompt ?? "do it",
+      },
       ...(options.killEscalationMs === undefined
         ? {}
         : { killEscalationMs: options.killEscalationMs }),

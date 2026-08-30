@@ -7,6 +7,7 @@ import {
   formatExecutorRejection,
   formatNotification,
   formatResult,
+  formatResumeOutcome,
   formatRunStatus,
   formatStartResult,
   formatSteerOutcome,
@@ -78,8 +79,32 @@ test("presentation owns agent_start and unknown-agent prose", () => {
     'Unknown agent: "ghost". Available: none',
   );
   assert.equal(
-    formatStartResult("explore", "run-1"),
-    "Started explore as run run-1. Its notification will arrive when it finishes; carry on until then.",
+    formatStartResult("explore", "subagent-1", "run-1"),
+    "Started explore:\nsubagent id subagent-1\nrun id run-1\n\nUse run id run-1 for agent_wait, agent_result, agent_cancel, and agent_steer. Its notification will arrive when the Run finishes; carry on until then.",
+  );
+});
+
+test("presentation distinguishes every agent_resume outcome and identity kind", () => {
+  assert.equal(
+    formatResumeOutcome("subagent-1", {
+      outcome: "started",
+      runId: "run-2",
+    }),
+    "Resumed subagent subagent-1:\nrun id run-2\n\nagent_resume returns immediately, not with the answer. Use run id run-2 for agent_wait, agent_result, agent_cancel, and agent_steer; its own notification will arrive when this Run finishes.",
+  );
+  assert.match(
+    formatResumeOutcome("run-wrong-kind", {
+      outcome: "unknown subagent",
+    }),
+    /unknown Subagent.*not a Run id/,
+  );
+  assert.match(
+    formatResumeOutcome("subagent-busy", { outcome: "already running" }),
+    /not queued and no provider work was started/,
+  );
+  assert.match(
+    formatResumeOutcome("subagent-pi", { outcome: "unsupported" }),
+    /does not support resume.*No Run or provider work was started/,
   );
 });
 
@@ -169,17 +194,18 @@ test("presentation owns every agent_steer outcome and states local-admission sem
 test("presentation owns every agent_result fallback", () => {
   const retained = {
     id: "run-1",
+    subagentId: "subagent-1",
     agent: "explore",
     status: "completed" as const,
     output: "",
   };
   assert.equal(
     formatResult(retained),
-    "explore (run-1):\n\nThe run finished without output.",
+    "explore (subagent subagent-1), run run-1:\n\nThe run finished without output.",
   );
   assert.equal(
     formatResult({ ...retained, evicted: true }),
-    "explore (run-1):\n\nThis run's full output was evicted to bound result-store memory.",
+    "explore (subagent subagent-1), run run-1:\n\nThis run's full output was evicted to bound result-store memory.",
   );
   assert.equal(
     formatAgentResultUnavailable("run-1", true),
@@ -193,17 +219,17 @@ test("presentation owns every agent_result fallback", () => {
 
 test("presentation owns executor-rejection result and notification prose", () => {
   assert.deepEqual(
-    formatExecutorRejection("run-1", "explore", "executor bug"),
+    formatExecutorRejection("run-1", "subagent-1", "explore", "executor bug"),
     {
       output:
         "This run failed before completing.\n\nFailure: executor bug\n\nThe run failed before producing output.",
       notification:
-        "Subagent explore (run-1) failed: executor bug\n\nUse agent_result with id run-1 to retrieve the full result.",
+        "Subagent explore (subagent-1), run run-1 failed: executor bug\n\nUse agent_result with id run-1 to retrieve the full result.",
     },
   );
   assert.equal(
-    formatExecutorRejection("run-1", "explore", "").notification,
-    "Subagent explore (run-1) failed: no reason reported\n\nUse agent_result with id run-1 to retrieve the full result.",
+    formatExecutorRejection("run-1", "subagent-1", "explore", "").notification,
+    "Subagent explore (subagent-1), run run-1 failed: no reason reported\n\nUse agent_result with id run-1 to retrieve the full result.",
   );
 });
 
@@ -242,7 +268,7 @@ test("notification accounting omits absent and undisplayed usage facts", () => {
 
   assert.equal(
     formatNotification("a1", result),
-    "Subagent explore (a1) was cancelled (requested).",
+    "Subagent explore (subagent-test), run a1 was cancelled (requested).",
   );
 
   // Cache and context facts are not fields in the accounting line, so they
@@ -252,7 +278,7 @@ test("notification accounting omits absent and undisplayed usage facts", () => {
   result.usage.cost = 0.00004;
   assert.equal(
     formatNotification("a1", result),
-    "Subagent explore (a1) was cancelled (requested).",
+    "Subagent explore (subagent-test), run a1 was cancelled (requested).",
   );
 
   result.usage.input = 1_200;
@@ -311,7 +337,7 @@ test("N3: failed notification carries only the primary error and pointer", () =>
   result.stderr = "raw secret stderr";
   assert.equal(
     formatNotification("a1", result),
-    "Subagent explore (a1) failed: model refused\n\nUse agent_result with id a1 to retrieve the full result.",
+    "Subagent explore (subagent-test), run a1 failed: model refused\n\nUse agent_result with id a1 to retrieve the full result.",
   );
 });
 
@@ -339,7 +365,7 @@ test("a cancelled notification is terse and contains no partial output", () => {
   result.lifecycle = { phase: "cancelled", finishedAt: 10, reason: "shutdown" };
   assert.equal(
     formatNotification("a1", result),
-    "Subagent explore (a1) was cancelled (shutdown).",
+    "Subagent explore (subagent-test), run a1 was cancelled (shutdown).",
   );
 });
 

@@ -168,16 +168,39 @@ comments and ordinary string literals are not.
   through the dispatcher and fold, asserting additive deltas; the Pi and fake
   rigs also prove latest-context replacement, while the Claude rig proves no
   double count between per-message usage and the terminal result.
-- [x] **One-shot binds every harness** — one prompt in, one terminal answer
-  out (ADR-0003 is a property of Run). *Test:* `one-shot.test.ts` has
-  compile-time exact `keyof` assertions for `Harness`, `HarnessRun`,
-  `SubagentTask`, and `SubagentRun`, plus runtime checks covering every adapter.
-  Prepared Runs declare neutral Control capability, and executors receive only
-  a neutral Control stream — never send/control methods or persistent provider
-  sessions. Codex declares steering support; Pi and Claude declare none.
+- [x] **One-shot binds every Run** — one prompt in, one terminal answer out
+  (ADR-0003 is a property of Run). Harness preparation binds the fixed
+  Subagent context and returns an adapter that can prepare independent Runs,
+  declare neutral resume capability, and close idempotently. The Session
+  manager retains it while the Subagent is idle and closes it at Session
+  shutdown; the dispatcher owns only each Run execution. *Test:*
+  `one-shot.test.ts` has compile-time exact `keyof` assertions for `Harness`,
+  `HarnessAdapter`, `HarnessCapabilities`, `HarnessRun`, `SubagentContext`,
+  `SubagentTask`, `SubagentRun`, `Fact`, `RunEnding`, and `SingleResult`, plus
+  runtime checks covering every adapter. Prepared Runs declare neutral Control
+  capability, and executors receive only a fresh reporter, AbortSignal, and
+  neutral Control stream — never send/control methods or provider continuation
+  handles. Codex declares steering support; Pi and Claude declare none. The
+  controlled fixtures and production Codex declare resume; Pi and Claude remain
+  unsupported and start no continuation work. Codex adapter tests prove fresh,
+  fully cleaned Attempts retain private semantic context while producing
+  independent managed Runs, per-Run accounting, current-Run steering, honest
+  continuation failures, and deterministic cancellation and shutdown races.
+- [x] **Managed resume conformance is part of the adapter cost** — the shared
+  battery creates one stable Subagent and first Run, observes idle transition,
+  admits at most one resumed Run, preserves independent immutable Results and
+  notifications, limits each adapter to one disposable execution at a time,
+  and closes the retained adapter once across repeated shutdown. Its fixture
+  contract contains neutral capabilities and lifecycle observations only and
+  never branches on Harness names or exposes continuation tokens. The
+  controlled adapter and production Codex prove retained semantic context
+  through the same domain outcomes; production Pi and Claude visibly prove
+  unsupported resume with zero continuation work. The battery repeats every
+  adapter path 32 times without timing delays. *Test:*
+  `npm run test:managed-conformance`.
 - [x] **Depth binds every harness** — Claude children have their
   agent-spawning tools disallowed, and every executor copies
-  `task.childDepth` into its child's environment so a Bash-launched
+  `context.childDepth` into its child's environment so a Bash-launched
   grandchild pi cannot restart at depth zero. *Test:* the shared **Harness
   Conformance** battery's `child-depth` scenario runs every real harness and
   observes the child depth; adapter policy tests assert Claude disallows
@@ -238,7 +261,9 @@ comments and ordinary string literals are not.
   refused with a JSON-RPC method-not-found error — neither can fail the run,
   because the protocol carries many more notification variants than this
   adapter consumes. The contract snapshot is vendored in
-  `docs/codex-protocol/`; when the codex CLI moves, re-verify via the
+  `docs/codex-protocol/`, including the generated `thread/resume` response
+  whose historical Turns remain unconsumed attachment data; when the codex
+  CLI moves, re-verify via the
   `codex-upgrade` skill (`.agents/skills/codex-upgrade/SKILL.md`), which
   diffs the regenerated schema and runs the live smoke in
   `scripts/codex-live-smoke.mjs`. *Test:* the App Server transport tests
@@ -261,3 +286,12 @@ comments and ordinary string literals are not.
   `CODEX_STEERING_LIVE_SMOKE_PASS`, and cleans up on every exit path. Run
   `npm run check` for the local quality gates and `npm run release:check` for
   the quota-spending final gate.
+- [x] **Codex resume has one release gate** — the installed pinned CLI's
+  generated request, notification, and `thread/resume` response artifacts are
+  byte-checked; per-Run and managed conformance are green; deterministic
+  public and transport races repeat; and the authenticated resume smoke starts
+  one Subagent, waits for its first Attempt to be disposed, resumes through a
+  fresh Attempt without replaying its unique marker, retrieves both immutable
+  Results, observes both notifications, rejects provider identity at the
+  public boundary, and prints `CODEX_RESUME_LIVE_SMOKE_PASS`. The existing
+  steering/interruption smoke remains a separate required proof.

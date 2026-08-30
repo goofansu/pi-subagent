@@ -54,6 +54,8 @@ export interface AgentConfig {
 
 export interface SingleResult {
   agent: string;
+  /** Stable Session-scoped Subagent that owns this Run. */
+  subagentId: string;
   /** The harness executing this run, retained for live presentation. */
   harness: string;
   description: string;

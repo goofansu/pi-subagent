@@ -9,6 +9,7 @@ import {
 
 const notification: PushedNotification = {
   id: "run-1",
+  subagentId: "subagent-1",
   agent: "explore",
   status: "completed",
   text: "done",

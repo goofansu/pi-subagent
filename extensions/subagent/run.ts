@@ -128,15 +128,13 @@ export interface ParentModel {
   thinkingLevel?: string;
 }
 
-/** Everything needed to run one agent once. */
-export interface SubagentTask {
-  /** The resolved agent profile. The executor must not mutate it. */
+/** Fixed inputs used to prepare one Subagent-scoped Harness adapter. */
+export interface SubagentContext {
+  /** The resolved agent profile. The adapter must not mutate it. */
   readonly config: AgentConfig;
-  readonly description: string;
-  readonly prompt: string;
-  /** Working directory for the child. */
+  /** Working directory fixed for the Subagent's lifetime. */
   readonly cwd: string;
-  /** Nesting depth the executor must copy to its child. */
+  /** Nesting depth every execution must copy to its child. */
   readonly childDepth: number;
   /**
    * Pi's project-trust decision for `cwd`, as resolved by the session that is
@@ -145,6 +143,14 @@ export interface SubagentTask {
    * neither prompt nor see a session-only decision.
    */
   readonly projectTrusted: boolean;
+  /** The caller policy inherited when the profile does not pin a model. */
+  readonly parentModel?: ParentModel;
+}
+
+/** The inputs unique to one Run on a prepared Subagent. */
+export interface SubagentTask {
+  readonly description: string;
+  readonly prompt: string;
 }
 
 /** Guidance admitted to a Run while its original execution is active. */
@@ -218,7 +224,6 @@ export type RunEnding =
  * and the signal that cancels it. The executor never sees the run record.
  */
 export interface SubagentRun {
-  readonly task: SubagentTask;
   readonly report: RunReporter;
   readonly signal?: AbortSignal;
   /** The prepared Run's one neutral, single-consumer Control stream. */
@@ -250,9 +255,11 @@ export function createEmptyResult(
   description: string,
   startedAt: number,
   harness = DEFAULT_HARNESS_NAME,
+  subagentId = "subagent-test",
 ): SingleResult {
   return {
     agent,
+    subagentId,
     harness,
     description,
     lifecycle: { phase: "running" },

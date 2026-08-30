@@ -11,9 +11,9 @@ import type {
   SDKSystemMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { getFinalOutput } from "../../messages.ts";
-import { DEPTH_ENV_KEY, type SubagentTask } from "../../run.ts";
-import { startSubagent } from "../../runner.ts";
+import { DEPTH_ENV_KEY, type SubagentContext } from "../../run.ts";
 import { createSubagentRuns } from "../../runs.ts";
+import { startSubagent } from "../../standalone-run-helper.ts";
 import type { AgentConfig } from "../../types.ts";
 import { renderRunLines } from "../../widget.ts";
 import {
@@ -39,10 +39,8 @@ const config: AgentConfig = {
   fields: { model: "sonnet", effort: "high", appendSystemPrompt: true },
   systemPrompt: "Be useful.",
 };
-const task: SubagentTask = {
+const context: SubagentContext = {
   config,
-  description: "task",
-  prompt: "do it",
   cwd: "/work",
   childDepth: 1,
   projectTrusted: false,
@@ -431,23 +429,26 @@ test("Claude validation accepts exactly the SDK family aliases", () => {
 
 test("Claude passes the alias through unresolved for the SDK to interpret", () => {
   const harness = createClaudeHarness();
-  assert.equal(harness.prepare(task).model, "sonnet");
+  assert.equal(harness.prepare(context).model, "sonnet");
   assert.equal(
     harness.prepare({
-      ...task,
+      ...context,
       config: { ...config, fields: { model: "Opus" } },
     }).model,
     "opus",
   );
   assert.equal(
-    harness.prepare({ ...task, config: { ...config, fields: {} } }).model,
+    harness.prepare({ ...context, config: { ...config, fields: {} } }).model,
     undefined,
   );
 });
 
 test("Claude shares tools trimming and empty-segment handling with Pi", () => {
   const options = buildClaudeOptions(
-    { ...task, config: { ...config, fields: { tools: " read, , grep ,, " } } },
+    {
+      ...context,
+      config: { ...config, fields: { tools: " read, , grep ,, " } },
+    },
     undefined,
     undefined,
     new AbortController(),
@@ -458,7 +459,7 @@ test("Claude shares tools trimming and empty-segment handling with Pi", () => {
 
 test("Claude preserves an explicitly empty tools allowlist", () => {
   const options = buildClaudeOptions(
-    { ...task, config: { ...config, fields: { tools: ", ," } } },
+    { ...context, config: { ...config, fields: { tools: ", ," } } },
     undefined,
     undefined,
     new AbortController(),
@@ -469,7 +470,8 @@ test("Claude preserves an explicitly empty tools allowlist", () => {
 
 test("Claude thinking budgets stay inside the adapter", () => {
   assert.deepEqual(
-    buildClaudeOptions(task, "sonnet", "high", new AbortController()).thinking,
+    buildClaudeOptions(context, "sonnet", "high", new AbortController())
+      .thinking,
     { type: "enabled", budgetTokens: 8192 },
   );
 });
@@ -499,7 +501,7 @@ test("Claude validation diagnoses a non-alias model with its value", () => {
 test("Claude permissions bypass either forwarded trust value and disallow child spawning", () => {
   for (const projectTrusted of [false, true]) {
     const options = buildClaudeOptions(
-      { ...task, projectTrusted },
+      { ...context, projectTrusted },
       undefined,
       "off",
       new AbortController(),
@@ -516,7 +518,7 @@ test("Claude children carry a nontrivial depth and inherit the environment", () 
   process.env[marker] = "inherited";
   try {
     const options = buildClaudeOptions(
-      { ...task, childDepth: 7 },
+      { ...context, childDepth: 7 },
       undefined,
       "off",
       new AbortController(),

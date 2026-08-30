@@ -24,7 +24,7 @@ export interface SessionStartContext {
 
 export interface SessionLifecycle {
   sessionStart(ctx: SessionStartContext): void;
-  sessionShutdown(): void;
+  sessionShutdown(): Promise<void>;
 }
 
 interface SessionLifecyclePi {
@@ -37,10 +37,15 @@ interface SessionLifecycleDelivery {
   shutdown(): void;
 }
 
+interface SessionLifecycleSubagents {
+  shutdown(): Promise<void>;
+}
+
 export interface SessionLifecycleOptions {
   pi: SessionLifecyclePi;
   agentsDir: string;
   delivery: SessionLifecycleDelivery;
+  subagents: SessionLifecycleSubagents;
   sessionPush: SessionPush;
   runs: SubagentRuns;
   harnesses: HarnessRegistry;
@@ -55,6 +60,7 @@ export function createSessionLifecycle({
   pi,
   agentsDir,
   delivery,
+  subagents,
   sessionPush,
   runs,
   harnesses,
@@ -106,11 +112,15 @@ export function createSessionLifecycle({
       }
     },
 
-    sessionShutdown() {
+    async sessionShutdown() {
       sessionPush.unbind();
       uninstallWidget?.();
       uninstallWidget = null;
+      // The manager marks every Subagent closed before it forwards active-Run
+      // cancellation. Delivery then clears Run results and notifications.
+      const adaptersClosed = subagents.shutdown();
       delivery.shutdown();
+      await adaptersClosed;
     },
   };
 }
