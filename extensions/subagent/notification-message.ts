@@ -5,7 +5,7 @@
  * and reveal their bounded orientation text when expanded.
  */
 
-import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import {
@@ -13,7 +13,11 @@ import {
   notificationVerb,
   runStatusTone,
 } from "./presentation.ts";
-import { contentText } from "./render.ts";
+import {
+  contentText,
+  formatParentheticalKeyHint,
+  type KeyHintRenderer,
+} from "./render.ts";
 import type { RenderableTheme, TerminalLifecycleStatus } from "./types.ts";
 
 /** The `customType` that routes a notification to the renderer below. */
@@ -99,7 +103,7 @@ export function formatNotificationSummary(
   characters: number,
   theme: RenderableTheme,
   expanded = false,
-  renderKeyHint = keyHint,
+  renderKeyHint?: KeyHintRenderer,
 ): string {
   const tone = runStatusTone(details.status);
   const verb = notificationVerb(details.status);
@@ -112,11 +116,13 @@ export function formatNotificationSummary(
 
   // One key toggles both ways, so the hint has to name the direction it will
   // actually go rather than always offering to expand.
-  const hint = renderKeyHint(
+  const hint = formatParentheticalKeyHint(
+    theme,
     "app.tools.expand",
     expanded ? "to collapse" : "to expand",
+    renderKeyHint,
   );
-  return `${line} ${theme.fg("dim", `(${hint})`)}`;
+  return `${line} ${hint}`;
 }
 
 /**

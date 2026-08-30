@@ -72,6 +72,42 @@ export interface CollectedRuns {
   stillRunning?: number;
 }
 
+/** Successful identity handoff returned immediately by `agent_resume`. */
+export interface ResumedRun {
+  subagentId: string;
+  runId: string;
+}
+
+export type KeyHintRenderer = typeof keyHint;
+
+/** Keep parenthetical punctuation dim even when the nested hint resets ANSI. */
+export function formatParentheticalKeyHint(
+  theme: RenderableTheme,
+  action: Parameters<KeyHintRenderer>[0],
+  description: string,
+  renderKeyHint: KeyHintRenderer = keyHint,
+): string {
+  return `${theme.fg("dim", "(")}${renderKeyHint(action, description)}${theme.fg("dim", ")")}`;
+}
+
+/** The actionable one-line handoff for a resumed Run. */
+export function formatResumeSummary(
+  resumed: ResumedRun,
+  theme: RenderableTheme,
+  renderKeyHint?: KeyHintRenderer,
+): string {
+  return (
+    theme.fg("toolTitle", "Resumed subagent") +
+    theme.fg("dim", ` ${resumed.subagentId} · run ${resumed.runId} `) +
+    formatParentheticalKeyHint(
+      theme,
+      "app.tools.expand",
+      "to expand",
+      renderKeyHint,
+    )
+  );
+}
+
 /**
  * Guard foreign tool results; extension-produced details are typed at creation,
  * so this runtime check's only job is defending this renderer at its boundary.
@@ -81,6 +117,14 @@ function isCollectedRuns(value: unknown): value is CollectedRuns {
     typeof value === "object" &&
     value !== null &&
     Array.isArray((value as CollectedRuns).runs)
+  );
+}
+
+function isResumedRun(value: unknown): value is ResumedRun {
+  if (typeof value !== "object" || value === null) return false;
+  const details = value as Record<string, unknown>;
+  return (
+    typeof details.subagentId === "string" && typeof details.runId === "string"
   );
 }
 
@@ -94,7 +138,7 @@ export function formatCollectedSummary(
   collected: CollectedRuns,
   characters: number,
   theme: RenderableTheme,
-  renderKeyHint = keyHint,
+  renderKeyHint?: KeyHintRenderer,
 ): string {
   const { runs } = collected;
   let line: string;
@@ -128,7 +172,12 @@ export function formatCollectedSummary(
   if (collected.stillRunning) {
     line += theme.fg("warning", ` · ${collected.stillRunning} still running`);
   }
-  return `${line} ${theme.fg("dim", `(${renderKeyHint("app.tools.expand", "to expand")})`)}`;
+  return `${line} ${formatParentheticalKeyHint(
+    theme,
+    "app.tools.expand",
+    "to expand",
+    renderKeyHint,
+  )}`;
 }
 
 /**
@@ -161,4 +210,21 @@ export function renderMarkdownResult(
     0,
     0,
   );
+}
+
+/** Render the immediate `agent_resume` result at its registered tool seam. */
+export function renderResumeResult(
+  result: {
+    content: string | Array<{ type: string; text?: string }>;
+    details?: unknown;
+  },
+  options: ToolRenderResultOptions,
+  theme: RenderableTheme,
+): Component {
+  const text = contentText(result.content).trim();
+  if (!text || options.expanded || !isResumedRun(result.details)) {
+    return renderMarkdownResult(result, options, theme);
+  }
+
+  return new Text(formatResumeSummary(result.details, theme), 0, 0);
 }

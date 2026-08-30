@@ -6,6 +6,8 @@ import type { CollectedRuns } from "./render.ts";
 import {
   contentText,
   formatCollectedSummary,
+  formatParentheticalKeyHint,
+  formatResumeSummary,
   renderMarkdownResult,
   renderSubagentCall,
 } from "./render.ts";
@@ -19,6 +21,18 @@ const theme = {
 
 const keyHintStub = (_action: string, description: string) =>
   `ctrl+o ${description}`;
+
+const styleAwareTheme = {
+  fg: (color: unknown, text: string) =>
+    color === "dim" ? `\u001b[2m${text}\u001b[22m` : text,
+  bg: (_color: unknown, text: string) => text,
+  bold: (text: string) => text,
+} as unknown as Parameters<typeof renderMarkdownResult>[2];
+
+const resettingKeyHintStub = (action: string, description: string) => {
+  assert.equal(action, "app.tools.expand");
+  return `\u001b[2mctrl+x\u001b[0m\u001b[37m ${description}\u001b[0m`;
+};
 
 function render(
   content: string,
@@ -111,6 +125,33 @@ test("headings and lists become structure rather than punctuation", () => {
 
 // ── Collapsed ────────────────────────────────────────────────────────────────
 
+test("a parenthetical key hint independently dims both parentheses", () => {
+  assert.equal(
+    formatParentheticalKeyHint(
+      styleAwareTheme,
+      "app.tools.expand",
+      "to expand",
+      resettingKeyHintStub,
+    ),
+    "\u001b[2m(\u001b[22m" +
+      "\u001b[2mctrl+x\u001b[0m\u001b[37m to expand\u001b[0m" +
+      "\u001b[2m)\u001b[22m",
+  );
+});
+
+test("a resume summary accepts the configured key-hint renderer", () => {
+  const rendered = formatResumeSummary(
+    { subagentId: "subagent-1", runId: "run-2" },
+    theme,
+    resettingKeyHintStub,
+  );
+
+  assert.equal(
+    stripVTControlCharacters(rendered),
+    "Resumed subagent subagent-1 · run run-2 (ctrl+x to expand)",
+  );
+});
+
 test("an extension-produced collected result renders its run row", () => {
   const body = `# Findings\n\n${"a long paragraph\n".repeat(40)}`;
   const rendered = render(body, false, oneRun);
@@ -193,6 +234,24 @@ test("a collapsed summary says when runs are still going", () => {
     ),
     /still running/,
   );
+});
+
+test("agent_wait and agent_result keep both hint parentheses dim across nested resets", () => {
+  const dimParenthetical =
+    "\u001b[2m(\u001b[22m" +
+    resettingKeyHintStub("app.tools.expand", "to expand") +
+    "\u001b[2m)\u001b[22m";
+
+  for (const collected of [oneRun, { ...oneRun, stillRunning: 1 }]) {
+    const rendered = formatCollectedSummary(
+      collected,
+      240,
+      styleAwareTheme,
+      resettingKeyHintStub,
+    );
+
+    assert.ok(rendered.endsWith(dimParenthetical));
+  }
 });
 
 test("a result without details falls back to its opening line", () => {

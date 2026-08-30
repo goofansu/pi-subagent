@@ -27,6 +27,7 @@ import {
 import {
   type CollectedRuns,
   renderMarkdownResult,
+  renderResumeResult,
   renderSubagentCall,
 } from "./render.ts";
 import { getSubagentDepth } from "./runner.ts";
@@ -150,7 +151,7 @@ export function registerSubagentFeatureTools(
       description: Type.String({ description: "Label for this new Run" }),
       prompt: Type.String({ description: "The full next task brief" }),
     }),
-    renderResult: renderMarkdownResult,
+    renderResult: renderResumeResult,
 
     async execute(_toolCallId, params) {
       const outcome = subagents.resume({
@@ -170,7 +171,10 @@ export function registerSubagentFeatureTools(
         content: [
           { type: "text", text: formatResumeOutcome(params.id, outcome) },
         ],
-        details: undefined,
+        details:
+          outcome.outcome === "started"
+            ? { subagentId: params.id, runId: outcome.runId }
+            : undefined,
       };
     },
   });

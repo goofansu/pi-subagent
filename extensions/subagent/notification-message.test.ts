@@ -21,6 +21,18 @@ const theme = {
 const keyHintStub = (_action: string, description: string) =>
   `ctrl+o ${description}`;
 
+const styleAwareTheme = {
+  fg: (color: unknown, text: string) =>
+    color === "dim" ? `\u001b[2m${text}\u001b[22m` : text,
+  bg: (_color: unknown, text: string) => text,
+  bold: (text: string) => text,
+};
+
+const resettingKeyHintStub = (action: string, description: string) => {
+  assert.equal(action, "app.tools.expand");
+  return `\u001b[2mctrl+x\u001b[0m\u001b[37m ${description}\u001b[0m`;
+};
+
 const summary = (
   details: NotificationMessageDetails,
   characters: number,
@@ -63,6 +75,27 @@ test("the hint names the direction the key will actually go", () => {
   assert.match(summary(details(), 100, false), /to expand/);
   assert.match(summary(details(), 100, true), /to collapse/);
   assert.doesNotMatch(summary(details(), 100, true), /to expand/);
+});
+
+test("notification expand and collapse hints keep both parentheses dim across nested resets", () => {
+  for (const [expanded, description] of [
+    [false, "to expand"],
+    [true, "to collapse"],
+  ] as const) {
+    const rendered = formatNotificationSummary(
+      details(),
+      100,
+      styleAwareTheme,
+      expanded,
+      resettingKeyHintStub,
+    );
+    const dimParenthetical =
+      "\u001b[2m(\u001b[22m" +
+      resettingKeyHintStub("app.tools.expand", description) +
+      "\u001b[2m)\u001b[22m";
+
+    assert.ok(rendered.endsWith(dimParenthetical));
+  }
 });
 
 test("small notifications are counted exactly", () => {

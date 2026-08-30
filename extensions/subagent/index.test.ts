@@ -6,7 +6,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { stripVTControlCharacters } from "node:util";
+import { type ExtensionAPI, initTheme } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import type { ChildProcessSpawn } from "./child-process.ts";
 import { type ControlAdmission, createControlGate } from "./control-source.ts";
 import { createSubagentDelivery, type PushedNotification } from "./delivery.ts";
@@ -25,7 +27,9 @@ import {
   type StartedManagedSubagent,
   type StartManagedSubagentOptions,
 } from "./subagents.ts";
-import type { AgentConfig } from "./types.ts";
+import type { AgentConfig, RenderableTheme } from "./types.ts";
+
+initTheme(undefined, false);
 
 // ── Extension registration ───────────────────────────────────────────────────
 
@@ -169,7 +173,19 @@ interface RegisteredTools {
       signal?: AbortSignal,
       onUpdate?: undefined,
       ctx?: unknown,
-    ): Promise<{ content: Array<{ type: string; text: string }> }>;
+    ): Promise<{
+      content: Array<{ type: string; text: string }>;
+      details?: unknown;
+    }>;
+    renderResult?(
+      result: {
+        content: string | Array<{ type: string; text?: string }>;
+        details?: unknown;
+      },
+      options: { expanded: boolean; isPartial: boolean },
+      theme: RenderableTheme,
+      context: unknown,
+    ): Component;
   };
 }
 
@@ -592,6 +608,56 @@ test("agent_resume starts a distinct Run with retained private Harness context",
   );
   assert.match(afterCompletedResume.content[0].text, /run id run-third/);
   assert.equal(boundary.active.length, 3);
+});
+
+test("registered agent_resume renders actionable collapsed and complete expanded success", async () => {
+  const boundary = runtimeBoundary(["run-first", "run-second"], {
+    resumable: true,
+  });
+  const started = await boundary.startIdentities();
+  boundary.active[0].resolve({ ending: "answered" });
+  await boundary.flush();
+
+  const resumed = await boundary.tools.agent_resume.execute("resume", {
+    id: started.subagentId,
+    description: "continue",
+    prompt: "do the next thing",
+  });
+  const renderResult = boundary.tools.agent_resume.renderResult;
+  assert.ok(renderResult);
+
+  const render = (expanded: boolean) =>
+    renderResult(
+      resumed,
+      { expanded, isPartial: false },
+      {
+        fg: (_tone, text) => text,
+        bg: (_tone, text) => text,
+        bold: (text) => text,
+      },
+      {},
+    )
+      .render(160)
+      .map((line) => stripVTControlCharacters(line).trimEnd())
+      .join("\n");
+
+  const collapsed = render(false);
+  assert.match(
+    collapsed,
+    new RegExp(
+      `^Resumed subagent ${started.subagentId} · run run-second \\(.*to expand\\)$`,
+    ),
+  );
+  assert.doesNotMatch(collapsed, /:$/);
+
+  const expanded = render(true);
+  assert.match(expanded, new RegExp(`subagent ${started.subagentId}`));
+  assert.match(expanded, /run id run-second/);
+  assert.match(
+    expanded,
+    /agent_wait, agent_result, agent_cancel, and agent_steer/,
+  );
+  assert.match(expanded, /notification\s+will arrive when this Run finishes/);
 });
 
 test("public tools retain one ephemeral Codex session across independent Results", async () => {
