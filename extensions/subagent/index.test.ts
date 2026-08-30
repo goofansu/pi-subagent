@@ -17,6 +17,7 @@ import subagentExtension, {
   registerSubagentFeatureTools,
 } from "./index.ts";
 import { buildNotificationMessage } from "./notification-message.ts";
+import { withPiChildExtensionLoad } from "./pi-child-extension-load.ts";
 import { createEmptyResult, type RunEnding, type SubagentRun } from "./run.ts";
 import { createSubagentRuns } from "./runs.ts";
 import {
@@ -28,7 +29,7 @@ import type { AgentConfig } from "./types.ts";
 
 // ── Extension registration ───────────────────────────────────────────────────
 
-test("the extension is not exposed inside a subagent Pi process", () => {
+test("the extension is not exposed inside a subagent Pi process", async () => {
   const originalDepth = process.env.PI_SUBAGENT_DEPTH;
   try {
     const nestedEvents: string[] = [];
@@ -40,19 +41,39 @@ test("the extension is not exposed inside a subagent Pi process", () => {
     } as unknown as ExtensionAPI);
     assert.deepEqual(nestedEvents, []);
 
-    const firstParentEvents: string[] = [];
-    const secondParentEvents: string[] = [];
+    const parentHost = () => {
+      const handlers: Record<string, (event: unknown, ctx: unknown) => void> =
+        {};
+      const events: string[] = [];
+      const tools: string[] = [];
+      return {
+        handlers,
+        events,
+        tools,
+        pi: {
+          on(event: string, handler: (event: unknown, ctx: unknown) => void) {
+            events.push(event);
+            handlers[event] = handler;
+          },
+          registerTool(tool: { name: string }) {
+            tools.push(tool.name);
+          },
+          registerMessageRenderer() {},
+          registerCommand() {},
+          getThinkingLevel: () => "off",
+          sendMessage() {},
+          sendUserMessage() {},
+        } as unknown as ExtensionAPI,
+      };
+    };
+    const firstParent = parentHost();
+    const secondParent = parentHost();
     delete process.env.PI_SUBAGENT_DEPTH;
-    subagentExtension({
-      on(event: string) {
-        firstParentEvents.push(event);
-      },
-    } as unknown as ExtensionAPI);
-    subagentExtension({
-      on(event: string) {
-        secondParentEvents.push(event);
-      },
-    } as unknown as ExtensionAPI);
+    subagentExtension(firstParent.pi);
+    const reloadedExtension = (
+      await import(`./index.ts?parent-reattach=${Date.now()}`)
+    ).default;
+    reloadedExtension(secondParent.pi);
     const expected = [
       "session_start",
       "session_shutdown",
@@ -60,8 +81,52 @@ test("the extension is not exposed inside a subagent Pi process", () => {
       "turn_end",
       "agent_settled",
     ];
-    assert.deepEqual(firstParentEvents, expected);
-    assert.deepEqual(secondParentEvents, expected);
+    assert.deepEqual(firstParent.events, expected);
+    assert.deepEqual(secondParent.events, expected);
+
+    const context = {
+      cwd: "/project",
+      modelRegistry: { getAll: () => [] },
+      isProjectTrusted: () => false,
+      ui: { notify() {}, setWidget() {} },
+    };
+    firstParent.handlers.session_start({}, context);
+    secondParent.handlers.session_start({}, context);
+    const expectedTools = [
+      "agent_start",
+      "agent_resume",
+      "agent_wait",
+      "agent_result",
+      "agent_cancel",
+      "agent_steer",
+    ];
+    assert.deepEqual(firstParent.tools, expectedTools);
+    assert.deepEqual(secondParent.tools, expectedTools);
+  } finally {
+    if (originalDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
+    else process.env.PI_SUBAGENT_DEPTH = originalDepth;
+  }
+});
+
+test("an in-process Pi child extension load stays inert without process depth", async () => {
+  const originalDepth = process.env.PI_SUBAGENT_DEPTH;
+  try {
+    delete process.env.PI_SUBAGENT_DEPTH;
+    const childEvents: string[] = [];
+
+    await withPiChildExtensionLoad(async () => {
+      await Promise.resolve();
+      const childLoadedExtension = (
+        await import(`./index.ts?child-binding=${Date.now()}`)
+      ).default;
+      childLoadedExtension({
+        on(event: string) {
+          childEvents.push(event);
+        },
+      } as unknown as ExtensionAPI);
+    });
+
+    assert.deepEqual(childEvents, []);
   } finally {
     if (originalDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
     else process.env.PI_SUBAGENT_DEPTH = originalDepth;

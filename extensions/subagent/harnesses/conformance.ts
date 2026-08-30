@@ -39,6 +39,8 @@ export const HARNESS_CONFORMANCE_SCENARIOS = [
   "terminal-transcript-healing",
   "steering-single-consumed",
   "steering-fifo-consumed",
+  "steering-intermediate-completion",
+  "steering-admission-no-fact",
 ] as const;
 
 export type HarnessConformanceScenario =
@@ -71,6 +73,8 @@ export interface HarnessConformanceSteering {
   readonly receivedTexts: () => readonly string[];
   readonly providerControlStarts: () => number;
   readonly maxConcurrentProviderControls: () => number;
+  /** Neutral checkpoint after adapter-local completion evidence was observed. */
+  readonly intermediateCheckpoint?: Promise<void>;
 }
 
 /**
@@ -154,10 +158,10 @@ function assertNoBackendAbortVocabulary(result: SingleResult): void {
 /** Register the v1 executor obligations for one harness rig. */
 export function runHarnessConformance(rig: HarnessConformanceRig): void {
   for (const scenario of HARNESS_CONFORMANCE_SCENARIOS) {
-    const fixture = rig.build(scenario);
+    const firstFixture = rig.build(scenario);
     const testName = `${rig.name} conformance: ${scenario}`;
 
-    if (!fixture) {
+    if (!firstFixture) {
       test(testName, {
         skip: `scenario '${scenario}' is not implemented`,
       }, () => {});
@@ -165,107 +169,133 @@ export function runHarnessConformance(rig: HarnessConformanceRig): void {
     }
 
     test(testName, async () => {
-      const runs = createSubagentRuns();
-      const config = profile(fixture.harness.name);
-      const beforeConfig = structuredClone(config);
-      const started = startSubagent({
-        config,
-        description: "conformance",
-        prompt: "exercise the harness",
-        harnesses: createHarnessRegistry([fixture.harness]),
-        runs,
-      });
+      const repetitions =
+        scenario === "steering-fifo-consumed" ||
+        scenario === "steering-intermediate-completion"
+          ? 32
+          : 1;
+      for (let iteration = 0; iteration < repetitions; iteration++) {
+        const fixture: HarnessConformanceFixture | undefined =
+          iteration === 0 ? firstFixture : rig.build(scenario);
+        assert.ok(fixture, `${scenario} disappeared during repetition`);
+        const runs = createSubagentRuns();
+        const config = profile(fixture.harness.name);
+        const beforeConfig = structuredClone(config);
+        const started = startSubagent({
+          config,
+          description: "conformance",
+          prompt: "exercise the harness",
+          harnesses: createHarnessRegistry([fixture.harness]),
+          runs,
+        });
 
-      if (scenario.startsWith("steering-")) {
-        assert.ok(
-          fixture.steering,
-          `${scenario} must provide steering observations`,
-        );
-        const delivery = createSubagentDelivery({ runs, push: () => {} });
-        delivery.register(
-          started.id,
-          config.name,
-          started.settled,
-          "subagent-unmanaged",
-        );
-        await fixture.steering.ready;
+        if (scenario.startsWith("steering-")) {
+          assert.ok(
+            fixture.steering,
+            `${scenario} must provide steering observations`,
+          );
+          const delivery = createSubagentDelivery({ runs, push: () => {} });
+          delivery.register(
+            started.id,
+            config.name,
+            started.settled,
+            "subagent-unmanaged",
+          );
+          await fixture.steering.ready;
+          assert.deepEqual(
+            fixture.steering.offeredTexts.map((text) =>
+              delivery.steer(started.id, text),
+            ),
+            fixture.steering.offeredTexts.map(
+              () => fixture.steering?.expectedOutcome,
+            ),
+          );
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          const expectedInFlight: number =
+            fixture.steering.expectedOutcome === "accepted" ? 1 : 0;
+          assert.equal(
+            fixture.steering.providerControlStarts(),
+            expectedInFlight,
+            "only the first provider Control may start before its response",
+          );
+          assert.equal(
+            fixture.steering.maxConcurrentProviderControls(),
+            expectedInFlight,
+            "provider Control delivery must remain serial while the first response is held",
+          );
+          if (scenario === "steering-intermediate-completion") {
+            assert.ok(
+              fixture.steering.intermediateCheckpoint,
+              "provider-transparent steering requires a neutral intermediate checkpoint",
+            );
+            await fixture.steering.intermediateCheckpoint;
+            assert.equal(
+              runs.list()[0]?.status,
+              "running",
+              "adapter-local completion must not settle the managed Run while earlier guidance is outstanding",
+            );
+          }
+          fixture.steering.release();
+        }
+
+        if (
+          scenario === "abort-mid-run" ||
+          scenario === "terminal-answer-then-abort"
+        ) {
+          assert.ok(
+            fixture.readyForCancellation,
+            `${scenario} must provide a cancellation readiness gate`,
+          );
+          await fixture.readyForCancellation;
+          assert.deepEqual(
+            runs.cancel([started.id], "requested"),
+            [started.id],
+            "the run must still be active when cancellation is requested",
+          );
+        }
+
+        await assert.doesNotReject(started.settled);
+        const result = await started.settled;
+        assertSettled(result, fixture.expected);
+        if (scenario === "backend-crash") {
+          assert.doesNotMatch(
+            result.errorMessage ?? "",
+            /^Executor failed unexpectedly:/,
+            "backend-crash must resolve from the executor, not the runner catch",
+          );
+        }
         assert.deepEqual(
-          fixture.steering.offeredTexts.map((text) =>
-            delivery.steer(started.id, text),
-          ),
-          fixture.steering.offeredTexts.map(
-            () => fixture.steering?.expectedOutcome,
-          ),
+          config,
+          beforeConfig,
+          "the executor must not mutate task.config",
         );
-        await new Promise<void>((resolve) => setImmediate(resolve));
-        const expectedInFlight =
-          fixture.steering.expectedOutcome === "accepted" ? 1 : 0;
-        assert.equal(
-          fixture.steering.providerControlStarts(),
-          expectedInFlight,
-          "only the first provider Control may start before its response",
-        );
-        assert.equal(
-          fixture.steering.maxConcurrentProviderControls(),
-          expectedInFlight,
-          "provider Control delivery must remain serial while the first response is held",
-        );
-        fixture.steering.release();
-      }
 
-      if (
-        scenario === "abort-mid-run" ||
-        scenario === "terminal-answer-then-abort"
-      ) {
-        assert.ok(
-          fixture.readyForCancellation,
-          `${scenario} must provide a cancellation readiness gate`,
-        );
-        await fixture.readyForCancellation;
-        assert.deepEqual(
-          runs.cancel([started.id], "requested"),
-          [started.id],
-          "the run must still be active when cancellation is requested",
-        );
-      }
-
-      await assert.doesNotReject(started.settled);
-      const result = await started.settled;
-      assertSettled(result, fixture.expected);
-      if (scenario === "backend-crash") {
-        assert.doesNotMatch(
-          result.errorMessage ?? "",
-          /^Executor failed unexpectedly:/,
-          "backend-crash must resolve from the executor, not the runner catch",
-        );
-      }
-      assert.deepEqual(
-        config,
-        beforeConfig,
-        "the executor must not mutate task.config",
-      );
-
-      if (scenario === "abort-mid-run") assertNoBackendAbortVocabulary(result);
-      if (scenario === "child-depth") {
-        assert.equal(fixture.depthProbe(), fixture.expected.childDepth);
-      }
-      if (scenario.startsWith("steering-")) {
-        assert.ok(fixture.steering);
-        const expectedStarts =
-          fixture.steering.expectedOutcome === "accepted"
-            ? fixture.steering.offeredTexts.length
-            : 0;
-        assert.deepEqual(
-          fixture.steering.receivedTexts(),
-          fixture.steering.expectedOutcome === "accepted"
-            ? fixture.steering.offeredTexts
-            : [],
-        );
-        assert.equal(fixture.steering.providerControlStarts(), expectedStarts);
-        assert.equal(
-          fixture.steering.maxConcurrentProviderControls(),
-          expectedStarts > 0 ? 1 : 0,
-        );
+        if (scenario === "abort-mid-run")
+          assertNoBackendAbortVocabulary(result);
+        if (scenario === "child-depth") {
+          assert.equal(fixture.depthProbe(), fixture.expected.childDepth);
+        }
+        if (scenario.startsWith("steering-")) {
+          assert.ok(fixture.steering);
+          const expectedStarts: number =
+            fixture.steering.expectedOutcome === "accepted"
+              ? fixture.steering.offeredTexts.length
+              : 0;
+          assert.deepEqual(
+            fixture.steering.receivedTexts(),
+            fixture.steering.expectedOutcome === "accepted"
+              ? fixture.steering.offeredTexts
+              : [],
+          );
+          assert.equal(
+            fixture.steering.providerControlStarts(),
+            expectedStarts,
+          );
+          assert.equal(
+            fixture.steering.maxConcurrentProviderControls(),
+            expectedStarts > 0 ? 1 : 0,
+          );
+        }
       }
     });
   }

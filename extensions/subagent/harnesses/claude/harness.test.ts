@@ -9,11 +9,19 @@ import type {
   SDKResultError,
   SDKResultSuccess,
   SDKSystemMessage,
+  SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { createControlGate } from "../../control-source.ts";
 import { getFinalOutput } from "../../messages.ts";
-import { DEPTH_ENV_KEY, type SubagentContext } from "../../run.ts";
+import {
+  createEmptyResult,
+  createRunReporter,
+  DEPTH_ENV_KEY,
+  type SubagentContext,
+} from "../../run.ts";
 import { createSubagentRuns } from "../../runs.ts";
 import { startSubagent } from "../../standalone-run-helper.ts";
+import { createSubagentManager } from "../../subagents.ts";
 import type { AgentConfig } from "../../types.ts";
 import { renderRunLines } from "../../widget.ts";
 import {
@@ -112,7 +120,7 @@ function assistantMessage(
     },
     parent_tool_use_id: null,
     uuid: "00000000-0000-4000-8000-000000000001",
-    session_id: "session-id",
+    session_id: "00000000-0000-4000-8000-000000000099",
     ...overrides,
   };
 }
@@ -135,7 +143,7 @@ function resultMessage(
     modelUsage: {},
     permission_denials: [],
     uuid: "00000000-0000-4000-8000-000000000002",
-    session_id: "session-id",
+    session_id: "00000000-0000-4000-8000-000000000099",
     ...overrides,
   };
 }
@@ -158,7 +166,7 @@ function errorResultMessage(
     permission_denials: [],
     errors,
     uuid: "00000000-0000-4000-8000-000000000003",
-    session_id: "session-id",
+    session_id: "00000000-0000-4000-8000-000000000099",
     ...overrides,
   };
 }
@@ -179,7 +187,7 @@ function initMessage(model: string): SDKSystemMessage {
     skills: [],
     plugins: [],
     uuid: "00000000-0000-4000-8000-000000000004",
-    session_id: "session-id",
+    session_id: "00000000-0000-4000-8000-000000000099",
   };
 }
 
@@ -197,7 +205,7 @@ function refusalFallback(): SDKModelRefusalFallbackMessage {
     refused_user_message_uuid: "00000000-0000-4000-8000-000000000005",
     content: "Retrying with the fallback model",
     uuid: "00000000-0000-4000-8000-000000000006",
-    session_id: "session-id",
+    session_id: "00000000-0000-4000-8000-000000000099",
   };
 }
 
@@ -234,8 +242,10 @@ function claudeConformanceRig(): HarnessConformanceRig {
       let ready: Promise<void> | undefined;
       let openReady = () => {};
       let releaseSteering = () => {};
-      let queryCalls = 0;
       const queryPrompts: string[] = [];
+      let providerControlStarts = 0;
+      let activeProviderControls = 0;
+      let maxConcurrentProviderControls = 0;
       if (
         scenario === "abort-mid-run" ||
         scenario === "terminal-answer-then-abort" ||
@@ -248,10 +258,13 @@ function claudeConformanceRig(): HarnessConformanceRig {
       const steeringReleased = new Promise<void>((resolve) => {
         releaseSteering = resolve;
       });
+      let openIntermediate = () => {};
+      const intermediateCheckpoint = new Promise<void>((resolve) => {
+        openIntermediate = resolve;
+      });
 
       const query: ClaudeQuery = ({ options, prompt }) => {
-        queryCalls++;
-        queryPrompts.push(prompt);
+        queryPrompts.push(typeof prompt === "string" ? prompt : "<stream>");
         observedDepth = Number(options?.env?.[DEPTH_ENV_KEY]);
         assert.equal(
           options?.env?.PATH,
@@ -315,10 +328,83 @@ function claudeConformanceRig(): HarnessConformanceRig {
                 throw new Error("late Claude failure");
               case "steering-single-consumed":
               case "steering-fifo-consumed":
+              case "steering-intermediate-completion":
+              case "steering-admission-no-fact": {
+                assert.notEqual(typeof prompt, "string");
+                const iterator = (prompt as AsyncIterable<SDKUserMessage>)[
+                  Symbol.asyncIterator
+                ]();
+                const initial = await iterator.next();
+                assert.equal(initial.done, false);
+                const initialUuid = initial.value.uuid;
                 openReady();
-                await steeringReleased;
-                yield resultMessage("unsupported steering answer");
+                const expectedControls =
+                  scenario === "steering-fifo-consumed" ? 2 : 1;
+                let firstControlUuid = "";
+                for (let index = 0; index < expectedControls; index++) {
+                  const next = await iterator.next();
+                  assert.equal(next.done, false);
+                  const message = next.value as SDKUserMessage;
+                  assert.equal(
+                    message.priority,
+                    "later",
+                    "Controls must survive the current provider Turn",
+                  );
+                  if (index === 0) firstControlUuid = message.uuid ?? "";
+                  const block = Array.isArray(message.message.content)
+                    ? message.message.content[0]
+                    : undefined;
+                  assert.ok(block && block.type === "text");
+                  queryPrompts.push(block.text);
+                  providerControlStarts++;
+                  activeProviderControls++;
+                  maxConcurrentProviderControls = Math.max(
+                    maxConcurrentProviderControls,
+                    activeProviderControls,
+                  );
+                  if (
+                    index === 0 &&
+                    scenario === "steering-intermediate-completion"
+                  ) {
+                    yield resultMessage("intermediate answer", {
+                      num_turns: 1,
+                      user_message_uuid: initialUuid,
+                      queued_turn_count: 0,
+                    });
+                    openIntermediate();
+                  }
+                  if (index === 0) await steeringReleased;
+                  if (
+                    index === 0 &&
+                    scenario === "steering-intermediate-completion"
+                  ) {
+                    // Live streaming input emits a fresh init boundary before
+                    // the later queued Turn while retaining the same Query.
+                    yield initMessage("claude-sonnet-4-6");
+                  }
+                  if (
+                    scenario !== "steering-admission-no-fact" &&
+                    scenario !== "steering-intermediate-completion"
+                  ) {
+                    yield {
+                      ...message,
+                      session_id: "00000000-0000-4000-8000-000000000099",
+                    } as SDKMessage;
+                  }
+                  activeProviderControls--;
+                }
+                yield resultMessage("controlled answer", {
+                  num_turns:
+                    scenario === "steering-intermediate-completion" ? 2 : 1,
+                  ...(scenario === "steering-intermediate-completion"
+                    ? {
+                        queued_turn_count: 0,
+                        user_message_uuid: firstControlUuid,
+                      }
+                    : {}),
+                });
                 return;
+              }
             }
           },
           close() {
@@ -382,26 +468,33 @@ function claudeConformanceRig(): HarnessConformanceRig {
             errorMessage: undefined,
           });
         case "steering-single-consumed":
-        case "steering-fifo-consumed": {
+        case "steering-fifo-consumed":
+        case "steering-intermediate-completion":
+        case "steering-admission-no-fact": {
           const offeredTexts =
-            scenario === "steering-single-consumed"
-              ? ["first guidance"]
-              : ["first guidance", "second guidance"];
+            scenario === "steering-fifo-consumed"
+              ? ["first guidance", "second guidance"]
+              : ["first guidance"];
           const fixture = base({
             phase: "completed",
-            finalOutput: "unsupported steering answer",
-            userFactTexts: [],
+            finalOutput: "controlled answer",
+            userFactTexts:
+              scenario === "steering-admission-no-fact" ? [] : offeredTexts,
           });
           return {
             ...fixture,
             steering: {
               ready: ready as Promise<void>,
               offeredTexts,
-              expectedOutcome: "unsupported",
+              expectedOutcome: "accepted",
               release: () => releaseSteering(),
               receivedTexts: () => queryPrompts.slice(1),
-              providerControlStarts: () => Math.max(0, queryCalls - 1),
-              maxConcurrentProviderControls: () => 0,
+              providerControlStarts: () => providerControlStarts,
+              maxConcurrentProviderControls: () =>
+                maxConcurrentProviderControls,
+              ...(scenario === "steering-intermediate-completion"
+                ? { intermediateCheckpoint }
+                : {}),
             },
           };
         }
@@ -771,6 +864,471 @@ test("Claude translator stamps one nonnegative integer delta on each accounting 
   const [metadata] = translate(initMessage("claude-sonnet-4-6"))?.facts ?? [];
   assert.equal(metadata?.role, "metadata");
   assert.equal(metadata?.usage, undefined);
+});
+
+test("Claude differences cumulative accounting at every provider Result boundary", () => {
+  const translate = createClaudeTranslator();
+  const totals = [
+    { inputTokens: 10, outputTokens: 4, costUSD: 0.1 },
+    { inputTokens: 16, outputTokens: 9, costUSD: 0.25 },
+    // A provider-side counter reset begins a new nonnegative segment.
+    { inputTokens: 3, outputTokens: 2, costUSD: 0.04 },
+  ];
+  const deltas = totals.map((usage, index) => {
+    const translation = translate(
+      resultMessage(`result ${index}`, {
+        num_turns: index + 1,
+        total_cost_usd: usage.costUSD,
+        modelUsage: {
+          "claude-sonnet-4-6": modelUsage(usage),
+        },
+      }),
+    );
+    return translation?.facts?.[0]?.usage;
+  });
+
+  assert.deepEqual(
+    deltas.map((usage) => ({
+      input: usage?.input,
+      output: usage?.output,
+      cost: usage?.cost,
+    })),
+    [
+      { input: 10, output: 4, cost: 0.1 },
+      { input: 6, output: 5, cost: 0.15 },
+      { input: 3, output: 2, cost: 0.04 },
+    ],
+  );
+  for (const usage of deltas) {
+    assert.ok((usage?.input ?? -1) >= 0);
+    assert.ok((usage?.output ?? -1) >= 0);
+    assert.ok((usage?.cost ?? -1) >= 0);
+  }
+});
+
+test("Claude rejects a successful Result without an authoritative Conversation identity", async () => {
+  const terminal = resultMessage("unattached answer") as unknown as Record<
+    string,
+    unknown
+  >;
+  delete terminal.session_id;
+
+  const result = await runClaudeMessages([terminal as unknown as SDKMessage]);
+
+  assert.equal(result.lifecycle.phase, "failed");
+  assert.equal(
+    result.errorMessage,
+    "Claude query returned an invalid conversation identity",
+  );
+  assert.equal(getFinalOutput(result.messages), "");
+});
+
+test("Claude reports one user Fact when Result correlation authoritatively confirms steering", async () => {
+  let openReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    openReady = resolve;
+  });
+  const query: ClaudeQuery = ({ prompt }) =>
+    ({
+      async *[Symbol.asyncIterator]() {
+        assert.notEqual(typeof prompt, "string");
+        const iterator = (prompt as AsyncIterable<SDKUserMessage>)[
+          Symbol.asyncIterator
+        ]();
+        await iterator.next();
+        openReady();
+        const control = await iterator.next();
+        assert.equal(control.done, false);
+        assert.equal(
+          control.value.priority,
+          "later",
+          "admitted guidance must remain queued across the active provider Turn",
+        );
+        const uuid = control.value.uuid;
+        yield {
+          ...resultMessage("steered answer"),
+          user_message_uuid: uuid,
+        } as SDKMessage;
+        // A duplicate provider echo with the same correlation cannot add a
+        // second neutral user Fact after the Result already confirmed it.
+        yield {
+          ...control.value,
+          session_id: "00000000-0000-4000-8000-000000000099",
+        } as SDKMessage;
+      },
+      close() {},
+    }) as never;
+  const runs = createSubagentRuns();
+  const started = startSubagent({
+    config,
+    description: "result correlation",
+    prompt: "start",
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs,
+  });
+  await ready;
+  assert.equal(
+    runs.offer(started.id, { type: "steer", text: "exact guidance" }),
+    "accepted",
+  );
+
+  const result = await started.settled;
+  assert.equal(result.lifecycle.phase, "completed");
+  assert.deepEqual(
+    result.messages
+      .filter((fact) => fact.role === "user")
+      .flatMap((fact) =>
+        fact.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])),
+      ),
+    ["exact guidance"],
+  );
+});
+
+for (const correlation of ["missing", "foreign"] as const) {
+  test(`Claude keeps a valid answer and does not hang when Control correlation is ${correlation}`, {
+    timeout: 2_000,
+  }, async () => {
+    let openReady = () => {};
+    const ready = new Promise<void>((resolve) => {
+      openReady = resolve;
+    });
+    let inputClosed = false;
+    let queryClosed = false;
+    const query: ClaudeQuery = ({ prompt }) =>
+      ({
+        async *[Symbol.asyncIterator]() {
+          assert.notEqual(typeof prompt, "string");
+          const iterator = (prompt as AsyncIterable<SDKUserMessage>)[
+            Symbol.asyncIterator
+          ]();
+          await iterator.next();
+          openReady();
+          const control = await iterator.next();
+          assert.equal(control.done, false);
+          yield {
+            ...resultMessage(`${correlation} correlation answer`),
+            ...(correlation === "foreign"
+              ? {
+                  user_message_uuid: "00000000-0000-4000-8000-000000000088",
+                }
+              : {}),
+          } as SDKMessage;
+          inputClosed = (await iterator.next()).done === true;
+        },
+        close() {
+          queryClosed = true;
+        },
+      }) as never;
+    const runs = createSubagentRuns();
+    const started = startSubagent({
+      config,
+      description: `${correlation} Control correlation`,
+      prompt: "start",
+      harnesses: createHarnessRegistry([
+        createClaudeHarness(async () => query),
+      ]),
+      runs,
+    });
+    await ready;
+    assert.equal(
+      runs.offer(started.id, { type: "steer", text: "unconfirmed guidance" }),
+      "accepted",
+    );
+
+    const result = await started.settled;
+
+    assert.equal(result.lifecycle.phase, "completed");
+    assert.equal(
+      getFinalOutput(result.messages),
+      `${correlation} correlation answer`,
+    );
+    assert.equal(
+      result.messages.some((fact) => fact.role === "user"),
+      false,
+      "unmatched correlation must not fabricate a user Fact",
+    );
+    assert.equal(inputClosed, true);
+    assert.equal(queryClosed, true);
+  });
+}
+
+test("Claude orders Control and cancellation by ingress in both directions", async () => {
+  for (let iteration = 0; iteration < 32; iteration++) {
+    for (const order of ["control-first", "cancellation-first"] as const) {
+      let openReady = () => {};
+      const ready = new Promise<void>((resolve) => {
+        openReady = resolve;
+      });
+      let openControlStarted = () => {};
+      const controlStarted = new Promise<void>((resolve) => {
+        openControlStarted = resolve;
+      });
+      let providerControlStarts = 0;
+      const query: ClaudeQuery = ({ prompt, options }) =>
+        ({
+          async *[Symbol.asyncIterator]() {
+            assert.notEqual(typeof prompt, "string");
+            const iterator = (prompt as AsyncIterable<SDKUserMessage>)[
+              Symbol.asyncIterator
+            ]();
+            await iterator.next();
+            openReady();
+            const next = await iterator.next();
+            if (!next.done) {
+              providerControlStarts++;
+              openControlStarted();
+              if (!options?.abortController?.signal.aborted) {
+                await new Promise<void>((resolve) =>
+                  options?.abortController?.signal.addEventListener(
+                    "abort",
+                    () => resolve(),
+                    { once: true },
+                  ),
+                );
+              }
+            }
+          },
+          close() {},
+        }) as never;
+      const runs = createSubagentRuns();
+      const started = startSubagent({
+        config,
+        description: `Claude ${order}`,
+        prompt: "start",
+        harnesses: createHarnessRegistry([
+          createClaudeHarness(async () => query),
+        ]),
+        runs,
+      });
+      await ready;
+
+      if (order === "control-first") {
+        assert.equal(
+          runs.offer(started.id, { type: "steer", text: "first guidance" }),
+          "accepted",
+        );
+        await controlStarted;
+        assert.deepEqual(runs.cancel([started.id], "requested"), [started.id]);
+      } else {
+        assert.deepEqual(runs.cancel([started.id], "requested"), [started.id]);
+        assert.notEqual(
+          runs.offer(started.id, { type: "steer", text: "late guidance" }),
+          "accepted",
+        );
+      }
+
+      const result = await started.settled;
+      assert.equal(result.lifecycle.phase, "cancelled");
+      assert.equal(providerControlStarts, order === "control-first" ? 1 : 0);
+      assert.equal(
+        result.messages.some((fact) => fact.role === "user"),
+        false,
+        "cancellation cannot fabricate authoritative Control consumption",
+      );
+    }
+  }
+});
+
+test("Claude resumes through one fresh Query without replay and never falls back after attachment failure", async () => {
+  const firstSession = "00000000-0000-4000-8000-000000000090";
+  const wrongSession = "00000000-0000-4000-8000-000000000091";
+  const prompts: AsyncIterable<SDKUserMessage>[] = [];
+  const resumeOptions: Array<string | undefined> = [];
+  let attempt = 0;
+  const query: ClaudeQuery = ({ prompt, options }) => {
+    assert.notEqual(typeof prompt, "string");
+    prompts.push(prompt as AsyncIterable<SDKUserMessage>);
+    resumeOptions.push(options?.resume);
+    const current = attempt++;
+    return {
+      async *[Symbol.asyncIterator]() {
+        const initial = await (prompt as AsyncIterable<SDKUserMessage>)
+          [Symbol.asyncIterator]()
+          .next();
+        assert.equal(initial.done, false);
+        if (current === 0) {
+          yield resultMessage("first answer", { session_id: firstSession });
+          return;
+        }
+        yield {
+          ...assistantMessage("historical", [
+            { type: "text", text: "replayed first answer", citations: null },
+          ]),
+          session_id: firstSession,
+          isReplay: true,
+        } as SDKMessage;
+        yield resultMessage("must not survive", {
+          session_id: wrongSession,
+        });
+      },
+      close() {},
+    } as never;
+  };
+  const runs = createSubagentRuns();
+  const manager = createSubagentManager({
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs,
+    generateSubagentId: () => "claude-managed",
+  });
+  const first = manager.start({
+    config,
+    description: "first",
+    prompt: "remember a private marker",
+  });
+  const firstResult = await first.settled;
+  assert.equal(firstResult.lifecycle.phase, "completed");
+
+  const resumed = manager.resume({
+    subagentId: first.subagentId,
+    description: "second",
+    prompt: "recall it",
+  });
+  assert.equal(resumed.outcome, "started");
+  if (resumed.outcome !== "started") assert.fail("resume did not start");
+  const resumedResult = await resumed.settled;
+
+  assert.equal(resumedResult.lifecycle.phase, "failed");
+  assert.equal(
+    resumedResult.errorMessage,
+    "Claude continuation attachment failed",
+  );
+  assert.equal(
+    attempt,
+    2,
+    "attachment failure must not create a fallback Query",
+  );
+  assert.deepEqual(resumeOptions, [undefined, firstSession]);
+  assert.equal(prompts.length, 2);
+  assert.notStrictEqual(prompts[0], prompts[1]);
+  assert.equal(
+    resumedResult.messages.some((fact) =>
+      fact.parts.some(
+        (part) => part.type === "text" && part.text.includes("replayed"),
+      ),
+    ),
+    false,
+  );
+  assert.equal(
+    resumedResult.errorMessage?.includes(firstSession) ||
+      resumedResult.errorMessage?.includes(wrongSession),
+    false,
+  );
+  assert.equal(getFinalOutput(firstResult.messages), "first answer");
+  await manager.shutdown();
+});
+
+test("Claude resume filters replayed user, assistant, and system history before the current attachment", async () => {
+  const sessionId = "00000000-0000-4000-8000-000000000090";
+  let attempt = 0;
+  const query: ClaudeQuery = ({ prompt }) =>
+    ({
+      async *[Symbol.asyncIterator]() {
+        assert.notEqual(typeof prompt, "string");
+        await (prompt as AsyncIterable<SDKUserMessage>)
+          [Symbol.asyncIterator]()
+          .next();
+        if (attempt++ === 0) {
+          yield resultMessage("first answer", { session_id: sessionId });
+          return;
+        }
+        yield {
+          type: "user",
+          message: { role: "user", content: "historical user" },
+          parent_tool_use_id: null,
+          session_id: sessionId,
+          uuid: "00000000-0000-4000-8000-000000000081",
+        } as unknown as SDKMessage;
+        yield {
+          ...assistantMessage("historical-assistant", [
+            { type: "text", text: "historical assistant", citations: null },
+          ]),
+          session_id: sessionId,
+        } as SDKMessage;
+        yield {
+          type: "system",
+          subtype: "status",
+          status: "historical system",
+          session_id: sessionId,
+          uuid: "00000000-0000-4000-8000-000000000082",
+        } as unknown as SDKMessage;
+        yield { ...initMessage("claude-sonnet-4-6"), session_id: sessionId };
+        yield assistantMessage(
+          "current-assistant",
+          [{ type: "text", text: "current assistant", citations: null }],
+          { session_id: sessionId },
+        );
+        yield resultMessage("resumed answer", { session_id: sessionId });
+      },
+      close() {},
+    }) as never;
+  const manager = createSubagentManager({
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs: createSubagentRuns(),
+    generateSubagentId: () => "claude-history-filter",
+  });
+  const first = manager.start({
+    config,
+    description: "first",
+    prompt: "remember",
+  });
+  assert.equal((await first.settled).lifecycle.phase, "completed");
+  const resumed = manager.resume({
+    subagentId: first.subagentId,
+    description: "second",
+    prompt: "recall",
+  });
+  assert.equal(resumed.outcome, "started");
+  if (resumed.outcome !== "started") assert.fail("resume did not start");
+
+  const result = await resumed.settled;
+
+  assert.equal(result.lifecycle.phase, "completed");
+  assert.equal(getFinalOutput(result.messages), "resumed answer");
+  assert.doesNotMatch(JSON.stringify(result.messages), /historical/);
+  assert.match(JSON.stringify(result.messages), /current assistant/);
+  await manager.shutdown();
+});
+
+test("Claude adapter close stops and waits for its active Attempt", async () => {
+  let openReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    openReady = resolve;
+  });
+  let releaseStream = () => {};
+  const streamReleased = new Promise<void>((resolve) => {
+    releaseStream = resolve;
+  });
+  let queryClosed = false;
+  const query: ClaudeQuery = () =>
+    ({
+      async *[Symbol.asyncIterator]() {
+        openReady();
+        await streamReleased;
+        yield* [] as SDKMessage[];
+      },
+      close() {
+        queryClosed = true;
+        releaseStream();
+      },
+    }) as never;
+  const adapter = createClaudeHarness(async () => query).prepare(context);
+  const result = createEmptyResult("worker", "active close", 0);
+  const execution = adapter
+    .prepareRun({
+      description: "active close",
+      prompt: "wait",
+    })
+    .execute({
+      report: createRunReporter(result, () => {}),
+      signal: new AbortController().signal,
+      controls: createControlGate(["steer"]).controls,
+    });
+  await ready;
+
+  await adapter.close();
+
+  assert.equal(queryClosed, true);
+  assert.deepEqual(await execution, { ending: "cancelled" });
 });
 
 test("Claude preserves observed turns when an error result reports zero", async () => {
@@ -1187,8 +1745,11 @@ test("Claude cancellation stays cancelled when abort arrives before a later term
   assert.equal(closeCalled, true);
   assert.equal(result.lifecycle.phase, "cancelled");
   assert.equal(result.stopReason, undefined);
-  assert.equal(result.messages.length, 1);
-  assert.equal(getFinalOutput(result.messages), "late answer");
+  assert.equal(
+    result.messages.length,
+    0,
+    "a provider Result first observed after cancellation is not current-Run truth",
+  );
 });
 
 test("Claude cancellation during SDK loading never invokes query", async () => {

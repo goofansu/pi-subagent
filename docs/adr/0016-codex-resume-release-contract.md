@@ -6,7 +6,8 @@ Date: 2026-08-30
 
 Accepted. Reopens ADR-0003's no-follow-up decision for Codex Subagents while
 preserving its one-shot Run boundary. It consolidates the release contract
-introduced by ADR-0013, ADR-0014, and ADR-0015.
+introduced by ADR-0013, ADR-0014, and ADR-0015. ADR-0019 later extends the
+release contract across all three production providers.
 
 ## Context
 
@@ -27,8 +28,9 @@ would break cancellation, accounting, notification, and failure ownership.
 whose adapter truthfully advertises resume. The stable Subagent retains its
 fixed Profile and execution policy, while every Run retains exactly one goal,
 one lifecycle, one Control mailbox, one usage fold, one immutable Result, and
-one notification. Active Subagents reject resume without queueing. Pi and
-Claude remain unsupported.
+one notification. Active Subagents reject resume without queueing. At this
+decision, Pi and Claude remained unsupported; ADR-0019 records their later
+managed adoption.
 
 Codex uses a non-ephemeral provider thread as its private Conversation. The
 prepared adapter keeps the thread association only in memory for the current

@@ -4,7 +4,7 @@ import { createDefaultHarnessRegistry } from "./composition.ts";
 import { createHarnessRegistry } from "./harnesses/contract.ts";
 import { createPiHarness } from "./harnesses/pi/harness.ts";
 
-test("default composition truthfully enables only production Codex resume", async () => {
+test("default composition enables managed resume for every production harness", async () => {
   const registry = createDefaultHarnessRegistry();
 
   assert.ok(registry.get("pi"));
@@ -31,7 +31,7 @@ test("default composition truthfully enables only production Codex resume", asyn
   for (const name of ["pi", "claude"] as const) {
     const harness = registry.get(name);
     assert.ok(harness);
-    const unsupported = harness.prepare({
+    const adapter = harness.prepare({
       config: {
         name,
         description: name,
@@ -43,8 +43,8 @@ test("default composition truthfully enables only production Codex resume", asyn
       childDepth: 1,
       projectTrusted: false,
     });
-    assert.deepEqual(unsupported.capabilities, { resume: false });
-    await unsupported.close();
+    assert.deepEqual(adapter.capabilities, { resume: true });
+    await adapter.close();
   }
 });
 

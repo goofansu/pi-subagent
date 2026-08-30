@@ -156,7 +156,7 @@ async function assertOneShotContract(
   await adapter.close();
 }
 
-test("production Harnesses remain one-shot while only Codex advertises resume", async () => {
+test("production Harnesses keep one-shot Runs while all advertise managed controls and resume", async () => {
   assert.deepEqual(Object.keys(context).sort(), [
     "childDepth",
     "config",
@@ -181,12 +181,13 @@ test("production Harnesses remain one-shot while only Codex advertises resume", 
     true,
     true,
   ]);
-  await assertOneShotContract(createPiHarness(), []);
+  await assertOneShotContract(createPiHarness(), ["steer"], true);
   await assertOneShotContract(
     createClaudeHarness(async () => {
       throw new Error("execution is not part of this contract fixture");
     }),
-    [],
+    ["steer"],
+    true,
   );
   await assertOneShotContract(createCodexHarness(), ["steer"], true);
 });

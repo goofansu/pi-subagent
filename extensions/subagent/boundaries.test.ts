@@ -9,7 +9,21 @@ import ts from "typescript";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const forbiddenPackages = new Set([
   "@anthropic-ai/claude-agent-sdk",
+  "@earendil-works/pi-agent-core",
   "@earendil-works/pi-ai",
+]);
+const piSessionSymbols = new Set([
+  "AgentSession",
+  "AgentSessionEvent",
+  "CreateAgentSessionOptions",
+  "LoadExtensionsResult",
+  "ModelRuntime",
+  "SessionManager",
+  "SettingsManager",
+  "DefaultResourceLoader",
+  "createAgentSession",
+  "createBashToolDefinition",
+  "withFileMutationQueue",
 ]);
 
 /** Read module specifiers from syntax, not arbitrary strings or comments. */
@@ -75,6 +89,68 @@ function readImportSpecifiers(source: string): string[] {
 
   visit(sourceFile);
   return specifiers;
+}
+
+/** Find Pi Conversation/session symbols even when imports are type-only or aliased. */
+function readPiSessionSymbolImports(source: string): string[] {
+  const sourceFile = ts.createSourceFile(
+    "boundary-fixture.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const found: string[] = [];
+  const isPiCodingAgent = (node: ts.Expression | undefined): boolean =>
+    Boolean(
+      node &&
+        ts.isStringLiteralLike(node) &&
+        (node.text === "@earendil-works/pi-coding-agent" ||
+          node.text.startsWith("@earendil-works/pi-coding-agent/")),
+    );
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && isPiCodingAgent(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      if (clause?.name) found.push("*");
+      const bindings = clause?.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) found.push("*");
+      if (bindings && ts.isNamedImports(bindings)) {
+        for (const element of bindings.elements) {
+          const imported = (element.propertyName ?? element.name).text;
+          if (piSessionSymbols.has(imported)) found.push(imported);
+        }
+      }
+    } else if (
+      ts.isExportDeclaration(node) &&
+      isPiCodingAgent(node.moduleSpecifier)
+    ) {
+      if (!node.exportClause || ts.isNamespaceExport(node.exportClause)) {
+        found.push("*");
+      } else if (ts.isNamedExports(node.exportClause)) {
+        for (const element of node.exportClause.elements) {
+          const imported = (element.propertyName ?? element.name).text;
+          if (piSessionSymbols.has(imported)) found.push(imported);
+        }
+      }
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      isPiCodingAgent(node.moduleReference.expression)
+    ) {
+      found.push("*");
+    } else if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) &&
+          node.expression.text === "require")) &&
+      isPiCodingAgent(node.arguments[0])
+    ) {
+      found.push("*");
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return found;
 }
 
 function resolveSourceFile(
@@ -196,7 +272,11 @@ export function findForbiddenImports(graphRoot: string = root): string[] {
         specifier.startsWith("@anthropic-ai/claude-agent-sdk/");
       const importsPi =
         specifier === "@earendil-works/pi-ai" ||
-        specifier.startsWith("@earendil-works/pi-ai/");
+        specifier.startsWith("@earendil-works/pi-ai/") ||
+        specifier === "@earendil-works/pi-agent-core" ||
+        specifier.startsWith("@earendil-works/pi-agent-core/") ||
+        specifier === "@earendil-works/pi-coding-agent" ||
+        specifier.startsWith("@earendil-works/pi-coding-agent/");
       const forbidden =
         (importsClaude && owner !== "claude") || (importsPi && owner !== "pi");
       if (forbidden) {
@@ -225,6 +305,12 @@ export function findForbiddenImports(graphRoot: string = root): string[] {
     if (visited.has(file) || adapterPaths.has(file)) return;
     visited.add(file);
     const source = fs.readFileSync(file, "utf8");
+
+    for (const symbol of readPiSessionSymbolImports(source)) {
+      violations.push(
+        `${describe(file, graphRoot)} imports forbidden Pi SDK symbol ${symbol}`,
+      );
+    }
 
     for (const specifier of readImportSpecifiers(source)) {
       const forbiddenPackage = [...forbiddenPackages].find(
@@ -367,6 +453,44 @@ test("core-to-SDK package edges are forbidden too", (t) => {
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), [
     "runner.ts imports forbidden package @anthropic-ai/claude-agent-sdk",
+  ]);
+});
+
+test("Pi SDK session types and symbols are confined to the Pi adapter", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-pi-sdk-symbols-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  writeSource(
+    fixtureRoot,
+    "runner.ts",
+    [
+      'import type { AgentSession as Session } from "@earendil-works/pi-coding-agent";',
+      'export { createAgentSession as makeSession } from "@earendil-works/pi-coding-agent";',
+      'import * as piSdk from "@earendil-works/pi-coding-agent";',
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), [
+    "runner.ts imports forbidden Pi SDK symbol AgentSession",
+    "runner.ts imports forbidden Pi SDK symbol createAgentSession",
+    "runner.ts imports forbidden Pi SDK symbol *",
+  ]);
+});
+
+test("a foreign adapter cannot import Pi SDK session construction", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-foreign-pi-sdk-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  writeSource(
+    fixtureRoot,
+    "harnesses/claude/harness.ts",
+    'import { createAgentSession } from "@earendil-works/pi-coding-agent";\n',
+  );
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), [
+    "harnesses/claude/harness.ts imports forbidden Pi wire package @earendil-works/pi-coding-agent",
   ]);
 });
 

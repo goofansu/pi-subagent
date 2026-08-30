@@ -28,22 +28,24 @@ id is local, distinct from every Run id, and never a provider identity. A
 successful `agent_resume` synchronously claims a resumable idle Subagent and
 starts its next Run; an active Subagent rejects resume rather than queueing it.
 
-**Run** — one execution of one Subagent's profile against one prompt. A run is
-one-shot — one prompt in, one terminal answer out — whichever harness executes
-it. A run has its own local id, lifecycle, transcript, usage, immutable terminal
-Result, and owning Subagent. The registry holds live-display runs, and the
-widget lists them. Not "job", not "task", not "call". Notification delivery
-state is a separate state machine, tracked by the delivery module keyed by Run
-id — never on the run itself.
+**Run** — one managed goal cycle of one Subagent's fixed Profile, begun by one
+new prompt and completed by one immutable terminal Result. A Run may span
+several provider Turns: intermediate provider completion is accounting and
+Conversation evidence, not a second Run and not necessarily settlement. A Run
+has its own local id, lifecycle, transcript, usage, Result, and owning Subagent.
+The registry holds live-display Runs, and the widget lists them. Not "job", not
+"task", not "call", and not a provider Turn. Notification delivery state is a
+separate state machine, tracked by the delivery module keyed by Run id — never
+on the Run itself.
 
 **Resume** — the asynchronous orchestration operation that accepts a stable
 Subagent id plus the next Run's description and full prompt. It returns the new
 Run id immediately rather than an answer. Resume never rebinds the fixed
 Profile, Harness adapter, working directory, child depth, resolved policy, or
-trust posture, and core never receives a provider continuation token. Pi,
-and Claude remain truthfully unsupported. Production Codex resumes its
-adapter-private Conversation through a fresh Attempt within the current
-Session.
+trust posture, and core never receives a provider continuation token. Pi
+continues its retained SDK session; Claude and Codex attach a fresh disposable
+Attempt through their native continuation mechanism. All continuation remains
+inside the prepared adapter and current Session.
 
 **Conversation** — provider-owned semantic context that may span multiple Runs
 of one Subagent. Its continuation identity and accounting baseline stay inside
@@ -51,22 +53,24 @@ the prepared adapter; it is neither a Subagent nor a Run and never crosses the
 Harness seam.
 
 **Attempt** — one disposable provider attachment used to execute one Run
-against a Conversation. A Codex Attempt owns one fresh App Server child,
-initialization, current Turn, translator, accounting fold, ordered reducer,
-and cleanup boundary; no Attempt remains alive while its Subagent is idle.
+against a Conversation. Claude owns one fresh streaming Query per Attempt;
+Codex owns one fresh App Server child, initialization, current Turn,
+translator, accounting fold, ordered reducer, and cleanup boundary. No Claude
+or Codex Attempt remains alive while its Subagent is idle. Pi instead retains
+one idle-capable SDK session and gives each Run a fresh subscription,
+accounting baseline, reporter, and Control consumer.
 
 **Control** — bounded, harness-neutral guidance offered while a Run is active.
 The only Control is steering text. `accepted` means the complete text entered
 the Run's bounded local admission and synchronously reached the source's one
 subscriber; it does not claim that a provider accepted it, a model consumed
 it, or it became transcript truth. A prepared Run declares supported Controls,
-and unsupported Runs have no live source. Pi and Claude declare no Control
-support. Codex records every admission as an Attempt occurrence, acknowledges
-it when the reducer takes or discards it, and consumes steering serially
-through the active App Server Turn. Cancellation discards unsent admissions
-but retains sent-steering correlation until Attempt settlement or failure.
-Only a correlated provider user-message item, not local admission or request
-acceptance, becomes a neutral user Fact.
+and unsupported Runs have no live source. Pi serializes native session
+steering; Claude serializes user input through one ordered Query engine across
+provider Result boundaries; Codex reduces Controls with its App Server events
+and sends native `turn/steer`. Cancellation discards unsent admissions and
+provider queues. Only authoritative provider evidence of the guidance, never
+local admission or request acceptance, becomes a neutral user Fact.
 
 **Ingress order** — the adapter-local order assigned when a complete external
 occurrence enters the executor, before translation, reporting, or Promise
@@ -98,8 +102,11 @@ It is not detached from the session — a result belongs to the conversation
 that asked for it, so every `session_shutdown` (switch, fork, resume, new,
 reload, quit) cancels whatever is still running.
 
-**Child pi** — the process a run executes in. One-shot: it takes one prompt on
-stdin and produces one answer. It cannot be steered mid-flight.
+**Pi session** — the lazy, in-process `AgentSession` owned by one prepared Pi
+adapter. It uses normal resources and memory-only state, is bound headlessly,
+retains provider context while idle, and accepts one prompt plus serial native
+steering for the active Run. Its orchestration tools and this extension are
+excluded from child discovery.
 
 **Fact** — a harness-neutral record of something the child did: usually a
 message with a role and parts (text, tool call) plus usage, model, and stop
@@ -121,9 +128,11 @@ cancelled at the executor seam and never shown above it.
 
 ## Delivery
 
-**Result** — the authoritative terminal output for a Run. It records the
-owning Subagent for orientation, is written to the result store when the Run
-settles, and remains authoritatively retrieved by Run id with `agent_result`.
+**Result** — the authoritative immutable terminal output for a managed Run. It
+records the owning Subagent for orientation, is written to the result store
+only when the Run settles, and remains authoritatively retrieved by Run id with
+`agent_result`. A provider's own Result event is adapter-local Turn evidence;
+it is not this domain Result and is not synonymous with Run settlement.
 
 **Notification** — a small status-specific completion notice pushed as a
 follow-up message. It identifies both the owning Subagent and the specific Run,
@@ -176,7 +185,7 @@ writes them. The manager supplies a retained prepared adapter; dispatch creates
 a fresh Result, Control gate, reporter, and execution for the Run and does not
 own adapter lifetime.
 
-**Harness** — a named backend (`pi`, `claude`, `codex`) that knows how to run profiles:
+**Harness** — a named backend (`pi`, `claude`, `codex`) that knows how to run Profiles:
 it validates the harness-owned parts of a profile and prepares one
 Subagent-scoped adapter from the fixed Profile, working directory, child depth,
 project trust, and inherited parent-model policy. A profile names its harness;
@@ -187,8 +196,8 @@ declares neutral capabilities, prepares independent per-Run executions, and
 closes idempotently; provider continuation never crosses this seam.
 
 **Executor** — the per-Run execution a prepared adapter supplies
-(`harnesses/pi/agent.ts` is the pi harness's; it composes the One-shot protocol
-and the neutral process source). Each execution is prepared from only that
+(`harnesses/pi/agent.ts` is the Pi harness's retained-session engine). Each
+execution is prepared from only that
 Run's description and prompt, then receives a fresh reporter, AbortSignal, and
 Control source. The source synchronously presents each accepted admission to
 its one subscriber, which explicitly acknowledges when it takes the Control;
@@ -205,11 +214,13 @@ settlement. Its sink returns `true` only for a terminal answer witnessed before
 abort, `false` for a translated nonterminal or post-abort terminal event, and
 `undefined` for ignored or post-settlement events.
 
-**Conformance** — the named battery of nine required scenarios every
+**Conformance** — the capability-aware battery of thirteen required scenarios every
 harness's executor must pass as part of its own tests: `backend-crash`,
 `abort-mid-run`, `terminal-answer-then-abort`, `usage-totals`, `child-depth`,
 `config-immutable`, `no-terminal-answer`, `post-answer-failure`, and
-`terminal-transcript-healing`. It makes the executor obligations of `run.ts`
+`terminal-transcript-healing`, `steering-single-consumed`,
+`steering-fifo-consumed`, `steering-intermediate-completion`, and
+`steering-admission-no-fact`. It makes the executor obligations of `run.ts`
 mechanical: backend failures resolve as failed, backend aborts normalize to
 cancellation, a terminal answer survives a later abort, usage deltas fold with
 latest context gauges, child depth reaches the child, and profile configuration
@@ -243,13 +254,14 @@ truth, usage, or final output, and settling clears it so settled runs are quiet.
 **Depth** — delegation is one level deep. A subagent cannot start subagents,
 whichever harness runs it. The Dispatcher alone decides a child's depth;
 executors only copy it, and each harness owns enforcement in its children —
-`PI_SUBAGENT_DEPTH` as pi and codex's transport, the agent-spawning tool
-disallowed for claude.
+per-spawn `PI_SUBAGENT_DEPTH` for Pi Bash and Codex transport, with
+agent-spawning tools denied for Pi and Claude.
 
-**Trust** — pi's project-trust decision for the working directory, resolved by
-the session and forwarded in every run request; the extension never derives its
-own. Applying it is harness policy: pi forwards it to its child; claude and
-codex do not consult it yet — their policy is a constant bypass, the forwarded
+**Trust** — Pi's project-trust decision for the working directory, resolved by
+the session and fixed when a Subagent is prepared; the extension never derives
+its own. Applying it is harness policy: Pi applies it to retained SDK settings
+and resource loading; Claude and
+Codex do not consult it yet — their policy is a constant bypass, the forwarded
 value reserved for a future shared posture (ADR-0009).
 
 **Shutdown** — every `session_shutdown` first marks every Subagent closed, then

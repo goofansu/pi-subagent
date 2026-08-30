@@ -68,13 +68,15 @@ codex-owned modules (the harness and transport).
    Conformance** battery also covers backend-crash executor resolution,
    cancellation normalization, usage folding, child-depth transport, configuration
    immutability, clean answerless termination, and failure after an answer. The
-   battery has eleven scenarios: backend-crash, abort-mid-run,
+   battery has thirteen scenarios: backend-crash, abort-mid-run,
    terminal-answer-then-abort, usage-totals, child-depth, config-immutable,
    no-terminal-answer, post-answer-failure, terminal-transcript-healing,
-   steering-single-consumed, and steering-fifo-consumed. The two steering
-   scenarios are capability-aware: supported adapters prove serial FIFO
-   consumption and neutral user Facts; unsupported adapters prove truthful
-   rejection with zero provider-control work. Shared code never checks a
+   steering-single-consumed, steering-fifo-consumed,
+   steering-intermediate-completion, and steering-admission-no-fact. The four
+   steering scenarios are capability-aware: supported adapters prove serial
+   FIFO consumption, provider-Result-transparent settlement, authoritative
+   neutral user Facts, and no Fact at admission alone; unsupported adapters
+   prove truthful rejection with zero provider-control work. Shared code never checks a
    harness name.
    That battery is part of the one-adapter cost,
    not a core change.
@@ -84,7 +86,7 @@ codex-owned modules (the harness and transport).
 6. [x] **The Codex adapter owns two modules, one registration, its own tests —
    and no dispatcher/lifecycle changes.**
     *Test:* `harnesses/codex/harness.test.ts` runs the real Codex adapter through the
-   shared **Harness Conformance** battery (all eleven scenarios; Claude alone
+   shared **Harness Conformance** battery (all thirteen scenarios; Claude alone
    visibly skips snapshot healing). Codex has no transcript snapshot, so its
    `terminal-transcript-healing` case asserts that multiple completed agent
    messages remain streamed facts and that the final completed agent message
@@ -180,9 +182,9 @@ comments and ordinary string literals are not.
   runtime checks covering every adapter. Prepared Runs declare neutral Control
   capability, and executors receive only a fresh reporter, AbortSignal, and
   neutral synchronous Control source — never send/control methods or provider continuation
-  handles. Codex declares steering support; Pi and Claude declare none. The
-  controlled fixtures and production Codex declare resume; Pi and Claude remain
-  unsupported and start no continuation work. Codex adapter tests prove fresh,
+  handles. Pi, Claude, and Codex all declare steering and resume support. Pi
+  retains one idle SDK session; Claude and Codex create fresh, fully cleaned
+  Attempts while retaining only private Conversation state. Adapter tests prove
   fully cleaned Attempts retain private semantic context while producing
   independent managed Runs, per-Run accounting, current-Run steering, honest
   continuation failures, and deterministic cancellation and shutdown races.
@@ -193,9 +195,11 @@ comments and ordinary string literals are not.
   and closes the retained adapter once across repeated shutdown. Its fixture
   contract contains neutral capabilities and lifecycle observations only and
   never branches on Harness names or exposes continuation tokens. The
-  controlled adapter and production Codex prove retained semantic context
-  through the same domain outcomes; production Pi and Claude visibly prove
-  unsupported resume with zero continuation work. The battery repeats every
+  controlled adapter and every production adapter prove retained semantic
+  context, cancellation followed by resume, immutable and independently
+  retrievable Results, independent notifications, per-Run transcript and usage
+  isolation, at most one active execution, and idempotent close through the
+  same domain outcomes. The battery repeats every
   adapter path 32 times without timing delays. *Test:*
   `npm run test:managed-conformance`.
 - [x] **Depth binds every harness** — Claude children have their
@@ -301,3 +305,26 @@ comments and ordinary string literals are not.
   Results, observes both notifications, rejects provider identity at the
   public boundary, and prints `CODEX_RESUME_LIVE_SMOKE_PASS`. The existing
   steering/interruption smoke remains a separate required proof.
+- [x] **Pi managed steering and resume have one release gate** — production
+  uses a retained, in-process, memory-only `AgentSession` with normal resource
+  loading, headless binding, project trust, self-filtering, orchestration-tool
+  denial, per-spawn depth, FIFO native steering, current-Run snapshots, queue
+  clearing on cancellation, and bounded idempotent shutdown. Focused SDK seam
+  tests cover construction and fault cleanup; per-Run and 32-repeat managed
+  conformance are green. `npm run pi:steering-smoke` and
+  `npm run pi:resume-smoke` are authenticated gates and print
+  `PI_STEERING_LIVE_SMOKE_PASS` and `PI_RESUME_LIVE_SMOKE_PASS`.
+- [x] **Claude managed steering and resume have one release gate** — one
+  ordered streaming-input engine keeps a public Run active across provider
+  Result checkpoints, serializes correlated Controls, differences cumulative
+  accounting, rejects lost continuation without fallback, and fully closes
+  every disposable Query before idle. Focused Query seam tests cover replay,
+  correlation, identity failure, cancellation, and accounting; per-Run and
+  32-repeat managed conformance are green. `npm run claude:steering-smoke` and
+  `npm run claude:resume-smoke` are authenticated gates and print
+  `CLAUDE_STEERING_LIVE_SMOKE_PASS` and `CLAUDE_RESUME_LIVE_SMOKE_PASS`.
+- [x] **Phase 3 release means all three providers** — `npm run check` is the
+  local gate. `npm run release:check` additionally runs the separate Codex,
+  Pi, and Claude authenticated steering and resume commands. Provider failures,
+  five-minute timeouts, forced cancellation probes, `SIGINT`/`SIGTERM`, and
+  normal completion all converge on manager shutdown and provider cleanup.

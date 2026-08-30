@@ -35,13 +35,34 @@ child-specific stop mechanism. Backend
 and its reason, never an `aborted` stop reason.
 
 An adapter's neutral `resume` capability is the sole admission authority above
-the Harness seam; core never branches on a harness name. Production Codex
-declares resume supported, while Pi and Claude declare it unsupported and start
-no continuation work. A Codex adapter retains only its provider Conversation
-identity and cumulative usage baseline. A successful resume reuses the adapter
-created from the fixed Subagent context but creates a fresh per-Run execution,
-reporter, AbortSignal, Control source, Result, usage fold, lifecycle, and
-notification.
+the Harness seam; core never branches on a harness name. Production Pi,
+Claude, and Codex declare resume supported. A successful resume reuses the
+adapter created from the fixed Subagent context but creates a fresh per-Run
+execution, reporter, AbortSignal, Control source, Result, usage fold,
+lifecycle, and notification. Earlier provider context remains available only
+inside the adapter and is neither re-emitted nor charged to the new Run.
+
+One Pi adapter lazily creates and retains one in-process `AgentSession`. Its
+fixed construction uses normal resource discovery, explicit project trust,
+memory-only session state, headless extension binding, orchestration-tool
+denial, self-filtering by package identity, and per-spawn child depth. Each Run
+owns one event subscription, one serial steering path, and a message/usage
+baseline. Cancellation closes admission, clears native queues, aborts, and
+waits for idle. Session shutdown emits bounded extension shutdown and disposes
+the session exactly once. Pi executes extension factories before applying the
+child's package-identity filter, so an adapter-owned asynchronous resource-load
+context makes only that in-process child initialization inert. Parent factories
+remain free to reattach full handlers and tools after reload or session replacement.
+
+Every Claude Run owns one disposable streaming Query. The first Query records
+an authoritative provider Conversation identity privately; later Queries use
+native `resume` and receive only their new prompt plus current-Run Controls.
+Replay events are ignored. Result accounting is cumulative within a Query and
+is differenced at every Result boundary; a fresh Query starts a fresh baseline.
+A missing, malformed, or changed Conversation identity fails attachment with a
+redacted diagnostic and never falls back to a fresh Query. Input, Query,
+Control subscription, abort listener, and accounting/correlation state are
+disposed before the Subagent becomes idle.
 
 Every Codex Run owns one disposable Attempt: a fresh App Server child is
 initialized, then creates or resumes the adapter-owned thread and starts one
@@ -73,8 +94,13 @@ until acknowledged or discarded; unsupported Runs receive an already-closed
 source and no live queue. Cancellation records its reason and
 closes Control admission synchronously before the executor's `AbortSignal`
 fires. Settlement and Session shutdown also close admission without draining
-pending Controls. Pi and Claude declare no Control support. Codex advertises
-steering and assigns every synchronous admission an ingress sequence in the
+pending Controls. Every production adapter advertises steering. Pi calls
+native session steering through one FIFO Promise chain and reports user Facts
+only from authoritative session events. Claude sends one correlated user input
+at a time through the active Query; a successful provider Result is an
+intermediate checkpoint while an earlier Control remains outstanding, and
+only provider echo or Result correlation creates its user Fact. Codex assigns
+every synchronous admission an ingress sequence in the
 same Attempt reducer as cancellation, provider messages, process outcomes, and
 escalation. Only that reducer initiates serial native `turn/steer` requests.
 For a ready Turn, accepted-Control-before-cancellation writes `turn/steer`

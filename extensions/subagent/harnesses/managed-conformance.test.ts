@@ -1,16 +1,18 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import type { Query } from "@anthropic-ai/claude-agent-sdk";
+import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { ChildProcessSpawn } from "../child-process.ts";
 import type { RunEnding } from "../run.ts";
-import { createClaudeHarness } from "./claude/harness.ts";
+import { type ClaudeQuery, createClaudeHarness } from "./claude/harness.ts";
 import { createCodexHarness } from "./codex/harness.ts";
 import type { Harness, HarnessAdapter } from "./contract.ts";
 import {
   type ManagedConformanceObservation,
   runManagedSubagentConformance,
 } from "./managed-conformance.ts";
+import type { PiSession, PiSessionFactory } from "./pi/agent.ts";
 import { createPiHarness } from "./pi/harness.ts";
 
 function observation(): ManagedConformanceObservation & {
@@ -68,6 +70,10 @@ function observeAdapterClose(
 
 function controlledFixture() {
   const observed = observation();
+  let openCancellation = () => {};
+  const cancellationReady = new Promise<void>((resolve) => {
+    openCancellation = resolve;
+  });
   const harness: Harness = {
     name: "controlled",
     validate: () => [],
@@ -83,6 +89,21 @@ function controlledFixture() {
             observed.executionStarted();
             try {
               await Promise.resolve();
+              if (task.prompt === "wait until cancelled") {
+                run.report.message({
+                  role: "assistant",
+                  parts: [{ type: "text", text: "controlled partial" }],
+                  usage: { input: 5 },
+                });
+                openCancellation();
+                await new Promise<void>((resolve) => {
+                  if (run.signal?.aborted) return resolve();
+                  run.signal?.addEventListener("abort", () => resolve(), {
+                    once: true,
+                  });
+                });
+                return { ending: "cancelled" };
+              }
               const remembered = task.prompt.match(/remember (\S+)/)?.[1];
               if (remembered) marker = remembered;
               const text = remembered
@@ -91,6 +112,7 @@ function controlledFixture() {
               run.report.message({
                 role: "assistant",
                 parts: [{ type: "text", text }],
+                usage: { input: remembered ? 11 : 3 },
               });
               return { ending: "answered" };
             } finally {
@@ -113,6 +135,53 @@ function controlledFixture() {
       resume: "supported" as const,
       firstOutput: "first controlled answer",
       secondOutput: "controlled retained marker: amber",
+      cancellationOutput: "controlled partial",
+      firstUsageInput: 11,
+      resumedUsageInput: 3,
+    },
+    cancellationReady,
+  };
+}
+
+function unsupportedFixture() {
+  const observed = observation();
+  const harness: Harness = {
+    name: "controlled-unsupported",
+    validate: () => [],
+    prepare: () => {
+      let closed = false;
+      return {
+        capabilities: { resume: false },
+        model: undefined,
+        prepareRun: () => ({
+          supportedControls: [],
+          execute: async (run): Promise<RunEnding> => {
+            observed.executionStarted();
+            try {
+              run.report.message({
+                role: "assistant",
+                parts: [{ type: "text", text: "unsupported first answer" }],
+              });
+              return { ending: "answered" };
+            } finally {
+              observed.executionSettled();
+            }
+          },
+        }),
+        close: async () => {
+          if (closed) return;
+          closed = true;
+          observed.adapterClosed();
+        },
+      };
+    },
+  };
+  return {
+    harness,
+    observation: observed,
+    expectation: {
+      resume: "unsupported" as const,
+      firstOutput: "unsupported first answer",
     },
   };
 }
@@ -169,6 +238,10 @@ function send(child: FakeChild, value: unknown): void {
 
 function codexFixture() {
   const observed = observation();
+  let openCancellation = () => {};
+  const cancellationReady = new Promise<void>((resolve) => {
+    openCancellation = resolve;
+  });
   let marker: string | undefined;
   let attempt = 0;
   const spawn: ChildProcessSpawn = () => {
@@ -197,6 +270,52 @@ function codexFixture() {
           id: request.id,
           result: { turn: { id: turnId, status: "inProgress" } },
         });
+        const inputTokens =
+          currentAttempt === 0 ? 11 : currentAttempt === 2 ? 5 : 3;
+        send(current, {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId,
+            turnId,
+            tokenUsage: {
+              total: {
+                totalTokens: inputTokens,
+                inputTokens,
+                cachedInputTokens: 0,
+                cacheWriteInputTokens: 0,
+                outputTokens: 0,
+                reasoningOutputTokens: 0,
+              },
+              last: {
+                totalTokens: inputTokens,
+                inputTokens,
+                cachedInputTokens: 0,
+                cacheWriteInputTokens: 0,
+                outputTokens: 0,
+                reasoningOutputTokens: 0,
+              },
+              modelContextWindow: 100,
+            },
+          },
+        });
+        if (prompt === "wait until cancelled") {
+          send(current, {
+            method: "item/completed",
+            params: {
+              threadId,
+              turnId,
+              item: {
+                type: "agentMessage",
+                id: `managed-partial-${currentAttempt + 1}`,
+                text: "Codex partial before cancellation",
+                phase: "commentary",
+              },
+              completedAtMs: 1,
+            },
+          });
+          openCancellation();
+          return;
+        }
         send(current, {
           method: "item/completed",
           params: {
@@ -218,6 +337,20 @@ function codexFixture() {
             turn: { id: turnId, items: [], status: "completed", error: null },
           },
         });
+      } else if (request.method === "turn/interrupt") {
+        send(current, { id: request.id, result: {} });
+        send(current, {
+          method: "turn/completed",
+          params: {
+            threadId,
+            turn: {
+              id: turnId,
+              items: [],
+              status: "interrupted",
+              error: null,
+            },
+          },
+        });
       }
     });
     child.stdin.on("finish", () => child.finish(0));
@@ -235,67 +368,238 @@ function codexFixture() {
       resume: "supported" as const,
       firstOutput: "first Codex answer",
       secondOutput: "Codex retained marker: amber",
+      cancellationOutput: "Codex partial before cancellation",
+      firstUsageInput: 11,
+      resumedUsageInput: 3,
     },
+    cancellationReady,
   };
 }
 
 function piFixture() {
   const observed = observation();
-  const spawn: ChildProcessSpawn = () => {
-    observed.executionStarted();
-    const child = fakeChild();
-    child.stdin.once("finish", () => {
-      send(child, {
-        type: "agent_end",
-        messages: [
-          {
+  let openCancellation = () => {};
+  const cancellationReady = new Promise<void>((resolve) => {
+    openCancellation = resolve;
+  });
+  let releaseCancelledPrompt = () => {};
+  const cancelledPrompt = new Promise<void>((resolve) => {
+    releaseCancelledPrompt = resolve;
+  });
+  const listeners = new Set<(event: AgentSessionEvent) => void>();
+  const messages: unknown[] = [];
+  let marker: string | undefined;
+  let creations = 0;
+  const emit = (event: unknown): void => {
+    for (const listener of listeners) listener(event as AgentSessionEvent);
+  };
+  const session: PiSession = {
+    get messages() {
+      return messages as PiSession["messages"];
+    },
+    get isIdle() {
+      return true;
+    },
+    async prompt(text) {
+      observed.executionStarted();
+      try {
+        if (text === "wait until cancelled") {
+          const user = { role: "user", content: [{ type: "text", text }] };
+          const partial = {
             role: "assistant",
-            content: [{ type: "text", text: "first Pi answer" }],
+            content: [{ type: "text", text: "Pi partial before cancellation" }],
             provider: "fixture",
             model: "fixture",
-            stopReason: "stop",
+            usage: {
+              input: 5,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 5,
+              cost: { total: 0 },
+            },
+          };
+          messages.push(user, partial);
+          emit({ type: "message_end", message: partial });
+          openCancellation();
+          await cancelledPrompt;
+          return;
+        }
+        const remembered = text.match(/remember (\S+)/)?.[1];
+        if (remembered) marker = remembered;
+        const user = { role: "user", content: [{ type: "text", text }] };
+        const assistant = {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: remembered
+                ? "first Pi answer"
+                : `Pi retained marker: ${marker ?? "missing"}`,
+            },
+          ],
+          provider: "fixture",
+          model: "fixture",
+          stopReason: "stop",
+          usage: {
+            input: remembered ? 11 : 3,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: remembered ? 11 : 3,
+            cost: { total: 0 },
           },
-        ],
-      });
-      child.finish(0);
-    });
-    child.once("close", () => observed.executionSettled());
-    return child as unknown as ChildProcess;
+        };
+        messages.push(user, assistant);
+        emit({ type: "message_end", message: assistant });
+        emit({ type: "agent_end", messages: [...messages], willRetry: false });
+      } finally {
+        observed.executionSettled();
+      }
+    },
+    async steer() {},
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    async bindExtensions() {},
+    async abort() {
+      releaseCancelledPrompt();
+    },
+    async waitForIdle() {},
+    clearQueue: () => ({ steering: [], followUp: [] }),
+    dispose() {},
+    extensionRunner: { async emit() {} },
+  };
+  const sessionFactory: PiSessionFactory = async () => {
+    creations++;
+    if (creations > 1) throw new Error("Pi created more than one SDK session");
+    return { session };
   };
   return {
-    harness: observeAdapterClose(createPiHarness({ spawn }), observed),
+    harness: observeAdapterClose(
+      createPiHarness({
+        sessionFactory,
+        sessionOptionsFactory: async () => ({}),
+      }),
+      observed,
+    ),
     observation: observed,
     expectation: {
-      resume: "unsupported" as const,
+      resume: "supported" as const,
       firstOutput: "first Pi answer",
+      secondOutput: "Pi retained marker: amber",
+      cancellationOutput: "Pi partial before cancellation",
+      firstUsageInput: 11,
+      resumedUsageInput: 3,
     },
+    cancellationReady,
   };
 }
 
 function claudeFixture() {
   const observed = observation();
-  const query = (() => {
+  let openCancellation = () => {};
+  const cancellationReady = new Promise<void>((resolve) => {
+    openCancellation = resolve;
+  });
+  const sessionId = "00000000-0000-4000-8000-000000000077";
+  let marker: string | undefined;
+  let attempt = 0;
+  const query: ClaudeQuery = ({ prompt, options }) => {
+    const currentAttempt = attempt++;
+    if (currentAttempt === 0 && options?.resume !== undefined)
+      throw new Error("first Claude attempt unexpectedly resumed");
+    if (currentAttempt > 0 && options?.resume !== sessionId)
+      throw new Error("Claude resume did not use retained continuation");
     observed.executionStarted();
+    let releaseAbort = () => {};
+    const aborted = new Promise<void>((resolve) => {
+      releaseAbort = resolve;
+    });
+    options?.abortController?.signal.addEventListener("abort", releaseAbort, {
+      once: true,
+    });
+    let settled = false;
+    const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      observed.executionSettled();
+    };
     return {
       async *[Symbol.asyncIterator]() {
         try {
+          if (typeof prompt === "string")
+            throw new Error("Claude managed Run did not use streaming input");
+          const first = await prompt[Symbol.asyncIterator]().next();
+          if (first.done)
+            throw new Error("Claude input omitted the Run prompt");
+          const content = first.value.message.content;
+          const block = Array.isArray(content) ? content[0] : undefined;
+          const text = block && block.type === "text" ? block.text : "";
+          const remembered = text.match(/remember (\S+)/)?.[1];
+          if (remembered) marker = remembered;
+          yield {
+            type: "system",
+            subtype: "init",
+            model: "claude-managed-fixture",
+            session_id: sessionId,
+            uuid: "00000000-0000-4000-8000-000000000078",
+          } as unknown as SDKMessage;
+          if (text === "wait until cancelled") {
+            yield {
+              type: "assistant",
+              message: {
+                id: "managed-claude-partial",
+                model: "claude-managed-fixture",
+                content: [
+                  {
+                    type: "text",
+                    text: "Claude partial before cancellation",
+                  },
+                ],
+              },
+              parent_tool_use_id: null,
+              session_id: sessionId,
+              uuid: "00000000-0000-4000-8000-000000000076",
+            } as unknown as SDKMessage;
+            openCancellation();
+            await aborted;
+            return;
+          }
           yield {
             type: "result",
             subtype: "success",
             is_error: false,
-            result: "first Claude answer",
+            result:
+              currentAttempt === 0
+                ? "first Claude answer"
+                : `Claude retained marker: ${marker ?? "missing"}`,
             num_turns: 1,
             total_cost_usd: 0,
-            modelUsage: {},
+            modelUsage: {
+              "claude-managed-fixture": {
+                inputTokens: currentAttempt === 0 ? 11 : 3,
+                outputTokens: 0,
+                cacheReadInputTokens: 0,
+                cacheCreationInputTokens: 0,
+                costUSD: 0,
+              },
+            },
             stop_reason: "end_turn",
+            session_id: sessionId,
+            uuid: "00000000-0000-4000-8000-000000000079",
           };
         } finally {
-          observed.executionSettled();
+          settle();
         }
       },
-      close() {},
+      close() {
+        releaseAbort();
+        settle();
+      },
     } as unknown as Query;
-  }) as unknown as () => Query;
+  };
   return {
     harness: observeAdapterClose(
       createClaudeHarness(async () => query),
@@ -303,13 +607,22 @@ function claudeFixture() {
     ),
     observation: observed,
     expectation: {
-      resume: "unsupported" as const,
+      resume: "supported" as const,
       firstOutput: "first Claude answer",
+      secondOutput: "Claude retained marker: amber",
+      cancellationOutput: "Claude partial before cancellation",
+      firstUsageInput: 11,
+      resumedUsageInput: 3,
     },
+    cancellationReady,
   };
 }
 
 runManagedSubagentConformance({ name: "controlled", build: controlledFixture });
+runManagedSubagentConformance({
+  name: "controlled-unsupported",
+  build: unsupportedFixture,
+});
 runManagedSubagentConformance({ name: "codex", build: codexFixture });
 runManagedSubagentConformance({ name: "pi", build: piFixture });
 runManagedSubagentConformance({ name: "claude", build: claudeFixture });

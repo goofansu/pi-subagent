@@ -5,7 +5,9 @@ Date: 2026-08-29
 ## Status
 
 Accepted. Supersedes ADR-0003 only where it ruled out guidance during a
-running child; the one-shot Run and absence of idle resume remain in force.
+running child; the one-shot Run remains in force. ADR-0014 and ADR-0016
+supersede the absence of idle resume, while ADR-0017 and ADR-0018 extend
+ordered steering to Pi and Claude without changing Codex's reducer.
 ADR-0013 supersedes only this ADR's claim that no stable Subagent identity
 exists. Refines ADR-0011's Codex ordering and provider-identity decisions.
 
@@ -63,8 +65,8 @@ or a resume surface.
 
 ## Consequences
 
-Codex may accept guidance during its one active Turn while Pi and Claude remain
-truthfully unsupported. At this decision, Runs were still the only identity:
+At this decision, Codex could accept guidance during its one active Turn while
+Pi and Claude were unsupported. Runs were still the only identity:
 there was no stable Subagent distinct from the Run id, no retained idle child,
 and no `agent_resume` or provider-session handle. ADR-0013 later adds the local
 Subagent identity and retains an adapter, but still no idle child, resume

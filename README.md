@@ -1,6 +1,6 @@
 # pi-subagent
 
-Delegate tasks to specialized subagents with isolated context windows in pi. Runs use a named harness: `pi`, `claude`, or `codex`. The Pi harness uses a child pi process and [pi's project-trust model](https://pi.dev/docs/latest/security#project-trust), Claude uses the Claude Agent SDK, and Codex uses the installed Codex CLI's App Server in headless JSON-RPC mode.
+Delegate tasks to specialized subagents with isolated context windows in pi. Runs use a named harness: `pi`, `claude`, or `codex`. The Pi harness owns a retained in-process Pi SDK session and [pi's project-trust model](https://pi.dev/docs/latest/security#project-trust), Claude uses disposable streaming Claude Agent SDK Queries, and Codex uses the installed Codex CLI's App Server in headless JSON-RPC mode.
 
 ## Install
 
@@ -20,14 +20,14 @@ Delegation uses six tools. `agent_start` creates a stable, Session-scoped Subage
 | `agent_resume` | Targets an idle Subagent id with a new `description` and full `prompt`, starts a distinct Run immediately, and returns its Run id rather than an answer. It never queues behind an active Run. |
 | `agent_wait` | Waits for named runs to become terminal and returns lifecycle state only. Takes an optional `timeout_seconds`; waiting never suppresses notifications or consumes results. |
 | `agent_cancel` | Stops named runs; partial output remains available after cancellation settles. |
-| `agent_steer` | Offers bounded guidance to an active run. Acceptance means local mailbox admission only. Codex delivers accepted guidance serially to its active Turn; Pi and Claude report steering as unsupported. |
+| `agent_steer` | Offers bounded guidance to an active run. Acceptance means local mailbox admission only; every production harness delivers accepted guidance serially through its active provider execution. |
 | `agent_result` | Reads a finished run's authoritative full output by id. |
 
 Every terminal output is stored for `agent_result` under its Run id and records its owning Subagent for orientation. A small completion notification names both identities and is pushed independently; `agent_wait` only observes Run lifecycle state. See [ADR 0006](docs/adr/0006-completion-notifications-and-result-store.md), [ADR 0013](docs/adr/0013-stable-subagent-identity.md), and [ADR 0014](docs/adr/0014-controlled-agent-resume.md).
 
-`agent_resume` is capability-aware. Codex can resume an idle Subagent within
-the current Session; Pi and Claude report resume as unsupported and start no
-provider continuation work. The Subagent id is used only for `agent_resume`;
+`agent_resume` is capability-aware. Pi, Claude, and Codex can resume an idle
+Subagent within the current Session through adapter-private provider context.
+The Subagent id is used only for `agent_resume`;
 `agent_wait`, `agent_result`, `agent_cancel`, and `agent_steer` always use the
 distinct Run id returned by `agent_start` or `agent_resume`.
 
@@ -36,13 +36,15 @@ distinct Run id returned by `agent_start` or `agent_resume`.
 Call `agent_steer` with the Run id returned by `agent_start` and one guidance
 message. An `accepted` response is deliberately narrow: the complete message
 entered that Run's bounded local FIFO mailbox synchronously. It does not mean
-the harness dequeued it, Codex accepted it, or the model consumed it, so do not
+the harness dequeued it, the provider accepted it, or the model consumed it, so do not
 resend accepted guidance in a retry loop. Only a provider-confirmed correlated
 user item becomes transcript truth in the eventual Result.
 
-Codex is the only steering-capable harness in this release. Pi and Claude
-return `unsupported` without starting provider-control work. A cancelling Run
-or a closed Control gate returns `not steerable`; a terminal Run reports
+All three production harnesses support steering. Pi uses its retained
+`AgentSession.steer`; Claude serializes guidance into the active streaming
+Query and may cross one or more provider Result boundaries before consumption;
+Codex uses native `turn/steer`. A cancelling Run or a closed Control gate
+returns `not steerable`; a terminal Run reports
 `already completed`, `already failed`, or `already cancelled`; an unknown id
 reports `unknown run`. These are too-late outcomes and never reopen or mutate a
 terminal Result.
@@ -94,6 +96,14 @@ disables all tools rather than restoring backend defaults. An empty or
 whitespace-only value remains unset and uses backend defaults. A pinned model
 is checked against Pi's loaded catalogue using its exact spelling.
 
+One lazy in-process Pi SDK session is retained per Subagent. It uses normal Pi
+resource discovery, memory-only session storage, headless extension binding,
+the parent's project-trust decision, and a Bash tool that injects the child
+depth per spawn without changing the host environment. This package filters
+itself from child extension discovery and all orchestration tools are denied.
+Sequential resumed Runs reuse the same provider session while emitting and
+charging only their own messages and usage.
+
 #### Claude profiles
 
 Use the Claude Agent SDK with the same field names:
@@ -138,6 +148,13 @@ server in Claude Code also grants it to claude-harness subagents. The `tools`
 field narrows built-in tools only. See
 [ADR 0008](docs/adr/0008-claude-children-inherit-operator-environment.md).
 
+Each Claude Run owns a fresh streaming Query. The adapter retains only the
+provider Conversation identity, applies native `resume` to later Queries, and
+sends only the new Run prompt plus that Run's Controls. Provider replay is
+ignored. Successful provider Results are internal Turn checkpoints while
+earlier guidance is still outstanding; the public Run settles once, after its
+later final Result and complete Query cleanup.
+
 #### Codex profiles
 
 Codex starts a fresh `codex app-server` Attempt for every Run and attaches it
@@ -178,9 +195,9 @@ every attachment; see [ADR 0009](docs/adr/0009-codex-trust-posture-and-environme
 | `model` only | profile model / Pi default thinking | profile alias / SDK default | profile model / Codex default |
 | both | profile model / profile effort | profile alias / profile budget | profile model / profile effort |
 
-Every Run is one-shot: one prompt in and one terminal answer out. A Codex
-Subagent may own several sequential Runs through its retained Conversation;
-Pi and Claude Subagents cannot resume in this release. The adapter translates
+Every Run is one-shot: one prompt in and one terminal answer out. Every
+production Subagent may own several sequential Runs through its private
+provider Conversation. The adapter translates
 provider messages into neutral facts; profiles and the rest of the runtime
 never depend on provider wire types.
 
@@ -217,11 +234,11 @@ The widget is a display. Pi routes keyboard input to the editor, never to a widg
 
 ### Concurrency
 
-Subagents are not capped: every successful `agent_start` creates a running Subagent with its first Run immediately. A Pi-harness run is a child pi process; a Claude-harness run uses the Claude Agent SDK directly; a Codex-harness run starts `codex app-server` as a child process. Either way, a wide fan-out costs real local resources — see [ADR 0001](docs/adr/0001-unbounded-subagent-concurrency.md) for why the cap and its queue were removed. Runs have no time limit.
+Subagents are not capped: every successful `agent_start` creates a running Subagent with its first Run immediately. A Pi Subagent owns an in-process SDK session, a Claude Run owns a disposable SDK Query, and a Codex Run starts a disposable `codex app-server` process. Either way, a wide fan-out costs real local resources — see [ADR 0001](docs/adr/0001-unbounded-subagent-concurrency.md) for why the cap and its queue were removed. Runs have no time limit.
 
 ### Lifecycle
 
-A Run is detached from the turn, not from the Session. `Esc` cancels the turn and leaves Runs going; `agent_cancel` stops one Run by Run id. Any terminal Run leaves its open Subagent idle and retains the prepared adapter. `agent_resume` can synchronously claim an idle Codex Subagent and start a fresh Run, but rejects an active Subagent without queueing; Pi and Claude report unsupported. Each Run has its own lifecycle, Result, notification, reporter, cancellation signal, usage fold, and Control mailbox; settlement discards pending guidance rather than carrying it into the next Run. There is no idle-Subagent widget yet.
+A Run is detached from the turn, not from the Session. `Esc` cancels the turn and leaves Runs going; `agent_cancel` stops one Run by Run id. Any terminal Run leaves its open Subagent idle and retains the prepared adapter. `agent_resume` can synchronously claim an idle Pi, Claude, or Codex Subagent and start a fresh Run, but rejects an active Subagent without queueing. Each Run has its own lifecycle, Result, notification, reporter, cancellation signal, usage fold, and Control mailbox; settlement discards pending guidance rather than carrying it into the next Run. There is no idle-Subagent widget yet.
 
 Anything that ends the Session — switching, forking, resuming, `/new`, `/reload`, or quitting pi — first closes every idle and running Subagent, then cancels active Runs, closes every retained adapter, and clears notifications and Results. Neither identity nor output crosses into the next Session.
 
@@ -233,17 +250,28 @@ association is forgotten.
 
 ### Security
 
-For the Pi harness, project trust is [pi's](https://pi.dev/docs/latest/security#project-trust): the extension resolves none of its own and forwards Pi's decision to every child pi process. The Claude and Codex harnesses do not consult that trust flag in this version: Claude bypasses permissions unconditionally, and Codex always bypasses approvals and sandbox — deliberate parity, with the forwarded value reserved for a future shared posture, documented in [ADR 0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md).
+For the Pi harness, project trust is [pi's](https://pi.dev/docs/latest/security#project-trust): the extension resolves none of its own and applies Pi's decision to the retained SDK resource loader and settings. The Claude and Codex harnesses do not consult that trust flag in this version: Claude bypasses permissions unconditionally, and Codex always bypasses approvals and sandbox — deliberate parity, with the forwarded value reserved for a future shared posture, documented in [ADR 0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md).
 
-A subagent reads files, writes files, and runs commands as far as its `tools` list allows, and cannot delegate further — delegation is one level deep. The neutral `agent_steer` operation is supported by Codex through its active native Turn; Pi and Claude report it as unsupported. See [ADR 0003](docs/adr/0003-one-shot-children.md) for the one-shot Run behavior.
+A subagent reads files, writes files, and runs commands as far as its `tools` list allows, and cannot delegate further — delegation is one level deep. The neutral `agent_steer` operation is implemented at each adapter's private provider boundary. See [ADR 0003](docs/adr/0003-one-shot-children.md) for the one-shot Run behavior.
 
 ## Release verification
 
 `npm run check` runs typechecking, lint, per-Run Harness Conformance, repeated
 managed Subagent conformance for the controlled harness and every production
 adapter, the full test suite, and a byte-for-byte generated Codex protocol
-check (`npm run codex:protocol:check`). `npm run release:check` adds both
-authenticated Codex gates: `npm run codex:smoke` preserves the live
+check (`npm run codex:protocol:check`). `npm run release:check` adds all six
+authenticated provider gates. `npm run codex:smoke` preserves the live
 steering/interruption proof and prints `CODEX_STEERING_LIVE_SMOKE_PASS`, while
 `npm run codex:resume-smoke` proves start–idle–resume through two disposable
-Attempts and prints `CODEX_RESUME_LIVE_SMOKE_PASS`. Both spend Codex quota.
+Attempts and prints `CODEX_RESUME_LIVE_SMOKE_PASS`. Pi uses
+`npm run pi:steering-smoke` and `npm run pi:resume-smoke`, printing
+`PI_STEERING_LIVE_SMOKE_PASS` and `PI_RESUME_LIVE_SMOKE_PASS`. Claude uses
+`npm run claude:steering-smoke` and `npm run claude:resume-smoke`, printing
+`CLAUDE_STEERING_LIVE_SMOKE_PASS` and `CLAUDE_RESUME_LIVE_SMOKE_PASS`.
+
+The Pi commands require a usable model and credentials in the normal Pi agent
+directory. The Claude commands require an authenticated Claude Code SDK
+environment. They spend provider quota, default to a five-minute hard timeout
+(override with `MANAGED_AGENT_LIVE_TIMEOUT_MS`), force a cancellation cleanup
+probe, handle `SIGINT`/`SIGTERM`, and always shut down the manager and provider
+resources on success, provider failure, timeout, cancellation, or interruption.

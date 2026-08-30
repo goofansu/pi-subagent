@@ -25,12 +25,17 @@ export interface ManagedConformanceExpectation {
   readonly resume: "supported" | "unsupported";
   readonly firstOutput: string;
   readonly secondOutput?: string;
+  readonly cancellationOutput?: string;
+  readonly firstUsageInput?: number;
+  readonly resumedUsageInput?: number;
 }
 
 export interface ManagedConformanceFixture {
   readonly harness: Harness;
   readonly observation: ManagedConformanceObservation;
   readonly expectation: ManagedConformanceExpectation;
+  /** Resolves when the fixture's cancellation Run has active provider work. */
+  readonly cancellationReady?: Promise<void>;
 }
 
 export interface ManagedConformanceRig {
@@ -46,7 +51,12 @@ export function runManagedSubagentConformance(
   test(`${rig.name} managed conformance: stable identity and managed resume`, async () => {
     for (let iteration = 0; iteration < 32; iteration++) {
       const fixture = rig.build();
-      const runIds = ["run-first", "run-second"];
+      const runIds = [
+        "run-first",
+        "run-second",
+        "run-cancelled",
+        "run-after-cancel",
+      ];
       const runs = createSubagentRuns({ now: () => 0 }, () => {
         const id = runIds.shift();
         assert.ok(id, "managed conformance started an unexpected Run");
@@ -106,6 +116,12 @@ export function runManagedSubagentConformance(
 
       const firstResult = await first.settled;
       assert.equal(firstResult.lifecycle.phase, "completed");
+      if (fixture.expectation.firstUsageInput !== undefined) {
+        assert.equal(
+          firstResult.usage.input,
+          fixture.expectation.firstUsageInput,
+        );
+      }
       assert.equal(
         delivery.result(first.runId)?.output,
         fixture.expectation.firstOutput,
@@ -161,6 +177,20 @@ export function runManagedSubagentConformance(
         );
         const secondResult = await resumed.settled;
         assert.equal(secondResult.lifecycle.phase, "completed");
+        if (fixture.expectation.resumedUsageInput !== undefined) {
+          assert.equal(
+            secondResult.usage.input,
+            fixture.expectation.resumedUsageInput,
+            "resumed usage must exclude prior-Run accounting",
+          );
+        }
+        assert.equal(
+          JSON.stringify(secondResult.messages).includes(
+            fixture.expectation.firstOutput,
+          ),
+          false,
+          "resumed transcript must exclude prior-Run Facts",
+        );
         assert.equal(
           delivery.result(resumed.runId)?.output,
           fixture.expectation.secondOutput,
@@ -180,10 +210,124 @@ export function runManagedSubagentConformance(
         ]);
         assert.equal(fixture.observation.executionsStarted(), 2);
         assert.equal(fixture.observation.executionsSettled(), 2);
+
+        assert.ok(
+          fixture.cancellationReady,
+          "enabled managed adapters must expose a cancellation readiness gate",
+        );
+        const cancelling = manager.resume({
+          subagentId: first.subagentId,
+          description: "cancel current goal",
+          prompt: "wait until cancelled",
+        });
+        assert.equal(cancelling.outcome, "started");
+        if (cancelling.outcome !== "started")
+          assert.fail("cancellation Run was not started");
+        delivery.register(
+          cancelling.runId,
+          cancelling.agent,
+          cancelling.settled,
+          first.subagentId,
+        );
+        await fixture.cancellationReady;
+        assert.deepEqual(runs.cancel([cancelling.runId], "requested"), [
+          cancelling.runId,
+        ]);
+        const cancelledResult = await cancelling.settled;
+        assert.equal(cancelledResult.lifecycle.phase, "cancelled");
+        assert.ok(
+          fixture.expectation.cancellationOutput,
+          "enabled managed adapters must name their provider partial output",
+        );
+        assert.equal(
+          JSON.stringify(cancelledResult.messages).includes(
+            fixture.expectation.cancellationOutput,
+          ),
+          true,
+          "provider partial Facts must survive cancellation",
+        );
+        assert.equal(
+          delivery
+            .result(cancelling.runId)
+            ?.output.includes(fixture.expectation.cancellationOutput),
+          true,
+          "provider partial output must remain retrievable after cancellation",
+        );
+        const immutableCancelled = structuredClone(
+          delivery.result(cancelling.runId),
+        );
+        delivery.notificationLanded(cancelling.runId);
+
+        const afterCancellation = manager.resume({
+          subagentId: first.subagentId,
+          description: "resume after cancellation",
+          prompt: "recall after cancellation",
+        });
+        assert.equal(afterCancellation.outcome, "started");
+        if (afterCancellation.outcome !== "started")
+          assert.fail("post-cancellation resume was not started");
+        delivery.register(
+          afterCancellation.runId,
+          afterCancellation.agent,
+          afterCancellation.settled,
+          first.subagentId,
+        );
+        const afterCancellationResult = await afterCancellation.settled;
+        assert.equal(afterCancellationResult.lifecycle.phase, "completed");
+        if (fixture.expectation.resumedUsageInput !== undefined) {
+          assert.equal(
+            afterCancellationResult.usage.input,
+            fixture.expectation.resumedUsageInput,
+            "post-cancellation usage must exclude every prior Run",
+          );
+        }
+        assert.equal(
+          JSON.stringify(afterCancellationResult.messages).includes(
+            fixture.expectation.firstOutput,
+          ),
+          false,
+          "post-cancellation transcript must exclude prior-Run Facts",
+        );
+        assert.equal(
+          delivery.result(afterCancellation.runId)?.output,
+          fixture.expectation.secondOutput,
+        );
+        assert.deepEqual(delivery.result(first.runId), immutableFirst);
+        assert.deepEqual(delivery.result(cancelling.runId), immutableCancelled);
+        assert.equal(fixture.observation.executionsStarted(), 4);
+        assert.equal(fixture.observation.executionsSettled(), 4);
+        assert.deepEqual(
+          notifications.map(({ id, status }) => ({ id, status })),
+          [
+            { id: "run-first", status: "completed" },
+            { id: "run-second", status: "completed" },
+            { id: "run-cancelled", status: "cancelled" },
+            { id: "run-after-cancel", status: "completed" },
+          ],
+        );
       }
 
       assert.equal(fixture.observation.maximumActiveExecutions(), 1);
       assert.equal(fixture.observation.activeExecutions(), 0);
+      const publicState = JSON.stringify({
+        results: [
+          delivery.result("run-first"),
+          delivery.result("run-second"),
+          delivery.result("run-cancelled"),
+          delivery.result("run-after-cancel"),
+        ],
+        notifications,
+      });
+      assert.doesNotMatch(
+        publicState,
+        /"(?:session_id|sessionId|conversationId|threadId|turnId|queryId|requestId)"\s*:/,
+        "provider continuation and correlation identities must not cross the public seam",
+      );
+      assert.doesNotMatch(
+        publicState,
+        /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|managed-provider-(?:thread|turn)/i,
+        "provider identity values must not leak under neutral or unnamed fields",
+      );
       await manager.shutdown();
       await manager.shutdown();
       assert.equal(

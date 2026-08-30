@@ -4,8 +4,9 @@ Date: 2026-08-30
 
 ## Status
 
-Accepted. Production Codex advertises Session-scoped resume; Pi and Claude do
-not.
+Accepted. This decision remains the Codex design. ADR-0017 and ADR-0018 later
+enable Session-scoped resume for Pi and Claude through their different native
+lifetime models.
 
 ## Decision
 

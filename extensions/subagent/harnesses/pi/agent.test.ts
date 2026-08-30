@@ -11,8 +11,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
+import {
+  type AgentSessionEvent,
+  createAgentSession,
+} from "@earendil-works/pi-coding-agent";
 import type { ChildProcessSpawn } from "../../child-process.ts";
 import { createControlGate } from "../../control-source.ts";
+import { getFinalOutput } from "../../messages.ts";
 import { formatNotification, fullOutput } from "../../presentation.ts";
 import {
   createEmptyResult,
@@ -20,6 +25,9 @@ import {
   DEPTH_ENV_KEY,
   settleResultLifecycle,
 } from "../../run.ts";
+import { createSubagentRuns } from "../../runs.ts";
+import { startSubagent } from "../../standalone-run-helper.ts";
+import { createSubagentManager } from "../../subagents.ts";
 import type { AgentConfig, SingleResult } from "../../types.ts";
 import {
   type HarnessConformanceFixture,
@@ -27,10 +35,14 @@ import {
   type HarnessConformanceScenario,
   runHarnessConformance,
 } from "../conformance.ts";
+import { createHarnessRegistry } from "../contract.ts";
 import {
   buildPiArgs,
+  createPiSessionOptions,
+  filterPiChildExtensions,
   getPiInvocation,
   type PiInvocationRuntime,
+  type PiSession,
   runPiAgent,
   translatePiJsonEvent,
 } from "./agent.ts";
@@ -272,73 +284,186 @@ function piConformanceRig(): HarnessConformanceRig {
     build(
       scenario: HarnessConformanceScenario,
     ): HarnessConformanceFixture | undefined {
-      let observedDepth: number | undefined;
-      let ready: Promise<void> | undefined;
-      let openReady = () => {};
-      let releaseSteering = () => {};
-      const childInputChunks: string[] = [];
       if (
-        scenario === "abort-mid-run" ||
-        scenario === "terminal-answer-then-abort" ||
-        scenario.startsWith("steering-")
+        scenario === "steering-single-consumed" ||
+        scenario === "steering-fifo-consumed" ||
+        scenario === "steering-intermediate-completion" ||
+        scenario === "steering-admission-no-fact"
       ) {
-        ready = new Promise<void>((resolve) => {
+        const offeredTexts =
+          scenario === "steering-fifo-consumed"
+            ? ["first guidance", "second guidance"]
+            : ["first guidance"];
+        const listeners = new Set<(event: AgentSessionEvent) => void>();
+        const messages: unknown[] = [];
+        const received: string[] = [];
+        let providerStarts = 0;
+        let activeProviderControls = 0;
+        let maxActiveProviderControls = 0;
+        let openReady = () => {};
+        const ready = new Promise<void>((resolve) => {
           openReady = resolve;
         });
-      }
-
-      const terminal = (text = "pi answer") => ({
-        type: "agent_end",
-        messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text }],
-            provider: "fixture-provider",
-            model: "fixture-model",
-            stopReason: "stop",
+        let releaseFirst = () => {};
+        const firstReleased = new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+        let openIntermediate = () => {};
+        const intermediateCheckpoint = new Promise<void>((resolve) => {
+          openIntermediate = resolve;
+        });
+        let finishPrompt = () => {};
+        const promptFinished = new Promise<void>((resolve) => {
+          finishPrompt = resolve;
+        });
+        const emit = (event: unknown): void => {
+          for (const listener of listeners)
+            listener(event as AgentSessionEvent);
+        };
+        const session: PiSession = {
+          get messages() {
+            return messages as PiSession["messages"];
           },
-        ],
+          get isIdle() {
+            return true;
+          },
+          async prompt(text) {
+            messages.push({
+              role: "user",
+              content: [{ type: "text", text }],
+            });
+            openReady();
+            await promptFinished;
+          },
+          async steer(text) {
+            providerStarts++;
+            activeProviderControls++;
+            maxActiveProviderControls = Math.max(
+              maxActiveProviderControls,
+              activeProviderControls,
+            );
+            received.push(text);
+            if (providerStarts === 1) openIntermediate();
+            if (providerStarts === 1) await firstReleased;
+            if (scenario !== "steering-admission-no-fact") {
+              const user = {
+                role: "user",
+                content: [{ type: "text", text }],
+              };
+              messages.push(user);
+              emit({ type: "message_end", message: user });
+            }
+            activeProviderControls--;
+            if (providerStarts === offeredTexts.length) {
+              const assistant = {
+                role: "assistant",
+                content: [{ type: "text", text: "controlled Pi answer" }],
+                provider: "fixture",
+                model: "fixture",
+                stopReason: "stop",
+              };
+              messages.push(assistant);
+              emit({ type: "message_end", message: assistant });
+              emit({
+                type: "agent_end",
+                messages: [...messages],
+                willRetry: false,
+              });
+              finishPrompt();
+            }
+          },
+          subscribe(listener) {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          },
+          async bindExtensions() {},
+          async abort() {},
+          async waitForIdle() {},
+          clearQueue: () => ({ steering: [], followUp: [] }),
+          dispose() {},
+          extensionRunner: { async emit() {} },
+        };
+        return {
+          harness: createPiHarness({
+            sessionFactory: async () => ({ session }),
+            sessionOptionsFactory: async () => ({}),
+          }),
+          expected: {
+            phase: "completed",
+            finalOutput: "controlled Pi answer",
+            userFactTexts:
+              scenario === "steering-admission-no-fact" ? [] : offeredTexts,
+          },
+          steering: {
+            ready,
+            offeredTexts,
+            expectedOutcome: "accepted",
+            release: releaseFirst,
+            receivedTexts: () => received,
+            providerControlStarts: () => providerStarts,
+            maxConcurrentProviderControls: () => maxActiveProviderControls,
+            ...(scenario === "steering-intermediate-completion"
+              ? { intermediateCheckpoint }
+              : {}),
+          },
+          depthProbe: () => undefined,
+        };
+      }
+      const listeners = new Set<(event: AgentSessionEvent) => void>();
+      const messages: unknown[] = [];
+      let observedDepth: number | undefined;
+      let openReady = () => {};
+      const ready = new Promise<void>((resolve) => {
+        openReady = resolve;
       });
-      const fixtureUsage = (text: string, usage: Record<string, unknown>) => ({
+      let releasePrompt = () => {};
+      const promptReleased = new Promise<void>((resolve) => {
+        releasePrompt = resolve;
+      });
+      const emit = (event: unknown): void => {
+        for (const listener of listeners) listener(event as AgentSessionEvent);
+      };
+      const assistant = (text: string, usage?: Record<string, unknown>) => ({
         role: "assistant",
         content: [{ type: "text", text }],
-        usage,
+        provider: "fixture-provider",
+        model: "fixture-model",
+        stopReason: "stop",
+        ...(usage ? { usage } : {}),
       });
-
-      const spawn: ChildProcessSpawn = (_command, _args, options) => {
-        observedDepth = Number(options.env?.[DEPTH_ENV_KEY]);
-        assert.equal(
-          options.env?.PATH,
-          process.env.PATH,
-          "pi child env must inherit the parent environment",
-        );
-        let child!: FakePiChild;
-        child = fakePiChild(() => {
-          if (scenario === "abort-mid-run") child.finish(null);
-          if (scenario === "terminal-answer-then-abort") child.finish(143);
+      const terminal = (terminalMessages: unknown[]): void => {
+        messages.push(...terminalMessages);
+        emit({
+          type: "agent_end",
+          messages: [...messages],
+          willRetry: false,
         });
-        const childStdin = child.stdin as PassThrough;
-        childStdin.setEncoding("utf8");
-        childStdin.on("data", (chunk) => childInputChunks.push(String(chunk)));
-
-        queueMicrotask(() => {
+      };
+      const session: PiSession = {
+        get messages() {
+          return messages as PiSession["messages"];
+        },
+        get isIdle() {
+          return true;
+        },
+        async prompt() {
           switch (scenario) {
             case "backend-crash":
-              (child.stderr as PassThrough).write("fixture pi crash\n");
-              child.finish(1);
-              break;
+              throw new Error("Pi SDK backend crashed");
             case "abort-mid-run":
-              (child.stdout as PassThrough).write("silent child tail");
               openReady();
-              break;
-            case "terminal-answer-then-abort":
-              (child.stdout as PassThrough).write(
-                `${JSON.stringify(terminal())}\n`,
-              );
+              await promptReleased;
+              return;
+            case "terminal-answer-then-abort": {
+              const answer = assistant("pi answer");
+              emit({ type: "message_end", message: answer });
+              terminal([answer]);
               openReady();
-              break;
+              await promptReleased;
+              return;
+            }
             case "usage-totals": {
-              const first = fixtureUsage("first turn", {
+              const first = assistant("first turn", {
                 input: 7,
                 output: 3,
                 cacheRead: 2,
@@ -346,7 +471,7 @@ function piConformanceRig(): HarnessConformanceRig {
                 totalTokens: 10,
                 cost: { total: 0.2 },
               });
-              const second = fixtureUsage("second turn", {
+              const second = assistant("second turn", {
                 input: 5,
                 output: 4,
                 cacheRead: 1,
@@ -354,70 +479,69 @@ function piConformanceRig(): HarnessConformanceRig {
                 totalTokens: 20,
                 cost: { total: 0.3 },
               });
-              (child.stdout as PassThrough).write(
-                `${JSON.stringify({ type: "message_end", message: first })}\n`,
-              );
-              (child.stdout as PassThrough).write(
-                `${JSON.stringify({ type: "message_end", message: second })}\n`,
-              );
-              (child.stdout as PassThrough).write(
-                `${JSON.stringify({
-                  type: "agent_end",
-                  messages: [first, second],
-                })}\n`,
-              );
-              child.finish(0);
-              break;
+              emit({ type: "message_end", message: first });
+              emit({ type: "message_end", message: second });
+              terminal([first, second]);
+              return;
             }
             case "child-depth":
-            case "config-immutable":
-            case "post-answer-failure":
-              (child.stdout as PassThrough).write(
-                `${JSON.stringify(terminal())}\n`,
-              );
-              child.finish(scenario === "post-answer-failure" ? 7 : 0);
-              break;
+            case "config-immutable": {
+              const answer = assistant("pi answer");
+              emit({ type: "message_end", message: answer });
+              terminal([answer]);
+              return;
+            }
             case "no-terminal-answer":
-              child.finish(0);
-              break;
-            case "terminal-transcript-healing":
-              (child.stdout as PassThrough).write(
-                `${JSON.stringify({
-                  type: "message_end",
-                  message: {
-                    role: "assistant",
-                    content: [],
-                    stopReason: "error",
-                    errorMessage: "stale streamed error",
-                  },
-                })}\n`,
-              );
-              (child.stdout as PassThrough).write(
-                `${JSON.stringify(terminal("healed terminal answer"))}\n`,
-              );
-              child.finish(0);
-              break;
-            case "steering-single-consumed":
-            case "steering-fifo-consumed":
-              releaseSteering = () => {
-                (child.stdout as PassThrough).write(
-                  `${JSON.stringify(terminal("unsupported steering answer"))}\n`,
-                );
-                child.finish(0);
-              };
-              openReady();
-              break;
+              return;
+            case "post-answer-failure": {
+              const partial = assistant("partial answer");
+              emit({ type: "message_end", message: partial });
+              throw new Error("Pi SDK backend failed after answer");
+            }
+            case "terminal-transcript-healing": {
+              emit({
+                type: "message_end",
+                message: {
+                  role: "assistant",
+                  content: [],
+                  stopReason: "error",
+                  errorMessage: "stale streamed error",
+                },
+              });
+              terminal([assistant("healed terminal answer")]);
+              return;
+            }
           }
-        });
-        return child;
+        },
+        async steer() {},
+        subscribe(listener) {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+        async bindExtensions() {},
+        async abort() {
+          releasePrompt();
+        },
+        async waitForIdle() {},
+        clearQueue: () => ({ steering: [], followUp: [] }),
+        dispose() {},
+        extensionRunner: { async emit() {} },
       };
-
       const base = (
         expected: HarnessConformanceFixture["expected"],
       ): HarnessConformanceFixture => ({
-        harness: createPiHarness({ spawn }),
+        harness: createPiHarness({
+          sessionFactory: async () => ({ session }),
+          sessionOptionsFactory: async (context) => {
+            observedDepth = context.childDepth;
+            return {};
+          },
+        }),
         expected,
-        ...(ready ? { readyForCancellation: ready } : {}),
+        ...(scenario === "abort-mid-run" ||
+        scenario === "terminal-answer-then-abort"
+          ? { readyForCancellation: ready }
+          : {}),
         depthProbe: () => observedDepth,
       });
 
@@ -425,14 +549,10 @@ function piConformanceRig(): HarnessConformanceRig {
         case "backend-crash":
           return base({
             phase: "failed",
-            errorMessage: "Child pi exited with code 1",
+            errorMessage: "Pi SDK backend crashed",
           });
         case "abort-mid-run":
-          return base({
-            phase: "cancelled",
-            cancellationReason: "requested",
-            stderrExcludes: "Last stdout:",
-          });
+          return base({ phase: "cancelled", cancellationReason: "requested" });
         case "terminal-answer-then-abort":
           return base({
             phase: "completed",
@@ -456,7 +576,7 @@ function piConformanceRig(): HarnessConformanceRig {
         case "child-depth":
           return base({ phase: "completed", childDepth: 1 });
         case "config-immutable":
-          return base({ phase: "completed" });
+          return base({ phase: "completed", finalOutput: "pi answer" });
         case "no-terminal-answer":
           return base({
             phase: "failed",
@@ -465,11 +585,8 @@ function piConformanceRig(): HarnessConformanceRig {
           });
         case "post-answer-failure":
           return base({
-            phase: "completed",
-            finalOutput: "pi answer",
-            stopReason: "stop",
-            errorMessage: undefined,
-            stderrExcludes: "Last stdout:",
+            phase: "failed",
+            errorMessage: "Pi SDK backend failed after answer",
           });
         case "terminal-transcript-healing":
           return base({
@@ -478,37 +595,1020 @@ function piConformanceRig(): HarnessConformanceRig {
             stopReason: "stop",
             errorMessage: undefined,
           });
-        case "steering-single-consumed":
-        case "steering-fifo-consumed": {
-          const offeredTexts =
-            scenario === "steering-single-consumed"
-              ? ["first guidance"]
-              : ["first guidance", "second guidance"];
-          const fixture = base({
-            phase: "completed",
-            finalOutput: "unsupported steering answer",
-            userFactTexts: [],
-          });
-          return {
-            ...fixture,
-            steering: {
-              ready: ready as Promise<void>,
-              offeredTexts,
-              expectedOutcome: "unsupported",
-              release: () => releaseSteering(),
-              receivedTexts: () => childInputChunks.slice(1),
-              providerControlStarts: () =>
-                Math.max(0, childInputChunks.length - 1),
-              maxConcurrentProviderControls: () => 0,
-            },
-          };
-        }
       }
     },
   };
 }
 
 runHarnessConformance(piConformanceRig());
+
+test("Pi child resource filtering removes this package by identity", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-resource-filter-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const self = path.join(root, "renamed-self");
+  const other = path.join(root, "other");
+  for (const directory of [self, other]) {
+    fs.mkdirSync(path.join(directory, "extensions"), { recursive: true });
+  }
+  fs.writeFileSync(
+    path.join(self, "package.json"),
+    JSON.stringify({ name: "pi-subagent" }),
+  );
+  fs.writeFileSync(
+    path.join(other, "package.json"),
+    JSON.stringify({ name: "librarian-tools" }),
+  );
+  const selfExtension = path.join(self, "extensions", "index.ts");
+  const otherExtension = path.join(other, "extensions", "librarian.ts");
+  fs.writeFileSync(selfExtension, "");
+  fs.writeFileSync(otherExtension, "");
+
+  const filtered = filterPiChildExtensions({
+    extensions: [
+      { resolvedPath: selfExtension },
+      { resolvedPath: otherExtension },
+    ],
+    errors: [],
+    runtime: {},
+  } as never);
+
+  assert.deepEqual(
+    filtered.extensions.map((extension) => extension.resolvedPath),
+    [otherExtension],
+  );
+});
+
+test("Pi SDK options preserve normal resources, trust, profile policy, and memory-only state", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-options-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cwd = path.join(root, "project");
+  const agentDir = path.join(root, "agent");
+  fs.mkdirSync(cwd);
+  fs.mkdirSync(agentDir);
+  fs.writeFileSync(path.join(agentDir, "SYSTEM.md"), "native instructions");
+
+  const options = await createPiSessionOptions(
+    {
+      config: agent({
+        fields: {
+          tools: "bash, read, agent_start",
+          appendSystemPrompt: true,
+        },
+      }),
+      cwd,
+      childDepth: 3,
+      projectTrusted: true,
+    },
+    undefined,
+    "medium",
+    agentDir,
+  );
+
+  assert.equal(options.settingsManager?.isProjectTrusted(), true);
+  assert.equal(options.sessionManager?.getSessionFile(), undefined);
+  assert.deepEqual(options.tools, ["bash", "read", "agent_start"]);
+  assert.deepEqual(options.excludeTools, [
+    "agent_start",
+    "agent_resume",
+    "agent_wait",
+    "agent_result",
+    "agent_cancel",
+    "agent_steer",
+  ]);
+  assert.equal(options.customTools?.[0]?.name, "bash");
+  assert.equal(options.thinkingLevel, "medium");
+  assert.deepEqual(options.resourceLoader?.getAppendSystemPrompt(), ["Work."]);
+  assert.equal(
+    options.resourceLoader?.getSystemPrompt(),
+    "native instructions",
+  );
+});
+
+test("an empty Pi profile prompt keeps the discovered system prompt", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-empty-prompt-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cwd = path.join(root, "project");
+  const agentDir = path.join(root, "agent");
+  fs.mkdirSync(cwd);
+  fs.mkdirSync(agentDir);
+  fs.writeFileSync(path.join(agentDir, "SYSTEM.md"), "discovered instructions");
+
+  const options = await createPiSessionOptions(
+    {
+      config: agent({ systemPrompt: "" }),
+      cwd,
+      childDepth: 1,
+      projectTrusted: false,
+    },
+    undefined,
+    undefined,
+    agentDir,
+  );
+
+  assert.equal(options.settingsManager?.isProjectTrusted(), false);
+  assert.equal(
+    options.resourceLoader?.getSystemPrompt(),
+    "discovered instructions",
+  );
+  assert.deepEqual(options.resourceLoader?.getAppendSystemPrompt(), []);
+});
+
+test("the installed Pi SDK enforces the tool deny-list and injects depth per Bash spawn", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sdk-policy-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cwd = path.join(root, "project");
+  const agentDir = path.join(root, "agent");
+  fs.mkdirSync(cwd);
+  fs.mkdirSync(agentDir);
+  const inheritedDepth = process.env[DEPTH_ENV_KEY];
+  const options = await createPiSessionOptions(
+    {
+      config: agent({ fields: { tools: "bash, agent_start" } }),
+      cwd,
+      childDepth: 7,
+      projectTrusted: true,
+    },
+    undefined,
+    undefined,
+    agentDir,
+  );
+  const { session } = await createAgentSession(options);
+  try {
+    await session.bindExtensions({ mode: "print" });
+    assert.deepEqual(session.getActiveToolNames(), ["bash"]);
+    const bash = session.agent.state.tools.find((tool) => tool.name === "bash");
+    assert.ok(bash);
+    const result = await bash.execute("depth-probe", {
+      command: `printf '%s' "$${DEPTH_ENV_KEY}"`,
+    });
+    assert.deepEqual(result.content[0], { type: "text", text: "7" });
+    assert.equal(process.env[DEPTH_ENV_KEY], inheritedDepth);
+  } finally {
+    await session.extensionRunner.emit({
+      type: "session_shutdown",
+      reason: "quit",
+    });
+    session.dispose();
+  }
+});
+
+test("trusted Pi project resources keep a profile-selected extension tool while untrusted resources stay excluded", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-project-resource-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cwd = path.join(root, "project");
+  const extensionDir = path.join(cwd, ".pi", "extensions");
+  const extensionPath = path.join(extensionDir, "librarian.js");
+  fs.mkdirSync(extensionDir, { recursive: true });
+  fs.writeFileSync(
+    extensionPath,
+    `export default (pi) => {
+      pi.registerTool({
+        name: "librarian_lookup",
+        label: "Librarian lookup",
+        description: "Hermetic project extension fixture",
+        parameters: { type: "object", properties: {} },
+        async execute() { return { content: [{ type: "text", text: "ok" }] }; },
+      });
+    };`,
+  );
+  const makeOptions = (projectTrusted: boolean, suffix: string) => {
+    const agentDir = path.join(root, `agent-${suffix}`);
+    fs.mkdirSync(agentDir);
+    return createPiSessionOptions(
+      {
+        config: agent({ fields: { tools: "librarian_lookup" } }),
+        cwd,
+        childDepth: 1,
+        projectTrusted,
+      },
+      undefined,
+      undefined,
+      agentDir,
+    );
+  };
+
+  const trusted = await makeOptions(true, "trusted");
+  const untrusted = await makeOptions(false, "untrusted");
+  assert.equal(
+    trusted.resourceLoader
+      ?.getExtensions()
+      .extensions.some((extension) => extension.resolvedPath === extensionPath),
+    true,
+  );
+  assert.equal(
+    untrusted.resourceLoader
+      ?.getExtensions()
+      .extensions.some((extension) => extension.resolvedPath === extensionPath),
+    false,
+  );
+
+  const { session } = await createAgentSession(trusted);
+  try {
+    await session.bindExtensions({ mode: "print" });
+    assert.deepEqual(session.getActiveToolNames(), ["librarian_lookup"]);
+  } finally {
+    await session.extensionRunner.emit({
+      type: "session_shutdown",
+      reason: "quit",
+    });
+    session.dispose();
+  }
+});
+
+test("Pi initialization and prompt failures clean the SDK session exactly once", async () => {
+  for (const failure of ["bind", "prompt"] as const) {
+    let binds = 0;
+    let prompts = 0;
+    let shutdowns = 0;
+    let disposals = 0;
+    const session: PiSession = {
+      messages: [],
+      isIdle: true,
+      async prompt() {
+        prompts++;
+        if (failure === "prompt") throw new Error("prompt failed");
+      },
+      async steer() {},
+      subscribe: () => () => {},
+      async bindExtensions(bindings) {
+        binds++;
+        assert.deepEqual(bindings, { mode: "print" });
+        if (failure === "bind") throw new Error("bind failed");
+      },
+      async abort() {},
+      async waitForIdle() {},
+      clearQueue: () => ({ steering: [], followUp: [] }),
+      dispose() {
+        disposals++;
+      },
+      extensionRunner: {
+        async emit() {
+          shutdowns++;
+        },
+      },
+    };
+    const result = await startSubagent({
+      config: agent({ harness: "pi" }),
+      description: `${failure} failure`,
+      prompt: "do it",
+      harnesses: createHarnessRegistry([
+        createPiHarness({
+          sessionFactory: async () => ({ session }),
+          sessionOptionsFactory: async () => ({}),
+        }),
+      ]),
+      runs: createSubagentRuns(),
+    }).settled;
+
+    assert.equal(result.lifecycle.phase, "failed");
+    assert.equal(result.errorMessage, `${failure} failed`);
+    assert.equal(binds, 1);
+    assert.equal(prompts, failure === "bind" ? 0 : 1);
+    assert.equal(shutdowns, 1);
+    assert.equal(disposals, 1);
+  }
+});
+
+test("Pi cancellation during resource loading, session creation, or extension binding leaves no detached session", async () => {
+  for (const phase of ["resources", "creation", "binding"] as const) {
+    let openPhase = () => {};
+    const phaseEntered = new Promise<void>((resolve) => {
+      openPhase = resolve;
+    });
+    let releasePhase = () => {};
+    const phaseReleased = new Promise<void>((resolve) => {
+      releasePhase = resolve;
+    });
+    let creations = 0;
+    let prompts = 0;
+    let shutdowns = 0;
+    let disposals = 0;
+    const session: PiSession = {
+      messages: [],
+      isIdle: true,
+      async prompt() {
+        prompts++;
+      },
+      async steer() {},
+      subscribe: () => () => {},
+      async bindExtensions() {
+        if (phase === "binding") {
+          openPhase();
+          await phaseReleased;
+        }
+      },
+      async abort() {},
+      async waitForIdle() {},
+      clearQueue: () => ({ steering: [], followUp: [] }),
+      dispose() {
+        disposals++;
+      },
+      extensionRunner: {
+        async emit() {
+          shutdowns++;
+        },
+      },
+    };
+    const runs = createSubagentRuns();
+    const started = startSubagent({
+      config: agent({ harness: "pi" }),
+      description: `cancel during ${phase}`,
+      prompt: "must not run",
+      harnesses: createHarnessRegistry([
+        createPiHarness({
+          sessionOptionsFactory: async () => {
+            if (phase === "resources") {
+              openPhase();
+              await phaseReleased;
+            }
+            return {};
+          },
+          sessionFactory: async () => {
+            creations++;
+            if (phase === "creation") {
+              openPhase();
+              await phaseReleased;
+            }
+            return { session };
+          },
+        }),
+      ]),
+      runs,
+    });
+    await phaseEntered;
+    assert.deepEqual(runs.cancel([started.id], "requested"), [started.id]);
+    releasePhase();
+    const result = await started.settled;
+
+    assert.equal(result.lifecycle.phase, "cancelled", phase);
+    assert.equal(prompts, 0, phase);
+    assert.equal(creations, phase === "resources" ? 0 : 1, phase);
+    assert.equal(shutdowns, phase === "resources" ? 0 : 1, phase);
+    assert.equal(disposals, phase === "resources" ? 0 : 1, phase);
+  }
+});
+
+test("Pi orders Control and cancellation by ingress and never carries stale guidance into resume", async () => {
+  for (let iteration = 0; iteration < 32; iteration++) {
+    for (const order of ["control-first", "cancellation-first"] as const) {
+      const listeners = new Set<(event: AgentSessionEvent) => void>();
+      const operations: string[] = [];
+      let pendingGuidance: string | undefined;
+      let finishPrompt = () => {};
+      let promptFinished = new Promise<void>((resolve) => {
+        finishPrompt = resolve;
+      });
+      let openReady = () => {};
+      const ready = new Promise<void>((resolve) => {
+        openReady = resolve;
+      });
+      let releaseSteer = () => {};
+      const steerReleased = new Promise<void>((resolve) => {
+        releaseSteer = resolve;
+      });
+      let openSteerStarted = () => {};
+      const steerStarted = new Promise<void>((resolve) => {
+        openSteerStarted = resolve;
+      });
+      const messages: unknown[] = [];
+      const emit = (event: unknown): void => {
+        for (const listener of listeners) listener(event as AgentSessionEvent);
+      };
+      const session: PiSession = {
+        get messages() {
+          return messages as PiSession["messages"];
+        },
+        isIdle: true,
+        async prompt(text) {
+          operations.push(`prompt:${text}`);
+          if (text === "first goal") {
+            openReady();
+            await promptFinished;
+            return;
+          }
+          const answer = {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: pendingGuidance
+                  ? `stale guidance: ${pendingGuidance}`
+                  : "clean resumed answer",
+              },
+            ],
+            provider: "fixture",
+            model: "fixture",
+            stopReason: "stop",
+          };
+          messages.push(answer);
+          emit({ type: "message_end", message: answer });
+          emit({
+            type: "agent_end",
+            messages: [...messages],
+            willRetry: false,
+          });
+        },
+        async steer(text) {
+          operations.push("steer:start");
+          openSteerStarted();
+          await steerReleased;
+          pendingGuidance = text;
+          operations.push("steer:end");
+        },
+        subscribe(listener) {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+        async bindExtensions() {},
+        async abort() {
+          operations.push("abort");
+          finishPrompt();
+        },
+        async waitForIdle() {},
+        clearQueue() {
+          operations.push("clear");
+          pendingGuidance = undefined;
+          return { steering: [], followUp: [] };
+        },
+        dispose() {},
+        extensionRunner: { async emit() {} },
+      };
+      const runs = createSubagentRuns();
+      const manager = createSubagentManager({
+        harnesses: createHarnessRegistry([
+          createPiHarness({
+            sessionFactory: async () => ({ session }),
+            sessionOptionsFactory: async () => ({}),
+          }),
+        ]),
+        runs,
+        generateSubagentId: () => `pi-order-${iteration}-${order}`,
+      });
+      const first = manager.start({
+        config: agent({ harness: "pi" }),
+        description: "ordered cancellation",
+        prompt: "first goal",
+      });
+      await ready;
+
+      if (order === "control-first") {
+        assert.equal(
+          runs.offer(first.runId, {
+            type: "steer",
+            text: "must not reach resume",
+          }),
+          "accepted",
+        );
+        await steerStarted;
+        assert.deepEqual(runs.cancel([first.runId], "requested"), [
+          first.runId,
+        ]);
+        assert.equal(
+          operations.includes("abort"),
+          false,
+          "cancellation must join in-flight steering before native abort",
+        );
+        releaseSteer();
+      } else {
+        assert.deepEqual(runs.cancel([first.runId], "requested"), [
+          first.runId,
+        ]);
+        assert.notEqual(
+          runs.offer(first.runId, {
+            type: "steer",
+            text: "rejected after cancellation",
+          }),
+          "accepted",
+        );
+        releaseSteer();
+      }
+
+      const cancelled = await first.settled;
+      assert.equal(cancelled.lifecycle.phase, "cancelled");
+      if (order === "control-first") {
+        assert.ok(
+          operations.indexOf("steer:end") < operations.lastIndexOf("clear"),
+        );
+        assert.ok(
+          operations.lastIndexOf("clear") < operations.indexOf("abort"),
+        );
+      } else {
+        assert.equal(operations.includes("steer:start"), false);
+      }
+
+      finishPrompt = () => {};
+      promptFinished = Promise.resolve();
+      const resumed = manager.resume({
+        subagentId: first.subagentId,
+        description: "resume cleanly",
+        prompt: "second goal",
+      });
+      assert.equal(resumed.outcome, "started");
+      if (resumed.outcome !== "started") assert.fail("Pi resume did not start");
+      const resumedResult = await resumed.settled;
+      assert.equal(
+        getFinalOutput(resumedResult.messages),
+        "clean resumed answer",
+      );
+      await manager.shutdown();
+    }
+  }
+});
+
+test("Pi cancellation remains honest when native abort rejects", async () => {
+  let openReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    openReady = resolve;
+  });
+  let finishPrompt = () => {};
+  const promptFinished = new Promise<void>((resolve) => {
+    finishPrompt = resolve;
+  });
+  let aborts = 0;
+  const session: PiSession = {
+    messages: [],
+    isIdle: true,
+    async prompt() {
+      openReady();
+      await promptFinished;
+    },
+    async steer() {},
+    subscribe: () => () => {},
+    async bindExtensions() {},
+    async abort() {
+      aborts++;
+      finishPrompt();
+      throw new Error("native abort rejected");
+    },
+    async waitForIdle() {},
+    clearQueue: () => ({ steering: [], followUp: [] }),
+    dispose() {},
+    extensionRunner: { async emit() {} },
+  };
+  const runs = createSubagentRuns();
+  const started = startSubagent({
+    config: agent({ harness: "pi" }),
+    description: "abort failure",
+    prompt: "wait",
+    harnesses: createHarnessRegistry([
+      createPiHarness({
+        sessionFactory: async () => ({ session }),
+        sessionOptionsFactory: async () => ({}),
+      }),
+    ]),
+    runs,
+  });
+  await ready;
+  runs.cancel([started.id], "requested");
+
+  const result = await started.settled;
+
+  assert.equal(result.lifecycle.phase, "cancelled");
+  assert.ok(aborts >= 1);
+  assert.doesNotMatch(result.errorMessage ?? "", /native abort rejected/);
+});
+
+test("Pi ignores retry checkpoints and settles from the later terminal snapshot", async () => {
+  const listeners = new Set<(event: AgentSessionEvent) => void>();
+  const retryAnswer = {
+    role: "assistant",
+    content: [{ type: "text", text: "retryable answer" }],
+    provider: "fixture",
+    model: "fixture",
+    stopReason: "error",
+  };
+  const finalAnswer = {
+    role: "assistant",
+    content: [{ type: "text", text: "answer after retry" }],
+    provider: "fixture",
+    model: "fixture",
+    stopReason: "stop",
+  };
+  const messages: unknown[] = [];
+  const session: PiSession = {
+    get messages() {
+      return messages as PiSession["messages"];
+    },
+    isIdle: true,
+    async prompt() {
+      messages.push(retryAnswer);
+      for (const listener of listeners) {
+        listener({
+          type: "agent_end",
+          messages: [retryAnswer],
+          willRetry: true,
+        } as AgentSessionEvent);
+        messages.push(finalAnswer);
+        listener({
+          type: "message_end",
+          message: finalAnswer,
+        } as AgentSessionEvent);
+        listener({
+          type: "agent_end",
+          messages,
+          willRetry: false,
+        } as AgentSessionEvent);
+      }
+    },
+    async steer() {},
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    async bindExtensions() {},
+    async abort() {},
+    async waitForIdle() {},
+    clearQueue: () => ({ steering: [], followUp: [] }),
+    dispose() {},
+    extensionRunner: { async emit() {} },
+  };
+
+  const result = await startSubagent({
+    config: agent({ harness: "pi" }),
+    description: "retry",
+    prompt: "work",
+    harnesses: createHarnessRegistry([
+      createPiHarness({
+        sessionFactory: async () => ({ session }),
+        sessionOptionsFactory: async () => ({}),
+      }),
+    ]),
+    runs: createSubagentRuns(),
+  }).settled;
+
+  assert.equal(result.lifecycle.phase, "completed");
+  assert.equal(getFinalOutput(result.messages), "answer after retry");
+});
+
+test("Pi adapter close aborts and waits for active work before disposal", async () => {
+  let openReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    openReady = resolve;
+  });
+  let finishPrompt = () => {};
+  const promptFinished = new Promise<void>((resolve) => {
+    finishPrompt = resolve;
+  });
+  let disposed = false;
+  const session: PiSession = {
+    messages: [],
+    isIdle: false,
+    async prompt() {
+      openReady();
+      await promptFinished;
+    },
+    async steer() {},
+    subscribe: () => () => {},
+    async bindExtensions() {},
+    async abort() {
+      finishPrompt();
+    },
+    async waitForIdle() {},
+    clearQueue: () => ({ steering: [], followUp: [] }),
+    dispose() {
+      disposed = true;
+    },
+    extensionRunner: { async emit() {} },
+  };
+  const adapter = createPiHarness({
+    sessionFactory: async () => ({ session }),
+    sessionOptionsFactory: async () => ({}),
+  }).prepare({
+    config: agent({ harness: "pi" }),
+    cwd: "/work",
+    childDepth: 1,
+    projectTrusted: false,
+  });
+  const result = createEmptyResult("worker", "active close", 0);
+  const execution = adapter
+    .prepareRun({
+      description: "active close",
+      prompt: "wait",
+    })
+    .execute({
+      report: createRunReporter(result, () => {}),
+      signal: new AbortController().signal,
+      controls: createControlGate(["steer"]).controls,
+    });
+  await ready;
+
+  await adapter.close();
+
+  assert.deepEqual(await execution, { ending: "cancelled" });
+  assert.equal(disposed, true);
+});
+
+test("Pi adapter bounds extension shutdown before disposal", {
+  timeout: 2_000,
+}, async () => {
+  let disposed = false;
+  const session: PiSession = {
+    messages: [],
+    isIdle: true,
+    async prompt() {},
+    async steer() {},
+    subscribe: () => () => {},
+    async bindExtensions() {},
+    async abort() {},
+    async waitForIdle() {},
+    clearQueue: () => ({ steering: [], followUp: [] }),
+    dispose() {
+      disposed = true;
+    },
+    extensionRunner: { emit: () => new Promise(() => {}) },
+  };
+  const adapter = createPiHarness({
+    sessionFactory: async () => ({ session }),
+    sessionOptionsFactory: async () => ({}),
+  }).prepare({
+    config: agent({ harness: "pi" }),
+    cwd: "/work",
+    childDepth: 1,
+    projectTrusted: false,
+  });
+  const result = createEmptyResult("worker", "initialize", 0);
+  await adapter
+    .prepareRun({ description: "initialize", prompt: "work" })
+    .execute({
+      report: createRunReporter(result, () => {}),
+      signal: new AbortController().signal,
+      controls: createControlGate(["steer"]).controls,
+    });
+
+  await adapter.close();
+
+  assert.equal(disposed, true);
+});
+
+test("Pi steering rejection is diagnostic-only and creates no user Fact", async () => {
+  const listeners = new Set<(event: AgentSessionEvent) => void>();
+  let finishPrompt = () => {};
+  const promptFinished = new Promise<void>((resolve) => {
+    finishPrompt = resolve;
+  });
+  let openReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    openReady = resolve;
+  });
+  let observeSteer = () => {};
+  const steerObserved = new Promise<void>((resolve) => {
+    observeSteer = resolve;
+  });
+  const terminal = {
+    role: "assistant",
+    content: [{ type: "text", text: "original answer" }],
+    provider: "fixture",
+    model: "fixture",
+    stopReason: "stop",
+  };
+  const session: PiSession = {
+    messages: [],
+    isIdle: true,
+    async prompt() {
+      openReady();
+      await promptFinished;
+    },
+    async steer() {
+      observeSteer();
+      throw new Error(`native rejection ${"x".repeat(4_096)}`);
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    async bindExtensions() {},
+    async abort() {
+      finishPrompt();
+    },
+    async waitForIdle() {},
+    clearQueue: () => ({ steering: [], followUp: [] }),
+    dispose() {},
+    extensionRunner: { async emit() {} },
+  };
+  const runs = createSubagentRuns();
+  const started = startSubagent({
+    config: agent({ harness: "pi" }),
+    description: "rejected steering",
+    prompt: "do it",
+    harnesses: createHarnessRegistry([
+      createPiHarness({
+        sessionFactory: async () => ({ session }),
+        sessionOptionsFactory: async () => ({}),
+      }),
+    ]),
+    runs,
+  });
+  await ready;
+  assert.equal(
+    runs.offer(started.id, { type: "steer", text: "rejected guidance" }),
+    "accepted",
+  );
+  await steerObserved;
+  for (const listener of listeners) {
+    listener({ type: "message_end", message: terminal } as AgentSessionEvent);
+    listener({
+      type: "agent_end",
+      messages: [terminal],
+      willRetry: false,
+    } as AgentSessionEvent);
+  }
+  finishPrompt();
+
+  const result = await started.settled;
+  assert.equal(result.lifecycle.phase, "completed");
+  assert.equal(getFinalOutput(result.messages), "original answer");
+  assert.equal(
+    result.messages.some((fact) => fact.role === "user"),
+    false,
+  );
+  assert.match(
+    result.stderr,
+    /Pi steering was not delivered: native rejection/,
+  );
+  assert.ok(
+    result.stderr.length <= 2_100,
+    "steering diagnostic must be bounded",
+  );
+});
+
+test("Pi preserves two separately consumed Controls with identical text", async () => {
+  const listeners = new Set<(event: AgentSessionEvent) => void>();
+  const messages: unknown[] = [];
+  let openReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    openReady = resolve;
+  });
+  let finishPrompt = () => {};
+  const promptFinished = new Promise<void>((resolve) => {
+    finishPrompt = resolve;
+  });
+  let steeringCount = 0;
+  const emit = (event: unknown): void => {
+    for (const listener of listeners) listener(event as AgentSessionEvent);
+  };
+  const session: PiSession = {
+    get messages() {
+      return messages as PiSession["messages"];
+    },
+    isIdle: true,
+    async prompt() {
+      openReady();
+      await promptFinished;
+    },
+    async steer(text) {
+      steeringCount++;
+      const user = { role: "user", content: [{ type: "text", text }] };
+      messages.push(user);
+      emit({ type: "message_end", message: user });
+      if (steeringCount === 2) {
+        const answer = {
+          role: "assistant",
+          content: [{ type: "text", text: "used both Controls" }],
+          provider: "fixture",
+          model: "fixture",
+          stopReason: "stop",
+        };
+        messages.push(answer);
+        emit({ type: "message_end", message: answer });
+        emit({
+          type: "agent_end",
+          messages: [...messages],
+          willRetry: false,
+        });
+        finishPrompt();
+      }
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    async bindExtensions() {},
+    async abort() {
+      finishPrompt();
+    },
+    async waitForIdle() {},
+    clearQueue: () => ({ steering: [], followUp: [] }),
+    dispose() {},
+    extensionRunner: { async emit() {} },
+  };
+  const runs = createSubagentRuns();
+  const started = startSubagent({
+    config: agent({ harness: "pi" }),
+    description: "identical Controls",
+    prompt: "start",
+    harnesses: createHarnessRegistry([
+      createPiHarness({
+        sessionFactory: async () => ({ session }),
+        sessionOptionsFactory: async () => ({}),
+      }),
+    ]),
+    runs,
+  });
+  await ready;
+  assert.equal(
+    runs.offer(started.id, { type: "steer", text: "same" }),
+    "accepted",
+  );
+  assert.equal(
+    runs.offer(started.id, { type: "steer", text: "same" }),
+    "accepted",
+  );
+
+  const result = await started.settled;
+
+  assert.deepEqual(
+    result.messages
+      .filter((fact) => fact.role === "user")
+      .flatMap((fact) =>
+        fact.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])),
+      ),
+    ["same", "same"],
+  );
+});
+
+test("Pi cancellation without agent_end preserves identical consumed Controls as distinct Facts", async () => {
+  const listeners = new Set<(event: AgentSessionEvent) => void>();
+  let openReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    openReady = resolve;
+  });
+  let finishPrompt = () => {};
+  const promptFinished = new Promise<void>((resolve) => {
+    finishPrompt = resolve;
+  });
+  let openControlsConsumed = () => {};
+  const controlsConsumed = new Promise<void>((resolve) => {
+    openControlsConsumed = resolve;
+  });
+  let steeringCount = 0;
+  const session: PiSession = {
+    messages: [],
+    isIdle: true,
+    async prompt() {
+      openReady();
+      await promptFinished;
+    },
+    async steer(text) {
+      steeringCount++;
+      const user = { role: "user", content: [{ type: "text", text }] };
+      for (const listener of listeners) {
+        listener({ type: "message_end", message: user } as AgentSessionEvent);
+        // Re-emitting the same provider object is a duplicate representation,
+        // unlike the next Control's separately created equal-content message.
+        listener({ type: "message_end", message: user } as AgentSessionEvent);
+      }
+      if (steeringCount === 2) openControlsConsumed();
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    async bindExtensions() {},
+    async abort() {
+      finishPrompt();
+    },
+    async waitForIdle() {},
+    clearQueue: () => ({ steering: [], followUp: [] }),
+    dispose() {},
+    extensionRunner: { async emit() {} },
+  };
+  const runs = createSubagentRuns();
+  const started = startSubagent({
+    config: agent({ harness: "pi" }),
+    description: "identical Controls before cancellation",
+    prompt: "start",
+    harnesses: createHarnessRegistry([
+      createPiHarness({
+        sessionFactory: async () => ({ session }),
+        sessionOptionsFactory: async () => ({}),
+      }),
+    ]),
+    runs,
+  });
+  await ready;
+  assert.equal(
+    runs.offer(started.id, { type: "steer", text: "same" }),
+    "accepted",
+  );
+  assert.equal(
+    runs.offer(started.id, { type: "steer", text: "same" }),
+    "accepted",
+  );
+  await controlsConsumed;
+  assert.deepEqual(runs.cancel([started.id], "requested"), [started.id]);
+
+  const result = await started.settled;
+
+  assert.equal(result.lifecycle.phase, "cancelled");
+  assert.deepEqual(
+    result.messages
+      .filter((fact) => fact.role === "user")
+      .flatMap((fact) =>
+        fact.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])),
+      ),
+    ["same", "same"],
+  );
+});
 
 test("the child pi source accepts exit 0 after a valid agent_end event", async () => {
   const terminalEvent = JSON.stringify({

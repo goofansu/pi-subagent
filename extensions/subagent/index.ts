@@ -13,6 +13,7 @@ import {
   parseNotificationMessage,
   renderNotificationMessage,
 } from "./notification-message.ts";
+import { isPiChildExtensionLoad } from "./pi-child-extension-load.ts";
 import {
   formatAgentResultUnavailable,
   formatCancelOutcome,
@@ -443,7 +444,7 @@ export function createSubagentRuntime(
   };
 }
 
-/** The one process-lifetime runtime, created only when the extension is used. */
+/** The process-lifetime runtime for this loaded parent extension factory. */
 let processRuntime: SubagentRuntime | null = null;
 
 export default function subagentExtension(pi: ExtensionAPI) {
@@ -451,7 +452,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
   // extension entirely inert there so the model cannot see and repeatedly
   // attempt a tool that the dispatcher would reject anyway. The dispatcher's
   // depth check remains the backstop for direct calls.
-  if (getSubagentDepth() > 0) return;
+  if (isPiChildExtensionLoad() || getSubagentDepth() > 0) return;
 
   processRuntime ??= createSubagentRuntime({
     agentsDir: getAgentsDir(getAgentDir()),

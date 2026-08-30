@@ -426,11 +426,13 @@ function conformanceRig(): HarnessConformanceRig {
             },
           );
         case "steering-single-consumed":
-        case "steering-fifo-consumed": {
+        case "steering-fifo-consumed":
+        case "steering-intermediate-completion":
+        case "steering-admission-no-fact": {
           const offeredTexts =
-            scenario === "steering-single-consumed"
-              ? ["first guidance"]
-              : ["first guidance", "second guidance"];
+            scenario === "steering-fifo-consumed"
+              ? ["first guidance", "second guidance"]
+              : ["first guidance"];
           const receivedTexts: string[] = [];
           let activeProviderControls = 0;
           let providerControlStarts = 0;
@@ -442,6 +444,10 @@ function conformanceRig(): HarnessConformanceRig {
           let releaseFirstProviderControl = () => {};
           const firstProviderControlResponse = new Promise<void>((resolve) => {
             releaseFirstProviderControl = resolve;
+          });
+          let openIntermediate = () => {};
+          const intermediateCheckpoint = new Promise<void>((resolve) => {
+            openIntermediate = resolve;
           });
           return base(
             async (run) => {
@@ -485,17 +491,32 @@ function conformanceRig(): HarnessConformanceRig {
                   activeProviderControls,
                 );
                 receivedTexts.push(admission.control.text);
+                if (
+                  providerControlStarts === 1 &&
+                  scenario === "steering-intermediate-completion"
+                ) {
+                  run.report.message({
+                    role: "assistant",
+                    parts: [
+                      { type: "text", text: "intermediate provider answer" },
+                    ],
+                    usage: { turns: 1 },
+                  });
+                  openIntermediate();
+                }
                 if (providerControlStarts === 1)
                   await firstProviderControlResponse;
-                run.report.message({
-                  role: "user",
-                  parts: [
-                    {
-                      type: "text",
-                      text: `confirmed: ${admission.control.text}`,
-                    },
-                  ],
-                });
+                if (scenario !== "steering-admission-no-fact") {
+                  run.report.message({
+                    role: "user",
+                    parts: [
+                      {
+                        type: "text",
+                        text: `confirmed: ${admission.control.text}`,
+                      },
+                    ],
+                  });
+                }
                 activeProviderControls--;
               }
               run.report.message({
@@ -507,7 +528,10 @@ function conformanceRig(): HarnessConformanceRig {
             {
               phase: "completed",
               finalOutput: "controlled answer",
-              userFactTexts: offeredTexts.map((text) => `confirmed: ${text}`),
+              userFactTexts:
+                scenario === "steering-admission-no-fact"
+                  ? []
+                  : offeredTexts.map((text) => `confirmed: ${text}`),
             },
             undefined,
             {
@@ -519,6 +543,9 @@ function conformanceRig(): HarnessConformanceRig {
               providerControlStarts: () => providerControlStarts,
               maxConcurrentProviderControls: () =>
                 maxConcurrentProviderControls,
+              ...(scenario === "steering-intermediate-completion"
+                ? { intermediateCheckpoint }
+                : {}),
             },
           );
         }
@@ -528,6 +555,65 @@ function conformanceRig(): HarnessConformanceRig {
 }
 
 runHarnessConformance(conformanceRig());
+
+function unsupportedConformanceRig(): HarnessConformanceRig {
+  return {
+    name: "controlled-unsupported",
+    build(scenario) {
+      if (!scenario.startsWith("steering-"))
+        return conformanceRig().build(scenario);
+      let openReady = () => {};
+      const ready = new Promise<void>((resolve) => {
+        openReady = resolve;
+      });
+      let release = () => {};
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let executorStarts = 0;
+      const providerControlStarts = 0;
+      return {
+        harness: fakeExecutorHarness(async (run) => {
+          executorStarts++;
+          openReady();
+          await released;
+          run.report.message({
+            role: "assistant",
+            parts: [{ type: "text", text: "unsupported fixture answer" }],
+          });
+          return { ending: "answered" };
+        }),
+        expected: {
+          phase: "completed",
+          finalOutput: "unsupported fixture answer",
+          userFactTexts: [],
+        },
+        steering: {
+          ready,
+          offeredTexts:
+            scenario === "steering-fifo-consumed"
+              ? ["first guidance", "second guidance"]
+              : ["first guidance"],
+          expectedOutcome: "unsupported",
+          release: () => {
+            assert.equal(executorStarts, 1, "the unsupported Run must execute");
+            assert.equal(providerControlStarts, 0);
+            release();
+          },
+          receivedTexts: () => [],
+          providerControlStarts: () => providerControlStarts,
+          maxConcurrentProviderControls: () => 0,
+          ...(scenario === "steering-intermediate-completion"
+            ? { intermediateCheckpoint: ready }
+            : {}),
+        },
+        depthProbe: () => undefined,
+      };
+    },
+  };
+}
+
+runHarnessConformance(unsupportedConformanceRig());
 
 test("a fake harness reaches dispatcher, registry, delivery, presentation, and widget", async () => {
   const runs = createSubagentRuns();

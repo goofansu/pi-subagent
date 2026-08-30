@@ -7,8 +7,20 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
+  type AgentSession,
+  type AgentSessionEvent,
+  type CreateAgentSessionOptions,
+  createAgentSession,
+  createBashToolDefinition,
+  DefaultResourceLoader,
+  getAgentDir,
   getPackageDir,
+  type LoadExtensionsResult,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -16,9 +28,11 @@ import {
   processJsonSource,
 } from "../../child-process.ts";
 import { runOneShot, type Translation } from "../../one-shot.ts";
+import { withPiChildExtensionLoad } from "../../pi-child-extension-load.ts";
 import type {
   Fact,
   FactPart,
+  RunControl,
   RunEnding,
   SubagentContext,
   SubagentRun,
@@ -26,6 +40,197 @@ import type {
 } from "../../run.ts";
 import type { AgentConfig } from "../../types.ts";
 import { parseTools, shouldAppendSystemPrompt } from "../contract.ts";
+
+const PI_ORCHESTRATION_TOOLS = [
+  "agent_start",
+  "agent_resume",
+  "agent_wait",
+  "agent_result",
+  "agent_cancel",
+  "agent_steer",
+] as const;
+const PI_EXTENSION_SHUTDOWN_TIMEOUT_MS = 1_000;
+const PI_STEERING_DIAGNOSTIC_LIMIT = 2_048;
+
+export type PiSession = Pick<
+  AgentSession,
+  | "prompt"
+  | "steer"
+  | "subscribe"
+  | "bindExtensions"
+  | "abort"
+  | "waitForIdle"
+  | "clearQueue"
+  | "dispose"
+  | "messages"
+  | "isIdle"
+> & {
+  extensionRunner: {
+    emit(event: { type: "session_shutdown"; reason: "quit" }): Promise<unknown>;
+  };
+};
+
+export type PiSessionFactory = (
+  options: CreateAgentSessionOptions,
+) => Promise<{ session: PiSession }>;
+
+export type PiSessionOptionsFactory = (
+  context: SubagentContext,
+  resolvedModel?: string,
+  resolvedThinking?: string,
+  agentDir?: string,
+  signal?: AbortSignal,
+) => Promise<CreateAgentSessionOptions>;
+
+export interface PiManagedAdapter {
+  prepareRun(task: SubagentTask): {
+    supportedControls: readonly ["steer"];
+    execute(run: SubagentRun): Promise<RunEnding>;
+  };
+  close(): Promise<void>;
+}
+
+function defaultPiSessionFactory(
+  options: CreateAgentSessionOptions,
+): Promise<{ session: PiSession }> {
+  return createAgentSession(options);
+}
+
+function packageNameForPath(filePath: string): string | undefined {
+  let directory = path.dirname(filePath);
+  try {
+    if (fs.statSync(filePath).isDirectory()) directory = filePath;
+  } catch {
+    // A loader diagnostic may refer to a path that disappeared after loading.
+  }
+  while (true) {
+    try {
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(directory, "package.json"), "utf8"),
+      ) as { name?: unknown };
+      if (typeof manifest.name === "string") return manifest.name;
+    } catch {
+      // Walk to the filesystem root until a package identity is found.
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) return undefined;
+    directory = parent;
+  }
+}
+
+const PI_SUBAGENT_PACKAGE_NAME =
+  packageNameForPath(fileURLToPath(import.meta.url)) ?? "pi-subagent";
+
+/** Remove this package by package identity before an in-process child binds. */
+export function filterPiChildExtensions(
+  base: LoadExtensionsResult,
+): LoadExtensionsResult {
+  return {
+    ...base,
+    extensions: base.extensions.filter(
+      (extension) =>
+        packageNameForPath(extension.resolvedPath) !== PI_SUBAGENT_PACKAGE_NAME,
+    ),
+  };
+}
+
+function modelForReference(
+  runtime: ModelRuntime,
+  reference: string,
+): CreateAgentSessionOptions["model"] {
+  const separator = reference.indexOf("/");
+  if (separator > 0) {
+    return runtime.getModel(
+      reference.slice(0, separator),
+      reference.slice(separator + 1),
+    );
+  }
+  return runtime.getModels().find((model) => model.id === reference);
+}
+
+/** Build the fixed SDK policy for one retained Pi Conversation. */
+export async function createPiSessionOptions(
+  context: SubagentContext,
+  resolvedModel?: string,
+  resolvedThinking?: string,
+  agentDir = getAgentDir(),
+  signal?: AbortSignal,
+): Promise<CreateAgentSessionOptions> {
+  const settingsManager = SettingsManager.create(context.cwd, agentDir, {
+    projectTrusted: context.projectTrusted,
+  });
+  const modelRuntime = await ModelRuntime.create({
+    authPath: path.join(agentDir, "auth.json"),
+    modelsPath: path.join(agentDir, "models.json"),
+    ...(signal ? { signal } : {}),
+  });
+  const model = resolvedModel
+    ? modelForReference(modelRuntime, resolvedModel)
+    : undefined;
+  if (resolvedModel && !model) {
+    throw new Error(
+      `Pi model '${resolvedModel}' was not found in the model catalogue`,
+    );
+  }
+
+  const configuredPrompt = context.config.systemPrompt;
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: context.cwd,
+    agentDir,
+    settingsManager,
+    extensionsOverride: filterPiChildExtensions,
+    ...(configuredPrompt.trim().length === 0
+      ? {}
+      : shouldAppendSystemPrompt(context.config, "profile")
+        ? {
+            appendSystemPromptOverride: (base: string[]) => [
+              ...base,
+              configuredPrompt,
+            ],
+          }
+        : { systemPromptOverride: () => configuredPrompt }),
+  });
+  // Pi initializes extension factories while reload() discovers resources;
+  // extensionsOverride is applied only afterward. Scope the discriminator to
+  // this asynchronous child-owned load chain so parent reloads can reattach.
+  await withPiChildExtensionLoad(() =>
+    resourceLoader.reload({
+      resolveProjectTrust: async () => context.projectTrusted,
+    }),
+  );
+
+  const tools = parseTools(context.config, "profile");
+  const bash = createBashToolDefinition(context.cwd, {
+    commandPrefix: settingsManager.getShellCommandPrefix(),
+    shellPath: settingsManager.getShellPath(),
+    spawnHook: (spawn) => ({
+      ...spawn,
+      env: {
+        ...spawn.env,
+        PI_SUBAGENT_DEPTH: String(context.childDepth),
+      },
+    }),
+  });
+
+  return {
+    cwd: context.cwd,
+    agentDir,
+    modelRuntime,
+    settingsManager,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(context.cwd),
+    model,
+    thinkingLevel:
+      resolvedThinking as CreateAgentSessionOptions["thinkingLevel"],
+    ...(tools === undefined ? {} : { tools }),
+    excludeTools: [...PI_ORCHESTRATION_TOOLS],
+    // Replace the normal Bash definition with the same local implementation
+    // plus a per-spawn depth environment. process.env is never mutated.
+    customTools: [bash] as unknown as NonNullable<
+      CreateAgentSessionOptions["customTools"]
+    >,
+  };
+}
 
 export interface PiInvocationRuntime {
   execPath: string;
@@ -345,4 +550,411 @@ export async function runPiAgent(
         /* ignore */
       }
   }
+}
+
+function messageIdentity(message: unknown): string {
+  if (!isRecord(message)) return JSON.stringify(message);
+  return JSON.stringify({
+    role: message.role,
+    content: message.content,
+    timestamp: message.timestamp,
+    provider: message.provider,
+    model: message.model,
+    stopReason: message.stopReason,
+    errorMessage: message.errorMessage,
+  });
+}
+
+function currentRunMessages(
+  messages: readonly unknown[],
+  baseline: readonly unknown[],
+): unknown[] {
+  // Compare a counted semantic snapshot instead of slicing by baseline length:
+  // the retained SDK may rebuild message objects while retrying or compacting
+  // its Conversation. Counts still preserve genuinely repeated, identical
+  // messages added by the current Run.
+  const old = new Map<string, number>();
+  for (const message of baseline) {
+    const key = messageIdentity(message);
+    old.set(key, (old.get(key) ?? 0) + 1);
+  }
+  return messages.filter((message) => {
+    const key = messageIdentity(message);
+    const remaining = old.get(key) ?? 0;
+    if (remaining === 0) return true;
+    old.set(key, remaining - 1);
+    return false;
+  });
+}
+
+function isPiUserText(message: unknown, text: string): boolean {
+  if (!isRecord(message) || message.role !== "user") return false;
+  const content = message.content;
+  if (typeof content === "string") return content === text;
+  if (!Array.isArray(content)) return false;
+  return (
+    content
+      .filter((part) => isRecord(part) && part.type === "text")
+      .map((part) => (part as Record<string, unknown>).text)
+      .join("") === text
+  );
+}
+
+function withoutInitialGoal(messages: unknown[], prompt: string): unknown[] {
+  let omitted = false;
+  return messages.filter((message) => {
+    if (!omitted && isPiUserText(message, prompt)) {
+      omitted = true;
+      return false;
+    }
+    return true;
+  });
+}
+
+function boundedPiDiagnostic(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const normalized = raw
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "[redacted]")
+    .trim();
+  return normalized.slice(0, PI_STEERING_DIAGNOSTIC_LIMIT);
+}
+
+async function withBoundedCleanup(
+  promise: Promise<unknown>,
+  timeoutMs = PI_EXTENSION_SHUTDOWN_TIMEOUT_MS,
+): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    promise.catch(() => undefined),
+    new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, timeoutMs);
+    }),
+  ]);
+  if (timeout) clearTimeout(timeout);
+}
+
+async function disposePiSession(session: PiSession): Promise<void> {
+  await withBoundedCleanup(
+    Promise.resolve().then(() =>
+      session.extensionRunner.emit({
+        type: "session_shutdown",
+        reason: "quit",
+      }),
+    ),
+  );
+  try {
+    session.dispose();
+  } catch {
+    // Cleanup cannot alter an already-settled Run.
+  }
+}
+
+interface PiControlRecord {
+  readonly control: RunControl;
+  discarded: boolean;
+}
+
+/**
+ * Create one retained SDK Conversation for a prepared Pi Subagent.
+ *
+ * Provider objects, subscriptions, and native steering stay inside this
+ * adapter. Every execution receives only its Run-local reporter, signal, and
+ * neutral Control source.
+ */
+export function createPiManagedAdapter(
+  context: SubagentContext,
+  options: {
+    resolvedModel?: string;
+    resolvedThinking?: string;
+    sessionFactory?: PiSessionFactory;
+    sessionOptionsFactory?: PiSessionOptionsFactory;
+    agentDir?: string;
+  } = {},
+): PiManagedAdapter {
+  const sessionFactory = options.sessionFactory ?? defaultPiSessionFactory;
+  const sessionOptionsFactory =
+    options.sessionOptionsFactory ?? createPiSessionOptions;
+  let session: PiSession | undefined;
+  let creating: Promise<PiSession> | undefined;
+  let active: Promise<RunEnding> | undefined;
+  let closed = false;
+  let closePromise: Promise<void> | undefined;
+  let disposed = false;
+  let cancelActive: (() => Promise<void>) | undefined;
+
+  const initialize = (signal?: AbortSignal): Promise<PiSession> => {
+    if (session) return Promise.resolve(session);
+    if (creating) return creating;
+    creating = (async () => {
+      const sdkOptions = await sessionOptionsFactory(
+        context,
+        options.resolvedModel,
+        options.resolvedThinking,
+        options.agentDir,
+        signal,
+      );
+      if (closed || signal?.aborted) {
+        throw new Error("Pi session initialization was cancelled");
+      }
+      const created = (await sessionFactory(sdkOptions)).session;
+      try {
+        if (closed || signal?.aborted) {
+          created.clearQueue();
+          await created.abort().catch(() => undefined);
+          await created.waitForIdle().catch(() => undefined);
+          throw new Error("Pi session initialization was cancelled");
+        }
+        await created.bindExtensions({ mode: "print" });
+        if (closed || signal?.aborted) {
+          created.clearQueue();
+          await created.abort().catch(() => undefined);
+          await created.waitForIdle().catch(() => undefined);
+          throw new Error("Pi session initialization was cancelled");
+        }
+        session = created;
+        return created;
+      } catch (error) {
+        await disposePiSession(created);
+        throw error;
+      }
+    })().finally(() => {
+      creating = undefined;
+    });
+    return creating;
+  };
+
+  const executeRun = async (
+    task: SubagentTask,
+    run: SubagentRun,
+  ): Promise<RunEnding> => {
+    if (closed || run.signal?.aborted) return { ending: "cancelled" };
+    let sdk: PiSession;
+    try {
+      sdk = await initialize(run.signal);
+    } catch (error) {
+      if (closed || run.signal?.aborted) return { ending: "cancelled" };
+      return {
+        ending: "failed",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (closed || run.signal?.aborted) return { ending: "cancelled" };
+
+    const baseline = [...sdk.messages];
+    // Pi may surface the same message object through duplicate representations,
+    // but equal content is not event identity: two consumed Controls can carry
+    // identical text. Reference identity drops only the former.
+    const seenEventMessages = new WeakSet<object>();
+    let terminalMessages: unknown[] | undefined;
+    let accepting = true;
+    let cancelled = false;
+    let initialGoalOmitted = false;
+    const queuedControls: PiControlRecord[] = [];
+    let deliveryTail = Promise.resolve();
+    let cancellationWork: Promise<void> | undefined;
+
+    const reportEvent = (event: AgentSessionEvent): void => {
+      if (!accepting) return;
+      const wire = event as unknown as Record<string, unknown>;
+      if (wire.type === "message_end" && wire.message) {
+        if (!initialGoalOmitted && isPiUserText(wire.message, task.prompt)) {
+          initialGoalOmitted = true;
+          return;
+        }
+        if (typeof wire.message === "object" && wire.message !== null) {
+          if (seenEventMessages.has(wire.message)) return;
+          seenEventMessages.add(wire.message);
+        }
+        const fact = piFact(wire.message);
+        if (fact) run.report.message(fact);
+        return;
+      }
+      if (
+        wire.type === "agent_end" &&
+        wire.willRetry !== true &&
+        Array.isArray(wire.messages)
+      ) {
+        terminalMessages = withoutInitialGoal(
+          currentRunMessages(wire.messages, baseline),
+          task.prompt,
+        );
+      }
+    };
+    const unsubscribeEvents = sdk.subscribe(reportEvent);
+
+    const discardQueued = (): void => {
+      for (const record of queuedControls) record.discarded = true;
+      queuedControls.length = 0;
+    };
+    const clearNativeQueue = (): void => {
+      try {
+        sdk.clearQueue();
+      } catch {
+        // Native abort remains authoritative when queue cleanup fails.
+      }
+    };
+    const stopCurrentWork = (): Promise<void> => {
+      if (cancellationWork) return cancellationWork;
+      cancelled = true;
+      accepting = false;
+      discardQueued();
+      clearNativeQueue();
+      const steeringAtCancellation = deliveryTail;
+      cancellationWork = (async () => {
+        // A Control that entered first may already be inside sdk.steer(). Join
+        // it, then clear again so its late native enqueue cannot cross the
+        // retained Conversation's cancellation/resume boundary.
+        await steeringAtCancellation.catch(() => undefined);
+        clearNativeQueue();
+        await sdk.abort().catch(() => undefined);
+        await sdk.waitForIdle().catch(() => undefined);
+      })();
+      return cancellationWork;
+    };
+    const onAbort = (): void => {
+      void stopCurrentWork();
+    };
+    cancelActive = stopCurrentWork;
+    run.signal?.addEventListener("abort", onAbort, { once: true });
+
+    const unsubscribeControls = run.controls.subscribe((admission) => {
+      // Taking the complete admission releases core's bounded budget. Native
+      // delivery and provider consumption remain separate facts.
+      admission.acknowledge();
+      const record: PiControlRecord = {
+        control: admission.control,
+        discarded: !accepting || cancelled,
+      };
+      if (record.discarded) return;
+      queuedControls.push(record);
+      deliveryTail = deliveryTail.then(async () => {
+        const index = queuedControls.indexOf(record);
+        if (index >= 0) queuedControls.splice(index, 1);
+        if (record.discarded || !accepting || cancelled) return;
+        try {
+          await sdk.steer(record.control.text);
+        } catch (error) {
+          // Admission and an otherwise valid answer remain honest even when
+          // native steering rejects. Keep only a bounded adapter diagnostic.
+          const diagnostic = boundedPiDiagnostic(error);
+          if (diagnostic)
+            run.report.stderr(`Pi steering was not delivered: ${diagnostic}\n`);
+        }
+      });
+    }, discardQueued);
+
+    try {
+      let promptError: unknown;
+      try {
+        await sdk.prompt(task.prompt);
+      } catch (error) {
+        promptError = error;
+      }
+
+      if (cancelled || run.signal?.aborted || closed) {
+        await stopCurrentWork();
+      } else {
+        // Controls admitted before Pi's idle boundary belong to this Run. Keep
+        // draining until no synchronous admission changed the tail around an
+        // await; then make completion non-reopenable in the same stack.
+        while (true) {
+          const draining = deliveryTail;
+          await draining;
+          await sdk.waitForIdle();
+          if (draining === deliveryTail && queuedControls.length === 0) break;
+        }
+      }
+      accepting = false;
+
+      if (terminalMessages) {
+        run.report.transcript(
+          terminalMessages
+            .map(piFact)
+            .filter((fact): fact is Fact => fact !== undefined),
+        );
+        // A non-retrying terminal snapshot observed before cancellation is
+        // authoritative even when abort is what releases prompt(). Native
+        // cleanup above still completes before the Run settles.
+        return { ending: "answered" };
+      }
+      if (cancelled || run.signal?.aborted || closed) {
+        await stopCurrentWork();
+        return { ending: "cancelled" };
+      }
+      if (promptError !== undefined) {
+        return {
+          ending: "failed",
+          errorMessage:
+            promptError instanceof Error
+              ? promptError.message
+              : String(promptError),
+        };
+      }
+      return { ending: "failed", errorMessage: MISSING_AGENT_END_ERROR };
+    } catch (error) {
+      if (cancelled || run.signal?.aborted || closed) {
+        return { ending: "cancelled" };
+      }
+      return {
+        ending: "failed",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    } finally {
+      accepting = false;
+      discardQueued();
+      unsubscribeControls();
+      run.signal?.removeEventListener("abort", onAbort);
+      if (cancelled) {
+        await stopCurrentWork();
+      }
+      unsubscribeEvents();
+      if (cancelActive === stopCurrentWork) cancelActive = undefined;
+    }
+  };
+
+  return {
+    prepareRun(task) {
+      return {
+        supportedControls: ["steer"],
+        execute(run) {
+          if (active) {
+            return Promise.resolve({
+              ending: "failed",
+              errorMessage: "Pi adapter already has an active Run",
+            });
+          }
+          const execution = executeRun(task, run);
+          active = execution.finally(() => {
+            active = undefined;
+          });
+          return active;
+        },
+      };
+    },
+    close() {
+      closePromise ??= (async () => {
+        closed = true;
+        const pendingCreation = creating;
+        if (cancelActive) {
+          await cancelActive().catch(() => undefined);
+        } else if (session) {
+          try {
+            session.clearQueue();
+          } catch {
+            // Continue through abort and bounded shutdown.
+          }
+          await session.abort().catch(() => undefined);
+        }
+        await active?.catch(() => undefined);
+        await pendingCreation?.catch(() => undefined);
+        if (session && !disposed) {
+          disposed = true;
+          await disposePiSession(session);
+          session = undefined;
+        }
+      })();
+      return closePromise;
+    },
+  };
 }

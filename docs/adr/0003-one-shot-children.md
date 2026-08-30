@@ -13,7 +13,10 @@ a new one-shot Run rather than reopening the old one. [ADR-0015](0015-codex-conv
 adds Codex Conversation retention without retaining a child process.
 [ADR-0016](0016-codex-resume-release-contract.md) records the release contract:
 Codex resume reopens follow-up only above the one-shot Run boundary, so every
-goal still owns one immutable Result.
+goal still owns one immutable Result. [ADR-0017](0017-retained-pi-sdk-conversation.md)
+and [ADR-0018](0018-ordered-claude-query-conversation.md) supersede this ADR's
+Pi/Claude process and no-guidance consequences while preserving that same Run
+boundary.
 
 ## Context
 
@@ -46,12 +49,13 @@ creating a resumable provider session.
 
 ## Consequences
 
-Pi and Claude Runs still require cancellation and a new Run to correct their
-direction. Codex may accept bounded guidance only while its one active Turn is
-running; its disposable Attempt still settles and is cleaned up with that
-one-shot Run even though the prepared adapter retains Conversation identity.
-ADR-0013 retains the Subagent-scoped adapter after settlement, not the child
-process or the Run's Control mailbox.
+At this decision, Pi and Claude Runs required cancellation and a new Run to
+correct their direction. Codex could accept bounded guidance only while its one
+active Turn was running; its disposable Attempt still settled and was cleaned
+up with that one-shot Run even though the prepared adapter retained
+Conversation identity. ADR-0013 retains the Subagent-scoped adapter after
+settlement, not the child process or the Run's Control mailbox; ADR-0017 and
+ADR-0018 supersede the historical Pi and Claude limitation.
 
 Reading a finished run does not require a live child, only retention, so
 `agent_result` is provided without reopening this decision. Follow-up work

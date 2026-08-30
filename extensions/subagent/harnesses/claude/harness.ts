@@ -2,12 +2,16 @@ import type {
   Options,
   Query,
   SDKMessage,
+  SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { runOneShot, streamSource, type Translation } from "../../one-shot.ts";
+import type { Translation } from "../../one-shot.ts";
 import {
   DEPTH_ENV_KEY,
   type FactPart,
+  type RunEnding,
   type SubagentContext,
+  type SubagentRun,
+  type SubagentTask,
 } from "../../run.ts";
 import { type AgentConfig, EFFORTS } from "../../types.ts";
 import type {
@@ -52,7 +56,7 @@ const THINKING_BUDGETS: Record<string, number> = {
 };
 
 export type ClaudeQuery = (params: {
-  prompt: string;
+  prompt: string | AsyncIterable<SDKUserMessage>;
   options?: Options;
 }) => Query;
 export type ClaudeQueryLoader = () => Promise<ClaudeQuery>;
@@ -229,6 +233,13 @@ export function createClaudeTranslator(): (
   message: SDKMessage,
 ) => Translation | undefined {
   const turnCounter = createClaudeTurnCounter();
+  let previousUsage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+  };
 
   return (message) => {
     const translation = translateClaudeMessage(message);
@@ -236,6 +247,37 @@ export function createClaudeTranslator(): (
     if (!translation) return undefined;
 
     const wire = message as unknown as Record<string, unknown>;
+    if (wire.type === "result") {
+      const accountingFact = translation.facts?.find(
+        (fact) => fact.role === "assistant",
+      );
+      const current = accountingFact?.usage;
+      if (current) {
+        const reset =
+          (current.input ?? 0) < previousUsage.input ||
+          (current.output ?? 0) < previousUsage.output ||
+          (current.cacheRead ?? 0) < previousUsage.cacheRead ||
+          (current.cacheWrite ?? 0) < previousUsage.cacheWrite ||
+          (current.cost ?? 0) < previousUsage.cost;
+        const delta = (value: number, previous: number): number =>
+          reset ? value : Math.max(0, value - previous);
+        accountingFact.usage = {
+          ...current,
+          input: delta(current.input ?? 0, previousUsage.input),
+          output: delta(current.output ?? 0, previousUsage.output),
+          cacheRead: delta(current.cacheRead ?? 0, previousUsage.cacheRead),
+          cacheWrite: delta(current.cacheWrite ?? 0, previousUsage.cacheWrite),
+          cost: delta(current.cost ?? 0, previousUsage.cost),
+        };
+        previousUsage = {
+          input: current.input ?? 0,
+          output: current.output ?? 0,
+          cacheRead: current.cacheRead ?? 0,
+          cacheWrite: current.cacheWrite ?? 0,
+          cost: current.cost ?? 0,
+        };
+      }
+    }
     if (wire.type === "assistant" || wire.type === "result") {
       const accountingFact = translation.facts?.find(
         (fact) => fact.role === "assistant",
@@ -280,6 +322,9 @@ export function buildClaudeOptions(
     model,
     abortController,
     thinking: claudeThinking(effort),
+    ...(effort && ["low", "medium", "high", "xhigh", "max"].includes(effort)
+      ? { effort: effort as NonNullable<Options["effort"]> }
+      : {}),
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
     disallowedTools: ["Agent", "Task"],
@@ -299,6 +344,371 @@ export function buildClaudeOptions(
       : context.config.systemPrompt,
   };
   return options;
+}
+
+const CLAUDE_IDENTITY =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CLAUDE_DIAGNOSTIC_LIMIT = 2_048;
+const CLAUDE_CONTINUATION_ATTACHMENT_FAILED =
+  "Claude continuation attachment failed";
+
+function claudeDiagnostic(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "[redacted]")
+    .replace(/[\r\n]+/g, " ")
+    .trim()
+    .slice(0, CLAUDE_DIAGNOSTIC_LIMIT);
+}
+
+function claudeInputMessage(
+  text: string,
+  uuid: NonNullable<SDKUserMessage["uuid"]>,
+  priority?: SDKUserMessage["priority"],
+): SDKUserMessage {
+  return {
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "text", text }],
+    },
+    parent_tool_use_id: null,
+    uuid,
+    ...(priority ? { priority } : {}),
+  };
+}
+
+class ClaudeInput implements AsyncIterable<SDKUserMessage> {
+  private readonly queue: SDKUserMessage[] = [];
+  private waiter:
+    | ((result: IteratorResult<SDKUserMessage>) => void)
+    | undefined;
+  private closed = false;
+
+  push(message: SDKUserMessage): boolean {
+    if (this.closed) return false;
+    const waiter = this.waiter;
+    if (waiter) {
+      this.waiter = undefined;
+      waiter({ done: false, value: message });
+    } else {
+      this.queue.push(message);
+    }
+    return true;
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.queue.length = 0;
+    const waiter = this.waiter;
+    this.waiter = undefined;
+    waiter?.({ done: true, value: undefined });
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
+    return {
+      next: () => {
+        const message = this.queue.shift();
+        if (message) return Promise.resolve({ done: false, value: message });
+        if (this.closed)
+          return Promise.resolve({ done: true, value: undefined });
+        return new Promise<IteratorResult<SDKUserMessage>>((resolve) => {
+          this.waiter = resolve;
+        });
+      },
+      return: async () => {
+        this.close();
+        return { done: true, value: undefined };
+      },
+    };
+  }
+}
+
+interface ClaudeControlRecord {
+  readonly text: string;
+  readonly uuid: NonNullable<SDKUserMessage["uuid"]>;
+  confirmed: boolean;
+  discarded: boolean;
+}
+
+function isClaudeToolResult(wire: Record<string, unknown>): boolean {
+  if (wire.type !== "user" || !isRecord(wire.message)) return false;
+  return (
+    Array.isArray(wire.message.content) &&
+    wire.message.content.some(
+      (block) => isRecord(block) && block.type === "tool_result",
+    )
+  );
+}
+
+async function runClaudeAttempt(
+  run: SubagentRun,
+  task: SubagentTask,
+  context: SubagentContext,
+  model: string | undefined,
+  effort: string | undefined,
+  loadQuery: ClaudeQueryLoader,
+  continuation: string | undefined,
+  retainContinuation: (identity: string) => void,
+  closeSignal?: AbortSignal,
+): Promise<RunEnding> {
+  const isAborted = (): boolean =>
+    Boolean(run.signal?.aborted || closeSignal?.aborted);
+  if (isAborted()) return { ending: "cancelled" };
+
+  const input = new ClaudeInput();
+  const initialUuid = globalThis.crypto.randomUUID();
+  const knownInputUuids = new Set<string>([initialUuid]);
+  input.push(claudeInputMessage(task.prompt, initialUuid));
+  const controls: ClaudeControlRecord[] = [];
+  let providerControl: ClaudeControlRecord | undefined;
+  let accepting = true;
+  let cancelled = false;
+  let semanticComplete = false;
+  let successfulResult = false;
+  let fatalEnding: RunEnding | undefined;
+  let queryStream: Query | undefined;
+  let attemptIdentity = continuation;
+  let attachedToCurrentAttempt = continuation === undefined;
+  const controller = new AbortController();
+
+  const discardControls = (): void => {
+    for (const control of controls) control.discarded = true;
+    controls.length = 0;
+    if (providerControl && !providerControl.confirmed)
+      providerControl.discarded = true;
+  };
+  const deliverNext = (): void => {
+    if (!accepting || cancelled || semanticComplete || providerControl) return;
+    const next = controls.shift();
+    if (!next) return;
+    providerControl = next;
+    if (!input.push(claudeInputMessage(next.text, next.uuid, "later"))) {
+      next.discarded = true;
+      providerControl = undefined;
+    }
+  };
+  const confirmControl = (uuid: unknown): void => {
+    if (
+      typeof uuid !== "string" ||
+      !providerControl ||
+      providerControl.uuid !== uuid ||
+      providerControl.confirmed ||
+      providerControl.discarded
+    ) {
+      return;
+    }
+    const confirmed = providerControl;
+    confirmed.confirmed = true;
+    knownInputUuids.add(confirmed.uuid);
+    run.report.message({
+      role: "user",
+      parts: [{ type: "text", text: confirmed.text }],
+    });
+    providerControl = undefined;
+    deliverNext();
+  };
+  const hasOutstandingControl = (): boolean =>
+    Boolean(
+      (providerControl &&
+        !providerControl.confirmed &&
+        !providerControl.discarded) ||
+        controls.some((control) => !control.confirmed && !control.discarded),
+    );
+
+  const unsubscribeControls = run.controls.subscribe((admission) => {
+    admission.acknowledge();
+    if (!accepting || cancelled || semanticComplete) return;
+    controls.push({
+      text: admission.control.text,
+      uuid: globalThis.crypto.randomUUID(),
+      confirmed: false,
+      discarded: false,
+    });
+    deliverNext();
+  }, discardControls);
+
+  const stop = (): void => {
+    accepting = false;
+    input.close();
+    discardControls();
+    controller.abort();
+    try {
+      queryStream?.close();
+    } catch {
+      // The ordered semantic outcome remains authoritative over cleanup.
+    }
+  };
+  const onAbort = (): void => {
+    if (!semanticComplete) cancelled = true;
+    stop();
+  };
+  run.signal?.addEventListener("abort", onAbort, { once: true });
+  closeSignal?.addEventListener("abort", onAbort, { once: true });
+
+  try {
+    let releaseLoaderAbort = (): void => {};
+    const loaderAborted = new Promise<void>((resolve) => {
+      releaseLoaderAbort = resolve;
+    });
+    const loaderAbort = (): void => releaseLoaderAbort();
+    run.signal?.addEventListener("abort", loaderAbort, { once: true });
+    closeSignal?.addEventListener("abort", loaderAbort, { once: true });
+    const loaded = await Promise.race([
+      loadQuery().then(
+        (query) => ({ outcome: "loaded" as const, query }),
+        (error) => ({ outcome: "failed" as const, error }),
+      ),
+      loaderAborted.then(() => ({ outcome: "cancelled" as const })),
+    ]);
+    run.signal?.removeEventListener("abort", loaderAbort);
+    closeSignal?.removeEventListener("abort", loaderAbort);
+    if (loaded.outcome === "cancelled") return { ending: "cancelled" };
+    if (loaded.outcome === "failed") {
+      return {
+        ending: "failed",
+        errorMessage: continuation
+          ? CLAUDE_CONTINUATION_ATTACHMENT_FAILED
+          : claudeDiagnostic(loaded.error),
+      };
+    }
+    if (cancelled || isAborted()) return { ending: "cancelled" };
+
+    const options = buildClaudeOptions(context, model, effort, controller);
+    options.stderr = (data) => run.report.stderr(data);
+    if (continuation) options.resume = continuation;
+    try {
+      queryStream = loaded.query({ prompt: input, options });
+    } catch (error) {
+      return {
+        ending: "failed",
+        errorMessage: continuation
+          ? CLAUDE_CONTINUATION_ATTACHMENT_FAILED
+          : claudeDiagnostic(error),
+      };
+    }
+
+    const translate = createClaudeTranslator();
+    try {
+      for await (const message of queryStream) {
+        if (semanticComplete) continue;
+        if (cancelled) break;
+        const wire = message as unknown as Record<string, unknown>;
+        if (wire.isReplay === true) continue;
+
+        const eventIdentity = wire.session_id;
+        const isIdentityBoundary =
+          wire.type === "result" ||
+          (wire.type === "system" && wire.subtype === "init");
+        if (continuation && !attachedToCurrentAttempt && !isIdentityBoundary) {
+          // A resumed Query can replay prior user, assistant, and system
+          // history before its current attachment boundary. None of it is a
+          // Fact or accounting input for this new managed Run.
+          continue;
+        }
+        if (isIdentityBoundary && eventIdentity === undefined) {
+          fatalEnding = {
+            ending: "failed",
+            errorMessage: continuation
+              ? CLAUDE_CONTINUATION_ATTACHMENT_FAILED
+              : "Claude query returned an invalid conversation identity",
+          };
+          stop();
+          break;
+        }
+        if (eventIdentity !== undefined) {
+          if (
+            typeof eventIdentity !== "string" ||
+            !CLAUDE_IDENTITY.test(eventIdentity) ||
+            (attemptIdentity !== undefined && eventIdentity !== attemptIdentity)
+          ) {
+            fatalEnding = {
+              ending: "failed",
+              errorMessage: continuation
+                ? CLAUDE_CONTINUATION_ATTACHMENT_FAILED
+                : "Claude query returned an invalid conversation identity",
+            };
+            stop();
+            break;
+          }
+        }
+        if (isIdentityBoundary && typeof eventIdentity === "string") {
+          attemptIdentity ??= eventIdentity;
+          attachedToCurrentAttempt = true;
+          retainContinuation(eventIdentity);
+        }
+
+        if (wire.type === "user") {
+          confirmControl(wire.uuid);
+          if (!isClaudeToolResult(wire)) continue;
+        }
+        if (wire.type === "result") confirmControl(wire.user_message_uuid);
+
+        const translation = translate(message);
+        for (const fact of translation?.facts ?? []) run.report.message(fact);
+
+        if (wire.type !== "result") continue;
+        if (wire.is_error === true || translation?.errorMessage) {
+          fatalEnding = {
+            ending: "failed",
+            errorMessage:
+              translation?.errorMessage ?? "Claude query reported an error",
+          };
+          stop();
+          break;
+        }
+        successfulResult = true;
+        if (hasOutstandingControl()) {
+          if (
+            typeof wire.user_message_uuid !== "string" ||
+            !knownInputUuids.has(wire.user_message_uuid)
+          ) {
+            // Without a correlation to an input this Attempt owns, the valid
+            // Result cannot prove that an outstanding Control belongs to a
+            // later provider Turn. Preserve the answer without fabricating a
+            // user Fact or waiting forever on a Query kept open for input.
+            discardControls();
+          }
+        }
+        if (hasOutstandingControl()) {
+          // This provider Result is an adapter-local Turn boundary. The
+          // managed Run stays active until earlier guidance is consumed.
+          deliverNext();
+          continue;
+        }
+        semanticComplete = true;
+        accepting = false;
+        input.close();
+      }
+    } catch (error) {
+      if (!semanticComplete && !cancelled) {
+        fatalEnding = {
+          ending: "failed",
+          errorMessage: continuation
+            ? CLAUDE_CONTINUATION_ATTACHMENT_FAILED
+            : claudeDiagnostic(error),
+        };
+      }
+    }
+
+    if (fatalEnding) return fatalEnding;
+    if (cancelled || (isAborted() && !semanticComplete)) {
+      return { ending: "cancelled" };
+    }
+    if (successfulResult) {
+      // Normal stream completion after admission without authoritative
+      // consumption keeps the valid answer and fabricates no user Fact.
+      return { ending: "answered" };
+    }
+    return { ending: "failed", errorMessage: MISSING_CLAUDE_ANSWER };
+  } finally {
+    accepting = false;
+    unsubscribeControls();
+    run.signal?.removeEventListener("abort", onAbort);
+    closeSignal?.removeEventListener("abort", onAbort);
+    stop();
+  }
 }
 
 export function createClaudeHarness(
@@ -326,43 +736,54 @@ export function createClaudeHarness(
         "profile",
       )?.toLowerCase();
       const effort = effortField(context.config, "profile", EFFORTS);
+      let continuation: string | undefined;
+      let active: Promise<RunEnding> | undefined;
+      let closed = false;
+      let closePromise: Promise<void> | undefined;
+      const closeController = new AbortController();
       return {
-        capabilities: { resume: false },
+        capabilities: { resume: true },
         model,
         prepareRun: (task) => ({
-          supportedControls: [],
-          execute: (run) => {
-            const source = streamSource<SDKMessage>(async (signal, sink) => {
-              const controller = new AbortController();
-              if (signal.aborted) return undefined;
-              const query = await loadQuery();
-              // Loading the SDK is asynchronous. Cancellation can win that race;
-              // in that case no provider query may be started.
-              if (signal.aborted) return undefined;
-              const options = buildClaudeOptions(
-                context,
-                model,
-                effort,
-                controller,
-              );
-              options.stderr = (data) => sink.stderr(data);
-              const stream = query({ prompt: task.prompt, options });
-              const stop = (): void => {
-                controller.abort();
-                stream.close();
+          supportedControls: ["steer"],
+          async execute(run) {
+            if (closed || run.signal?.aborted) return { ending: "cancelled" };
+            if (active) {
+              return {
+                ending: "failed",
+                errorMessage: "Claude adapter already has an active Run",
               };
-              return { events: stream, stop };
-            });
-            return runOneShot({
-              source,
-              translate: createClaudeTranslator(),
-              report: run.report,
-              signal: run.signal,
-              missingAnswerMessage: MISSING_CLAUDE_ANSWER,
-            });
+            }
+            const execution = runClaudeAttempt(
+              run,
+              task,
+              context,
+              model,
+              effort,
+              loadQuery,
+              continuation,
+              (identity) => {
+                if (continuation === undefined) continuation = identity;
+              },
+              closeController.signal,
+            );
+            active = execution;
+            try {
+              return await execution;
+            } finally {
+              if (active === execution) active = undefined;
+            }
           },
         }),
-        close: async () => {},
+        close() {
+          closePromise ??= (async () => {
+            closed = true;
+            closeController.abort();
+            await active?.catch(() => undefined);
+            continuation = undefined;
+          })();
+          return closePromise;
+        },
       };
     },
   };

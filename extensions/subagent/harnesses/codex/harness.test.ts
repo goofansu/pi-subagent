@@ -129,6 +129,7 @@ interface ConformanceObservation {
   activeProviderControls: number;
   maxConcurrentProviderControls: number;
   releaseProviderControl?: () => void;
+  openIntermediate?: () => void;
 }
 
 function event(
@@ -317,6 +318,8 @@ function appServerSpawn(
               break;
             case "steering-single-consumed":
             case "steering-fifo-consumed":
+            case "steering-intermediate-completion":
+            case "steering-admission-no-fact":
               ready.resolve?.();
               break;
           }
@@ -333,25 +336,27 @@ function appServerSpawn(
           observed.activeProviderControls,
         );
         observed.receivedControlTexts.push(text as string);
-        const expectedControls =
-          scenario === "steering-single-consumed" ? 1 : 2;
+        if (observed.providerControlStarts === 1) observed.openIntermediate?.();
+        const expectedControls = scenario === "steering-fifo-consumed" ? 2 : 1;
         const acknowledge = (): void => {
           send(current, { id, result: {} });
-          send(
-            current,
-            itemCompleted({
-              type: "userMessage",
-              id: `confirmed-${observed.providerControlStarts}`,
-              clientId: params.clientUserMessageId,
-              content: [
-                {
-                  type: "text",
-                  text: `confirmed: ${text as string}`,
-                  text_elements: [],
-                },
-              ],
-            }),
-          );
+          if (scenario !== "steering-admission-no-fact") {
+            send(
+              current,
+              itemCompleted({
+                type: "userMessage",
+                id: `confirmed-${observed.providerControlStarts}`,
+                clientId: params.clientUserMessageId,
+                content: [
+                  {
+                    type: "text",
+                    text: `confirmed: ${text as string}`,
+                    text_elements: [],
+                  },
+                ],
+              }),
+            );
+          }
           observed.activeProviderControls--;
           if (observed.providerControlStarts === expectedControls) {
             send(current, agent("controlled answer"));
@@ -384,6 +389,9 @@ function conformanceRig(): HarnessConformanceRig {
       const readyState: { resolve?: () => void } = {};
       const readyForCancellation = new Promise<void>((resolve) => {
         readyState.resolve = resolve;
+      });
+      const intermediateCheckpoint = new Promise<void>((resolve) => {
+        observed.openIntermediate = resolve;
       });
       const harness = createCodexHarness({
         spawn: appServerSpawn(scenario, observed, readyState),
@@ -456,15 +464,20 @@ function conformanceRig(): HarnessConformanceRig {
             messageCount: 2,
           });
         case "steering-single-consumed":
-        case "steering-fifo-consumed": {
+        case "steering-fifo-consumed":
+        case "steering-intermediate-completion":
+        case "steering-admission-no-fact": {
           const offeredTexts =
-            scenario === "steering-single-consumed"
-              ? ["first guidance"]
-              : ["first guidance", "second guidance"];
+            scenario === "steering-fifo-consumed"
+              ? ["first guidance", "second guidance"]
+              : ["first guidance"];
           const fixture = base({
             phase: "completed",
             finalOutput: "controlled answer",
-            userFactTexts: offeredTexts.map((text) => `confirmed: ${text}`),
+            userFactTexts:
+              scenario === "steering-admission-no-fact"
+                ? []
+                : offeredTexts.map((text) => `confirmed: ${text}`),
           });
           return {
             ...fixture,
@@ -482,6 +495,9 @@ function conformanceRig(): HarnessConformanceRig {
               providerControlStarts: () => observed.providerControlStarts,
               maxConcurrentProviderControls: () =>
                 observed.maxConcurrentProviderControls,
+              ...(scenario === "steering-intermediate-completion"
+                ? { intermediateCheckpoint }
+                : {}),
             },
           };
         }

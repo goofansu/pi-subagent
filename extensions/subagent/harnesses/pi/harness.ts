@@ -12,7 +12,12 @@ import {
   stringField,
   validateCommonProfileFields,
 } from "../contract.ts";
-import { runPiAgent } from "./agent.ts";
+import {
+  createPiManagedAdapter,
+  type PiSessionFactory,
+  type PiSessionOptionsFactory,
+  runPiAgent,
+} from "./agent.ts";
 
 const MAX_CATALOGUE_DIAGNOSTIC_CHARS = 512;
 
@@ -31,7 +36,12 @@ function catalogueSummary(values: readonly string[]): string {
 }
 
 export interface PiHarnessOptions {
+  /** Legacy one-shot protocol injection retained for CLI regression fixtures. */
   readonly spawn?: ChildProcessSpawn;
+  /** SDK-session boundary injection used by managed adapter fixtures. */
+  readonly sessionFactory?: PiSessionFactory;
+  readonly sessionOptionsFactory?: PiSessionOptionsFactory;
+  readonly agentDir?: string;
 }
 
 export function createPiHarness(options: PiHarnessOptions = {}): Harness {
@@ -80,21 +90,41 @@ export function createPiHarness(options: PiHarnessOptions = {}): Harness {
       const thinking =
         effort ??
         (profileModel ? undefined : context.parentModel?.thinkingLevel);
+      if (options.spawn) {
+        return {
+          capabilities: { resume: false },
+          model,
+          prepareRun: (task) => ({
+            supportedControls: [],
+            execute: (run) =>
+              runPiAgent(run, {
+                context,
+                task,
+                resolvedModel: model,
+                resolvedThinking: thinking,
+                spawn: options.spawn,
+              }),
+          }),
+          close: async () => {},
+        };
+      }
+
+      const managed = createPiManagedAdapter(context, {
+        resolvedModel: model,
+        resolvedThinking: thinking,
+        ...(options.sessionFactory
+          ? { sessionFactory: options.sessionFactory }
+          : {}),
+        ...(options.sessionOptionsFactory
+          ? { sessionOptionsFactory: options.sessionOptionsFactory }
+          : {}),
+        ...(options.agentDir ? { agentDir: options.agentDir } : {}),
+      });
       return {
-        capabilities: { resume: false },
+        capabilities: { resume: true },
         model,
-        prepareRun: (task) => ({
-          supportedControls: [],
-          execute: (run) =>
-            runPiAgent(run, {
-              context,
-              task,
-              resolvedModel: model,
-              resolvedThinking: thinking,
-              ...(options.spawn ? { spawn: options.spawn } : {}),
-            }),
-        }),
-        close: async () => {},
+        prepareRun: managed.prepareRun,
+        close: managed.close,
       };
     },
   };

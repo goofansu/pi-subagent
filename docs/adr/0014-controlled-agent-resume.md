@@ -6,6 +6,7 @@ Date: 2026-08-30
 
 Accepted. Supersedes ADR-0003's rejection of follow-up orchestration and
 ADR-0013 only where it deferred `agent_resume`. Every Run remains one-shot.
+ADRs 0015–0019 subsequently enable the production provider implementations.
 
 ## Context
 
