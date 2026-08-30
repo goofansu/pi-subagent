@@ -84,17 +84,25 @@ function piHarness() {
     sessionFactory: async (options) => {
       const { session } = await createAgentSession(options);
       providerState.attempts++;
-      providerState.active++;
       let disposed = false;
       return {
         session: new Proxy(session, {
           get(target, property) {
+            if (property === "prompt") {
+              return async (...args) => {
+                providerState.active++;
+                try {
+                  return await target.prompt(...args);
+                } finally {
+                  providerState.active--;
+                }
+              };
+            }
             if (property === "dispose") {
               return () => {
                 if (!disposed) {
                   disposed = true;
                   providerState.disposed++;
-                  providerState.active--;
                 }
                 return target.dispose();
               };
@@ -306,15 +314,28 @@ async function resumeSmoke() {
     `\n=== start, idle, resume, and steer one live ${provider} Subagent ===`,
   );
   const retainedMarker = `${provider}-resume-${randomUUID()}`;
-  const steeringMarker = `${provider}-resumed-steer-${randomUUID()}`;
+  const steeringMarker = `${provider}-managed-steer-${randomUUID()}`;
+  const firstPrompt =
+    provider === "pi"
+      ? `Remember this exact marker for a later Run: ${retainedMarker}. Run this exact shell command: \`sleep 10\`. Do not answer before it finishes. Then follow any guidance received while running.`
+      : `Remember this exact marker for a later Run: ${retainedMarker}. Include it in your brief confirmation.`;
   const first = manager.start({
     config,
     description: "establish retained marker",
-    prompt: `Remember this exact marker for a later Run: ${retainedMarker}. Include it in your brief confirmation.`,
+    prompt: firstPrompt,
     cwd,
     projectTrusted: false,
   });
   register(first);
+  if (provider === "pi") {
+    check(
+      "first-Run steering is admitted",
+      delivery.steer(
+        first.runId,
+        `Include both exact markers in the first answer: ${retainedMarker} and ${steeringMarker}`,
+      ) === "accepted",
+    );
+  }
   const firstResult = await settle(first.settled);
   const immutableFirst = structuredClone(delivery.result(first.runId));
   check("first Run completes", firstResult.lifecycle.phase === "completed");
@@ -322,13 +343,29 @@ async function resumeSmoke() {
     "first Result establishes context",
     immutableFirst?.output.includes(retainedMarker),
   );
-  check(
-    "first execution is idle before resume",
-    provider === "pi" ? providerState.active === 1 : providerState.active === 0,
-  );
+  if (provider === "pi") {
+    const matchingUsers = firstResult.messages.filter(
+      (fact) =>
+        fact.role === "user" &&
+        fact.parts.some(
+          (part) => part.type === "text" && part.text.includes(steeringMarker),
+        ),
+    );
+    check(
+      "first-Run guidance is provider-confirmed exactly once",
+      matchingUsers.length === 1,
+    );
+    check(
+      "first Result reflects guidance",
+      immutableFirst?.output.includes(steeringMarker),
+    );
+  }
+  check("first execution is idle before resume", providerState.active === 0);
 
   const resumePrompt =
-    "Run this exact shell command: `sleep 10`. Then return the marker remembered from the prior Run and follow any new guidance.";
+    provider === "pi"
+      ? "Return the exact marker remembered from the prior Run. Answer briefly."
+      : "Run this exact shell command: `sleep 10`. Then return the marker remembered from the prior Run and follow any new guidance.";
   check(
     "the resumed prompt does not replay the marker",
     !resumePrompt.includes(retainedMarker),
@@ -347,13 +384,15 @@ async function resumeSmoke() {
   if (resumed.outcome !== "started")
     throw new Error(`resume did not start: ${resumed.outcome}`);
   register(resumed, first.subagentId);
-  check(
-    "resumed steering is admitted",
-    delivery.steer(
-      resumed.runId,
-      `Also include this exact marker: ${steeringMarker}`,
-    ) === "accepted",
-  );
+  if (provider === "claude") {
+    check(
+      "resumed steering is admitted",
+      delivery.steer(
+        resumed.runId,
+        `Also include this exact marker: ${steeringMarker}`,
+      ) === "accepted",
+    );
+  }
   const secondResult = await settle(resumed.settled);
   const secondStored = delivery.result(resumed.runId);
   check("resumed Run completes", secondResult.lifecycle.phase === "completed");
@@ -361,11 +400,11 @@ async function resumeSmoke() {
     "resume depends on retained context",
     secondStored?.output.includes(retainedMarker),
   );
-  check(
-    "resumed steering affects the answer",
-    secondStored?.output.includes(steeringMarker),
-  );
   if (provider === "claude") {
+    check(
+      "resumed steering affects the answer",
+      secondStored?.output.includes(steeringMarker),
+    );
     check(
       "resumed Claude steering crosses a provider Result",
       providerState.results >= 2 && providerState.firstResultBeforeGuidance,

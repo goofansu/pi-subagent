@@ -40,6 +40,7 @@ import type {
 } from "../../run.ts";
 import type { AgentConfig } from "../../types.ts";
 import { parseTools, shouldAppendSystemPrompt } from "../contract.ts";
+import { confineProviderDiagnostic } from "../provider-diagnostic.ts";
 
 const PI_ORCHESTRATION_TOOLS = [
   "agent_start",
@@ -50,7 +51,6 @@ const PI_ORCHESTRATION_TOOLS = [
   "agent_steer",
 ] as const;
 const PI_EXTENSION_SHUTDOWN_TIMEOUT_MS = 1_000;
-const PI_STEERING_DIAGNOSTIC_LIMIT = 2_048;
 
 export type PiSession = Pick<
   AgentSession,
@@ -432,7 +432,12 @@ function piFact(value: unknown): Fact | undefined {
       ? { stopReason: value.stopReason }
       : {}),
     ...(typeof value.errorMessage === "string"
-      ? { errorMessage: value.errorMessage }
+      ? {
+          errorMessage: confineProviderDiagnostic(
+            value.errorMessage,
+            "Pi provider message failed",
+          ),
+        }
       : {}),
   };
 }
@@ -457,7 +462,7 @@ export function translatePiJsonEvent(
   if (isValidAgentEndEvent(event)) {
     return {
       transcript: event.messages
-        .map(piFact)
+        .map((message) => piFact(message))
         .filter((fact): fact is Fact => fact !== undefined),
       terminal: true,
     };
@@ -611,27 +616,46 @@ function withoutInitialGoal(messages: unknown[], prompt: string): unknown[] {
   });
 }
 
-function boundedPiDiagnostic(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  const normalized = raw
-    .replace(/[\r\n]+/g, " ")
-    .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "[redacted]")
-    .trim();
-  return normalized.slice(0, PI_STEERING_DIAGNOSTIC_LIMIT);
-}
-
 async function withBoundedCleanup(
   promise: Promise<unknown>,
   timeoutMs = PI_EXTENSION_SHUTDOWN_TIMEOUT_MS,
-): Promise<void> {
+): Promise<boolean> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([
-    promise.catch(() => undefined),
-    new Promise<void>((resolve) => {
-      timeout = setTimeout(resolve, timeoutMs);
+  const completed = await Promise.race([
+    promise.catch(() => undefined).then(() => true),
+    new Promise<boolean>((resolve) => {
+      timeout = setTimeout(() => resolve(false), timeoutMs);
     }),
   ]);
   if (timeout) clearTimeout(timeout);
+  return completed;
+}
+
+interface PendingPiSessionCleanup {
+  readonly settled: Promise<void>;
+}
+
+async function stopPiSession(
+  session: PiSession,
+): Promise<PendingPiSessionCleanup | undefined> {
+  let abortWork: Promise<unknown>;
+  try {
+    abortWork = Promise.resolve(session.abort());
+  } catch {
+    abortWork = Promise.resolve();
+  }
+  let idleWork: Promise<unknown>;
+  try {
+    idleWork = Promise.resolve(session.waitForIdle());
+  } catch {
+    idleWork = Promise.resolve();
+  }
+  const settled = Promise.allSettled([abortWork, idleWork]).then((outcomes) =>
+    outcomes[1]?.status === "fulfilled"
+      ? undefined
+      : new Promise<void>(() => {}),
+  );
+  return (await withBoundedCleanup(settled)) ? undefined : { settled };
 }
 
 async function disposePiSession(session: PiSession): Promise<void> {
@@ -682,6 +706,8 @@ export function createPiManagedAdapter(
   let closePromise: Promise<void> | undefined;
   let disposed = false;
   let cancelActive: (() => Promise<void>) | undefined;
+  let pendingSteeringCleanup: Promise<void> | undefined;
+  let pendingNativeCleanup: Promise<void> | undefined;
 
   const initialize = (signal?: AbortSignal): Promise<PiSession> => {
     if (session) return Promise.resolve(session);
@@ -701,15 +727,13 @@ export function createPiManagedAdapter(
       try {
         if (closed || signal?.aborted) {
           created.clearQueue();
-          await created.abort().catch(() => undefined);
-          await created.waitForIdle().catch(() => undefined);
+          await stopPiSession(created);
           throw new Error("Pi session initialization was cancelled");
         }
         await created.bindExtensions({ mode: "print" });
         if (closed || signal?.aborted) {
           created.clearQueue();
-          await created.abort().catch(() => undefined);
-          await created.waitForIdle().catch(() => undefined);
+          await stopPiSession(created);
           throw new Error("Pi session initialization was cancelled");
         }
         session = created;
@@ -729,6 +753,13 @@ export function createPiManagedAdapter(
     run: SubagentRun,
   ): Promise<RunEnding> => {
     if (closed || run.signal?.aborted) return { ending: "cancelled" };
+    if (pendingSteeringCleanup || pendingNativeCleanup) {
+      return {
+        ending: "failed",
+        errorMessage:
+          "Pi session cleanup is still waiting for native steering to finish",
+      };
+    }
     let sdk: PiSession;
     try {
       sdk = await initialize(run.signal);
@@ -736,7 +767,10 @@ export function createPiManagedAdapter(
       if (closed || run.signal?.aborted) return { ending: "cancelled" };
       return {
         ending: "failed",
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage: confineProviderDiagnostic(
+          error,
+          "Pi initialization failed",
+        ),
       };
     }
     if (closed || run.signal?.aborted) return { ending: "cancelled" };
@@ -753,6 +787,10 @@ export function createPiManagedAdapter(
     const queuedControls: PiControlRecord[] = [];
     let deliveryTail = Promise.resolve();
     let cancellationWork: Promise<void> | undefined;
+    let releaseCancellation = () => {};
+    const cancellationFinished = new Promise<void>((resolve) => {
+      releaseCancellation = resolve;
+    });
 
     const reportEvent = (event: AgentSessionEvent): void => {
       if (!accepting) return;
@@ -801,15 +839,31 @@ export function createPiManagedAdapter(
       discardQueued();
       clearNativeQueue();
       const steeringAtCancellation = deliveryTail;
-      cancellationWork = (async () => {
-        // A Control that entered first may already be inside sdk.steer(). Join
-        // it, then clear again so its late native enqueue cannot cross the
-        // retained Conversation's cancellation/resume boundary.
-        await steeringAtCancellation.catch(() => undefined);
+      let steeringSettled = false;
+      const lateCleanup = steeringAtCancellation.finally(() => {
+        steeringSettled = true;
         clearNativeQueue();
-        await sdk.abort().catch(() => undefined);
-        await sdk.waitForIdle().catch(() => undefined);
-      })();
+        if (pendingSteeringCleanup === lateCleanup) {
+          pendingSteeringCleanup = undefined;
+        }
+      });
+      cancellationWork = (async () => {
+        // Abort first so uncooperative native work cannot indefinitely
+        // prevent cancellation or Session shutdown. A still-pending steer
+        // blocks resume until its late completion has been cleared.
+        const pendingNative = await stopPiSession(sdk);
+        if (pendingNative) {
+          const lateNativeCleanup = pendingNative.settled.finally(() => {
+            clearNativeQueue();
+            if (pendingNativeCleanup === lateNativeCleanup) {
+              pendingNativeCleanup = undefined;
+            }
+          });
+          pendingNativeCleanup = lateNativeCleanup;
+        }
+        clearNativeQueue();
+        if (!steeringSettled) pendingSteeringCleanup = lateCleanup;
+      })().finally(releaseCancellation);
       return cancellationWork;
     };
     const onAbort = (): void => {
@@ -837,19 +891,28 @@ export function createPiManagedAdapter(
         } catch (error) {
           // Admission and an otherwise valid answer remain honest even when
           // native steering rejects. Keep only a bounded adapter diagnostic.
-          const diagnostic = boundedPiDiagnostic(error);
-          if (diagnostic)
-            run.report.stderr(`Pi steering was not delivered: ${diagnostic}\n`);
+          const diagnostic = confineProviderDiagnostic(
+            error,
+            "Pi steering was not delivered",
+          );
+          if (diagnostic) run.report.stderr(`${diagnostic}\n`);
         }
       });
     }, discardQueued);
 
     try {
       let promptError: unknown;
-      try {
-        await sdk.prompt(task.prompt);
-      } catch (error) {
-        promptError = error;
+      const promptOutcome = await Promise.race([
+        Promise.resolve()
+          .then(() => sdk.prompt(task.prompt))
+          .then(
+            () => ({ outcome: "settled" as const }),
+            (error) => ({ outcome: "failed" as const, error }),
+          ),
+        cancellationFinished.then(() => ({ outcome: "cancelled" as const })),
+      ]);
+      if (promptOutcome.outcome === "failed") {
+        promptError = promptOutcome.error;
       }
 
       if (cancelled || run.signal?.aborted || closed) {
@@ -860,8 +923,18 @@ export function createPiManagedAdapter(
         // await; then make completion non-reopenable in the same stack.
         while (true) {
           const draining = deliveryTail;
-          await draining;
-          await sdk.waitForIdle();
+          const cancelledWhileDraining = await Promise.race([
+            draining.then(() => false),
+            cancellationFinished.then(() => true),
+          ]);
+          if (cancelledWhileDraining) break;
+          const cancelledWhileWaitingForIdle = await Promise.race([
+            Promise.resolve()
+              .then(() => sdk.waitForIdle())
+              .then(() => false),
+            cancellationFinished.then(() => true),
+          ]);
+          if (cancelledWhileWaitingForIdle) break;
           if (draining === deliveryTail && queuedControls.length === 0) break;
         }
       }
@@ -870,7 +943,7 @@ export function createPiManagedAdapter(
       if (terminalMessages) {
         run.report.transcript(
           terminalMessages
-            .map(piFact)
+            .map((message) => piFact(message))
             .filter((fact): fact is Fact => fact !== undefined),
         );
         // A non-retrying terminal snapshot observed before cancellation is
@@ -885,10 +958,10 @@ export function createPiManagedAdapter(
       if (promptError !== undefined) {
         return {
           ending: "failed",
-          errorMessage:
-            promptError instanceof Error
-              ? promptError.message
-              : String(promptError),
+          errorMessage: confineProviderDiagnostic(
+            promptError,
+            "Pi prompt failed",
+          ),
         };
       }
       return { ending: "failed", errorMessage: MISSING_AGENT_END_ERROR };
@@ -898,7 +971,7 @@ export function createPiManagedAdapter(
       }
       return {
         ending: "failed",
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage: confineProviderDiagnostic(error, "Pi execution failed"),
       };
     } finally {
       accepting = false;
@@ -937,17 +1010,21 @@ export function createPiManagedAdapter(
         closed = true;
         const pendingCreation = creating;
         if (cancelActive) {
-          await cancelActive().catch(() => undefined);
+          await withBoundedCleanup(cancelActive());
         } else if (session) {
           try {
             session.clearQueue();
           } catch {
             // Continue through abort and bounded shutdown.
           }
-          await session.abort().catch(() => undefined);
+          await stopPiSession(session);
         }
-        await active?.catch(() => undefined);
-        await pendingCreation?.catch(() => undefined);
+        await withBoundedCleanup(
+          Promise.all([
+            active?.catch(() => undefined),
+            pendingCreation?.catch(() => undefined),
+          ]),
+        );
         if (session && !disposed) {
           disposed = true;
           await disposePiSession(session);

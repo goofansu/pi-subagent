@@ -549,7 +549,7 @@ function piConformanceRig(): HarnessConformanceRig {
         case "backend-crash":
           return base({
             phase: "failed",
-            errorMessage: "Pi SDK backend crashed",
+            errorMessage: "Pi prompt failed: [redacted]",
           });
         case "abort-mid-run":
           return base({ phase: "cancelled", cancellationReason: "requested" });
@@ -586,7 +586,7 @@ function piConformanceRig(): HarnessConformanceRig {
         case "post-answer-failure":
           return base({
             phase: "failed",
-            errorMessage: "Pi SDK backend failed after answer",
+            errorMessage: "Pi prompt failed: [redacted]",
           });
         case "terminal-transcript-healing":
           return base({
@@ -861,12 +861,57 @@ test("Pi initialization and prompt failures clean the SDK session exactly once",
     }).settled;
 
     assert.equal(result.lifecycle.phase, "failed");
-    assert.equal(result.errorMessage, `${failure} failed`);
+    assert.equal(
+      result.errorMessage,
+      failure === "bind"
+        ? "Pi initialization failed: [redacted]"
+        : "Pi prompt failed: [redacted]",
+    );
     assert.equal(binds, 1);
     assert.equal(prompts, failure === "bind" ? 0 : 1);
     assert.equal(shutdowns, 1);
     assert.equal(disposals, 1);
   }
+});
+
+test("Pi confines provider identities and oversized initialization diagnostics", async () => {
+  const providerUuid = "00000000-0000-4000-8000-000000000099";
+  const providerConversation = "pi-conversation-secret";
+  const providerMessage = "pi-message-secret";
+  const providerQuery = "pi-query-secret";
+  const providerRequest = "pi-request-secret";
+  const providerCorrelation = "pi-correlation-secret";
+  const providerOpaque = "pi-opaque-secret";
+  const started = startSubagent({
+    config: agent({ harness: "pi" }),
+    description: "confined Pi diagnostic",
+    prompt: "work",
+    harnesses: createHarnessRegistry([
+      createPiHarness({
+        sessionFactory: async () => {
+          throw new Error(
+            `Pi initialization failed to attach ${providerOpaque} conversation lost: ${providerConversation} conversation_id=${providerConversation} message_id=${providerMessage} query_id=${providerQuery} request_id=${providerRequest} correlation_id=${providerCorrelation}\ncorrelation ${providerUuid} ${"x".repeat(4_096)}`,
+          );
+        },
+        sessionOptionsFactory: async () => ({}),
+      }),
+    ]),
+    runs: createSubagentRuns(),
+  });
+
+  const result = await started.settled;
+
+  assert.equal(result.lifecycle.phase, "failed");
+  assert.match(result.errorMessage ?? "", /\[redacted\]/);
+  assert.doesNotMatch(result.errorMessage ?? "", /pi-conversation-secret/);
+  assert.doesNotMatch(result.errorMessage ?? "", /pi-message-secret/);
+  assert.doesNotMatch(result.errorMessage ?? "", /pi-query-secret/);
+  assert.doesNotMatch(result.errorMessage ?? "", /pi-request-secret/);
+  assert.doesNotMatch(result.errorMessage ?? "", /pi-correlation-secret/);
+  assert.doesNotMatch(result.errorMessage ?? "", /pi-opaque-secret/);
+  assert.doesNotMatch(result.errorMessage ?? "", new RegExp(providerUuid));
+  assert.doesNotMatch(result.errorMessage ?? "", /[\r\n]/);
+  assert.ok((result.errorMessage?.length ?? 0) <= 2_048);
 });
 
 test("Pi cancellation during resource loading, session creation, or extension binding leaves no detached session", async () => {
@@ -1065,8 +1110,8 @@ test("Pi orders Control and cancellation by ingress and never carries stale guid
         ]);
         assert.equal(
           operations.includes("abort"),
-          false,
-          "cancellation must join in-flight steering before native abort",
+          true,
+          "cancellation must abort before waiting for native steering",
         );
         releaseSteer();
       } else {
@@ -1087,10 +1132,10 @@ test("Pi orders Control and cancellation by ingress and never carries stale guid
       assert.equal(cancelled.lifecycle.phase, "cancelled");
       if (order === "control-first") {
         assert.ok(
-          operations.indexOf("steer:end") < operations.lastIndexOf("clear"),
+          operations.indexOf("abort") < operations.indexOf("steer:end"),
         );
         assert.ok(
-          operations.lastIndexOf("clear") < operations.indexOf("abort"),
+          operations.indexOf("steer:end") < operations.lastIndexOf("clear"),
         );
       } else {
         assert.equal(operations.includes("steer:start"), false);
@@ -1113,6 +1158,217 @@ test("Pi orders Control and cancellation by ingress and never carries stale guid
       await manager.shutdown();
     }
   }
+});
+
+test("Pi cancellation and shutdown do not wait for stalled native steering", async () => {
+  let openReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    openReady = resolve;
+  });
+  let finishPrompt = () => {};
+  const promptFinished = new Promise<void>((resolve) => {
+    finishPrompt = resolve;
+  });
+  let openSteerStarted = () => {};
+  const steerStarted = new Promise<void>((resolve) => {
+    openSteerStarted = resolve;
+  });
+  const neverFinishes = new Promise<void>(() => {});
+  let aborts = 0;
+  let idleWaits = 0;
+  let clears = 0;
+  let disposals = 0;
+  const session: PiSession = {
+    messages: [],
+    isIdle: false,
+    async prompt() {
+      openReady();
+      await promptFinished;
+    },
+    async steer() {
+      openSteerStarted();
+      await neverFinishes;
+    },
+    subscribe: () => () => {},
+    async bindExtensions() {},
+    async abort() {
+      aborts++;
+      finishPrompt();
+    },
+    async waitForIdle() {
+      idleWaits++;
+    },
+    clearQueue() {
+      clears++;
+      return { steering: [], followUp: [] };
+    },
+    dispose() {
+      disposals++;
+    },
+    extensionRunner: { async emit() {} },
+  };
+  const runs = createSubagentRuns();
+  const manager = createSubagentManager({
+    harnesses: createHarnessRegistry([
+      createPiHarness({
+        sessionFactory: async () => ({ session }),
+        sessionOptionsFactory: async () => ({}),
+      }),
+    ]),
+    runs,
+    generateSubagentId: () => "pi-stalled-steering",
+  });
+  const started = manager.start({
+    config: agent({ harness: "pi" }),
+    description: "stalled native steering",
+    prompt: "wait for guidance",
+  });
+  await ready;
+  assert.equal(
+    runs.offer(started.runId, { type: "steer", text: "stalled guidance" }),
+    "accepted",
+  );
+  await steerStarted;
+
+  assert.deepEqual(runs.cancel([started.runId], "requested"), [started.runId]);
+  assert.equal(aborts, 1, "abort must not wait for native steering");
+  const result = await started.settled;
+  await manager.shutdown();
+
+  assert.equal(result.lifecycle.phase, "cancelled");
+  assert.ok(idleWaits >= 1);
+  assert.ok(clears >= 2);
+  assert.equal(disposals, 1);
+});
+
+test("Pi cancellation settles while completed prompt work is draining stalled steering", {
+  timeout: 3_000,
+}, async () => {
+  let openReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    openReady = resolve;
+  });
+  let finishPrompt = () => {};
+  const promptFinished = new Promise<void>((resolve) => {
+    finishPrompt = resolve;
+  });
+  let openSteerStarted = () => {};
+  const steerStarted = new Promise<void>((resolve) => {
+    openSteerStarted = resolve;
+  });
+  const neverFinishes = new Promise<void>(() => {});
+  const session: PiSession = {
+    messages: [],
+    isIdle: false,
+    async prompt() {
+      openReady();
+      await promptFinished;
+    },
+    async steer() {
+      openSteerStarted();
+      await neverFinishes;
+    },
+    subscribe: () => () => {},
+    async bindExtensions() {},
+    async abort() {},
+    async waitForIdle() {},
+    clearQueue: () => ({ steering: [], followUp: [] }),
+    dispose() {},
+    extensionRunner: { async emit() {} },
+  };
+  const runs = createSubagentRuns();
+  const manager = createSubagentManager({
+    harnesses: createHarnessRegistry([
+      createPiHarness({
+        sessionFactory: async () => ({ session }),
+        sessionOptionsFactory: async () => ({}),
+      }),
+    ]),
+    runs,
+  });
+  const started = manager.start({
+    config: agent({ harness: "pi" }),
+    description: "cancel stalled drain",
+    prompt: "wait for guidance",
+  });
+  await ready;
+  assert.equal(
+    runs.offer(started.runId, { type: "steer", text: "stalled guidance" }),
+    "accepted",
+  );
+  await steerStarted;
+  finishPrompt();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(runs.cancel([started.runId], "requested"), [started.runId]);
+  const result = await started.settled;
+  await manager.shutdown();
+
+  assert.equal(result.lifecycle.phase, "cancelled");
+});
+
+test("Pi does not resume while timed-out native cancellation remains active", {
+  timeout: 4_000,
+}, async () => {
+  let openReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    openReady = resolve;
+  });
+  const neverFinishes = new Promise<void>(() => {});
+  let prompts = 0;
+  const session: PiSession = {
+    messages: [],
+    isIdle: false,
+    async prompt() {
+      prompts++;
+      openReady();
+      await neverFinishes;
+    },
+    async steer() {},
+    subscribe: () => () => {},
+    async bindExtensions() {},
+    async abort() {
+      await neverFinishes;
+    },
+    async waitForIdle() {
+      await neverFinishes;
+    },
+    clearQueue: () => ({ steering: [], followUp: [] }),
+    dispose() {},
+    extensionRunner: { async emit() {} },
+  };
+  const runs = createSubagentRuns();
+  const manager = createSubagentManager({
+    harnesses: createHarnessRegistry([
+      createPiHarness({
+        sessionFactory: async () => ({ session }),
+        sessionOptionsFactory: async () => ({}),
+      }),
+    ]),
+    runs,
+  });
+  const started = manager.start({
+    config: agent({ harness: "pi" }),
+    description: "cancel stalled native work",
+    prompt: "wait",
+  });
+  await ready;
+
+  assert.deepEqual(runs.cancel([started.runId], "requested"), [started.runId]);
+  assert.equal((await started.settled).lifecycle.phase, "cancelled");
+  const resumed = manager.resume({
+    subagentId: started.subagentId,
+    description: "must remain blocked",
+    prompt: "second prompt",
+  });
+  assert.equal(resumed.outcome, "started");
+  if (resumed.outcome !== "started") assert.fail("Pi resume was not admitted");
+  const resumedResult = await resumed.settled;
+
+  assert.equal(resumedResult.lifecycle.phase, "failed");
+  assert.match(resumedResult.errorMessage ?? "", /cleanup is still waiting/);
+  assert.equal(prompts, 1);
+  await manager.shutdown();
 });
 
 test("Pi cancellation remains honest when native abort rejects", async () => {
@@ -1340,6 +1596,65 @@ test("Pi adapter bounds extension shutdown before disposal", {
   assert.equal(disposed, true);
 });
 
+test("Pi adapter bounds stalled native cancellation before disposal", {
+  timeout: 5_000,
+}, async () => {
+  let openReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    openReady = resolve;
+  });
+  const neverFinishes = new Promise<void>(() => {});
+  let idleWaits = 0;
+  let disposed = false;
+  const session: PiSession = {
+    messages: [],
+    isIdle: false,
+    async prompt() {
+      openReady();
+      await neverFinishes;
+    },
+    async steer() {},
+    subscribe: () => () => {},
+    async bindExtensions() {},
+    async abort() {
+      await neverFinishes;
+    },
+    async waitForIdle() {
+      idleWaits++;
+      await neverFinishes;
+    },
+    clearQueue: () => ({ steering: [], followUp: [] }),
+    dispose() {
+      disposed = true;
+    },
+    extensionRunner: { async emit() {} },
+  };
+  const adapter = createPiHarness({
+    sessionFactory: async () => ({ session }),
+    sessionOptionsFactory: async () => ({}),
+  }).prepare({
+    config: agent({ harness: "pi" }),
+    cwd: "/work",
+    childDepth: 1,
+    projectTrusted: false,
+  });
+  const result = createEmptyResult("worker", "active close", 0);
+  const execution = adapter
+    .prepareRun({ description: "active close", prompt: "wait" })
+    .execute({
+      report: createRunReporter(result, () => {}),
+      signal: new AbortController().signal,
+      controls: createControlGate(["steer"]).controls,
+    });
+  await ready;
+
+  await adapter.close();
+
+  assert.deepEqual(await execution, { ending: "cancelled" });
+  assert.equal(idleWaits, 1);
+  assert.equal(disposed, true);
+});
+
 test("Pi steering rejection is diagnostic-only and creates no user Fact", async () => {
   const listeners = new Set<(event: AgentSessionEvent) => void>();
   let finishPrompt = () => {};
@@ -1421,10 +1736,7 @@ test("Pi steering rejection is diagnostic-only and creates no user Fact", async 
     result.messages.some((fact) => fact.role === "user"),
     false,
   );
-  assert.match(
-    result.stderr,
-    /Pi steering was not delivered: native rejection/,
-  );
+  assert.match(result.stderr, /Pi steering was not delivered: \[redacted\]/);
   assert.ok(
     result.stderr.length <= 2_100,
     "steering diagnostic must be bounded",
@@ -1645,7 +1957,7 @@ process.exitCode = 7;`,
   );
 
   assert.equal(result.lifecycle.phase, "failed");
-  assert.equal(result.errorMessage, "provider says the request was rejected");
+  assert.equal(result.errorMessage, "Pi provider message failed: [redacted]");
   assert.equal(result.stopReason, "error");
 });
 
@@ -1735,7 +2047,7 @@ test("an error-bearing empty message fails an otherwise clean child", async () =
 
   assert.equal(settled.lifecycle.phase, "failed");
   assert.deepEqual(settled.messages[0]?.parts, []);
-  assert.equal(settled.errorMessage, "fixture in-band error");
+  assert.equal(settled.errorMessage, "Pi provider message failed: [redacted]");
   assert.equal(settled.stopReason, "error");
   assert.equal(settled.usage.input, 5);
   assert.equal(settled.usage.turns, 1);
@@ -1797,7 +2109,7 @@ test("a translated error event preserves stdout on a nonzero exit", async () => 
 process.exitCode = 7;`,
   );
   assert.equal(settled.lifecycle.phase, "failed");
-  assert.equal(settled.errorMessage, "translated failure");
+  assert.equal(settled.errorMessage, "Pi provider message failed: [redacted]");
   assert.match(fullOutput(settled), /Last stdout:/);
 });
 

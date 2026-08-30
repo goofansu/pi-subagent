@@ -427,7 +427,7 @@ function claudeConformanceRig(): HarnessConformanceRig {
         case "backend-crash":
           return base({
             phase: "failed",
-            errorMessage: "fixture Claude backend crashed",
+            errorMessage: "Claude query failed: [redacted]",
           });
         case "abort-mid-run":
           return base({ phase: "cancelled", cancellationReason: "requested" });
@@ -1052,6 +1052,59 @@ for (const correlation of ["missing", "foreign"] as const) {
   });
 }
 
+test("Claude error Results discard queued Controls without inventing user Facts", async () => {
+  let openReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    openReady = resolve;
+  });
+  let openControlReceived = () => {};
+  const controlReceived = new Promise<void>((resolve) => {
+    openControlReceived = resolve;
+  });
+  let queryClosed = false;
+  const query: ClaudeQuery = ({ prompt }) =>
+    ({
+      async *[Symbol.asyncIterator]() {
+        assert.notEqual(typeof prompt, "string");
+        const iterator = (prompt as AsyncIterable<SDKUserMessage>)[
+          Symbol.asyncIterator
+        ]();
+        assert.equal((await iterator.next()).done, false);
+        openReady();
+        assert.equal((await iterator.next()).done, false);
+        openControlReceived();
+        yield errorResultMessage(["provider failed before consuming guidance"]);
+      },
+      close() {
+        queryClosed = true;
+      },
+    }) as never;
+  const runs = createSubagentRuns();
+  const started = startSubagent({
+    config,
+    description: "error with queued Control",
+    prompt: "start",
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs,
+  });
+  await ready;
+  assert.equal(
+    runs.offer(started.id, { type: "steer", text: "unconsumed guidance" }),
+    "accepted",
+  );
+  await controlReceived;
+
+  const result = await started.settled;
+
+  assert.equal(result.lifecycle.phase, "failed");
+  assert.equal(queryClosed, true);
+  assert.equal(
+    result.messages.some((fact) => fact.role === "user"),
+    false,
+  );
+  assert.equal(result.messages.filter((fact) => fact.errorMessage).length, 1);
+});
+
 test("Claude orders Control and cancellation by ingress in both directions", async () => {
   for (let iteration = 0; iteration < 32; iteration++) {
     for (const order of ["control-first", "cancellation-first"] as const) {
@@ -1215,6 +1268,230 @@ test("Claude resumes through one fresh Query without replay and never falls back
   );
   assert.equal(getFinalOutput(firstResult.messages), "first answer");
   await manager.shutdown();
+});
+
+test("Claude continuation loss never falls back across loader, Query, or input-stream failure", async () => {
+  for (const failure of ["loader", "query", "input-stream"] as const) {
+    const sessionId = "00000000-0000-4000-8000-000000000090";
+    let loads = 0;
+    let queries = 0;
+    let closes = 0;
+    const loader: ClaudeQueryLoader = async () => {
+      const attempt = loads++;
+      if (attempt === 1 && failure === "loader") {
+        throw new Error(`continuation unavailable session_id=${sessionId}`);
+      }
+      return ({ prompt }) => {
+        queries++;
+        if (attempt === 1 && failure === "query") {
+          throw new Error(`query process lost session_id=${sessionId}`);
+        }
+        return {
+          async *[Symbol.asyncIterator]() {
+            assert.notEqual(typeof prompt, "string");
+            await (prompt as AsyncIterable<SDKUserMessage>)
+              [Symbol.asyncIterator]()
+              .next();
+            if (attempt === 1) {
+              throw new Error(`input stream failed session_id=${sessionId}`);
+            }
+            yield resultMessage("first answer", { session_id: sessionId });
+          },
+          close() {
+            closes++;
+          },
+        } as never;
+      };
+    };
+    const manager = createSubagentManager({
+      harnesses: createHarnessRegistry([createClaudeHarness(loader)]),
+      runs: createSubagentRuns(),
+      generateSubagentId: () => `claude-${failure}-loss`,
+    });
+    const first = manager.start({
+      config,
+      description: `${failure} first`,
+      prompt: "remember",
+    });
+    const immutableFirst = structuredClone(await first.settled);
+    assert.equal(immutableFirst.lifecycle.phase, "completed", failure);
+    const resumed = manager.resume({
+      subagentId: first.subagentId,
+      description: `${failure} resumed`,
+      prompt: "recall",
+    });
+    assert.equal(resumed.outcome, "started", failure);
+    if (resumed.outcome !== "started") assert.fail("resume did not start");
+
+    const result = await resumed.settled;
+
+    assert.equal(result.lifecycle.phase, "failed", failure);
+    assert.equal(
+      result.errorMessage,
+      "Claude continuation attachment failed",
+      failure,
+    );
+    assert.equal(loads, 2, failure);
+    assert.equal(queries, failure === "loader" ? 1 : 2, failure);
+    assert.equal(
+      JSON.stringify(await first.settled),
+      JSON.stringify(immutableFirst),
+      failure,
+    );
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(sessionId), failure);
+    await manager.shutdown();
+    assert.equal(closes, failure === "input-stream" ? 2 : 1, failure);
+  }
+});
+
+test("Claude rejects a malformed resumed Conversation identity without fallback", async () => {
+  const sessionId = "00000000-0000-4000-8000-000000000090";
+  const malformedIdentity = "malformed-provider-session";
+  let attempts = 0;
+  const query: ClaudeQuery = ({ prompt }) => {
+    const attempt = attempts++;
+    return {
+      async *[Symbol.asyncIterator]() {
+        assert.notEqual(typeof prompt, "string");
+        await (prompt as AsyncIterable<SDKUserMessage>)
+          [Symbol.asyncIterator]()
+          .next();
+        yield resultMessage(attempt === 0 ? "first answer" : "invalid answer", {
+          session_id: attempt === 0 ? sessionId : malformedIdentity,
+        });
+      },
+      close() {},
+    } as never;
+  };
+  const manager = createSubagentManager({
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs: createSubagentRuns(),
+    generateSubagentId: () => "claude-malformed-identity",
+  });
+  const first = manager.start({
+    config,
+    description: "first",
+    prompt: "remember",
+  });
+  assert.equal((await first.settled).lifecycle.phase, "completed");
+  const resumed = manager.resume({
+    subagentId: first.subagentId,
+    description: "malformed resume",
+    prompt: "recall",
+  });
+  assert.equal(resumed.outcome, "started");
+  if (resumed.outcome !== "started") assert.fail("resume did not start");
+
+  const result = await resumed.settled;
+
+  assert.equal(result.lifecycle.phase, "failed");
+  assert.equal(result.errorMessage, "Claude continuation attachment failed");
+  assert.equal(attempts, 2);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(malformedIdentity));
+  await manager.shutdown();
+});
+
+test("Claude cancellation during resumed attachment closes the Query and ignores late evidence", async () => {
+  const sessionId = "00000000-0000-4000-8000-000000000090";
+  let attempts = 0;
+  let openAttachment = () => {};
+  const attachmentStarted = new Promise<void>((resolve) => {
+    openAttachment = resolve;
+  });
+  let releaseAttachment = () => {};
+  const attachmentReleased = new Promise<void>((resolve) => {
+    releaseAttachment = resolve;
+  });
+  let closes = 0;
+  const query: ClaudeQuery = ({ prompt }) => {
+    const attempt = attempts++;
+    return {
+      async *[Symbol.asyncIterator]() {
+        assert.notEqual(typeof prompt, "string");
+        await (prompt as AsyncIterable<SDKUserMessage>)
+          [Symbol.asyncIterator]()
+          .next();
+        if (attempt === 0) {
+          yield resultMessage("first answer", { session_id: sessionId });
+          return;
+        }
+        openAttachment();
+        await attachmentReleased;
+        yield resultMessage("late resumed answer", { session_id: sessionId });
+      },
+      close() {
+        closes++;
+        releaseAttachment();
+      },
+    } as never;
+  };
+  const runs = createSubagentRuns();
+  const manager = createSubagentManager({
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs,
+    generateSubagentId: () => "claude-cancel-attachment",
+  });
+  const first = manager.start({
+    config,
+    description: "first",
+    prompt: "remember",
+  });
+  assert.equal((await first.settled).lifecycle.phase, "completed");
+  const resumed = manager.resume({
+    subagentId: first.subagentId,
+    description: "cancel attachment",
+    prompt: "recall",
+  });
+  assert.equal(resumed.outcome, "started");
+  if (resumed.outcome !== "started") assert.fail("resume did not start");
+  await attachmentStarted;
+
+  assert.deepEqual(runs.cancel([resumed.runId], "requested"), [resumed.runId]);
+  const result = await resumed.settled;
+
+  assert.equal(result.lifecycle.phase, "cancelled");
+  assert.equal(result.messages.length, 0);
+  assert.equal(closes, 2);
+  await manager.shutdown();
+});
+
+test("Claude idle shutdown is idempotent and forgets its continuation", async () => {
+  let attempts = 0;
+  let closes = 0;
+  const query: ClaudeQuery = () => {
+    attempts++;
+    return {
+      async *[Symbol.asyncIterator]() {
+        yield resultMessage("first answer");
+      },
+      close() {
+        closes++;
+      },
+    } as never;
+  };
+  const manager = createSubagentManager({
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs: createSubagentRuns(),
+    generateSubagentId: () => "claude-idle-shutdown",
+  });
+  const first = manager.start({
+    config,
+    description: "first",
+    prompt: "remember",
+  });
+  assert.equal((await first.settled).lifecycle.phase, "completed");
+
+  await manager.shutdown();
+  await manager.shutdown();
+  const resumed = manager.resume({
+    subagentId: first.subagentId,
+    description: "must not resume",
+    prompt: "recall",
+  });
+
+  assert.equal(resumed.outcome, "unknown subagent");
+  assert.equal(attempts, 1);
+  assert.equal(closes, 1);
 });
 
 test("Claude resume filters replayed user, assistant, and system history before the current attachment", async () => {
@@ -1555,7 +1832,7 @@ test("an empty Claude result carries turns into the widget", async () => {
   assert.match(lines[1] ?? "", /2 turns/);
 });
 
-test("Claude uses the SDK error text for an error-flagged success result", () => {
+test("Claude confines the SDK error text on an error-flagged success result", () => {
   const [fact] = factsFrom(
     resultMessage(
       // This is the SDK's success-subtype API-error shape: result is the
@@ -1570,11 +1847,47 @@ test("Claude uses the SDK error text for an error-flagged success result", () =>
     ),
   );
 
-  assert.equal(
-    fact.errorMessage,
-    "API Error: 529 overloaded_error: service is temporarily overloaded",
-  );
+  assert.equal(fact.errorMessage, "Claude query failed: [redacted]");
   assert.deepEqual(fact.parts, []);
+});
+
+test("Claude confines provider identities in stderr, Facts, and failed Results", async () => {
+  const providerUuid = "00000000-0000-4000-8000-000000000099";
+  const providerQuery = "claude-query-secret";
+  const diagnostic = `provider failed conversation lost: ${providerQuery} conversation_id=${providerQuery}\nsession_id=${providerUuid} ${"x".repeat(4_096)}`;
+  const query: ClaudeQuery = ({ options }) => {
+    options?.stderr?.(providerUuid.slice(0, 17));
+    options?.stderr?.(providerUuid.slice(17));
+    options?.stderr?.(diagnostic);
+    return {
+      async *[Symbol.asyncIterator]() {
+        yield resultMessage(diagnostic, { is_error: true });
+      },
+      close() {},
+    } as never;
+  };
+  const started = startSubagent({
+    config,
+    description: "confined Claude diagnostic",
+    prompt: "work",
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs: createSubagentRuns(),
+  });
+
+  const result = await started.settled;
+  const publicState = JSON.stringify({
+    errorMessage: result.errorMessage,
+    messages: result.messages,
+    stderr: result.stderr,
+  });
+
+  assert.equal(result.lifecycle.phase, "failed");
+  assert.match(publicState, /\[redacted\]/);
+  assert.doesNotMatch(publicState, new RegExp(providerUuid));
+  assert.doesNotMatch(publicState, new RegExp(providerQuery));
+  assert.doesNotMatch(result.errorMessage ?? "", /[\r\n]/);
+  assert.ok((result.errorMessage?.length ?? 0) <= 2_048);
+  assert.ok(result.stderr.length <= 2_048);
 });
 
 test("an auxiliary-only error result preserves the initialized model", async () => {
@@ -1652,7 +1965,7 @@ test("Claude runs end-to-end through the core run contract", async () => {
   const result = await started.settled;
   assert.equal(result.lifecycle.phase, "completed");
   assert.equal(getFinalOutput(result.messages), "answer");
-  assert.equal(result.stderr, "sdk diagnostic\\n");
+  assert.equal(result.stderr, "Claude SDK reported diagnostics: [redacted]");
   assert.equal(result.model, "claude-sonnet-4-6");
   assert.equal(result.usage.input, 3);
   assert.equal(result.usage.output, 2);

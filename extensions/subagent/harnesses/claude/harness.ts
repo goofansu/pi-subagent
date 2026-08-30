@@ -26,6 +26,10 @@ import {
   stringField,
   validateCommonProfileFields,
 } from "../contract.ts";
+import {
+  confineProviderDiagnostic,
+  createProviderDiagnosticCollector,
+} from "../provider-diagnostic.ts";
 import { createClaudeTurnCounter } from "./turns.ts";
 
 /**
@@ -188,7 +192,7 @@ function translateClaudeMessage(message: SDKMessage): Translation | undefined {
     isError && Array.isArray(wire.errors) && typeof wire.errors[0] === "string"
       ? wire.errors[0]
       : undefined;
-  const errorMessage =
+  const rawErrorMessage =
     resultErrorText ??
     listedErrorText ??
     (isError && typeof wire.subtype === "string"
@@ -196,6 +200,10 @@ function translateClaudeMessage(message: SDKMessage): Translation | undefined {
       : isError
         ? "Claude query reported an error"
         : undefined);
+  const errorMessage =
+    rawErrorMessage === undefined
+      ? undefined
+      : confineProviderDiagnostic(rawErrorMessage, "Claude query failed");
   return {
     facts: [
       {
@@ -348,18 +356,8 @@ export function buildClaudeOptions(
 
 const CLAUDE_IDENTITY =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const CLAUDE_DIAGNOSTIC_LIMIT = 2_048;
 const CLAUDE_CONTINUATION_ATTACHMENT_FAILED =
   "Claude continuation attachment failed";
-
-function claudeDiagnostic(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message
-    .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "[redacted]")
-    .replace(/[\r\n]+/g, " ")
-    .trim()
-    .slice(0, CLAUDE_DIAGNOSTIC_LIMIT);
-}
 
 function claudeInputMessage(
   text: string,
@@ -467,11 +465,13 @@ async function runClaudeAttempt(
   let cancelled = false;
   let semanticComplete = false;
   let successfulResult = false;
+  let stopped = false;
   let fatalEnding: RunEnding | undefined;
   let queryStream: Query | undefined;
   let attemptIdentity = continuation;
   let attachedToCurrentAttempt = continuation === undefined;
   const controller = new AbortController();
+  const providerStderr = createProviderDiagnosticCollector();
 
   const discardControls = (): void => {
     for (const control of controls) control.discarded = true;
@@ -530,6 +530,8 @@ async function runClaudeAttempt(
   }, discardControls);
 
   const stop = (): void => {
+    if (stopped) return;
+    stopped = true;
     accepting = false;
     input.close();
     discardControls();
@@ -570,13 +572,16 @@ async function runClaudeAttempt(
         ending: "failed",
         errorMessage: continuation
           ? CLAUDE_CONTINUATION_ATTACHMENT_FAILED
-          : claudeDiagnostic(loaded.error),
+          : confineProviderDiagnostic(
+              loaded.error,
+              "Claude SDK loading failed",
+            ),
       };
     }
     if (cancelled || isAborted()) return { ending: "cancelled" };
 
     const options = buildClaudeOptions(context, model, effort, controller);
-    options.stderr = (data) => run.report.stderr(data);
+    options.stderr = (data) => providerStderr.append(data);
     if (continuation) options.resume = continuation;
     try {
       queryStream = loaded.query({ prompt: input, options });
@@ -585,7 +590,7 @@ async function runClaudeAttempt(
         ending: "failed",
         errorMessage: continuation
           ? CLAUDE_CONTINUATION_ATTACHMENT_FAILED
-          : claudeDiagnostic(error),
+          : confineProviderDiagnostic(error, "Claude query start failed"),
       };
     }
 
@@ -687,7 +692,7 @@ async function runClaudeAttempt(
           ending: "failed",
           errorMessage: continuation
             ? CLAUDE_CONTINUATION_ATTACHMENT_FAILED
-            : claudeDiagnostic(error),
+            : confineProviderDiagnostic(error, "Claude query failed"),
         };
       }
     }
@@ -703,6 +708,10 @@ async function runClaudeAttempt(
     }
     return { ending: "failed", errorMessage: MISSING_CLAUDE_ANSWER };
   } finally {
+    const diagnostic = providerStderr.confined(
+      "Claude SDK reported diagnostics",
+    );
+    if (diagnostic) run.report.stderr(diagnostic);
     accepting = false;
     unsubscribeControls();
     run.signal?.removeEventListener("abort", onAbort);
