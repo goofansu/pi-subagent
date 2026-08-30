@@ -12,7 +12,7 @@ import * as path from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import type { ChildProcessSpawn } from "../../child-process.ts";
-import { createControlGate } from "../../control-mailbox.ts";
+import { createControlGate } from "../../control-source.ts";
 import { formatNotification, fullOutput } from "../../presentation.ts";
 import {
   createEmptyResult,

@@ -179,7 +179,7 @@ comments and ordinary string literals are not.
   `SubagentTask`, `SubagentRun`, `Fact`, `RunEnding`, and `SingleResult`, plus
   runtime checks covering every adapter. Prepared Runs declare neutral Control
   capability, and executors receive only a fresh reporter, AbortSignal, and
-  neutral Control stream — never send/control methods or provider continuation
+  neutral synchronous Control source — never send/control methods or provider continuation
   handles. Codex declares steering support; Pi and Claude declare none. The
   controlled fixtures and production Codex declare resume; Pi and Claude remain
   unsupported and start no continuation work. Codex adapter tests prove fresh,
@@ -277,9 +277,15 @@ comments and ordinary string literals are not.
   comments and ordinary strings remain ignored. *Test:* the checker runs
   against disposable fixture roots and the real production graph.
 - [x] **Steering has one release gate** — capability-aware Harness Conformance
-  runs for the controlled harness and all production adapters; Codex transport
-  fixtures repeat Control-versus-cancellation and Control-versus-terminal
-  ingress order 32 times without timing delays; generated schemas are
+  runs for the controlled harness and all production adapters; Codex dispatcher
+  and transport fixtures repeat the synchronous Control/cancellation ingress law
+  for first and resumed Attempts at least 32 times with explicit barriers and no
+  timing delays: accepted-Control-before-cancellation writes `turn/steer` before
+  `turn/interrupt`, and cancellation-first returns `not steerable` with no later
+  `turn/steer`; late steering-response races remain covered separately and are
+  not substitutes for admission-order proofs; provider-accepted steering stays
+  correlated through cancellation until settlement and reports its later
+  provider-confirmed user item exactly once; generated schemas are
   byte-compared with the pinned installed CLI; and the authenticated live smoke
   admits uniquely marked guidance, observes its correlated neutral user Fact,
   retrieves a Result reflecting it, proves interruption, prints

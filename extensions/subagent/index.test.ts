@@ -8,7 +8,7 @@ import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ChildProcessSpawn } from "./child-process.ts";
-import { createControlGate } from "./control-mailbox.ts";
+import { type ControlAdmission, createControlGate } from "./control-source.ts";
 import { createSubagentDelivery, type PushedNotification } from "./delivery.ts";
 import { createCodexHarness } from "./harnesses/codex/harness.ts";
 import { createHarnessRegistry, type Harness } from "./harnesses/contract.ts";
@@ -934,23 +934,24 @@ test("cancel settlement, pending Controls, and notification landing stay Run-sco
     prompt: "fresh prompt",
   });
   assert.match(resumed.content[0].text, /run id run-second/);
-  assert.deepEqual(
-    await boundary.active[0].controls[Symbol.asyncIterator]().next(),
-    { done: true, value: undefined },
-    "the cancelled Run discards its pending guidance",
+  boundary.active[0].controls.subscribe(
+    () => assert.fail("the cancelled Run retained pending guidance"),
+    () => {},
   );
 
+  let resumedControl: ControlAdmission | undefined;
+  boundary.active[1].controls.subscribe((admission) => {
+    resumedControl = admission;
+  });
   await boundary.tools.agent_steer.execute("steer-new", {
     id: "run-second",
     message: "fresh guidance",
   });
-  assert.deepEqual(
-    await boundary.active[1].controls[Symbol.asyncIterator]().next(),
-    {
-      done: false,
-      value: { type: "steer", text: "fresh guidance" },
-    },
-  );
+  assert.deepEqual(resumedControl?.control, {
+    type: "steer",
+    text: "fresh guidance",
+  });
+  resumedControl?.acknowledge();
 
   assert.equal(boundary.pushed.length, 1);
   assert.deepEqual(
@@ -1532,7 +1533,10 @@ test("agent_steer reports local admission and crosses the public tool seam exact
       delivery,
     },
   );
-  const controls = gate.controls[Symbol.asyncIterator]();
+  let admission: ControlAdmission | undefined;
+  gate.controls.subscribe((next) => {
+    admission = next;
+  });
   const message = "  correct the scope exactly  ";
 
   const response = await tools.agent_steer.execute("steer", {
@@ -1543,10 +1547,8 @@ test("agent_steer reports local admission and crosses the public tool seam exact
   assert.match(response.content[0].text, /synchronously admitted/);
   assert.match(response.content[0].text, /does not mean the Harness dequeued/);
   assert.match(response.content[0].text, /Do not resend/);
-  assert.deepEqual(await controls.next(), {
-    done: false,
-    value: { type: "steer", text: message },
-  });
+  assert.deepEqual(admission?.control, { type: "steer", text: message });
+  admission?.acknowledge();
   assert.match(tools.agent_steer.description ?? "", /local bounded mailbox/);
   assert.match(tools.agent_steer.description ?? "", /Do not retry repeatedly/);
 });

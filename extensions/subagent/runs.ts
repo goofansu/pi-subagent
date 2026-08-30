@@ -16,7 +16,7 @@ import {
   type ControlGate,
   type ControlGateOffer,
   createControlGate,
-} from "./control-mailbox.ts";
+} from "./control-source.ts";
 import type { RunControl } from "./run.ts";
 import type {
   CancellationReason,

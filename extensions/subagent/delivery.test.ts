@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createControlGate } from "./control-mailbox.ts";
+import { createControlGate } from "./control-source.ts";
 import type {
   DeliveryOptions,
   PushedNotification,
@@ -271,14 +271,17 @@ test("steering validates before Run lookup and preserves admitted text exactly",
   const gate = createControlGate(["steer"]);
   const handle = runs.track(run.result, run.cancel, gate);
   delivery.register(handle.id, run.result.agent, run.settled);
-  const controls = gate.controls[Symbol.asyncIterator]();
+  let admission:
+    | Parameters<Parameters<typeof gate.controls.subscribe>[0]>[0]
+    | undefined;
+  gate.controls.subscribe((next) => {
+    admission = next;
+  });
   const exact = "  preserve\nthis text \t";
 
   assert.equal(delivery.steer(handle.id, exact), "accepted");
-  assert.deepEqual(await controls.next(), {
-    done: false,
-    value: { type: "steer", text: exact },
-  });
+  assert.deepEqual(admission?.control, { type: "steer", text: exact });
+  admission?.acknowledge();
 });
 
 test("steering outcomes follow settled, cancelling, unsupported, and backpressure precedence", async () => {
@@ -394,18 +397,24 @@ test("shutdown stops what is running and delivers nothing anywhere", async () =>
   );
 });
 
-test("Session shutdown closes a controlled Run mailbox without waiting for queued Controls", async () => {
+test("Session shutdown closes a controlled Run source without waiting for queued Controls", async () => {
   const { delivery, runs } = harness();
   const run = deferredRun();
   const gate = createControlGate(["steer"]);
   const handle = runs.track(run.result, () => {}, gate);
   delivery.register(handle.id, run.result.agent, run.settled);
   assert.equal(delivery.steer(handle.id, "discard on shutdown"), "accepted");
-  const controls = gate.controls[Symbol.asyncIterator]();
 
   delivery.shutdown();
 
-  assert.deepEqual(await controls.next(), { done: true, value: undefined });
+  let closed = false;
+  gate.controls.subscribe(
+    () => assert.fail("shutdown delivered a discarded Control"),
+    () => {
+      closed = true;
+    },
+  );
+  assert.equal(closed, true);
   assert.equal(delivery.steer(handle.id, "after shutdown"), "unknown run");
 });
 

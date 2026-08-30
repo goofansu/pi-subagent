@@ -32,8 +32,22 @@ message, Control, cancellation request, process outcome, or escalation outcome
 receives stable ingress order before asynchronous interpretation. The engine
 alone settles the source. This is a deliberate Codex-owned refinement outside
 the older sink-timing rule: the shared seam still receives Facts, Activity,
-`AbortSignal`, a Control stream, and one `RunEnding`; no provider ordering type
-or runtime framework crosses it.
+`AbortSignal`, a Control source, and one `RunEnding`; no provider ordering type
+or runtime framework crosses it. The source has one synchronous subscriber:
+an accepted admission reaches that subscriber before its offer returns and
+remains bounded until the executor acknowledges or discards it.
+
+The subscriber records each Control as an occurrence in that same ordered
+Attempt reducer. The reducer retains pre-identity Controls until the active
+thread and Turn are safe, owns the serial pending/in-flight steering state, and
+is the only code allowed to initiate `turn/steer`. There is no asynchronous
+Control pump or direct steering side channel. When an active Turn is ready, an
+accepted Control is reduced and initiates `turn/steer` before a synchronously
+later cancellation can initiate `turn/interrupt`; cancellation-first closes
+admission, and pre-identity cancellation may discard an already ordered but
+unsent Control. Once native steering has been sent, cancellation closes only
+admission: its provider correlation remains live until Attempt settlement or
+failure so a later provider-confirmed user item remains transcript truth.
 
 Steering admission and steering rejection are independent of `RunEnding`.
 `accepted` means bounded local admission only. A server-authored refusal may
@@ -57,8 +71,11 @@ Subagent identity and retains an adapter, but still no idle child, resume
 operation, or provider-session handle.
 
 Harness Conformance can test capability rather than adapter names. Deterministic
-fixtures control ingress directly and repeat terminal and cancellation races;
-they do not sleep or retry until green. ADR-0013 later adds a stable local
+fixtures use the real Control gate and fake App Server to repeat both
+Control-first and cancellation-first order for first and resumed Attempts at
+least 32 times with explicit Turn latches; they do not sleep or retry until
+green. Late steering-response races remain separate from that admission-order
+law. ADR-0013 later adds a stable local
 Subagent above the one-shot Run and retains its adapter while idle, without yet
 adding resume or exposing provider identity. A live pinned-CLI smoke remains
 part of the release gate because generated schemas and fake transports cannot

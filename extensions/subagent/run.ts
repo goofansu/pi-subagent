@@ -15,6 +15,7 @@
  * See docs/adr/0010-run-endings.md and docs/adr/0005-executor-reports-facts.md.
  */
 
+import type { ControlSource } from "./control-source.ts";
 import { deriveActivity } from "./messages.ts";
 import type {
   AgentConfig,
@@ -226,8 +227,8 @@ export type RunEnding =
 export interface SubagentRun {
   readonly report: RunReporter;
   readonly signal?: AbortSignal;
-  /** The prepared Run's one neutral, single-consumer Control stream. */
-  readonly controls: AsyncIterable<RunControl>;
+  /** The prepared Run's one neutral, synchronous single-consumer Control source. */
+  readonly controls: ControlSource;
 }
 
 /**

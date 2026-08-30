@@ -4,11 +4,11 @@ import {
   type SpawnOptions,
 } from "node:child_process";
 import type { ChildProcessSpawn } from "../../child-process.ts";
+import type { ControlAdmission, ControlSource } from "../../control-source.ts";
 import type { Translation } from "../../one-shot.ts";
 import {
   DEPTH_ENV_KEY,
   type Fact,
-  type RunControl,
   type RunEnding,
   type RunReporter,
 } from "../../run.ts";
@@ -239,7 +239,7 @@ export interface CodexAppServerRunOptions extends CodexAppServerOptions {
   readonly translate: (event: CodexAppServerEvent) => Translation | undefined;
   readonly report: RunReporter;
   readonly signal?: AbortSignal;
-  readonly controls?: AsyncIterable<RunControl>;
+  readonly controls?: ControlSource;
   readonly missingAnswerMessage: string;
 }
 
@@ -699,6 +699,9 @@ function correlatedSteeringFact(
 
 type CodexRunOccurrence =
   | { readonly type: "provider-message"; readonly value: JsonObject }
+  | { readonly type: "control"; readonly admission: ControlAdmission }
+  | { readonly type: "control-source-close" }
+  | { readonly type: "steering-settled" }
   | { readonly type: "cancel" }
   | { readonly type: "stderr"; readonly chunk: string }
   | { readonly type: "stdin-error"; readonly error: Error }
@@ -736,7 +739,12 @@ export function runCodexAppServer(
     translate,
     report,
     signal = new AbortController().signal,
-    controls = (async function* () {})(),
+    controls = {
+      subscribe: (_onAdmission, onClose) => {
+        onClose?.();
+        return () => {};
+      },
+    },
     missingAnswerMessage,
     onRequestRejection,
     spawn = defaultSpawn,
@@ -824,12 +832,10 @@ export function runCodexAppServer(
     const providerIdentities = new Set<string>();
     if (options.continuationThreadId)
       providerIdentities.add(options.continuationThreadId);
-    const controlIterator = controls[Symbol.asyncIterator]();
-    let controlPumpClosed = false;
-    let announceRunIdentity!: () => void;
-    const runIdentityReady = new Promise<void>((resolve) => {
-      announceRunIdentity = resolve;
-    });
+    const queuedControls: ControlAdmission[] = [];
+    let steeringInFlight = false;
+    let controlsClosed = false;
+    let unsubscribeControls = () => {};
 
     const notifyRequestRejection = (error: Error): void => {
       try {
@@ -856,14 +862,21 @@ export function runCodexAppServer(
         if (request.settleOnTransport) request.reject(error);
       }
     };
-    const closeControlPump = (): void => {
-      if (controlPumpClosed) return;
-      controlPumpClosed = true;
+    const closeControlAdmissions = (): void => {
+      if (controlsClosed) return;
+      controlsClosed = true;
+      for (const admission of queuedControls) admission.acknowledge();
+      queuedControls.length = 0;
+      unsubscribeControls();
+    };
+    const clearSteeringState = (): void => {
+      steeringInFlight = false;
       pendingSteeringCorrelations.clear();
       consumedSteeringItems.clear();
-      announceRunIdentity();
-      const returned = controlIterator.return?.();
-      if (returned) void Promise.resolve(returned).catch(() => {});
+    };
+    const closeAttemptState = (): void => {
+      closeControlAdmissions();
+      clearSteeringState();
     };
     const clearTimer = (): void => {
       if (timer !== undefined) {
@@ -935,7 +948,7 @@ export function runCodexAppServer(
     const settle = (conclusion: SourceConclusion): void => {
       if (endingSettled) return;
       endingSettled = true;
-      closeControlPump();
+      closeAttemptState();
       settledEnding = endingFrom(conclusion, reducingSequence);
       if (childClosed) finishCleanup();
     };
@@ -943,7 +956,7 @@ export function runCodexAppServer(
       if (endingSettled) return;
       endingSettled = true;
       settledError = error;
-      closeControlPump();
+      closeAttemptState();
       signal.removeEventListener("abort", onAbort);
       detachStreams();
       beginTermination(false);
@@ -983,6 +996,7 @@ export function runCodexAppServer(
       if (endingSettled) return;
       signal.removeEventListener("abort", onAbort);
       detachStreams();
+      closeControlAdmissions();
       rejectPending(new CodexAppServerTransportError(requestSettlement));
       if (terminate) beginTermination(false);
       else if (!childClosed) endStdin();
@@ -1039,39 +1053,41 @@ export function runCodexAppServer(
       pending.set(id, { accept, reject: rejectRequest, settleOnTransport });
       if (!write({ jsonrpc: "2.0", id, method, params })) pending.delete(id);
     }
-    const sendControl = (control: RunControl): Promise<void> => {
-      if (!threadId || !turnId || controlPumpClosed) return Promise.resolve();
+    const startNextControl = (): void => {
+      if (
+        controlsClosed ||
+        endingSettled ||
+        steeringInFlight ||
+        !threadId ||
+        !turnId
+      )
+        return;
+      const admission = queuedControls.shift();
+      if (!admission) return;
+      admission.acknowledge();
+      steeringInFlight = true;
       const clientUserMessageId = globalThis.crypto.randomUUID();
       pendingSteeringCorrelations.add(clientUserMessageId);
       providerIdentities.add(clientUserMessageId);
-      return new Promise((resolveControl) => {
-        sendRequest(
-          "turn/steer",
-          turnSteerParams(
-            threadId as string,
-            turnId as string,
-            control.text,
-            clientUserMessageId,
-          ),
-          () => resolveControl(),
-          (error) => {
-            pendingSteeringCorrelations.delete(clientUserMessageId);
-            if (error instanceof CodexAppServerRequestError)
-              reportStderr(steeringDiagnostic(error, redactDiagnostic));
-            resolveControl();
-          },
-          true,
-        );
-      });
-    };
-    const pumpControls = async (): Promise<void> => {
-      while (!controlPumpClosed) {
-        const next = await controlIterator.next();
-        if (next.done || controlPumpClosed) return;
-        await runIdentityReady;
-        if (controlPumpClosed) return;
-        await sendControl(next.value);
-      }
+      sendRequest(
+        "turn/steer",
+        turnSteerParams(
+          threadId,
+          turnId,
+          admission.control.text,
+          clientUserMessageId,
+        ),
+        () => {
+          queueMicrotask(() => admit({ type: "steering-settled" }));
+        },
+        (error) => {
+          pendingSteeringCorrelations.delete(clientUserMessageId);
+          if (error instanceof CodexAppServerRequestError)
+            reportStderr(steeringDiagnostic(error, redactDiagnostic));
+          queueMicrotask(() => admit({ type: "steering-settled" }));
+        },
+        true,
+      );
     };
     const responseError = (value: unknown): string | undefined =>
       isRecord(value) && typeof value.message === "string"
@@ -1112,8 +1128,8 @@ export function runCodexAppServer(
             failExecution(error);
             return;
           }
-          announceRunIdentity();
           flushEarlyNotifications();
+          startNextControl();
         },
         startupFailure,
       );
@@ -1410,7 +1426,23 @@ export function runCodexAppServer(
         case "provider-message":
           handleProviderMessage(sequence, occurrence.value);
           return;
+        case "control":
+          if (controlsClosed || endingSettled) {
+            occurrence.admission.acknowledge();
+            return;
+          }
+          queuedControls.push(occurrence.admission);
+          startNextControl();
+          return;
+        case "control-source-close":
+          closeControlAdmissions();
+          return;
+        case "steering-settled":
+          steeringInFlight = false;
+          startNextControl();
+          return;
         case "cancel":
+          closeControlAdmissions();
           beginTermination(Boolean(threadId && turnId));
           return;
         case "stderr":
@@ -1454,8 +1486,10 @@ export function runCodexAppServer(
         endingSettled &&
         occurrence.type !== "process-close" &&
         occurrence.type !== "escalation"
-      )
+      ) {
+        if (occurrence.type === "control") occurrence.admission.acknowledge();
         return;
+      }
       const ordered = { sequence: nextSequence++, occurrence };
       if (occurrence.type === "cancel" && cancellationSequence === undefined)
         cancellationSequence = ordered.sequence;
@@ -1546,10 +1580,19 @@ export function runCodexAppServer(
     proc.on("error", onProcessError);
     proc.on("close", onClose);
     signal.addEventListener("abort", onAbort, { once: true });
+    unsubscribeControls = controls.subscribe(
+      (admission) => {
+        if (controlsClosed) {
+          admission.acknowledge();
+          return;
+        }
+        admit({ type: "control", admission });
+      },
+      () => {
+        if (!controlsClosed) admit({ type: "control-source-close" });
+      },
+    );
     if (signal.aborted) onAbort();
-    else {
-      void pumpControls().catch(() => {});
-      start();
-    }
+    else start();
   });
 }

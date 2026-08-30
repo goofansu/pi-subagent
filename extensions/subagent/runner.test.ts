@@ -1,11 +1,17 @@
 /**
  * Dispatcher tests: the depth guard, lifecycle settling, and progress
  * reporting — the rules that hold for every subagent run, exercised against a
- * stand-in executor so no child process is involved.
+ * stand-in executors, plus the real Codex adapter at the ordered-Control seam.
  */
 
 import assert from "node:assert/strict";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, test } from "node:test";
+import type { ChildProcessSpawn } from "./child-process.ts";
+import type { ControlSource } from "./control-source.ts";
+import { createCodexHarness } from "./harnesses/codex/harness.ts";
 import {
   createHarnessRegistry,
   type Harness,
@@ -16,14 +22,17 @@ import { getFinalOutput } from "./messages.ts";
 import {
   createEmptyResult,
   type Fact,
-  type RunControl,
   type RunEnding,
   type SubagentContext,
   type SubagentExecutor,
   type SubagentRun,
   type SubagentTask,
 } from "./run.ts";
-import { assertSubagentDepthAvailable, getSubagentDepth } from "./runner.ts";
+import {
+  assertSubagentDepthAvailable,
+  dispatchSubagentRun,
+  getSubagentDepth,
+} from "./runner.ts";
 import { createSubagentRuns } from "./runs.ts";
 import {
   startSubagent as dispatchSubagent,
@@ -214,10 +223,13 @@ test("a controlled Harness receives admitted Controls through the executor seam 
         supportedControls: ["steer"],
         execute: async (run) => {
           await executorGate;
-          for await (const control of run.controls) {
-            received.push(control.text);
-            if (received.length === 2) break;
-          }
+          await new Promise<void>((resolve) => {
+            run.controls.subscribe((admission) => {
+              received.push(admission.control.text);
+              admission.acknowledge();
+              if (received.length === 2) resolve();
+            });
+          });
           run.report.message({
             role: "assistant",
             parts: [{ type: "text", text: "followed both Controls" }],
@@ -252,6 +264,270 @@ test("a controlled Harness receives admitted Controls through the executor seam 
     runs.offer(started.id, { type: "steer", text: "after settlement" }),
     "already completed",
   );
+});
+
+test("a controlled Harness observes accepted Control admission before a later cancellation abort", async () => {
+  const occurrences: string[] = [];
+  let executorReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    executorReady = resolve;
+  });
+  const harness: Harness = {
+    name: "controlled",
+    validate: () => [],
+    prepare: () =>
+      controlledAdapter(() => ({
+        supportedControls: ["steer"],
+        execute: async (run) => {
+          run.controls.subscribe(
+            (admission) => {
+              occurrences.push(`Control: ${admission.control.text}`);
+              admission.acknowledge();
+            },
+            () => occurrences.push("Control source closed"),
+          );
+          const aborted = new Promise<void>((resolve) => {
+            run.signal?.addEventListener(
+              "abort",
+              () => {
+                occurrences.push("executor aborted");
+                resolve();
+              },
+              { once: true },
+            );
+          });
+          executorReady();
+          await aborted;
+          return { ending: "cancelled" };
+        },
+      })),
+  };
+  const runs = createSubagentRuns();
+  const started = dispatchSubagent({
+    config: agent({ harness: "controlled" }),
+    description: "task",
+    prompt: "work",
+    harnesses: createHarnessRegistry([harness]),
+    runs,
+  });
+  await ready;
+
+  occurrences.push(
+    `offer: ${runs.offer(started.id, { type: "steer", text: "guidance" })}`,
+  );
+  runs.cancel([started.id], "requested");
+
+  assert.deepEqual(occurrences, [
+    "Control: guidance",
+    "offer: accepted",
+    "Control source closed",
+    "executor aborted",
+  ]);
+  assert.equal((await started.settled).lifecycle.phase, "cancelled");
+});
+
+test("cancellation-first closes a controlled Harness source before rejecting later Control", async () => {
+  const occurrences: string[] = [];
+  let executorReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    executorReady = resolve;
+  });
+  const harness: Harness = {
+    name: "controlled",
+    validate: () => [],
+    prepare: () =>
+      controlledAdapter(() => ({
+        supportedControls: ["steer"],
+        execute: async (run) => {
+          run.controls.subscribe(
+            (admission) =>
+              occurrences.push(`Control: ${admission.control.text}`),
+            () => occurrences.push("Control source closed"),
+          );
+          const aborted = new Promise<void>((resolve) => {
+            run.signal?.addEventListener(
+              "abort",
+              () => {
+                occurrences.push("executor aborted");
+                resolve();
+              },
+              { once: true },
+            );
+          });
+          executorReady();
+          await aborted;
+          return { ending: "cancelled" };
+        },
+      })),
+  };
+  const runs = createSubagentRuns();
+  const started = dispatchSubagent({
+    config: agent({ harness: "controlled" }),
+    description: "task",
+    prompt: "work",
+    harnesses: createHarnessRegistry([harness]),
+    runs,
+  });
+  await ready;
+
+  runs.cancel([started.id], "requested");
+  occurrences.push(
+    `offer: ${runs.offer(started.id, { type: "steer", text: "too late" })}`,
+  );
+
+  assert.deepEqual(occurrences, [
+    "Control source closed",
+    "executor aborted",
+    "offer: not steerable",
+  ]);
+  assert.equal((await started.settled).lifecycle.phase, "cancelled");
+});
+
+const CONTROL_ORDER_REPETITIONS = 32;
+
+async function proveCodexControlOrder(
+  order: "control-first" | "cancellation-first",
+): Promise<void> {
+  for (let iteration = 0; iteration < CONTROL_ORDER_REPETITIONS; iteration++) {
+    const providerMethods: string[][] = [[], []];
+    const turnReady: Array<Promise<void>> = [];
+    const releaseTurn: Array<() => void> = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      turnReady.push(
+        new Promise<void>((resolve) => {
+          releaseTurn.push(resolve);
+        }),
+      );
+    }
+    const threadId = `thread-${iteration}`;
+    let attempt = 0;
+    const spawn: ChildProcessSpawn = () => {
+      const currentAttempt = attempt++;
+      const turnId = `turn-${iteration}-${currentAttempt}`;
+      const child = new EventEmitter() as EventEmitter & {
+        stdin: PassThrough;
+        stdout: PassThrough;
+        stderr: PassThrough;
+        kill(signal: string): boolean;
+      };
+      child.stdin = new PassThrough();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = () => true;
+      let closed = false;
+      const close = (): void => {
+        if (closed) return;
+        closed = true;
+        child.stdout.end();
+        child.stderr.end();
+        queueMicrotask(() => child.emit("close", 0, null));
+      };
+      const send = (value: unknown): void => {
+        child.stdout.write(`${JSON.stringify(value)}\n`);
+      };
+      child.stdin.setEncoding("utf8");
+      child.stdin.on("finish", close);
+      child.stdin.on("data", (chunk) => {
+        for (const line of String(chunk).split("\n")) {
+          if (!line.trim()) continue;
+          const request = JSON.parse(line) as Record<string, unknown>;
+          const method = String(request.method);
+          if (method === "turn/steer" || method === "turn/interrupt")
+            providerMethods[currentAttempt]?.push(method);
+          if (method === "initialize") {
+            send({
+              id: request.id,
+              result: {
+                userAgent: "fixture",
+                codexHome: "/tmp",
+                platformFamily: "unix",
+                platformOs: "test",
+              },
+            });
+          } else if (method === "thread/start" || method === "thread/resume") {
+            send({ id: request.id, result: { thread: { id: threadId } } });
+          } else if (method === "turn/start") {
+            send({
+              id: request.id,
+              result: { turn: { id: turnId, status: "inProgress" } },
+            });
+            releaseTurn[currentAttempt]?.();
+          } else if (method === "turn/interrupt") {
+            send({
+              method: "turn/completed",
+              params: {
+                threadId,
+                turn: {
+                  id: turnId,
+                  items: [],
+                  status: "interrupted",
+                  error: null,
+                  startedAt: null,
+                  completedAt: null,
+                  durationMs: null,
+                },
+              },
+            });
+          }
+        }
+      });
+      return child as unknown as ChildProcess;
+    };
+    const adapter = createCodexHarness({ spawn, killEscalationMs: 1 }).prepare({
+      config: agent({ harness: "codex" }),
+      cwd: "/work",
+      childDepth: 1,
+      projectTrusted: true,
+    });
+    const runs = createSubagentRuns();
+
+    for (let currentAttempt = 0; currentAttempt < 2; currentAttempt++) {
+      const started = dispatchSubagentRun({
+        subagentId: `subagent-${iteration}`,
+        agent: "worker",
+        harness: "codex",
+        description: `attempt ${currentAttempt}`,
+        prompt: `prompt ${currentAttempt}`,
+        adapter,
+        runs,
+      });
+      await turnReady[currentAttempt];
+      await new Promise<void>((resolve) => {
+        queueMicrotask(resolve);
+      });
+
+      const offer = () =>
+        runs.offer(started.id, {
+          type: "steer",
+          text: `guidance ${iteration}-${currentAttempt}`,
+        });
+      if (order === "control-first") {
+        assert.equal(offer(), "accepted");
+        assert.deepEqual(runs.cancel([started.id], "requested"), [started.id]);
+      } else {
+        assert.deepEqual(runs.cancel([started.id], "requested"), [started.id]);
+        assert.equal(offer(), "not steerable");
+      }
+
+      assert.equal((await started.settled).lifecycle.phase, "cancelled");
+      assert.deepEqual(
+        providerMethods[currentAttempt],
+        order === "control-first"
+          ? ["turn/steer", "turn/interrupt"]
+          : ["turn/interrupt"],
+      );
+    }
+
+    await adapter.close();
+  }
+}
+
+test("accepted steering enters first and resumed Codex Attempts before synchronous later cancellation", async () => {
+  await proveCodexControlOrder("control-first");
+});
+
+test("cancellation-first closes first and resumed Codex Attempts before later steering", async () => {
+  await proveCodexControlOrder("cancellation-first");
 });
 
 test("the selected harness resolves models without exposing effort", () => {
@@ -727,8 +1003,10 @@ test("a Control admitted before cancellation may be discarded without changing t
           execute: async (run) => {
             executorReady();
             await consumptionGate;
-            for await (const control of run.controls)
-              consumed.push(control.text);
+            run.controls.subscribe((admission) => {
+              consumed.push(admission.control.text);
+              admission.acknowledge();
+            });
             return run.signal?.aborted
               ? { ending: "cancelled" }
               : { ending: "answered" };
@@ -817,8 +1095,8 @@ test("external cancellation uses the Registry cancellation linearization point",
   }
 });
 
-test("startup failure closes a controlled Run mailbox without draining it", async () => {
-  let waiting: Promise<IteratorResult<RunControl>> | undefined;
+test("startup failure closes a controlled Run source without draining it", async () => {
+  let sourceClosed: Promise<void> | undefined;
   const harness: Harness = {
     name: "controlled",
     validate: () => [],
@@ -826,7 +1104,12 @@ test("startup failure closes a controlled Run mailbox without draining it", asyn
       controlledAdapter(() => ({
         supportedControls: ["steer"],
         execute: async (run) => {
-          waiting = run.controls[Symbol.asyncIterator]().next();
+          sourceClosed = new Promise<void>((resolve) => {
+            run.controls.subscribe(
+              () => assert.fail("startup failure consumed a Control"),
+              resolve,
+            );
+          });
           throw new Error("startup failed");
         },
       })),
@@ -842,11 +1125,56 @@ test("startup failure closes a controlled Run mailbox without draining it", asyn
 
   const result = await started.settled;
   assert.equal(result.lifecycle.phase, "failed");
-  assert.deepEqual(await waiting, { done: true, value: undefined });
+  await sourceClosed;
   assert.equal(
     runs.offer(started.id, { type: "steer", text: "too late" }),
     "already failed",
   );
+});
+
+test("settlement before Control subscription discards early admission", async () => {
+  let finishExecutor = () => {};
+  const finishing = new Promise<void>((resolve) => {
+    finishExecutor = resolve;
+  });
+  let controls: ControlSource | undefined;
+  const harness: Harness = {
+    name: "controlled",
+    validate: () => [],
+    prepare: () =>
+      controlledAdapter(() => ({
+        supportedControls: ["steer"],
+        execute: async (run) => {
+          controls = run.controls;
+          await finishing;
+          return { ending: "answered" };
+        },
+      })),
+  };
+  const runs = createSubagentRuns();
+  const started = dispatchSubagent({
+    config: agent({ harness: "controlled" }),
+    description: "task",
+    prompt: "work",
+    harnesses: createHarnessRegistry([harness]),
+    runs,
+  });
+  assert.equal(
+    runs.offer(started.id, { type: "steer", text: "discard on settlement" }),
+    "accepted",
+  );
+
+  finishExecutor();
+  assert.equal((await started.settled).lifecycle.phase, "completed");
+
+  let closed = false;
+  controls?.subscribe(
+    () => assert.fail("settlement retained early Control admission"),
+    () => {
+      closed = true;
+    },
+  );
+  assert.equal(closed, true);
 });
 
 // ── Registry ──────────────────────────────────────────────────────────────────

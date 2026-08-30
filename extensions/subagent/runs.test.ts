@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createControlGate } from "./control-mailbox.ts";
+import { createControlGate } from "./control-source.ts";
 import { createEmptyResult, settleResultLifecycle } from "./run.ts";
 import type { RegistryClock } from "./runs.ts";
 import { createSubagentRuns } from "./runs.ts";

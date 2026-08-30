@@ -40,7 +40,7 @@ declares resume supported, while Pi and Claude declare it unsupported and start
 no continuation work. A Codex adapter retains only its provider Conversation
 identity and cumulative usage baseline. A successful resume reuses the adapter
 created from the fixed Subagent context but creates a fresh per-Run execution,
-reporter, AbortSignal, Control stream, Result, usage fold, lifecycle, and
+reporter, AbortSignal, Control source, Result, usage fold, lifecycle, and
 notification.
 
 Every Codex Run owns one disposable Attempt: a fresh App Server child is
@@ -66,15 +66,25 @@ adapter and forgets its in-memory association, making that continuation
 unaddressable to the extension in later Sessions.
 
 A prepared Run declares its neutral Control capability. Every execution
-receives a fresh reporter, AbortSignal, and Control stream. Supported Runs
-receive one bounded, single-consumer FIFO Control stream; unsupported Runs
-receive an already-done stream and no live queue. Cancellation records its reason and
+receives a fresh reporter, AbortSignal, and Control source. Supported Runs
+receive one bounded, synchronous, single-consumer Control source. Accepted
+admissions reach its subscriber before the offer returns and remain budgeted
+until acknowledged or discarded; unsupported Runs receive an already-closed
+source and no live queue. Cancellation records its reason and
 closes Control admission synchronously before the executor's `AbortSignal`
 fires. Settlement and Session shutdown also close admission without draining
 pending Controls. Pi and Claude declare no Control support. Codex advertises
-steering and maps its neutral FIFO stream to serial native `turn/steer`
-requests; provider-confirmed correlated user items are the only steering
-events that become Facts, and every provider identity remains adapter-local.
+steering and assigns every synchronous admission an ingress sequence in the
+same Attempt reducer as cancellation, provider messages, process outcomes, and
+escalation. Only that reducer initiates serial native `turn/steer` requests.
+For a ready Turn, accepted-Control-before-cancellation writes `turn/steer`
+before `turn/interrupt`; cancellation-first closes admission and writes no
+later steer. Pre-identity Controls retain their ingress position but may be
+discarded by cancellation or settlement. Provider-confirmed correlated user
+items are the only steering events that become Facts. Cancellation discards
+unsent admissions but preserves sent-steering correlation until Attempt
+settlement or failure, so provider-confirmed transcript truth arriving after
+cancellation is still reported. Every provider identity remains adapter-local.
 
 ## INV-1 — Subagent and Run identities are stable
 

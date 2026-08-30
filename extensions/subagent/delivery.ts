@@ -5,7 +5,7 @@
  * known to be lost.
  */
 
-import { isValidControlText } from "./control-mailbox.ts";
+import { isValidControlText } from "./control-source.ts";
 import {
   type NotificationDeliveryEvent,
   type NotificationDeliveryState,

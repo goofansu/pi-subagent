@@ -4,8 +4,14 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import type { ChildProcessSpawn } from "../../child-process.ts";
+import {
+  CONTROL_MAX_PENDING,
+  type ControlSource,
+  type ControlSourceOwner,
+  createControlSource,
+} from "../../control-source.ts";
 import type { OneShotSink } from "../../one-shot.ts";
-import { DEPTH_ENV_KEY, type RunControl } from "../../run.ts";
+import { DEPTH_ENV_KEY, type Fact, type RunControl } from "../../run.ts";
 import {
   type CodexAppServerEvent,
   type CodexAppServerOptions,
@@ -98,12 +104,20 @@ function completed(status = "completed") {
   };
 }
 
+function controlsFrom(...controls: RunControl[]): ControlSource {
+  const source = createControlSource();
+  for (const control of controls)
+    assert.equal(source.offer(control), "accepted");
+  return source.controls;
+}
+
 function sourceWith(
   handler: (request: Record<string, unknown>, child: FakeChild) => void,
   overrides: Partial<CodexAppServerOptions> = {},
-  controls: AsyncIterable<RunControl> = (async function* () {})(),
+  controls: ControlSource = controlsFrom(),
 ) {
   let child: FakeChild | undefined;
+  const messages: Fact[] = [];
   let replacementKill: ((signal: string) => boolean) | undefined;
   let ignoreStdinEnd = false;
   const spawn: ChildProcessSpawn = (_command, _args, options) => {
@@ -133,7 +147,7 @@ function sourceWith(
         };
       },
       report: {
-        message: () => {},
+        message: (fact) => messages.push(fact),
         transcript: () => {},
         activity: () => {},
         stderr: sink.stderr,
@@ -147,6 +161,7 @@ function sourceWith(
     get child() {
       return child;
     },
+    messages,
     setKill(handler: (signal: string) => boolean) {
       replacementKill = handler;
       if (child) child.kill = handler;
@@ -161,18 +176,14 @@ function sourceWith(
 test("a Control admitted before provider identity is known is retained for native turn steering", async (t) => {
   const requests: Record<string, unknown>[] = [];
   let initializeRequest: Record<string, unknown> | undefined;
-  let controlTaken!: () => void;
-  const taken = new Promise<void>((resolve) => {
-    controlTaken = resolve;
-  });
   let steerSent!: () => void;
   const steered = new Promise<void>((resolve) => {
     steerSent = resolve;
   });
-  const controls = (async function* (): AsyncIterable<RunControl> {
-    controlTaken();
-    yield { type: "steer", text: "Use the indexed implementation." };
-  })();
+  const controls = controlsFrom({
+    type: "steer",
+    text: "Use the indexed implementation.",
+  });
   const rig = sourceWith(
     (request, child) => {
       requests.push(request);
@@ -198,13 +209,6 @@ test("a Control admitted before provider identity is known is retained for nativ
     rig.child?.finish(0);
     await pending;
   });
-  assert.equal(
-    await Promise.race([
-      taken.then(() => true),
-      new Promise<false>((resolve) => setImmediate(() => resolve(false))),
-    ]),
-    true,
-  );
   assert.equal(
     requests.some((request) => request.method === "turn/steer"),
     false,
@@ -236,6 +240,34 @@ test("a Control admitted before provider identity is known is retained for nativ
   assert.deepEqual(await pending, { ending: "answered" });
 });
 
+test("cancellation discards an earlier pre-identity Control and releases its source", async () => {
+  const requests: Record<string, unknown>[] = [];
+  const controlOwner = createControlSource();
+  assert.equal(
+    controlOwner.offer({ type: "steer", text: "early guidance" }),
+    "accepted",
+  );
+  const rig = sourceWith(
+    (request) => requests.push(request),
+    {},
+    controlOwner.controls,
+  );
+  const controller = new AbortController();
+
+  const pending = rig.source(sinkFor([], []), controller.signal);
+  controller.abort();
+
+  assert.deepEqual(await pending, { ending: "cancelled" });
+  assert.equal(
+    requests.some((request) => request.method === "turn/steer"),
+    false,
+  );
+  assert.equal(
+    controlOwner.offer({ type: "steer", text: "after cancellation" }),
+    "closed",
+  );
+});
+
 test("multiple Controls are delivered serially in FIFO admission order", async () => {
   const steerRequests: Record<string, unknown>[] = [];
   let firstSent!: () => void;
@@ -246,10 +278,10 @@ test("multiple Controls are delivered serially in FIFO admission order", async (
   const second = new Promise<void>((resolve) => {
     secondSent = resolve;
   });
-  const controls = (async function* (): AsyncIterable<RunControl> {
-    yield { type: "steer", text: "first guidance" };
-    yield { type: "steer", text: "second guidance" };
-  })();
+  const controls = controlsFrom(
+    { type: "steer", text: "first guidance" },
+    { type: "steer", text: "second guidance" },
+  );
   const rig = sourceWith(
     (request, child) => {
       if (request.method === "initialize")
@@ -298,11 +330,74 @@ test("multiple Controls are delivered serially in FIFO admission order", async (
   assert.deepEqual(await pending, { ending: "answered" });
 });
 
+test("Controls waiting behind native steering retain bounded source admission", async () => {
+  const controlOwner = createControlSource();
+  const steerRequests: Record<string, unknown>[] = [];
+  let secondSteerSent!: () => void;
+  const secondSteer = new Promise<void>((resolve) => {
+    secondSteerSent = resolve;
+  });
+  let activeTurnReady!: () => void;
+  const activeTurn = new Promise<void>((resolve) => {
+    activeTurnReady = resolve;
+  });
+  const rig = sourceWith(
+    (request, child) => {
+      if (request.method === "initialize")
+        response(child, request.id as number, initializeResult());
+      if (request.method === "thread/resume")
+        response(child, request.id as number, threadResult());
+      if (request.method === "turn/start") {
+        response(child, request.id as number, turnResult());
+        activeTurnReady();
+      }
+      if (request.method === "turn/steer") {
+        steerRequests.push(request);
+        if (steerRequests.length === 2) secondSteerSent();
+      }
+      if (request.method === "turn/interrupt")
+        child.stdout.write(`${JSON.stringify(completed("interrupted"))}\n`);
+    },
+    { continuationThreadId: "thread-1" },
+    controlOwner.controls,
+  );
+  const controller = new AbortController();
+  const pending = rig.source(sinkFor([], []), controller.signal);
+  await activeTurn;
+
+  assert.equal(
+    controlOwner.offer({ type: "steer", text: "in flight" }),
+    "accepted",
+  );
+  assert.equal(steerRequests.length, 1);
+  for (let index = 0; index < CONTROL_MAX_PENDING; index++) {
+    assert.equal(
+      controlOwner.offer({ type: "steer", text: `waiting-${index}` }),
+      "accepted",
+    );
+  }
+  assert.equal(
+    controlOwner.offer({ type: "steer", text: "over budget" }),
+    "queue full",
+  );
+
+  const firstRequest = steerRequests[0];
+  assert.ok(firstRequest && rig.child);
+  response(rig.child, firstRequest.id as number, {});
+  await secondSteer;
+  assert.equal(steerRequests.length, 2);
+  assert.equal(
+    controlOwner.offer({ type: "steer", text: "released capacity" }),
+    "accepted",
+  );
+
+  controller.abort();
+  assert.deepEqual(await pending, { ending: "cancelled" });
+});
+
 test("a resumed active-Turn steering refusal is a bounded redacted diagnostic, not the Run ending", async () => {
   const stderr: string[] = [];
-  const controls = (async function* (): AsyncIterable<RunControl> {
-    yield { type: "steer", text: "review this" };
-  })();
+  const controls = controlsFrom({ type: "steer", text: "review this" });
   const providerIdentity = {
     threadId: "secret-thread",
     turnId: "secret-turn",
@@ -361,7 +456,7 @@ test("a resumed active-Turn steering refusal is a bounded redacted diagnostic, n
 
 const DETERMINISTIC_RACE_REPETITIONS = 32;
 
-test("repeated resumed completion-before-Control settlement closes the pump and answers once", async () => {
+test("repeated resumed completion-before-Control settlement closes reducer steering and answers once", async () => {
   for (
     let iteration = 0;
     iteration < DETERMINISTIC_RACE_REPETITIONS;
@@ -369,18 +464,15 @@ test("repeated resumed completion-before-Control settlement closes the pump and 
   ) {
     const steerRequests: Record<string, unknown>[] = [];
     const rejections: Error[] = [];
-    let pumpClosed!: () => void;
-    const closed = new Promise<void>((resolve) => {
-      pumpClosed = resolve;
-    });
-    const controls = (async function* (): AsyncIterable<RunControl> {
-      try {
-        yield { type: "steer", text: `first-${iteration}` };
-        yield { type: "steer", text: `discarded-${iteration}` };
-      } finally {
-        pumpClosed();
-      }
-    })();
+    const controlOwner: ControlSourceOwner = createControlSource();
+    assert.equal(
+      controlOwner.offer({ type: "steer", text: `first-${iteration}` }),
+      "accepted",
+    );
+    assert.equal(
+      controlOwner.offer({ type: "steer", text: `discarded-${iteration}` }),
+      "accepted",
+    );
     const rig = sourceWith(
       (request, child) => {
         if (request.method === "initialize")
@@ -398,12 +490,15 @@ test("repeated resumed completion-before-Control settlement closes the pump and 
         continuationThreadId: "thread-1",
         onRequestRejection: (error) => rejections.push(error),
       },
-      controls,
+      controlOwner.controls,
     );
 
     const pending = rig.source(sinkFor([], []), new AbortController().signal);
     assert.deepEqual(await pending, { ending: "answered" });
-    await closed;
+    assert.equal(
+      controlOwner.offer({ type: "steer", text: "after settlement" }),
+      "closed",
+    );
     assert.equal(steerRequests.length, 1);
     assert.equal(rejections.length, 1);
     assert.ok(rejections[0] instanceof CodexAppServerTransportError);
@@ -445,9 +540,10 @@ test("repeated resumed cancellation-before-Control-response stays cancelled once
           child.stdout.write(`${JSON.stringify(completed("interrupted"))}\n`);
       },
       { continuationThreadId: "thread-1" },
-      (async function* (): AsyncIterable<RunControl> {
-        yield { type: "steer", text: `racing guidance ${iteration}` };
-      })(),
+      controlsFrom({
+        type: "steer",
+        text: `racing guidance ${iteration}`,
+      }),
     );
 
     const pending = rig.source(sinkFor([], []), controller.signal);
@@ -464,6 +560,157 @@ test("repeated resumed cancellation-before-Control-response stays cancelled once
     );
     assert.deepEqual(await pending, { ending: "cancelled" });
   }
+});
+
+test("provider-accepted steering remains correlated after cancellation until settlement", async () => {
+  const controller = new AbortController();
+  let steerRequest: Record<string, unknown> | undefined;
+  let interruptRequest: Record<string, unknown> | undefined;
+  const rig = sourceWith(
+    (request, child) => {
+      if (request.method === "initialize")
+        response(child, request.id as number, initializeResult());
+      if (request.method === "thread/resume")
+        response(child, request.id as number, threadResult());
+      if (request.method === "turn/start")
+        response(child, request.id as number, turnResult());
+      if (request.method === "turn/steer") steerRequest = request;
+      if (request.method === "turn/interrupt") interruptRequest = request;
+    },
+    { continuationThreadId: "thread-1" },
+    controlsFrom({ type: "steer", text: "confirmed guidance" }),
+  );
+
+  const pending = rig.source(sinkFor([], []), controller.signal);
+  assert.ok(steerRequest && rig.child);
+  response(rig.child, steerRequest.id as number, {});
+  controller.abort();
+  assert.ok(interruptRequest);
+
+  const clientId = (steerRequest.params as Record<string, unknown>)
+    .clientUserMessageId;
+  assert.equal(typeof clientId, "string");
+  const item = {
+    type: "userMessage",
+    id: "provider-confirmed-steering",
+    clientId,
+    content: [
+      {
+        type: "text",
+        text: "provider-confirmed guidance",
+        text_elements: [],
+      },
+    ],
+  };
+  for (const method of ["item/started", "item/completed"]) {
+    rig.child.stdout.write(
+      `${JSON.stringify({
+        method,
+        emittedAtMs: 3,
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          startedAtMs: 3,
+          completedAtMs: 3,
+          item,
+        },
+      })}\n`,
+    );
+  }
+  rig.child.stdout.write(`${JSON.stringify(completed("interrupted"))}\n`);
+
+  assert.deepEqual(await pending, { ending: "cancelled" });
+  assert.deepEqual(rig.messages, [
+    {
+      role: "user",
+      parts: [{ type: "text", text: "provider-confirmed guidance" }],
+    },
+  ]);
+});
+
+async function proveControlAdmissionOrder(
+  order: "control-first" | "cancellation-first",
+): Promise<void> {
+  for (
+    let iteration = 0;
+    iteration < DETERMINISTIC_RACE_REPETITIONS;
+    iteration++
+  ) {
+    for (const continuationThreadId of [undefined, "thread-1"] as const) {
+      const methods: string[] = [];
+      const controlOwner = createControlSource();
+      let releaseTurn!: () => void;
+      const activeTurnReady = new Promise<void>((resolve) => {
+        releaseTurn = resolve;
+      });
+      const rig = sourceWith(
+        (request, child) => {
+          if (request.method === "initialize")
+            response(child, request.id as number, initializeResult());
+          if (
+            request.method === "thread/start" ||
+            request.method === "thread/resume"
+          )
+            response(child, request.id as number, threadResult());
+          if (request.method === "turn/start") {
+            response(child, request.id as number, turnResult());
+            releaseTurn();
+          }
+          if (
+            request.method === "turn/steer" ||
+            request.method === "turn/interrupt"
+          )
+            methods.push(request.method);
+          if (request.method === "turn/interrupt")
+            child.stdout.write(`${JSON.stringify(completed("interrupted"))}\n`);
+        },
+        continuationThreadId === undefined ? {} : { continuationThreadId },
+        controlOwner.controls,
+      );
+      const controller = new AbortController();
+      const pending = rig.source(sinkFor([], []), controller.signal);
+      await activeTurnReady;
+      await new Promise<void>((resolve) => {
+        queueMicrotask(resolve);
+      });
+
+      if (order === "control-first") {
+        assert.equal(
+          controlOwner.offer({
+            type: "steer",
+            text: `guidance-${iteration}`,
+          }),
+          "accepted",
+        );
+        controller.abort();
+      } else {
+        controller.abort();
+        assert.equal(
+          controlOwner.offer({
+            type: "steer",
+            text: `too-late-${iteration}`,
+          }),
+          "closed",
+        );
+      }
+
+      assert.deepEqual(await pending, { ending: "cancelled" });
+      assert.deepEqual(
+        methods,
+        order === "control-first"
+          ? ["turn/steer", "turn/interrupt"]
+          : ["turn/interrupt"],
+      );
+    }
+  }
+}
+
+test("accepted Control before abort writes turn/steer before turn/interrupt on first and resumed Attempts", async () => {
+  await proveControlAdmissionOrder("control-first");
+});
+
+test("abort-first writes turn/interrupt and no later turn/steer on first and resumed Attempts", async () => {
+  await proveControlAdmissionOrder("cancellation-first");
 });
 
 function sinkFor(

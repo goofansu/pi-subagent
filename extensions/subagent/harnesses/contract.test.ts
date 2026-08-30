@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { type ControlAdmission, createControlGate } from "../control-source.ts";
 import { createSubagentDelivery } from "../delivery.ts";
 import { formatNotification } from "../presentation.ts";
 import type {
@@ -134,7 +135,7 @@ test("one prepared adapter owns private state across independent Runs and closes
   const execution: SubagentRun = {
     report,
     signal: new AbortController().signal,
-    controls: (async function* () {})(),
+    controls: createControlGate([]).controls,
   };
 
   const adapter = statefulHarness.prepare(context);
@@ -445,25 +446,54 @@ function conformanceRig(): HarnessConformanceRig {
           return base(
             async (run) => {
               openReady();
-              const controls = run.controls[Symbol.asyncIterator]();
+              const admissions: ControlAdmission[] = [];
+              let resolveAdmission:
+                | ((admission: ControlAdmission | undefined) => void)
+                | undefined;
+              run.controls.subscribe(
+                (admission) => {
+                  const resolve = resolveAdmission;
+                  if (resolve) {
+                    resolveAdmission = undefined;
+                    resolve(admission);
+                  } else {
+                    admissions.push(admission);
+                  }
+                },
+                () => {
+                  const resolve = resolveAdmission;
+                  resolveAdmission = undefined;
+                  resolve?.(undefined);
+                },
+              );
               for (const expectedText of offeredTexts) {
-                const next = await controls.next();
-                assert.equal(next.done, false);
-                assert.equal(next.value?.type, "steer");
-                assert.equal(next.value?.text, expectedText);
+                const admission =
+                  admissions.shift() ??
+                  (await new Promise<ControlAdmission | undefined>(
+                    (resolve) => {
+                      resolveAdmission = resolve;
+                    },
+                  ));
+                assert.ok(admission);
+                admission.acknowledge();
+                assert.equal(admission.control.type, "steer");
+                assert.equal(admission.control.text, expectedText);
                 providerControlStarts++;
                 activeProviderControls++;
                 maxConcurrentProviderControls = Math.max(
                   maxConcurrentProviderControls,
                   activeProviderControls,
                 );
-                receivedTexts.push(next.value.text);
+                receivedTexts.push(admission.control.text);
                 if (providerControlStarts === 1)
                   await firstProviderControlResponse;
                 run.report.message({
                   role: "user",
                   parts: [
-                    { type: "text", text: `confirmed: ${next.value.text}` },
+                    {
+                      type: "text",
+                      text: `confirmed: ${admission.control.text}`,
+                    },
                   ],
                 });
                 activeProviderControls--;

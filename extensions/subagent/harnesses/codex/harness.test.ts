@@ -5,6 +5,10 @@ import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import type { ChildProcessSpawn } from "../../child-process.ts";
 import {
+  type ControlSource,
+  createControlSource,
+} from "../../control-source.ts";
+import {
   DEPTH_ENV_KEY,
   type RunControl,
   type RunReporter,
@@ -36,6 +40,13 @@ function prepareCodexRun(
 ): HarnessRun {
   const { description, prompt, ...context } = input;
   return harness.prepare(context).prepareRun({ description, prompt });
+}
+
+function controlsFrom(...controls: RunControl[]): ControlSource {
+  const source = createControlSource();
+  for (const control of controls)
+    assert.equal(source.offer(control), "accepted");
+  return source.controls;
 }
 
 interface FakeChild extends EventEmitter {
@@ -719,20 +730,13 @@ test("a prepared Codex adapter resumes one Conversation through cleaned disposab
     const facts: Parameters<RunReporter["message"]>[0][] = [];
     const stderr: string[] = [];
     let controlReturns = 0;
-    let finishNext: ((value: IteratorResult<RunControl>) => void) | undefined;
-    const controls: AsyncIterable<RunControl> = {
-      [Symbol.asyncIterator]() {
-        return {
-          next: () =>
-            new Promise<IteratorResult<RunControl>>((resolve) => {
-              finishNext = resolve;
-            }),
-          return: async () => {
-            controlReturns++;
-            finishNext?.({ done: true, value: undefined });
-            return { done: true, value: undefined };
-          },
-        };
+    const controlOwner = createControlSource();
+    const controls: ControlSource = {
+      subscribe(onAdmission, onClose) {
+        return controlOwner.controls.subscribe(onAdmission, () => {
+          controlReturns++;
+          onClose?.();
+        });
       },
     };
     const prepared = adapter.prepareRun({ description: prompt, prompt });
@@ -924,7 +928,7 @@ test("closing a Codex adapter while attaching cancels and fully cleans its Attem
       activity: () => {},
       stderr: () => {},
     },
-    controls: (async function* () {})(),
+    controls: controlsFrom(),
   });
   await didSpawn;
 
@@ -1033,7 +1037,7 @@ test("repeated Session-owned close versus resumed settlement has one winner", as
             activity: () => {},
             stderr: () => {},
           },
-          controls: (async function* () {})(),
+          controls: controlsFrom(),
         });
       assert.deepEqual(await execute("seed"), { ending: "answered" });
       const pending = execute("resumed race");
@@ -1158,7 +1162,7 @@ test("Codex creates after a pre-Conversation failure but never falls back after 
         activity: () => {},
         stderr: () => {},
       },
-      controls: (async function* () {})(),
+      controls: controlsFrom(),
     });
 
   assert.deepEqual(await execute("first prompt"), {
@@ -1281,7 +1285,7 @@ test("Codex does not retain a created thread before its first Turn accepts the P
         activity: () => {},
         stderr: () => {},
       },
-      controls: (async function* () {})(),
+      controls: controlsFrom(),
     });
 
   assert.equal((await execute("first prompt")).ending, "failed");
@@ -1443,7 +1447,7 @@ test("resumed Codex failures are honest, bounded, cleaned, and never fall back",
           activity: () => {},
           stderr: () => {},
         },
-        controls: (async function* () {})(),
+        controls: controlsFrom(),
       });
 
     assert.deepEqual(await execute("seed"), { ending: "answered" });
@@ -1596,7 +1600,7 @@ test("a failed resumed Turn keeps only its partial output and leaks no state int
           activity: (value) => activity.push(value),
           stderr: (value) => stderr.push(value),
         },
-        controls: (async function* () {})(),
+        controls: controlsFrom(),
       });
     return { ending, facts, activity, stderr };
   };
@@ -1808,9 +1812,9 @@ test("resumed steering is current-Turn FIFO and never re-emits prior confirmed g
           activity: () => {},
           stderr: () => {},
         },
-        controls: (async function* (): AsyncIterable<RunControl> {
-          for (const text of controls) yield { type: "steer", text };
-        })(),
+        controls: controlsFrom(
+          ...controls.map((text): RunControl => ({ type: "steer", text })),
+        ),
       });
     return { ending, facts };
   };
@@ -1926,6 +1930,19 @@ test("cancelling a resumed Turn interrupts only that Turn and preserves partial 
       );
     }
   });
+  const controlOwner = createControlSource();
+  assert.equal(
+    controlOwner.offer({ type: "steer", text: "racing guidance" }),
+    "accepted",
+  );
+  const controls: ControlSource = {
+    subscribe(onAdmission, onClose) {
+      return controlOwner.controls.subscribe(onAdmission, () => {
+        controlReturns++;
+        onClose?.();
+      });
+    },
+  };
   const endingPromise = runCodexAppServer({
     cwd: "/work",
     childDepth: 1,
@@ -1941,20 +1958,7 @@ test("cancelling a resumed Turn interrupts only that Turn and preserves partial 
       stderr: (chunk) => stderr.push(chunk),
     },
     signal: controller.signal,
-    controls: {
-      [Symbol.asyncIterator]() {
-        return {
-          next: async () => ({
-            done: false as const,
-            value: { type: "steer" as const, text: "racing guidance" },
-          }),
-          return: async () => {
-            controlReturns++;
-            return { done: true as const, value: undefined };
-          },
-        };
-      },
-    },
+    controls,
     missingAnswerMessage: "missing answer",
   });
   await steered;
@@ -2020,7 +2024,7 @@ test("a completed Codex answer admitted before cancellation remains authoritativ
       stderr: () => {},
     },
     signal: controller.signal,
-    controls: (async function* () {})(),
+    controls: controlsFrom(),
   });
 
   assert.deepEqual(ending, { ending: "answered" });
@@ -2077,7 +2081,7 @@ test("a completed Codex answer first admitted after cancellation is not authorit
       stderr: () => {},
     },
     signal: controller.signal,
-    controls: (async function* () {})(),
+    controls: controlsFrom(),
   });
 
   assert.deepEqual(ending, { ending: "cancelled" });
@@ -2163,7 +2167,7 @@ test("complete messages in one stdout ingress precede cancellation from reportin
       stderr: () => {},
     },
     signal: controller.signal,
-    controls: (async function* () {})(),
+    controls: controlsFrom(),
   });
 
   assert.deepEqual(ending, { ending: "answered" });
@@ -2212,9 +2216,10 @@ test("only correlated provider consumption creates one neutral steering Fact", a
     }),
     task,
   );
-  const controls = (async function* (): AsyncIterable<RunControl> {
-    yield { type: "steer", text: "locally accepted guidance" };
-  })();
+  const controls = controlsFrom({
+    type: "steer",
+    text: "locally accepted guidance",
+  });
 
   const pending = execution.execute({
     report: {
@@ -2372,9 +2377,7 @@ test("a steering server rejection racing semantic completion preserves the answe
       activity: () => {},
       stderr: (chunk) => stderr.push(chunk),
     },
-    controls: (async function* (): AsyncIterable<RunControl> {
-      yield { type: "steer", text: "racing guidance" };
-    })(),
+    controls: controlsFrom({ type: "steer", text: "racing guidance" }),
   });
 
   assert.deepEqual(ending, { ending: "answered" });

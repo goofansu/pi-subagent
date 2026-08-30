@@ -4,7 +4,7 @@
  * never branches on a backend.
  */
 
-import { createControlGate } from "./control-mailbox.ts";
+import { createControlGate } from "./control-source.ts";
 import type { HarnessAdapter } from "./harnesses/contract.ts";
 import type { RunEnding, SubagentTask } from "./run.ts";
 import {

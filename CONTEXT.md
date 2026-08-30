@@ -52,25 +52,33 @@ Harness seam.
 
 **Attempt** — one disposable provider attachment used to execute one Run
 against a Conversation. A Codex Attempt owns one fresh App Server child,
-initialization, current Turn, translator, accounting fold, Control pump, and
-cleanup boundary; no Attempt remains alive while its Subagent is idle.
+initialization, current Turn, translator, accounting fold, ordered reducer,
+and cleanup boundary; no Attempt remains alive while its Subagent is idle.
 
 **Control** — bounded, harness-neutral guidance offered while a Run is active.
 The only Control is steering text. `accepted` means the complete text entered
-the Run's local FIFO mailbox synchronously; it does not claim that the Harness
-dequeued it, a provider accepted it, or a model consumed it. A prepared Run
-declares supported Controls, and unsupported Runs have no live mailbox. Pi and
-Claude declare no Control support. Codex consumes steering serially through
-the active App Server Turn; only a correlated provider user-message item, not
-local admission or request acceptance, becomes a neutral user Fact.
+the Run's bounded local admission and synchronously reached the source's one
+subscriber; it does not claim that a provider accepted it, a model consumed
+it, or it became transcript truth. A prepared Run declares supported Controls,
+and unsupported Runs have no live source. Pi and Claude declare no Control
+support. Codex records every admission as an Attempt occurrence, acknowledges
+it when the reducer takes or discards it, and consumes steering serially
+through the active App Server Turn. Cancellation discards unsent admissions
+but retains sent-steering correlation until Attempt settlement or failure.
+Only a correlated provider user-message item, not local admission or request
+acceptance, becomes a neutral user Fact.
 
 **Ingress order** — the adapter-local order assigned when a complete external
 occurrence enters the executor, before translation, reporting, or Promise
 continuations can delay it. Codex orders provider events, Controls,
-cancellation, process outcomes, and escalation this way because its semantic
-Turn and native steering share one App Server connection. Provider ordering
-and identity remain adapter-local; neither a local Subagent id nor a Run id is
-a provider thread, Turn, item, request, or correlation identity.
+cancellation, process outcomes, and escalation in one Attempt reducer because
+its semantic Turn and native steering share one App Server connection. A
+successful Control offer assigns this order during its synchronous subscriber
+callback, before the offer returns; cancellation-first instead closes the gate
+before abort ingress. Only the reducer may initiate native `turn/steer` or
+`turn/interrupt`. Provider ordering and identity remain adapter-local; neither
+a local Subagent id nor a Run id is a provider thread, Turn, item, request, or
+correlation identity.
 
 **Turn** — one completed provider model turn (response), folded into a run's
 usage and counted by the widget. A turn is provider accounting, not a second
@@ -182,7 +190,9 @@ closes idempotently; provider continuation never crosses this seam.
 (`harnesses/pi/agent.ts` is the pi harness's; it composes the One-shot protocol
 and the neutral process source). Each execution is prepared from only that
 Run's description and prompt, then receives a fresh reporter, AbortSignal, and
-Control stream. It witnesses what the child did: it reports harness-neutral
+Control source. The source synchronously presents each accepted admission to
+its one subscriber, which explicitly acknowledges when it takes the Control;
+the admission remains bounded until then. The executor witnesses what the child did: it reports harness-neutral
 facts through the reporter defined in `run.ts` and resolves to an **ending**;
 it never touches the run record. Steering support is declared per prepared Run;
 there is no Harness control method or provider session in core. Wire format
