@@ -66,14 +66,16 @@ non-resumable, and a later Resume reports the loss without exposing provider
 identity or mechanism.
 
 **Attempt** — one disposable provider attachment used to execute one Run
-against a Conversation. Claude owns one fresh streaming Query per Attempt;
-Codex owns one fresh Turn, translator, accounting fold, ordered reducer, and
-Run-local cleanup while its retained App Server remains the Conversation owner.
-A Codex Attempt settles after its matching Turn completion is fully reduced;
-the retained process does not settle the Run. No Claude or Codex Attempt
-remains alive while its Subagent is idle. Pi instead retains one idle-capable
-SDK session and gives each Run a fresh subscription, accounting baseline,
-reporter, and Control consumer.
+against a Conversation. A prepared Run is not yet an Attempt: the Attempt
+begins when execution starts and ends only after its Run-local provider cleanup
+finishes. Claude owns one fresh streaming Query per Attempt; Codex owns one
+fresh Turn, translator, accounting delta, ordered reducer, and Run-local cleanup
+while its retained App Server remains the Conversation owner. A Codex Attempt
+settles after its matching Turn completion is fully reduced; the retained
+process does not settle the Run. No Attempt remains alive while its Subagent is
+idle. Pi instead retains one idle-capable SDK session while each Attempt owns a
+fresh provider-event subscription and accounting baseline and consumes its
+Run's fresh reporter and Control source.
 
 **Control** — bounded, harness-neutral guidance offered while a Run is active.
 The only Control is steering text. `accepted` means the complete text entered
