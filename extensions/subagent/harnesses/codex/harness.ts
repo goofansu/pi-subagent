@@ -10,10 +10,6 @@ import {
 import type { CodexAppServerSessionOptions } from "./app-server.ts";
 import { createCodexAppServerSession } from "./app-server.ts";
 
-// Compatibility surface for existing provider translation tests. Production
-// constructs this fresh state inside runCodexAttempt.
-export { createCodexTranslator } from "./attempt.ts";
-
 const CODEX_PROFILE_FIELDS = ["model", "effort"] as const;
 const MISSING_CODEX_ANSWER =
   "Codex exited without a terminal agent message answer.";

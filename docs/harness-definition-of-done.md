@@ -17,7 +17,7 @@ checking items 1–3 is looking for wire/message types, not host-API imports.
 
 "Claude" means everything from `@anthropic-ai/claude-agent-sdk`. "Codex" means
 Codex App Server JSON-RPC events and invocation policy, all confined to
-codex-owned modules (the harness and transport).
+codex-owned modules (the harness, retained transport owner, and Attempt).
 
 ## The ten criteria
 
@@ -83,7 +83,7 @@ codex-owned modules (the harness and transport).
    *Review:* the fake implements only the public `Harness` contract; profile
    loading also asks a fake-owned validator to reject an unknown field.
 
-6. [x] **The Codex adapter owns two modules, one registration, its own tests —
+6. [x] **The Codex adapter owns three modules, one registration, its own tests —
    and no dispatcher/lifecycle changes.**
     *Test:* `harnesses/codex/harness.test.ts` runs the real Codex adapter through the
    shared **Harness Conformance** battery (all thirteen scenarios; Claude alone
@@ -92,8 +92,10 @@ codex-owned modules (the harness and transport).
    messages remain streamed facts and that the final completed agent message
    determines final output, without inventing a transcript replacement. JSON-RPC
    fixtures and protocol validation cover the adapter's remaining behavior. The
-   adapter cost is therefore its harness and transport modules, one harness
-   registration, and its battery tests.
+   retained transport owns process and JSON-RPC lifetime, while the Attempt owns
+   current-Turn reduction and terminal meaning. The adapter cost is therefore
+   its harness, retained transport, and Attempt modules, one harness registration,
+   and its battery tests.
 
 7. [x] **Pi wire `Message` objects never leave the pi harness.**
    Translation to facts happens inside the retained Pi SDK adapter, at the edge.

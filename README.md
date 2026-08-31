@@ -105,7 +105,10 @@ the parent's project-trust decision, and a Bash tool that injects the child
 depth per spawn without changing the host environment. This package filters
 itself from child extension discovery and all orchestration tools are denied.
 Sequential resumed Runs reuse the same provider session while emitting and
-charging only their own messages and usage.
+charging only their own messages and usage. Execution creates one disposable
+Pi Attempt per Run; it owns that Run's fresh provider-event subscription,
+message/usage baseline, Control consumer, and cleanup. Preparing a Run performs
+no provider I/O, and no Attempt remains while the Subagent is idle.
 
 #### Claude profiles
 
@@ -151,12 +154,15 @@ server in Claude Code also grants it to claude-harness subagents. The `tools`
 field narrows built-in tools only. See
 [ADR 0008](docs/adr/0008-claude-children-inherit-operator-environment.md).
 
-Each Claude Run owns a fresh streaming Query. The adapter retains only the
-provider Conversation identity, applies native `resume` to later Queries, and
-sends only the new Run prompt plus that Run's Controls. Provider replay is
-ignored. Successful provider Results are internal Turn checkpoints while
-earlier guidance is still outstanding; the public Run settles once, after its
-later final Result and complete Query cleanup.
+Execution creates one disposable Claude Attempt per Run, and that Attempt owns
+a fresh streaming Query, input stream, Control correlations, accounting deltas,
+and Query cleanup. The adapter retains only the provider Conversation identity,
+applies native `resume` to later Queries, and sends only the new Run prompt plus
+that Run's Controls. Provider replay is ignored. Successful provider Results
+are internal Turn checkpoints while earlier guidance is still outstanding; the
+public Run settles once, after its later final Result and complete Attempt
+cleanup. Preparing a Run performs no provider I/O, and no Attempt remains while
+the Subagent is idle.
 
 #### Codex profiles
 
@@ -165,10 +171,13 @@ pathless root Conversation. The first Run initializes the connection, creates
 the root, and sends the Profile role with the first prompt. Later Runs start
 new sequential Turns on that same root and send only the new prompt; they do
 not use live-session `thread/resume`. Each Run owns fresh Turn-scoped Attempt
-state and settles independently after its matching semantic completion. A
-healthy process intentionally remains alive while the Subagent is idle and is
-closed at parent Session shutdown. `model` is passed through unvalidated and
-Codex validates it.
+state: its translator, ordered reducer, Control correlations, accounting delta,
+terminal interpretation, and Run-local cleanup. The retained transport owner
+keeps process, JSON-RPC, root-Conversation, and cumulative-accounting state.
+Each Run settles independently after its matching semantic completion. A
+healthy process intentionally remains alive while the Subagent is idle, but no
+Attempt does, and the process is closed at parent Session shutdown. `model` is
+passed through unvalidated and Codex validates it.
 `effort` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`;
 `off` maps to `none` and every other value is passed through to the App Server's
 model reasoning configuration. Codex does not recognize `tools` or
@@ -204,9 +213,12 @@ every attachment; see [ADR 0009](docs/adr/0009-codex-trust-posture-and-environme
 
 Every Run begins with one new prompt and settles exactly once with one immutable
 terminal Result. Every production Subagent may own several sequential Runs
-through its private provider Conversation. The adapter translates
-provider messages into neutral facts; profiles and the rest of the runtime
-never depend on provider wire types.
+through its private provider Conversation. Run preparation is provider-I/O-free;
+execution starts one provider-specific Attempt, which translates provider
+messages into neutral facts and returns a candidate Ending only after Run-local
+cleanup. The core dispatcher folds those facts and owns authoritative lifecycle
+settlement. Profiles and the rest of the runtime never depend on provider wire
+types.
 
 ### Agent lookup
 

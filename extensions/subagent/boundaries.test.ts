@@ -574,6 +574,30 @@ test("a foreign Claude adapter cannot import the Codex transport", (t) => {
   ]);
 });
 
+test("Attempt modules remain internal to their owning provider adapter", (t) => {
+  const fixtureRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pi-subagent-boundary-attempt-ownership-"),
+  );
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  writeSource(
+    fixtureRoot,
+    "runner.ts",
+    'import "./harnesses/codex/attempt.ts";\n',
+  );
+  writeSource(
+    fixtureRoot,
+    "harnesses/claude/harness.ts",
+    'import "../pi/attempt.ts";\n',
+  );
+  writeSource(fixtureRoot, "harnesses/codex/attempt.ts", "export {};\n");
+  writeSource(fixtureRoot, "harnesses/pi/attempt.ts", "export {};\n");
+
+  assert.deepEqual(findForbiddenImports(fixtureRoot), [
+    "harnesses/claude/harness.ts imports forbidden foreign adapter harnesses/pi/attempt.ts",
+    "runner.ts imports forbidden harness adapter harnesses/codex/attempt.ts",
+  ]);
+});
+
 test("an unclassified adapter cannot import the Codex transport", (t) => {
   const fixtureRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "pi-subagent-boundary-codex-transport-other-"),

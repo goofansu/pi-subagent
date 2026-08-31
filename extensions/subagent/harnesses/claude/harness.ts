@@ -1,4 +1,8 @@
-import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  Options,
+  Query,
+  SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import {
   DEPTH_ENV_KEY,
   type RunEnding,
@@ -17,16 +21,13 @@ import {
   stringField,
   validateCommonProfileFields,
 } from "../contract.ts";
-import { type ClaudeQueryLoader, runClaudeAttempt } from "./attempt.ts";
+import { runClaudeAttempt } from "./attempt.ts";
 
-// TODO(ticket 05): These are temporary compatibility exports for the existing
-// provider tests. Contract them once equivalent Harness-level coverage is in
-// place; they are not part of the permanent Claude Harness interface.
-export {
-  type ClaudeQuery,
-  type ClaudeQueryLoader,
-  createClaudeTranslator,
-} from "./attempt.ts";
+type ClaudeQuery = (params: {
+  prompt: string | AsyncIterable<SDKUserMessage>;
+  options?: Options;
+}) => Query;
+type ClaudeQueryLoader = () => Promise<ClaudeQuery>;
 
 /**
  * The SDK documents these family aliases and resolves each to its current

@@ -29,11 +29,7 @@ import {
   type CodexAppServerTurnOptions,
   createCodexAppServerSession,
 } from "./app-server.ts";
-import {
-  codexEffort,
-  createCodexHarness,
-  createCodexTranslator,
-} from "./harness.ts";
+import { codexEffort, createCodexHarness } from "./harness.ts";
 
 function prepareCodexRun(
   harness: Harness,
@@ -99,7 +95,6 @@ async function runCodexAppServer(
 ) {
   const {
     prompt,
-    translate,
     report,
     signal,
     controls,
@@ -110,7 +105,6 @@ async function runCodexAppServer(
   try {
     return await session.runNextTurn({
       prompt,
-      translate,
       report,
       ...(signal ? { signal } : {}),
       ...(controls ? { controls } : {}),
@@ -126,19 +120,15 @@ function createTestAppServerRun(
 ) {
   return (
     sink: {
-      event(event: CodexAppServerEvent): boolean | undefined;
+      message?(fact: Parameters<RunReporter["message"]>[0]): void;
       stderr(chunk: string): void;
     },
     signal: AbortSignal,
   ) =>
     runCodexAppServer({
       ...options,
-      translate: (value) => ({
-        terminal:
-          sink.event(value) === true || value.method === "turn/completed",
-      }),
       report: {
-        message: () => {},
+        message: (fact) => sink.message?.(fact),
         transcript: () => {},
         activity: () => {},
         stderr: sink.stderr,
@@ -187,21 +177,6 @@ function itemCompleted(item: Record<string, unknown>): CodexAppServerEvent {
     turnId: TURN_ID,
     completedAtMs: 1,
   });
-}
-
-function agentMessageDelta(
-  translate: ReturnType<typeof createCodexTranslator>,
-  itemId: string,
-  delta: string,
-) {
-  return translate(
-    event("item/agentMessage/delta", {
-      threadId: THREAD_ID,
-      turnId: TURN_ID,
-      itemId,
-      delta,
-    }),
-  );
 }
 
 function agent(
@@ -560,7 +535,7 @@ test("Codex App Server sends the ephemeral handshake and one prompt", async () =
     effort: "none",
     spawn: (() => child) as unknown as ChildProcessSpawn,
   });
-  const sink = { event: () => undefined, stderr: () => {} };
+  const sink = { stderr: () => {} };
   assert.deepEqual(await source(sink, new AbortController().signal), {
     ending: "answered",
   });
@@ -2641,354 +2616,6 @@ test("a steering server rejection racing semantic completion preserves the answe
   ]);
 });
 
-test("Codex translator maps pinned events without leaking provider ids", () => {
-  const translate = createCodexTranslator("/work");
-  assert.deepEqual(
-    translate(
-      event("item/completed", {
-        threadId: THREAD_ID,
-        turnId: TURN_ID,
-        item: {
-          type: "commandExecution",
-          id: "item-id",
-          command: "echo hi",
-          cwd: "/work",
-          status: "completed",
-          aggregatedOutput: null,
-          exitCode: 0,
-          durationMs: 1,
-          commandActions: [],
-        },
-        completedAtMs: 1,
-      }),
-    ),
-    {
-      facts: [
-        {
-          role: "assistant",
-          parts: [
-            {
-              type: "tool_call",
-              name: "command_execution",
-              arguments: { command: "echo hi" },
-            },
-          ],
-          usage: { turns: 0 },
-        },
-      ],
-    },
-  );
-  assert.deepEqual(translate(agent("answer")), {
-    facts: [
-      {
-        role: "assistant",
-        parts: [{ type: "text", text: "answer" }],
-        usage: { turns: 0 },
-      },
-    ],
-    terminal: true,
-  });
-  assert.equal(translate(agent("legacy answer", undefined))?.terminal, true);
-
-  const commentary = createCodexTranslator("/work");
-  assert.equal(commentary(agent("working", "commentary"))?.terminal, false);
-  assert.deepEqual(commentary(completedTurn()), {
-    terminal: true,
-    activity: null,
-  });
-
-  const facts = translate(agent("answer"))?.facts ?? [];
-  assert.equal(JSON.stringify(facts).includes("provider"), false);
-  assert.equal(JSON.stringify(facts).includes("thread"), false);
-});
-
-test("Codex translator reports normalized live activity", () => {
-  const translate = createCodexTranslator("/work");
-  assert.deepEqual(
-    translate(
-      event("item/started", {
-        threadId: THREAD_ID,
-        turnId: TURN_ID,
-        item: {
-          type: "commandExecution",
-          id: "command-item",
-          command: "/bin/zsh -lc 'echo   hi'",
-          cwd: "/work",
-          status: "inProgress",
-          aggregatedOutput: null,
-          exitCode: null,
-          durationMs: null,
-          commandActions: [],
-        },
-      }),
-    ),
-    { activity: "$ /bin/zsh -lc 'echo hi'" },
-  );
-  assert.deepEqual(
-    translate(
-      event("item/started", {
-        threadId: THREAD_ID,
-        turnId: TURN_ID,
-        item: { type: "fileChange", changes: [{ path: "/work/src/index.ts" }] },
-      }),
-    ),
-    { activity: "Editing src/index.ts" },
-  );
-  assert.deepEqual(
-    translate(
-      event("item/started", {
-        threadId: THREAD_ID,
-        turnId: TURN_ID,
-        item: { type: "reasoning" },
-      }),
-    ),
-    { activity: "Thinking…" },
-  );
-  assert.deepEqual(
-    translate(
-      event("item/started", {
-        threadId: THREAD_ID,
-        turnId: TURN_ID,
-        item: { type: "plan" },
-      }),
-    ),
-    { activity: "Planning…" },
-  );
-  assert.deepEqual(
-    translate(
-      event("item/reasoning/summaryTextDelta", {
-        threadId: THREAD_ID,
-        turnId: TURN_ID,
-        itemId: "r",
-        delta: "**Inspecting auth**\nmore",
-        summaryIndex: 0,
-      }),
-    ),
-    { activity: "Inspecting auth" },
-  );
-  assert.deepEqual(
-    translate(
-      event("item/agentMessage/delta", {
-        threadId: THREAD_ID,
-        turnId: TURN_ID,
-        itemId: "m",
-        delta: "answer",
-      }),
-    ),
-    { activity: "answer" },
-  );
-  assert.deepEqual(
-    translate(
-      event("item/started", {
-        threadId: THREAD_ID,
-        turnId: TURN_ID,
-        item: { type: "webSearch", query: "latest auth docs" },
-      }),
-    ),
-    { activity: "Searching: latest auth docs" },
-  );
-  assert.deepEqual(
-    translate(
-      event("item/started", {
-        threadId: THREAD_ID,
-        turnId: TURN_ID,
-        item: { type: "mcpToolCall", tool: "lookup" },
-      }),
-    ),
-    { activity: "Calling lookup…" },
-  );
-  assert.equal(
-    translate(
-      event("item/started", {
-        threadId: THREAD_ID,
-        turnId: TURN_ID,
-        item: { type: "mcpToolCall", tool: "x".repeat(200) },
-      }),
-    )?.activity?.length,
-    120,
-  );
-});
-
-test("Codex previews streaming agent messages without making them durable", () => {
-  const translate = createCodexTranslator("/work");
-  const delta = (itemId: string, text: string) =>
-    agentMessageDelta(translate, itemId, text);
-
-  assert.deepEqual(delta("message-1", "First"), { activity: "First" });
-  assert.deepEqual(delta("message-1", " sentence. "), {
-    activity: "First sentence.",
-  });
-  assert.deepEqual(delta("message-1", "Second"), { activity: "Second" });
-  assert.deepEqual(delta("message-1", " sentence."), {
-    activity: "Second sentence.",
-  });
-  assert.deepEqual(delta("message-1", "\n\n"), {
-    activity: "Second sentence.",
-  });
-  assert.deepEqual(delta("message-2", "Version v1.2 is ready"), {
-    activity: "Version v1.2 is ready",
-  });
-  assert.deepEqual(delta("message-3", "## **Summary**"), {
-    activity: "Summary",
-  });
-  assert.deepEqual(delta("message-4", "- _ran_ agent_start"), {
-    activity: "ran agent_start",
-  });
-  assert.deepEqual(delta("message-4", " and __checked__ PI_SUBAGENT_DEPTH"), {
-    activity: "ran agent_start and __checked__ PI_SUBAGENT_DEPTH",
-  });
-  assert.deepEqual(delta("message-4", " via agent__start"), {
-    activity:
-      "ran agent_start and __checked__ PI_SUBAGENT_DEPTH via agent__start",
-  });
-  assert.deepEqual(delta("message-5", "```"), {
-    activity: "Writing response…",
-  });
-
-  const preview = delta("message-6", "still ephemeral");
-  assert.deepEqual(preview, { activity: "still ephemeral" });
-});
-
-test("Codex strips only paired unambiguous markdown from prose previews", () => {
-  const translate = createCodexTranslator("/work");
-  const preview = agentMessageDelta(
-    translate,
-    "markdown-and-code",
-    "**bold** _italic_ ~~strike~~ `code` _private __dirname __init__ __checked__ value_ ~/.config *.ts *ptr",
-  );
-
-  assert.deepEqual(preview, {
-    activity:
-      "bold italic strike code _private __dirname __init__ __checked__ value_ ~/.config *.ts *ptr",
-  });
-});
-
-test("Codex previews the advancing tail of a long current sentence", () => {
-  const translate = createCodexTranslator("/work");
-  const delta = (text: string) =>
-    agentMessageDelta(translate, "long-message", text);
-
-  const opening = `Working through ${"the implementation details ".repeat(6)}`;
-  const first = delta(opening)?.activity;
-  const second = delta("and now the final verification is running")?.activity;
-
-  assert.equal(first?.length, 120);
-  assert.match(first ?? "", /implementation details$/);
-  assert.equal(second?.length, 120);
-  assert.match(second ?? "", /final verification is running$/);
-  assert.notEqual(second, first);
-});
-
-test("Codex isolates interleaved message previews and preserves fallback activity", () => {
-  const translate = createCodexTranslator("/work");
-  const delta = (itemId: string, text: string) =>
-    agentMessageDelta(translate, itemId, text);
-
-  assert.deepEqual(delta("one", "First item is "), {
-    activity: "First item is",
-  });
-  assert.deepEqual(delta("two", "Second item is complete."), {
-    activity: "Second item is complete.",
-  });
-  assert.deepEqual(delta("one", "still writing."), {
-    activity: "First item is still writing.",
-  });
-  assert.deepEqual(delta("two", "\n\n"), {
-    activity: "Second item is complete.",
-  });
-  assert.deepEqual(delta("three", "   \n\t"), {
-    activity: "Writing response…",
-  });
-  assert.deepEqual(delta("four", "~~~typescript"), {
-    activity: "Writing response…",
-  });
-});
-
-test("Codex bounds and clears streaming message previews independently", () => {
-  const translate = createCodexTranslator("/work");
-  const delta = (itemId: string, text: string) =>
-    agentMessageDelta(translate, itemId, text);
-  const fullText = `Answer: ${"x".repeat(3_000)}`;
-
-  assert.equal(delta("message-1", fullText)?.activity?.length, 120);
-  assert.deepEqual(
-    translate(
-      itemCompleted({
-        type: "agentMessage",
-        id: "message-1",
-        text: fullText,
-        phase: "final_answer",
-      }),
-    )?.facts?.[0]?.parts,
-    [{ type: "text", text: fullText }],
-  );
-  assert.deepEqual(delta("message-1", "fresh"), { activity: "fresh" });
-});
-
-test("Codex command output deltas surface the latest meaningful line", () => {
-  const translate = createCodexTranslator("/work");
-  const outputDelta = (itemId: string, delta: string) =>
-    translate(
-      event("item/commandExecution/outputDelta", {
-        threadId: THREAD_ID,
-        turnId: TURN_ID,
-        itemId,
-        delta,
-      }),
-    );
-  translate(
-    event("item/started", {
-      threadId: THREAD_ID,
-      turnId: TURN_ID,
-      item: {
-        type: "commandExecution",
-        id: "command-1",
-        command: "npm test",
-        cwd: "/work",
-        status: "inProgress",
-        aggregatedOutput: null,
-        exitCode: null,
-        durationMs: null,
-        commandActions: [],
-      },
-    }),
-  );
-  // Blank output does not overwrite the current activity.
-  assert.equal(outputDelta("command-1", "\n  \n"), undefined);
-  assert.deepEqual(outputDelta("command-1", "PASS src/index.test.ts\n"), {
-    activity: "$ npm test · PASS src/index.test.ts",
-  });
-  // Carriage-return progress rewrites count as the latest line.
-  assert.deepEqual(outputDelta("command-1", "\rTests 12/40"), {
-    activity: "$ npm test · Tests 12/40",
-  });
-  // Output for a command that never announced itself still shows progress.
-  assert.deepEqual(outputDelta("command-2", "compiling worker\n"), {
-    activity: "compiling worker",
-  });
-  // A long command leaves room for the output line.
-  translate(
-    event("item/started", {
-      threadId: THREAD_ID,
-      turnId: TURN_ID,
-      item: {
-        type: "commandExecution",
-        id: "command-3",
-        command: `run ${"x".repeat(200)}`,
-        cwd: "/work",
-        status: "inProgress",
-        aggregatedOutput: null,
-        exitCode: null,
-        durationMs: null,
-        commandActions: [],
-      },
-    }),
-  );
-  const long = outputDelta("command-3", "done\n");
-  assert.equal(long?.activity?.endsWith("· done"), true);
-  assert.equal((long?.activity?.length ?? 0) <= 120, true);
-});
-
 test("one retained App Server owns cumulative usage while fresh Turn translators report local deltas", async () => {
   const totals = [
     [
@@ -3258,31 +2885,6 @@ test("one retained App Server owns cumulative usage while fresh Turn translators
   await session.close();
 });
 
-test("Codex retryable errors are activity; fatal errors are facts", () => {
-  const translate = createCodexTranslator("/work");
-  const retry = translate(
-    event("error", {
-      threadId: THREAD_ID,
-      turnId: TURN_ID,
-      error: { message: "temporary" },
-      willRetry: true,
-    }),
-  );
-  const fatal = translate(
-    event("error", {
-      threadId: THREAD_ID,
-      turnId: TURN_ID,
-      error: { message: "permanent" },
-      willRetry: false,
-    }),
-  );
-  assert.deepEqual(retry, { activity: "Retrying after a provider error…" });
-  assert.deepEqual(fatal, {
-    facts: [{ role: "metadata", parts: [], errorMessage: "permanent" }],
-    errorMessage: "permanent",
-  });
-});
-
 test("Codex preserves profile validation, effort mapping, and prompt composition", () => {
   const harness = createCodexHarness();
   const profile: AgentConfig = {
@@ -3385,16 +2987,18 @@ test("App Server filters foreign/unknown notifications and answers server reques
   const stderr: string[] = [];
   const conclusion = await source(
     {
-      event: (value) => {
-        forwarded.push(value.method);
-        return undefined;
-      },
+      message: (fact) =>
+        forwarded.push(
+          ...fact.parts.flatMap((part) =>
+            part.type === "text" ? [part.text] : [],
+          ),
+        ),
       stderr: (value) => stderr.push(value),
     },
     new AbortController().signal,
   );
   assert.deepEqual(conclusion, { ending: "answered" });
-  assert.deepEqual(forwarded, ["item/completed", "turn/completed"]);
+  assert.deepEqual(forwarded, ["answer"]);
   assert.deepEqual(writes.at(-1), {
     jsonrpc: "2.0",
     id: 99,
@@ -3427,10 +3031,7 @@ test("App Server cancellation interrupts the known turn before escalating", asyn
     killEscalationMs: 500,
     spawn: (() => child) as unknown as ChildProcessSpawn,
   });
-  const pending = source(
-    { event: () => undefined, stderr: () => {} },
-    controller.signal,
-  );
+  const pending = source({ stderr: () => {} }, controller.signal);
   assert.deepEqual(await pending, { ending: "cancelled" });
   assert.deepEqual(interrupt?.params, { threadId: THREAD_ID, turnId: TURN_ID });
   assert.deepEqual(child.signals, []);
@@ -3462,12 +3063,8 @@ test("App Server escalates an ignored interrupt from SIGTERM to SIGKILL", async 
     killEscalationMs: 5,
     spawn: (() => child) as unknown as ChildProcessSpawn,
   });
-  assert.deepEqual(
-    await source(
-      { event: () => undefined, stderr: () => {} },
-      controller.signal,
-    ),
-    { ending: "cancelled" },
-  );
+  assert.deepEqual(await source({ stderr: () => {} }, controller.signal), {
+    ending: "cancelled",
+  });
   assert.deepEqual(child.signals, ["SIGTERM", "SIGKILL"]);
 });

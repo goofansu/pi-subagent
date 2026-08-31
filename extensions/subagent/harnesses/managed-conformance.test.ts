@@ -5,7 +5,7 @@ import { PassThrough } from "node:stream";
 import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { RunEnding } from "../run.ts";
-import { type ClaudeQuery, createClaudeHarness } from "./claude/harness.ts";
+import { createClaudeHarness } from "./claude/harness.ts";
 import type { ChildProcessSpawn } from "./codex/app-server.ts";
 import { createCodexHarness } from "./codex/harness.ts";
 import type { Harness, HarnessAdapter } from "./contract.ts";
@@ -15,6 +15,12 @@ import {
 } from "./managed-conformance.ts";
 import type { PiSession, PiSessionFactory } from "./pi/agent.ts";
 import { createPiHarness } from "./pi/harness.ts";
+
+type ClaudeQueryLoader = Exclude<
+  Parameters<typeof createClaudeHarness>[0],
+  undefined
+>;
+type ClaudeQuery = Awaited<ReturnType<ClaudeQueryLoader>>;
 
 function observation(): ManagedConformanceObservation & {
   executionStarted(): void;

@@ -34,11 +34,14 @@ import { createHarnessRegistry } from "../contract.ts";
 import {
   buildClaudeOptions,
   CLAUDE_MODEL_ALIASES,
-  type ClaudeQuery,
-  type ClaudeQueryLoader,
   createClaudeHarness,
-  createClaudeTranslator,
 } from "./harness.ts";
+
+type ClaudeQueryLoader = Exclude<
+  Parameters<typeof createClaudeHarness>[0],
+  undefined
+>;
+type ClaudeQuery = Awaited<ReturnType<ClaudeQueryLoader>>;
 
 const config: AgentConfig = {
   name: "worker",
@@ -207,10 +210,6 @@ function refusalFallback(): SDKModelRefusalFallbackMessage {
     uuid: "00000000-0000-4000-8000-000000000006",
     session_id: "00000000-0000-4000-8000-000000000099",
   };
-}
-
-function factsFrom(message: SDKMessage) {
-  return createClaudeTranslator()(message)?.facts ?? [];
 }
 
 async function runClaudeMessages(messages: SDKMessage[]) {
@@ -625,7 +624,7 @@ test("Claude children carry a nontrivial depth and inherit the environment", () 
   }
 });
 
-test("SDK assistant messages translate tool calls with one turn delta", () => {
+test("SDK assistant messages translate tool calls with one turn delta", async () => {
   const assistant = assistantMessage("msg-tool", [
     {
       type: "tool_use",
@@ -634,18 +633,28 @@ test("SDK assistant messages translate tool calls with one turn delta", () => {
       input: { file_path: "a.ts" },
     },
   ]);
-  const [live] = factsFrom(assistant);
-  assert.deepEqual(live.parts, [
+  const result = await runClaudeMessages([assistant, resultMessage("done")]);
+  const live = result.messages.find((fact) =>
+    fact.parts.some((part) => part.type === "tool_call"),
+  );
+  assert.deepEqual(live?.parts, [
     { type: "tool_call", name: "Read", arguments: { file_path: "a.ts" } },
   ]);
-  assert.equal(live.usage?.turns, 1);
+  assert.equal(live?.usage?.turns, 1);
 });
 
-test("Claude keeps model metadata from an empty assistant message", () => {
-  const [fact] = factsFrom(
+test("Claude keeps model metadata from an empty assistant message", async () => {
+  const result = await runClaudeMessages([
     assistantMessage("msg-thinking", [
       { type: "thinking", thinking: "planning", signature: "signature" },
     ]),
+    resultMessage("done"),
+  ]);
+  const fact = result.messages.find(
+    (candidate) =>
+      candidate.role === "assistant" &&
+      candidate.parts.length === 0 &&
+      candidate.usage?.turns === 1,
   );
 
   assert.deepEqual(fact, {
@@ -656,8 +665,14 @@ test("Claude keeps model metadata from an empty assistant message", () => {
   });
 });
 
-test("Claude translates init provenance as metadata without usage", () => {
-  const [fact] = factsFrom(initMessage("claude-opus-5"));
+test("Claude translates init provenance as metadata without usage", async () => {
+  const result = await runClaudeMessages([
+    initMessage("claude-opus-5"),
+    resultMessage("done"),
+  ]);
+  const fact = result.messages.find(
+    (candidate) => candidate.role === "metadata",
+  );
 
   assert.deepEqual(fact, {
     role: "metadata",
@@ -666,7 +681,7 @@ test("Claude translates init provenance as metadata without usage", () => {
   });
 });
 
-test("Claude keeps terminal facts when a successful result has empty text", () => {
+test("Claude keeps terminal facts when a successful result has empty text", async () => {
   const terminalWithCompatibleModel = {
     ...resultMessage("", {
       num_turns: 2,
@@ -685,7 +700,8 @@ test("Claude keeps terminal facts when a successful result has empty text", () =
     // though the installed SDK result type does not currently declare it.
     model: "claude-sonnet-4-6",
   };
-  const [fact] = factsFrom(terminalWithCompatibleModel);
+  const result = await runClaudeMessages([terminalWithCompatibleModel]);
+  const fact = result.messages.at(-1);
 
   assert.deepEqual(fact, {
     role: "assistant",
@@ -830,80 +846,66 @@ test("Claude shows completed provider turns while it is still running", async ()
   assert.equal(result.usage.turns, 5, "a higher terminal total catches up");
 });
 
-test("Claude translator stamps one nonnegative integer delta on each accounting event", () => {
-  const translate = createClaudeTranslator();
-  const events: SDKMessage[] = [
-    assistantMessage("msg-1", [
-      { type: "text", text: "first", citations: null },
-    ]),
-    assistantMessage("msg-1", [
-      { type: "text", text: "same response", citations: null },
-    ]),
-    assistantMessage(
-      "sidechain-msg",
-      [{ type: "text", text: "sidechain", citations: null }],
-      { parent_tool_use_id: "tool-1" },
-    ),
-    resultMessage("done", { num_turns: 1 }),
-  ];
-
-  for (const event of events) {
-    const translation = translate(event);
-    assert.ok(translation);
-    assert.equal(translation.facts?.length, 1);
-    const accountingFacts =
-      translation.facts?.filter((fact) => fact.usage?.turns !== undefined) ??
-      [];
-    assert.equal(accountingFacts.length, 1);
-    const delta = accountingFacts[0]?.usage?.turns;
-    assert.equal(Number.isFinite(delta), true);
-    assert.equal(Number.isInteger(delta), true);
-    assert.ok((delta ?? -1) >= 0);
-  }
-
-  const [metadata] = translate(initMessage("claude-sonnet-4-6"))?.facts ?? [];
-  assert.equal(metadata?.role, "metadata");
-  assert.equal(metadata?.usage, undefined);
-});
-
-test("Claude differences cumulative accounting at every provider Result boundary", () => {
-  const translate = createClaudeTranslator();
+test("Claude differences cumulative accounting at every provider Result boundary", async () => {
   const totals = [
     { inputTokens: 10, outputTokens: 4, costUSD: 0.1 },
     { inputTokens: 16, outputTokens: 9, costUSD: 0.25 },
     // A provider-side counter reset begins a new nonnegative segment.
     { inputTokens: 3, outputTokens: 2, costUSD: 0.04 },
   ];
-  const deltas = totals.map((usage, index) => {
-    const translation = translate(
-      resultMessage(`result ${index}`, {
-        num_turns: index + 1,
-        total_cost_usd: usage.costUSD,
-        modelUsage: {
-          "claude-sonnet-4-6": modelUsage(usage),
-        },
-      }),
-    );
-    return translation?.facts?.[0]?.usage;
+  let openReady = () => {};
+  const ready = new Promise<void>((resolve) => {
+    openReady = resolve;
   });
+  const query: ClaudeQuery = ({ prompt }) =>
+    ({
+      async *[Symbol.asyncIterator]() {
+        assert.notEqual(typeof prompt, "string");
+        const iterator = (prompt as AsyncIterable<SDKUserMessage>)[
+          Symbol.asyncIterator
+        ]();
+        await iterator.next();
+        openReady();
+        for (const [index, usage] of totals.entries()) {
+          const control = await iterator.next();
+          assert.equal(control.done, false);
+          yield {
+            ...resultMessage(`result ${index}`, {
+              num_turns: index + 1,
+              total_cost_usd: usage.costUSD,
+              modelUsage: {
+                "claude-sonnet-4-6": modelUsage(usage),
+              },
+            }),
+            user_message_uuid: control.value.uuid,
+          } as SDKMessage;
+        }
+      },
+      close() {},
+    }) as never;
+  const runs = createSubagentRuns();
+  const started = startSubagent({
+    config,
+    description: "cumulative Claude accounting",
+    prompt: "start",
+    harnesses: createHarnessRegistry([createClaudeHarness(async () => query)]),
+    runs,
+  });
+  await ready;
+  for (const text of ["first", "second", "third"])
+    assert.equal(runs.offer(started.id, { type: "steer", text }), "accepted");
+
+  const result = await started.settled;
 
   assert.deepEqual(
-    deltas.map((usage) => ({
-      input: usage?.input,
-      output: usage?.output,
-      cost: usage?.cost,
-    })),
-    [
-      { input: 10, output: 4, cost: 0.1 },
-      { input: 6, output: 5, cost: 0.15 },
-      { input: 3, output: 2, cost: 0.04 },
-    ],
+    {
+      input: result.usage.input,
+      output: result.usage.output,
+      cost: result.usage.cost,
+      turns: result.usage.turns,
+    },
+    { input: 19, output: 11, cost: 0.29, turns: 3 },
   );
-  for (const usage of deltas) {
-    assert.ok((usage?.input ?? -1) >= 0);
-    assert.ok((usage?.output ?? -1) >= 0);
-    assert.ok((usage?.cost ?? -1) >= 0);
-  }
 });
 
 test("Claude rejects a successful Result without an authoritative Conversation identity", async () => {
@@ -1832,8 +1834,8 @@ test("an empty Claude result carries turns into the widget", async () => {
   assert.match(lines[1] ?? "", /2 turns/);
 });
 
-test("Claude confines the SDK error text on an error-flagged success result", () => {
-  const [fact] = factsFrom(
+test("Claude confines the SDK error text on an error-flagged success result", async () => {
+  const result = await runClaudeMessages([
     resultMessage(
       // This is the SDK's success-subtype API-error shape: result is the
       // provider diagnostic, not an answer to show the user.
@@ -1845,10 +1847,11 @@ test("Claude confines the SDK error text on an error-flagged success result", ()
         total_cost_usd: 0.01,
       },
     ),
-  );
+  ]);
+  const fact = result.messages.at(-1);
 
-  assert.equal(fact.errorMessage, "Claude query failed: [redacted]");
-  assert.deepEqual(fact.parts, []);
+  assert.equal(fact?.errorMessage, "Claude query failed: [redacted]");
+  assert.deepEqual(fact?.parts, []);
 });
 
 test("Claude confines provider identities in stderr, Facts, and failed Results", async () => {
@@ -2140,8 +2143,8 @@ test("Claude cancellation stays cancelled when abort closes the stream gracefull
   }
 });
 
-test("Claude does not infer provenance from one terminal usage entry", () => {
-  const [fact] = factsFrom(
+test("Claude does not infer provenance from one terminal usage entry", async () => {
+  const result = await runClaudeMessages([
     resultMessage("answer", {
       modelUsage: {
         "claude-sonnet-4-6": modelUsage({
@@ -2150,13 +2153,14 @@ test("Claude does not infer provenance from one terminal usage entry", () => {
         }),
       },
     }),
-  );
+  ]);
+  const fact = result.messages.at(-1);
 
-  assert.equal(fact.model, undefined);
+  assert.equal(fact?.model, undefined);
 });
 
-test("Claude does not infer provenance from multiple terminal usage entries", () => {
-  const [fact] = factsFrom(
+test("Claude does not infer provenance from multiple terminal usage entries", async () => {
+  const result = await runClaudeMessages([
     resultMessage("answer", {
       modelUsage: {
         "claude-haiku-4-5-20251001": modelUsage({
@@ -2169,9 +2173,10 @@ test("Claude does not infer provenance from multiple terminal usage entries", ()
         }),
       },
     }),
-  );
+  ]);
+  const fact = result.messages.at(-1);
 
-  assert.equal(fact.model, undefined);
-  assert.equal(fact.usage?.input, 12);
-  assert.equal(fact.usage?.output, 5);
+  assert.equal(fact?.model, undefined);
+  assert.equal(fact?.usage?.input, 12);
+  assert.equal(fact?.usage?.output, 5);
 });

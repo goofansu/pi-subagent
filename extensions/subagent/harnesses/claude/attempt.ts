@@ -32,12 +32,10 @@ interface ClaudeTranslation {
   errorMessage?: string;
 }
 
-export type ClaudeQuery = (params: {
+type ClaudeQuery = (params: {
   prompt: string | AsyncIterable<SDKUserMessage>;
   options?: Options;
 }) => Query;
-export type ClaudeQueryLoader = () => Promise<ClaudeQuery>;
-
 type ClaudeTurnCounter = {
   countFor(message: SDKMessage): number;
 };
@@ -48,9 +46,7 @@ type ClaudeTurnCounter = {
  * an earlier additive delta; terminal totals therefore catch up but never lower
  * provisional accounting.
  */
-// TODO(ticket 05): Exported only for the temporary turns.ts compatibility
-// surface. Attempt execution is this helper's production owner.
-export function createClaudeTurnCounter(): ClaudeTurnCounter {
+function createClaudeTurnCounter(): ClaudeTurnCounter {
   const seenRootMessageIds = new Set<string>();
   let emittedTurns = 0;
 
@@ -273,9 +269,7 @@ function translateClaudeMessage(
  * type. A provider turn is therefore one unique root assistant message id,
  * not one assistant event.
  */
-// TODO(ticket 05): Exported only for existing provider helper tests. Attempt
-// execution is this translator's production owner.
-export function createClaudeTranslator(): (
+function createClaudeTranslator(): (
   message: SDKMessage,
 ) => ClaudeTranslation | undefined {
   const turnCounter = createClaudeTurnCounter();

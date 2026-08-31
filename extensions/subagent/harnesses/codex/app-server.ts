@@ -4,10 +4,13 @@ import {
   type SpawnOptions,
 } from "node:child_process";
 import type { ControlSource } from "../../control-source.ts";
-import { DEPTH_ENV_KEY, type RunEnding, type RunReporter } from "../../run.ts";
-import { type CodexTranslation, runCodexAttempt } from "./attempt.ts";
-
-export type { CodexTranslation } from "./attempt.ts";
+import {
+  DEPTH_ENV_KEY,
+  type Fact,
+  type RunEnding,
+  type RunReporter,
+} from "../../run.ts";
+import { runCodexAttempt } from "./attempt.ts";
 
 const STDOUT_LINE_LIMIT = 32 * 1024 * 1024;
 const RAW_STDOUT_TAIL_LIMIT = 2000;
@@ -35,6 +38,14 @@ export type ChildProcessSpawn = (
   args: readonly string[],
   options: SpawnOptions,
 ) => ChildProcess;
+
+interface CodexTranslation {
+  facts?: Fact[];
+  transcript?: Fact[];
+  activity?: string | null;
+  terminal?: boolean;
+  errorMessage?: string;
+}
 
 export interface CodexAppServerJsonRpcError {
   readonly code: number;
@@ -241,6 +252,7 @@ export interface CodexAppServerSessionOptions {
 
 export interface CodexAppServerTurnOptions {
   readonly prompt: string;
+  /** Internal transport-test adapter; production uses Attempt-owned translation. */
   readonly translate?: (
     event: CodexAppServerEvent,
   ) => CodexTranslation | undefined;

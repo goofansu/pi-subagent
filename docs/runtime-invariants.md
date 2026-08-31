@@ -17,6 +17,13 @@ never adapter lifetime. Session shutdown closes idle and active adapters. Core
 receives no provider continuation handle. Pi, Claude, and Codex adapters alone
 know provider wire messages and translate them into `Fact` records. The
 dispatcher, fold, registry, presentation, and widget consume only those facts.
+A prepared Run is not an Attempt and owns no provider attachment. Execution
+starts one provider-specific Attempt, which owns Run-local provider resources
+until cleanup completes and then returns a candidate Ending. The dispatcher
+retains authoritative Fact and usage folding, cancellation reason, lifecycle
+settlement, Result creation, and Notification delivery. The prepared adapter
+retains cross-Run Conversation state; an idle Subagent may retain that
+Conversation but never an Attempt.
 Input/output/cache counters, turns, and cost on a fact are additive deltas and
 the fold sums them. Usage turn deltas are nonnegative finite integers;
 `contextTokens` is a latest-value gauge, so the fold

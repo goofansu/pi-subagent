@@ -24,7 +24,7 @@ const AGENT_MESSAGE_TAIL_LIMIT = 2048;
 const STEERING_DIAGNOSTIC_LIMIT = 1024;
 const RESULT_DIAGNOSTIC_LIMIT = 1024;
 
-export interface CodexTranslation {
+interface CodexTranslation {
   facts?: Fact[];
   transcript?: Fact[];
   /** Live UI activity: absent leaves it unchanged, null clears it. */
@@ -205,7 +205,7 @@ function reasoningHeadline(summary: string): string | undefined {
 }
 
 /** Create the fresh stateful translator for one Codex Attempt. */
-export function createCodexTranslator(
+function createCodexTranslator(
   cwd: string,
 ): (event: CodexAppServerEvent) => CodexTranslation | undefined {
   const reasoning = new Map<string, string>();

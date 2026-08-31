@@ -182,20 +182,12 @@ test("a deterministic transport retains a pre-identity Control for the current T
     controls: controls.controls,
     report: reporter(facts),
     missingAnswerMessage: "missing",
-    translate: (event) =>
-      event.method === "turn/completed"
-        ? {
-            facts: [
-              { role: "assistant", parts: [{ type: "text", text: "ok" }] },
-            ],
-            terminal: true,
-          }
-        : undefined,
   });
 
   assert.deepEqual(transport.steers, []);
   transport.releaseTurn();
   assert.deepEqual(transport.steers, ["guidance before identity"]);
+  transport.emit(completedAgentMessage());
   transport.emit(completed());
   assert.deepEqual(await settled, { ending: "answered" });
   assert.equal(facts.at(-1)?.parts[0]?.type, "text");
@@ -240,12 +232,14 @@ test("transport occurrences retain provider-before-close order within one frame"
     prompt: "goal",
     report: reporter([]),
     missingAnswerMessage: "missing",
-    translate: (event) =>
-      event.method === "turn/completed" ? { terminal: true } : undefined,
   });
   transport.releaseTurn();
 
   transport.frame([
+    {
+      type: "provider-message",
+      message: { consume: () => completedAgentMessage() },
+    },
     {
       type: "provider-message",
       message: { consume: () => completed() },
@@ -264,23 +258,18 @@ test("unknown provider notifications are ignored through the transport seam", as
     { cwd: "/work", childDepth: 1 },
     transport,
   );
-  const translated: string[] = [];
   const settled = session.runNextTurn({
     prompt: "goal",
     report: reporter([]),
     missingAnswerMessage: "missing",
-    translate: (event) => {
-      translated.push(event.method);
-      return event.method === "turn/completed" ? { terminal: true } : undefined;
-    },
   });
   transport.releaseTurn();
 
   transport.emitUnknownNotification();
+  transport.emit(completedAgentMessage());
   transport.emit(completed());
 
   assert.deepEqual(await settled, { ending: "answered" });
-  assert.deepEqual(translated, ["turn/completed"]);
   await session.close();
 });
 
@@ -294,19 +283,17 @@ test("one deterministic transport retains its process across sequential Turns an
     prompt: "goal",
     report: reporter([]),
     missingAnswerMessage: "missing",
-    translate: (event: CodexAppServerEvent) =>
-      event.method === "turn/completed"
-        ? { terminal: true as const }
-        : undefined,
   };
 
   const first = session.runNextTurn(turnOptions);
   transport.releaseTurn();
+  transport.emit(completedAgentMessage("turn-one"));
   transport.emit(completed("turn-one"));
   assert.deepEqual(await first, { ending: "answered" });
 
   const second = session.runNextTurn(turnOptions);
   transport.releaseTurn();
+  transport.emit(completedAgentMessage("turn-two"));
   transport.emit(completed("turn-two"));
   assert.deepEqual(await second, { ending: "answered" });
   assert.equal(transport.processAcquisitions, 1);
@@ -325,7 +312,6 @@ test("transport failure becomes one observable failed Ending", async () => {
   const settled = session.runNextTurn({
     prompt: "goal",
     missingAnswerMessage: "missing",
-    translate: () => undefined,
     report: {
       ...reporter([]),
       stderr: (text) => diagnostics.push(text),
@@ -357,7 +343,6 @@ test("escalation is reduced deterministically without timer sleeps", async () =>
     prompt: "goal",
     report: reporter([]),
     missingAnswerMessage: "missing",
-    translate: () => undefined,
   });
   transport.releaseTurn();
 

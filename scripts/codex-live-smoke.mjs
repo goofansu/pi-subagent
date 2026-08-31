@@ -7,24 +7,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createSubagentDelivery } from "../extensions/subagent/delivery.ts";
-import { createCodexAppServerSession } from "../extensions/subagent/harnesses/codex/app-server.ts";
-import {
-  createCodexHarness,
-  createCodexTranslator,
-} from "../extensions/subagent/harnesses/codex/harness.ts";
+import { createCodexHarness } from "../extensions/subagent/harnesses/codex/harness.ts";
 import { createHarnessRegistry } from "../extensions/subagent/harnesses/contract.ts";
 import { createSubagentRuns } from "../extensions/subagent/runs.ts";
 import { startSubagent } from "../extensions/subagent/standalone-run-helper.ts";
 
 const LIVE_TIMEOUT_MS = 240_000;
 const SUCCESS_MARKER = "CODEX_STEERING_LIVE_SMOKE_PASS";
-const inheritedDepth = process.env.PI_SUBAGENT_DEPTH;
-// The smoke is an operator-level release gate even when invoked by a coding
-// agent whose own environment carries depth 1. Its child still receives the
-// dispatcher's derived depth 1, so the production nesting guard is exercised.
-process.env.PI_SUBAGENT_DEPTH = "0";
-const cwd = mkdtempSync(path.join(tmpdir(), "codex-steering-live-smoke-"));
 const failures = [];
+let inheritedDepth;
+let cwd;
 let active;
 let interruption;
 
@@ -112,88 +104,92 @@ async function runSteeringSmoke() {
 
 async function runInterruptSmoke() {
   console.log("\n=== interrupt a live Codex command ===");
-  const translate = createCodexTranslator(cwd);
-  const controller = new AbortController();
-  let commandStarted = false;
-  let turnStatus;
-  const session = createCodexAppServerSession({
-    cwd,
-    childDepth: 1,
-  });
-  const pending = (async () => {
-    try {
-      return await session.runNextTurn({
-        prompt: "Run this exact shell command: `sleep 45 && echo finished`",
-        translate: (event) => {
-          if (event.method === "turn/completed")
-            turnStatus = event.params.turn.status;
-          if (
-            !commandStarted &&
-            event.method === "item/started" &&
-            event.params.item.type === "commandExecution"
-          ) {
-            commandStarted = true;
-            controller.abort();
-          }
-          return translate(event);
-        },
-        report: {
-          message: () => {},
-          transcript: () => {},
-          activity: () => {},
-          stderr: (chunk) => {
-            const text = chunk.trim();
-            if (text) console.log("  [stderr]", text.slice(0, 160));
-          },
-        },
-        signal: controller.signal,
-        missingAnswerMessage: "Live interrupt smoke ended without an answer.",
-      });
-    } finally {
-      await session.close();
-    }
-  })();
-  active = {
-    delivery: {
-      cancel: () => controller.abort(),
-      shutdown: () => controller.abort(),
-    },
-    id: "interrupt-smoke",
-    settled: pending,
+  const runs = createSubagentRuns();
+  const delivery = createSubagentDelivery({ runs, push: () => {} });
+  const config = {
+    name: "codex-live-smoke",
+    description: "Live interruption release smoke",
+    harness: "codex",
+    fields: {},
+    systemPrompt: "",
   };
-  const conclusion = await Promise.race([
-    pending,
-    waitForTimeout(() => controller.abort()),
+  const started = startSubagent({
+    config,
+    description: "live interruption release smoke",
+    prompt: "Run this exact shell command: `sleep 45 && echo finished`",
+    cwd,
+    projectTrusted: false,
+    harnesses: createHarnessRegistry([createCodexHarness()]),
+    runs,
+  });
+  delivery.register(started.id, config.name, started.settled);
+  active = { delivery, id: started.id, settled: started.settled };
+
+  let commandStarted = false;
+  let cancellation;
+  const observeActivity = () => {
+    const activity = runs.list().find((run) => run.id === started.id)?.activity;
+    if (commandStarted || !activity?.includes("sleep 45")) return;
+    commandStarted = true;
+    cancellation = delivery.cancel([started.id]);
+  };
+  const unsubscribe = runs.subscribe(observeActivity);
+  observeActivity();
+
+  const result = await Promise.race([
+    started.settled,
+    waitForTimeout(() => delivery.cancel([started.id])),
     waitForInterruption(),
-  ]);
+  ]).finally(() => {
+    unsubscribe();
+  });
+  await delivery.wait([started.id]);
   active = undefined;
+
   check("interrupt target command started", commandStarted);
   check(
-    "interrupt transport settles cancelled",
-    conclusion?.ending === "cancelled",
+    "command-start activity admits one cancellation request",
+    cancellation?.cancelled.includes(started.id) === true,
   );
-  check("provider reports interrupted Turn", turnStatus === "interrupted");
+  check(
+    "production Harness settles the interrupted Run as requested cancellation",
+    result.lifecycle.phase === "cancelled" &&
+      result.lifecycle.reason === "requested",
+  );
+  delivery.shutdown();
 }
 
-try {
-  await runSteeringSmoke();
-  await runInterruptSmoke();
-} catch (error) {
-  failures.push(error instanceof Error ? error.message : String(error));
-} finally {
-  if (active) {
-    active.delivery.cancel([active.id]);
-    active.delivery.shutdown();
-    await active.settled.catch(() => {});
+async function main() {
+  inheritedDepth = process.env.PI_SUBAGENT_DEPTH;
+  // The smoke is an operator-level release gate even when invoked by a coding
+  // agent whose own environment carries depth 1. Its child still receives the
+  // dispatcher's derived depth 1, so the production nesting guard is exercised.
+  process.env.PI_SUBAGENT_DEPTH = "0";
+  cwd = mkdtempSync(path.join(tmpdir(), "codex-steering-live-smoke-"));
+  try {
+    await runSteeringSmoke();
+    await runInterruptSmoke();
+  } catch (error) {
+    failures.push(error instanceof Error ? error.message : String(error));
+  } finally {
+    if (active) {
+      active.delivery.cancel([active.id]);
+      active.delivery.shutdown();
+      await active.settled.catch(() => {});
+    }
+    rmSync(cwd, { recursive: true, force: true });
+    if (inheritedDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
+    else process.env.PI_SUBAGENT_DEPTH = inheritedDepth;
   }
-  rmSync(cwd, { recursive: true, force: true });
-  if (inheritedDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
-  else process.env.PI_SUBAGENT_DEPTH = inheritedDepth;
+
+  if (failures.length === 0) {
+    console.log(`\n${SUCCESS_MARKER}`);
+  } else {
+    console.error(`\nCODEX_STEERING_LIVE_SMOKE_FAIL — ${failures.join("; ")}`);
+    process.exitCode = interruption ? 128 : 1;
+  }
 }
 
-if (failures.length === 0) {
-  console.log(`\n${SUCCESS_MARKER}`);
-} else {
-  console.error(`\nCODEX_STEERING_LIVE_SMOKE_FAIL — ${failures.join("; ")}`);
-  process.exitCode = interruption ? 128 : 1;
-}
+if (process.env.CODEX_LIVE_SMOKE_VALIDATE_ONLY === "1")
+  console.log("CODEX_STEERING_LIVE_SMOKE_MODULE_PASS");
+else await main();
