@@ -6,12 +6,7 @@
  */
 
 import { isValidControlText } from "./control-source.ts";
-import {
-  type NotificationDeliveryEvent,
-  type NotificationDeliveryState,
-  type PushedNotification,
-  transitionNotification,
-} from "./notification-delivery.ts";
+import type { NotificationMessage } from "./notification-message.ts";
 import {
   formatExecutorRejection,
   formatNotification,
@@ -21,7 +16,8 @@ import {
 import type { SubagentRuns } from "./runs.ts";
 import type { SingleResult, TerminalLifecycleStatus } from "./types.ts";
 
-export type { PushedNotification } from "./notification-delivery.ts";
+/** A completion notification on its way to the model. */
+export type PushedNotification = NotificationMessage;
 
 /** Provider-neutral evidence from one completed parent-host turn. */
 export interface HostTurnCompletionEvidence {
@@ -199,6 +195,12 @@ interface Pending {
   result?: SingleResult;
 }
 
+/** Delivery-private state retained only while a Notification has not landed. */
+interface UnlandedNotification {
+  notification: PushedNotification;
+  knownLost: boolean;
+}
+
 export function createSubagentDelivery({
   push,
   runs,
@@ -206,7 +208,7 @@ export function createSubagentDelivery({
 }: DeliveryOptions): SubagentDelivery {
   const pending = new Map<string, Pending>();
   const results = new Map<string, RetainedResult>();
-  const notifications = new Map<string, NotificationDeliveryState>();
+  const notifications = new Map<string, UnlandedNotification>();
   let generation = 0;
 
   // Map insertion order is the result store's eviction order. Results are
@@ -249,18 +251,6 @@ export function createSubagentDelivery({
     }
   };
 
-  const applyNotificationEvent = (
-    id: string,
-    event: NotificationDeliveryEvent,
-  ): void => {
-    const current = notifications.get(id);
-    if (!current) return;
-    const transition = transitionNotification(current, event);
-    notifications.set(id, transition.state);
-    if (transition.push) safePush(transition.push);
-    if (transition.release) runs.release(id);
-  };
-
   const notify = (id: string, result: SingleResult): void => {
     if (result.lifecycle.phase === "running")
       throw new Error(formatRunningNotificationError(id));
@@ -271,8 +261,9 @@ export function createSubagentDelivery({
       status: result.lifecycle.phase,
       text: formatNotification(id, result),
     };
-    notifications.set(id, { phase: "pending", notification });
-    applyNotificationEvent(id, { type: "push" });
+    // Commit before pushing because the host may synchronously report landing.
+    notifications.set(id, { notification, knownLost: false });
+    safePush(notification);
   };
 
   return {
@@ -319,8 +310,8 @@ export function createSubagentDelivery({
             status: "failed",
             text: rejection.notification,
           };
-          notifications.set(id, { phase: "pending", notification });
-          applyNotificationEvent(id, { type: "push" });
+          notifications.set(id, { notification, knownLost: false });
+          safePush(notification);
         }
       })();
     },
@@ -358,21 +349,20 @@ export function createSubagentDelivery({
     result: (id) => results.get(id),
 
     notificationLanded(id) {
-      applyNotificationEvent(id, { type: "landed" });
+      if (notifications.delete(id)) runs.release(id);
     },
 
     hostTurnCompleted(evidence) {
       if (evidence.stopReason !== "aborted" && !evidence.signalAborted) return;
-      for (const [id, state] of notifications) {
-        if (state.phase === "awaiting-landing")
-          applyNotificationEvent(id, { type: "known-lost" });
-      }
+      for (const state of notifications.values()) state.knownLost = true;
     },
 
     agentSettled() {
-      for (const [id, state] of notifications) {
-        if (state.phase === "known-lost")
-          applyNotificationEvent(id, { type: "retry" });
+      for (const state of notifications.values()) {
+        if (!state.knownLost) continue;
+        // Commit before pushing because the retry may synchronously land.
+        state.knownLost = false;
+        safePush(state.notification);
       }
     },
 
@@ -408,8 +398,7 @@ export function createSubagentDelivery({
       runs.cancelRunning("shutdown");
       generation++;
       for (const id of pending.keys()) runs.release(id);
-      for (const id of notifications.keys())
-        applyNotificationEvent(id, { type: "shutdown" });
+      for (const id of notifications.keys()) runs.release(id);
       pending.clear();
       notifications.clear();
       results.clear();

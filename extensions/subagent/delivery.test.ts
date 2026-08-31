@@ -539,6 +539,17 @@ test("one landing per run: re-push never double-delivers", async () => {
   delivery.agentSettled();
 
   assert.equal(pushed.length, 1, "a landed report is never doubled");
+  assert.equal(runs.list().length, 0, "the first landing releases the Run");
+
+  delivery.notificationLanded(handle.id);
+  delivery.hostTurnCompleted({
+    stopReason: "aborted",
+    signalAborted: false,
+  });
+  delivery.agentSettled();
+
+  assert.equal(pushed.length, 1, "later evidence cannot revive a landing");
+  assert.equal(runs.list().length, 0, "stale landing stays released");
 });
 
 test("a settle with no preceding abort pushes nothing again", async () => {
@@ -592,6 +603,16 @@ test("a retry the interrupt discards again is pushed once more", async () => {
   delivery.agentSettled();
 
   assert.equal(pushed.length, 3, "the report keeps trying until it lands");
+
+  delivery.notificationLanded(handle.id);
+  delivery.hostTurnCompleted({
+    stopReason: "aborted",
+    signalAborted: false,
+  });
+  delivery.agentSettled();
+
+  assert.equal(pushed.length, 3, "landing ends every later retry cycle");
+  assert.equal(runs.list().length, 0);
 });
 
 test("shutdown forgets what an abort snapshotted", async () => {
@@ -607,7 +628,12 @@ test("shutdown forgets what an abort snapshotted", async () => {
     signalAborted: false,
   });
   delivery.shutdown();
+  delivery.hostTurnCompleted({
+    stopReason: "aborted",
+    signalAborted: true,
+  });
   delivery.agentSettled();
+  delivery.notificationLanded(handle.id);
 
   assert.equal(pushed.length, 1, "nothing re-pushes into the next session");
   assert.equal(runs.list().length, 0);
@@ -857,7 +883,18 @@ test("INV-9: notification failure cannot invalidate the stored result", async ()
   run.finish("survives");
   await flush();
 
-  assert.equal(delivery.result("run-1")?.output, "survives");
+  const resultBeforeRetry = structuredClone(delivery.result("run-1"));
+  const waitBeforeRetry = await delivery.wait(["run-1"]);
+
+  delivery.hostTurnCompleted({
+    stopReason: "aborted",
+    signalAborted: false,
+  });
+  delivery.agentSettled();
+
+  assert.equal(resultBeforeRetry?.output, "survives");
+  assert.deepEqual(delivery.result("run-1"), resultBeforeRetry);
+  assert.deepEqual(await delivery.wait(["run-1"]), waitBeforeRetry);
 });
 
 // ── The session push ─────────────────────────────────────────────────────────
