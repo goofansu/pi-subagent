@@ -68,7 +68,11 @@ export type ResumeManagedSubagentOutcome =
       settled: Promise<SingleResult>;
     }
   | {
-      outcome: "unknown subagent" | "already running" | "unsupported";
+      outcome:
+        | "unknown subagent"
+        | "already running"
+        | "unsupported"
+        | "conversation lost";
     };
 
 export interface SubagentManager {
@@ -205,16 +209,18 @@ export function createSubagentManager({
       if (record.state.phase === "running" || record.admittingRun) {
         return { outcome: "already running" };
       }
-      if (!record.adapter.capabilities.resume) {
-        return { outcome: "unsupported" };
-      }
-
       // This synchronous claim is the linearization point for concurrent
-      // resume calls. No queue exists: every loser returns before preparing
-      // provider work.
+      // resume calls. No queue exists: every loser returns before adapter
+      // admission or provider work.
       record.admittingRun = true;
       let started: ReturnType<typeof dispatchSubagentRun>;
       try {
+        const task = { description, prompt };
+        const admission = record.adapter.admitResume(task);
+        if (admission.outcome !== "admitted") {
+          record.admittingRun = false;
+          return { outcome: admission.outcome };
+        }
         started = dispatchSubagentRun({
           subagentId: record.id,
           agent: record.agent,
@@ -222,6 +228,7 @@ export function createSubagentManager({
           description,
           prompt,
           adapter: record.adapter,
+          preparedRun: admission.run,
           runs,
           now,
         });

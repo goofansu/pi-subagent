@@ -137,12 +137,14 @@ export function registerSubagentFeatureTools(
     description:
       "Immediately start a new asynchronous Run on an idle stable Subagent, retaining only Harness-private Conversation context. " +
       "Pass a Subagent id returned by agent_start, not a Run id. Returns the new Run id immediately, not the answer; " +
-      "use that Run id for wait, result, cancellation, and steering. Active Subagents reject resume without queueing.",
+      "use that Run id for wait, result, cancellation, and steering. Active Subagents reject resume without queueing; " +
+      "lost Conversation context starts no Run and requires a new Subagent.",
     promptSnippet:
       "Resume an idle stable subagent and return its new run id immediately",
     promptGuidelines: [
       "agent_resume takes the stable Subagent id from agent_start; agent_wait, agent_result, agent_cancel, and agent_steer take Run ids.",
       "agent_resume returns immediately with a new Run id, not the answer; continue independent work and use agent_wait when only that Run remains.",
+      "If agent_resume reports Conversation loss, start a new Subagent; no Run or provider work was started.",
     ],
     parameters: Type.Object({
       id: Type.String({

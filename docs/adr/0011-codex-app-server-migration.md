@@ -9,9 +9,10 @@ Accepted. Refines the Codex execution consequences of
 [ADR-0009](0009-codex-trust-posture-and-environment-inheritance.md), and the
 Codex protocol consequence of [ADR-0010](0010-run-endings.md). Their neutral
 fact, trust-posture, and run-ending decisions remain in force.
-[ADR-0015](0015-codex-conversation-across-disposable-attempts.md) supersedes
-only this ADR's ephemeral-thread, no-resume, and process-cleanup consequences;
-the App Server protocol and neutral Fact decisions remain in force.
+[ADR-0021](0021-retained-ephemeral-codex-conversation.md) supersedes only this
+ADR's per-Run process, persisted-thread, and continuation consequences. The App
+Server protocol, neutral Fact, provider-identity, activity, usage, cancellation,
+and semantic-settlement decisions remain in force.
 
 ## Context
 

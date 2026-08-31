@@ -6,8 +6,9 @@ Date: 2026-08-26
 
 Accepted. Codex execution details are refined by
 [ADR-0011](0011-codex-app-server-migration.md) and
-[ADR-0015](0015-codex-conversation-across-disposable-attempts.md); this ADR's
-trust posture and environment-inheritance decision remains in force.
+[ADR-0021](0021-retained-ephemeral-codex-conversation.md); the latter
+supersedes this ADR's non-ephemeral Conversation consequence. This ADR's trust
+posture and environment-inheritance decision remains in force.
 
 ## Context
 

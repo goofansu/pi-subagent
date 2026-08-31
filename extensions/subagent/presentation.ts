@@ -267,7 +267,13 @@ export function formatStartResult(
 
 export type ResumePresentationOutcome =
   | { outcome: "started"; runId: string }
-  | { outcome: "unknown subagent" | "already running" | "unsupported" };
+  | {
+      outcome:
+        | "unknown subagent"
+        | "already running"
+        | "unsupported"
+        | "conversation lost";
+    };
 
 /** The immediate result from agent_resume. */
 export function formatResumeOutcome(
@@ -295,6 +301,11 @@ export function formatResumeOutcome(
       return (
         `Cannot resume subagent ${subagentId}: its Harness does not support resume. ` +
         "No Run or provider work was started."
+      );
+    case "conversation lost":
+      return (
+        `Cannot resume subagent ${subagentId}: its Conversation was lost. ` +
+        "No Run or provider work was started. Start a new Subagent to continue."
       );
   }
 }

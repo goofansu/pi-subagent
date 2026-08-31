@@ -761,40 +761,41 @@ export function createClaudeHarness(
       let closed = false;
       let closePromise: Promise<void> | undefined;
       const closeController = new AbortController();
+      const prepareRun: HarnessAdapter["prepareRun"] = (task) => ({
+        supportedControls: ["steer"],
+        async execute(run) {
+          if (closed || run.signal?.aborted) return { ending: "cancelled" };
+          if (active) {
+            return {
+              ending: "failed",
+              errorMessage: "Claude adapter already has an active Run",
+            };
+          }
+          const execution = runClaudeAttempt(
+            run,
+            task,
+            context,
+            model,
+            effort,
+            loadQuery,
+            continuation,
+            (identity) => {
+              if (continuation === undefined) continuation = identity;
+            },
+            closeController.signal,
+          );
+          active = execution;
+          try {
+            return await execution;
+          } finally {
+            if (active === execution) active = undefined;
+          }
+        },
+      });
       return {
-        capabilities: { resume: true },
         model,
-        prepareRun: (task) => ({
-          supportedControls: ["steer"],
-          async execute(run) {
-            if (closed || run.signal?.aborted) return { ending: "cancelled" };
-            if (active) {
-              return {
-                ending: "failed",
-                errorMessage: "Claude adapter already has an active Run",
-              };
-            }
-            const execution = runClaudeAttempt(
-              run,
-              task,
-              context,
-              model,
-              effort,
-              loadQuery,
-              continuation,
-              (identity) => {
-                if (continuation === undefined) continuation = identity;
-              },
-              closeController.signal,
-            );
-            active = execution;
-            try {
-              return await execution;
-            } finally {
-              if (active === execution) active = undefined;
-            }
-          },
-        }),
+        prepareRun,
+        admitResume: (task) => ({ outcome: "admitted", run: prepareRun(task) }),
         close() {
           closePromise ??= (async () => {
             closed = true;

@@ -25,6 +25,9 @@ After upgrading the codex CLI, regenerate and overwrite these files, then
 consumed shape is drift the adapter must absorb; added optional fields and new
 notification variants are already tolerated. The full upgrade procedure is
 the `codex-upgrade` skill in `.agents/skills/codex-upgrade/SKILL.md`.
+The upgrade must also re-run retained two-Turn tests, verify there is still no
+live-session continuation attachment, and exercise bounded idle and active
+stdio shutdown through SIGTERM/SIGKILL fallback.
 
 For a non-mutating check against the currently installed pinned CLI, run:
 
@@ -39,3 +42,9 @@ schema-minimum, repeated-Turn, cancellation, stdin-shutdown, and
 steering-correlation tests verify the behavioral contract. The authenticated
 `npm run codex:resume-smoke` then proves one pathless root thread across two
 Turns and its nondiscoverability from a second App Server.
+
+Pathlessness means the client-created root has no stored/listable rollout. It
+does not promise zero shared-home I/O and does not prohibit provider-native
+child threads or tool processes. The retained lifecycle remains unreleased for
+a pinned CLI until `npm run codex:retained-release:check` finds both the live
+smoke marker/cleanup proof and complete human Desktop coexistence evidence.

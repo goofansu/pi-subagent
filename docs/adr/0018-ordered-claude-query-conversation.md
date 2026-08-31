@@ -29,7 +29,7 @@ and discards stale correlation.
 
 ## Consequences
 
-Claude now truthfully advertises Session-scoped steering and resume. Provider
+Claude now truthfully supports Session-scoped steering and Resume. Provider
 Result boundaries are invisible above neutral Facts and Turn accounting; one
 managed Run still settles once with one immutable Result and notification. No
 Query, input pump, listener, timer, or Control subscriber remains while idle.

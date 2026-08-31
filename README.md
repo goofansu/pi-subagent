@@ -25,8 +25,11 @@ Delegation uses six tools. `agent_start` creates a stable, Session-scoped Subage
 
 Every terminal output is stored for `agent_result` under its Run id and records its owning Subagent for orientation. A small completion notification names both identities and is pushed independently; `agent_wait` only observes Run lifecycle state. See [ADR 0006](docs/adr/0006-completion-notifications-and-result-store.md), [ADR 0013](docs/adr/0013-stable-subagent-identity.md), and [ADR 0014](docs/adr/0014-controlled-agent-resume.md).
 
-`agent_resume` is capability-aware. Pi, Claude, and Codex can resume an idle
-Subagent within the current Session through adapter-private provider context.
+`agent_resume` is admission-aware. Pi, Claude, and a healthy Codex adapter can
+resume an idle Subagent within the current Session through adapter-private
+provider context. A Harness that never supports Resume reports unsupported. If
+a previously usable Conversation is irrecoverably lost, Resume starts no Run
+or provider work and tells the caller to start a new Subagent.
 The Subagent id is used only for `agent_resume`;
 `agent_wait`, `agent_result`, `agent_cancel`, and `agent_steer` always use the
 distinct Run id returned by `agent_start` or `agent_resume`.
@@ -157,14 +160,15 @@ later final Result and complete Query cleanup.
 
 #### Codex profiles
 
-Codex starts a fresh `codex app-server` Attempt for every Run and attaches it
-to one non-ephemeral, adapter-owned provider Conversation. The first Attempt
-creates the thread and sends the Profile role with the first Run prompt; later
-Attempts use native `thread/resume` and send only the new prompt. Each Attempt
-has one logical Turn over headless JSON-RPC, and the child and all transport
-state are gone before the Subagent becomes idle. Semantic turn completion is
-authoritative; process exit is the cleanup boundary plus a fallback or
-escalation path. `model` is passed through unvalidated and Codex validates it.
+One Codex Subagent retains one `codex app-server` process and one ephemeral,
+pathless root Conversation. The first Run initializes the connection, creates
+the root, and sends the Profile role with the first prompt. Later Runs start
+new sequential Turns on that same root and send only the new prompt; they do
+not use live-session `thread/resume`. Each Run owns fresh Turn-scoped Attempt
+state and settles independently after its matching semantic completion. A
+healthy process intentionally remains alive while the Subagent is idle and is
+closed at parent Session shutdown. `model` is passed through unvalidated and
+Codex validates it.
 `effort` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`;
 `off` maps to `none` and every other value is passed through to the App Server's
 model reasoning configuration. Codex does not recognize `tools` or
@@ -175,10 +179,13 @@ Accepted steering is sent serially through native `turn/steer`; transcript
 truth appears only when the provider confirms consumption with a correlated
 user-message item.
 
-The installed Codex CLI owns storage and retention of the non-ephemeral
-provider thread. The extension keeps only a Session-scoped in-memory association
-to it: Session shutdown forgets that association, so cross-Session recovery and
-extension-managed provider-thread deletion are not supported.
+The ephemeral root is process-local and is not a stored/listable rollout.
+Unexpected process or terminal transport loss therefore destroys the
+Conversation permanently. A later Resume reports Conversation loss and directs
+the caller to create a new Subagent; the adapter never respawns, attaches to a
+durable thread, or replays prior output. Ephemeral does not mean zero shared
+Codex-home I/O: authentication, configuration, logs, plugins, MCP startup, and
+provider-native child threads or tool processes may still use shared resources.
 
 Codex App Server threads use `approvalPolicy: "never"` and
 `sandbox: "danger-full-access"` — the same unconditional bypass posture as
@@ -234,7 +241,14 @@ The widget is a display. Pi routes keyboard input to the editor, never to a widg
 
 ### Concurrency
 
-Subagents are not capped: every successful `agent_start` creates a running Subagent with its first Run immediately. A Pi Subagent owns an in-process SDK session, a Claude Run owns a disposable SDK Query, and a Codex Run starts a disposable `codex app-server` process. Either way, a wide fan-out costs real local resources — see [ADR 0001](docs/adr/0001-unbounded-subagent-concurrency.md) for why the cap and its queue were removed. Runs have no time limit.
+Subagents are not capped: every successful `agent_start` creates a running
+Subagent with its first Run immediately. A Pi Subagent owns an in-process SDK
+session, a Claude Run owns a disposable SDK Query, and a Codex Subagent retains
+an App Server process until Session shutdown or Conversation loss. A wide
+fan-out therefore costs real local resources even while Codex Subagents are
+idle — see [ADR 0001](docs/adr/0001-unbounded-subagent-concurrency.md) for why
+the cap and its queue were removed. Runs have no automatic timeout; explicit
+cancellation is the liveness mechanism.
 
 ### Lifecycle
 
@@ -243,10 +257,9 @@ A Run is detached from the turn, not from the Session. `Esc` cancels the turn an
 Anything that ends the Session — switching, forking, resuming, `/new`, `/reload`, or quitting pi — first closes every idle and running Subagent, then cancels active Runs, closes every retained adapter, and clears notifications and Results. Neither identity nor output crosses into the next Session.
 
 There is no persistence layer, cross-Session resume, manual Subagent close
-tool, or provider-neutral continuation token. The installed Codex CLI retains
-its own non-ephemeral provider threads according to its storage policy; the
-extension neither recovers nor deletes them after its Session-scoped
-association is forgotten.
+tool, provider-neutral continuation token, hidden idle expiry, or automatic
+replacement Conversation. Codex's ephemeral root ends with its retained App
+Server and cannot be recovered after Session shutdown or process loss.
 
 ### Security
 
@@ -260,7 +273,9 @@ A subagent reads files, writes files, and runs commands as far as its `tools` li
 managed Subagent conformance for the controlled harness and every production
 adapter, the full test suite, and a byte-for-byte generated Codex protocol
 check (`npm run codex:protocol:check`). `npm run release:check` adds all six
-authenticated provider gates. `npm run codex:smoke` preserves the live
+authenticated provider gates and the retained-Codex evidence gate. It remains
+red until the pinned authenticated smoke and human Desktop record both exist.
+`npm run codex:smoke` preserves the live
 steering/interruption proof and prints `CODEX_STEERING_LIVE_SMOKE_PASS`, while
 `npm run codex:resume-smoke` proves two Runs on one retained ephemeral,
 pathless App Server Conversation, stored-thread nondiscoverability, and complete
@@ -274,6 +289,9 @@ The human-only Codex Desktop coexistence gate is recorded with
 [`docs/codex-desktop-coexistence-release.md`](docs/codex-desktop-coexistence-release.md).
 It runs the Codex resume smoke with an idle-process pause while Desktop remains
 open; it is deliberately separate from non-interactive `release:check`.
+`npm run codex:retained-release:check` spends no quota; it verifies the pinned
+protocol first and then checks that the recorded evidence is complete. It
+cannot create or substitute for human evidence.
 
 The Pi commands require a usable model and credentials in the normal Pi agent
 directory. The Claude commands require an authenticated Claude Code SDK

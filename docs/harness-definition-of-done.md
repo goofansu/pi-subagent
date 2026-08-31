@@ -174,27 +174,29 @@ comments and ordinary string literals are not.
 - [x] **Every Run settles exactly once** — one new prompt produces one
   immutable terminal Result (ADR-0020). Harness preparation binds the fixed
   Subagent context and returns an adapter that can prepare independent Runs,
-  declare neutral resume capability, and close idempotently. The Session
+  atomically admit Resume, and close idempotently. Admission is synchronous,
+  provider-I/O-free, and returns exactly an admitted prepared Run,
+  unsupported, or Conversation loss. The Session
   manager retains it while the Subagent is idle and closes it at Session
   shutdown; the dispatcher owns only each Run execution. *Test:*
   `harnesses/contract.test.ts` has compile-time exact `keyof` assertions for
-  `Harness`, `HarnessAdapter`, `HarnessCapabilities`, `HarnessRun`, `SubagentContext`,
+  `Harness`, `HarnessAdapter`, `HarnessResumeAdmission`, `HarnessRun`, `SubagentContext`,
   `SubagentTask`, `SubagentRun`, `Fact`, `RunEnding`, and `SingleResult`, plus
   runtime checks covering every adapter. Prepared Runs declare neutral Control
   capability, and executors receive only a fresh reporter, AbortSignal, and
   neutral synchronous Control source — never send/control methods or provider continuation
-  handles. Pi, Claude, and Codex all declare steering and resume support. Pi
-  retains one idle SDK session; Claude and Codex create fresh, fully cleaned
-  Attempts while retaining only private Conversation state. Adapter tests prove
-  fully cleaned Attempts retain private semantic context while producing
+  handles. Pi, Claude, and healthy Codex adapters admit Resume. Pi retains one
+  idle SDK session; Claude creates fresh, fully cleaned Queries; Codex retains
+  one App Server and ephemeral root while every Run receives fresh Turn-scoped
+  Attempt state. Adapter tests prove retained private semantic context,
   independent managed Runs, per-Run accounting, current-Run steering, honest
-  continuation failures, and deterministic cancellation and shutdown races.
+  Conversation loss, and deterministic cancellation and shutdown races.
 - [x] **Managed resume conformance is part of the adapter cost** — the shared
   battery creates one stable Subagent and first Run, observes idle transition,
   admits at most one resumed Run, preserves independent immutable Results and
   notifications, limits each adapter to one disposable execution at a time,
   and closes the retained adapter once across repeated shutdown. Its fixture
-  contract contains neutral capabilities and lifecycle observations only and
+  contract contains neutral admission outcomes and lifecycle observations only and
   never branches on Harness names or exposes continuation tokens. The
   controlled adapter and every production adapter prove retained semantic
   context, cancellation followed by resume, immutable and independently
@@ -203,6 +205,13 @@ comments and ordinary string literals are not.
   same domain outcomes. The battery repeats every
   adapter path 32 times without timing delays. *Test:*
   `npm run test:managed-conformance`.
+- [x] **Managed Resume rejects known Conversation loss without a Run** — the
+  shared battery exercises admitted, unsupported, and Conversation-loss
+  outcomes through controlled neutral adapters. Rejections consume no Run id,
+  start no execution, emit no Notification, and leave prior Results immutable.
+  The public Codex/fake-App-Server test additionally proves idle process loss
+  yields actionable harness-neutral prose, no replacement request or spawn,
+  and no provider identity.
 - [x] **Depth binds every harness** — Claude children have their
   agent-spawning tools disallowed, and every executor copies
   `context.childDepth` into its child's environment so a Bash-launched
@@ -309,9 +318,11 @@ comments and ordinary string literals are not.
   immutable Results, observes both notifications, confines provider identity,
   proves process-tree cleanup, and prints `CODEX_RESUME_LIVE_SMOKE_PASS`. The
   existing steering/interruption smoke and recorded Desktop-coexistence
-  procedure remain separate required proofs. Check this item only after both
-  live records exist; deterministic coverage alone does not complete this
-  release gate.
+  procedure remain separate required proofs. `npm run
+  codex:retained-release:check` is the no-quota closing gate and intentionally
+  fails while either record is absent. Check this item only after both live
+  records exist; deterministic coverage alone does not complete this release
+  gate.
 - [x] **Pi managed steering and resume have one release gate** — production
   uses a retained, in-process, memory-only `AgentSession` with normal resource
   loading, headless binding, project trust, self-filtering, orchestration-tool

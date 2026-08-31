@@ -10,7 +10,9 @@ adds stable Session-scoped identity and idle adapter retention above Runs.
 Both preserve the one-shot Run decision. [ADR-0014](0014-controlled-agent-resume.md)
 supersedes only this ADR's rejection of follow-up orchestration: resume creates
 a new one-shot Run rather than reopening the old one. [ADR-0015](0015-codex-conversation-across-disposable-attempts.md)
-adds Codex Conversation retention without retaining a child process.
+originally added Codex Conversation retention without retaining a child
+process; [ADR-0021](0021-retained-ephemeral-codex-conversation.md) supersedes
+that process-lifetime consequence while preserving this ADR's one-shot Run.
 [ADR-0016](0016-codex-resume-release-contract.md) records the release contract:
 Codex resume reopens follow-up only above the one-shot Run boundary, so every
 goal still owns one immutable Result. [ADR-0017](0017-retained-pi-sdk-conversation.md)

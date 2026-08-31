@@ -10,6 +10,7 @@
   "scripts": {
     "check": "npm run typecheck && npm run lint && npm run test:conformance && npm run test:managed-conformance && npm test && npm run codex:protocol:check",
     "codex:protocol:check": "node scripts/check-codex-protocol.mjs",
+    "codex:retained-release:check": "node scripts/check-codex-retained-release.mjs",
     "codex:resume-smoke": "node --import tsx scripts/codex-resume-live-smoke.mjs",
     "codex:smoke": "node --import tsx scripts/codex-live-smoke.mjs",
     "pi:steering-smoke": "node --import tsx scripts/managed-provider-live-smoke.mjs pi steering",
@@ -19,7 +20,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "prepare": "node .husky/install.mjs",
-    "release:check": "npm run check && npm run codex:smoke && npm run codex:resume-smoke && npm run pi:steering-smoke && npm run pi:resume-smoke && npm run claude:steering-smoke && npm run claude:resume-smoke",
+    "release:check": "npm run check && npm run codex:smoke && npm run codex:resume-smoke && npm run pi:steering-smoke && npm run pi:resume-smoke && npm run claude:steering-smoke && npm run claude:resume-smoke && npm run codex:retained-release:check",
     "test": "node --import tsx --import ./extensions/subagent/suite-setup.ts --test",
     "test:conformance": "node --import tsx --import ./extensions/subagent/suite-setup.ts --test extensions/subagent/harnesses/contract.test.ts extensions/subagent/harnesses/pi/agent.test.ts extensions/subagent/harnesses/claude/harness.test.ts extensions/subagent/harnesses/codex/harness.test.ts",
     "test:managed-conformance": "node --import tsx --import ./extensions/subagent/suite-setup.ts --test extensions/subagent/harnesses/managed-conformance.test.ts",

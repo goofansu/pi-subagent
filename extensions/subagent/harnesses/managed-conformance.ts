@@ -22,7 +22,7 @@ export interface ManagedConformanceObservation {
 }
 
 export interface ManagedConformanceExpectation {
-  readonly resume: "supported" | "unsupported";
+  readonly resume: "supported" | "unsupported" | "conversation lost";
   readonly firstOutput: string;
   readonly secondOutput?: string;
   readonly cancellationOutput?: string;
@@ -141,13 +141,20 @@ export function runManagedSubagentConformance(
       if (!landBeforeResume) delivery.notificationLanded(first.runId);
       assert.deepEqual(delivery.result(first.runId), immutableFirst);
 
-      if (fixture.expectation.resume === "unsupported") {
-        assert.deepEqual(resumed, { outcome: "unsupported" });
+      if (fixture.expectation.resume !== "supported") {
+        const expectedOutcome = fixture.expectation.resume;
+        assert.deepEqual(resumed, { outcome: expectedOutcome });
         assert.equal(
           fixture.observation.executionsStarted(),
           1,
-          "unsupported resume must start zero continuation work",
+          `${expectedOutcome} resume must start zero continuation work`,
         );
+        assert.equal(
+          runIds[0],
+          "run-second",
+          `${expectedOutcome} resume must not allocate a Run identity`,
+        );
+        assert.deepEqual(delivery.result(first.runId), immutableFirst);
         assert.deepEqual(notifications, [
           {
             id: "run-first",

@@ -54,6 +54,7 @@ cannot reopen an identity in the old or next Session.
 The public model now has two deliberately distinct identities: Subagent ids
 for `agent_resume`, and Run ids for `agent_wait`, `agent_result`,
 `agent_cancel`, and `agent_steer`. There is still no idle-Subagent observer or
-public close operation. Production resume remains gated on a provider adapter
-proving its own continuation, disposable execution, correlation, accounting,
-cleanup, and live behavior.
+public close operation. Production Resume remains gated on provider-adapter
+atomic admission and proof of continuation, disposable execution, correlation,
+accounting, cleanup, and live behavior. ADR-0021 replaces the original boolean
+capability with admitted, unsupported, and Conversation loss outcomes.

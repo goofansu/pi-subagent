@@ -4,9 +4,13 @@ Date: 2026-08-30
 
 ## Status
 
-Accepted. This decision remains the Codex design. ADR-0017 and ADR-0018 later
-enable Session-scoped resume for Pi and Claude through their different native
-lifetime models.
+Accepted, with its disposable-process, non-ephemeral-thread, and native
+continuation consequences superseded by
+[ADR-0021](0021-retained-ephemeral-codex-conversation.md). Its one private
+Conversation, Run-scoped Attempt state, independent accounting and Results,
+no-fallback rule, provider-identity confinement, cancellation ordering, and
+Session ownership remain in force. ADR-0017 and ADR-0018 record the different
+Pi and Claude lifetime models.
 
 ## Decision
 

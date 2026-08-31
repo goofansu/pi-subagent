@@ -11,8 +11,10 @@ provider evidence.
 
 ## Decision
 
-Production Pi, Claude, and Codex advertise steering and Session-scoped resume.
-All pass the same capability-aware per-Run conformance and 32-repeat managed
+Production Pi, Claude, and healthy Codex adapters support steering and
+Session-scoped Resume. Resume uses the neutral atomic admission interface from
+ADR-0021: admitted with a prepared Run, unsupported, or Conversation loss. All
+pass the same Control-capability-aware per-Run conformance and 32-repeat managed
 conformance, including provider-Result-transparent steering, FIFO delivery,
 admission-without-Fact, cancellation followed by resume, immutable independent
 Results and notifications, per-Run transcript and usage isolation, one active

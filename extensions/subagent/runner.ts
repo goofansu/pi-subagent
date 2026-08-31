@@ -5,7 +5,7 @@
  */
 
 import { createControlGate } from "./control-source.ts";
-import type { HarnessAdapter } from "./harnesses/contract.ts";
+import type { HarnessAdapter, HarnessRun } from "./harnesses/contract.ts";
 import type { RunEnding, SubagentTask } from "./run.ts";
 import {
   createEmptyResult,
@@ -47,6 +47,8 @@ export interface DispatchSubagentRunOptions {
   description: string;
   prompt: string;
   adapter: HarnessAdapter;
+  /** A Run already prepared by synchronous Resume admission. */
+  preparedRun?: HarnessRun;
   signal?: AbortSignal;
   runs: SubagentRuns;
   now?: () => number;
@@ -65,6 +67,7 @@ export function dispatchSubagentRun({
   description,
   prompt,
   adapter,
+  preparedRun,
   signal,
   runs,
   now = Date.now,
@@ -77,7 +80,7 @@ export function dispatchSubagentRun({
     subagentId,
   );
   const task: SubagentTask = { description, prompt };
-  const prepared = adapter.prepareRun(task);
+  const prepared = preparedRun ?? adapter.prepareRun(task);
   if (adapter.model) result.model = adapter.model;
   const controlGate = createControlGate(prepared.supportedControls);
   const controller = new AbortController();

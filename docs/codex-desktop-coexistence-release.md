@@ -5,6 +5,13 @@ whether one retained, ephemeral App Server can remain usable beside Codex
 Desktop while idle and while its second Turn is active, without a shared
 rollout-writer conflict.
 
+Release status: **OPEN** for codex-cli 0.150.1. Deterministic checks and the
+procedure are implemented, but no authenticated/Desktop evidence record exists.
+`npm run codex:retained-release:check` is a no-quota gate that first verifies
+the installed pinned protocol and then refuses to pass until one complete
+matching record below has `PASS` at every required checkpoint. It never
+fabricates or infers human evidence.
+
 ## Procedure
 
 1. Record the date, operator, OS, `codex --version`, and Codex Desktop version
@@ -39,6 +46,8 @@ rollout-writer conflict.
    thread-storage conflict appeared, and a link or path to the retained smoke
    log. A release passes only when the before-smoke, retained-idle, overlapping
    active-Turn-2, and after-cleanup Desktop checks and the smoke all pass.
+9. Run `npm run codex:retained-release:check`. Only its
+   `CODEX_RETAINED_RELEASE_CHECK_PASS` marker closes the recorded evidence gate.
 
 The two coexistence prompts are interactive-only and appear only when
 `CODEX_DESKTOP_COEXISTENCE_PROBE=1`; run it from a terminal with usable stdin.

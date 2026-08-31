@@ -28,7 +28,7 @@ import {
 import type {
   Harness,
   HarnessAdapter,
-  HarnessCapabilities,
+  HarnessResumeAdmission,
   HarnessRun,
 } from "./contract.ts";
 import {
@@ -52,10 +52,15 @@ type HarnessContractKeys = Assert<
   Equal<keyof Harness, "name" | "validate" | "prepare">
 >;
 type HarnessAdapterContractKeys = Assert<
-  Equal<keyof HarnessAdapter, "capabilities" | "model" | "prepareRun" | "close">
+  Equal<keyof HarnessAdapter, "model" | "prepareRun" | "admitResume" | "close">
 >;
-type HarnessCapabilitiesContractKeys = Assert<
-  Equal<keyof HarnessCapabilities, "resume">
+type HarnessResumeAdmissionContract = Assert<
+  Equal<
+    HarnessResumeAdmission,
+    | { readonly outcome: "admitted"; readonly run: HarnessRun }
+    | { readonly outcome: "unsupported" }
+    | { readonly outcome: "conversation lost" }
+  >
 >;
 type HarnessRunContractKeys = Assert<
   Equal<keyof HarnessRun, "execute" | "supportedControls">
@@ -110,7 +115,7 @@ type SingleResultContractKeys = Assert<
 const contractKeyAssertions: [
   HarnessContractKeys,
   HarnessAdapterContractKeys,
-  HarnessCapabilitiesContractKeys,
+  HarnessResumeAdmissionContract,
   HarnessRunContractKeys,
   SubagentContextContractKeys,
   SubagentTaskContractKeys,
@@ -150,7 +155,6 @@ const contractTask: SubagentTask = {
 async function assertHarnessContract(
   harness: Harness,
   supportedControls: HarnessRun["supportedControls"],
-  resume = false,
 ): Promise<void> {
   assert.deepEqual(Object.keys(harness).sort(), [
     "name",
@@ -158,7 +162,6 @@ async function assertHarnessContract(
     "validate",
   ]);
   const adapter = harness.prepare(contractContext);
-  assert.deepEqual(adapter.capabilities, { resume });
   assert.equal(typeof adapter.close, "function");
   const prepared = adapter.prepareRun(contractTask);
   assert.equal(typeof prepared.execute, "function");
@@ -168,16 +171,24 @@ async function assertHarnessContract(
     "supportedControls",
   ]);
   assert.deepEqual(Object.keys(adapter).sort(), [
-    "capabilities",
+    "admitResume",
     "close",
     "model",
     "prepareRun",
   ]);
+  const admission = adapter.admitResume(contractTask);
+  assert.equal("then" in admission, false, "Resume admission is synchronous");
+  assert.equal(admission.outcome, "admitted");
+  if (admission.outcome === "admitted") {
+    assert.equal(typeof admission.run.execute, "function");
+    assert.deepEqual(admission.run.supportedControls, supportedControls);
+  }
   assert.equal("send" in adapter, false);
   assert.equal("steer" in adapter, false);
   assert.equal("session" in adapter, false);
   assert.equal("thread" in adapter, false);
   assert.equal("continuation" in adapter, false);
+  assert.equal("capabilities" in adapter, false);
   await adapter.close();
   await adapter.close();
 }
@@ -207,15 +218,14 @@ test("production Harnesses expose the exact managed Run contract", async () => {
     true,
   ]);
 
-  await assertHarnessContract(createPiHarness(), ["steer"], true);
+  await assertHarnessContract(createPiHarness(), ["steer"]);
   await assertHarnessContract(
     createClaudeHarness(async () => {
       throw new Error("execution is not part of this contract fixture");
     }),
     ["steer"],
-    true,
   );
-  await assertHarnessContract(createCodexHarness(), ["steer"], true);
+  await assertHarnessContract(createCodexHarness(), ["steer"]);
 });
 
 test("common profile accessors normalize tools and default appendSystemPrompt", () => {
@@ -271,20 +281,21 @@ test("one prepared adapter owns private state across independent Runs and closes
     prepare: () => {
       const conversation: string[] = [];
       let closed = false;
+      const prepareRun: HarnessAdapter["prepareRun"] = (task) => ({
+        supportedControls: [],
+        execute: async (run) => {
+          conversation.push(task.prompt);
+          run.report.message({
+            role: "assistant",
+            parts: [{ type: "text", text: conversation.join(" -> ") }],
+          });
+          return { ending: "answered" };
+        },
+      });
       const adapter: HarnessAdapter = {
-        capabilities: { resume: false },
         model: undefined,
-        prepareRun: (task) => ({
-          supportedControls: [],
-          execute: async (run) => {
-            conversation.push(task.prompt);
-            run.report.message({
-              role: "assistant",
-              parts: [{ type: "text", text: conversation.join(" -> ") }],
-            });
-            return { ending: "answered" };
-          },
-        }),
+        prepareRun,
+        admitResume: (task) => ({ outcome: "admitted", run: prepareRun(task) }),
         close: async () => {
           if (closed) return;
           closed = true;
@@ -315,13 +326,19 @@ test("one prepared adapter owns private state across independent Runs and closes
   };
 
   const adapter = statefulHarness.prepare(context);
-  assert.deepEqual(adapter.capabilities, { resume: false });
   await adapter
     .prepareRun({ description: "first", prompt: "remember alpha" })
     .execute(execution);
-  await adapter
-    .prepareRun({ description: "second", prompt: "use beta" })
-    .execute({ ...execution, signal: new AbortController().signal });
+  const admission = adapter.admitResume({
+    description: "second",
+    prompt: "use beta",
+  });
+  assert.equal(admission.outcome, "admitted");
+  if (admission.outcome !== "admitted") assert.fail("resume was rejected");
+  await admission.run.execute({
+    ...execution,
+    signal: new AbortController().signal,
+  });
 
   assert.deepEqual(
     facts.map((fact) => fact.parts[0]),
@@ -361,7 +378,6 @@ function fakeHarness(
     name: "fake",
     validate: () => [],
     prepare: () => ({
-      capabilities: { resume: false },
       model: undefined,
       prepareRun: () => ({
         supportedControls: [],
@@ -372,6 +388,7 @@ function fakeHarness(
             : { ending: "answered" };
         },
       }),
+      admitResume: () => ({ outcome: "unsupported" }),
       close: async () => {},
     }),
   };
@@ -388,9 +405,9 @@ function fakeExecutorHarness(
     prepare: (context) => {
       onPrepare?.(context.childDepth);
       return {
-        capabilities: { resume: false },
         model: undefined,
         prepareRun: () => ({ execute, supportedControls }),
+        admitResume: () => ({ outcome: "unsupported" }),
         close: async () => {},
       };
     },
@@ -857,7 +874,6 @@ test("a Codex-like harness compiles and runs through the unchanged core", async 
     name: "codex",
     validate: () => [],
     prepare: () => ({
-      capabilities: { resume: false },
       model: undefined,
       prepareRun: () => ({
         supportedControls: [],
@@ -869,6 +885,7 @@ test("a Codex-like harness compiles and runs through the unchanged core", async 
           return { ending: "answered" };
         },
       }),
+      admitResume: () => ({ outcome: "unsupported" }),
       close: async () => {},
     }),
   };

@@ -81,46 +81,47 @@ function controlledFixture() {
     prepare: () => {
       let marker: string | undefined;
       let closed = false;
-      return {
-        capabilities: { resume: true },
-        model: undefined,
-        prepareRun: (task) => ({
-          supportedControls: [],
-          execute: async (run): Promise<RunEnding> => {
-            observed.executionStarted();
-            try {
-              await Promise.resolve();
-              if (task.prompt === "wait until cancelled") {
-                run.report.message({
-                  role: "assistant",
-                  parts: [{ type: "text", text: "controlled partial" }],
-                  usage: { input: 5 },
-                });
-                openCancellation();
-                await new Promise<void>((resolve) => {
-                  if (run.signal?.aborted) return resolve();
-                  run.signal?.addEventListener("abort", () => resolve(), {
-                    once: true,
-                  });
-                });
-                return { ending: "cancelled" };
-              }
-              const remembered = task.prompt.match(/remember (\S+)/)?.[1];
-              if (remembered) marker = remembered;
-              const text = remembered
-                ? "first controlled answer"
-                : `controlled retained marker: ${marker ?? "missing"}`;
+      const prepareRun: HarnessAdapter["prepareRun"] = (task) => ({
+        supportedControls: [],
+        execute: async (run): Promise<RunEnding> => {
+          observed.executionStarted();
+          try {
+            await Promise.resolve();
+            if (task.prompt === "wait until cancelled") {
               run.report.message({
                 role: "assistant",
-                parts: [{ type: "text", text }],
-                usage: { input: remembered ? 11 : 3 },
+                parts: [{ type: "text", text: "controlled partial" }],
+                usage: { input: 5 },
               });
-              return { ending: "answered" };
-            } finally {
-              observed.executionSettled();
+              openCancellation();
+              await new Promise<void>((resolve) => {
+                if (run.signal?.aborted) return resolve();
+                run.signal?.addEventListener("abort", () => resolve(), {
+                  once: true,
+                });
+              });
+              return { ending: "cancelled" };
             }
-          },
-        }),
+            const remembered = task.prompt.match(/remember (\S+)/)?.[1];
+            if (remembered) marker = remembered;
+            const text = remembered
+              ? "first controlled answer"
+              : `controlled retained marker: ${marker ?? "missing"}`;
+            run.report.message({
+              role: "assistant",
+              parts: [{ type: "text", text }],
+              usage: { input: remembered ? 11 : 3 },
+            });
+            return { ending: "answered" };
+          } finally {
+            observed.executionSettled();
+          }
+        },
+      });
+      return {
+        model: undefined,
+        prepareRun,
+        admitResume: (task) => ({ outcome: "admitted", run: prepareRun(task) }),
         close: async () => {
           if (closed) return;
           closed = true;
@@ -152,7 +153,6 @@ function unsupportedFixture() {
     prepare: () => {
       let closed = false;
       return {
-        capabilities: { resume: false },
         model: undefined,
         prepareRun: () => ({
           supportedControls: [],
@@ -169,6 +169,7 @@ function unsupportedFixture() {
             }
           },
         }),
+        admitResume: () => ({ outcome: "unsupported" }),
         close: async () => {
           if (closed) return;
           closed = true;
@@ -183,6 +184,52 @@ function unsupportedFixture() {
     expectation: {
       resume: "unsupported" as const,
       firstOutput: "unsupported first answer",
+    },
+  };
+}
+
+function conversationLostFixture() {
+  const observed = observation();
+  const harness: Harness = {
+    name: "controlled-conversation-lost",
+    validate: () => [],
+    prepare: () => {
+      let lost = false;
+      let closed = false;
+      return {
+        model: undefined,
+        prepareRun: () => ({
+          supportedControls: [],
+          execute: async (run): Promise<RunEnding> => {
+            observed.executionStarted();
+            try {
+              run.report.message({
+                role: "assistant",
+                parts: [{ type: "text", text: "loss fixture first answer" }],
+              });
+              lost = true;
+              return { ending: "answered" };
+            } finally {
+              observed.executionSettled();
+            }
+          },
+        }),
+        admitResume: () =>
+          lost ? { outcome: "conversation lost" } : { outcome: "unsupported" },
+        close: async () => {
+          if (closed) return;
+          closed = true;
+          observed.adapterClosed();
+        },
+      };
+    },
+  };
+  return {
+    harness,
+    observation: observed,
+    expectation: {
+      resume: "conversation lost" as const,
+      firstOutput: "loss fixture first answer",
     },
   };
 }
@@ -640,6 +687,10 @@ runManagedSubagentConformance({ name: "controlled", build: controlledFixture });
 runManagedSubagentConformance({
   name: "controlled-unsupported",
   build: unsupportedFixture,
+});
+runManagedSubagentConformance({
+  name: "controlled-conversation-lost",
+  build: conversationLostFixture,
 });
 runManagedSubagentConformance({ name: "codex", build: codexFixture });
 runManagedSubagentConformance({ name: "pi", build: piFixture });

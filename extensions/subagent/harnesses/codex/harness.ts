@@ -343,69 +343,66 @@ export function createCodexHarness(options: CodexHarnessOptions = {}): Harness {
       let session: ReturnType<typeof createCodexAppServerSession> | undefined;
       let activeRun: Promise<RunEnding> | undefined;
       let closed = false;
-      const capabilities = {
-        get resume(): boolean {
-          return (
-            !closed && (session === undefined || session.continuationAvailable)
-          );
+      const prepareRun: HarnessAdapter["prepareRun"] = (task) => ({
+        supportedControls: ["steer"],
+        execute: async (run) => {
+          if (closed) {
+            return {
+              ending: "failed",
+              errorMessage: "Codex adapter is closed",
+            };
+          }
+          if (activeRun) {
+            return {
+              ending: "failed",
+              errorMessage: "Codex adapter already has an active Run",
+            };
+          }
+          if (!session)
+            session = createCodexAppServerSession({
+              cwd: context.cwd,
+              childDepth: context.childDepth,
+              model,
+              effort,
+              ...(options.spawn ? { spawn: options.spawn } : {}),
+              ...(options.killEscalationMs === undefined
+                ? {}
+                : { killEscalationMs: options.killEscalationMs }),
+            });
+          const retainedSession = session;
+          const firstProviderTurn = !retainedSession.hasIssuedTurn;
+          // Yield once so activeRun is installed before spawning. Close
+          // can then own cancellation even when provider callbacks re-enter
+          // Session shutdown during synchronous fixture I/O.
+          const promise = (async (): Promise<RunEnding> => {
+            await Promise.resolve();
+            if (closed) return { ending: "cancelled" };
+            return await retainedSession.runNextTurn({
+              prompt: firstProviderTurn
+                ? codexPrompt(context, task)
+                : task.prompt,
+              translate: createCodexTranslator(context.cwd),
+              report: run.report,
+              signal: run.signal,
+              controls: run.controls,
+              missingAnswerMessage: MISSING_CODEX_ANSWER,
+            });
+          })();
+          activeRun = promise;
+          try {
+            return await promise;
+          } finally {
+            if (activeRun === promise) activeRun = undefined;
+          }
         },
-      };
+      });
       return {
-        capabilities,
         model,
-        prepareRun: (task) => ({
-          supportedControls: ["steer"],
-          execute: async (run) => {
-            if (closed) {
-              return {
-                ending: "failed",
-                errorMessage: "Codex adapter is closed",
-              };
-            }
-            if (activeRun) {
-              return {
-                ending: "failed",
-                errorMessage: "Codex adapter already has an active Run",
-              };
-            }
-            if (!session)
-              session = createCodexAppServerSession({
-                cwd: context.cwd,
-                childDepth: context.childDepth,
-                model,
-                effort,
-                ...(options.spawn ? { spawn: options.spawn } : {}),
-                ...(options.killEscalationMs === undefined
-                  ? {}
-                  : { killEscalationMs: options.killEscalationMs }),
-              });
-            const retainedSession = session;
-            const firstProviderTurn = !retainedSession.hasIssuedTurn;
-            // Yield once so activeRun is installed before spawning. Close
-            // can then own cancellation even when provider callbacks re-enter
-            // Session shutdown during synchronous fixture I/O.
-            const promise = (async (): Promise<RunEnding> => {
-              await Promise.resolve();
-              if (closed) return { ending: "cancelled" };
-              return await retainedSession.runNextTurn({
-                prompt: firstProviderTurn
-                  ? codexPrompt(context, task)
-                  : task.prompt,
-                translate: createCodexTranslator(context.cwd),
-                report: run.report,
-                signal: run.signal,
-                controls: run.controls,
-                missingAnswerMessage: MISSING_CODEX_ANSWER,
-              });
-            })();
-            activeRun = promise;
-            try {
-              return await promise;
-            } finally {
-              if (activeRun === promise) activeRun = undefined;
-            }
-          },
-        }),
+        prepareRun,
+        admitResume: (task) =>
+          closed || (session !== undefined && !session.continuationAvailable)
+            ? { outcome: "conversation lost" }
+            : { outcome: "admitted", run: prepareRun(task) },
         close: async () => {
           closed = true;
           const current = activeRun;

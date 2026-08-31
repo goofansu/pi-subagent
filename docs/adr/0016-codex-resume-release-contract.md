@@ -8,6 +8,10 @@ Accepted. Reopens ADR-0003's no-follow-up decision for Codex Subagents while
 preserving its one-shot Run boundary. It consolidates the release contract
 introduced by ADR-0013, ADR-0014, and ADR-0015. ADR-0019 later extends the
 release contract across all three production providers.
+[ADR-0021](0021-retained-ephemeral-codex-conversation.md) supersedes only this
+ADR's non-ephemeral thread, disposable App Server, native continuation, and
+no-idle-process consequences. One goal, Result, Notification, and fixed
+Subagent policy per Run remain in force.
 
 ## Context
 

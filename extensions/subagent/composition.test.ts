@@ -25,7 +25,10 @@ test("default composition enables managed resume for every production harness", 
     childDepth: 1,
     projectTrusted: false,
   });
-  assert.deepEqual(adapter.capabilities, { resume: true });
+  assert.equal(
+    adapter.admitResume({ description: "resume", prompt: "continue" }).outcome,
+    "admitted",
+  );
   await adapter.close();
 
   for (const name of ["pi", "claude"] as const) {
@@ -43,7 +46,11 @@ test("default composition enables managed resume for every production harness", 
       childDepth: 1,
       projectTrusted: false,
     });
-    assert.deepEqual(adapter.capabilities, { resume: true });
+    assert.equal(
+      adapter.admitResume({ description: "resume", prompt: "continue" })
+        .outcome,
+      "admitted",
+    );
     await adapter.close();
   }
 });

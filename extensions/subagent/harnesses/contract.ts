@@ -15,11 +15,6 @@ export interface HarnessValidationContext {
   models?: readonly { provider: string; id: string }[];
 }
 
-export interface HarnessCapabilities {
-  /** Whether this adapter can continue its private Conversation in a later Run. */
-  readonly resume: boolean;
-}
-
 /** One independently prepared execution on a Subagent-scoped adapter. */
 export interface HarnessRun {
   execute: SubagentExecutor;
@@ -27,15 +22,23 @@ export interface HarnessRun {
   supportedControls: readonly RunControl["type"][];
 }
 
+/** The synchronous, provider-I/O-free decision for one Resume request. */
+export type HarnessResumeAdmission =
+  | { readonly outcome: "admitted"; readonly run: HarnessRun }
+  | { readonly outcome: "unsupported" }
+  | { readonly outcome: "conversation lost" };
+
 /**
  * One prepared Subagent adapter. Provider Conversation state may live only in
  * this instance and is never returned through the neutral contract.
  */
 export interface HarnessAdapter {
-  readonly capabilities: HarnessCapabilities;
   /** Display metadata resolved once from the Subagent's fixed policy. */
   readonly model?: string;
+  /** Prepare the Subagent's initial Run. */
   prepareRun(task: SubagentTask): HarnessRun;
+  /** Atomically decide and prepare a later Run without provider I/O. */
+  admitResume(task: SubagentTask): HarnessResumeAdmission;
   /** Release adapter-owned state. Safe to await more than once. */
   close(): Promise<void>;
 }

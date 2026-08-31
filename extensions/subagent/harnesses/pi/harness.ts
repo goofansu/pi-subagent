@@ -98,9 +98,12 @@ export function createPiHarness(options: PiHarnessOptions = {}): Harness {
         ...(options.agentDir ? { agentDir: options.agentDir } : {}),
       });
       return {
-        capabilities: { resume: true },
         model,
         prepareRun: managed.prepareRun,
+        admitResume: (task) => ({
+          outcome: "admitted",
+          run: managed.prepareRun(task),
+        }),
         close: managed.close,
       };
     },

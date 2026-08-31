@@ -106,6 +106,10 @@ test("presentation distinguishes every agent_resume outcome and identity kind", 
     formatResumeOutcome("subagent-pi", { outcome: "unsupported" }),
     /does not support resume.*No Run or provider work was started/,
   );
+  assert.match(
+    formatResumeOutcome("subagent-lost", { outcome: "conversation lost" }),
+    /Conversation was lost.*Start a new Subagent/,
+  );
 });
 
 test("presentation owns every agent_wait outcome", () => {

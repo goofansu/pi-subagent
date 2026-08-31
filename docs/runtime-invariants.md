@@ -7,8 +7,10 @@ These invariants define the correctness contract of the subagent runtime.
 Runs are backend-neutral and settle exactly once. A profile names a harness
 (default `pi`); the registry resolves it before dispatch. Harness preparation receives
 only fixed Subagent inputs and returns one adapter instance. That adapter may
-own private provider Conversation state, declares neutral capabilities,
-prepares each Run from its description and prompt, and closes idempotently.
+own private provider Conversation state, prepares the initial Run, atomically
+admits Resume, and closes idempotently. Resume admission is synchronous and
+provider-I/O-free. It returns exactly one neutral outcome: an admitted prepared
+Run, unsupported, or Conversation loss.
 The Session-scoped Subagent manager creates one adapter, starts the first Run,
 and retains the adapter when that Run settles; the dispatcher owns the Run but
 never adapter lifetime. Session shutdown closes idle and active adapters. Core
@@ -34,13 +36,16 @@ child-specific stop mechanism. Backend
 `aborted` is normalized at the seam: the domain records lifecycle `cancelled`
 and its reason, never an `aborted` stop reason.
 
-An adapter's neutral `resume` capability is the sole admission authority above
-the Harness seam; core never branches on a harness name. Production Pi,
-Claude, and Codex declare resume supported. A successful resume reuses the
-adapter created from the fixed Subagent context but creates a fresh per-Run
-execution, reporter, AbortSignal, Control source, Result, usage fold,
-lifecycle, and notification. Earlier provider context remains available only
-inside the adapter and is neither re-emitted nor charged to the new Run.
+An adapter's atomic Resume operation is the sole admission authority above the
+Harness seam; core never branches on a harness name. Production Pi, Claude,
+and healthy Codex adapters admit Resume. A successful decision returns the
+prepared Run that dispatch uses without repeating the decision. It reuses the
+adapter created from the fixed Subagent context but creates a fresh reporter,
+AbortSignal, Control source, Result, usage fold, lifecycle, and notification.
+Earlier provider context remains available only inside the adapter and is
+neither re-emitted nor charged to the new Run. Unsupported means the Harness
+never offered Resume; Conversation loss means previously usable semantic
+context was irrecoverably lost.
 
 One Pi adapter lazily creates and retains one in-process `AgentSession`. Its
 fixed construction uses normal resource discovery, explicit project trust,
@@ -64,27 +69,32 @@ redacted diagnostic and never falls back to a fresh Query. Input, Query,
 Control subscription, abort listener, and accounting/correlation state are
 disposed before the Subagent becomes idle.
 
-Every Codex Run owns one disposable Attempt: a fresh App Server child is
-initialized, then creates or resumes the adapter-owned thread and starts one
-new Turn. The first accepted Turn creates a non-ephemeral thread and includes
-the fixed Profile role; local continuation retention begins only after
-`turn/start` succeeds, so a rejected first Turn cannot lose that role on a
-later Run. Later attachments use native `thread/resume` and send only the new
-Run prompt. Resume reapplies cwd, model, effort, approval, sandbox, inherited
-environment, and child depth. Attachment Turns and notifications not matching
-the adapter-owned thread plus current Turn are discarded.
-Conversation-cumulative accounting is differenced from the retained baseline,
-while attachment-local counters are translated from zero; only the current Run
-receives the resulting usage. Run settlement waits for child exit and complete
-transport and Control cleanup, leaving an idle Subagent with continuation
-metadata but no live process resource.
+One Codex adapter retains one App Server process and one client-created
+ephemeral root Conversation. The first Run initializes the connection, creates
+the pathless root, and starts one Turn with the fixed Profile role plus its
+prompt. Later Runs start sequential Turns on the same root with only their new
+prompt. Production sends no live-session `thread/resume`. Every Run still owns
+a fresh Attempt: current Turn identity, translator, ordered reducer, Control
+correlations, accounting delta, Activity, and Run-local cleanup. Notifications
+not matching the retained root and current Turn are discarded. A matching
+`turn/completed` settles the Attempt after current ingress is reduced without
+closing the healthy process. Conversation-cumulative accounting is differenced
+at the process level so only the current Run receives its usage.
 
-Continuation loss fails only the current Run with bounded redacted diagnostics.
-It never creates a replacement thread, replays core history, retries the Run,
-forks the thread, or rolls back the Conversation. The installed Codex CLI owns
-provider-thread storage and retention. Session shutdown closes the local
-adapter and forgets its in-memory association, making that continuation
-unaddressable to the extension in later Sessions.
+A healthy App Server remains alive while the Subagent is idle. Session
+shutdown interrupts an active Turn, closes stdio, waits boundedly, and
+escalates through process signals when needed; idle shutdown starts with stdio
+closure. Terminal process or transport evidence irreversibly loses the
+Conversation. Known loss admits no Run or provider work; loss after admission
+fails that Run once with retained partial output and bounded redacted
+diagnostics. A terminal Result reduced before loss stays immutable. Successful
+Turn failure or interruption preserves Resume when the retained process is
+healthy, while kill escalation that destroys it causes loss. There is no
+replacement root, replay, retry, native attachment, idle timeout, heartbeat,
+or speculative watchdog. Recovery is a new Subagent.
+
+Ephemeral prevents a stored/listable root rollout; it does not promise zero
+shared-home I/O or prohibit provider-native child threads and tool processes.
 
 A prepared Run declares its neutral Control capability. Every execution
 receives a fresh reporter, AbortSignal, and Control source. Supported Runs
@@ -140,16 +150,19 @@ re-opens that decision and needs its own ADR.*
 
 `agent_resume` accepts only a stable Subagent id, a description for the next
 Run, and its full prompt. If the Subagent is known, idle, open, and its adapter
-advertises resume, admission synchronously moves it to running and returns a
-new Run id immediately rather than an answer.
+admits Resume, admission synchronously moves it to running and returns a new
+Run id immediately rather than an answer.
 
 An active or settling Subagent rejects resume without queueing or preparing
 provider work. Two concurrent calls have one synchronous winner. An unknown,
-Run, stale, wrong-kind, or prior-Session id is an unknown Subagent; an idle
-non-resumable Subagent reports unsupported. Completed, failed, and cancelled
-Runs return an open Subagent to idle only after settlement. Each Run's terminal
-Result is immutable and independently retrievable; resuming can neither append
-to nor replace an earlier Run's Result or notification.
+Run, stale, wrong-kind, or prior-Session id is an unknown Subagent. An idle
+adapter that never offered Resume reports unsupported; one whose previously
+usable semantic context was destroyed reports Conversation loss and directs
+the caller to start a new Subagent. Either rejection allocates no Run and
+starts no provider work. Completed, failed, and cancelled Runs return an open
+Subagent to idle only after settlement. Each Run's terminal Result is immutable
+and independently retrievable; resuming can neither append to nor replace an
+earlier Run's Result or notification.
 
 ## INV-3 — Terminal states are final
 

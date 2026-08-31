@@ -44,22 +44,36 @@ Subagent id plus the next Run's description and full prompt. It returns the new
 Run id immediately rather than an answer. Resume never rebinds the fixed
 Profile, Harness adapter, working directory, child depth, resolved policy, or
 trust posture, and core never receives a provider continuation token. Pi
-continues its retained SDK session; Claude and Codex attach a fresh disposable
-Attempt through their native continuation mechanism. All continuation remains
-inside the prepared adapter and current Session.
+continues its retained SDK session; Codex starts another Turn on its retained
+process-local Conversation; Claude attaches a fresh disposable Attempt through
+native continuation. All continuation remains inside the prepared adapter and
+current Session. Resume reports **Conversation loss** distinctly when a
+previously resumable Subagent has lost that context.
 
 **Conversation** — provider-owned semantic context that may span multiple Runs
 of one Subagent. Its continuation identity and accounting baseline stay inside
 the prepared adapter; it is neither a Subagent nor a Run and never crosses the
-Harness seam.
+Harness seam. A Codex Conversation is process-local and retains its App Server
+until Session shutdown. Losing that process loses the Conversation, leaving the
+Subagent idle but non-resumable; recovery requires a new Subagent rather than a
+replacement Conversation.
+
+**Conversation loss** — the terminal loss of provider semantic context needed
+to Resume a Subagent, not merely a failed or cancelled Run. Loss known before
+Resume admission starts no Run; loss after admission belongs to that Run, while
+a terminal Result remains immutable. The Subagent then remains idle but
+non-resumable, and a later Resume reports the loss without exposing provider
+identity or mechanism.
 
 **Attempt** — one disposable provider attachment used to execute one Run
 against a Conversation. Claude owns one fresh streaming Query per Attempt;
-Codex owns one fresh App Server child, initialization, current Turn,
-translator, accounting fold, ordered reducer, and cleanup boundary. No Claude
-or Codex Attempt remains alive while its Subagent is idle. Pi instead retains
-one idle-capable SDK session and gives each Run a fresh subscription,
-accounting baseline, reporter, and Control consumer.
+Codex owns one fresh Turn, translator, accounting fold, ordered reducer, and
+Run-local cleanup while its retained App Server remains the Conversation owner.
+A Codex Attempt settles after its matching Turn completion is fully reduced;
+the retained process does not settle the Run. No Claude or Codex Attempt
+remains alive while its Subagent is idle. Pi instead retains one idle-capable
+SDK session and gives each Run a fresh subscription, accounting baseline,
+reporter, and Control consumer.
 
 **Control** — bounded, harness-neutral guidance offered while a Run is active.
 The only Control is steering text. `accepted` means the complete text entered
@@ -85,11 +99,14 @@ before abort ingress. Only the reducer may initiate native `turn/steer` or
 a local Subagent id nor a Run id is a provider thread, Turn, item, request, or
 correlation identity.
 
-**Turn** — one completed provider model turn (response), folded into a run's
-usage and counted by the widget. A turn is provider accounting, not a second
-run or a provider session that can be resumed. Claude provisionally counts one
-unique root assistant message id (including aborted frames), treating a
-missing parent id as root for compatibility, deduplicating its block-level
+**Turn** — one provider model response, folded into a Run's usage and counted
+by the widget. A Turn is provider accounting, not a second Run or a provider
+session that can be resumed. In the retained Codex lifecycle, each Run owns one
+current protocol Turn and a matching completion settles its Turn-scoped Attempt
+only after current ingress is fully reduced; later Turns continue on the same
+Conversation. Claude provisionally counts one unique root assistant message id
+(including aborted frames), treating a missing parent id as root for
+compatibility, deduplicating its block-level
 events, and excluding non-null sidechains. Its terminal total can raise that
 count but never lower it, so cancellation and backend failure preserve already
 observed progress. Missing message ids contribute nothing until a usable
@@ -193,8 +210,9 @@ project trust, and inherited parent-model policy. A profile names its harness;
 core resolves that name through the harness registry and never interprets
 harness-specific configuration or imports a backend's types. The prepared
 adapter is the only object allowed to retain provider Conversation state. It
-declares neutral capabilities, prepares independent per-Run executions, and
-closes idempotently; provider continuation never crosses this seam.
+prepares the initial Run, synchronously admits Resume as admitted, unsupported,
+or Conversation loss, prepares independent per-Run executions, and closes
+idempotently; provider continuation never crosses this seam.
 
 **Executor** — the per-Run execution a prepared adapter supplies
 (`harnesses/pi/agent.ts` is the Pi harness's retained-session engine). Each

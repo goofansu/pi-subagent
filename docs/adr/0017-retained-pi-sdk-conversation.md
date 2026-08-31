@@ -31,7 +31,7 @@ disposed exactly once.
 
 ## Consequences
 
-Pi now truthfully advertises Session-scoped steering and resume while every Run
+Pi now truthfully supports Session-scoped steering and Resume while every Run
 still has one goal, lifecycle, Result, notification, and accounting fold. The
 idle resource is an SDK session rather than a child process. Cross-Session
 resume, persistence, concurrent prompts, provider identity in core, and nested

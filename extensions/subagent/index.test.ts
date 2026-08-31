@@ -13,7 +13,11 @@ import { type ControlAdmission, createControlGate } from "./control-source.ts";
 import { createSubagentDelivery, type PushedNotification } from "./delivery.ts";
 import type { ChildProcessSpawn } from "./harnesses/codex/app-server.ts";
 import { createCodexHarness } from "./harnesses/codex/harness.ts";
-import { createHarnessRegistry, type Harness } from "./harnesses/contract.ts";
+import {
+  createHarnessRegistry,
+  type Harness,
+  type HarnessAdapter,
+} from "./harnesses/contract.ts";
 import subagentExtension, {
   createSubagentRuntime,
   registerSubagentFeatureTools,
@@ -389,36 +393,40 @@ function runtimeBoundary(
       const index = adapterCloses.push(0) - 1;
       let closed = false;
       let semanticMarker: string | undefined;
+      const prepareRun: HarnessAdapter["prepareRun"] = (task) => ({
+        execute: (run) => {
+          const marker = task.prompt.match(/^remember: (.+)$/)?.[1];
+          if (marker) semanticMarker = marker;
+          if (task.prompt === "recall marker") {
+            run.report.message({
+              role: "assistant",
+              parts: [
+                {
+                  type: "text",
+                  text: `private marker: ${semanticMarker ?? "missing"}`,
+                },
+              ],
+            });
+          }
+          return new Promise((resolve) =>
+            active.push({
+              report: run.report,
+              signal: run.signal,
+              controls: run.controls,
+              task,
+              resolve,
+            }),
+          );
+        },
+        supportedControls: steerable ? ["steer"] : [],
+      });
       return {
-        capabilities: { resume: resumable },
         model: undefined,
-        prepareRun: (task) => ({
-          execute: (run) => {
-            const marker = task.prompt.match(/^remember: (.+)$/)?.[1];
-            if (marker) semanticMarker = marker;
-            if (task.prompt === "recall marker") {
-              run.report.message({
-                role: "assistant",
-                parts: [
-                  {
-                    type: "text",
-                    text: `private marker: ${semanticMarker ?? "missing"}`,
-                  },
-                ],
-              });
-            }
-            return new Promise((resolve) =>
-              active.push({
-                report: run.report,
-                signal: run.signal,
-                controls: run.controls,
-                task,
-                resolve,
-              }),
-            );
-          },
-          supportedControls: steerable ? ["steer"] : [],
-        }),
+        prepareRun,
+        admitResume: (task) =>
+          resumable
+            ? { outcome: "admitted", run: prepareRun(task) }
+            : { outcome: "unsupported" },
         close: async () => {
           if (closed) return;
           closed = true;
@@ -915,21 +923,39 @@ test("public tools retain one ephemeral Codex session across independent Results
       "idle loss provider-thread-secret provider-turn-second provider-item-2",
     ),
   );
+  const requestsBeforeLossObservation = structuredClone(providerRequests);
+  const notificationsBeforeLossObservation = structuredClone(pushed);
+  const firstBeforeLossObservation = structuredClone(
+    delivery.result("run-codex-first"),
+  );
+  const secondBeforeLossObservation = structuredClone(
+    delivery.result("run-codex-second"),
+  );
   const afterLoss = await tools.agent_resume.execute("resume-lost", {
     id: "subagent-codex",
     description: "must not replace context",
     prompt: "must not start",
   });
-  assert.match(afterLoss.content[0].text, /does not support resume/);
+  assert.match(afterLoss.content[0].text, /Conversation was lost/);
+  assert.match(afterLoss.content[0].text, /Start a new Subagent/);
+  assert.match(
+    afterLoss.content[0].text,
+    /No Run or provider work was started/,
+  );
   assert.doesNotMatch(
     afterLoss.content[0].text,
-    /provider-thread-secret|provider-turn|provider-item/,
+    /provider-thread-secret|provider-turn|provider-item|thread|Turn|item|request|session|process|correlation/,
   );
   assert.equal(children.length, 1);
-  assert.equal(
-    providerRequests.filter((request) => request.method === "turn/start")
-      .length,
-    2,
+  assert.deepEqual(providerRequests, requestsBeforeLossObservation);
+  assert.deepEqual(pushed, notificationsBeforeLossObservation);
+  assert.deepEqual(
+    delivery.result("run-codex-first"),
+    firstBeforeLossObservation,
+  );
+  assert.deepEqual(
+    delivery.result("run-codex-second"),
+    secondBeforeLossObservation,
   );
 
   await events.session_shutdown?.({ reason: "new" });
@@ -994,6 +1020,78 @@ test("agent_resume has one synchronous winner and never queues behind settlement
     description: "winner",
     prompt: "start now",
   });
+});
+
+test("a dispatch failure releases atomic Resume admission without preparing twice", async () => {
+  let runSequence = 0;
+  let failDispatch = true;
+  let initialPreparations = 0;
+  let resumeAdmissions = 0;
+  const prepared = {
+    supportedControls: [] as const,
+    execute: async () => ({ ending: "answered" as const }),
+  };
+  const harness: Harness = {
+    name: "atomic",
+    validate: () => [],
+    prepare: () => ({
+      model: undefined,
+      prepareRun: () => {
+        initialPreparations++;
+        return prepared;
+      },
+      admitResume: () => {
+        resumeAdmissions++;
+        return { outcome: "admitted", run: prepared };
+      },
+      close: async () => {},
+    }),
+  };
+  const runs = createSubagentRuns({ now: () => 0 }, () => {
+    runSequence++;
+    if (runSequence === 2 && failDispatch) throw new Error("dispatch failed");
+    return `run-${runSequence}`;
+  });
+  const manager = createSubagentManager({
+    harnesses: createHarnessRegistry([harness]),
+    runs,
+    generateSubagentId: () => "subagent-atomic",
+    now: () => 0,
+  });
+  const first = manager.start({
+    config: {
+      name: "atomic-worker",
+      description: "atomic worker",
+      harness: "atomic",
+      fields: {},
+      systemPrompt: "work",
+    },
+    description: "first",
+    prompt: "first",
+  });
+  await first.settled;
+
+  assert.throws(
+    () =>
+      manager.resume({
+        subagentId: first.subagentId,
+        description: "failed dispatch",
+        prompt: "failed dispatch",
+      }),
+    /dispatch failed/,
+  );
+  failDispatch = false;
+  const resumed = manager.resume({
+    subagentId: first.subagentId,
+    description: "retry",
+    prompt: "retry",
+  });
+  assert.equal(resumed.outcome, "started");
+  if (resumed.outcome !== "started") assert.fail("resume stayed blocked");
+  await resumed.settled;
+  assert.equal(initialPreparations, 1, "dispatch did not repeat preparation");
+  assert.equal(resumeAdmissions, 2, "each caller received one admission");
+  await manager.shutdown();
 });
 
 test("agent_resume distinguishes unsupported and unknown Subagent identities", async () => {

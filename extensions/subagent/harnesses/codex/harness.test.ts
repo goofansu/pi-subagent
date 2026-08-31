@@ -865,7 +865,10 @@ test("pre-spawn cancellation preserves the profile prompt for the first provider
     ending: "cancelled",
   });
   assert.equal(spawnCount, 0);
-  assert.equal(adapter.capabilities.resume, true);
+  assert.equal(
+    adapter.admitResume({ description: "resume", prompt: "continue" }).outcome,
+    "admitted",
+  );
   assert.deepEqual(await execute("first actual task"), { ending: "answered" });
   assert.deepEqual(await execute("later task only"), { ending: "answered" });
 
@@ -1432,7 +1435,10 @@ test("terminal App Server loss disables adapter resume without leaking provider 
 
   const result = await ending;
   assert.equal(result.ending, "failed");
-  assert.equal(adapter.capabilities.resume, false);
+  assert.equal(
+    adapter.admitResume({ description: "resume", prompt: "continue" }).outcome,
+    "conversation lost",
+  );
   assert.deepEqual(facts, [
     {
       role: "assistant",

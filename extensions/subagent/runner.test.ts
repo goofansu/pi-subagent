@@ -98,9 +98,9 @@ function controlledAdapter(
   close: HarnessAdapter["close"] = async () => {},
 ): HarnessAdapter {
   return {
-    capabilities: { resume: false },
     model: undefined,
     prepareRun,
+    admitResume: (task) => ({ outcome: "admitted", run: prepareRun(task) }),
     close,
   };
 }

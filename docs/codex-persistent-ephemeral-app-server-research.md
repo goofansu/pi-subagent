@@ -1,5 +1,10 @@
 # Persistent ephemeral Codex App Server research
 
+Status: implemented by
+[ADR-0021](adr/0021-retained-ephemeral-codex-conversation.md). “Current” code
+descriptions below record the pre-implementation baseline; ADR-0021,
+`CONTEXT.md`, and `runtime-invariants.md` are the normative lifecycle sources.
+
 ## Question
 
 Can the Codex harness use one `codex app-server` process for each Session-scoped
@@ -127,9 +132,9 @@ provider state
 ([`extensions/subagent/harnesses/contract.ts:31-44`](../extensions/subagent/harnesses/contract.ts)).
 No manager-level redesign is needed to retain a Codex process.
 
-### Current Codex transport lifetime is the part that must change
+### Pre-implementation Codex transport lifetime was the part that changed
 
-Today each `prepareRun().execute()` calls `runCodexAppServer()`
+Before ADR-0021, each `prepareRun().execute()` called `runCodexAppServer()`
 ([`extensions/subagent/harnesses/codex/harness.ts:408-467`](../extensions/subagent/harnesses/codex/harness.ts)).
 That function:
 
@@ -223,15 +228,17 @@ behavior change rather than a prerequisite for this lifecycle migration.
   SIGTERM/SIGKILL if needed.
 - **Session shutdown while idle:** close stdin and await the child; escalate
   only if it does not exit.
-- **Unexpected process exit:** fail the active Run once and mark the adapter's
-  resume capability unavailable. Do not silently create a new thread under the
-  same stable Subagent: ephemeral history is gone, so that would falsely claim
-  conversation continuity. A new Subagent is the honest recovery path unless
-  transcript replay is deliberately designed later.
+- **Unexpected process exit:** fail the active Run once and make atomic Resume
+  admission return Conversation loss. Do not silently create a new root under
+  the same stable Subagent: ephemeral history is gone, so that would falsely
+  claim continuity. A new Subagent is the honest recovery path unless replay
+  is deliberately designed later.
 
-The adapter's `capabilities.resume` can be exposed through a getter backed by
-its terminal process state, allowing the existing manager's admission check
-(`subagents.ts:183-185`) to return `unsupported` after conversation loss.
+The implemented adapter's synchronous `admitResume` operation projects
+terminal process state as neutral Conversation loss without provider I/O. The
+manager claims admission first and dispatches only the prepared Run returned by
+an admitted outcome; unsupported remains reserved for a Harness that never
+offered Resume.
 
 ## Important qualifications
 
@@ -295,7 +302,7 @@ the existing release-smoke policy.
 
 ## Documentation decision
 
-Implementation should add a new ADR (next number: 0020) that supersedes the
+Implementation added ADR-0021, which supersedes the
 Codex-specific process/persistence consequences of ADR-0011, ADR-0015, and
 ADR-0016 while preserving their one-Conversation, one-Run/one-Result, ordered
 cancellation, and Session-boundary decisions. Update:
