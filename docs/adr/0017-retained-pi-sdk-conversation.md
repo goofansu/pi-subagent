@@ -39,3 +39,6 @@ delegation remain unsupported. This deliberately gives up process crash
 isolation: an extension that crashes synchronously executes in the host process,
 so adapter boundaries catch ordinary initialization, binding, prompt, steering,
 and cleanup failures, but cannot recover from a fatal runtime crash.
+Removing the former CLI path does not add process isolation. Future isolation
+would require a purpose-built child SDK protocol that preserves retained-session
+resume and steering semantics.

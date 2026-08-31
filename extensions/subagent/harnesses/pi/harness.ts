@@ -1,4 +1,3 @@
-import type { ChildProcessSpawn } from "../../child-process.ts";
 import type { SubagentContext } from "../../run.ts";
 import { type AgentConfig, EFFORTS } from "../../types.ts";
 import type {
@@ -16,7 +15,6 @@ import {
   createPiManagedAdapter,
   type PiSessionFactory,
   type PiSessionOptionsFactory,
-  runPiAgent,
 } from "./agent.ts";
 
 const MAX_CATALOGUE_DIAGNOSTIC_CHARS = 512;
@@ -36,8 +34,6 @@ function catalogueSummary(values: readonly string[]): string {
 }
 
 export interface PiHarnessOptions {
-  /** Legacy one-shot protocol injection retained for CLI regression fixtures. */
-  readonly spawn?: ChildProcessSpawn;
   /** SDK-session boundary injection used by managed adapter fixtures. */
   readonly sessionFactory?: PiSessionFactory;
   readonly sessionOptionsFactory?: PiSessionOptionsFactory;
@@ -90,25 +86,6 @@ export function createPiHarness(options: PiHarnessOptions = {}): Harness {
       const thinking =
         effort ??
         (profileModel ? undefined : context.parentModel?.thinkingLevel);
-      if (options.spawn) {
-        return {
-          capabilities: { resume: false },
-          model,
-          prepareRun: (task) => ({
-            supportedControls: [],
-            execute: (run) =>
-              runPiAgent(run, {
-                context,
-                task,
-                resolvedModel: model,
-                resolvedThinking: thinking,
-                spawn: options.spawn,
-              }),
-          }),
-          close: async () => {},
-        };
-      }
-
       const managed = createPiManagedAdapter(context, {
         resolvedModel: model,
         resolvedThinking: thinking,

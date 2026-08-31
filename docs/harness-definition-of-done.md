@@ -8,9 +8,9 @@ production behavior and regression evidence support it.
 
 ## Scope rule (read first)
 
-"Pi" below means **pi as a harness**: the wire vocabulary in
-`@earendil-works/pi-ai` (`Message`, content parts, usage payloads), the pi
-CLI protocol, and the pi executor module. It does **not** mean pi as the
+"Pi" below means **pi as a harness**: the SDK vocabulary in
+`@earendil-works/pi-ai` (`Message`, content parts, usage payloads) and the Pi
+adapter module. It does **not** mean pi as the
 host: `ExtensionAPI`, pi-tui components, `Theme`, and host event names are
 how this extension exists at all and are allowed everywhere. A reviewer
 checking items 1–3 is looking for wire/message types, not host-API imports.
@@ -22,7 +22,7 @@ codex-owned modules (the harness and transport).
 ## The ten criteria
 
 1. [x] **`runner.ts` imports no pi-harness or Claude types.**
-   No `runPiAgent` import, no pi `provider/id` model building, no pi
+   No Pi adapter import, no pi `provider/id` model building, no pi
    thinking-scale vocabulary — resolution lives in the harness.
     *Test:* the boundaries test parses real import specifiers and walks the
     dispatcher's transitive core-module graph; it contains neither
@@ -96,12 +96,13 @@ codex-owned modules (the harness and transport).
    registration, and its battery tests.
 
 7. [x] **Pi wire `Message` objects never leave the pi harness.**
-   Translation to facts happens inside the pi executor module, at the edge.
-   *Test:* pi adapter tests feed NDJSON fixtures and assert emitted *facts*;
-   the boundaries test directly assigns Pi wire ownership to the Pi harness,
-   while the neutral process source is checked as core and owns no wire. It
-   rejects Pi wire imports from Claude and other adapters (and rejects Claude
-   SDK imports from the Pi side).
+   Translation to facts happens inside the retained Pi SDK adapter, at the edge.
+   *Test:* pi adapter tests drive SDK session events and terminal snapshots
+   through the Harness interface and assert emitted *facts*, including tool
+   calls, tool results, and confined in-band errors. The boundaries test
+   directly assigns Pi wire ownership to the Pi harness, rejects Pi wire imports
+   from Claude and other adapters, and rejects Claude SDK imports from the Pi
+   side.
    *Review:* the translator is the only consumer of the wire shape.
 
 8. [x] **Claude SDK message objects never leave the claude harness.**
