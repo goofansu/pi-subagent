@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createSubagentDelivery } from "../extensions/subagent/delivery.ts";
-import { runCodexAppServer } from "../extensions/subagent/harnesses/codex/app-server.ts";
+import { createCodexAppServerSession } from "../extensions/subagent/harnesses/codex/app-server.ts";
 import {
   createCodexHarness,
   createCodexTranslator,
@@ -116,35 +116,43 @@ async function runInterruptSmoke() {
   const controller = new AbortController();
   let commandStarted = false;
   let turnStatus;
-  const pending = runCodexAppServer({
+  const session = createCodexAppServerSession({
     cwd,
     childDepth: 1,
-    prompt: "Run this exact shell command: `sleep 45 && echo finished`",
-    translate: (event) => {
-      if (event.method === "turn/completed")
-        turnStatus = event.params.turn.status;
-      if (
-        !commandStarted &&
-        event.method === "item/started" &&
-        event.params.item.type === "commandExecution"
-      ) {
-        commandStarted = true;
-        controller.abort();
-      }
-      return translate(event);
-    },
-    report: {
-      message: () => {},
-      transcript: () => {},
-      activity: () => {},
-      stderr: (chunk) => {
-        const text = chunk.trim();
-        if (text) console.log("  [stderr]", text.slice(0, 160));
-      },
-    },
-    signal: controller.signal,
-    missingAnswerMessage: "Live interrupt smoke ended without an answer.",
   });
+  const pending = (async () => {
+    try {
+      return await session.runNextTurn({
+        prompt: "Run this exact shell command: `sleep 45 && echo finished`",
+        translate: (event) => {
+          if (event.method === "turn/completed")
+            turnStatus = event.params.turn.status;
+          if (
+            !commandStarted &&
+            event.method === "item/started" &&
+            event.params.item.type === "commandExecution"
+          ) {
+            commandStarted = true;
+            controller.abort();
+          }
+          return translate(event);
+        },
+        report: {
+          message: () => {},
+          transcript: () => {},
+          activity: () => {},
+          stderr: (chunk) => {
+            const text = chunk.trim();
+            if (text) console.log("  [stderr]", text.slice(0, 160));
+          },
+        },
+        signal: controller.signal,
+        missingAnswerMessage: "Live interrupt smoke ended without an answer.",
+      });
+    } finally {
+      await session.close();
+    }
+  })();
   active = {
     delivery: {
       cancel: () => controller.abort(),

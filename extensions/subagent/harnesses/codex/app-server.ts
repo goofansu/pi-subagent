@@ -18,6 +18,14 @@ const RAW_STDOUT_TAIL_LIMIT = 2000;
 const STEERING_DIAGNOSTIC_LIMIT = 1024;
 const RESULT_DIAGNOSTIC_LIMIT = 1024;
 const DEFAULT_KILL_ESCALATION_MS = 5000;
+const TOKEN_USAGE_COUNTERS = [
+  "totalTokens",
+  "inputTokens",
+  "cachedInputTokens",
+  "cacheWriteInputTokens",
+  "outputTokens",
+  "reasoningOutputTokens",
+] as const satisfies readonly (keyof TokenUsageBreakdown)[];
 const CLIENT_INFO = {
   name: "pi-subagent",
   title: "pi-subagent",
@@ -220,27 +228,36 @@ export type CodexAppServerEvent =
       };
     };
 
-export interface CodexAppServerOptions {
+export interface CodexAppServerSessionOptions {
   readonly cwd: string;
   readonly childDepth: number;
-  readonly prompt: string;
   readonly model?: string;
   readonly effort?: string;
-  /** Adapter-private provider Conversation identity to attach on this Attempt. */
-  readonly continuationThreadId?: string;
-  /** Retain an identity only after its current Turn has started successfully. */
-  readonly onThreadAttached?: (threadId: string) => void;
   readonly onRequestRejection?: (error: Error) => void;
   readonly spawn?: ChildProcessSpawn;
   readonly killEscalationMs?: number;
 }
 
-export interface CodexAppServerRunOptions extends CodexAppServerOptions {
+export interface CodexAppServerTurnOptions {
+  readonly prompt: string;
   readonly translate: (event: CodexAppServerEvent) => Translation | undefined;
   readonly report: RunReporter;
   readonly signal?: AbortSignal;
   readonly controls?: ControlSource;
   readonly missingAnswerMessage: string;
+}
+
+export interface CodexAppServerSession {
+  /** Whether the same in-memory Conversation can accept a later Turn. */
+  readonly continuationAvailable: boolean;
+  /** Whether this session has written a provider `turn/start` request. */
+  readonly hasIssuedTurn: boolean;
+  runNextTurn(options: CodexAppServerTurnOptions): Promise<RunEnding>;
+  close(): Promise<void>;
+}
+
+interface CodexAppServerRunOptions extends CodexAppServerTurnOptions {
+  readonly connection: CodexAppServerConnection;
 }
 
 function isRecord(value: unknown): value is JsonObject {
@@ -610,26 +627,10 @@ function isInitializeResponse(value: unknown): boolean {
   );
 }
 
-function threadStartParams(options: CodexAppServerOptions): JsonObject {
+function threadStartParams(options: CodexAppServerSessionOptions): JsonObject {
   const params: JsonObject = {
     cwd: options.cwd,
-    ephemeral: false,
-    approvalPolicy: "never",
-    sandbox: "danger-full-access",
-  };
-  if (options.model) params.model = options.model;
-  if (options.effort)
-    params.config = { model_reasoning_effort: options.effort };
-  return params;
-}
-
-function threadResumeParams(
-  options: CodexAppServerOptions,
-  threadId: string,
-): JsonObject {
-  const params: JsonObject = {
-    threadId,
-    cwd: options.cwd,
+    ephemeral: true,
     approvalPolicy: "never",
     sandbox: "danger-full-access",
   };
@@ -705,6 +706,7 @@ type CodexRunOccurrence =
   | { readonly type: "cancel" }
   | { readonly type: "stderr"; readonly chunk: string }
   | { readonly type: "stdin-error"; readonly error: Error }
+  | { readonly type: "stdin-write-error"; readonly error: Error }
   | { readonly type: "process-error"; readonly error: Error }
   | { readonly type: "process-close"; readonly code: number | null }
   | { readonly type: "escalation"; readonly stage: "SIGTERM" | "SIGKILL" };
@@ -724,17 +726,630 @@ type SourceConclusion =
   | { readonly status: "clean" }
   | { readonly status: "failed"; readonly errorMessage?: string };
 
+interface CodexProcessObserver {
+  readonly admit: (occurrence: CodexRunOccurrence) => void;
+  readonly beginFrame: () => void;
+  readonly endFrame: () => void;
+}
+
+type ProcessStartResult =
+  | { readonly status: "ready" }
+  | { readonly status: "failed"; readonly errorMessage: string };
+
+/** Process-scoped state retained by one App Server session. */
+class CodexAppServerConnection {
+  private proc: ChildProcess | undefined;
+  private observer: CodexProcessObserver | undefined;
+  private nextRequestId = 1;
+  private readonly pending = new Map<number, PendingRequest>();
+  private rootThreadId: string | undefined;
+  private issuedTurn = false;
+  private initialized = false;
+  private terminal = false;
+  private childClosed = false;
+  private rawStdoutTail = "";
+  private cumulativeUsage: TokenUsageBreakdown | undefined;
+  private lineBuffer = "";
+  private droppingLine = false;
+  private stdinEnded = false;
+  private terminationState: "none" | "interrupting" | "terminating" = "none";
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private processDone: Promise<void> = Promise.resolve();
+  private resolveProcessDone: (() => void) | undefined;
+
+  constructor(private readonly options: CodexAppServerSessionOptions) {}
+
+  get threadId(): string | undefined {
+    return this.rootThreadId;
+  }
+
+  get isChildClosed(): boolean {
+    return this.childClosed;
+  }
+
+  get stdoutTail(): string {
+    return this.rawStdoutTail;
+  }
+
+  get continuationAvailable(): boolean {
+    return !this.terminal && this.terminationState !== "terminating";
+  }
+
+  get hasIssuedTurn(): boolean {
+    return this.issuedTurn;
+  }
+
+  beginRunDiagnostics(): void {
+    this.rawStdoutTail = "";
+  }
+
+  attach(observer: CodexProcessObserver): void {
+    this.observer = observer;
+  }
+
+  detach(observer: CodexProcessObserver): void {
+    if (this.observer === observer) this.observer = undefined;
+  }
+
+  start(): ProcessStartResult {
+    if (this.proc)
+      return this.terminal || this.terminationState === "terminating"
+        ? {
+            status: "failed",
+            errorMessage: "Codex App Server session is closed",
+          }
+        : { status: "ready" };
+    if (this.terminal)
+      return {
+        status: "failed",
+        errorMessage: "Codex App Server session is closed",
+      };
+
+    let proc: ChildProcess;
+    try {
+      proc = (this.options.spawn ?? defaultSpawn)(
+        "codex",
+        ["app-server"],
+        spawnOptions(this.options.cwd, this.options.childDepth),
+      );
+    } catch (error) {
+      this.terminal = true;
+      return {
+        status: "failed",
+        errorMessage: boundedRedactedDiagnostic(
+          error instanceof Error ? error.message : String(error),
+        ),
+      };
+    }
+
+    this.proc = proc;
+    this.processDone = new Promise<void>((resolve) => {
+      this.resolveProcessDone = resolve;
+    });
+    if (!proc.stdin || !proc.stdout || !proc.stderr) {
+      this.terminatePartiallyOpenedProcess();
+      return {
+        status: "failed",
+        errorMessage: "Failed to open Codex App Server stdio pipes",
+      };
+    }
+
+    proc.stdout.on("data", this.onStdoutData);
+    proc.stderr.on("data", this.onStderrData);
+    proc.stdin.on("error", this.onStdinError);
+    proc.on("error", this.onProcessError);
+    proc.on("close", this.onClose);
+    return { status: "ready" };
+  }
+
+  ensureThread(
+    accept: (threadId: string) => void,
+    reject: (error: Error) => void,
+  ): void {
+    if (this.initialized && this.rootThreadId) {
+      accept(this.rootThreadId);
+      return;
+    }
+    this.sendRequest(
+      "initialize",
+      initializeParams(),
+      (initialize) => {
+        if (!isInitializeResponse(initialize)) {
+          reject(
+            new Error(
+              "Codex App Server returned an invalid initialize response",
+            ),
+          );
+          return;
+        }
+        this.initialized = true;
+        this.sendNotification("initialized");
+        this.startThread(accept, reject);
+      },
+      reject,
+    );
+  }
+
+  addSessionIdentities(identities: Set<string>): void {
+    if (this.rootThreadId) identities.add(this.rootThreadId);
+  }
+
+  sendNotification(method: string, params?: JsonObject): void {
+    const value: JsonObject = { method };
+    if (params) value.params = params;
+    this.write(value);
+  }
+
+  sendRequest(
+    method: string,
+    params: JsonObject,
+    accept: (value: unknown) => void,
+    rejectRequest: (error: Error) => void,
+    settleOnTransport = false,
+  ): void {
+    if (this.terminal || this.childClosed) {
+      rejectRequest(new CodexAppServerTransportError("transport-settled"));
+      return;
+    }
+    const id = this.nextRequestId++;
+    this.pending.set(id, {
+      accept,
+      reject: rejectRequest,
+      settleOnTransport,
+    });
+    if (!this.write({ jsonrpc: "2.0", id, method, params }))
+      this.pending.delete(id);
+    else if (method === "turn/start") this.issuedTurn = true;
+  }
+
+  consumeProviderMessage(
+    value: JsonObject,
+  ): CodexAppServerEvent | string | undefined {
+    if (typeof value.method === "string") {
+      if ("id" in value) return this.handleServerRequest(value);
+      return parseNotification(value);
+    }
+    this.handleResponse(value);
+    return undefined;
+  }
+
+  normalizeTurnUsage(
+    tokenUsage: ThreadTokenUsage,
+    allowBaselineReset: boolean,
+  ): ThreadTokenUsage {
+    const next = { ...tokenUsage.total };
+    const baseline =
+      allowBaselineReset &&
+      this.cumulativeUsage &&
+      TOKEN_USAGE_COUNTERS.some(
+        (key) => next[key] < (this.cumulativeUsage?.[key] ?? 0),
+      )
+        ? undefined
+        : this.cumulativeUsage;
+    const delta = { ...next };
+    for (const key of TOKEN_USAGE_COUNTERS)
+      delta[key] = Math.max(0, next[key] - (baseline?.[key] ?? 0));
+    this.cumulativeUsage = next;
+    return {
+      ...tokenUsage,
+      total: delta,
+      last: { ...tokenUsage.last },
+    };
+  }
+
+  rejectPending(error: Error): void {
+    const requests = [...this.pending.values()];
+    this.pending.clear();
+    for (const request of requests) {
+      this.notifyRequestRejection(error);
+      if (request.settleOnTransport) request.reject(error);
+    }
+  }
+
+  interrupt(threadId: string, turnId: string): void {
+    if (this.childClosed || this.terminationState !== "none") return;
+    this.terminationState = "interrupting";
+    this.sendRequest(
+      "turn/interrupt",
+      { threadId, turnId },
+      () => {},
+      () => {},
+    );
+    this.scheduleKill("SIGTERM");
+  }
+
+  completeInterruption(): void {
+    if (this.terminationState !== "interrupting") return;
+    this.clearTimer();
+    this.terminationState = "none";
+  }
+
+  terminate(): void {
+    if (this.childClosed || this.terminationState === "terminating") return;
+    this.clearTimer();
+    this.terminationState = "terminating";
+    if (!this.proc) return;
+    this.endStdin();
+    this.kill("SIGTERM");
+    this.scheduleKill("SIGKILL");
+  }
+
+  async close(force: boolean): Promise<void> {
+    if (!this.proc || this.childClosed) {
+      this.clearTimer();
+      return;
+    }
+    if (force) this.terminate();
+    else {
+      this.endStdin();
+      if (this.terminationState === "none") {
+        this.terminationState = "terminating";
+        this.scheduleKill("SIGTERM");
+      }
+    }
+    await this.processDone;
+  }
+
+  escalate(stage: "SIGTERM" | "SIGKILL"): void {
+    if (this.childClosed) return;
+    this.terminationState = "terminating";
+    this.kill(stage);
+    if (stage === "SIGTERM") this.scheduleKill("SIGKILL");
+    else this.endStdin();
+  }
+
+  private write(value: JsonObject): boolean {
+    if (this.terminal || this.childClosed) return false;
+    try {
+      this.proc?.stdin?.write(`${JSON.stringify(value)}\n`, "utf8");
+      return true;
+    } catch (error) {
+      this.observer?.admit({
+        type: "stdin-write-error",
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      return false;
+    }
+  }
+
+  private startThread(
+    accept: (threadId: string) => void,
+    reject: (error: Error) => void,
+  ): void {
+    this.sendRequest(
+      "thread/start",
+      threadStartParams(this.options),
+      (thread) => {
+        if (
+          !isRecord(thread) ||
+          !isRecord(thread.thread) ||
+          typeof thread.thread.id !== "string"
+        ) {
+          reject(
+            new Error(
+              "Codex App Server returned an invalid thread/start response",
+            ),
+          );
+          return;
+        }
+        this.rootThreadId = thread.thread.id;
+        accept(thread.thread.id);
+      },
+      reject,
+    );
+  }
+
+  private handleResponse(value: JsonObject): void {
+    if (
+      !Number.isInteger(value.id) ||
+      (!("result" in value) && !("error" in value))
+    )
+      return;
+    const request = this.pending.get(value.id as number);
+    if (!request) return;
+    this.pending.delete(value.id as number);
+    if ("error" in value) {
+      const jsonRpcError = parseCodexAppServerResponseError(value.error);
+      const rejection = jsonRpcError
+        ? new CodexAppServerRequestError(jsonRpcError)
+        : new Error(
+            isRecord(value.error) && typeof value.error.message === "string"
+              ? value.error.message
+              : "Codex App Server request failed",
+          );
+      this.notifyRequestRejection(rejection);
+      request.reject(rejection);
+    } else request.accept(value.result);
+  }
+
+  private handleServerRequest(value: JsonObject): string | undefined {
+    const id = value.id;
+    if (
+      (typeof id !== "number" && typeof id !== "string") ||
+      (typeof id === "number" && !Number.isInteger(id)) ||
+      typeof value.method !== "string"
+    )
+      return undefined;
+    this.write({
+      jsonrpc: "2.0",
+      id,
+      error: {
+        code: -32601,
+        message: "Method not supported by pi-subagent",
+      },
+    });
+    return `Codex App Server requested unsupported method '${value.method}'\n`;
+  }
+
+  private notifyRequestRejection(error: Error): void {
+    try {
+      this.options.onRequestRejection?.(error);
+    } catch {
+      // Diagnostics must not become a second settlement path.
+    }
+  }
+
+  private processLine(line: string): void {
+    if (!line.trim()) return;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (!isRecord(value)) return;
+    if (this.observer) this.observer.admit({ type: "provider-message", value });
+    else this.consumeProviderMessage(value);
+  }
+
+  private processChunk(chunk: Buffer | string): void {
+    const text = chunk.toString();
+    this.rawStdoutTail = (this.rawStdoutTail + text).slice(
+      -RAW_STDOUT_TAIL_LIMIT,
+    );
+    let rest = text;
+    while (rest) {
+      if (this.droppingLine) {
+        const newline = rest.indexOf("\n");
+        if (newline < 0) return;
+        this.droppingLine = false;
+        rest = rest.slice(newline + 1);
+        continue;
+      }
+      this.lineBuffer += rest;
+      rest = "";
+      while (true) {
+        const newline = this.lineBuffer.indexOf("\n");
+        if (newline < 0) {
+          if (this.lineBuffer.length > STDOUT_LINE_LIMIT) {
+            this.lineBuffer = "";
+            this.droppingLine = true;
+          }
+          return;
+        }
+        const line = this.lineBuffer.slice(0, newline);
+        this.lineBuffer = this.lineBuffer.slice(newline + 1);
+        if (line.length <= STDOUT_LINE_LIMIT) this.processLine(line);
+      }
+    }
+  }
+
+  private readonly onStdoutData = (data: Buffer | string): void => {
+    const observer = this.observer;
+    observer?.beginFrame();
+    try {
+      this.processChunk(data);
+    } finally {
+      observer?.endFrame();
+    }
+  };
+
+  private readonly onStderrData = (data: Buffer | string): void => {
+    this.observer?.admit({ type: "stderr", chunk: data.toString() });
+  };
+
+  private readonly onStdinError = (error: Error): void => {
+    this.observer?.admit({ type: "stdin-error", error });
+  };
+
+  private readonly onProcessError = (error: Error): void => {
+    if (this.terminal || this.childClosed) return;
+    this.terminal = true;
+    this.rejectPending(new CodexAppServerTransportError("transport-settled"));
+    const observer = this.observer;
+    if (observer) observer.admit({ type: "process-error", error });
+    else this.terminate();
+  };
+
+  private readonly onClose = (code: number | null): void => {
+    if (this.childClosed) return;
+    this.childClosed = true;
+    this.terminal = true;
+    this.clearTimer();
+    this.rejectPending(new CodexAppServerTransportError("child-exited"));
+    const observer = this.observer;
+    observer?.beginFrame();
+    try {
+      if (
+        this.lineBuffer.length > 0 &&
+        this.lineBuffer.length <= STDOUT_LINE_LIMIT
+      )
+        this.processLine(this.lineBuffer);
+      this.lineBuffer = "";
+      observer?.admit({ type: "process-close", code });
+    } finally {
+      observer?.endFrame();
+      this.detachProcess();
+      this.resolveProcessDone?.();
+      this.resolveProcessDone = undefined;
+    }
+  };
+
+  private terminatePartiallyOpenedProcess(): void {
+    const proc = this.proc;
+    if (!proc) return;
+    this.terminationState = "terminating";
+    const finish = (): void => {
+      if (this.childClosed) return;
+      this.childClosed = true;
+      this.terminal = true;
+      this.clearTimer();
+      proc.removeListener("close", finish);
+      this.resolveProcessDone?.();
+      this.resolveProcessDone = undefined;
+    };
+    proc.once("close", finish);
+    try {
+      proc.stdin?.end();
+      proc.kill("SIGTERM");
+      this.timer = setTimeout(() => {
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          // The process may have exited after SIGTERM.
+        }
+      }, this.options.killEscalationMs ?? DEFAULT_KILL_ESCALATION_MS);
+      this.timer.unref?.();
+    } catch {
+      finish();
+    }
+  }
+
+  private scheduleKill(stage: "SIGTERM" | "SIGKILL"): void {
+    this.clearTimer();
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      if (this.observer) this.observer.admit({ type: "escalation", stage });
+      else this.escalate(stage);
+    }, this.options.killEscalationMs ?? DEFAULT_KILL_ESCALATION_MS);
+    this.timer.unref?.();
+  }
+
+  private clearTimer(): void {
+    if (this.timer === undefined) return;
+    clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  private endStdin(): void {
+    if (this.stdinEnded) return;
+    this.stdinEnded = true;
+    try {
+      this.proc?.stdin?.end();
+    } catch {
+      // The child may have closed stdin during teardown.
+    }
+  }
+
+  private kill(stage: "SIGTERM" | "SIGKILL"): void {
+    try {
+      this.proc?.kill(stage);
+    } catch {
+      // The child may have exited between escalation stages.
+    }
+  }
+
+  private detachProcess(): void {
+    const proc = this.proc;
+    if (!proc) return;
+    proc.stdout?.removeListener("data", this.onStdoutData);
+    proc.stderr?.removeListener("data", this.onStderrData);
+    proc.stdin?.removeListener("error", this.onStdinError);
+    proc.removeListener("error", this.onProcessError);
+    proc.removeListener("close", this.onClose);
+  }
+}
+
+/** Own one App Server session and at most one active Run-scoped Turn. */
+class CodexAppServerSessionOwner implements CodexAppServerSession {
+  private active:
+    | {
+        readonly controller: AbortController;
+        readonly promise: Promise<RunEnding>;
+      }
+    | undefined;
+  private closed = false;
+  private started = false;
+  private closePromise: Promise<void> | undefined;
+  private readonly connection: CodexAppServerConnection;
+
+  constructor(sessionOptions: CodexAppServerSessionOptions) {
+    this.connection = new CodexAppServerConnection(sessionOptions);
+  }
+
+  get continuationAvailable(): boolean {
+    return !this.closed && this.connection.continuationAvailable;
+  }
+
+  get hasIssuedTurn(): boolean {
+    return this.connection.hasIssuedTurn;
+  }
+
+  runNextTurn(turnOptions: CodexAppServerTurnOptions): Promise<RunEnding> {
+    if (this.closed)
+      return this.started
+        ? Promise.resolve({
+            ending: "failed",
+            errorMessage: "Codex App Server session is closed",
+          })
+        : Promise.resolve({ ending: "cancelled" });
+    if (this.active)
+      return Promise.resolve({
+        ending: "failed",
+        errorMessage: "Codex App Server session already has an active Turn",
+      });
+
+    this.started = true;
+    const controller = new AbortController();
+    const forwardAbort = (): void => controller.abort();
+    if (turnOptions.signal?.aborted) controller.abort();
+    else
+      turnOptions.signal?.addEventListener("abort", forwardAbort, {
+        once: true,
+      });
+    const promise = runCodexAppServerTurn({
+      ...turnOptions,
+      connection: this.connection,
+      signal: controller.signal,
+    }).finally(() => {
+      turnOptions.signal?.removeEventListener("abort", forwardAbort);
+    });
+    const current = { controller, promise };
+    this.active = current;
+    void promise.then(
+      () => {
+        if (this.active === current) this.active = undefined;
+      },
+      () => {
+        if (this.active === current) this.active = undefined;
+      },
+    );
+    return promise;
+  }
+
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    this.closed = true;
+    const current = this.active;
+    current?.controller.abort();
+    this.closePromise = (async () => {
+      await current?.promise.catch(() => {});
+      await this.connection.close(false);
+    })();
+    return this.closePromise;
+  }
+}
+
 /**
- * Run one disposable Codex App Server conversation. All externally occurring
- * inputs receive an ingress sequence before this engine interprets them; this
- * function is also the sole producer of the executor's terminal Ending.
+ * Execute one fresh Turn for the session owner. All externally occurring
+ * inputs receive an ingress sequence before this reducer interprets them; the
+ * Turn is the sole producer of its terminal Ending.
  */
-export function runCodexAppServer(
+function runCodexAppServerTurn(
   options: CodexAppServerRunOptions,
 ): Promise<RunEnding> {
   const {
-    cwd,
-    childDepth,
+    connection,
     prompt,
     translate,
     report,
@@ -746,78 +1361,19 @@ export function runCodexAppServer(
       },
     },
     missingAnswerMessage,
-    onRequestRejection,
-    spawn = defaultSpawn,
-    killEscalationMs = DEFAULT_KILL_ESCALATION_MS,
   } = options;
   if (signal.aborted) return Promise.resolve({ ending: "cancelled" });
+  connection.beginRunDiagnostics();
 
   return new Promise((resolve, reject) => {
-    let proc: ChildProcess;
-    try {
-      proc = spawn("codex", ["app-server"], spawnOptions(cwd, childDepth));
-    } catch (error) {
-      resolve({
-        ending: "failed",
-        errorMessage: boundedRedactedDiagnostic(
-          error instanceof Error ? error.message : String(error),
-        ),
-      });
-      return;
-    }
-
-    if (!proc.stdin || !proc.stdout || !proc.stderr) {
-      let earlyClosed = false;
-      let escalation: ReturnType<typeof setTimeout> | undefined;
-      const finishEarlyCleanup = (): void => {
-        if (earlyClosed) return;
-        earlyClosed = true;
-        if (escalation !== undefined) clearTimeout(escalation);
-        proc.removeListener("close", finishEarlyCleanup);
-        resolve({
-          ending: "failed",
-          errorMessage: "Failed to open Codex App Server stdio pipes",
-        });
-      };
-      proc.once("close", finishEarlyCleanup);
-      try {
-        proc.stdin?.end();
-        proc.kill("SIGTERM");
-        if (!earlyClosed) {
-          escalation = setTimeout(() => {
-            try {
-              proc.kill("SIGKILL");
-            } catch {
-              // The process may have exited after SIGTERM.
-            }
-          }, killEscalationMs);
-          escalation.unref?.();
-        }
-      } catch {
-        // The partially opened child may already have exited.
-      }
-      return;
-    }
-
-    let nextRequestId = 1;
     let nextSequence = 1;
-    let threadId: string | undefined;
     let turnId: string | undefined;
     let cancellationSequence: number | undefined;
     let endingSettled = false;
-    let settledEnding: RunEnding | undefined;
-    let settledError: unknown;
-    let completionDelivered = false;
-    let childClosed = false;
     let sawStderr = false;
     let terminalAnswer = false;
     let witnessedError: string | undefined;
-    let rawStdoutTail = "";
-    let lineBuffer = "";
-    let droppingLine = false;
-    let stdinEnded = false;
-    let terminationStarted = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let firstUsageUpdate = true;
     let draining = false;
     let framingStdout = false;
     let reducingSequence: number | undefined;
@@ -826,24 +1382,16 @@ export function runCodexAppServer(
       readonly sequence: number;
       readonly notification: CodexAppServerEvent;
     }[] = [];
-    const pending = new Map<number, PendingRequest>();
     const pendingSteeringCorrelations = new Set<string>();
     const consumedSteeringItems = new Set<string>();
     const providerIdentities = new Set<string>();
-    if (options.continuationThreadId)
-      providerIdentities.add(options.continuationThreadId);
+    connection.addSessionIdentities(providerIdentities);
     const queuedControls: ControlAdmission[] = [];
     let steeringInFlight = false;
     let controlsClosed = false;
     let unsubscribeControls = () => {};
+    let observer: CodexProcessObserver;
 
-    const notifyRequestRejection = (error: Error): void => {
-      try {
-        onRequestRejection?.(error);
-      } catch {
-        // Diagnostics must not become a second settlement path.
-      }
-    };
     const redactDiagnostic = (value: string): string => {
       let redacted = redactProviderIds(value);
       const identities = [...providerIdentities].sort(
@@ -853,14 +1401,6 @@ export function runCodexAppServer(
         if (identity) redacted = redacted.split(identity).join("[redacted]");
       }
       return redacted.slice(0, RESULT_DIAGNOSTIC_LIMIT);
-    };
-    const rejectPending = (error: Error): void => {
-      const requests = [...pending.values()];
-      pending.clear();
-      for (const request of requests) {
-        notifyRequestRejection(error);
-        if (request.settleOnTransport) request.reject(error);
-      }
     };
     const closeControlAdmissions = (): void => {
       if (controlsClosed) return;
@@ -874,54 +1414,9 @@ export function runCodexAppServer(
       pendingSteeringCorrelations.clear();
       consumedSteeringItems.clear();
     };
-    const closeAttemptState = (): void => {
+    const closeTurnState = (): void => {
       closeControlAdmissions();
       clearSteeringState();
-    };
-    const clearTimer = (): void => {
-      if (timer !== undefined) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
-    };
-    const detachProcess = (): void => {
-      proc.removeListener("error", onProcessError);
-      proc.removeListener("close", onClose);
-    };
-    const detachStreams = (): void => {
-      proc.stdout?.removeListener("data", onStdoutData);
-      proc.stderr?.removeListener("data", onStderrData);
-      proc.stdin?.removeListener("error", onStdinError);
-    };
-    const completeAfterCleanup = (): void => {
-      if (completionDelivered || !endingSettled) return;
-      completionDelivered = true;
-      if (settledError !== undefined) reject(settledError);
-      else resolve(settledEnding as RunEnding);
-    };
-    const finishCleanup = (): void => {
-      clearTimer();
-      signal.removeEventListener("abort", onAbort);
-      detachStreams();
-      detachProcess();
-      rejectPending(new CodexAppServerTransportError("transport-settled"));
-      completeAfterCleanup();
-    };
-    const endStdin = (): void => {
-      if (stdinEnded) return;
-      stdinEnded = true;
-      try {
-        proc.stdin?.end();
-      } catch {
-        // The child may have closed stdin during teardown.
-      }
-    };
-    const kill = (stage: "SIGTERM" | "SIGKILL"): void => {
-      try {
-        proc.kill(stage);
-      } catch {
-        // The child may have exited between escalation stages.
-      }
     };
     const cancellationPrecedes = (sequence: number | undefined): boolean =>
       cancellationSequence !== undefined &&
@@ -948,45 +1443,22 @@ export function runCodexAppServer(
     const settle = (conclusion: SourceConclusion): void => {
       if (endingSettled) return;
       endingSettled = true;
-      closeAttemptState();
-      settledEnding = endingFrom(conclusion, reducingSequence);
-      if (childClosed) finishCleanup();
+      closeTurnState();
+      signal.removeEventListener("abort", onAbort);
+      connection.detach(observer);
+      resolve(endingFrom(conclusion, reducingSequence));
     };
     const failExecution = (error: unknown): void => {
       if (endingSettled) return;
       endingSettled = true;
-      settledError = error;
-      closeAttemptState();
+      closeTurnState();
       signal.removeEventListener("abort", onAbort);
-      detachStreams();
-      beginTermination(false);
-      rejectPending(new CodexAppServerTransportError("transport-settled"));
-      if (childClosed) finishCleanup();
-    };
-    const scheduleKill = (stage: "SIGTERM" | "SIGKILL"): void => {
-      clearTimer();
-      timer = setTimeout(() => {
-        timer = undefined;
-        admit({ type: "escalation", stage });
-      }, killEscalationMs);
-      timer.unref?.();
-    };
-    const beginTermination = (interrupt: boolean): void => {
-      if (childClosed || terminationStarted) return;
-      terminationStarted = true;
-      if (interrupt && threadId && turnId) {
-        sendRequest(
-          "turn/interrupt",
-          { threadId, turnId },
-          () => {},
-          () => {},
-        );
-        if (!endingSettled) scheduleKill("SIGTERM");
-        return;
-      }
-      endStdin();
-      kill("SIGTERM");
-      scheduleKill("SIGKILL");
+      connection.detach(observer);
+      connection.terminate();
+      connection.rejectPending(
+        new CodexAppServerTransportError("transport-settled"),
+      );
+      reject(error);
     };
     const finish = (
       conclusion: SourceConclusion,
@@ -994,12 +1466,11 @@ export function runCodexAppServer(
       requestSettlement: CodexAppServerTransportRejectionReason,
     ): void => {
       if (endingSettled) return;
-      signal.removeEventListener("abort", onAbort);
-      detachStreams();
       closeControlAdmissions();
-      rejectPending(new CodexAppServerTransportError(requestSettlement));
-      if (terminate) beginTermination(false);
-      else if (!childClosed) endStdin();
+      connection.rejectPending(
+        new CodexAppServerTransportError(requestSettlement),
+      );
+      if (terminate && conclusion.status === "failed") connection.terminate();
       settle(conclusion);
     };
     const reportStderr = (chunk: string): boolean => {
@@ -1020,40 +1491,8 @@ export function runCodexAppServer(
         return false;
       }
     };
-    const write = (value: JsonObject): boolean => {
-      if (endingSettled) return false;
-      try {
-        proc.stdin?.write(`${JSON.stringify(value)}\n`, "utf8");
-        return true;
-      } catch (error) {
-        reportStderr(
-          `stdin: ${error instanceof Error ? error.message : String(error)}\n`,
-        );
-        finish({ status: "failed" }, true, "transport-settled");
-        return false;
-      }
-    };
-    const sendNotification = (method: string, params?: JsonObject): void => {
-      const value: JsonObject = { method };
-      if (params) value.params = params;
-      write(value);
-    };
-    function sendRequest(
-      method: string,
-      params: JsonObject,
-      accept: (value: unknown) => void,
-      rejectRequest: (error: Error) => void,
-      settleOnTransport = false,
-    ): void {
-      if (endingSettled) {
-        rejectRequest(new CodexAppServerTransportError("transport-settled"));
-        return;
-      }
-      const id = nextRequestId++;
-      pending.set(id, { accept, reject: rejectRequest, settleOnTransport });
-      if (!write({ jsonrpc: "2.0", id, method, params })) pending.delete(id);
-    }
     const startNextControl = (): void => {
+      const threadId = connection.threadId;
       if (
         controlsClosed ||
         endingSettled ||
@@ -1069,7 +1508,7 @@ export function runCodexAppServer(
       const clientUserMessageId = globalThis.crypto.randomUUID();
       pendingSteeringCorrelations.add(clientUserMessageId);
       providerIdentities.add(clientUserMessageId);
-      sendRequest(
+      connection.sendRequest(
         "turn/steer",
         turnSteerParams(
           threadId,
@@ -1089,10 +1528,6 @@ export function runCodexAppServer(
         true,
       );
     };
-    const responseError = (value: unknown): string | undefined =>
-      isRecord(value) && typeof value.message === "string"
-        ? value.message
-        : undefined;
     const startupFailure = (error: Error): void => {
       finish(
         { status: "failed", errorMessage: redactDiagnostic(error.message) },
@@ -1101,10 +1536,11 @@ export function runCodexAppServer(
       );
     };
     const startTurn = (): void => {
+      const threadId = connection.threadId;
       if (!threadId || endingSettled || cancellationSequence !== undefined)
         return;
       const attachedThreadId = threadId;
-      sendRequest(
+      connection.sendRequest(
         "turn/start",
         turnStartParams(attachedThreadId, prompt),
         (turn) => {
@@ -1122,120 +1558,17 @@ export function runCodexAppServer(
           }
           turnId = turn.turn.id;
           providerIdentities.add(turnId);
-          try {
-            options.onThreadAttached?.(attachedThreadId);
-          } catch (error) {
-            failExecution(error);
-            return;
-          }
           flushEarlyNotifications();
           startNextControl();
         },
         startupFailure,
       );
     };
-    const attachThread = (
-      method: "thread/start" | "thread/resume",
-      params: JsonObject,
-      expectedThreadId?: string,
-    ): void => {
-      if (endingSettled || cancellationSequence !== undefined) return;
-      sendRequest(
-        method,
-        params,
-        (thread) => {
-          if (
-            !isRecord(thread) ||
-            !isRecord(thread.thread) ||
-            typeof thread.thread.id !== "string" ||
-            (expectedThreadId !== undefined &&
-              thread.thread.id !== expectedThreadId)
-          ) {
-            startupFailure(
-              new Error(
-                `Codex App Server returned an invalid ${method} response`,
-              ),
-            );
-            return;
-          }
-          threadId = thread.thread.id;
-          providerIdentities.add(threadId);
-          startTurn();
-        },
-        startupFailure,
-      );
-    };
-    const startThread = (): void => {
-      const continuation = options.continuationThreadId;
-      if (continuation) {
-        attachThread(
-          "thread/resume",
-          threadResumeParams(options, continuation),
-          continuation,
-        );
-      } else {
-        attachThread("thread/start", threadStartParams(options));
-      }
-    };
     const start = (): void => {
-      sendRequest(
-        "initialize",
-        initializeParams(),
-        (initialize) => {
-          if (!isInitializeResponse(initialize)) {
-            startupFailure(
-              new Error(
-                "Codex App Server returned an invalid initialize response",
-              ),
-            );
-            return;
-          }
-          if (endingSettled || cancellationSequence !== undefined) return;
-          sendNotification("initialized");
-          startThread();
-        },
-        startupFailure,
-      );
-    };
-    const handleResponse = (value: JsonObject): void => {
-      if (
-        !Number.isInteger(value.id) ||
-        (!("result" in value) && !("error" in value))
-      )
-        return;
-      const request = pending.get(value.id as number);
-      if (!request) return;
-      pending.delete(value.id as number);
-      if ("error" in value) {
-        const jsonRpcError = parseCodexAppServerResponseError(value.error);
-        const rejection = jsonRpcError
-          ? new CodexAppServerRequestError(jsonRpcError)
-          : new Error(
-              responseError(value.error) ?? "Codex App Server request failed",
-            );
-        notifyRequestRejection(rejection);
-        request.reject(rejection);
-      } else request.accept(value.result);
-    };
-    const handleServerRequest = (value: JsonObject): void => {
-      const id = value.id;
-      if (
-        (typeof id !== "number" && typeof id !== "string") ||
-        (typeof id === "number" && !Number.isInteger(id)) ||
-        typeof value.method !== "string"
-      )
-        return;
-      write({
-        jsonrpc: "2.0",
-        id,
-        error: {
-          code: -32601,
-          message: "Method not supported by pi-subagent",
-        },
-      });
-      reportStderr(
-        `Codex App Server requested unsupported method '${value.method}'\n`,
-      );
+      connection.ensureThread((threadId) => {
+        providerIdentities.add(threadId);
+        startTurn();
+      }, startupFailure);
     };
     const applyTranslation = (
       sequence: number,
@@ -1266,7 +1599,19 @@ export function runCodexAppServer(
         consumedSteeringItems,
       );
       try {
-        translation = translate(notification);
+        let currentNotification = notification;
+        if (notification.method === "thread/tokenUsage/updated") {
+          const tokenUsage = connection.normalizeTurnUsage(
+            notification.params.tokenUsage,
+            firstUsageUpdate,
+          );
+          firstUsageUpdate = false;
+          currentNotification = {
+            ...notification,
+            params: { ...notification.params, tokenUsage },
+          };
+        }
+        translation = translate(currentNotification);
       } catch (error) {
         failExecution(error);
         return;
@@ -1323,6 +1668,7 @@ export function runCodexAppServer(
       }
     };
     const matchesRunIdentity = (notification: CodexAppServerEvent): boolean => {
+      const threadId = connection.threadId;
       if (!threadId || notification.params.threadId !== threadId) return false;
       if (!turnId) return false;
       return notification.method === "turn/completed"
@@ -1335,14 +1681,17 @@ export function runCodexAppServer(
     ): void => {
       if (endingSettled || !matchesRunIdentity(notification)) return;
       applyTranslation(sequence, notification);
-      if (!endingSettled && notification.method === "turn/completed")
+      if (!endingSettled && notification.method === "turn/completed") {
+        if (cancellationPrecedes(sequence)) connection.completeInterruption();
         finish(
           { status: "clean" },
           !cancellationPrecedes(sequence),
           "semantic-settled",
         );
+      }
     };
     function flushEarlyNotifications(): void {
+      const threadId = connection.threadId;
       if (!threadId || !turnId || endingSettled) return;
       const retained = earlyNotifications.splice(0);
       for (const entry of retained) {
@@ -1354,40 +1703,30 @@ export function runCodexAppServer(
       sequence: number,
       value: JsonObject,
     ): void => {
-      if (typeof value.method === "string") {
-        if ("id" in value) {
-          handleServerRequest(value);
-          return;
-        }
-        const notification = parseNotification(value);
-        if (!notification) return;
-        if (!threadId || !turnId) {
-          earlyNotifications.push({ sequence, notification });
-          return;
-        }
-        forwardNotification(sequence, notification);
+      const consumed = connection.consumeProviderMessage(value);
+      if (typeof consumed === "string") {
+        reportStderr(consumed);
         return;
       }
-      handleResponse(value);
+      if (!consumed) return;
+      if (!connection.threadId || !turnId) {
+        earlyNotifications.push({ sequence, notification: consumed });
+        return;
+      }
+      forwardNotification(sequence, consumed);
     };
     const handleProcessClose = (
       sequence: number,
       code: number | null,
     ): void => {
-      childClosed = true;
-      clearTimer();
-      rejectPending(new CodexAppServerTransportError("child-exited"));
-      if (endingSettled) {
-        finishCleanup();
-        return;
-      }
+      if (endingSettled) return;
       if (cancellationPrecedes(sequence)) {
         finish({ status: "clean" }, false, "child-exited");
         return;
       }
       if (code === 0) {
         if (!sawStderr && !terminalAnswer) {
-          const tail = redactProviderIds(rawStdoutTail.trim());
+          const tail = redactProviderIds(connection.stdoutTail.trim());
           if (
             !reportStderr(
               tail ? `Last stdout:\n${tail}` : "No stdout was captured.",
@@ -1398,10 +1737,10 @@ export function runCodexAppServer(
         finish({ status: "clean" }, false, "child-exited");
         return;
       }
-      if (!sawStderr && !terminalAnswer && rawStdoutTail.trim()) {
+      if (!sawStderr && !terminalAnswer && connection.stdoutTail.trim()) {
         if (
           !reportStderr(
-            `Last stdout:\n${redactProviderIds(rawStdoutTail.trim())}`,
+            `Last stdout:\n${redactProviderIds(connection.stdoutTail.trim())}`,
           )
         )
           return;
@@ -1443,7 +1782,9 @@ export function runCodexAppServer(
           return;
         case "cancel":
           closeControlAdmissions();
-          beginTermination(Boolean(threadId && turnId));
+          if (connection.threadId && turnId)
+            connection.interrupt(connection.threadId, turnId);
+          else connection.terminate();
           return;
         case "stderr":
           reportStderr(occurrence.chunk);
@@ -1451,18 +1792,26 @@ export function runCodexAppServer(
         case "stdin-error":
           reportStderr(`stdin: ${occurrence.error.message}\n`);
           return;
-        case "process-error":
-          if (!reportStderr(`${occurrence.error.message}\n`)) return;
+        case "stdin-write-error":
+          reportStderr(`stdin: ${occurrence.error.message}\n`);
           finish({ status: "failed" }, true, "transport-settled");
+          return;
+        case "process-error":
+          {
+            const errorMessage = redactDiagnostic(occurrence.error.message);
+            if (!reportStderr(`${errorMessage}\n`)) return;
+            finish(
+              { status: "failed", errorMessage },
+              true,
+              "transport-settled",
+            );
+          }
           return;
         case "process-close":
           handleProcessClose(sequence, occurrence.code);
           return;
         case "escalation":
-          if (childClosed) return;
-          kill(occurrence.stage);
-          if (occurrence.stage === "SIGTERM") scheduleKill("SIGKILL");
-          else endStdin();
+          connection.escalate(occurrence.stage);
       }
     };
     function drainQueue(): void {
@@ -1496,89 +1845,21 @@ export function runCodexAppServer(
       queue.push(ordered);
       if (!framingStdout) drainQueue();
     }
-    const processLine = (line: string): void => {
-      if (!line.trim()) return;
-      let value: unknown;
-      try {
-        value = JSON.parse(line);
-      } catch {
-        return;
-      }
-      if (isRecord(value)) admit({ type: "provider-message", value });
-    };
-    const processChunk = (chunk: Buffer | string): void => {
-      const text = chunk.toString();
-      rawStdoutTail = (rawStdoutTail + text).slice(-RAW_STDOUT_TAIL_LIMIT);
-      let rest = text;
-      while (rest) {
-        if (droppingLine) {
-          const newline = rest.indexOf("\n");
-          if (newline < 0) return;
-          droppingLine = false;
-          rest = rest.slice(newline + 1);
-          continue;
-        }
-        lineBuffer += rest;
-        rest = "";
-        while (true) {
-          const newline = lineBuffer.indexOf("\n");
-          if (newline < 0) {
-            if (lineBuffer.length > STDOUT_LINE_LIMIT) {
-              lineBuffer = "";
-              droppingLine = true;
-            }
-            return;
-          }
-          const line = lineBuffer.slice(0, newline);
-          lineBuffer = lineBuffer.slice(newline + 1);
-          if (line.length <= STDOUT_LINE_LIMIT) processLine(line);
-          if (endingSettled) return;
-        }
-      }
-    };
-    function onStdoutData(data: Buffer | string): void {
-      framingStdout = true;
-      try {
-        processChunk(data);
-      } catch (error) {
-        failExecution(error);
-      } finally {
-        framingStdout = false;
-        drainQueue();
-      }
-    }
-    function onStderrData(data: Buffer | string): void {
-      admit({ type: "stderr", chunk: data.toString() });
-    }
-    function onStdinError(error: Error): void {
-      admit({ type: "stdin-error", error });
-    }
-    function onProcessError(error: Error): void {
-      admit({ type: "process-error", error });
-    }
-    function onClose(code: number | null): void {
-      framingStdout = true;
-      try {
-        if (!endingSettled) {
-          if (lineBuffer.length > 0 && lineBuffer.length <= STDOUT_LINE_LIMIT)
-            processLine(lineBuffer);
-          lineBuffer = "";
-        }
-        admit({ type: "process-close", code });
-      } finally {
-        framingStdout = false;
-        drainQueue();
-      }
-    }
     function onAbort(): void {
       admit({ type: "cancel" });
     }
 
-    proc.stdout.on("data", onStdoutData);
-    proc.stderr.on("data", onStderrData);
-    proc.stdin.on("error", onStdinError);
-    proc.on("error", onProcessError);
-    proc.on("close", onClose);
+    observer = {
+      admit,
+      beginFrame: () => {
+        framingStdout = true;
+      },
+      endFrame: () => {
+        framingStdout = false;
+        drainQueue();
+      },
+    };
+    connection.attach(observer);
     signal.addEventListener("abort", onAbort, { once: true });
     unsubscribeControls = controls.subscribe(
       (admission) => {
@@ -1592,7 +1873,30 @@ export function runCodexAppServer(
         if (!controlsClosed) admit({ type: "control-source-close" });
       },
     );
-    if (signal.aborted) onAbort();
-    else start();
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    const processStart = connection.start();
+    if (processStart.status === "failed") {
+      finish(
+        { status: "failed", errorMessage: processStart.errorMessage },
+        true,
+        "transport-settled",
+      );
+      return;
+    }
+    start();
   });
+}
+
+/**
+ * Create the Codex-owned lifecycle module behind the Harness Adapter seam.
+ * One instance owns one retained ephemeral root Conversation until close or
+ * terminal process loss.
+ */
+export function createCodexAppServerSession(
+  options: CodexAppServerSessionOptions,
+): CodexAppServerSession {
+  return new CodexAppServerSessionOwner(options);
 }

@@ -262,12 +262,18 @@ adapter, the full test suite, and a byte-for-byte generated Codex protocol
 check (`npm run codex:protocol:check`). `npm run release:check` adds all six
 authenticated provider gates. `npm run codex:smoke` preserves the live
 steering/interruption proof and prints `CODEX_STEERING_LIVE_SMOKE_PASS`, while
-`npm run codex:resume-smoke` proves start–idle–resume through two disposable
-Attempts and prints `CODEX_RESUME_LIVE_SMOKE_PASS`. Pi uses
+`npm run codex:resume-smoke` proves two Runs on one retained ephemeral,
+pathless App Server Conversation, stored-thread nondiscoverability, and complete
+cleanup before printing `CODEX_RESUME_LIVE_SMOKE_PASS`. Pi uses
 `npm run pi:steering-smoke` and `npm run pi:resume-smoke`, printing
 `PI_STEERING_LIVE_SMOKE_PASS` and `PI_RESUME_LIVE_SMOKE_PASS`. Claude uses
 `npm run claude:steering-smoke` and `npm run claude:resume-smoke`, printing
 `CLAUDE_STEERING_LIVE_SMOKE_PASS` and `CLAUDE_RESUME_LIVE_SMOKE_PASS`.
+
+The human-only Codex Desktop coexistence gate is recorded with
+[`docs/codex-desktop-coexistence-release.md`](docs/codex-desktop-coexistence-release.md).
+It runs the Codex resume smoke with an idle-process pause while Desktop remains
+open; it is deliberately separate from non-interactive `release:check`.
 
 The Pi commands require a usable model and credentials in the normal Pi agent
 directory. The Claude commands require an authenticated Claude Code SDK

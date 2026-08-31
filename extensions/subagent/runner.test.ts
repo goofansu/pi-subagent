@@ -400,10 +400,9 @@ async function proveCodexControlOrder(
       );
     }
     const threadId = `thread-${iteration}`;
-    let attempt = 0;
+    let spawnCount = 0;
     const spawn: ChildProcessSpawn = () => {
-      const currentAttempt = attempt++;
-      const turnId = `turn-${iteration}-${currentAttempt}`;
+      spawnCount++;
       const child = new EventEmitter() as EventEmitter & {
         stdin: PassThrough;
         stdout: PassThrough;
@@ -425,6 +424,8 @@ async function proveCodexControlOrder(
       const send = (value: unknown): void => {
         child.stdout.write(`${JSON.stringify(value)}\n`);
       };
+      let currentTurn = -1;
+      let turnId = "";
       child.stdin.setEncoding("utf8");
       child.stdin.on("finish", close);
       child.stdin.on("data", (chunk) => {
@@ -433,7 +434,7 @@ async function proveCodexControlOrder(
           const request = JSON.parse(line) as Record<string, unknown>;
           const method = String(request.method);
           if (method === "turn/steer" || method === "turn/interrupt")
-            providerMethods[currentAttempt]?.push(method);
+            providerMethods[currentTurn]?.push(method);
           if (method === "initialize") {
             send({
               id: request.id,
@@ -444,14 +445,16 @@ async function proveCodexControlOrder(
                 platformOs: "test",
               },
             });
-          } else if (method === "thread/start" || method === "thread/resume") {
+          } else if (method === "thread/start") {
             send({ id: request.id, result: { thread: { id: threadId } } });
           } else if (method === "turn/start") {
+            currentTurn++;
+            turnId = `turn-${iteration}-${currentTurn}`;
             send({
               id: request.id,
               result: { turn: { id: turnId, status: "inProgress" } },
             });
-            releaseTurn[currentAttempt]?.();
+            releaseTurn[currentTurn]?.();
           } else if (method === "turn/interrupt") {
             send({
               method: "turn/completed",
@@ -519,14 +522,15 @@ async function proveCodexControlOrder(
     }
 
     await adapter.close();
+    assert.equal(spawnCount, 1, "both cancelled Runs retain one App Server");
   }
 }
 
-test("accepted steering enters first and resumed Codex Attempts before synchronous later cancellation", async () => {
+test("accepted steering enters first and resumed Codex Turns before synchronous later cancellation", async () => {
   await proveCodexControlOrder("control-first");
 });
 
-test("cancellation-first closes first and resumed Codex Attempts before later steering", async () => {
+test("cancellation-first closes first and resumed Codex Turns before later steering", async () => {
   await proveCodexControlOrder("cancellation-first");
 });
 

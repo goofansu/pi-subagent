@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { test } from "node:test";
+import { type TestContext, test } from "node:test";
 import type { ChildProcessSpawn } from "../../child-process.ts";
 import {
   CONTROL_MAX_PENDING,
@@ -11,13 +11,19 @@ import {
   createControlSource,
 } from "../../control-source.ts";
 import type { OneShotSink } from "../../one-shot.ts";
-import { DEPTH_ENV_KEY, type Fact, type RunControl } from "../../run.ts";
+import {
+  DEPTH_ENV_KEY,
+  type Fact,
+  type RunControl,
+  type RunReporter,
+} from "../../run.ts";
 import {
   type CodexAppServerEvent,
-  type CodexAppServerOptions,
   CodexAppServerRequestError,
+  type CodexAppServerSessionOptions,
   CodexAppServerTransportError,
-  runCodexAppServer,
+  type CodexAppServerTurnOptions,
+  createCodexAppServerSession,
 } from "./app-server.ts";
 
 interface FakeChild extends EventEmitter {
@@ -86,13 +92,17 @@ function turnResult() {
 }
 
 function completed(status = "completed") {
+  return completedTurn("turn-1", status);
+}
+
+function completedTurn(turnId: string, status = "completed") {
   return {
     method: "turn/completed",
     emittedAtMs: 4,
     params: {
       threadId: "thread-1",
       turn: {
-        id: "turn-1",
+        id: turnId,
         items: [],
         status,
         error: null,
@@ -104,6 +114,51 @@ function completed(status = "completed") {
   };
 }
 
+function useManualTimers(t: TestContext) {
+  const nativeSetTimeout = globalThis.setTimeout;
+  const nativeClearTimeout = globalThis.clearTimeout;
+  const pending = new Map<ReturnType<typeof setTimeout>, () => void>();
+  let scheduled = 0;
+  let cleared = 0;
+  globalThis.setTimeout = ((
+    callback: (...args: unknown[]) => void,
+    _delay?: number,
+    ...args: unknown[]
+  ) => {
+    scheduled++;
+    const timer = {
+      unref: () => timer,
+    } as unknown as ReturnType<typeof setTimeout>;
+    pending.set(timer, () => callback(...args));
+    return timer;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = ((timer) => {
+    if (pending.delete(timer as ReturnType<typeof setTimeout>)) cleared++;
+  }) as typeof clearTimeout;
+  t.after(() => {
+    globalThis.setTimeout = nativeSetTimeout;
+    globalThis.clearTimeout = nativeClearTimeout;
+  });
+  return {
+    get scheduled() {
+      return scheduled;
+    },
+    get cleared() {
+      return cleared;
+    },
+    get pending() {
+      return pending.size;
+    },
+    fireNext() {
+      const next = pending.entries().next().value;
+      assert.ok(next, "expected a pending timer");
+      const [timer, callback] = next;
+      pending.delete(timer);
+      callback();
+    },
+  };
+}
+
 function controlsFrom(...controls: RunControl[]): ControlSource {
   const source = createControlSource();
   for (const control of controls)
@@ -111,9 +166,53 @@ function controlsFrom(...controls: RunControl[]): ControlSource {
   return source.controls;
 }
 
+function silentReporter(): RunReporter {
+  return {
+    message: () => {},
+    transcript: () => {},
+    activity: () => {},
+    stderr: () => {},
+  };
+}
+
+function assertProcessListenersReleased(child: FakeChild): void {
+  assert.equal(child.listenerCount("error"), 0);
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.stdout.listenerCount("data"), 0);
+  assert.equal(child.stderr.listenerCount("data"), 0);
+  assert.equal(child.stdin.listenerCount("error"), 0);
+}
+
+async function runCodexAppServer(
+  options: CodexAppServerSessionOptions & CodexAppServerTurnOptions,
+) {
+  const {
+    prompt,
+    translate,
+    report,
+    signal,
+    controls,
+    missingAnswerMessage,
+    ...sessionOptions
+  } = options;
+  const session = createCodexAppServerSession(sessionOptions);
+  try {
+    return await session.runNextTurn({
+      prompt,
+      translate,
+      report,
+      ...(signal ? { signal } : {}),
+      ...(controls ? { controls } : {}),
+      missingAnswerMessage,
+    });
+  } finally {
+    await session.close();
+  }
+}
+
 function sourceWith(
   handler: (request: Record<string, unknown>, child: FakeChild) => void,
-  overrides: Partial<CodexAppServerOptions> = {},
+  overrides: Partial<CodexAppServerSessionOptions> = {},
   controls: ControlSource = controlsFrom(),
 ) {
   let child: FakeChild | undefined;
@@ -345,7 +444,7 @@ test("Controls waiting behind native steering retain bounded source admission", 
     (request, child) => {
       if (request.method === "initialize")
         response(child, request.id as number, initializeResult());
-      if (request.method === "thread/resume")
+      if (request.method === "thread/start")
         response(child, request.id as number, threadResult());
       if (request.method === "turn/start") {
         response(child, request.id as number, turnResult());
@@ -358,7 +457,7 @@ test("Controls waiting behind native steering retain bounded source admission", 
       if (request.method === "turn/interrupt")
         child.stdout.write(`${JSON.stringify(completed("interrupted"))}\n`);
     },
-    { continuationThreadId: "thread-1" },
+    {},
     controlOwner.controls,
   );
   const controller = new AbortController();
@@ -395,7 +494,7 @@ test("Controls waiting behind native steering retain bounded source admission", 
   assert.deepEqual(await pending, { ending: "cancelled" });
 });
 
-test("a resumed active-Turn steering refusal is a bounded redacted diagnostic, not the Run ending", async () => {
+test("an active-Turn steering refusal is a bounded redacted diagnostic, not the Run ending", async () => {
   const stderr: string[] = [];
   const controls = controlsFrom({ type: "steer", text: "review this" });
   const providerIdentity = {
@@ -412,7 +511,7 @@ test("a resumed active-Turn steering refusal is a bounded redacted diagnostic, n
     (request, child) => {
       if (request.method === "initialize")
         response(child, request.id as number, initializeResult());
-      if (request.method === "thread/resume")
+      if (request.method === "thread/start")
         response(child, request.id as number, threadResult());
       if (request.method === "turn/start")
         response(child, request.id as number, turnResult());
@@ -434,7 +533,7 @@ test("a resumed active-Turn steering refusal is a bounded redacted diagnostic, n
         child.stdout.write(`${JSON.stringify(completed())}\n`);
       }
     },
-    { continuationThreadId: "thread-1" },
+    {},
     controls,
   );
 
@@ -456,7 +555,7 @@ test("a resumed active-Turn steering refusal is a bounded redacted diagnostic, n
 
 const DETERMINISTIC_RACE_REPETITIONS = 32;
 
-test("repeated resumed completion-before-Control settlement closes reducer steering and answers once", async () => {
+test("repeated completion-before-Control settlement closes reducer steering and answers once", async () => {
   for (
     let iteration = 0;
     iteration < DETERMINISTIC_RACE_REPETITIONS;
@@ -477,7 +576,7 @@ test("repeated resumed completion-before-Control settlement closes reducer steer
       (request, child) => {
         if (request.method === "initialize")
           response(child, request.id as number, initializeResult());
-        if (request.method === "thread/resume")
+        if (request.method === "thread/start")
           response(child, request.id as number, threadResult());
         if (request.method === "turn/start")
           response(child, request.id as number, turnResult());
@@ -487,7 +586,6 @@ test("repeated resumed completion-before-Control settlement closes reducer steer
         }
       },
       {
-        continuationThreadId: "thread-1",
         onRequestRejection: (error) => rejections.push(error),
       },
       controlOwner.controls,
@@ -516,7 +614,7 @@ test("repeated resumed completion-before-Control settlement closes reducer steer
   }
 });
 
-test("repeated resumed cancellation-before-Control-response stays cancelled once", async () => {
+test("repeated cancellation-before-Control-response stays cancelled once", async () => {
   for (
     let iteration = 0;
     iteration < DETERMINISTIC_RACE_REPETITIONS;
@@ -528,7 +626,7 @@ test("repeated resumed cancellation-before-Control-response stays cancelled once
       (request, child) => {
         if (request.method === "initialize")
           response(child, request.id as number, initializeResult());
-        if (request.method === "thread/resume")
+        if (request.method === "thread/start")
           response(child, request.id as number, threadResult());
         if (request.method === "turn/start")
           response(child, request.id as number, turnResult());
@@ -539,7 +637,7 @@ test("repeated resumed cancellation-before-Control-response stays cancelled once
         if (request.method === "turn/interrupt")
           child.stdout.write(`${JSON.stringify(completed("interrupted"))}\n`);
       },
-      { continuationThreadId: "thread-1" },
+      {},
       controlsFrom({
         type: "steer",
         text: `racing guidance ${iteration}`,
@@ -570,14 +668,14 @@ test("provider-accepted steering remains correlated after cancellation until set
     (request, child) => {
       if (request.method === "initialize")
         response(child, request.id as number, initializeResult());
-      if (request.method === "thread/resume")
+      if (request.method === "thread/start")
         response(child, request.id as number, threadResult());
       if (request.method === "turn/start")
         response(child, request.id as number, turnResult());
       if (request.method === "turn/steer") steerRequest = request;
       if (request.method === "turn/interrupt") interruptRequest = request;
     },
-    { continuationThreadId: "thread-1" },
+    {},
     controlsFrom({ type: "steer", text: "confirmed guidance" }),
   );
 
@@ -636,80 +734,75 @@ async function proveControlAdmissionOrder(
     iteration < DETERMINISTIC_RACE_REPETITIONS;
     iteration++
   ) {
-    for (const continuationThreadId of [undefined, "thread-1"] as const) {
-      const methods: string[] = [];
-      const controlOwner = createControlSource();
-      let releaseTurn!: () => void;
-      const activeTurnReady = new Promise<void>((resolve) => {
-        releaseTurn = resolve;
-      });
-      const rig = sourceWith(
-        (request, child) => {
-          if (request.method === "initialize")
-            response(child, request.id as number, initializeResult());
-          if (
-            request.method === "thread/start" ||
-            request.method === "thread/resume"
-          )
-            response(child, request.id as number, threadResult());
-          if (request.method === "turn/start") {
-            response(child, request.id as number, turnResult());
-            releaseTurn();
-          }
-          if (
-            request.method === "turn/steer" ||
-            request.method === "turn/interrupt"
-          )
-            methods.push(request.method);
-          if (request.method === "turn/interrupt")
-            child.stdout.write(`${JSON.stringify(completed("interrupted"))}\n`);
-        },
-        continuationThreadId === undefined ? {} : { continuationThreadId },
-        controlOwner.controls,
+    const methods: string[] = [];
+    const controlOwner = createControlSource();
+    let releaseTurn!: () => void;
+    const activeTurnReady = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const rig = sourceWith(
+      (request, child) => {
+        if (request.method === "initialize")
+          response(child, request.id as number, initializeResult());
+        if (request.method === "thread/start")
+          response(child, request.id as number, threadResult());
+        if (request.method === "turn/start") {
+          response(child, request.id as number, turnResult());
+          releaseTurn();
+        }
+        if (
+          request.method === "turn/steer" ||
+          request.method === "turn/interrupt"
+        )
+          methods.push(request.method);
+        if (request.method === "turn/interrupt")
+          child.stdout.write(`${JSON.stringify(completed("interrupted"))}\n`);
+      },
+      {},
+      controlOwner.controls,
+    );
+    const controller = new AbortController();
+    const pending = rig.source(sinkFor([], []), controller.signal);
+    await activeTurnReady;
+    await new Promise<void>((resolve) => {
+      queueMicrotask(resolve);
+    });
+
+    if (order === "control-first") {
+      assert.equal(
+        controlOwner.offer({
+          type: "steer",
+          text: `guidance-${iteration}`,
+        }),
+        "accepted",
       );
-      const controller = new AbortController();
-      const pending = rig.source(sinkFor([], []), controller.signal);
-      await activeTurnReady;
-      await new Promise<void>((resolve) => {
-        queueMicrotask(resolve);
-      });
-
-      if (order === "control-first") {
-        assert.equal(
-          controlOwner.offer({
-            type: "steer",
-            text: `guidance-${iteration}`,
-          }),
-          "accepted",
-        );
-        controller.abort();
-      } else {
-        controller.abort();
-        assert.equal(
-          controlOwner.offer({
-            type: "steer",
-            text: `too-late-${iteration}`,
-          }),
-          "closed",
-        );
-      }
-
-      assert.deepEqual(await pending, { ending: "cancelled" });
-      assert.deepEqual(
-        methods,
-        order === "control-first"
-          ? ["turn/steer", "turn/interrupt"]
-          : ["turn/interrupt"],
+      controller.abort();
+    } else {
+      controller.abort();
+      assert.equal(
+        controlOwner.offer({
+          type: "steer",
+          text: `too-late-${iteration}`,
+        }),
+        "closed",
       );
     }
+
+    assert.deepEqual(await pending, { ending: "cancelled" });
+    assert.deepEqual(
+      methods,
+      order === "control-first"
+        ? ["turn/steer", "turn/interrupt"]
+        : ["turn/interrupt"],
+    );
   }
 }
 
-test("accepted Control before abort writes turn/steer before turn/interrupt on first and resumed Attempts", async () => {
+test("accepted Control before abort writes turn/steer before turn/interrupt", async () => {
   await proveControlAdmissionOrder("control-first");
 });
 
-test("abort-first writes turn/interrupt and no later turn/steer on first and resumed Attempts", async () => {
+test("abort-first writes turn/interrupt and no later turn/steer", async () => {
   await proveControlAdmissionOrder("cancellation-first");
 });
 
@@ -725,6 +818,1808 @@ function sinkFor(
     stderr: (chunk) => stderr.push(chunk),
   };
 }
+
+test("closing an active App Server session cancels its Turn and releases the process", async (t) => {
+  const timers = useManualTimers(t);
+  const requests: Record<string, unknown>[] = [];
+  const signals: string[] = [];
+  const lifecycle: string[] = [];
+  let child: FakeChild | undefined;
+  let turnStarted!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    turnStarted = resolve;
+  });
+  const session = createCodexAppServerSession({
+    cwd: "/work",
+    childDepth: 2,
+    spawn: () => {
+      child = fakeChild((request, currentChild) => {
+        requests.push(request);
+        if (request.method === "initialize")
+          response(currentChild, request.id as number, initializeResult());
+        if (request.method === "thread/start")
+          response(currentChild, request.id as number, threadResult());
+        if (request.method === "turn/start") {
+          response(currentChild, request.id as number, turnResult());
+          turnStarted();
+        }
+        if (request.method === "turn/interrupt") {
+          lifecycle.push("interrupt");
+          currentChild.stdout.write(
+            `${JSON.stringify(completed("interrupted"))}\n`,
+          );
+        }
+      });
+      child.stdin.on("finish", () => lifecycle.push("stdin-end"));
+      child.kill = (signal) => {
+        signals.push(signal);
+        return true;
+      };
+      return child as unknown as ChildProcess;
+    },
+    killEscalationMs: 5,
+  });
+
+  const ending = session.runNextTurn({
+    prompt: "prompt",
+    translate: (event) => ({
+      terminal: event.method === "turn/completed",
+    }),
+    report: {
+      message: () => {},
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
+    missingAnswerMessage: "missing answer",
+  });
+
+  await ready;
+  assert.ok(child);
+  assert.equal(child.stdin.writableEnded, false);
+  assert.equal(child.listenerCount("close"), 1);
+
+  await session.close();
+  assert.deepEqual(await ending, { ending: "cancelled" });
+  assert.equal(
+    requests.filter((request) => request.method === "turn/interrupt").length,
+    1,
+  );
+  assert.deepEqual(signals, []);
+  assert.deepEqual(lifecycle, ["interrupt", "stdin-end"]);
+  assert.equal(timers.scheduled, 2);
+  assert.equal(timers.cleared, 2);
+  assert.equal(timers.pending, 0);
+  assert.equal(child.stdin.writableEnded, true);
+  assert.equal(child.listenerCount("close"), 0);
+});
+
+test("a clean Turn settles before its App Server session is closed", async () => {
+  const requests: Record<string, unknown>[] = [];
+  let child: FakeChild | undefined;
+  let spawnCount = 0;
+  const session = createCodexAppServerSession({
+    cwd: "/work",
+    childDepth: 2,
+    spawn: () => {
+      spawnCount++;
+      child = fakeChild((request, currentChild) => {
+        requests.push(request);
+        if (request.method === "initialize")
+          response(currentChild, request.id as number, initializeResult());
+        if (request.method === "thread/start")
+          response(currentChild, request.id as number, threadResult());
+        if (request.method === "turn/start") {
+          response(currentChild, request.id as number, turnResult());
+          currentChild.stdout.write(`${JSON.stringify(completed())}\n`);
+        }
+      });
+      return child as unknown as ChildProcess;
+    },
+    killEscalationMs: 5,
+  });
+
+  assert.deepEqual(
+    await session.runNextTurn({
+      prompt: "prompt",
+      translate: (event) => ({
+        terminal: event.method === "turn/completed",
+      }),
+      report: {
+        message: () => {},
+        transcript: () => {},
+        activity: () => {},
+        stderr: () => {},
+      },
+      missingAnswerMessage: "missing answer",
+    }),
+    { ending: "answered" },
+  );
+
+  assert.equal(spawnCount, 1);
+  assert.equal(
+    requests.filter((request) => request.method === "initialize").length,
+    1,
+  );
+  assert.ok(child);
+  assert.equal(child.stdin.writableEnded, false);
+  assert.equal(child.listenerCount("close"), 1);
+
+  await session.close();
+  assert.equal(child.stdin.writableEnded, true);
+  assert.equal(child.listenerCount("close"), 0);
+});
+
+test("one ephemeral App Server session runs two isolated sequential Turns on one retained process", async (t) => {
+  const requests: Record<string, unknown>[] = [];
+  const reports: string[][] = [[], []];
+  const timers = useManualTimers(t);
+  let child: FakeChild | undefined;
+  let spawnCount = 0;
+  let closeCount = 0;
+  let stdinFinishCount = 0;
+  const signals: string[] = [];
+  let secondTurnReady!: () => void;
+  const secondTurnStarted = new Promise<void>((resolve) => {
+    secondTurnReady = resolve;
+  });
+
+  const session = createCodexAppServerSession({
+    cwd: "/work",
+    childDepth: 2,
+    spawn: () => {
+      spawnCount++;
+      child = fakeChild((request, currentChild) => {
+        requests.push(request);
+        if (request.method === "initialize")
+          response(currentChild, request.id as number, initializeResult());
+        if (request.method === "thread/start")
+          response(currentChild, request.id as number, threadResult());
+        if (request.method === "turn/start") {
+          const turnNumber = requests.filter(
+            (candidate) => candidate.method === "turn/start",
+          ).length;
+          const turnId = `turn-${turnNumber}`;
+          response(currentChild, request.id as number, {
+            turn: { id: turnId },
+          });
+          if (turnNumber === 1)
+            currentChild.stdout.write(
+              `${JSON.stringify(completedTurn(turnId))}\n`,
+            );
+          else secondTurnReady();
+        }
+      });
+      child.on("close", () => closeCount++);
+      child.stdin.on("finish", () => stdinFinishCount++);
+      child.kill = (signal) => {
+        signals.push(signal);
+        return true;
+      };
+      return child as unknown as ChildProcess;
+    },
+    killEscalationMs: 5,
+  });
+  const turnOptions = (index: number, prompt: string) => ({
+    prompt,
+    translate: (event: CodexAppServerEvent) => ({
+      terminal: event.method === "turn/completed",
+      facts:
+        event.method === "turn/completed"
+          ? [
+              {
+                role: "assistant" as const,
+                parts: [{ type: "text" as const, text: event.params.turn.id }],
+              },
+            ]
+          : [],
+    }),
+    report: {
+      message: (fact: Fact) => {
+        const text = fact.parts.find((part) => part.type === "text");
+        if (text?.type === "text") reports[index]?.push(text.text);
+      },
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
+    missingAnswerMessage: "missing answer",
+  });
+
+  const firstEnding = await session.runNextTurn(
+    turnOptions(0, "first prompt only"),
+  );
+  assert.deepEqual(firstEnding, { ending: "answered" });
+  const firstObservations = [...reports[0]];
+  assert.deepEqual(firstObservations, ["turn-1"]);
+  assert.equal(spawnCount, 1);
+  assert.ok(child);
+  assert.equal(child.stdin.writableEnded, false);
+  assert.equal(child.stdout.listenerCount("data"), 1);
+  assert.equal(child.listenerCount("close"), 2);
+
+  let secondSettled = false;
+  const second = session.runNextTurn(turnOptions(1, "second prompt only"));
+  void second.then(() => {
+    secondSettled = true;
+  });
+  await secondTurnStarted;
+
+  const overlapping = await session.runNextTurn(
+    turnOptions(1, "must not be sent"),
+  );
+  assert.deepEqual(overlapping, {
+    ending: "failed",
+    errorMessage: "Codex App Server session already has an active Turn",
+  });
+  assert.equal(
+    requests.filter((request) => request.method === "turn/start").length,
+    2,
+  );
+
+  child.stdout.write(`${JSON.stringify(completedTurn("turn-1"))}\n`);
+  await Promise.resolve();
+  assert.equal(secondSettled, false);
+  assert.deepEqual(reports, [["turn-1"], []]);
+
+  child.stdout.write(`${JSON.stringify(completedTurn("turn-2"))}\n`);
+  const secondEnding = await second;
+  assert.deepEqual(secondEnding, { ending: "answered" });
+  assert.notStrictEqual(secondEnding, firstEnding);
+  assert.deepEqual(firstEnding, { ending: "answered" });
+  assert.deepEqual(reports, [["turn-1"], ["turn-2"]]);
+  assert.deepEqual(firstObservations, ["turn-1"]);
+
+  assert.equal(spawnCount, 1);
+  assert.deepEqual(requests, [
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        clientInfo: {
+          name: "pi-subagent",
+          title: "pi-subagent",
+          version: "1.0.0",
+        },
+        capabilities: null,
+      },
+    },
+    { method: "initialized" },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "thread/start",
+      params: {
+        cwd: "/work",
+        ephemeral: true,
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "turn/start",
+      params: {
+        threadId: "thread-1",
+        input: [{ type: "text", text: "first prompt only", text_elements: [] }],
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 4,
+      method: "turn/start",
+      params: {
+        threadId: "thread-1",
+        input: [
+          { type: "text", text: "second prompt only", text_elements: [] },
+        ],
+      },
+    },
+  ]);
+  assert.deepEqual(
+    requests
+      .filter((request) => typeof request.id === "number")
+      .map((request) => request.id),
+    [1, 2, 3, 4],
+  );
+  assert.equal(
+    requests.some((request) => request.method === "thread/resume"),
+    false,
+  );
+  assert.equal(child.stdin.writableEnded, false);
+
+  const firstClose = session.close();
+  const secondClose = session.close();
+  assert.strictEqual(firstClose, secondClose);
+  await firstClose;
+  assert.equal(stdinFinishCount, 1);
+  assert.equal(closeCount, 1);
+  assert.deepEqual(signals, []);
+  assert.equal(timers.scheduled, 1);
+  assert.equal(timers.cleared, 1);
+  assert.equal(timers.pending, 0);
+  assert.equal(child.listenerCount("error"), 0);
+  assert.equal(child.listenerCount("close"), 1);
+  assert.equal(child.stdout.listenerCount("data"), 0);
+  assert.equal(child.stderr.listenerCount("data"), 0);
+  assert.equal(child.stdin.listenerCount("error"), 0);
+});
+
+test("matching interrupted completion keeps the retained session resumable with fresh Turn state", async (t) => {
+  const timers = useManualTimers(t);
+  const requests: Record<string, unknown>[] = [];
+  const reports: Fact[][] = [[], []];
+  const signals: string[] = [];
+  const firstControls = createControlSource();
+  const controller = new AbortController();
+  let child: FakeChild | undefined;
+  let spawnCount = 0;
+  let firstTurnReady!: () => void;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    firstTurnReady = resolve;
+  });
+  let turnStarts = 0;
+  const session = createCodexAppServerSession({
+    cwd: "/work",
+    childDepth: 2,
+    spawn: () => {
+      spawnCount++;
+      child = fakeChild((request, currentChild) => {
+        requests.push(request);
+        if (request.method === "initialize")
+          response(currentChild, request.id as number, initializeResult());
+        if (request.method === "thread/start")
+          response(currentChild, request.id as number, threadResult());
+        if (request.method === "turn/start") {
+          turnStarts++;
+          const turnId = `turn-${turnStarts}`;
+          response(currentChild, request.id as number, {
+            turn: { id: turnId },
+          });
+          if (turnStarts === 1) {
+            currentChild.stdout.write(
+              `${JSON.stringify({
+                method: "item/completed",
+                params: {
+                  threadId: "thread-1",
+                  turnId,
+                  completedAtMs: 1,
+                  item: {
+                    type: "agentMessage",
+                    id: "partial-first",
+                    text: "partial before cancellation",
+                    phase: "commentary",
+                  },
+                },
+              })}\n`,
+            );
+            firstTurnReady();
+          } else {
+            const steer = requests.find(
+              (candidate) => candidate.method === "turn/steer",
+            );
+            const correlation = (
+              steer?.params as Record<string, unknown> | undefined
+            )?.clientUserMessageId;
+            currentChild.stdout.write(
+              `${JSON.stringify({
+                method: "item/completed",
+                params: {
+                  threadId: "thread-1",
+                  turnId,
+                  completedAtMs: 2,
+                  item: {
+                    type: "userMessage",
+                    id: "stale-control",
+                    clientId: correlation,
+                    content: [{ type: "text", text: "stale guidance" }],
+                  },
+                },
+              })}\n`,
+            );
+            currentChild.stdout.write(
+              `${JSON.stringify({
+                method: "item/completed",
+                params: {
+                  threadId: "thread-1",
+                  turnId,
+                  completedAtMs: 3,
+                  item: {
+                    type: "agentMessage",
+                    id: "later-answer",
+                    text: "independent later answer",
+                    phase: "final_answer",
+                  },
+                },
+              })}\n`,
+            );
+            currentChild.stdout.write(
+              `${JSON.stringify(completedTurn(turnId))}\n`,
+            );
+          }
+        }
+        if (request.method === "turn/interrupt") {
+          response(currentChild, request.id as number, {});
+          currentChild.stdout.write(
+            `${JSON.stringify(completedTurn("turn-1", "interrupted"))}\n`,
+          );
+        }
+      });
+      child.kill = (signal) => {
+        signals.push(signal);
+        return true;
+      };
+      return child as unknown as ChildProcess;
+    },
+  });
+  const options = (
+    index: number,
+    prompt: string,
+    signal?: AbortSignal,
+    controls: ControlSource = controlsFrom(),
+  ) => ({
+    prompt,
+    translate: (event: CodexAppServerEvent) => ({
+      terminal: event.method === "turn/completed",
+      facts:
+        event.method === "item/completed" &&
+        event.params.item.type === "agentMessage"
+          ? [
+              {
+                role: "assistant" as const,
+                parts: [
+                  { type: "text" as const, text: event.params.item.text },
+                ],
+              },
+            ]
+          : [],
+    }),
+    report: {
+      message: (fact: Fact) => reports[index]?.push(fact),
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
+    ...(signal ? { signal } : {}),
+    controls,
+    missingAnswerMessage: "missing answer",
+  });
+
+  const first = session.runNextTurn(
+    options(0, "first prompt", controller.signal, firstControls.controls),
+  );
+  await firstTurnStarted;
+  assert.equal(
+    firstControls.offer({ type: "steer", text: "sent before cancellation" }),
+    "accepted",
+  );
+  assert.equal(
+    firstControls.offer({ type: "steer", text: "discard when cancelled" }),
+    "accepted",
+  );
+  controller.abort();
+
+  const firstEnding = await first;
+  assert.deepEqual(firstEnding, { ending: "cancelled" });
+  assert.equal(spawnCount, 1);
+  assert.ok(child);
+  assert.equal(child.stdin.writableEnded, false);
+  assert.deepEqual(signals, []);
+  assert.equal(timers.pending, 0);
+  assert.deepEqual(
+    requests
+      .filter(
+        (request) =>
+          request.method === "turn/steer" ||
+          request.method === "turn/interrupt",
+      )
+      .map((request) => request.method),
+    ["turn/steer", "turn/interrupt"],
+  );
+  assert.equal(
+    firstControls.offer({ type: "steer", text: "too late" }),
+    "closed",
+  );
+  assert.deepEqual(reports[0], [
+    {
+      role: "assistant",
+      parts: [{ type: "text", text: "partial before cancellation" }],
+    },
+  ]);
+
+  const secondEnding = await session.runNextTurn(
+    options(1, "later prompt only"),
+  );
+  assert.deepEqual(secondEnding, { ending: "answered" });
+  assert.notStrictEqual(secondEnding, firstEnding);
+  assert.deepEqual(reports[0], [
+    {
+      role: "assistant",
+      parts: [{ type: "text", text: "partial before cancellation" }],
+    },
+  ]);
+  assert.deepEqual(reports[1], [
+    {
+      role: "assistant",
+      parts: [{ type: "text", text: "independent later answer" }],
+    },
+  ]);
+  assert.equal(spawnCount, 1);
+  assert.deepEqual(
+    requests
+      .filter((request) => request.method === "turn/start")
+      .map((request) => request.params),
+    [
+      {
+        threadId: "thread-1",
+        input: [{ type: "text", text: "first prompt", text_elements: [] }],
+      },
+      {
+        threadId: "thread-1",
+        input: [{ type: "text", text: "later prompt only", text_elements: [] }],
+      },
+    ],
+  );
+
+  await session.close();
+  assert.deepEqual(signals, []);
+  assert.equal(timers.scheduled, 2);
+  assert.equal(timers.cleared, 2);
+  assert.equal(timers.pending, 0);
+  assert.equal(child.listenerCount("error"), 0);
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.stdout.listenerCount("data"), 0);
+  assert.equal(child.stderr.listenerCount("data"), 0);
+  assert.equal(child.stdin.listenerCount("error"), 0);
+});
+
+test("failure during cancellation makes terminal teardown supersede interruption before another Turn", async (t) => {
+  const timers = useManualTimers(t);
+  const requests: Record<string, unknown>[] = [];
+  const signals: string[] = [];
+  const controller = new AbortController();
+  let child: FakeChild | undefined;
+  let firstTurnReady!: () => void;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    firstTurnReady = resolve;
+  });
+  let turnStarts = 0;
+  const session = createCodexAppServerSession({
+    cwd: "/work",
+    childDepth: 2,
+    spawn: () => {
+      child = fakeChild((request, currentChild) => {
+        requests.push(request);
+        if (request.method === "initialize")
+          response(currentChild, request.id as number, initializeResult());
+        if (request.method === "thread/start")
+          response(currentChild, request.id as number, threadResult());
+        if (request.method === "turn/start") {
+          turnStarts++;
+          const turnId = `turn-${turnStarts}`;
+          response(currentChild, request.id as number, {
+            turn: { id: turnId },
+          });
+          if (turnStarts === 1) firstTurnReady();
+          else
+            currentChild.stdout.write(
+              `${JSON.stringify(completedTurn(turnId))}\n`,
+            );
+        }
+        if (request.method === "turn/interrupt")
+          response(currentChild, request.id as number, {});
+      });
+      child.ignoreStdinEnd = true;
+      child.kill = (signal) => {
+        signals.push(signal);
+        if (signal === "SIGKILL") queueMicrotask(() => child?.finish(137));
+        return true;
+      };
+      return child as unknown as ChildProcess;
+    },
+  });
+
+  const first = session.runNextTurn({
+    prompt: "fail while cancellation is in flight",
+    translate: (event) => {
+      if (event.method === "item/completed")
+        throw new Error("translation failed during cancellation");
+      return undefined;
+    },
+    report: {
+      message: () => {},
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
+    signal: controller.signal,
+    missingAnswerMessage: "missing answer",
+  });
+
+  await firstTurnStarted;
+  controller.abort();
+  assert.equal(timers.scheduled, 1);
+  assert.equal(timers.pending, 1);
+  assert.ok(child);
+  child.stdout.write(
+    `${JSON.stringify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 1,
+        item: {
+          type: "agentMessage",
+          id: "failure-trigger",
+          text: "must not survive translation",
+          phase: "commentary",
+        },
+      },
+    })}\n`,
+  );
+  await assert.rejects(first, /translation failed during cancellation/);
+
+  assert.deepEqual(
+    await session.runNextTurn({
+      prompt: "must not start after terminal teardown begins",
+      translate: (event) => ({
+        terminal: event.method === "turn/completed",
+      }),
+      report: {
+        message: () => {},
+        transcript: () => {},
+        activity: () => {},
+        stderr: () => {},
+      },
+      missingAnswerMessage: "missing answer",
+    }),
+    {
+      ending: "failed",
+      errorMessage: "Codex App Server session is closed",
+    },
+  );
+  assert.equal(turnStarts, 1);
+  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.equal(timers.scheduled, 2);
+  assert.equal(timers.cleared, 1);
+  assert.equal(timers.pending, 1);
+
+  const close = session.close();
+  timers.fireNext();
+  await close;
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(timers.pending, 0);
+  assert.equal(child.listenerCount("error"), 0);
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.stdout.listenerCount("data"), 0);
+  assert.equal(child.stderr.listenerCount("data"), 0);
+  assert.equal(child.stdin.listenerCount("error"), 0);
+});
+
+test("cancellation before initialization, thread, or Turn identity tears the session down boundedly", async (t) => {
+  const timers = useManualTimers(t);
+  for (const phase of ["initialize", "thread/start", "turn/start"] as const) {
+    const requests: Record<string, unknown>[] = [];
+    const rejections: Error[] = [];
+    const signals: string[] = [];
+    const controls = createControlSource();
+    const controller = new AbortController();
+    let child: FakeChild | undefined;
+    let spawnCount = 0;
+    let reachedPhase!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      reachedPhase = resolve;
+    });
+    assert.equal(
+      controls.offer({ type: "steer", text: `queued before ${phase}` }),
+      "accepted",
+    );
+    const session = createCodexAppServerSession({
+      cwd: "/work",
+      childDepth: 2,
+      onRequestRejection: (error) => rejections.push(error),
+      spawn: () => {
+        spawnCount++;
+        child = fakeChild((request, currentChild) => {
+          requests.push(request);
+          if (request.method === phase) reachedPhase();
+          if (request.method === "initialize" && phase !== "initialize")
+            response(currentChild, request.id as number, initializeResult());
+          if (request.method === "thread/start" && phase === "turn/start")
+            response(currentChild, request.id as number, threadResult());
+        });
+        child.ignoreStdinEnd = true;
+        child.kill = (signal) => {
+          signals.push(signal);
+          if (signal === "SIGKILL") queueMicrotask(() => child?.finish(137));
+          return true;
+        };
+        return child as unknown as ChildProcess;
+      },
+    });
+    const pending = session.runNextTurn({
+      prompt: `cancel during ${phase}`,
+      translate: () => undefined,
+      report: {
+        message: () => {},
+        transcript: () => {},
+        activity: () => {},
+        stderr: () => {},
+      },
+      signal: controller.signal,
+      controls: controls.controls,
+      missingAnswerMessage: "missing answer",
+    });
+
+    await ready;
+    controller.abort();
+    assert.deepEqual(signals, ["SIGTERM"]);
+    assert.equal(timers.pending, 1);
+    timers.fireNext();
+    assert.deepEqual(await pending, { ending: "cancelled" });
+    assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+    assert.equal(timers.pending, 0);
+    assert.equal(spawnCount, 1);
+    assert.equal(
+      requests.some((request) => request.method === "turn/interrupt"),
+      false,
+    );
+    assert.equal(rejections.length, 1);
+    assert.ok(rejections[0] instanceof CodexAppServerTransportError);
+    assert.equal(
+      (rejections[0] as CodexAppServerTransportError).reason,
+      "child-exited",
+    );
+    assert.equal(
+      controls.offer({ type: "steer", text: "must be closed" }),
+      "closed",
+    );
+
+    const transcriptAfterCancellation = [...requests];
+    assert.deepEqual(
+      await session.runNextTurn({
+        prompt: "must not restart",
+        translate: () => undefined,
+        report: {
+          message: () => {},
+          transcript: () => {},
+          activity: () => {},
+          stderr: () => {},
+        },
+        missingAnswerMessage: "missing answer",
+      }),
+      {
+        ending: "failed",
+        errorMessage: "Codex App Server session is closed",
+      },
+    );
+    assert.deepEqual(requests, transcriptAfterCancellation);
+    assert.equal(spawnCount, 1);
+
+    const firstClose = session.close();
+    const secondClose = session.close();
+    assert.strictEqual(firstClose, secondClose);
+    await firstClose;
+    assert.ok(child);
+    assert.equal(child.listenerCount("error"), 0);
+    assert.equal(child.listenerCount("close"), 0);
+    assert.equal(child.stdout.listenerCount("data"), 0);
+    assert.equal(child.stderr.listenerCount("data"), 0);
+    assert.equal(child.stdin.listenerCount("error"), 0);
+  }
+  assert.equal(timers.scheduled, 3);
+  assert.equal(timers.pending, 0);
+});
+
+test("idle session close escalates an ignored stdin shutdown through SIGTERM and SIGKILL", async (t) => {
+  const timers = useManualTimers(t);
+  const signals: string[] = [];
+  let child: FakeChild | undefined;
+  const session = createCodexAppServerSession({
+    cwd: "/work",
+    childDepth: 2,
+    spawn: () => {
+      child = fakeChild((request, currentChild) => {
+        if (request.method === "initialize")
+          response(currentChild, request.id as number, initializeResult());
+        if (request.method === "thread/start")
+          response(currentChild, request.id as number, threadResult());
+        if (request.method === "turn/start") {
+          response(currentChild, request.id as number, turnResult());
+          currentChild.stdout.write(`${JSON.stringify(completed())}\n`);
+        }
+      });
+      child.ignoreStdinEnd = true;
+      child.kill = (signal) => {
+        signals.push(signal);
+        if (signal === "SIGKILL") queueMicrotask(() => child?.finish(137));
+        return true;
+      };
+      return child as unknown as ChildProcess;
+    },
+  });
+
+  assert.deepEqual(
+    await session.runNextTurn({
+      prompt: "finish before idle close",
+      translate: (event) => ({
+        terminal: event.method === "turn/completed",
+      }),
+      report: {
+        message: () => {},
+        transcript: () => {},
+        activity: () => {},
+        stderr: () => {},
+      },
+      missingAnswerMessage: "missing answer",
+    }),
+    { ending: "answered" },
+  );
+  assert.ok(child);
+  assert.equal(child.stdin.writableEnded, false);
+
+  const firstClose = session.close();
+  const secondClose = session.close();
+  assert.strictEqual(firstClose, secondClose);
+  await Promise.resolve();
+  assert.equal(child.stdin.writableEnded, true);
+  assert.deepEqual(signals, []);
+  assert.equal(timers.pending, 1);
+  timers.fireNext();
+  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.equal(timers.pending, 1);
+  timers.fireNext();
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  await firstClose;
+
+  assert.equal(timers.scheduled, 2);
+  assert.equal(timers.pending, 0);
+  assert.equal(child.listenerCount("error"), 0);
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.stdout.listenerCount("data"), 0);
+  assert.equal(child.stderr.listenerCount("data"), 0);
+  assert.equal(child.stdin.listenerCount("error"), 0);
+});
+
+test("active session close escalates an ignored semantic interrupt through SIGTERM and SIGKILL", async (t) => {
+  const timers = useManualTimers(t);
+  const requests: Record<string, unknown>[] = [];
+  const rejections: Error[] = [];
+  const signals: string[] = [];
+  let child: FakeChild | undefined;
+  let turnReady!: () => void;
+  const started = new Promise<void>((resolve) => {
+    turnReady = resolve;
+  });
+  const session = createCodexAppServerSession({
+    cwd: "/work",
+    childDepth: 2,
+    onRequestRejection: (error) => rejections.push(error),
+    spawn: () => {
+      child = fakeChild((request, currentChild) => {
+        requests.push(request);
+        if (request.method === "initialize")
+          response(currentChild, request.id as number, initializeResult());
+        if (request.method === "thread/start")
+          response(currentChild, request.id as number, threadResult());
+        if (request.method === "turn/start") {
+          response(currentChild, request.id as number, turnResult());
+          turnReady();
+        }
+      });
+      child.ignoreStdinEnd = true;
+      child.kill = (signal) => {
+        signals.push(signal);
+        if (signal === "SIGKILL") queueMicrotask(() => child?.finish(137));
+        return true;
+      };
+      return child as unknown as ChildProcess;
+    },
+  });
+  const ending = session.runNextTurn({
+    prompt: "active close",
+    translate: () => undefined,
+    report: {
+      message: () => {},
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
+    },
+    missingAnswerMessage: "missing answer",
+  });
+  await started;
+
+  const firstClose = session.close();
+  const secondClose = session.close();
+  assert.strictEqual(firstClose, secondClose);
+  assert.deepEqual(signals, []);
+  assert.equal(
+    requests.filter((request) => request.method === "turn/interrupt").length,
+    1,
+  );
+  assert.deepEqual(
+    await session.runNextTurn({
+      prompt: "admission is closed",
+      translate: () => undefined,
+      report: {
+        message: () => {},
+        transcript: () => {},
+        activity: () => {},
+        stderr: () => {},
+      },
+      missingAnswerMessage: "missing answer",
+    }),
+    {
+      ending: "failed",
+      errorMessage: "Codex App Server session is closed",
+    },
+  );
+  assert.equal(
+    requests.filter((request) => request.method === "turn/start").length,
+    1,
+  );
+  assert.equal(timers.pending, 1);
+  timers.fireNext();
+  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.equal(timers.pending, 1);
+  timers.fireNext();
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+
+  await firstClose;
+  assert.deepEqual(await ending, { ending: "cancelled" });
+  assert.equal(timers.scheduled, 2);
+  assert.equal(timers.pending, 0);
+  assert.equal(rejections.length, 1);
+  assert.ok(rejections[0] instanceof CodexAppServerTransportError);
+  assert.equal(
+    (rejections[0] as CodexAppServerTransportError).reason,
+    "child-exited",
+  );
+  assert.ok(child);
+  assert.equal(child.stdin.writableEnded, true);
+  assert.equal(child.listenerCount("error"), 0);
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.stdout.listenerCount("data"), 0);
+  assert.equal(child.stderr.listenerCount("data"), 0);
+  assert.equal(child.stdin.listenerCount("error"), 0);
+});
+
+test("retained session close is idempotent across cancellation, completion, process error, and process close races", async (t) => {
+  const timers = useManualTimers(t);
+  for (const race of [
+    "cancellation",
+    "completion",
+    "process-error",
+    "process-close",
+  ] as const) {
+    const controller = new AbortController();
+    const requests: Record<string, unknown>[] = [];
+    const signals: string[] = [];
+    let child: FakeChild | undefined;
+    let turnReady!: () => void;
+    const started = new Promise<void>((resolve) => {
+      turnReady = resolve;
+    });
+    const session = createCodexAppServerSession({
+      cwd: "/work",
+      childDepth: 2,
+      spawn: () => {
+        child = fakeChild((request, currentChild) => {
+          requests.push(request);
+          if (request.method === "initialize")
+            response(currentChild, request.id as number, initializeResult());
+          if (request.method === "thread/start")
+            response(currentChild, request.id as number, threadResult());
+          if (request.method === "turn/start") {
+            response(currentChild, request.id as number, turnResult());
+            turnReady();
+          }
+          if (request.method === "turn/interrupt" && race !== "process-close") {
+            response(currentChild, request.id as number, {});
+            currentChild.stdout.write(
+              `${JSON.stringify(completed("interrupted"))}\n`,
+            );
+          }
+        });
+        child.kill = (signal) => {
+          signals.push(signal);
+          return true;
+        };
+        return child as unknown as ChildProcess;
+      },
+    });
+    const ending = session.runNextTurn({
+      prompt: race,
+      translate: (event) => ({
+        terminal: event.method === "turn/completed",
+      }),
+      report: {
+        message: () => {},
+        transcript: () => {},
+        activity: () => {},
+        stderr: () => {},
+      },
+      signal: controller.signal,
+      missingAnswerMessage: "missing answer",
+    });
+    await started;
+    assert.ok(child);
+
+    if (race === "cancellation") controller.abort();
+    else if (race === "completion")
+      child.stdout.write(`${JSON.stringify(completed())}\n`);
+    else if (race === "process-error")
+      child.emit("error", new Error("process failed during close"));
+    else child.finish(7);
+
+    const firstClose = session.close();
+    const secondClose = session.close();
+    assert.strictEqual(firstClose, secondClose);
+    await firstClose;
+    const result = await ending;
+    assert.equal(
+      result.ending,
+      race === "completion"
+        ? "answered"
+        : race === "process-error"
+          ? "failed"
+          : "cancelled",
+    );
+    assert.equal(
+      requests.filter((request) => request.method === "turn/interrupt").length,
+      race === "cancellation" || race === "process-close" ? 1 : 0,
+    );
+    assert.deepEqual(signals, race === "process-error" ? ["SIGTERM"] : []);
+    assert.equal(timers.pending, 0);
+    assert.equal(child.listenerCount("error"), 0);
+    assert.equal(child.listenerCount("close"), 0);
+    assert.equal(child.stdout.listenerCount("data"), 0);
+    assert.equal(child.stderr.listenerCount("data"), 0);
+    assert.equal(child.stdin.listenerCount("error"), 0);
+  }
+});
+
+test("a terminal idle connection cannot re-handshake or replay a prior Turn Ending", async () => {
+  const requests: Record<string, unknown>[] = [];
+  let child: FakeChild | undefined;
+  let spawnCount = 0;
+  let connectionClosed!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    connectionClosed = resolve;
+  });
+  const firstReports: string[] = [];
+  const laterReports: string[] = [];
+  const session = createCodexAppServerSession({
+    cwd: "/work",
+    childDepth: 2,
+    spawn: () => {
+      spawnCount++;
+      child = fakeChild((request, currentChild) => {
+        requests.push(request);
+        if (request.method === "initialize")
+          response(currentChild, request.id as number, initializeResult());
+        if (request.method === "thread/start")
+          response(currentChild, request.id as number, threadResult());
+        if (request.method === "turn/start") {
+          response(currentChild, request.id as number, turnResult());
+          currentChild.stdout.write(`${JSON.stringify(completed())}\n`);
+        }
+      });
+      child.on("close", connectionClosed);
+      return child as unknown as ChildProcess;
+    },
+  });
+  const options = (prompt: string, reports: string[]) => ({
+    prompt,
+    translate: (event: CodexAppServerEvent) => ({
+      terminal: event.method === "turn/completed",
+    }),
+    report: {
+      message: () => reports.push("message"),
+      transcript: () => reports.push("transcript"),
+      activity: () => reports.push("activity"),
+      stderr: () => reports.push("stderr"),
+    },
+    missingAnswerMessage: `${prompt} missing answer`,
+  });
+
+  const firstEnding = await session.runNextTurn(options("first", firstReports));
+  assert.deepEqual(firstEnding, { ending: "answered" });
+  assert.equal(session.continuationAvailable, true);
+  assert.ok(child);
+  child.finish(17);
+  await closed;
+  assert.equal(session.continuationAvailable, false);
+
+  const transcriptBeforeLaterTurn = [...requests];
+  const laterEnding = await session.runNextTurn(options("later", laterReports));
+  assert.deepEqual(laterEnding, {
+    ending: "failed",
+    errorMessage: "Codex App Server session is closed",
+  });
+  assert.notDeepEqual(laterEnding, firstEnding);
+  assert.deepEqual(laterReports, []);
+  assert.deepEqual(requests, transcriptBeforeLaterTurn);
+  assert.equal(spawnCount, 1);
+  assert.equal(
+    requests.filter((request) => request.method === "initialize").length,
+    1,
+  );
+  assert.equal(
+    requests.filter((request) => request.method === "initialized").length,
+    1,
+  );
+  assert.equal(
+    requests.filter((request) => request.method === "thread/start").length,
+    1,
+  );
+  assert.equal(
+    requests.filter((request) => request.method === "turn/start").length,
+    1,
+  );
+
+  await session.close();
+  assert.equal(child.listenerCount("error"), 0);
+  assert.equal(child.listenerCount("close"), 1);
+  assert.equal(child.stdout.listenerCount("data"), 0);
+  assert.equal(child.stderr.listenerCount("data"), 0);
+  assert.equal(child.stdin.listenerCount("error"), 0);
+});
+
+test("idle process error synchronously disables continuation and closes without replacement", async (t) => {
+  const timers = useManualTimers(t);
+  const requests: Record<string, unknown>[] = [];
+  const signals: string[] = [];
+  let child: FakeChild | undefined;
+  let spawnCount = 0;
+  const session = createCodexAppServerSession({
+    cwd: "/work",
+    childDepth: 2,
+    spawn: () => {
+      spawnCount++;
+      child = fakeChild((request, currentChild) => {
+        requests.push(request);
+        if (request.method === "initialize")
+          response(currentChild, request.id as number, initializeResult());
+        if (request.method === "thread/start")
+          response(currentChild, request.id as number, threadResult());
+        if (request.method === "turn/start") {
+          response(currentChild, request.id as number, turnResult());
+          currentChild.stdout.write(`${JSON.stringify(completed())}\n`);
+        }
+      });
+      child.ignoreStdinEnd = true;
+      child.kill = (signal) => {
+        signals.push(signal);
+        if (signal === "SIGKILL") queueMicrotask(() => child?.finish(137));
+        return true;
+      };
+      return child as unknown as ChildProcess;
+    },
+  });
+  const options = (prompt: string) => ({
+    prompt,
+    translate: (event: CodexAppServerEvent) => ({
+      terminal: event.method === "turn/completed",
+    }),
+    report: silentReporter(),
+    missingAnswerMessage: "missing answer",
+  });
+
+  assert.equal(session.continuationAvailable, true);
+  assert.deepEqual(await session.runNextTurn(options("first")), {
+    ending: "answered",
+  });
+  assert.equal(session.continuationAvailable, true);
+  assert.ok(child);
+
+  child.emit("error", new Error("idle App Server failed"));
+  assert.equal(session.continuationAvailable, false);
+  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.equal(timers.pending, 1);
+
+  const transcriptAfterLoss = [...requests];
+  assert.deepEqual(await session.runNextTurn(options("must not replay")), {
+    ending: "failed",
+    errorMessage: "Codex App Server session is closed",
+  });
+  assert.deepEqual(requests, transcriptAfterLoss);
+  assert.equal(spawnCount, 1);
+  assert.equal(
+    requests.some((request) => request.method === "thread/resume"),
+    false,
+  );
+
+  const firstClose = session.close();
+  const secondClose = session.close();
+  assert.strictEqual(firstClose, secondClose);
+  timers.fireNext();
+  await firstClose;
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(timers.pending, 0);
+  assertProcessListenersReleased(child);
+});
+
+test("active process error fails once with partial output and settles pending steering", async () => {
+  const requests: Record<string, unknown>[] = [];
+  const rejections: Error[] = [];
+  const reports: Fact[] = [];
+  const stderr: string[] = [];
+  const signals: string[] = [];
+  const controls = createControlSource();
+  let child: FakeChild | undefined;
+  let turnReady!: () => void;
+  const started = new Promise<void>((resolve) => {
+    turnReady = resolve;
+  });
+  const session = createCodexAppServerSession({
+    cwd: "/work",
+    childDepth: 2,
+    onRequestRejection: (error) => rejections.push(error),
+    spawn: () => {
+      child = fakeChild((request, currentChild) => {
+        requests.push(request);
+        if (request.method === "initialize")
+          response(currentChild, request.id as number, initializeResult());
+        if (request.method === "thread/start")
+          response(currentChild, request.id as number, threadResult());
+        if (request.method === "turn/start") {
+          response(currentChild, request.id as number, turnResult());
+          turnReady();
+        }
+      });
+      child.ignoreStdinEnd = true;
+      child.kill = (signal) => {
+        signals.push(signal);
+        if (signal === "SIGTERM") queueMicrotask(() => child?.finish(1));
+        return true;
+      };
+      return child as unknown as ChildProcess;
+    },
+  });
+  const ending = session.runNextTurn({
+    prompt: "active process loss",
+    translate: (event) => ({
+      terminal: event.method === "turn/completed",
+      facts:
+        event.method === "item/completed" &&
+        event.params.item.type === "agentMessage"
+          ? [
+              {
+                role: "assistant" as const,
+                parts: [
+                  { type: "text" as const, text: event.params.item.text },
+                ],
+              },
+            ]
+          : [],
+    }),
+    report: {
+      message: (fact) => reports.push(fact),
+      transcript: () => {},
+      activity: () => {},
+      stderr: (chunk) => stderr.push(chunk),
+    },
+    controls: controls.controls,
+    missingAnswerMessage: "missing answer",
+  });
+
+  await started;
+  assert.equal(
+    controls.offer({ type: "steer", text: "in flight at process loss" }),
+    "accepted",
+  );
+  assert.equal(
+    controls.offer({ type: "steer", text: "queued at process loss" }),
+    "accepted",
+  );
+  assert.ok(child);
+  child.stdout.write(
+    `${JSON.stringify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 1,
+        item: {
+          type: "agentMessage",
+          id: "partial-item",
+          text: "retained partial answer",
+          phase: "commentary",
+        },
+      },
+    })}\n`,
+  );
+  const identities = {
+    threadId: "thread-secret",
+    turnId: "turn-secret",
+    itemId: "item-secret",
+    requestId: "request-secret",
+    sessionId: "session-secret",
+    correlationId: "correlation-secret",
+  };
+  child.emit(
+    "error",
+    new Error(
+      `active transport failed ${JSON.stringify(identities)} ${"detail ".repeat(400)}`,
+    ),
+  );
+  child.emit("error", new Error("duplicate process error"));
+  assert.equal(session.continuationAvailable, false);
+
+  const result = await ending;
+  assert.equal(result.ending, "failed");
+  assert.ok(result.errorMessage);
+  assert.ok(result.errorMessage.length <= 1024);
+  for (const identity of Object.values(identities))
+    assert.doesNotMatch(result.errorMessage, new RegExp(identity));
+  assert.match(result.errorMessage, /"threadId":"\[redacted\]"/);
+  assert.deepEqual(reports, [
+    {
+      role: "assistant",
+      parts: [{ type: "text", text: "retained partial answer" }],
+    },
+  ]);
+  assert.equal(stderr.length, 1);
+  assert.equal(rejections.length, 1);
+  assert.ok(rejections[0] instanceof CodexAppServerTransportError);
+  assert.equal(
+    (rejections[0] as CodexAppServerTransportError).reason,
+    "transport-settled",
+  );
+  assert.equal(
+    controls.offer({ type: "steer", text: "after process loss" }),
+    "closed",
+  );
+  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.equal(
+    requests.filter((request) => request.method === "turn/steer").length,
+    1,
+  );
+
+  const transcriptAfterLoss = [...requests];
+  assert.deepEqual(
+    await session.runNextTurn({
+      prompt: "must not replace lost conversation",
+      translate: () => undefined,
+      report: silentReporter(),
+      missingAnswerMessage: "missing answer",
+    }),
+    {
+      ending: "failed",
+      errorMessage: "Codex App Server session is closed",
+    },
+  );
+  assert.deepEqual(requests, transcriptAfterLoss);
+  await session.close();
+  assert.ok(child);
+  assertProcessListenersReleased(child);
+});
+
+test("process loss during initialization or root-thread creation drains startup and disables continuation", async () => {
+  for (const loss of [
+    {
+      phase: "initialize",
+      kind: "error",
+      expectedMessage: 'startup transport failed {"threadId":"[redacted]"}',
+      rejectionReason: "transport-settled",
+    },
+    {
+      phase: "thread/start",
+      kind: "close",
+      expectedMessage: "Child codex exited with code 12",
+      rejectionReason: "child-exited",
+    },
+  ] as const) {
+    const requests: Record<string, unknown>[] = [];
+    const rejections: Error[] = [];
+    const signals: string[] = [];
+    let child: FakeChild | undefined;
+    let spawnCount = 0;
+    let phaseReady!: () => void;
+    const reachedPhase = new Promise<void>((resolve) => {
+      phaseReady = resolve;
+    });
+    const session = createCodexAppServerSession({
+      cwd: "/work",
+      childDepth: 2,
+      onRequestRejection: (error) => rejections.push(error),
+      spawn: () => {
+        spawnCount++;
+        child = fakeChild((request, currentChild) => {
+          requests.push(request);
+          if (request.method === loss.phase) phaseReady();
+          if (request.method === "initialize" && loss.phase === "thread/start")
+            response(currentChild, request.id as number, initializeResult());
+        });
+        child.ignoreStdinEnd = true;
+        child.kill = (signal) => {
+          signals.push(signal);
+          if (signal === "SIGTERM") queueMicrotask(() => child?.finish(1));
+          return true;
+        };
+        return child as unknown as ChildProcess;
+      },
+    });
+    const ending = session.runNextTurn({
+      prompt: `loss during ${loss.phase}`,
+      translate: () => undefined,
+      report: silentReporter(),
+      missingAnswerMessage: "missing answer",
+    });
+
+    await reachedPhase;
+    assert.equal(session.continuationAvailable, true);
+    assert.ok(child);
+    if (loss.kind === "error")
+      child.emit(
+        "error",
+        new Error('startup transport failed {"threadId":"startup-secret"}'),
+      );
+    else child.emit("close", 12, null);
+    assert.equal(session.continuationAvailable, false);
+
+    assert.deepEqual(await ending, {
+      ending: "failed",
+      errorMessage: loss.expectedMessage,
+    });
+    assert.equal(rejections.length, 1);
+    assert.ok(rejections[0] instanceof CodexAppServerTransportError);
+    assert.equal(
+      (rejections[0] as CodexAppServerTransportError).reason,
+      loss.rejectionReason,
+    );
+    const transcriptAfterLoss = [...requests];
+    assert.deepEqual(
+      await session.runNextTurn({
+        prompt: "must not restart startup",
+        translate: () => undefined,
+        report: silentReporter(),
+        missingAnswerMessage: "missing answer",
+      }),
+      {
+        ending: "failed",
+        errorMessage: "Codex App Server session is closed",
+      },
+    );
+    assert.deepEqual(requests, transcriptAfterLoss);
+    assert.equal(spawnCount, 1);
+    assert.equal(
+      requests.some((request) => request.method === "thread/resume"),
+      false,
+    );
+
+    const firstClose = session.close();
+    const secondClose = session.close();
+    assert.strictEqual(firstClose, secondClose);
+    await firstClose;
+    assert.deepEqual(signals, loss.kind === "error" ? ["SIGTERM"] : []);
+    assertProcessListenersReleased(child);
+  }
+});
+
+test("process close has one winner before or immediately after semantic completion", async () => {
+  for (const order of ["close-first", "completion-first"] as const) {
+    const requests: Record<string, unknown>[] = [];
+    const reports: Fact[] = [];
+    let child: FakeChild | undefined;
+    let spawnCount = 0;
+    let boundaryReady!: () => void;
+    const reachedBoundary = new Promise<void>((resolve) => {
+      boundaryReady = resolve;
+    });
+    const session = createCodexAppServerSession({
+      cwd: "/work",
+      childDepth: 2,
+      spawn: () => {
+        spawnCount++;
+        child = fakeChild((request, currentChild) => {
+          requests.push(request);
+          if (request.method === "initialize")
+            response(currentChild, request.id as number, initializeResult());
+          if (request.method === "thread/start")
+            response(currentChild, request.id as number, threadResult());
+          if (request.method === "turn/start") {
+            response(currentChild, request.id as number, turnResult());
+            const text =
+              order === "close-first" ? "partial before close" : "final answer";
+            currentChild.stdout.write(
+              `${JSON.stringify({
+                method: "item/completed",
+                params: {
+                  threadId: "thread-1",
+                  turnId: "turn-1",
+                  completedAtMs: 1,
+                  item: {
+                    type: "agentMessage",
+                    id: `message-${order}`,
+                    text,
+                    phase:
+                      order === "close-first" ? "commentary" : "final_answer",
+                  },
+                },
+              })}\n`,
+            );
+            if (order === "completion-first")
+              currentChild.stdout.write(`${JSON.stringify(completed())}\n`);
+            boundaryReady();
+          }
+        });
+        return child as unknown as ChildProcess;
+      },
+    });
+    const ending = session.runNextTurn({
+      prompt: order,
+      translate: (event) => ({
+        terminal:
+          event.method === "item/completed" &&
+          event.params.item.type === "agentMessage" &&
+          event.params.item.phase === "final_answer",
+        facts:
+          event.method === "item/completed" &&
+          event.params.item.type === "agentMessage"
+            ? [
+                {
+                  role: "assistant" as const,
+                  parts: [
+                    { type: "text" as const, text: event.params.item.text },
+                  ],
+                },
+              ]
+            : [],
+      }),
+      report: {
+        message: (fact) => reports.push(fact),
+        transcript: () => {},
+        activity: () => {},
+        stderr: () => {},
+      },
+      missingAnswerMessage: "missing answer",
+    });
+
+    await reachedBoundary;
+    assert.ok(child);
+    child.emit("close", 9, null);
+    assert.equal(session.continuationAvailable, false);
+    assert.deepEqual(
+      await ending,
+      order === "close-first"
+        ? {
+            ending: "failed",
+            errorMessage: "Child codex exited with code 9",
+          }
+        : { ending: "answered" },
+    );
+    assert.deepEqual(reports, [
+      {
+        role: "assistant",
+        parts: [
+          {
+            type: "text",
+            text:
+              order === "close-first" ? "partial before close" : "final answer",
+          },
+        ],
+      },
+    ]);
+
+    const transcriptAfterLoss = [...requests];
+    assert.deepEqual(
+      await session.runNextTurn({
+        prompt: "no later Turn",
+        translate: () => undefined,
+        report: silentReporter(),
+        missingAnswerMessage: "missing answer",
+      }),
+      {
+        ending: "failed",
+        errorMessage: "Codex App Server session is closed",
+      },
+    );
+    assert.deepEqual(requests, transcriptAfterLoss);
+    assert.equal(spawnCount, 1);
+
+    const firstClose = session.close();
+    const secondClose = session.close();
+    assert.strictEqual(firstClose, secondClose);
+    await firstClose;
+    assertProcessListenersReleased(child);
+  }
+});
+
+test("process-close diagnostics contain only the active retained Turn stdout", async () => {
+  const priorRunSecret = "PRIOR_RUN_SECRET_MUST_NOT_CROSS_TURNS";
+  const currentRunOutput = "CURRENT_RUN_LOCAL_STDOUT";
+  const currentProviderItemId = "current-provider-item-secret";
+  let turnNumber = 0;
+  const child = fakeChild((request, currentChild) => {
+    if (request.method === "initialize")
+      response(currentChild, request.id as number, initializeResult());
+    if (request.method === "thread/start")
+      response(currentChild, request.id as number, threadResult());
+    if (request.method !== "turn/start") return;
+
+    turnNumber++;
+    const turnId = `turn-${turnNumber}`;
+    response(currentChild, request.id as number, { turn: { id: turnId } });
+    if (turnNumber === 1) {
+      currentChild.stdout.write(
+        `${JSON.stringify({
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId,
+            completedAtMs: 1,
+            item: {
+              type: "agentMessage",
+              id: "prior-message",
+              text: priorRunSecret,
+              phase: "final_answer",
+            },
+          },
+        })}\n`,
+      );
+      currentChild.stdout.write(`${JSON.stringify(completedTurn(turnId))}\n`);
+      return;
+    }
+
+    currentChild.stdout.write(`${currentRunOutput}\n`);
+    currentChild.stdout.write(
+      `${JSON.stringify({
+        method: "future/current-turn-notification",
+        params: {
+          threadId: "thread-1",
+          turnId,
+          itemId: currentProviderItemId,
+        },
+      })}\n`,
+    );
+    currentChild.finish(9);
+  });
+  const session = createCodexAppServerSession({
+    cwd: "/work",
+    childDepth: 2,
+    spawn: (() => child) as unknown as ChildProcessSpawn,
+  });
+  const turnOptions = (prompt: string, stderr: string[]) => ({
+    prompt,
+    translate: (event: CodexAppServerEvent) => ({
+      terminal: event.method === "turn/completed",
+    }),
+    report: {
+      message: () => {},
+      transcript: () => {},
+      activity: () => {},
+      stderr: (chunk: string) => stderr.push(chunk),
+    },
+    missingAnswerMessage: "missing answer",
+  });
+  const firstStderr: string[] = [];
+  assert.deepEqual(
+    await session.runNextTurn(turnOptions("first", firstStderr)),
+    { ending: "answered" },
+  );
+  assert.deepEqual(firstStderr, []);
+
+  const secondStderr: string[] = [];
+  const secondEnding = await session.runNextTurn(
+    turnOptions("second", secondStderr),
+  );
+  const secondDiagnostic = secondStderr.join("");
+  assert.deepEqual(secondEnding, {
+    ending: "failed",
+    errorMessage: "Child codex exited with code 9",
+  });
+  assert.match(secondDiagnostic, /Last stdout:/);
+  assert.match(secondDiagnostic, new RegExp(currentRunOutput));
+  assert.doesNotMatch(secondDiagnostic, new RegExp(priorRunSecret));
+  assert.doesNotMatch(JSON.stringify(secondEnding), new RegExp(priorRunSecret));
+  assert.doesNotMatch(
+    secondDiagnostic,
+    /thread-1|turn-2|current-provider-item-secret/,
+  );
+
+  await session.close();
+  assertProcessListenersReleased(child);
+});
+
+test("process close racing cancellation settles the interrupt waiter and cannot resume", async (t) => {
+  const timers = useManualTimers(t);
+  const requests: Record<string, unknown>[] = [];
+  const rejections: Error[] = [];
+  const signals: string[] = [];
+  const controller = new AbortController();
+  const controls = createControlSource();
+  let child: FakeChild | undefined;
+  let turnReady!: () => void;
+  const started = new Promise<void>((resolve) => {
+    turnReady = resolve;
+  });
+  const session = createCodexAppServerSession({
+    cwd: "/work",
+    childDepth: 2,
+    onRequestRejection: (error) => rejections.push(error),
+    spawn: () => {
+      child = fakeChild((request, currentChild) => {
+        requests.push(request);
+        if (request.method === "initialize")
+          response(currentChild, request.id as number, initializeResult());
+        if (request.method === "thread/start")
+          response(currentChild, request.id as number, threadResult());
+        if (request.method === "turn/start") {
+          response(currentChild, request.id as number, turnResult());
+          turnReady();
+        }
+      });
+      child.kill = (signal) => {
+        signals.push(signal);
+        return true;
+      };
+      return child as unknown as ChildProcess;
+    },
+  });
+  const ending = session.runNextTurn({
+    prompt: "cancel as process closes",
+    translate: () => undefined,
+    report: silentReporter(),
+    signal: controller.signal,
+    controls: controls.controls,
+    missingAnswerMessage: "missing answer",
+  });
+
+  await started;
+  assert.equal(
+    controls.offer({ type: "steer", text: "discard on cancellation" }),
+    "accepted",
+  );
+  controller.abort();
+  assert.equal(
+    requests.filter((request) => request.method === "turn/interrupt").length,
+    1,
+  );
+  assert.equal(timers.pending, 1);
+  assert.ok(child);
+  child.emit("close", 7, null);
+  assert.equal(session.continuationAvailable, false);
+
+  assert.deepEqual(await ending, { ending: "cancelled" });
+  assert.equal(rejections.length, 2);
+  for (const rejection of rejections) {
+    assert.ok(rejection instanceof CodexAppServerTransportError);
+    assert.equal(rejection.reason, "child-exited");
+  }
+  assert.equal(timers.cleared, 1);
+  assert.equal(timers.pending, 0);
+  assert.deepEqual(signals, []);
+  assert.equal(
+    controls.offer({ type: "steer", text: "after terminal loss" }),
+    "closed",
+  );
+
+  const transcriptAfterLoss = [...requests];
+  assert.deepEqual(
+    await session.runNextTurn({
+      prompt: "must remain unsupported",
+      translate: () => undefined,
+      report: silentReporter(),
+      missingAnswerMessage: "missing answer",
+    }),
+    {
+      ending: "failed",
+      errorMessage: "Codex App Server session is closed",
+    },
+  );
+  assert.deepEqual(requests, transcriptAfterLoss);
+
+  const firstClose = session.close();
+  const secondClose = session.close();
+  assert.strictEqual(firstClose, secondClose);
+  await firstClose;
+  assert.deepEqual(signals, []);
+  assertProcessListenersReleased(child);
+});
 
 test("App Server performs the exact handshake and forwards only validated run events", async () => {
   const requests: Record<string, unknown>[] = [];
@@ -792,7 +2687,7 @@ test("App Server performs the exact handshake and forwards only validated run ev
     method: "thread/start",
     params: {
       cwd: "/work",
-      ephemeral: false,
+      ephemeral: true,
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       model: "gpt-test",
@@ -1090,7 +2985,8 @@ test("invalid startup responses retain targeted operator diagnostics", async () 
   }
 });
 
-test("spawn failures return a bounded redacted diagnostic", async () => {
+test("spawn failures return a bounded redacted diagnostic without retaining teardown timers", async (t) => {
+  const timers = useManualTimers(t);
   const secret = "thread-provider-secret";
   const conclusion = await runCodexAppServer({
     cwd: "/work",
@@ -1116,6 +3012,8 @@ test("spawn failures return a bounded redacted diagnostic", async () => {
   assert.ok(conclusion.errorMessage.length <= 1024);
   assert.doesNotMatch(conclusion.errorMessage, new RegExp(secret));
   assert.match(conclusion.errorMessage, /"threadId":"\[redacted\]"/);
+  assert.equal(timers.scheduled, 0);
+  assert.equal(timers.pending, 0);
 });
 
 test("semantic settlement rejects pending requests as transport lifecycle cleanup", async () => {
@@ -1197,7 +3095,7 @@ test("process failure classifies pending requests as transport settlement", asyn
 
   assert.deepEqual(
     await rig.source(sinkFor([], stderr), new AbortController().signal),
-    { ending: "failed" },
+    { ending: "failed", errorMessage: "transport broke" },
   );
   assert.deepEqual(stderr, ["transport broke\n"]);
   assert.equal(rejections.length, 1);
@@ -1422,7 +3320,7 @@ test("semantic settlement completes unresponsive child escalation and removes li
   assert.equal(rig.child?.stdin.listenerCount("error"), 0);
 });
 
-test("repeated resumed cancellation racing process close finalizes once without retained work", async () => {
+test("repeated cancellation racing process failure starts terminal teardown and finalizes once", async () => {
   const unhandled: unknown[] = [];
   const onUnhandled = (reason: unknown): void => {
     unhandled.push(reason);
@@ -1444,7 +3342,7 @@ test("repeated resumed cancellation racing process close finalizes once without 
         (request, child) => {
           if (request.method === "initialize")
             response(child, request.id as number, initializeResult());
-          if (request.method === "thread/resume")
+          if (request.method === "thread/start")
             response(child, request.id as number, threadResult());
           if (request.method === "turn/start") {
             response(child, request.id as number, turnResult());
@@ -1452,7 +3350,6 @@ test("repeated resumed cancellation racing process close finalizes once without 
           }
         },
         {
-          continuationThreadId: "thread-1",
           onRequestRejection: (error) => rejections.push(error),
         },
       );
@@ -1469,7 +3366,7 @@ test("repeated resumed cancellation racing process close finalizes once without 
 
       assert.deepEqual(await pending, { ending: "cancelled" });
       await new Promise((resolve) => setImmediate(resolve));
-      assert.deepEqual(signals, []);
+      assert.deepEqual(signals, ["SIGTERM"]);
       assert.equal(rejections.length, 1);
       assert.ok(rejections[0] instanceof CodexAppServerTransportError);
       assert.equal(

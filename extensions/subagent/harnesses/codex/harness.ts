@@ -16,13 +16,12 @@ import {
 } from "../contract.ts";
 import type {
   CodexAppServerEvent,
-  CodexAppServerOptions,
+  CodexAppServerSessionOptions,
   ThreadItem,
   ThreadTokenUsage,
-  TokenUsageBreakdown,
   Turn,
 } from "./app-server.ts";
-import { runCodexAppServer } from "./app-server.ts";
+import { createCodexAppServerSession } from "./app-server.ts";
 
 const CODEX_PROFILE_FIELDS = ["model", "effort"] as const;
 const MISSING_CODEX_ANSWER =
@@ -36,13 +35,8 @@ const OUTPUT_TAIL_LIMIT = 2048;
 const AGENT_MESSAGE_TAIL_LIMIT = 2048;
 
 export interface CodexHarnessOptions {
-  readonly spawn?: CodexAppServerOptions["spawn"];
+  readonly spawn?: CodexAppServerSessionOptions["spawn"];
   readonly killEscalationMs?: number;
-}
-
-interface CodexTranslatorOptions {
-  readonly previousUsage?: TokenUsageBreakdown;
-  readonly onUsage?: (usage: TokenUsageBreakdown) => void;
 }
 
 export function codexEffort(effort: string | undefined): string | undefined {
@@ -147,47 +141,21 @@ function itemActivity(item: ThreadItem, cwd: string): string | undefined {
   }
 }
 
-function usageDelta(
-  tokenUsage: ThreadTokenUsage,
-  previous: TokenUsageBreakdown | undefined,
-  allowBaselineReset: boolean,
-): { fact: Fact; next: TokenUsageBreakdown } {
-  const next = { ...tokenUsage.total };
-  const counterKeys = [
-    "totalTokens",
-    "inputTokens",
-    "cachedInputTokens",
-    "cacheWriteInputTokens",
-    "outputTokens",
-    "reasoningOutputTokens",
-  ] as const;
-  // App Server releases have exposed both Conversation-cumulative and
-  // attachment-local counters. A first current-Turn update below the retained
-  // Conversation baseline is the latter and must be translated from zero.
-  const baseline =
-    allowBaselineReset &&
-    previous &&
-    counterKeys.some((key) => next[key] < previous[key])
-      ? undefined
-      : previous;
-  const diff = (key: keyof typeof next): number =>
-    Math.max(0, next[key] - (baseline?.[key] ?? 0));
+function usageFact(tokenUsage: ThreadTokenUsage): Fact {
+  const delta = tokenUsage.total;
   return {
-    fact: {
-      role: "metadata",
-      parts: [],
-      usage: {
-        input: diff("inputTokens"),
-        cacheRead: diff("cachedInputTokens"),
-        cacheWrite: diff("cacheWriteInputTokens"),
-        output: diff("outputTokens") + diff("reasoningOutputTokens"),
-        // The latest provider request's total is the context-size gauge; the
-        // schema's modelContextWindow is capacity, not occupancy.
-        contextTokens: tokenUsage.last.totalTokens,
-        turns: 1,
-      },
+    role: "metadata",
+    parts: [],
+    usage: {
+      input: delta.inputTokens,
+      cacheRead: delta.cachedInputTokens,
+      cacheWrite: delta.cacheWriteInputTokens,
+      output: delta.outputTokens + delta.reasoningOutputTokens,
+      // The latest provider request's total is the context-size gauge; the
+      // schema's modelContextWindow is capacity, not occupancy.
+      contextTokens: tokenUsage.last.totalTokens,
+      turns: 1,
     },
-    next,
   };
 }
 
@@ -201,17 +169,14 @@ function reasoningHeadline(summary: string): string | undefined {
   return plain ? capped(plain) : undefined;
 }
 
-/** Create the stateful translator for one disposable App Server turn. */
+/** Create the fresh stateful translator for one App Server Turn. */
 export function createCodexTranslator(
   cwd: string,
-  options: CodexTranslatorOptions = {},
 ): (event: CodexAppServerEvent) => Translation | undefined {
   const reasoning = new Map<string, string>();
   const commands = new Map<string, string>();
   const outputTails = new Map<string, string>();
   const agentMessageTails = new Map<string, string>();
-  let previousUsage = options.previousUsage;
-  let firstUsageUpdate = true;
   let completedAgentMessage = false;
 
   return (event) => {
@@ -302,15 +267,7 @@ export function createCodexTranslator(
     }
 
     if (event.method === "thread/tokenUsage/updated") {
-      const result = usageDelta(
-        event.params.tokenUsage,
-        previousUsage,
-        firstUsageUpdate,
-      );
-      firstUsageUpdate = false;
-      previousUsage = result.next;
-      options.onUsage?.(result.next);
-      return { facts: [result.fact] };
+      return { facts: [usageFact(event.params.tokenUsage)] };
     }
 
     if (event.method === "error") {
@@ -373,7 +330,7 @@ function codexPrompt(context: SubagentContext, task: SubagentTask): string {
     : task.prompt;
 }
 
-/** Create the Codex one-shot harness using the ordered App Server Run. */
+/** Create the Codex harness using one retained App Server session per adapter. */
 export function createCodexHarness(options: CodexHarnessOptions = {}): Harness {
   return {
     name: "codex",
@@ -383,18 +340,18 @@ export function createCodexHarness(options: CodexHarnessOptions = {}): Harness {
       const effort = codexEffort(
         effortField(context.config, "profile", EFFORTS),
       );
-      let continuation:
-        | { threadId: string; usage?: TokenUsageBreakdown }
-        | undefined;
-      let activeAttempt:
-        | {
-            readonly controller: AbortController;
-            readonly promise: Promise<RunEnding>;
-          }
-        | undefined;
+      let session: ReturnType<typeof createCodexAppServerSession> | undefined;
+      let activeRun: Promise<RunEnding> | undefined;
       let closed = false;
+      const capabilities = {
+        get resume(): boolean {
+          return (
+            !closed && (session === undefined || session.continuationAvailable)
+          );
+        },
+      };
       return {
-        capabilities: { resume: true },
+        capabilities,
         model,
         prepareRun: (task) => ({
           supportedControls: ["steer"],
@@ -405,73 +362,55 @@ export function createCodexHarness(options: CodexHarnessOptions = {}): Harness {
                 errorMessage: "Codex adapter is closed",
               };
             }
-            if (activeAttempt) {
+            if (activeRun) {
               return {
                 ending: "failed",
-                errorMessage: "Codex adapter already has an active Attempt",
+                errorMessage: "Codex adapter already has an active Run",
               };
             }
-            const controller = new AbortController();
-            const forwardAbort = (): void => controller.abort();
-            if (run.signal?.aborted) controller.abort();
-            else
-              run.signal?.addEventListener("abort", forwardAbort, {
-                once: true,
+            if (!session)
+              session = createCodexAppServerSession({
+                cwd: context.cwd,
+                childDepth: context.childDepth,
+                model,
+                effort,
+                ...(options.spawn ? { spawn: options.spawn } : {}),
+                ...(options.killEscalationMs === undefined
+                  ? {}
+                  : { killEscalationMs: options.killEscalationMs }),
               });
-            const attached = continuation;
-            // Yield once so activeAttempt is installed before spawning. Close
+            const retainedSession = session;
+            const firstProviderTurn = !retainedSession.hasIssuedTurn;
+            // Yield once so activeRun is installed before spawning. Close
             // can then own cancellation even when provider callbacks re-enter
             // Session shutdown during synchronous fixture I/O.
             const promise = (async (): Promise<RunEnding> => {
               await Promise.resolve();
-              try {
-                return await runCodexAppServer({
-                  cwd: context.cwd,
-                  childDepth: context.childDepth,
-                  prompt: attached ? task.prompt : codexPrompt(context, task),
-                  model,
-                  effort,
-                  ...(attached
-                    ? { continuationThreadId: attached.threadId }
-                    : {}),
-                  onThreadAttached: (threadId) => {
-                    continuation ??= { threadId };
-                  },
-                  translate: createCodexTranslator(context.cwd, {
-                    ...(attached?.usage
-                      ? { previousUsage: attached.usage }
-                      : {}),
-                    onUsage: (usage) => {
-                      if (continuation) continuation.usage = usage;
-                    },
-                  }),
-                  report: run.report,
-                  signal: controller.signal,
-                  controls: run.controls,
-                  missingAnswerMessage: MISSING_CODEX_ANSWER,
-                  ...(options.spawn ? { spawn: options.spawn } : {}),
-                  ...(options.killEscalationMs === undefined
-                    ? {}
-                    : { killEscalationMs: options.killEscalationMs }),
-                });
-              } finally {
-                run.signal?.removeEventListener("abort", forwardAbort);
-              }
+              if (closed) return { ending: "cancelled" };
+              return await retainedSession.runNextTurn({
+                prompt: firstProviderTurn
+                  ? codexPrompt(context, task)
+                  : task.prompt,
+                translate: createCodexTranslator(context.cwd),
+                report: run.report,
+                signal: run.signal,
+                controls: run.controls,
+                missingAnswerMessage: MISSING_CODEX_ANSWER,
+              });
             })();
-            const attempt = { controller, promise };
-            activeAttempt = attempt;
+            activeRun = promise;
             try {
               return await promise;
             } finally {
-              if (activeAttempt === attempt) activeAttempt = undefined;
+              if (activeRun === promise) activeRun = undefined;
             }
           },
         }),
         close: async () => {
           closed = true;
-          const attempt = activeAttempt;
-          attempt?.controller.abort();
-          await attempt?.promise.catch(() => {});
+          const current = activeRun;
+          await session?.close();
+          await current?.catch(() => {});
         },
       };
     },

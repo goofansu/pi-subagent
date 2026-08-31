@@ -25,8 +25,9 @@ import {
 import type { Harness, HarnessRun } from "../contract.ts";
 import {
   type CodexAppServerEvent,
-  type CodexAppServerOptions,
-  runCodexAppServer,
+  type CodexAppServerSessionOptions,
+  type CodexAppServerTurnOptions,
+  createCodexAppServerSession,
 } from "./app-server.ts";
 import {
   codexEffort,
@@ -93,7 +94,36 @@ function send(child: FakeChild, value: unknown): void {
   child.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
-function createTestAppServerRun(options: CodexAppServerOptions) {
+async function runCodexAppServer(
+  options: CodexAppServerSessionOptions & CodexAppServerTurnOptions,
+) {
+  const {
+    prompt,
+    translate,
+    report,
+    signal,
+    controls,
+    missingAnswerMessage,
+    ...sessionOptions
+  } = options;
+  const session = createCodexAppServerSession(sessionOptions);
+  try {
+    return await session.runNextTurn({
+      prompt,
+      translate,
+      report,
+      ...(signal ? { signal } : {}),
+      ...(controls ? { controls } : {}),
+      missingAnswerMessage,
+    });
+  } finally {
+    await session.close();
+  }
+}
+
+function createTestAppServerRun(
+  options: CodexAppServerSessionOptions & { readonly prompt: string },
+) {
   return (
     sink: {
       event(event: CodexAppServerEvent): boolean | undefined;
@@ -508,7 +538,7 @@ function conformanceRig(): HarnessConformanceRig {
 
 runHarnessConformance(conformanceRig());
 
-test("Codex App Server sends the disposable handshake and one prompt", async () => {
+test("Codex App Server sends the ephemeral handshake and one prompt", async () => {
   const writes: Record<string, unknown>[] = [];
   const child = fakeChild((request, current) => {
     writes.push(request);
@@ -544,7 +574,7 @@ test("Codex App Server sends the disposable handshake and one prompt", async () 
   });
   assert.deepEqual(writes[2]?.params, {
     cwd: "/work",
-    ephemeral: false,
+    ephemeral: true,
     approvalPolicy: "never",
     sandbox: "danger-full-access",
     model: "gpt",
@@ -556,178 +586,95 @@ test("Codex App Server sends the disposable handshake and one prompt", async () 
   });
 });
 
-test("a prepared Codex adapter resumes one Conversation through cleaned disposable Attempts", async () => {
-  const order: string[] = [];
-  const children: FakeChild[] = [];
-  const writes: Record<string, unknown>[][] = [[], [], []];
-  const turnIds = ["turn-first", "turn-second", "turn-third"];
-  const spawn: ChildProcessSpawn = (_command, args, options) => {
-    const attempt = children.length;
-    assert.ok(attempt < 3, "each Run starts exactly one App Server child");
-    assert.deepEqual(args, ["app-server"]);
-    assert.equal(options.cwd, "/fixed/work");
-    assert.equal(options.env?.[DEPTH_ENV_KEY], "1");
-    assert.equal(options.env?.PATH, process.env.PATH);
-    order.push(`spawn-${attempt + 1}`);
-    const turnId = turnIds[attempt] as string;
-    const child = fakeChild((request, current) => {
-      writes[attempt]?.push(request);
-      const method = request.method;
-      order.push(`${attempt + 1}:${String(method)}`);
-      if (method === "initialize") {
-        send(current, initializeResponse(request.id));
-      } else if (method === "thread/start") {
-        send(current, {
-          id: request.id,
-          result: { thread: { id: THREAD_ID, turns: [] } },
-        });
-      } else if (method === "thread/resume") {
-        // Resumed turns are attachment data. Even a terminal answer in this
-        // response must not become a Fact in the new Run.
-        send(current, {
-          id: request.id,
-          result: {
-            thread: {
-              id: THREAD_ID,
-              turns: [
-                {
-                  id: turnIds[0],
-                  items: [
-                    {
-                      type: "agentMessage",
-                      id: "attached-old-answer",
-                      text: "first answer from attachment",
-                      phase: "final_answer",
-                    },
-                  ],
-                  status: "completed",
-                },
-              ],
-            },
-          },
-        });
-      } else if (method === "turn/start") {
-        if (attempt === 1) {
-          send(
-            current,
-            event("item/completed", {
-              threadId: THREAD_ID,
-              turnId: turnIds[0],
-              item: {
-                type: "agentMessage",
-                id: "late-old-answer",
-                text: "late first answer",
-                phase: "final_answer",
-              },
-              completedAtMs: 1,
-            }),
-          );
-          send(
-            current,
-            event("item/completed", {
-              threadId: "foreign-thread",
-              turnId,
-              item: {
-                type: "agentMessage",
-                id: "foreign-answer",
-                text: "foreign answer",
-                phase: "final_answer",
-              },
-              completedAtMs: 1,
-            }),
-          );
-        }
-        send(current, {
-          id: request.id,
-          result: { turn: { id: turnId, status: "inProgress" } },
-        });
-        const totals = [
-          { total: 10, input: 7, cacheRead: 2, output: 1 },
-          { total: 16, input: 11, cacheRead: 3, output: 2 },
-          // Some resumed App Server versions expose counters scoped to the
-          // current attachment instead of the retained Conversation.
-          { total: 6, input: 4, cacheRead: 1, output: 1 },
-        ] as const;
-        const currentUsage = totals[attempt];
-        assert.ok(currentUsage);
-        send(
-          current,
-          event("thread/tokenUsage/updated", {
-            threadId: THREAD_ID,
-            turnId,
-            tokenUsage: {
-              total: {
-                totalTokens: currentUsage.total,
-                inputTokens: currentUsage.input,
-                cachedInputTokens: currentUsage.cacheRead,
-                cacheWriteInputTokens: 0,
-                outputTokens: currentUsage.output,
-                reasoningOutputTokens: 0,
-              },
-              last: {
-                totalTokens: attempt === 0 ? 10 : 6,
-                inputTokens: attempt === 0 ? 7 : 4,
-                cachedInputTokens: attempt === 0 ? 2 : 1,
-                cacheWriteInputTokens: 0,
-                outputTokens: 1,
-                reasoningOutputTokens: 0,
-              },
-              modelContextWindow: 100,
-            },
-          }),
-        );
-        send(
-          current,
-          event("item/completed", {
-            threadId: THREAD_ID,
-            turnId,
-            item: {
-              type: "agentMessage",
-              id: `answer-${attempt + 1}`,
-              text:
-                attempt === 0
-                  ? "first answer"
-                  : attempt === 1
-                    ? "second answer in context"
-                    : "third answer after reset counters",
-              phase: "final_answer",
-            },
-            completedAtMs: 1,
-          }),
-        );
-        send(
-          current,
-          event("turn/completed", {
-            threadId: THREAD_ID,
-            turn: {
-              id: turnId,
-              items: [],
-              status: "completed",
-              error: null,
-              startedAt: null,
-              completedAt: null,
-              durationMs: null,
-            },
-          }),
-        );
-      }
-    });
-    const originalKill = child.kill;
-    child.kill = (signal) => {
-      const killed = originalKill(signal);
-      if (signal === "SIGTERM") {
-        order.push(`dispose-${attempt + 1}`);
-        queueMicrotask(() => child.finish(0));
-      }
-      return killed;
-    };
-    children.push(child);
-    return child as unknown as ChildProcess;
-  };
+test("a prepared Codex adapter lazily retains one ephemeral session across clean Runs", async () => {
+  const requests: Record<string, unknown>[] = [];
+  const signals: string[] = [];
+  let spawnCount = 0;
+  let turnNumber = 0;
+  let closeCount = 0;
+  const child = fakeChild((request, current) => {
+    requests.push(request);
+    if (request.method === "initialize") {
+      send(current, initializeResponse(request.id));
+      return;
+    }
+    if (request.method === "thread/start") {
+      send(current, {
+        id: request.id,
+        result: { thread: { id: THREAD_ID, turns: [] } },
+      });
+      return;
+    }
+    if (request.method !== "turn/start") return;
 
+    turnNumber++;
+    const turnId = `retained-adapter-turn-${turnNumber}`;
+    send(current, {
+      id: request.id,
+      result: { turn: { id: turnId, status: "inProgress" } },
+    });
+    const usage =
+      turnNumber === 1
+        ? { total: 10, input: 7, cacheRead: 2, output: 1, context: 8 }
+        : { total: 16, input: 11, cacheRead: 3, output: 2, context: 6 };
+    send(
+      current,
+      event("thread/tokenUsage/updated", {
+        threadId: THREAD_ID,
+        turnId,
+        tokenUsage: {
+          total: {
+            totalTokens: usage.total,
+            inputTokens: usage.input,
+            cachedInputTokens: usage.cacheRead,
+            cacheWriteInputTokens: 0,
+            outputTokens: usage.output,
+            reasoningOutputTokens: 0,
+          },
+          last: {
+            totalTokens: usage.context,
+            inputTokens: usage.input,
+            cachedInputTokens: usage.cacheRead,
+            cacheWriteInputTokens: 0,
+            outputTokens: usage.output,
+            reasoningOutputTokens: 0,
+          },
+        },
+      }),
+    );
+    send(
+      current,
+      event("item/completed", {
+        threadId: THREAD_ID,
+        turnId,
+        item: {
+          type: "agentMessage",
+          id: `retained-answer-${turnNumber}`,
+          text: turnNumber === 1 ? "first answer" : "second retained answer",
+          phase: "final_answer",
+        },
+        completedAtMs: turnNumber,
+      }),
+    );
+    send(
+      current,
+      event("turn/completed", {
+        threadId: THREAD_ID,
+        turn: { id: turnId, items: [], status: "completed", error: null },
+      }),
+    );
+  });
+  child.on("close", () => closeCount++);
+  const originalKill = child.kill;
+  child.kill = (signal) => {
+    signals.push(signal);
+    return originalKill(signal);
+  };
   const adapter = createCodexHarness({
-    spawn,
-    killEscalationMs: 20,
+    spawn: () => {
+      spawnCount++;
+      return child as unknown as ChildProcess;
+    },
   }).prepare({
     config: {
       name: "codex",
@@ -740,121 +687,79 @@ test("a prepared Codex adapter resumes one Conversation through cleaned disposab
     childDepth: 1,
     projectTrusted: false,
   });
-  assert.equal(adapter.capabilities.resume, true);
-
+  assert.equal(spawnCount, 0);
   const execute = async (prompt: string) => {
     const facts: Parameters<RunReporter["message"]>[0][] = [];
-    const stderr: string[] = [];
-    let controlReturns = 0;
-    const controlOwner = createControlSource();
-    const controls: ControlSource = {
-      subscribe(onAdmission, onClose) {
-        return controlOwner.controls.subscribe(onAdmission, () => {
-          controlReturns++;
-          onClose?.();
-        });
-      },
-    };
-    const prepared = adapter.prepareRun({ description: prompt, prompt });
-    const ending = await prepared.execute({
-      report: {
-        message: (fact) => facts.push(fact),
-        transcript: () => {},
-        activity: () => {},
-        stderr: (chunk) => stderr.push(chunk),
-      },
-      controls,
-    });
-    return { ending, facts, stderr, controlReturns };
+    const ending = await adapter
+      .prepareRun({ description: prompt, prompt })
+      .execute({
+        report: {
+          message: (fact) => facts.push(fact),
+          transcript: () => {},
+          activity: () => {},
+          stderr: () => {},
+        },
+        controls: controlsFrom(),
+      });
+    return { ending, facts };
   };
 
   const first = await execute("first prompt");
   assert.deepEqual(first.ending, { ending: "answered" });
-  assert.equal(first.controlReturns, 1);
-  assert.equal(children[0]?.listenerCount("close"), 0);
-  assert.equal(children[0]?.stdout.listenerCount("data"), 0);
-  assert.equal(children[0]?.stderr.listenerCount("data"), 0);
-  assert.equal(children[0]?.stdin.listenerCount("error"), 0);
-
+  assert.equal(spawnCount, 1);
+  assert.equal(child.stdin.writableEnded, false);
+  assert.equal(closeCount, 0);
   const second = await execute("second prompt only");
   assert.deepEqual(second.ending, { ending: "answered" });
-  assert.equal(second.controlReturns, 1);
-  assert.equal(children[1]?.listenerCount("close"), 0);
-  assert.equal(children[1]?.stdout.listenerCount("data"), 0);
-  assert.equal(children[1]?.stderr.listenerCount("data"), 0);
-  assert.equal(children[1]?.stdin.listenerCount("error"), 0);
-
-  const third = await execute("third prompt only");
-  assert.deepEqual(third.ending, { ending: "answered" });
-  assert.equal(third.controlReturns, 1);
-  assert.equal(children[2]?.listenerCount("close"), 0);
-  assert.equal(children[2]?.stdout.listenerCount("data"), 0);
-  assert.equal(children[2]?.stderr.listenerCount("data"), 0);
-  assert.equal(children[2]?.stdin.listenerCount("error"), 0);
+  assert.equal(spawnCount, 1);
+  assert.equal(child.stdin.writableEnded, false);
+  assert.equal(closeCount, 0);
 
   assert.deepEqual(
-    writes.map((attempt) => attempt.map((request) => request.method)),
-    [
-      ["initialize", "initialized", "thread/start", "turn/start"],
-      ["initialize", "initialized", "thread/resume", "turn/start"],
-      ["initialize", "initialized", "thread/resume", "turn/start"],
-    ],
+    requests.map((request) => request.method),
+    ["initialize", "initialized", "thread/start", "turn/start", "turn/start"],
   );
-  assert.deepEqual(writes[0]?.[2]?.params, {
+  assert.deepEqual(requests[2]?.params, {
     cwd: "/fixed/work",
-    ephemeral: false,
+    ephemeral: true,
     approvalPolicy: "never",
     sandbox: "danger-full-access",
     model: "gpt-fixed",
     config: { model_reasoning_effort: "high" },
   });
-  assert.deepEqual(writes[0]?.[3]?.params, {
-    threadId: THREAD_ID,
-    input: [
-      {
-        type: "text",
-        text: "fixed profile role\n\nfirst prompt",
-        text_elements: [],
-      },
-    ],
-  });
-  assert.deepEqual(writes[1]?.[2]?.params, {
-    threadId: THREAD_ID,
-    cwd: "/fixed/work",
-    approvalPolicy: "never",
-    sandbox: "danger-full-access",
-    model: "gpt-fixed",
-    config: { model_reasoning_effort: "high" },
-  });
-  assert.deepEqual(writes[1]?.[3]?.params, {
-    threadId: THREAD_ID,
-    input: [
-      {
-        type: "text",
-        text: "second prompt only",
-        text_elements: [],
-      },
-    ],
-  });
   assert.deepEqual(
-    first.facts.filter((fact) => fact.role === "assistant"),
+    requests
+      .filter((request) => request.method === "turn/start")
+      .map((request) => request.params),
     [
       {
-        role: "assistant",
-        parts: [{ type: "text", text: "first answer" }],
-        usage: { turns: 0 },
+        threadId: THREAD_ID,
+        input: [
+          {
+            type: "text",
+            text: "fixed profile role\n\nfirst prompt",
+            text_elements: [],
+          },
+        ],
+      },
+      {
+        threadId: THREAD_ID,
+        input: [
+          { type: "text", text: "second prompt only", text_elements: [] },
+        ],
       },
     ],
   );
   assert.deepEqual(
-    second.facts.filter((fact) => fact.role === "assistant"),
-    [
-      {
-        role: "assistant",
-        parts: [{ type: "text", text: "second answer in context" }],
-        usage: { turns: 0 },
-      },
-    ],
+    first.facts.find((fact) => fact.role === "metadata")?.usage,
+    {
+      input: 7,
+      cacheRead: 2,
+      cacheWrite: 0,
+      output: 1,
+      contextTokens: 8,
+      turns: 1,
+    },
   );
   assert.deepEqual(
     second.facts.find((fact) => fact.role === "metadata")?.usage,
@@ -867,42 +772,708 @@ test("a prepared Codex adapter resumes one Conversation through cleaned disposab
       turns: 1,
     },
   );
-  assert.deepEqual(
-    third.facts.find((fact) => fact.role === "metadata")?.usage,
-    {
-      input: 4,
-      cacheRead: 1,
-      cacheWrite: 0,
-      output: 1,
-      contextTokens: 6,
-      turns: 1,
-    },
-  );
-  assert.deepEqual(first.stderr, []);
-  assert.deepEqual(second.stderr, []);
-  assert.deepEqual(order, [
-    "spawn-1",
-    "1:initialize",
-    "1:initialized",
-    "1:thread/start",
-    "1:turn/start",
-    "dispose-1",
-    "spawn-2",
-    "2:initialize",
-    "2:initialized",
-    "2:thread/resume",
-    "2:turn/start",
-    "dispose-2",
-    "spawn-3",
-    "3:initialize",
-    "3:initialized",
-    "3:thread/resume",
-    "3:turn/start",
-    "dispose-3",
-  ]);
+
+  await adapter.close();
+  assert.equal(child.stdin.writableEnded, true);
+  assert.equal(closeCount, 1);
+  assert.deepEqual(signals, []);
+  assert.equal(child.listenerCount("close"), 1);
+  assert.equal(child.stdout.listenerCount("data"), 0);
+  assert.equal(child.stderr.listenerCount("data"), 0);
+  assert.equal(child.stdin.listenerCount("error"), 0);
 });
 
-test("closing a Codex adapter while attaching cancels and fully cleans its Attempt", async () => {
+test("pre-spawn cancellation preserves the profile prompt for the first provider Turn", async () => {
+  const requests: Record<string, unknown>[] = [];
+  let spawnCount = 0;
+  let turnNumber = 0;
+  const child = fakeChild((request, current) => {
+    requests.push(request);
+    if (request.method === "initialize") {
+      send(current, initializeResponse(request.id));
+      return;
+    }
+    if (request.method === "thread/start") {
+      send(current, {
+        id: request.id,
+        result: { thread: { id: THREAD_ID, turns: [] } },
+      });
+      return;
+    }
+    if (request.method !== "turn/start") return;
+
+    turnNumber++;
+    const turnId = `first-provider-turn-${turnNumber}`;
+    send(current, {
+      id: request.id,
+      result: { turn: { id: turnId, status: "inProgress" } },
+    });
+    send(
+      current,
+      event("item/completed", {
+        threadId: THREAD_ID,
+        turnId,
+        item: {
+          type: "agentMessage",
+          id: `answer-${turnNumber}`,
+          text: `answer ${turnNumber}`,
+          phase: "final_answer",
+        },
+        completedAtMs: turnNumber,
+      }),
+    );
+    send(
+      current,
+      event("turn/completed", {
+        threadId: THREAD_ID,
+        turn: { id: turnId, items: [], status: "completed", error: null },
+      }),
+    );
+  });
+  const adapter = createCodexHarness({
+    spawn: () => {
+      spawnCount++;
+      return child as unknown as ChildProcess;
+    },
+  }).prepare({
+    config: {
+      name: "codex",
+      description: "codex",
+      harness: "codex",
+      fields: {},
+      systemPrompt: "fixed profile role",
+    },
+    cwd: "/work",
+    childDepth: 1,
+    projectTrusted: false,
+  });
+  const execute = (prompt: string, signal?: AbortSignal) =>
+    adapter.prepareRun({ description: prompt, prompt }).execute({
+      report: {
+        message: () => {},
+        transcript: () => {},
+        activity: () => {},
+        stderr: () => {},
+      },
+      ...(signal ? { signal } : {}),
+      controls: controlsFrom(),
+    });
+  const cancelled = new AbortController();
+  cancelled.abort();
+
+  assert.deepEqual(await execute("cancelled before spawn", cancelled.signal), {
+    ending: "cancelled",
+  });
+  assert.equal(spawnCount, 0);
+  assert.equal(adapter.capabilities.resume, true);
+  assert.deepEqual(await execute("first actual task"), { ending: "answered" });
+  assert.deepEqual(await execute("later task only"), { ending: "answered" });
+
+  assert.equal(spawnCount, 1);
+  assert.deepEqual(
+    requests
+      .filter((request) => request.method === "turn/start")
+      .map((request) => request.params),
+    [
+      {
+        threadId: THREAD_ID,
+        input: [
+          {
+            type: "text",
+            text: "fixed profile role\n\nfirst actual task",
+            text_elements: [],
+          },
+        ],
+      },
+      {
+        threadId: THREAD_ID,
+        input: [{ type: "text", text: "later task only", text_elements: [] }],
+      },
+    ],
+  );
+
+  await adapter.close();
+});
+
+test("adapter close before a resumed executor reaches the session settles cancelled without a write", async () => {
+  const requests: Record<string, unknown>[] = [];
+  let turnId = "first-turn";
+  const child = fakeChild((request, current) => {
+    requests.push(request);
+    if (request.method === "initialize") {
+      send(current, initializeResponse(request.id));
+      return;
+    }
+    if (request.method === "thread/start") {
+      send(current, {
+        id: request.id,
+        result: { thread: { id: THREAD_ID, turns: [] } },
+      });
+      return;
+    }
+    if (request.method !== "turn/start") return;
+    send(current, {
+      id: request.id,
+      result: { turn: { id: turnId, status: "inProgress" } },
+    });
+    send(
+      current,
+      event("item/completed", {
+        threadId: THREAD_ID,
+        turnId,
+        item: {
+          type: "agentMessage",
+          id: "first-answer",
+          text: "first answer",
+          phase: "final_answer",
+        },
+        completedAtMs: 1,
+      }),
+    );
+    send(
+      current,
+      event("turn/completed", {
+        threadId: THREAD_ID,
+        turn: { id: turnId, items: [], status: "completed", error: null },
+      }),
+    );
+    turnId = "unexpected-second-turn";
+  });
+  const adapter = createCodexHarness({
+    spawn: () => child as unknown as ChildProcess,
+  }).prepare({
+    config: {
+      name: "codex",
+      description: "codex",
+      harness: "codex",
+      fields: {},
+      systemPrompt: "fixed role",
+    },
+    cwd: "/work",
+    childDepth: 1,
+    projectTrusted: false,
+  });
+  const run = (prompt: string) =>
+    adapter.prepareRun({ description: prompt, prompt }).execute({
+      report: {
+        message: () => {},
+        transcript: () => {},
+        activity: () => {},
+        stderr: () => {},
+      },
+      controls: controlsFrom(),
+    });
+
+  assert.deepEqual(await run("first task"), { ending: "answered" });
+  const resumed = run("never written");
+  await adapter.close();
+
+  assert.deepEqual(await resumed, { ending: "cancelled" });
+  assert.equal(
+    requests.filter((request) => request.method === "turn/start").length,
+    1,
+  );
+});
+
+test("steering and active-Run admission stay scoped across retained adapter Runs", async () => {
+  const requests: Record<string, unknown>[] = [];
+  const controls = createControlSource();
+  let turnNumber = 0;
+  let firstTurnReady!: () => void;
+  const firstTurnStarted = new Promise<void>((resolve) => {
+    firstTurnReady = resolve;
+  });
+  const child = fakeChild((request, current) => {
+    requests.push(request);
+    if (request.method === "initialize") {
+      send(current, initializeResponse(request.id));
+      return;
+    }
+    if (request.method === "thread/start") {
+      send(current, { id: request.id, result: { thread: { id: THREAD_ID } } });
+      return;
+    }
+    if (request.method === "turn/start") {
+      turnNumber++;
+      const turnId = `adapter-steered-turn-${turnNumber}`;
+      send(current, {
+        id: request.id,
+        result: { turn: { id: turnId, status: "inProgress" } },
+      });
+      if (turnNumber === 1) firstTurnReady();
+      else {
+        send(
+          current,
+          event("item/completed", {
+            threadId: THREAD_ID,
+            turnId,
+            item: {
+              type: "agentMessage",
+              id: "after-steering-answer",
+              text: "continued after steering",
+              phase: "final_answer",
+            },
+            completedAtMs: 2,
+          }),
+        );
+        send(
+          current,
+          event("turn/completed", {
+            threadId: THREAD_ID,
+            turn: { id: turnId, items: [], status: "completed", error: null },
+          }),
+        );
+      }
+      return;
+    }
+    if (request.method === "turn/steer") {
+      const params = request.params as Record<string, unknown>;
+      send(current, { id: request.id, result: {} });
+      send(
+        current,
+        event("item/completed", {
+          threadId: THREAD_ID,
+          turnId: "adapter-steered-turn-1",
+          item: {
+            type: "userMessage",
+            id: "confirmed-adapter-guidance",
+            clientId: params.clientUserMessageId,
+            content: [
+              {
+                type: "text",
+                text: "confirmed adapter guidance",
+                text_elements: [],
+              },
+            ],
+          },
+          completedAtMs: 1,
+        }),
+      );
+      send(
+        current,
+        event("item/completed", {
+          threadId: THREAD_ID,
+          turnId: "adapter-steered-turn-1",
+          item: {
+            type: "agentMessage",
+            id: "steered-answer",
+            text: "answer after guidance",
+            phase: "final_answer",
+          },
+          completedAtMs: 1,
+        }),
+      );
+      send(
+        current,
+        event("turn/completed", {
+          threadId: THREAD_ID,
+          turn: {
+            id: "adapter-steered-turn-1",
+            items: [],
+            status: "completed",
+            error: null,
+          },
+        }),
+      );
+    }
+  });
+  let spawnCount = 0;
+  const adapter = createCodexHarness({
+    spawn: () => {
+      spawnCount++;
+      return child as unknown as ChildProcess;
+    },
+  }).prepare({
+    config: {
+      name: "codex",
+      description: "codex",
+      harness: "codex",
+      fields: {},
+      systemPrompt: "fixed role",
+    },
+    cwd: "/work",
+    childDepth: 1,
+    projectTrusted: false,
+  });
+  const execute = (
+    prompt: string,
+    report: Parameters<RunReporter["message"]>[0][],
+    source: ControlSource = controlsFrom(),
+  ) =>
+    adapter.prepareRun({ description: prompt, prompt }).execute({
+      report: {
+        message: (fact) => report.push(fact),
+        transcript: () => {},
+        activity: () => {},
+        stderr: () => {},
+      },
+      controls: source,
+    });
+
+  const firstFacts: Parameters<RunReporter["message"]>[0][] = [];
+  const first = execute("first", firstFacts, controls.controls);
+  await firstTurnStarted;
+  const overlap = await execute("must not start", []);
+  assert.deepEqual(overlap, {
+    ending: "failed",
+    errorMessage: "Codex adapter already has an active Run",
+  });
+  assert.equal(
+    requests.filter((request) => request.method === "turn/start").length,
+    1,
+  );
+  assert.equal(
+    controls.offer({ type: "steer", text: "adapter guidance" }),
+    "accepted",
+  );
+  assert.deepEqual(await first, { ending: "answered" });
+  const firstSnapshot = structuredClone(firstFacts);
+
+  const secondFacts: Parameters<RunReporter["message"]>[0][] = [];
+  assert.deepEqual(await execute("continue after steering", secondFacts), {
+    ending: "answered",
+  });
+  assert.deepEqual(firstFacts, firstSnapshot);
+  assert.deepEqual(
+    firstFacts.filter((fact) => fact.role === "user"),
+    [
+      {
+        role: "user",
+        parts: [{ type: "text", text: "confirmed adapter guidance" }],
+      },
+    ],
+  );
+  assert.equal(
+    secondFacts.some((fact) => fact.role === "user"),
+    false,
+  );
+  assert.equal(spawnCount, 1);
+  assert.deepEqual(
+    requests.map((request) => request.method),
+    [
+      "initialize",
+      "initialized",
+      "thread/start",
+      "turn/start",
+      "turn/steer",
+      "turn/start",
+    ],
+  );
+
+  await adapter.close();
+  assert.equal(child.stdout.listenerCount("data"), 0);
+});
+
+test("parallel Codex Subagent adapters own independent retained sessions and usage baselines", async () => {
+  const requests: Array<Record<string, unknown>[]> = [[], []];
+  const children: FakeChild[] = [];
+  const turnCounts = [0, 0];
+  const activeTurnIds: Array<string | undefined> = [undefined, undefined];
+  let firstTurnsReady!: () => void;
+  const bothFirstTurnsStarted = new Promise<void>((resolve) => {
+    firstTurnsReady = resolve;
+  });
+  let firstTurnsStarted = 0;
+  const sendUsage = (
+    child: FakeChild,
+    threadId: string,
+    turnId: string,
+    inputTokens: number,
+  ): void => {
+    send(
+      child,
+      event("thread/tokenUsage/updated", {
+        threadId,
+        turnId,
+        tokenUsage: {
+          total: {
+            totalTokens: inputTokens,
+            inputTokens,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            outputTokens: 0,
+            reasoningOutputTokens: 0,
+          },
+          last: {
+            totalTokens: inputTokens,
+            inputTokens,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            outputTokens: 0,
+            reasoningOutputTokens: 0,
+          },
+        },
+      }),
+    );
+  };
+  const complete = (index: number, text: string): void => {
+    const child = children[index];
+    const turnId = activeTurnIds[index];
+    assert.ok(child && turnId);
+    const threadId = `parallel-thread-${index + 1}`;
+    send(
+      child,
+      event("item/completed", {
+        threadId,
+        turnId,
+        item: {
+          type: "agentMessage",
+          id: `parallel-answer-${index + 1}-${turnCounts[index]}`,
+          text,
+          phase: "final_answer",
+        },
+        completedAtMs: 1,
+      }),
+    );
+    send(
+      child,
+      event("turn/completed", {
+        threadId,
+        turn: { id: turnId, items: [], status: "completed", error: null },
+      }),
+    );
+  };
+  const spawn: ChildProcessSpawn = (_command, _args, options) => {
+    const index = children.length;
+    assert.ok(index < 2, "each adapter creates at most one App Server");
+    assert.equal(options.cwd, `/parallel/${index + 1}`);
+    assert.equal(options.env?.[DEPTH_ENV_KEY], String(index + 1));
+    const threadId = `parallel-thread-${index + 1}`;
+    const child = fakeChild((request, current) => {
+      requests[index]?.push(request);
+      if (request.method === "initialize") {
+        send(current, initializeResponse(request.id));
+        return;
+      }
+      if (request.method === "thread/start") {
+        send(current, { id: request.id, result: { thread: { id: threadId } } });
+        return;
+      }
+      if (request.method !== "turn/start") return;
+      const turnNumber = (turnCounts[index] ?? 0) + 1;
+      turnCounts[index] = turnNumber;
+      const turnId = `parallel-turn-${index + 1}-${turnNumber}`;
+      activeTurnIds[index] = turnId;
+      send(current, {
+        id: request.id,
+        result: { turn: { id: turnId, status: "inProgress" } },
+      });
+      const inputTokens =
+        index === 0 ? (turnNumber === 1 ? 7 : 11) : turnNumber === 1 ? 70 : 79;
+      sendUsage(current, threadId, turnId, inputTokens);
+      if (turnNumber === 1) {
+        firstTurnsStarted++;
+        if (firstTurnsStarted === 2) firstTurnsReady();
+      } else complete(index, `parallel resumed answer ${index + 1}`);
+    });
+    children.push(child);
+    return child as unknown as ChildProcess;
+  };
+  const harness = createCodexHarness({ spawn });
+  const adapters = [0, 1].map((index) =>
+    harness.prepare({
+      config: {
+        name: `codex-${index + 1}`,
+        description: "codex",
+        harness: "codex",
+        fields: {},
+        systemPrompt: `role ${index + 1}`,
+      },
+      cwd: `/parallel/${index + 1}`,
+      childDepth: index + 1,
+      projectTrusted: false,
+    }),
+  );
+  const execute = async (index: number, prompt: string) => {
+    const facts: Parameters<RunReporter["message"]>[0][] = [];
+    const adapter = adapters[index];
+    assert.ok(adapter);
+    const ending = await adapter
+      .prepareRun({ description: prompt, prompt })
+      .execute({
+        report: {
+          message: (fact) => facts.push(fact),
+          transcript: () => {},
+          activity: () => {},
+          stderr: () => {},
+        },
+        controls: controlsFrom(),
+      });
+    return { ending, facts };
+  };
+
+  const firstRuns = [execute(0, "first one"), execute(1, "first two")];
+  await bothFirstTurnsStarted;
+  assert.equal(children.length, 2);
+  assert.equal(
+    children.every((child) => !child.stdin.writableEnded),
+    true,
+  );
+  complete(0, "parallel first answer 1");
+  complete(1, "parallel first answer 2");
+  const first = await Promise.all(firstRuns);
+  assert.deepEqual(
+    first.map(({ ending }) => ending),
+    [{ ending: "answered" }, { ending: "answered" }],
+  );
+
+  const second = await Promise.all([
+    execute(0, "second one"),
+    execute(1, "second two"),
+  ]);
+  assert.deepEqual(
+    second.map(
+      ({ facts }) =>
+        facts.find((fact) => fact.role === "metadata")?.usage?.input,
+    ),
+    [4, 9],
+  );
+  assert.deepEqual(
+    requests.map((writes) => writes.map((request) => request.method)),
+    [
+      ["initialize", "initialized", "thread/start", "turn/start", "turn/start"],
+      ["initialize", "initialized", "thread/start", "turn/start", "turn/start"],
+    ],
+  );
+  for (let index = 0; index < requests.length; index++) {
+    assert.deepEqual(requests[index]?.[2]?.params, {
+      cwd: `/parallel/${index + 1}`,
+      ephemeral: true,
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+  }
+
+  await Promise.all(adapters.map((adapter) => adapter.close()));
+  for (const child of children) {
+    assert.equal(child.stdout.listenerCount("data"), 0);
+    assert.equal(child.stderr.listenerCount("data"), 0);
+    assert.equal(child.stdin.listenerCount("error"), 0);
+  }
+});
+
+test("terminal App Server loss disables adapter resume without leaking provider identity", async () => {
+  const requests: Record<string, unknown>[] = [];
+  const facts: Parameters<RunReporter["message"]>[0][] = [];
+  const stderr: string[] = [];
+  let turnReady!: () => void;
+  const activeTurn = new Promise<void>((resolve) => {
+    turnReady = resolve;
+  });
+  const child = fakeChild((request, current) => {
+    requests.push(request);
+    if (request.method === "initialize")
+      send(current, initializeResponse(request.id));
+    if (request.method === "thread/start")
+      send(current, {
+        id: request.id,
+        result: { thread: { id: "loss-thread-secret" } },
+      });
+    if (request.method === "turn/start") {
+      send(current, {
+        id: request.id,
+        result: {
+          turn: { id: "loss-turn-secret", status: "inProgress" },
+        },
+      });
+      send(
+        current,
+        event("item/completed", {
+          threadId: "loss-thread-secret",
+          turnId: "loss-turn-secret",
+          item: {
+            type: "agentMessage",
+            id: "loss-item-secret",
+            text: "partial answer retained",
+            phase: "commentary",
+          },
+          completedAtMs: 1,
+        }),
+      );
+      turnReady();
+    }
+  });
+  let spawnCount = 0;
+  const adapter = createCodexHarness({
+    spawn: () => {
+      spawnCount++;
+      return child as unknown as ChildProcess;
+    },
+  }).prepare({
+    config: {
+      name: "codex",
+      description: "codex",
+      harness: "codex",
+      fields: {},
+      systemPrompt: "role",
+    },
+    cwd: "/work",
+    childDepth: 1,
+    projectTrusted: false,
+  });
+  const ending = adapter
+    .prepareRun({ description: "lose process", prompt: "lose process" })
+    .execute({
+      report: {
+        message: (fact) => facts.push(fact),
+        transcript: () => {},
+        activity: () => {},
+        stderr: (chunk) => stderr.push(chunk),
+      },
+      controls: controlsFrom(),
+    });
+  await activeTurn;
+  child.emit(
+    "error",
+    new Error(
+      'lost loss-thread-secret loss-turn-secret loss-item-secret {"requestId":"request-secret"}',
+    ),
+  );
+
+  const result = await ending;
+  assert.equal(result.ending, "failed");
+  assert.equal(adapter.capabilities.resume, false);
+  assert.deepEqual(facts, [
+    {
+      role: "assistant",
+      parts: [{ type: "text", text: "partial answer retained" }],
+      usage: { turns: 0 },
+    },
+  ]);
+  const publicState = JSON.stringify({ result, facts, stderr });
+  assert.doesNotMatch(
+    publicState,
+    /loss-thread-secret|loss-turn-secret|loss-item-secret|request-secret/,
+  );
+  const writesAfterLoss = requests.length;
+  assert.deepEqual(
+    await adapter
+      .prepareRun({
+        description: "must not restart",
+        prompt: "must not restart",
+      })
+      .execute({
+        report: {
+          message: () => {},
+          transcript: () => {},
+          activity: () => {},
+          stderr: () => {},
+        },
+        controls: controlsFrom(),
+      }),
+    {
+      ending: "failed",
+      errorMessage: "Codex App Server session is closed",
+    },
+  );
+  assert.equal(requests.length, writesAfterLoss);
+  assert.equal(spawnCount, 1);
+
+  await adapter.close();
+  assert.equal(child.stdout.listenerCount("data"), 0);
+});
+
+test("closing a Codex adapter while attaching cancels and fully cleans its session", async () => {
   let child!: FakeChild;
   let spawned!: () => void;
   const didSpawn = new Promise<void>((resolve) => {
@@ -962,202 +1533,13 @@ test("closing a Codex adapter while attaching cancels and fully cleans its Attem
   await adapter.close();
 });
 
-test("repeated Session-owned close versus resumed settlement has one winner", async () => {
-  for (let iteration = 0; iteration < 32; iteration++) {
-    for (const completionFirst of [true, false]) {
-      const children: FakeChild[] = [];
-      let resumedChild: FakeChild | undefined;
-      let resumedTurnReady!: () => void;
-      const resumedReady = new Promise<void>((resolve) => {
-        resumedTurnReady = resolve;
-      });
-      const spawn: ChildProcessSpawn = () => {
-        const attempt = children.length;
-        const turnId = attempt === 0 ? "turn-seed" : "turn-resumed-race";
-        const child = fakeChild((request, current) => {
-          if (request.method === "initialize") {
-            send(current, initializeResponse(request.id));
-          } else if (request.method === "thread/start") {
-            send(current, {
-              id: request.id,
-              result: { thread: { id: THREAD_ID } },
-            });
-          } else if (request.method === "thread/resume") {
-            send(current, {
-              id: request.id,
-              result: { thread: { id: THREAD_ID } },
-            });
-          } else if (request.method === "turn/start") {
-            send(current, {
-              id: request.id,
-              result: { turn: { id: turnId, status: "inProgress" } },
-            });
-            if (attempt === 0) {
-              send(
-                current,
-                event("item/completed", {
-                  threadId: THREAD_ID,
-                  turnId,
-                  item: {
-                    type: "agentMessage",
-                    id: "seed-answer",
-                    text: "seed",
-                    phase: "final_answer",
-                  },
-                  completedAtMs: 1,
-                }),
-              );
-              send(
-                current,
-                event("turn/completed", {
-                  threadId: THREAD_ID,
-                  turn: {
-                    id: turnId,
-                    items: [],
-                    status: "completed",
-                    error: null,
-                  },
-                }),
-              );
-            } else {
-              resumedChild = current;
-              resumedTurnReady();
-            }
-          } else if (request.method === "turn/interrupt") {
-            send(current, { id: request.id, result: {} });
-          }
-        });
-        children.push(child);
-        return child as unknown as ChildProcess;
-      };
-      const adapter = createCodexHarness({
-        spawn,
-        killEscalationMs: 1,
-      }).prepare({
-        config: {
-          name: "codex",
-          description: "codex",
-          harness: "codex",
-          fields: {},
-          systemPrompt: "role",
-        },
-        cwd: "/work",
-        childDepth: 1,
-        projectTrusted: false,
-      });
-      const execute = (prompt: string) =>
-        adapter.prepareRun({ description: prompt, prompt }).execute({
-          report: {
-            message: () => {},
-            transcript: () => {},
-            activity: () => {},
-            stderr: () => {},
-          },
-          controls: controlsFrom(),
-        });
-      assert.deepEqual(await execute("seed"), { ending: "answered" });
-      const pending = execute("resumed race");
-      await resumedReady;
-      assert.ok(resumedChild);
-      const sendSettlement = (): void => {
-        send(
-          resumedChild as FakeChild,
-          event("item/completed", {
-            threadId: THREAD_ID,
-            turnId: "turn-resumed-race",
-            item: {
-              type: "agentMessage",
-              id: "resumed-race-answer",
-              text: "resumed race answer",
-              phase: "final_answer",
-            },
-            completedAtMs: 1,
-          }),
-        );
-        send(
-          resumedChild as FakeChild,
-          event("turn/completed", {
-            threadId: THREAD_ID,
-            turn: {
-              id: "turn-resumed-race",
-              items: [],
-              status: "completed",
-              error: null,
-            },
-          }),
-        );
-      };
-
-      let closing: Promise<void>;
-      if (completionFirst) {
-        sendSettlement();
-        closing = adapter.close();
-      } else {
-        closing = adapter.close();
-        sendSettlement();
-      }
-
-      assert.deepEqual(await pending, {
-        ending: completionFirst ? "answered" : "cancelled",
-      });
-      await closing;
-      await adapter.close();
-      assert.equal(children[1]?.listenerCount("close"), 0);
-      assert.equal(children[1]?.stdout.listenerCount("data"), 0);
-      assert.equal(children[1]?.stderr.listenerCount("data"), 0);
-      assert.equal(children[1]?.stdin.listenerCount("error"), 0);
-    }
-  }
-});
-
-test("Codex creates after a pre-Conversation failure but never falls back after continuation exists", async () => {
-  const attempts: Record<string, unknown>[][] = [[], [], []];
-  const children: FakeChild[] = [];
-  const spawn: ChildProcessSpawn = () => {
-    const attempt = children.length;
-    const child = fakeChild((request, current) => {
-      attempts[attempt]?.push(request);
-      if (request.method === "initialize") {
-        if (attempt === 0) {
-          send(current, {
-            id: request.id,
-            error: { code: -32000, message: "initialization unavailable" },
-          });
-        } else send(current, initializeResponse(request.id));
-      } else if (request.method === "thread/start") {
-        send(current, {
-          id: request.id,
-          result: { thread: { id: THREAD_ID, turns: [] } },
-        });
-      } else if (request.method === "thread/resume") {
-        send(current, {
-          id: request.id,
-          error: {
-            code: -32001,
-            message: `continuation ${THREAD_ID} unavailable`,
-          },
-        });
-      } else if (request.method === "turn/start") {
-        send(current, {
-          id: request.id,
-          result: { turn: { id: TURN_ID, status: "inProgress" } },
-        });
-        send(current, agent("created on retry"));
-        send(current, completedTurn());
-      }
-    });
-    const originalKill = child.kill;
-    child.kill = (signal) => {
-      const killed = originalKill(signal);
-      if (signal === "SIGTERM") queueMicrotask(() => child.finish(0));
-      return killed;
-    };
-    children.push(child);
-    return child as unknown as ChildProcess;
-  };
+test("closing a Codex adapter before spawn preserves the cancelled Ending", async () => {
+  let spawnCount = 0;
   const adapter = createCodexHarness({
-    spawn,
-    killEscalationMs: 20,
+    spawn: () => {
+      spawnCount++;
+      return fakeChild(() => {}) as unknown as ChildProcess;
+    },
   }).prepare({
     config: {
       name: "codex",
@@ -1170,476 +1552,254 @@ test("Codex creates after a pre-Conversation failure but never falls back after 
     childDepth: 1,
     projectTrusted: false,
   });
-  const execute = (prompt: string) =>
-    adapter.prepareRun({ description: prompt, prompt }).execute({
-      report: {
-        message: () => {},
-        transcript: () => {},
-        activity: () => {},
-        stderr: () => {},
-      },
-      controls: controlsFrom(),
-    });
-
-  assert.deepEqual(await execute("first prompt"), {
-    ending: "failed",
-    errorMessage: "initialization unavailable",
-  });
-  assert.deepEqual(await execute("retry prompt"), { ending: "answered" });
-  assert.deepEqual(await execute("resume prompt"), {
-    ending: "failed",
-    errorMessage: "continuation [redacted] unavailable",
+  const execution = adapter.prepareRun({
+    description: "pre-spawn cancellation",
+    prompt: "must never spawn",
   });
 
-  assert.deepEqual(
-    attempts.map((writes) => writes.map((write) => write.method)),
-    [
-      ["initialize"],
-      ["initialize", "initialized", "thread/start", "turn/start"],
-      ["initialize", "initialized", "thread/resume"],
-    ],
-  );
-  assert.deepEqual(attempts[1]?.[3]?.params, {
-    threadId: THREAD_ID,
-    input: [
-      {
-        type: "text",
-        text: "fixed role\n\nretry prompt",
-        text_elements: [],
-      },
-    ],
-  });
-});
-
-test("Codex does not retain a created thread before its first Turn accepts the Profile role", async () => {
-  const attempts: Record<string, unknown>[][] = [[], []];
-  const children: FakeChild[] = [];
-  const spawn: ChildProcessSpawn = () => {
-    const attempt = children.length;
-    let attachedThread = `thread-${attempt + 1}`;
-    const child = fakeChild((request, current) => {
-      attempts[attempt]?.push(request);
-      if (request.method === "initialize") {
-        send(current, initializeResponse(request.id));
-      } else if (request.method === "thread/start") {
-        send(current, {
-          id: request.id,
-          result: { thread: { id: attachedThread } },
-        });
-      } else if (request.method === "thread/resume") {
-        attachedThread = "thread-1";
-        send(current, {
-          id: request.id,
-          result: { thread: { id: attachedThread } },
-        });
-      } else if (request.method === "turn/start") {
-        if (attempt === 0) {
-          send(current, {
-            id: request.id,
-            error: { code: -32000, message: "first turn rejected" },
-          });
-          return;
-        }
-        send(current, {
-          id: request.id,
-          result: { turn: { id: "turn-retry", status: "inProgress" } },
-        });
-        send(
-          current,
-          event("item/completed", {
-            threadId: attachedThread,
-            turnId: "turn-retry",
-            item: {
-              type: "agentMessage",
-              id: "retry-answer",
-              text: "role retained on retry",
-              phase: "final_answer",
-            },
-            completedAtMs: 1,
-          }),
-        );
-        send(
-          current,
-          event("turn/completed", {
-            threadId: attachedThread,
-            turn: {
-              id: "turn-retry",
-              items: [],
-              status: "completed",
-              error: null,
-            },
-          }),
-        );
-      }
-    });
-    const originalKill = child.kill;
-    child.kill = (signal) => {
-      const killed = originalKill(signal);
-      if (signal === "SIGTERM") queueMicrotask(() => child.finish(0));
-      return killed;
-    };
-    children.push(child);
-    return child as unknown as ChildProcess;
-  };
-  const adapter = createCodexHarness({ spawn, killEscalationMs: 1 }).prepare({
-    config: {
-      name: "codex",
-      description: "codex",
-      harness: "codex",
-      fields: {},
-      systemPrompt: "fixed Profile role",
+  const pending = execution.execute({
+    report: {
+      message: () => {},
+      transcript: () => {},
+      activity: () => {},
+      stderr: () => {},
     },
-    cwd: "/work",
-    childDepth: 1,
-    projectTrusted: false,
+    controls: controlsFrom(),
   });
-  const execute = (prompt: string) =>
-    adapter.prepareRun({ description: prompt, prompt }).execute({
-      report: {
-        message: () => {},
-        transcript: () => {},
-        activity: () => {},
-        stderr: () => {},
-      },
-      controls: controlsFrom(),
-    });
-
-  assert.equal((await execute("first prompt")).ending, "failed");
-  const retry = await execute("retry prompt");
-  assert.deepEqual(
-    attempts.map((writes) => writes.map((write) => write.method)),
-    [
-      ["initialize", "initialized", "thread/start", "turn/start"],
-      ["initialize", "initialized", "thread/start", "turn/start"],
-    ],
-  );
-  assert.deepEqual(attempts[1]?.[3]?.params, {
-    threadId: "thread-2",
-    input: [
-      {
-        type: "text",
-        text: "fixed Profile role\n\nretry prompt",
-        text_elements: [],
-      },
-    ],
-  });
-  assert.deepEqual(retry, { ending: "answered" });
   await adapter.close();
+
+  assert.deepEqual(await pending, { ending: "cancelled" });
+  assert.equal(spawnCount, 0);
 });
 
-test("resumed Codex failures are honest, bounded, cleaned, and never fall back", async () => {
-  const cases = [
-    {
-      name: "spawn failure",
-      expected: "resumed spawn unavailable",
-    },
-    {
-      name: "initialization failure",
-      expected: "resumed initialization unavailable",
-    },
-    {
-      name: "malformed resume response",
-      expected: "invalid thread/resume response",
-    },
-    {
-      name: "unavailable continuation",
-      expected: "continuation [redacted] unavailable",
-    },
-    {
-      name: "process loss",
-      expected: "Child codex exited with code 9",
-    },
-    {
-      name: "clean exit without answer",
-      expected: "Codex exited without a terminal agent message answer.",
-    },
-  ] as const;
-
-  for (const failure of cases) {
-    let spawnCalls = 0;
-    const children: FakeChild[] = [];
-    const methods: string[][] = [[], []];
-    const spawn: ChildProcessSpawn = () => {
-      const attempt = spawnCalls++;
-      if (attempt === 1 && failure.name === "spawn failure") {
-        throw new Error(
-          `resumed spawn unavailable {"threadId":"${THREAD_ID}"} ${"detail ".repeat(400)}`,
-        );
-      }
-      const turnId = attempt === 0 ? "turn-seed" : "turn-failure";
-      const child = fakeChild((request, current) => {
-        methods[attempt]?.push(String(request.method));
-        if (request.method === "initialize") {
-          if (attempt === 1 && failure.name === "initialization failure") {
-            send(current, {
-              id: request.id,
-              error: {
-                code: -32000,
-                message: "resumed initialization unavailable",
-              },
-            });
-          } else send(current, initializeResponse(request.id));
-        } else if (request.method === "thread/start") {
-          send(current, {
-            id: request.id,
-            result: { thread: { id: THREAD_ID } },
-          });
-        } else if (request.method === "thread/resume") {
-          if (failure.name === "malformed resume response") {
-            send(current, { id: request.id, result: { thread: {} } });
-          } else if (failure.name === "unavailable continuation") {
-            send(current, {
-              id: request.id,
-              error: {
-                code: -32001,
-                message: `continuation ${THREAD_ID} unavailable`,
-              },
-            });
-          } else {
-            send(current, {
-              id: request.id,
-              result: { thread: { id: THREAD_ID } },
-            });
-          }
-        } else if (request.method === "turn/start") {
-          send(current, {
-            id: request.id,
-            result: { turn: { id: turnId, status: "inProgress" } },
-          });
-          if (attempt === 0) {
-            send(
-              current,
-              event("item/completed", {
-                threadId: THREAD_ID,
-                turnId,
-                item: {
-                  type: "agentMessage",
-                  id: "seed-answer",
-                  text: "seed answer",
-                  phase: "final_answer",
-                },
-                completedAtMs: 1,
-              }),
-            );
-            send(
-              current,
-              event("turn/completed", {
-                threadId: THREAD_ID,
-                turn: {
-                  id: turnId,
-                  items: [],
-                  status: "completed",
-                  error: null,
-                },
-              }),
-            );
-          } else if (failure.name === "process loss") {
-            current.finish(9);
-          } else if (failure.name === "clean exit without answer") {
-            current.finish(0);
-          }
-        }
-      });
-      children.push(child);
-      return child as unknown as ChildProcess;
-    };
-    const adapter = createCodexHarness({ spawn, killEscalationMs: 1 }).prepare({
-      config: {
-        name: "codex",
-        description: "codex",
-        harness: "codex",
-        fields: {},
-        systemPrompt: "role",
-      },
-      cwd: "/work",
-      childDepth: 1,
-      projectTrusted: false,
-    });
-    const execute = (prompt: string) =>
-      adapter.prepareRun({ description: prompt, prompt }).execute({
-        report: {
-          message: () => {},
-          transcript: () => {},
-          activity: () => {},
-          stderr: () => {},
-        },
-        controls: controlsFrom(),
-      });
-
-    assert.deepEqual(await execute("seed"), { ending: "answered" });
-    const ending = await execute(`fail: ${failure.name}`);
-    assert.equal(ending.ending, "failed", failure.name);
-    assert.ok(ending.errorMessage?.includes(failure.expected), failure.name);
-    assert.ok((ending.errorMessage?.length ?? 0) <= 1024, failure.name);
-    assert.equal(ending.errorMessage?.includes(THREAD_ID), false, failure.name);
-    assert.equal(spawnCalls, 2, failure.name);
-    assert.deepEqual(
-      methods[1]?.filter(
-        (method) => method === "thread/start" || method === "thread/resume",
-      ),
-      failure.name === "spawn failure" ||
-        failure.name === "initialization failure"
-        ? []
-        : ["thread/resume"],
-      failure.name,
-    );
-    for (const child of children) {
-      assert.equal(child.listenerCount("close"), 0, failure.name);
-      assert.equal(child.stdout.listenerCount("data"), 0, failure.name);
-      assert.equal(child.stderr.listenerCount("data"), 0, failure.name);
-      assert.equal(child.stdin.listenerCount("error"), 0, failure.name);
-    }
-    await adapter.close();
-  }
-});
-
-test("a failed resumed Turn keeps only its partial output and leaks no state into recovery", async () => {
+test("retained Turns isolate reused item state and stale interleaved notifications", async () => {
   const turnIds = ["turn-first", "turn-failed", "turn-recovery"];
-  const children: FakeChild[] = [];
-  const methods: string[][] = [[], [], []];
-  const spawn: ChildProcessSpawn = () => {
-    const attempt = children.length;
-    const turnId = turnIds[attempt] as string;
-    const child = fakeChild((request, current) => {
-      methods[attempt]?.push(String(request.method));
-      if (request.method === "initialize") {
-        send(current, initializeResponse(request.id));
-      } else if (request.method === "thread/start") {
-        send(current, {
-          id: request.id,
-          result: { thread: { id: THREAD_ID, turns: [] } },
-        });
-      } else if (request.method === "thread/resume") {
-        send(current, {
-          id: request.id,
-          result: { thread: { id: THREAD_ID, turns: [] } },
-        });
-      } else if (request.method === "turn/start") {
-        send(current, {
-          id: request.id,
-          result: { turn: { id: turnId, status: "inProgress" } },
-        });
-        if (attempt === 1) {
-          send(
-            current,
-            event("item/agentMessage/delta", {
-              threadId: THREAD_ID,
-              turnId,
-              itemId: "failed-draft",
-              delta: "second-only live activity",
-            }),
-          );
-          send(
-            current,
-            event("item/completed", {
-              threadId: THREAD_ID,
-              turnId,
-              item: {
-                type: "agentMessage",
-                id: "failed-draft",
-                text: "partial second output",
-                phase: "commentary",
-              },
-              completedAtMs: 1,
-            }),
-          );
-          send(
-            current,
-            event("error", {
-              threadId: THREAD_ID,
-              turnId,
-              error: { message: "second-only provider failure" },
-              willRetry: false,
-            }),
-          );
-          current.stderr.write("second-only stderr\n");
-          current.finish(7);
-          return;
-        }
-        const text = attempt === 0 ? "first stable answer" : "recovered answer";
-        send(
-          current,
-          event("item/completed", {
-            threadId: THREAD_ID,
-            turnId,
-            item: {
-              type: "agentMessage",
-              id: `answer-${attempt}`,
-              text,
-              phase: "final_answer",
-            },
-            completedAtMs: 1,
-          }),
-        );
-        send(
-          current,
-          event("turn/completed", {
-            threadId: THREAD_ID,
-            turn: {
-              id: turnId,
-              items: [],
-              status: "completed",
-              error: null,
-              startedAt: null,
-              completedAt: null,
-              durationMs: null,
-            },
-          }),
-        );
-      }
+  const requests: Record<string, unknown>[] = [];
+  let turnIndex = -1;
+  const child = fakeChild((request, current) => {
+    requests.push(request);
+    if (request.method === "initialize") {
+      send(current, initializeResponse(request.id));
+      return;
+    }
+    if (request.method === "thread/start") {
+      send(current, {
+        id: request.id,
+        result: { thread: { id: THREAD_ID, turns: [] } },
+      });
+      return;
+    }
+    if (request.method !== "turn/start") return;
+
+    turnIndex++;
+    const turnId = turnIds[turnIndex] as string;
+    const priorTurnId = turnIds[turnIndex - 1];
+    if (priorTurnId) {
+      for (const stale of [
+        event("item/agentMessage/delta", {
+          threadId: THREAD_ID,
+          turnId: priorTurnId,
+          itemId: "shared-message",
+          delta: "stale message tail",
+        }),
+        event("item/commandExecution/outputDelta", {
+          threadId: THREAD_ID,
+          turnId: priorTurnId,
+          itemId: "shared-command",
+          delta: "stale command tail",
+        }),
+        event("item/reasoning/summaryTextDelta", {
+          threadId: THREAD_ID,
+          turnId: priorTurnId,
+          itemId: "shared-reasoning",
+          delta: "stale reasoning",
+          summaryIndex: 0,
+        }),
+        event("error", {
+          threadId: THREAD_ID,
+          turnId: priorTurnId,
+          error: { message: "stale prior failure" },
+          willRetry: false,
+        }),
+        event("error", {
+          threadId: THREAD_ID,
+          turnId: priorTurnId,
+          error: { message: "stale retry activity" },
+          willRetry: true,
+        }),
+        event("item/completed", {
+          threadId: THREAD_ID,
+          turnId: priorTurnId,
+          item: {
+            type: "agentMessage",
+            id: "stale-completed-message",
+            text: "stale prior output",
+            phase: "final_answer",
+          },
+          completedAtMs: 1,
+        }),
+        event("turn/completed", {
+          threadId: THREAD_ID,
+          turn: {
+            id: priorTurnId,
+            items: [],
+            status: "completed",
+            error: null,
+          },
+        }),
+      ])
+        send(current, stale);
+      send(current, {
+        method: "future/unknown",
+        params: { threadId: THREAD_ID, turnId: priorTurnId },
+      });
+    }
+    send(current, {
+      id: request.id,
+      result: { turn: { id: turnId, status: "inProgress" } },
     });
-    children.push(child);
-    return child as unknown as ChildProcess;
-  };
-  const adapter = createCodexHarness({ spawn, killEscalationMs: 1 }).prepare({
-    config: {
-      name: "codex",
-      description: "codex",
-      harness: "codex",
-      fields: {},
-      systemPrompt: "fixed role",
-    },
+    send(
+      current,
+      event("item/agentMessage/delta", {
+        threadId: "foreign-thread",
+        turnId,
+        itemId: "shared-message",
+        delta: "foreign message tail",
+      }),
+    );
+    send(
+      current,
+      event("item/agentMessage/delta", {
+        threadId: THREAD_ID,
+        turnId,
+        itemId: "shared-message",
+        delta:
+          turnIndex === 0
+            ? "first draft"
+            : turnIndex === 1
+              ? "second draft"
+              : "fresh recovery",
+      }),
+    );
+    if (turnIndex === 0) {
+      send(
+        current,
+        event("item/started", {
+          threadId: THREAD_ID,
+          turnId,
+          item: {
+            type: "commandExecution",
+            id: "shared-command",
+            command: "first-command",
+            cwd: "/work",
+            status: "inProgress",
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: null,
+            commandActions: [],
+          },
+        }),
+      );
+    }
+    send(
+      current,
+      event("item/commandExecution/outputDelta", {
+        threadId: THREAD_ID,
+        turnId,
+        itemId: "shared-command",
+        delta: `${turnIndex === 0 ? "first" : turnIndex === 1 ? "second" : "recovery"} output\n`,
+      }),
+    );
+    send(
+      current,
+      event("item/reasoning/summaryTextDelta", {
+        threadId: THREAD_ID,
+        turnId,
+        itemId: "shared-reasoning",
+        delta: `${turnIndex === 0 ? "first" : turnIndex === 1 ? "second" : "recovery"} reasoning`,
+        summaryIndex: 0,
+      }),
+    );
+
+    const text =
+      turnIndex === 0
+        ? "first stable answer"
+        : turnIndex === 1
+          ? "partial second output"
+          : "recovered answer";
+    send(
+      current,
+      event("item/completed", {
+        threadId: THREAD_ID,
+        turnId,
+        item: {
+          type: "agentMessage",
+          id: "shared-message",
+          text,
+          phase: turnIndex === 1 ? "commentary" : "final_answer",
+        },
+        completedAtMs: 1,
+      }),
+    );
+    if (turnIndex === 1)
+      send(
+        current,
+        event("error", {
+          threadId: THREAD_ID,
+          turnId,
+          error: { message: "second-only provider failure" },
+          willRetry: false,
+        }),
+      );
+    send(
+      current,
+      event("turn/completed", {
+        threadId: THREAD_ID,
+        turn: {
+          id: turnId,
+          items: [],
+          status: turnIndex === 1 ? "failed" : "completed",
+          error: null,
+        },
+      }),
+    );
+  });
+  const session = createCodexAppServerSession({
     cwd: "/work",
     childDepth: 1,
-    projectTrusted: false,
+    spawn: (() => child) as unknown as ChildProcessSpawn,
   });
   const execute = async (prompt: string) => {
     const facts: Parameters<RunReporter["message"]>[0][] = [];
     const activity: Array<string | undefined> = [];
     const stderr: string[] = [];
-    const ending = await adapter
-      .prepareRun({ description: prompt, prompt })
-      .execute({
-        report: {
-          message: (fact) => facts.push(fact),
-          transcript: () => {},
-          activity: (value) => activity.push(value),
-          stderr: (value) => stderr.push(value),
-        },
-        controls: controlsFrom(),
-      });
+    const ending = await session.runNextTurn({
+      prompt,
+      translate: createCodexTranslator("/work"),
+      report: {
+        message: (fact) => facts.push(fact),
+        transcript: () => {},
+        activity: (value) => activity.push(value),
+        stderr: (value) => stderr.push(value),
+      },
+      missingAnswerMessage: "missing answer",
+    });
     return { ending, facts, activity, stderr };
   };
 
   const first = await execute("first");
   const firstSnapshot = structuredClone(first);
   const failed = await execute("fail after partial output");
+  const failedSnapshot = structuredClone(failed);
   const recovered = await execute("recover explicitly");
 
   assert.deepEqual(first, firstSnapshot);
+  assert.deepEqual(failed, failedSnapshot);
   assert.deepEqual(first.ending, { ending: "answered" });
   assert.deepEqual(failed.ending, {
     ending: "failed",
     errorMessage: "second-only provider failure",
   });
-  assert.equal(
-    failed.facts.some((fact) =>
-      fact.parts.some(
-        (part) => part.type === "text" && part.text === "partial second output",
-      ),
-    ),
-    true,
-  );
   assert.deepEqual(recovered.ending, { ending: "answered" });
   assert.deepEqual(
     recovered.facts.filter((fact) => fact.role === "assistant"),
@@ -1651,82 +1811,110 @@ test("a failed resumed Turn keeps only its partial output and leaks no state int
       },
     ],
   );
-  assert.deepEqual(recovered.activity, [undefined]);
-  assert.deepEqual(recovered.stderr, []);
-  assert.equal(JSON.stringify(recovered).includes("second-only"), false);
-  assert.deepEqual(methods, [
-    ["initialize", "initialized", "thread/start", "turn/start"],
-    ["initialize", "initialized", "thread/resume", "turn/start"],
-    ["initialize", "initialized", "thread/resume", "turn/start"],
+  assert.deepEqual(recovered.activity, [
+    "fresh recovery",
+    "recovery output",
+    "recovery reasoning",
+    undefined,
   ]);
-  for (const child of children) {
-    assert.equal(child.listenerCount("close"), 0);
-    assert.equal(child.stdout.listenerCount("data"), 0);
-    assert.equal(child.stderr.listenerCount("data"), 0);
-    assert.equal(child.stdin.listenerCount("error"), 0);
-  }
-  await adapter.close();
+  assert.deepEqual(recovered.stderr, []);
+  assert.equal(
+    JSON.stringify(recovered).includes("first-command") ||
+      JSON.stringify(recovered).includes("stale") ||
+      JSON.stringify(recovered).includes("second-only"),
+    false,
+  );
+  assert.equal(
+    failed.facts.some((fact) =>
+      fact.parts.some(
+        (part) => part.type === "text" && part.text === "partial second output",
+      ),
+    ),
+    true,
+  );
+  assert.deepEqual(
+    requests.map((request) => request.method),
+    [
+      "initialize",
+      "initialized",
+      "thread/start",
+      "turn/start",
+      "turn/start",
+      "turn/start",
+    ],
+  );
+  assert.equal(
+    requests.some((request) => request.method === "thread/resume"),
+    false,
+  );
+
+  await session.close();
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.stdout.listenerCount("data"), 0);
+  assert.equal(child.stderr.listenerCount("data"), 0);
+  assert.equal(child.stdin.listenerCount("error"), 0);
 });
 
-test("resumed steering is current-Turn FIFO and never re-emits prior confirmed guidance", async () => {
+test("retained steering is Turn-local FIFO and disposes prior correlations", async () => {
   const turnIds = ["turn-guided-first", "turn-guided-second"];
-  const children: FakeChild[] = [];
-  const steerParams: Array<Record<string, unknown>[]> = [[], []];
-  const spawn: ChildProcessSpawn = () => {
-    const attempt = children.length;
-    const turnId = turnIds[attempt] as string;
-    const child = fakeChild((request, current) => {
-      if (request.method === "initialize") {
-        send(current, initializeResponse(request.id));
-      } else if (request.method === "thread/start") {
-        send(current, {
-          id: request.id,
-          result: { thread: { id: THREAD_ID, turns: [] } },
-        });
-      } else if (request.method === "thread/resume") {
-        send(current, {
-          id: request.id,
-          result: {
-            thread: {
-              id: THREAD_ID,
-              turns: [
-                {
-                  id: turnIds[0],
-                  status: "completed",
-                  items: [
-                    {
-                      type: "userMessage",
-                      id: "attached-old-guidance",
-                      clientId: "attached-old-correlation",
-                      content: [
-                        {
-                          type: "text",
-                          text: "confirmed first guidance",
-                          text_elements: [],
-                        },
-                      ],
-                    },
-                  ],
-                },
-              ],
-            },
-          },
-        });
-      } else if (request.method === "turn/start") {
-        if (attempt === 1) {
+  const requests: Record<string, unknown>[] = [];
+  const steerRequests: Array<{
+    request: Record<string, unknown>;
+    turnIndex: number;
+  }> = [];
+  const turnStarted: Array<Promise<void>> = [];
+  const resolveTurnStarted: Array<() => void> = [];
+  const steerStarted: Array<Promise<void>> = [];
+  const resolveSteerStarted: Array<() => void> = [];
+  for (let index = 0; index < 2; index++)
+    turnStarted.push(
+      new Promise<void>((resolve) => resolveTurnStarted.push(resolve)),
+    );
+  for (let index = 0; index < 3; index++)
+    steerStarted.push(
+      new Promise<void>((resolve) => resolveSteerStarted.push(resolve)),
+    );
+  let turnIndex = -1;
+  const child = fakeChild((request, current) => {
+    requests.push(request);
+    if (request.method === "initialize") {
+      send(current, initializeResponse(request.id));
+      return;
+    }
+    if (request.method === "thread/start") {
+      send(current, {
+        id: request.id,
+        result: { thread: { id: THREAD_ID, turns: [] } },
+      });
+      return;
+    }
+    if (request.method === "turn/start") {
+      turnIndex++;
+      const turnId = turnIds[turnIndex] as string;
+      send(current, {
+        id: request.id,
+        result: { turn: { id: turnId, status: "inProgress" } },
+      });
+      if (turnIndex === 1) {
+        const priorSteering = steerRequests[0];
+        assert.ok(priorSteering);
+        const priorCorrelation = (
+          priorSteering.request.params as Record<string, unknown>
+        ).clientUserMessageId;
+        for (const staleTurnId of [turnIds[0], turnId])
           send(
             current,
             event("item/completed", {
               threadId: THREAD_ID,
-              turnId: turnIds[0],
+              turnId: staleTurnId,
               item: {
                 type: "userMessage",
-                id: "late-old-guidance",
-                clientId: "attached-old-correlation",
+                id: "confirmed-guidance-reused",
+                clientId: priorCorrelation,
                 content: [
                   {
                     type: "text",
-                    text: "confirmed first guidance",
+                    text: "stale confirmed first guidance",
                     text_elements: [],
                   },
                 ],
@@ -1734,112 +1922,126 @@ test("resumed steering is current-Turn FIFO and never re-emits prior confirmed g
               completedAtMs: 1,
             }),
           );
-        }
-        send(current, {
-          id: request.id,
-          result: { turn: { id: turnId, status: "inProgress" } },
-        });
-      } else if (request.method === "turn/steer") {
-        const params = request.params as Record<string, unknown>;
-        steerParams[attempt]?.push(params);
-        send(current, { id: request.id, result: {} });
-        const input = params.input as Array<Record<string, unknown>>;
-        const text = String(input[0]?.text);
-        send(
-          current,
-          event("item/completed", {
-            threadId: THREAD_ID,
-            turnId,
-            item: {
-              type: "userMessage",
-              id: `confirmed-${attempt}-${steerParams[attempt]?.length}`,
-              clientId: params.clientUserMessageId,
-              content: [
-                {
-                  type: "text",
-                  text: `confirmed ${text}`,
-                  text_elements: [],
-                },
-              ],
-            },
-            completedAtMs: 1,
-          }),
-        );
-        const expected = attempt === 0 ? 1 : 2;
-        if (steerParams[attempt]?.length === expected) {
-          send(
-            current,
-            event("item/completed", {
-              threadId: THREAD_ID,
-              turnId,
-              item: {
-                type: "agentMessage",
-                id: `guided-answer-${attempt}`,
-                text:
-                  attempt === 0
-                    ? "first guided answer"
-                    : "resumed guided answer",
-                phase: "final_answer",
-              },
-              completedAtMs: 1,
-            }),
-          );
-          send(
-            current,
-            event("turn/completed", {
-              threadId: THREAD_ID,
-              turn: {
-                id: turnId,
-                items: [],
-                status: "completed",
-                error: null,
-                startedAt: null,
-                completedAt: null,
-                durationMs: null,
-              },
-            }),
-          );
-        }
       }
-    });
-    children.push(child);
-    return child as unknown as ChildProcess;
-  };
-  const adapter = createCodexHarness({ spawn, killEscalationMs: 1 }).prepare({
-    config: {
-      name: "codex",
-      description: "codex",
-      harness: "codex",
-      fields: {},
-      systemPrompt: "fixed role",
-    },
+      resolveTurnStarted[turnIndex]?.();
+      return;
+    }
+    if (request.method === "turn/steer") {
+      steerRequests.push({ request, turnIndex });
+      resolveSteerStarted[steerRequests.length - 1]?.();
+    }
+  });
+  const session = createCodexAppServerSession({
     cwd: "/work",
     childDepth: 1,
-    projectTrusted: false,
+    spawn: (() => child) as unknown as ChildProcessSpawn,
   });
-  const execute = async (prompt: string, controls: string[]) => {
+  const startTurn = (prompt: string) => {
     const facts: Parameters<RunReporter["message"]>[0][] = [];
-    const ending = await adapter
-      .prepareRun({ description: prompt, prompt })
-      .execute({
-        report: {
-          message: (fact) => facts.push(fact),
-          transcript: () => {},
-          activity: () => {},
-          stderr: () => {},
+    const controls = createControlSource();
+    const ending = session.runNextTurn({
+      prompt,
+      translate: createCodexTranslator("/work"),
+      report: {
+        message: (fact) => facts.push(fact),
+        transcript: () => {},
+        activity: () => {},
+        stderr: () => {},
+      },
+      controls: controls.controls,
+      missingAnswerMessage: "missing answer",
+    });
+    return { ending, facts, controls };
+  };
+  const settleSteer = (
+    steerIndex: number,
+    confirmedText: string,
+    itemId: string,
+  ): void => {
+    const steering = steerRequests[steerIndex];
+    assert.ok(steering);
+    const params = steering.request.params as Record<string, unknown>;
+    send(child, { id: steering.request.id, result: {} });
+    send(
+      child,
+      event("item/completed", {
+        threadId: THREAD_ID,
+        turnId: turnIds[steering.turnIndex],
+        item: {
+          type: "userMessage",
+          id: itemId,
+          clientId: params.clientUserMessageId,
+          content: [{ type: "text", text: confirmedText, text_elements: [] }],
         },
-        controls: controlsFrom(
-          ...controls.map((text): RunControl => ({ type: "steer", text })),
-        ),
-      });
-    return { ending, facts };
+        completedAtMs: 1,
+      }),
+    );
+  };
+  const completeTurn = (index: number): void => {
+    const turnId = turnIds[index] as string;
+    send(
+      child,
+      event("item/completed", {
+        threadId: THREAD_ID,
+        turnId,
+        item: {
+          type: "agentMessage",
+          id: `guided-answer-${index}`,
+          text: index === 0 ? "first guided answer" : "second guided answer",
+          phase: "final_answer",
+        },
+        completedAtMs: 1,
+      }),
+    );
+    send(
+      child,
+      event("turn/completed", {
+        threadId: THREAD_ID,
+        turn: { id: turnId, items: [], status: "completed", error: null },
+      }),
+    );
   };
 
-  const first = await execute("first", ["first guidance"]);
-  const second = await execute("second", ["second guidance", "third guidance"]);
+  const first = startTurn("first");
+  await turnStarted[0];
+  assert.equal(
+    first.controls.offer({ type: "steer", text: "first guidance" }),
+    "accepted",
+  );
+  await steerStarted[0];
+  settleSteer(0, "confirmed first guidance", "confirmed-guidance-reused");
+  completeTurn(0);
+  assert.deepEqual(await first.ending, { ending: "answered" });
+  assert.equal(
+    first.controls.offer({ type: "steer", text: "too late for first" }),
+    "closed",
+  );
+  const firstSnapshot = structuredClone(first.facts);
 
-  assert.deepEqual(first.ending, { ending: "answered" });
-  assert.deepEqual(second.ending, { ending: "answered" });
+  const second = startTurn("second");
+  await turnStarted[1];
+  assert.equal(
+    second.controls.offer({ type: "steer", text: "second guidance" }),
+    "accepted",
+  );
+  assert.equal(
+    second.controls.offer({ type: "steer", text: "third guidance" }),
+    "accepted",
+  );
+  await steerStarted[1];
+  assert.equal(steerRequests.length, 2);
+  settleSteer(1, "confirmed second guidance", "confirmed-guidance-reused");
+  await steerStarted[2];
+  assert.equal(steerRequests.length, 3);
+  settleSteer(2, "confirmed third guidance", "confirmed-third-guidance");
+  completeTurn(1);
+
+  assert.deepEqual(await second.ending, { ending: "answered" });
+  assert.deepEqual(first.facts, firstSnapshot);
+  assert.equal(
+    second.controls.offer({ type: "steer", text: "too late for second" }),
+    "closed",
+  );
   assert.deepEqual(
     second.facts
       .filter((fact) => fact.role === "user")
@@ -1849,39 +2051,67 @@ test("resumed steering is current-Turn FIFO and never re-emits prior confirmed g
   );
   assert.equal(JSON.stringify(second.facts).includes("first guidance"), false);
   assert.deepEqual(
-    steerParams.map((attempt) =>
-      attempt.map((params) => ({
+    steerRequests.map(({ request, turnIndex: index }) => {
+      const params = request.params as Record<string, unknown>;
+      return {
         threadId: params.threadId,
         expectedTurnId: params.expectedTurnId,
         text: (params.input as Array<Record<string, unknown>>)[0]?.text,
-      })),
-    ),
+        turnIndex: index,
+      };
+    }),
     [
-      [
-        {
-          threadId: THREAD_ID,
-          expectedTurnId: turnIds[0],
-          text: "first guidance",
-        },
-      ],
-      [
-        {
-          threadId: THREAD_ID,
-          expectedTurnId: turnIds[1],
-          text: "second guidance",
-        },
-        {
-          threadId: THREAD_ID,
-          expectedTurnId: turnIds[1],
-          text: "third guidance",
-        },
-      ],
+      {
+        threadId: THREAD_ID,
+        expectedTurnId: turnIds[0],
+        text: "first guidance",
+        turnIndex: 0,
+      },
+      {
+        threadId: THREAD_ID,
+        expectedTurnId: turnIds[1],
+        text: "second guidance",
+        turnIndex: 1,
+      },
+      {
+        threadId: THREAD_ID,
+        expectedTurnId: turnIds[1],
+        text: "third guidance",
+        turnIndex: 1,
+      },
     ],
   );
-  await adapter.close();
+  const correlations = steerRequests.map(
+    ({ request }) =>
+      (request.params as Record<string, unknown>).clientUserMessageId,
+  );
+  assert.equal(new Set(correlations).size, 3);
+  assert.deepEqual(
+    requests.map((request) => request.method),
+    [
+      "initialize",
+      "initialized",
+      "thread/start",
+      "turn/start",
+      "turn/steer",
+      "turn/start",
+      "turn/steer",
+      "turn/steer",
+    ],
+  );
+  assert.equal(
+    requests.some((request) => request.method === "thread/resume"),
+    false,
+  );
+
+  await session.close();
+  assert.equal(child.listenerCount("close"), 0);
+  assert.equal(child.stdout.listenerCount("data"), 0);
+  assert.equal(child.stderr.listenerCount("data"), 0);
+  assert.equal(child.stdin.listenerCount("error"), 0);
 });
 
-test("cancelling a resumed Turn interrupts only that Turn and preserves partial output", async () => {
+test("cancelling an active Turn interrupts only that Turn and preserves partial output", async () => {
   const controller = new AbortController();
   const facts: Parameters<RunReporter["message"]>[0][] = [];
   const stderr: string[] = [];
@@ -1894,7 +2124,7 @@ test("cancelling a resumed Turn interrupts only that Turn and preserves partial 
   const child = fakeChild((request, current) => {
     if (request.method === "initialize") {
       send(current, initializeResponse(request.id));
-    } else if (request.method === "thread/resume") {
+    } else if (request.method === "thread/start") {
       send(current, {
         id: request.id,
         result: { thread: { id: THREAD_ID } },
@@ -1963,7 +2193,6 @@ test("cancelling a resumed Turn interrupts only that Turn and preserves partial 
     cwd: "/work",
     childDepth: 1,
     prompt: "resumed prompt",
-    continuationThreadId: THREAD_ID,
     spawn: (() => child) as unknown as ChildProcessSpawn,
     killEscalationMs: 1,
     translate: createCodexTranslator("/work"),
@@ -2757,55 +2986,274 @@ test("Codex command output deltas surface the latest meaningful line", () => {
   assert.equal((long?.activity?.length ?? 0) <= 120, true);
 });
 
-test("Codex folds cumulative usage updates exactly once", () => {
-  const translate = createCodexTranslator("/work");
-  const make = (total: Record<string, number>): CodexAppServerEvent =>
-    event("thread/tokenUsage/updated", {
-      threadId: THREAD_ID,
-      turnId: TURN_ID,
-      tokenUsage: { total, last: total },
-    });
-  const first = translate(
-    make({
-      totalTokens: 10,
-      inputTokens: 7,
-      cachedInputTokens: 2,
-      cacheWriteInputTokens: 1,
-      outputTokens: 2,
-      reasoningOutputTokens: 1,
-    }),
-  );
-  const second = translate(
-    make({
-      totalTokens: 25,
-      inputTokens: 15,
-      cachedInputTokens: 5,
-      cacheWriteInputTokens: 2,
-      outputTokens: 6,
-      reasoningOutputTokens: 2,
-    }),
-  );
-  assert.deepEqual(
-    [first?.facts?.[0]?.usage, second?.facts?.[0]?.usage],
+test("one retained App Server owns cumulative usage while fresh Turn translators report local deltas", async () => {
+  const totals = [
     [
       {
-        input: 7,
+        totalTokens: 10,
+        inputTokens: 6,
+        cachedInputTokens: 2,
+        cacheWriteInputTokens: 1,
+        outputTokens: 1,
+        reasoningOutputTokens: 1,
+        contextTokens: 8,
+      },
+      {
+        totalTokens: 16,
+        inputTokens: 10,
+        cachedInputTokens: 3,
+        cacheWriteInputTokens: 1,
+        outputTokens: 2,
+        reasoningOutputTokens: 1,
+        contextTokens: 12,
+      },
+    ],
+    [
+      {
+        totalTokens: 22,
+        inputTokens: 14,
+        cachedInputTokens: 4,
+        cacheWriteInputTokens: 2,
+        outputTokens: 3,
+        reasoningOutputTokens: 1,
+        contextTokens: 9,
+      },
+    ],
+    [
+      {
+        totalTokens: 5,
+        inputTokens: 3,
+        cachedInputTokens: 1,
+        cacheWriteInputTokens: 0,
+        outputTokens: 1,
+        reasoningOutputTokens: 0,
+        contextTokens: 5,
+      },
+    ],
+    [
+      {
+        totalTokens: 9,
+        inputTokens: 5,
+        cachedInputTokens: 1,
+        cacheWriteInputTokens: 0,
+        outputTokens: 3,
+        reasoningOutputTokens: 0,
+        contextTokens: 6,
+      },
+    ],
+  ] as const;
+  const requests: Record<string, unknown>[] = [];
+  let turnNumber = 0;
+  const child = fakeChild((request, current) => {
+    requests.push(request);
+    if (request.method === "initialize")
+      send(current, initializeResponse(request.id));
+    if (request.method === "thread/start")
+      send(current, {
+        id: request.id,
+        result: { thread: { id: THREAD_ID, turns: [] } },
+      });
+    if (request.method !== "turn/start") return;
+
+    turnNumber++;
+    const turnId = `retained-turn-${turnNumber}`;
+    if (turnNumber > 1) {
+      send(
+        current,
+        event("thread/tokenUsage/updated", {
+          threadId: THREAD_ID,
+          turnId: `retained-turn-${turnNumber - 1}`,
+          tokenUsage: {
+            total: {
+              totalTokens: 999,
+              inputTokens: 999,
+              cachedInputTokens: 999,
+              cacheWriteInputTokens: 999,
+              outputTokens: 999,
+              reasoningOutputTokens: 999,
+            },
+            last: {
+              totalTokens: 999,
+              inputTokens: 999,
+              cachedInputTokens: 999,
+              cacheWriteInputTokens: 999,
+              outputTokens: 999,
+              reasoningOutputTokens: 999,
+            },
+          },
+        }),
+      );
+    }
+    send(current, {
+      id: request.id,
+      result: { turn: { id: turnId, status: "inProgress" } },
+    });
+    send(
+      current,
+      event("thread/tokenUsage/updated", {
+        threadId: "foreign-thread",
+        turnId,
+        tokenUsage: {
+          total: {
+            totalTokens: 777,
+            inputTokens: 777,
+            cachedInputTokens: 777,
+            cacheWriteInputTokens: 777,
+            outputTokens: 777,
+            reasoningOutputTokens: 777,
+          },
+          last: {
+            totalTokens: 777,
+            inputTokens: 777,
+            cachedInputTokens: 777,
+            cacheWriteInputTokens: 777,
+            outputTokens: 777,
+            reasoningOutputTokens: 777,
+          },
+        },
+      }),
+    );
+    for (const update of totals[turnNumber - 1] ?? []) {
+      const { contextTokens, ...total } = update;
+      send(
+        current,
+        event("thread/tokenUsage/updated", {
+          threadId: THREAD_ID,
+          turnId,
+          tokenUsage: {
+            total,
+            last: { ...total, totalTokens: contextTokens },
+          },
+        }),
+      );
+    }
+    send(
+      current,
+      event("item/completed", {
+        threadId: THREAD_ID,
+        turnId,
+        item: {
+          type: "agentMessage",
+          id: `answer-${turnNumber}`,
+          text: `answer ${turnNumber}`,
+          phase: "final_answer",
+        },
+        completedAtMs: turnNumber,
+      }),
+    );
+    send(
+      current,
+      event("turn/completed", {
+        threadId: THREAD_ID,
+        turn: {
+          id: turnId,
+          items: [],
+          status: "completed",
+          error: null,
+        },
+      }),
+    );
+  });
+  const session = createCodexAppServerSession({
+    cwd: "/work",
+    childDepth: 1,
+    spawn: (() => child) as unknown as ChildProcessSpawn,
+  });
+  const observedUsage: Array<
+    Array<NonNullable<Parameters<RunReporter["message"]>[0]["usage"]>>
+  > = [];
+
+  for (let index = 0; index < totals.length; index++) {
+    const usage: Array<
+      NonNullable<Parameters<RunReporter["message"]>[0]["usage"]>
+    > = [];
+    assert.deepEqual(
+      await session.runNextTurn({
+        prompt: `prompt ${index + 1}`,
+        translate: createCodexTranslator("/work"),
+        report: {
+          message: (fact) => {
+            if (fact.usage?.turns === 1) usage.push(fact.usage);
+          },
+          transcript: () => {},
+          activity: () => {},
+          stderr: () => {},
+        },
+        missingAnswerMessage: "missing answer",
+      }),
+      { ending: "answered" },
+    );
+    observedUsage.push(usage);
+  }
+
+  assert.deepEqual(observedUsage, [
+    [
+      {
+        input: 6,
         cacheRead: 2,
         cacheWrite: 1,
-        output: 3,
-        contextTokens: 10,
+        output: 2,
+        contextTokens: 8,
         turns: 1,
       },
       {
-        input: 8,
-        cacheRead: 3,
-        cacheWrite: 1,
-        output: 5,
-        contextTokens: 25,
+        input: 4,
+        cacheRead: 1,
+        cacheWrite: 0,
+        output: 1,
+        contextTokens: 12,
         turns: 1,
       },
     ],
+    [
+      {
+        input: 4,
+        cacheRead: 1,
+        cacheWrite: 1,
+        output: 1,
+        contextTokens: 9,
+        turns: 1,
+      },
+    ],
+    [
+      {
+        input: 3,
+        cacheRead: 1,
+        cacheWrite: 0,
+        output: 1,
+        contextTokens: 5,
+        turns: 1,
+      },
+    ],
+    [
+      {
+        input: 2,
+        cacheRead: 0,
+        cacheWrite: 0,
+        output: 2,
+        contextTokens: 6,
+        turns: 1,
+      },
+    ],
+  ]);
+  assert.equal(
+    requests.filter((request) => request.method === "initialize").length,
+    1,
   );
+  assert.equal(
+    requests.filter((request) => request.method === "thread/start").length,
+    1,
+  );
+  assert.equal(
+    requests.filter((request) => request.method === "turn/start").length,
+    4,
+  );
+  assert.equal(
+    requests.some((request) => request.method === "thread/resume"),
+    false,
+  );
+
+  await session.close();
 });
 
 test("Codex retryable errors are activity; fatal errors are facts", () => {

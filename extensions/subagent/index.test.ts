@@ -594,7 +594,7 @@ test("agent_resume starts a distinct Run with retained private Harness context",
   assert.equal(boundary.active.length, 3);
 });
 
-test("public tools retain a Codex Conversation across disposable Attempts with independent Results", async () => {
+test("public tools retain one ephemeral Codex session across independent Results", async () => {
   interface CodexFixtureChild extends EventEmitter {
     stdin: PassThrough;
     stdout: PassThrough;
@@ -606,17 +606,16 @@ test("public tools retain a Codex Conversation across disposable Attempts with i
 
   const providerThreadId = "provider-thread-secret";
   const providerTurnIds = ["provider-turn-first", "provider-turn-second"];
-  const providerRequests: Record<string, unknown>[][] = [[], []];
+  const providerRequests: Record<string, unknown>[] = [];
   const children: CodexFixtureChild[] = [];
   const order: string[] = [];
   let retainedMarker: string | undefined;
+  let turnNumber = 0;
   const sendProvider = (child: CodexFixtureChild, value: unknown): void => {
     child.stdout.write(`${JSON.stringify(value)}\n`);
   };
   const spawn: ChildProcessSpawn = (_command, args, options) => {
-    const attempt = children.length;
-    const turnId = providerTurnIds[attempt];
-    assert.ok(turnId, "unexpected extra Codex Attempt");
+    assert.equal(children.length, 0, "one Subagent owns one App Server");
     assert.deepEqual(args, ["app-server"]);
     assert.equal(options.cwd, "/fixed/project");
     assert.equal(options.env?.PI_SUBAGENT_DEPTH, "1");
@@ -646,8 +645,8 @@ test("public tools retain a Codex Conversation across disposable Attempts with i
       for (const line of String(chunk).split("\n")) {
         if (!line.trim()) continue;
         const request = JSON.parse(line) as Record<string, unknown>;
-        providerRequests[attempt]?.push(request);
-        order.push(`${attempt + 1}:${String(request.method)}`);
+        providerRequests.push(request);
+        order.push(`1:${String(request.method)}`);
         if (request.method === "initialize") {
           sendProvider(child, {
             id: request.id,
@@ -663,35 +662,15 @@ test("public tools retain a Codex Conversation across disposable Attempts with i
             id: request.id,
             result: { thread: { id: providerThreadId, turns: [] } },
           });
-        } else if (request.method === "thread/resume") {
-          sendProvider(child, {
-            id: request.id,
-            result: {
-              thread: {
-                id: providerThreadId,
-                turns: [
-                  {
-                    id: providerTurnIds[0],
-                    items: [
-                      {
-                        type: "agentMessage",
-                        id: "attached-provider-item",
-                        text: "first public answer",
-                        phase: "final_answer",
-                      },
-                    ],
-                    status: "completed",
-                  },
-                ],
-              },
-            },
-          });
         } else if (request.method === "turn/start") {
+          turnNumber++;
+          const turnId = providerTurnIds[turnNumber - 1];
+          assert.ok(turnId, "unexpected extra Codex Turn");
           const params = request.params as Record<string, unknown>;
           const input = params.input as Array<Record<string, unknown>>;
           const prompt = input[0]?.text;
           assert.equal(typeof prompt, "string");
-          if (attempt === 0) {
+          if (turnNumber === 1) {
             retainedMarker = String(prompt).match(/remember (\w+)/)?.[1];
           } else {
             assert.equal(prompt, "recall the marker");
@@ -701,7 +680,7 @@ test("public tools retain a Codex Conversation across disposable Attempts with i
             result: { turn: { id: turnId, status: "inProgress" } },
           });
           const answer =
-            attempt === 0
+            turnNumber === 1
               ? "first public answer"
               : `retained marker: ${retainedMarker ?? "missing"}`;
           sendProvider(child, {
@@ -711,7 +690,7 @@ test("public tools retain a Codex Conversation across disposable Attempts with i
               turnId,
               item: {
                 type: "agentMessage",
-                id: `provider-item-${attempt + 1}`,
+                id: `provider-item-${turnNumber}`,
                 text: answer,
                 phase: "final_answer",
               },
@@ -737,7 +716,7 @@ test("public tools retain a Codex Conversation across disposable Attempts with i
       }
     });
     children.push(child);
-    order.push(`spawn-${attempt + 1}`);
+    order.push("spawn-1");
     return child as unknown as ChildProcess;
   };
 
@@ -846,25 +825,54 @@ test("public tools retain a Codex Conversation across disposable Attempts with i
     "1:initialized",
     "1:thread/start",
     "1:turn/start",
-    "spawn-2",
-    "2:initialize",
-    "2:initialized",
-    "2:thread/resume",
-    "2:turn/start",
+    "1:turn/start",
   ]);
+  assert.deepEqual(providerRequests[2]?.params, {
+    cwd: "/fixed/project",
+    ephemeral: true,
+    approvalPolicy: "never",
+    sandbox: "danger-full-access",
+  });
   const publicState = JSON.stringify({ first, second, pushed });
   assert.doesNotMatch(
     publicState,
     /provider-thread-secret|provider-turn|provider-item|attached-provider/,
   );
+  assert.equal(children.length, 1);
+  assert.equal(children[0]?.stdin.writableEnded, false);
+  assert.equal(children[0]?.listenerCount("close"), 1);
+  assert.equal(children[0]?.stdout.listenerCount("data"), 1);
+
+  children[0]?.emit(
+    "error",
+    new Error(
+      "idle loss provider-thread-secret provider-turn-second provider-item-2",
+    ),
+  );
+  const afterLoss = await tools.agent_resume.execute("resume-lost", {
+    id: "subagent-codex",
+    description: "must not replace context",
+    prompt: "must not start",
+  });
+  assert.match(afterLoss.content[0].text, /does not support resume/);
+  assert.doesNotMatch(
+    afterLoss.content[0].text,
+    /provider-thread-secret|provider-turn|provider-item/,
+  );
+  assert.equal(children.length, 1);
+  assert.equal(
+    providerRequests.filter((request) => request.method === "turn/start")
+      .length,
+    2,
+  );
+
+  await events.session_shutdown?.({ reason: "new" });
   for (const child of children) {
     assert.equal(child.listenerCount("close"), 0);
     assert.equal(child.stdout.listenerCount("data"), 0);
     assert.equal(child.stderr.listenerCount("data"), 0);
     assert.equal(child.stdin.listenerCount("error"), 0);
   }
-
-  await events.session_shutdown?.({ reason: "new" });
   assert.equal(delivery.result("run-codex-first"), undefined);
   assert.equal(delivery.result("run-codex-second"), undefined);
   const afterShutdown = await tools.agent_resume.execute("resume-closed", {
@@ -873,7 +881,7 @@ test("public tools retain a Codex Conversation across disposable Attempts with i
     prompt: "must not attach",
   });
   assert.match(afterShutdown.content[0].text, /unknown Subagent/);
-  assert.equal(children.length, 2);
+  assert.equal(children.length, 1);
 });
 
 test("agent_resume has one synchronous winner and never queues behind settlement", async () => {

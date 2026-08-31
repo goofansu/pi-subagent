@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -243,52 +244,60 @@ function codexFixture() {
     openCancellation = resolve;
   });
   let marker: string | undefined;
-  let attempt = 0;
+  let turnNumber = 0;
+  let activeTurnId: string | undefined;
+  let spawnCount = 0;
   const spawn: ChildProcessSpawn = () => {
-    const currentAttempt = attempt++;
-    observed.executionStarted();
+    spawnCount++;
+    assert.equal(spawnCount, 1, "managed Codex must retain one App Server");
     const threadId = "managed-provider-thread";
-    const turnId = `managed-provider-turn-${currentAttempt + 1}`;
     const child = fakeChild((request, current) => {
       if (request.method === "initialize") {
         send(current, initializeResponse(request.id));
-      } else if (request.method === "thread/start") {
+        return;
+      }
+      if (request.method === "thread/start") {
         send(current, { id: request.id, result: { thread: { id: threadId } } });
-      } else if (request.method === "thread/resume") {
-        send(current, { id: request.id, result: { thread: { id: threadId } } });
-      } else if (request.method === "turn/start") {
+        return;
+      }
+      if (request.method === "turn/start") {
+        observed.executionStarted();
+        turnNumber++;
+        activeTurnId = `managed-provider-turn-${turnNumber}`;
         const input = (request.params as { input: Array<{ text: string }> })
           .input;
         const prompt = input[0]?.text ?? "";
         const remembered = prompt.match(/remember (\S+)/)?.[1];
         if (remembered) marker = remembered;
         const text =
-          currentAttempt === 0
+          turnNumber === 1
             ? "first Codex answer"
             : `Codex retained marker: ${marker ?? "missing"}`;
         send(current, {
           id: request.id,
-          result: { turn: { id: turnId, status: "inProgress" } },
+          result: {
+            turn: { id: activeTurnId, status: "inProgress" },
+          },
         });
-        const inputTokens =
-          currentAttempt === 0 ? 11 : currentAttempt === 2 ? 5 : 3;
+        const cumulativeInput = [11, 14, 19, 22][turnNumber - 1];
+        assert.ok(cumulativeInput);
         send(current, {
           method: "thread/tokenUsage/updated",
           params: {
             threadId,
-            turnId,
+            turnId: activeTurnId,
             tokenUsage: {
               total: {
-                totalTokens: inputTokens,
-                inputTokens,
+                totalTokens: cumulativeInput,
+                inputTokens: cumulativeInput,
                 cachedInputTokens: 0,
                 cacheWriteInputTokens: 0,
                 outputTokens: 0,
                 reasoningOutputTokens: 0,
               },
               last: {
-                totalTokens: inputTokens,
-                inputTokens,
+                totalTokens: cumulativeInput,
+                inputTokens: cumulativeInput,
                 cachedInputTokens: 0,
                 cacheWriteInputTokens: 0,
                 outputTokens: 0,
@@ -303,10 +312,10 @@ function codexFixture() {
             method: "item/completed",
             params: {
               threadId,
-              turnId,
+              turnId: activeTurnId,
               item: {
                 type: "agentMessage",
-                id: `managed-partial-${currentAttempt + 1}`,
+                id: `managed-partial-${turnNumber}`,
                 text: "Codex partial before cancellation",
                 phase: "commentary",
               },
@@ -320,10 +329,10 @@ function codexFixture() {
           method: "item/completed",
           params: {
             threadId,
-            turnId,
+            turnId: activeTurnId,
             item: {
               type: "agentMessage",
-              id: `managed-answer-${currentAttempt + 1}`,
+              id: `managed-answer-${turnNumber}`,
               text,
               phase: "final_answer",
             },
@@ -334,27 +343,36 @@ function codexFixture() {
           method: "turn/completed",
           params: {
             threadId,
-            turn: { id: turnId, items: [], status: "completed", error: null },
+            turn: {
+              id: activeTurnId,
+              items: [],
+              status: "completed",
+              error: null,
+            },
           },
         });
-      } else if (request.method === "turn/interrupt") {
+        observed.executionSettled();
+        return;
+      }
+      if (request.method === "turn/interrupt") {
+        assert.ok(activeTurnId);
         send(current, { id: request.id, result: {} });
         send(current, {
           method: "turn/completed",
           params: {
             threadId,
             turn: {
-              id: turnId,
+              id: activeTurnId,
               items: [],
               status: "interrupted",
               error: null,
             },
           },
         });
+        observed.executionSettled();
       }
     });
     child.stdin.on("finish", () => child.finish(0));
-    child.once("close", () => observed.executionSettled());
     return child as unknown as ChildProcess;
   };
   const harness = observeAdapterClose(

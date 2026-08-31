@@ -264,13 +264,13 @@ comments and ordinary string literals are not.
   method is safely ignored, and an unrecognized server-to-client request is
   refused with a JSON-RPC method-not-found error — neither can fail the run,
   because the protocol carries many more notification variants than this
-  adapter consumes. The contract snapshot is vendored in
-  `docs/codex-protocol/`, including the generated `thread/resume` response
-  whose historical Turns remain unconsumed attachment data; when the codex
-  CLI moves, re-verify via the
-  `codex-upgrade` skill (`.agents/skills/codex-upgrade/SKILL.md`), which
-  diffs the regenerated schema and runs the live smoke in
-  `scripts/codex-live-smoke.mjs`. *Test:* the App Server transport tests
+  adapter consumes. The request and notification unions are vendored in
+  `docs/codex-protocol/`; the no-quota check also inspects generated ephemeral
+  `thread/start`, pathless Thread response, Turn identity, stored-thread
+  inspection, and consumed notification shapes. When the codex CLI moves,
+  re-verify via the `codex-upgrade` skill
+  (`.agents/skills/codex-upgrade/SKILL.md`), which diffs the regenerated schema
+  and runs both authenticated Codex smokes. *Test:* the App Server transport tests
   forward schema-minimum notifications — no envelope timestamp, sparse
   optional fields, a turn carrying an unknown item type — and drop unknown
   notification methods while refusing unsupported server requests.
@@ -296,15 +296,21 @@ comments and ordinary string literals are not.
   `CODEX_STEERING_LIVE_SMOKE_PASS`, and cleans up on every exit path. Run
   `npm run check` for the local quality gates and `npm run release:check` for
   the quota-spending final gate.
-- [x] **Codex resume has one release gate** — the installed pinned CLI's
-  generated request, notification, and `thread/resume` response artifacts are
-  byte-checked; per-Run and managed conformance are green; deterministic
-  public and transport races repeat; and the authenticated resume smoke starts
-  one Subagent, waits for its first Attempt to be disposed, resumes through a
-  fresh Attempt without replaying its unique marker, retrieves both immutable
-  Results, observes both notifications, rejects provider identity at the
-  public boundary, and prints `CODEX_RESUME_LIVE_SMOKE_PASS`. The existing
-  steering/interruption smoke remains a separate required proof.
+- [ ] **Codex resume has one release gate** — pending authenticated smoke and
+  recorded Desktop-coexistence evidence for the pinned release. The installed
+  pinned CLI's generated request and notification unions are byte-checked,
+  while generated response shapes are structurally checked for ephemeral
+  pathlessness and Turn identity; per-Run and managed conformance are green;
+  deterministic public and transport races repeat; and the authenticated
+  resume smoke starts one Subagent, retains one App Server while idle, runs two
+  Turns on one ephemeral pathless root without marker replay or
+  `thread/resume`, rejects list/read from a second App Server, retrieves both
+  immutable Results, observes both notifications, confines provider identity,
+  proves process-tree cleanup, and prints `CODEX_RESUME_LIVE_SMOKE_PASS`. The
+  existing steering/interruption smoke and recorded Desktop-coexistence
+  procedure remain separate required proofs. Check this item only after both
+  live records exist; deterministic coverage alone does not complete this
+  release gate.
 - [x] **Pi managed steering and resume have one release gate** — production
   uses a retained, in-process, memory-only `AgentSession` with normal resource
   loading, headless binding, project trust, self-filtering, orchestration-tool
