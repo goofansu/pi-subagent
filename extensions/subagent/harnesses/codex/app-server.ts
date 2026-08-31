@@ -271,10 +271,6 @@ export interface CodexAppServerSession {
   close(): Promise<void>;
 }
 
-interface CodexAppServerRunOptions extends CodexAppServerTurnOptions {
-  readonly connection: CodexAppServerConnection;
-}
-
 function isRecord(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -713,18 +709,28 @@ function correlatedSteeringFact(
     : undefined;
 }
 
-type CodexRunOccurrence =
-  | { readonly type: "provider-message"; readonly value: JsonObject }
-  | { readonly type: "control"; readonly admission: ControlAdmission }
-  | { readonly type: "control-source-close" }
-  | { readonly type: "steering-settled" }
-  | { readonly type: "cancel" }
+interface CodexTransportMessage {
+  consume(): CodexAppServerEvent | string | undefined;
+}
+
+type CodexTransportOccurrence =
+  | {
+      readonly type: "provider-message";
+      readonly message: CodexTransportMessage;
+    }
   | { readonly type: "stderr"; readonly chunk: string }
   | { readonly type: "stdin-error"; readonly error: Error }
   | { readonly type: "stdin-write-error"; readonly error: Error }
   | { readonly type: "process-error"; readonly error: Error }
   | { readonly type: "process-close"; readonly code: number | null }
   | { readonly type: "escalation"; readonly stage: "SIGTERM" | "SIGKILL" };
+
+type CodexRunOccurrence =
+  | CodexTransportOccurrence
+  | { readonly type: "control"; readonly admission: ControlAdmission }
+  | { readonly type: "control-source-close" }
+  | { readonly type: "steering-settled" }
+  | { readonly type: "cancel" };
 
 interface OrderedOccurrence {
   readonly sequence: number;
@@ -741,8 +747,8 @@ type CodexProcessConclusion =
   | { readonly status: "clean" }
   | { readonly status: "failed"; readonly errorMessage?: string };
 
-interface CodexProcessObserver {
-  readonly admit: (occurrence: CodexRunOccurrence) => void;
+interface CodexTransportObserver {
+  readonly admit: (occurrence: CodexTransportOccurrence) => void;
   readonly beginFrame: () => void;
   readonly endFrame: () => void;
 }
@@ -751,13 +757,57 @@ type ProcessStartResult =
   | { readonly status: "ready" }
   | { readonly status: "failed"; readonly errorMessage: string };
 
+interface CodexTransportTurn {
+  steer(
+    text: string,
+    clientUserMessageId: string,
+    accept: () => void,
+    reject: (error: Error) => void,
+  ): void;
+  matches(event: CodexAppServerEvent): boolean;
+  interrupt(): void;
+  completeInterruption(): void;
+}
+
+interface CodexAppServerTransport {
+  readonly continuationAvailable: boolean;
+  readonly hasIssuedTurn: boolean;
+  readonly stdoutTail: string;
+  beginTurn(): void;
+  attach(observer: CodexTransportObserver): void;
+  detach(observer: CodexTransportObserver): void;
+  start(): ProcessStartResult;
+  startTurn(
+    prompt: string,
+    accept: (turn: CodexTransportTurn) => void,
+    reject: (error: Error) => void,
+  ): void;
+  normalizeTurnUsage(
+    tokenUsage: ThreadTokenUsage,
+    allowBaselineReset: boolean,
+  ): ThreadTokenUsage;
+  redactDiagnostic(
+    value: string,
+    additionalIdentities?: ReadonlySet<string>,
+  ): string;
+  rejectPending(error: Error): void;
+  terminate(): void;
+  escalate(stage: "SIGTERM" | "SIGKILL"): void;
+  close(): Promise<void>;
+}
+
+interface CodexAppServerRunOptions extends CodexAppServerTurnOptions {
+  readonly connection: CodexAppServerTransport;
+}
+
 /** Process-scoped state retained by one App Server session. */
-class CodexAppServerConnection {
+class CodexAppServerConnection implements CodexAppServerTransport {
   private proc: ChildProcess | undefined;
-  private observer: CodexProcessObserver | undefined;
+  private observer: CodexTransportObserver | undefined;
   private nextRequestId = 1;
   private readonly pending = new Map<number, PendingRequest>();
   private rootThreadId: string | undefined;
+  private currentTurnId: string | undefined;
   private issuedTurn = false;
   private initialized = false;
   private terminal = false;
@@ -794,15 +844,16 @@ class CodexAppServerConnection {
     return this.issuedTurn;
   }
 
-  beginRunDiagnostics(): void {
+  beginTurn(): void {
     this.rawStdoutTail = "";
+    this.currentTurnId = undefined;
   }
 
-  attach(observer: CodexProcessObserver): void {
+  attach(observer: CodexTransportObserver): void {
     this.observer = observer;
   }
 
-  detach(observer: CodexProcessObserver): void {
+  detach(observer: CodexTransportObserver): void {
     if (this.observer === observer) this.observer = undefined;
   }
 
@@ -885,8 +936,70 @@ class CodexAppServerConnection {
     );
   }
 
-  addSessionIdentities(identities: Set<string>): void {
-    if (this.rootThreadId) identities.add(this.rootThreadId);
+  startTurn(
+    prompt: string,
+    accept: (turn: CodexTransportTurn) => void,
+    reject: (error: Error) => void,
+  ): void {
+    this.ensureThread((threadId) => {
+      this.sendRequest(
+        "turn/start",
+        turnStartParams(threadId, prompt),
+        (turn) => {
+          if (
+            !isRecord(turn) ||
+            !isRecord(turn.turn) ||
+            typeof turn.turn.id !== "string"
+          ) {
+            reject(
+              new Error(
+                "Codex App Server returned an invalid turn/start response",
+              ),
+            );
+            return;
+          }
+          const turnId = turn.turn.id;
+          this.currentTurnId = turnId;
+          accept({
+            steer: (text, clientUserMessageId, onAccept, onReject) => {
+              this.sendRequest(
+                "turn/steer",
+                turnSteerParams(threadId, turnId, text, clientUserMessageId),
+                onAccept,
+                onReject,
+                true,
+              );
+            },
+            matches: (event) =>
+              event.params.threadId === threadId &&
+              (event.method === "turn/completed"
+                ? event.params.turn.id === turnId
+                : event.params.turnId === turnId),
+            interrupt: () => this.interrupt(threadId, turnId),
+            completeInterruption: () => this.completeInterruption(),
+          });
+        },
+        reject,
+      );
+    }, reject);
+  }
+
+  redactDiagnostic(
+    value: string,
+    additionalIdentities: ReadonlySet<string> = new Set(),
+  ): string {
+    let redacted = redactProviderIds(value);
+    const identities = [
+      this.rootThreadId,
+      this.currentTurnId,
+      ...additionalIdentities,
+    ]
+      .filter((identity): identity is string => Boolean(identity))
+      .sort((left, right) => right.length - left.length);
+    for (const identity of identities) {
+      redacted = redacted.split(identity).join("[redacted]");
+    }
+    return redacted;
   }
 
   sendNotification(method: string, params?: JsonObject): void {
@@ -989,18 +1102,15 @@ class CodexAppServerConnection {
     this.scheduleKill("SIGKILL");
   }
 
-  async close(force: boolean): Promise<void> {
+  async close(): Promise<void> {
     if (!this.proc || this.childClosed) {
       this.clearTimer();
       return;
     }
-    if (force) this.terminate();
-    else {
-      this.endStdin();
-      if (this.terminationState === "none") {
-        this.terminationState = "terminating";
-        this.scheduleKill("SIGTERM");
-      }
+    this.endStdin();
+    if (this.terminationState === "none") {
+      this.terminationState = "terminating";
+      this.scheduleKill("SIGTERM");
     }
     await this.processDone;
   }
@@ -1113,8 +1223,12 @@ class CodexAppServerConnection {
       return;
     }
     if (!isRecord(value)) return;
-    if (this.observer) this.observer.admit({ type: "provider-message", value });
-    else this.consumeProviderMessage(value);
+    if (this.observer) {
+      this.observer.admit({
+        type: "provider-message",
+        message: { consume: () => this.consumeProviderMessage(value) },
+      });
+    } else this.consumeProviderMessage(value);
   }
 
   private processChunk(chunk: Buffer | string): void {
@@ -1286,10 +1400,15 @@ class CodexAppServerSessionOwner implements CodexAppServerSession {
   private closed = false;
   private started = false;
   private closePromise: Promise<void> | undefined;
-  private readonly connection: CodexAppServerConnection;
+  private readonly connection: CodexAppServerTransport;
 
-  constructor(sessionOptions: CodexAppServerSessionOptions) {
-    this.connection = new CodexAppServerConnection(sessionOptions);
+  constructor(
+    sessionOptions: CodexAppServerSessionOptions,
+    connection: CodexAppServerTransport = new CodexAppServerConnection(
+      sessionOptions,
+    ),
+  ) {
+    this.connection = connection;
   }
 
   get continuationAvailable(): boolean {
@@ -1349,13 +1468,16 @@ class CodexAppServerSessionOwner implements CodexAppServerSession {
     current?.controller.abort();
     this.closePromise = (async () => {
       await current?.promise.catch(() => {});
-      await this.connection.close(false);
+      await this.connection.close();
     })();
     return this.closePromise;
   }
 }
 
 /**
+ * TODO(ticket 04): this unchanged ordered Turn reducer is the temporary
+ * contraction surface for extraction into the Codex Attempt module.
+ *
  * Execute one fresh Turn for the session owner. All externally occurring
  * inputs receive an ingress sequence before this reducer interprets them; the
  * Turn is the sole producer of its terminal Ending.
@@ -1378,11 +1500,10 @@ function runCodexAppServerTurn(
     missingAnswerMessage,
   } = options;
   if (signal.aborted) return Promise.resolve({ ending: "cancelled" });
-  connection.beginRunDiagnostics();
-
+  connection.beginTurn();
   return new Promise((resolve, reject) => {
     let nextSequence = 1;
-    let turnId: string | undefined;
+    let turn: CodexTransportTurn | undefined;
     let cancellationSequence: number | undefined;
     let endingSettled = false;
     let sawStderr = false;
@@ -1400,22 +1521,16 @@ function runCodexAppServerTurn(
     const pendingSteeringCorrelations = new Set<string>();
     const consumedSteeringItems = new Set<string>();
     const providerIdentities = new Set<string>();
-    connection.addSessionIdentities(providerIdentities);
     const queuedControls: ControlAdmission[] = [];
     let steeringInFlight = false;
     let controlsClosed = false;
     let unsubscribeControls = () => {};
-    let observer: CodexProcessObserver;
+    let observer: CodexTransportObserver;
 
     const redactDiagnostic = (value: string): string => {
-      let redacted = redactProviderIds(value);
-      const identities = [...providerIdentities].sort(
-        (left, right) => right.length - left.length,
-      );
-      for (const identity of identities) {
-        if (identity) redacted = redacted.split(identity).join("[redacted]");
-      }
-      return redacted.slice(0, RESULT_DIAGNOSTIC_LIMIT);
+      return connection
+        .redactDiagnostic(value, providerIdentities)
+        .slice(0, RESULT_DIAGNOSTIC_LIMIT);
     };
     const closeControlAdmissions = (): void => {
       if (controlsClosed) return;
@@ -1507,15 +1622,7 @@ function runCodexAppServerTurn(
       }
     };
     const startNextControl = (): void => {
-      const threadId = connection.threadId;
-      if (
-        controlsClosed ||
-        endingSettled ||
-        steeringInFlight ||
-        !threadId ||
-        !turnId
-      )
-        return;
+      if (controlsClosed || endingSettled || steeringInFlight || !turn) return;
       const admission = queuedControls.shift();
       if (!admission) return;
       admission.acknowledge();
@@ -1523,14 +1630,9 @@ function runCodexAppServerTurn(
       const clientUserMessageId = globalThis.crypto.randomUUID();
       pendingSteeringCorrelations.add(clientUserMessageId);
       providerIdentities.add(clientUserMessageId);
-      connection.sendRequest(
-        "turn/steer",
-        turnSteerParams(
-          threadId,
-          turnId,
-          admission.control.text,
-          clientUserMessageId,
-        ),
+      turn.steer(
+        admission.control.text,
+        clientUserMessageId,
         () => {
           queueMicrotask(() => admit({ type: "steering-settled" }));
         },
@@ -1540,7 +1642,6 @@ function runCodexAppServerTurn(
             reportStderr(steeringDiagnostic(error, redactDiagnostic));
           queueMicrotask(() => admit({ type: "steering-settled" }));
         },
-        true,
       );
     };
     const startupFailure = (error: Error): void => {
@@ -1550,40 +1651,17 @@ function runCodexAppServerTurn(
         "transport-settled",
       );
     };
-    const startTurn = (): void => {
-      const threadId = connection.threadId;
-      if (!threadId || endingSettled || cancellationSequence !== undefined)
-        return;
-      const attachedThreadId = threadId;
-      connection.sendRequest(
-        "turn/start",
-        turnStartParams(attachedThreadId, prompt),
-        (turn) => {
-          if (
-            !isRecord(turn) ||
-            !isRecord(turn.turn) ||
-            typeof turn.turn.id !== "string"
-          ) {
-            startupFailure(
-              new Error(
-                "Codex App Server returned an invalid turn/start response",
-              ),
-            );
-            return;
-          }
-          turnId = turn.turn.id;
-          providerIdentities.add(turnId);
+    const start = (): void => {
+      if (endingSettled || cancellationSequence !== undefined) return;
+      connection.startTurn(
+        prompt,
+        (attachedTurn) => {
+          turn = attachedTurn;
           flushEarlyNotifications();
           startNextControl();
         },
         startupFailure,
       );
-    };
-    const start = (): void => {
-      connection.ensureThread((threadId) => {
-        providerIdentities.add(threadId);
-        startTurn();
-      }, startupFailure);
     };
     const applyTranslation = (
       sequence: number,
@@ -1683,12 +1761,7 @@ function runCodexAppServerTurn(
       }
     };
     const matchesRunIdentity = (notification: CodexAppServerEvent): boolean => {
-      const threadId = connection.threadId;
-      if (!threadId || notification.params.threadId !== threadId) return false;
-      if (!turnId) return false;
-      return notification.method === "turn/completed"
-        ? notification.params.turn.id === turnId
-        : notification.params.turnId === turnId;
+      return turn?.matches(notification) ?? false;
     };
     const forwardNotification = (
       sequence: number,
@@ -1697,7 +1770,7 @@ function runCodexAppServerTurn(
       if (endingSettled || !matchesRunIdentity(notification)) return;
       applyTranslation(sequence, notification);
       if (!endingSettled && notification.method === "turn/completed") {
-        if (cancellationPrecedes(sequence)) connection.completeInterruption();
+        if (cancellationPrecedes(sequence)) turn?.completeInterruption();
         finish(
           { status: "clean" },
           !cancellationPrecedes(sequence),
@@ -1706,8 +1779,7 @@ function runCodexAppServerTurn(
       }
     };
     function flushEarlyNotifications(): void {
-      const threadId = connection.threadId;
-      if (!threadId || !turnId || endingSettled) return;
+      if (!turn || endingSettled) return;
       const retained = earlyNotifications.splice(0);
       for (const entry of retained) {
         forwardNotification(entry.sequence, entry.notification);
@@ -1716,15 +1788,15 @@ function runCodexAppServerTurn(
     }
     const handleProviderMessage = (
       sequence: number,
-      value: JsonObject,
+      message: CodexTransportMessage,
     ): void => {
-      const consumed = connection.consumeProviderMessage(value);
+      const consumed = message.consume();
       if (typeof consumed === "string") {
         reportStderr(consumed);
         return;
       }
       if (!consumed) return;
-      if (!connection.threadId || !turnId) {
+      if (!turn) {
         earlyNotifications.push({ sequence, notification: consumed });
         return;
       }
@@ -1778,7 +1850,7 @@ function runCodexAppServerTurn(
         return;
       switch (occurrence.type) {
         case "provider-message":
-          handleProviderMessage(sequence, occurrence.value);
+          handleProviderMessage(sequence, occurrence.message);
           return;
         case "control":
           if (controlsClosed || endingSettled) {
@@ -1797,8 +1869,7 @@ function runCodexAppServerTurn(
           return;
         case "cancel":
           closeControlAdmissions();
-          if (connection.threadId && turnId)
-            connection.interrupt(connection.threadId, turnId);
+          if (turn) turn.interrupt();
           else connection.terminate();
           return;
         case "stderr":
@@ -1912,6 +1983,7 @@ function runCodexAppServerTurn(
  */
 export function createCodexAppServerSession(
   options: CodexAppServerSessionOptions,
+  transport?: CodexAppServerTransport,
 ): CodexAppServerSession {
-  return new CodexAppServerSessionOwner(options);
+  return new CodexAppServerSessionOwner(options, transport);
 }
