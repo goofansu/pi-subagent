@@ -1596,10 +1596,20 @@ test("INV-9 boundary: lost notification retries once without changing result", a
   await boundary.flush();
 
   assert.equal(boundary.pushed.length, 1);
+  const waitBeforeRetry = await boundary.tools.agent_wait.execute(
+    "wait-before",
+    {
+      ids: [id],
+    },
+  );
+  const resultBeforeRetry = await boundary.tools.agent_result.execute(
+    "result-before",
+    { id },
+  );
   boundary.events.turn_end({ message: { stopReason: "aborted" } });
   boundary.events.agent_settled({});
   assert.equal(boundary.pushed.length, 2);
-  assert.equal(boundary.pushed[1].text, boundary.pushed[0].text);
+  assert.deepEqual(boundary.pushed[1], boundary.pushed[0]);
 
   const landed = {
     message: {
@@ -1618,8 +1628,16 @@ test("INV-9 boundary: lost notification retries once without changing result", a
   boundary.events.agent_settled({});
   assert.equal(boundary.pushed.length, 2);
 
-  const result = await boundary.tools.agent_result.execute("result", { id });
-  assert.match(result.content[0].text, / {2}answer\n$/);
+  const waitAfterRetry = await boundary.tools.agent_wait.execute("wait-after", {
+    ids: [id],
+  });
+  const resultAfterRetry = await boundary.tools.agent_result.execute(
+    "result-after",
+    { id },
+  );
+  assert.deepEqual(waitAfterRetry, waitBeforeRetry);
+  assert.deepEqual(resultAfterRetry, resultBeforeRetry);
+  assert.match(resultAfterRetry.content[0].text, / {2}answer\n$/);
 });
 
 test("INV-9 boundary: settlement retries notifications discarded by an error-shaped abort", async () => {
@@ -1668,6 +1686,7 @@ test("INV-9 boundary: settlement retries notifications discarded by an error-sha
   boundary.events.agent_settled({});
 
   assert.equal(boundary.pushed.length, 6);
+  assert.deepEqual(boundary.pushed.slice(3), boundary.pushed.slice(0, 3));
   for (const id of ids) {
     boundary.events.message_start({
       message: {
@@ -1683,6 +1702,26 @@ test("INV-9 boundary: settlement retries notifications discarded by an error-sha
     });
   }
   assert.equal(boundary.runs.list().length, 0);
+});
+
+test("INV-9 boundary: provider error text alone does not classify a notification as lost", async () => {
+  const boundary = runtimeBoundary(["run-error-text"]);
+  await boundary.start();
+  boundary.active[0].resolve({ ending: "answered" });
+  await boundary.flush();
+
+  boundary.events.turn_end(
+    {
+      message: {
+        stopReason: "error",
+        errorMessage: "This operation was aborted by the provider",
+      },
+    },
+    { signal: new AbortController().signal },
+  );
+  boundary.events.agent_settled({});
+
+  assert.equal(boundary.pushed.length, 1);
 });
 
 test("INV-9 boundary: a failed notification push preserves the exact result", async () => {

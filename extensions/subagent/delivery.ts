@@ -23,6 +23,21 @@ import type { SingleResult, TerminalLifecycleStatus } from "./types.ts";
 
 export type { PushedNotification } from "./notification-delivery.ts";
 
+/** Provider-neutral evidence from one completed parent-host turn. */
+export interface HostTurnCompletionEvidence {
+  /** The host's normalized stop reason, when the completed message has one. */
+  stopReason?:
+    | "pending"
+    | "stop"
+    | "length"
+    | "toolUse"
+    | "error"
+    | "aborted"
+    | "deferred";
+  /** Whether the host operation's signal had been aborted at completion. */
+  signalAborted: boolean;
+}
+
 /** Push a completion notification into the session. */
 export type PushNotification = (notification: PushedNotification) => void;
 
@@ -167,8 +182,8 @@ export interface SubagentDelivery {
   steer(id: string, text: string): SteerOutcome;
   /** Confirm that this run's pushed notification entered the conversation. */
   notificationLanded(id: string): void;
-  /** Mark queued, unlanded notifications as known lost after an interrupt. */
-  turnAborted(): void;
+  /** Classify delivery loss from neutral evidence about a completed host turn. */
+  hostTurnCompleted(evidence: HostTurnCompletionEvidence): void;
   /** Retry notifications known lost once the parent agent settles. */
   agentSettled(): void;
   /** Stop running children and clear this session's notifications/results. */
@@ -346,7 +361,8 @@ export function createSubagentDelivery({
       applyNotificationEvent(id, { type: "landed" });
     },
 
-    turnAborted() {
+    hostTurnCompleted(evidence) {
+      if (evidence.stopReason !== "aborted" && !evidence.signalAborted) return;
       for (const [id, state] of notifications) {
         if (state.phase === "awaiting-landing")
           applyNotificationEvent(id, { type: "known-lost" });

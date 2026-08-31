@@ -374,12 +374,13 @@ export function registerDeliveryEventHandlers(
   });
 
   pi.on("turn_end", (event, ctx) => {
-    const message = event.message as { stopReason?: string } | undefined;
-    // Some providers surface an aborted host request as an error message. The
-    // host signal remains the provider-neutral evidence that Escape cleared
-    // its queued follow-ups, so those notifications need to be retried too.
-    if (message?.stopReason === "aborted" || ctx.signal?.aborted)
-      delivery.turnAborted();
+    delivery.hostTurnCompleted({
+      stopReason:
+        event.message && "stopReason" in event.message
+          ? event.message.stopReason
+          : undefined,
+      signalAborted: ctx?.signal?.aborted === true,
+    });
   });
 
   pi.on("agent_settled", () => delivery.agentSettled());

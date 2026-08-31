@@ -476,25 +476,50 @@ function queuedHarness() {
   return { pushed, runs, delivery };
 }
 
-test("INV-9: an interrupt-discarded follow-up is pushed again after settle", async () => {
+test("INV-9: an explicitly aborted host turn retries its unlanded push after settle", async () => {
   const { pushed, runs, delivery } = queuedHarness();
-  const run = deferredRun();
-  const handle = runs.track(run.result, () => {});
-  delivery.register(handle.id, run.result.agent, run.settled);
-  run.finish("the answer");
+  const first = deferredRun();
+  const second = deferredRun();
+  const firstHandle = runs.track(first.result, () => {});
+  const secondHandle = runs.track(second.result, () => {});
+  delivery.register(firstHandle.id, first.result.agent, first.settled);
+  delivery.register(secondHandle.id, second.result.agent, second.settled);
+  first.finish("the first answer");
+  second.finish("the second answer");
   await flush();
-  assert.equal(pushed.length, 1, "queued behind the model's turn");
+  assert.equal(pushed.length, 2, "queued behind the model's turn");
 
-  // The operator interrupts: pi clears its queue, the report with it.
-  delivery.turnAborted();
+  // The operator interrupts: the host clears its queue, including both pushes.
+  delivery.hostTurnCompleted({
+    stopReason: "aborted",
+    signalAborted: false,
+  });
   delivery.agentSettled();
 
-  assert.equal(pushed.length, 2, "the discarded report is pushed again");
-  assert.equal(pushed[1].text, pushed[0].text, "the same report, verbatim");
-  assert.equal(runs.list().length, 1, "still listed until the retry lands");
+  assert.equal(pushed.length, 4, "every discarded report is pushed again");
+  assert.deepEqual(pushed.slice(2), pushed.slice(0, 2));
+  assert.equal(runs.list().length, 2, "still listed until the retries land");
 
-  delivery.notificationLanded(handle.id);
+  delivery.notificationLanded(firstHandle.id);
+  delivery.notificationLanded(secondHandle.id);
   assert.equal(runs.list().length, 0);
+});
+
+test("INV-9: an aborted host signal retries a push after an error-shaped turn", async () => {
+  const { pushed, delivery } = queuedHarness();
+  const run = deferredRun();
+  delivery.register("run-error-abort", run.result.agent, run.settled);
+  run.finish("the answer");
+  await flush();
+
+  delivery.hostTurnCompleted({
+    stopReason: "error",
+    signalAborted: true,
+  });
+  delivery.agentSettled();
+
+  assert.equal(pushed.length, 2);
+  assert.deepEqual(pushed[1], pushed[0]);
 });
 
 test("one landing per run: re-push never double-delivers", async () => {
@@ -505,7 +530,10 @@ test("one landing per run: re-push never double-delivers", async () => {
   run.finish();
   await flush();
 
-  delivery.turnAborted();
+  delivery.hostTurnCompleted({
+    stopReason: "aborted",
+    signalAborted: false,
+  });
   // Pi's continuation drained the surviving queue: the report landed.
   delivery.notificationLanded(handle.id);
   delivery.agentSettled();
@@ -533,7 +561,10 @@ test("a report pushed after the abort is left to land on its own", async () => {
   delivery.register(handle.id, run.result.agent, run.settled);
 
   // The abort precedes the push: this report was never in the cleared queue.
-  delivery.turnAborted();
+  delivery.hostTurnCompleted({
+    stopReason: "aborted",
+    signalAborted: false,
+  });
   run.finish();
   await flush();
   delivery.agentSettled();
@@ -549,9 +580,15 @@ test("a retry the interrupt discards again is pushed once more", async () => {
   run.finish();
   await flush();
 
-  delivery.turnAborted();
+  delivery.hostTurnCompleted({
+    stopReason: "aborted",
+    signalAborted: false,
+  });
   delivery.agentSettled();
-  delivery.turnAborted();
+  delivery.hostTurnCompleted({
+    stopReason: "aborted",
+    signalAborted: false,
+  });
   delivery.agentSettled();
 
   assert.equal(pushed.length, 3, "the report keeps trying until it lands");
@@ -565,7 +602,10 @@ test("shutdown forgets what an abort snapshotted", async () => {
   run.finish();
   await flush();
 
-  delivery.turnAborted();
+  delivery.hostTurnCompleted({
+    stopReason: "aborted",
+    signalAborted: false,
+  });
   delivery.shutdown();
   delivery.agentSettled();
 
