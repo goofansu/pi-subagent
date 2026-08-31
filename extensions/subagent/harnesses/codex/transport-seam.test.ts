@@ -39,6 +39,21 @@ const completed = (turnId = "turn-test"): CodexAppServerEvent => ({
   },
 });
 
+const completedAgentMessage = (turnId = "turn-test"): CodexAppServerEvent => ({
+  method: "item/completed",
+  params: {
+    threadId: "thread-test",
+    turnId,
+    completedAtMs: 1,
+    item: {
+      type: "agentMessage",
+      id: "answer-test",
+      text: "Attempt-owned answer",
+      phase: "final_answer",
+    },
+  },
+});
+
 function reporter(facts: Fact[]): RunReporter {
   return {
     message: (fact) => facts.push(fact),
@@ -133,7 +148,7 @@ class DeterministicCodexTransport implements CodexAppServerTransport {
     return value;
   }
 
-  rejectPending(): void {}
+  settlePending(): void {}
   terminate(): void {
     this.terminateCalls += 1;
     this.continuationAvailable = false;
@@ -184,6 +199,34 @@ test("a deterministic transport retains a pre-identity Control for the current T
   transport.emit(completed());
   assert.deepEqual(await settled, { ending: "answered" });
   assert.equal(facts.at(-1)?.parts[0]?.type, "text");
+  await session.close();
+});
+
+test("a Codex Attempt owns its fresh translator", async () => {
+  const transport = new DeterministicCodexTransport();
+  const facts: Fact[] = [];
+  const session = createCodexAppServerSession(
+    { cwd: "/work", childDepth: 1 },
+    transport,
+  );
+
+  const settled = session.runNextTurn({
+    prompt: "goal",
+    report: reporter(facts),
+    missingAnswerMessage: "missing",
+  });
+  transport.releaseTurn();
+  transport.emit(completedAgentMessage());
+  transport.emit(completed());
+
+  assert.deepEqual(await settled, { ending: "answered" });
+  assert.deepEqual(facts, [
+    {
+      role: "assistant",
+      parts: [{ type: "text", text: "Attempt-owned answer" }],
+      usage: { turns: 0 },
+    },
+  ]);
   await session.close();
 });
 

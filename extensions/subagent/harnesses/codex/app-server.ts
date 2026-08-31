@@ -3,17 +3,14 @@ import {
   spawn as defaultSpawn,
   type SpawnOptions,
 } from "node:child_process";
-import type { ControlAdmission, ControlSource } from "../../control-source.ts";
-import {
-  DEPTH_ENV_KEY,
-  type Fact,
-  type RunEnding,
-  type RunReporter,
-} from "../../run.ts";
+import type { ControlSource } from "../../control-source.ts";
+import { DEPTH_ENV_KEY, type RunEnding, type RunReporter } from "../../run.ts";
+import { type CodexTranslation, runCodexAttempt } from "./attempt.ts";
+
+export type { CodexTranslation } from "./attempt.ts";
 
 const STDOUT_LINE_LIMIT = 32 * 1024 * 1024;
 const RAW_STDOUT_TAIL_LIMIT = 2000;
-const STEERING_DIAGNOSTIC_LIMIT = 1024;
 const RESULT_DIAGNOSTIC_LIMIT = 1024;
 const DEFAULT_KILL_ESCALATION_MS = 5000;
 const TOKEN_USAGE_COUNTERS = [
@@ -38,15 +35,6 @@ export type ChildProcessSpawn = (
   args: readonly string[],
   options: SpawnOptions,
 ) => ChildProcess;
-
-export interface CodexTranslation {
-  facts?: Fact[];
-  transcript?: Fact[];
-  /** Live UI activity: absent leaves it unchanged, null clears it. */
-  activity?: string | null;
-  terminal?: boolean;
-  errorMessage?: string;
-}
 
 export interface CodexAppServerJsonRpcError {
   readonly code: number;
@@ -253,7 +241,7 @@ export interface CodexAppServerSessionOptions {
 
 export interface CodexAppServerTurnOptions {
   readonly prompt: string;
-  readonly translate: (
+  readonly translate?: (
     event: CodexAppServerEvent,
   ) => CodexTranslation | undefined;
   readonly report: RunReporter;
@@ -607,14 +595,6 @@ function boundedRedactedDiagnostic(value: string): string {
   return redactProviderIds(value).slice(0, RESULT_DIAGNOSTIC_LIMIT);
 }
 
-function steeringDiagnostic(
-  error: CodexAppServerRequestError,
-  redact: (value: string) => string = redactProviderIds,
-): string {
-  const value = `Steering rejected: ${redact(error.message)}`;
-  return `${value.slice(0, STEERING_DIAGNOSTIC_LIMIT - 1)}\n`;
-}
-
 function spawnOptions(cwd: string, childDepth: number): SpawnOptions {
   return {
     shell: false,
@@ -672,48 +652,11 @@ function turnSteerParams(
   };
 }
 
-function correlatedSteeringFact(
-  event: CodexAppServerEvent,
-  pendingCorrelations: ReadonlySet<string>,
-  consumedItems: ReadonlySet<string>,
-):
-  | {
-      readonly correlation: string;
-      readonly itemId: string;
-      readonly fact: Fact;
-    }
-  | undefined {
-  if (event.method !== "item/started" && event.method !== "item/completed")
-    return undefined;
-  const item = event.params.item;
-  if (
-    item.type !== "userMessage" ||
-    consumedItems.has(item.id) ||
-    typeof item.clientId !== "string" ||
-    !pendingCorrelations.has(item.clientId)
-  )
-    return undefined;
-  const parts = item.content.flatMap((content) =>
-    isRecord(content) &&
-    content.type === "text" &&
-    typeof content.text === "string"
-      ? [{ type: "text" as const, text: content.text }]
-      : [],
-  );
-  return parts.length > 0
-    ? {
-        correlation: item.clientId,
-        itemId: item.id,
-        fact: { role: "user", parts },
-      }
-    : undefined;
-}
-
-interface CodexTransportMessage {
+export interface CodexTransportMessage {
   consume(): CodexAppServerEvent | string | undefined;
 }
 
-type CodexTransportOccurrence =
+export type CodexTransportOccurrence =
   | {
       readonly type: "provider-message";
       readonly message: CodexTransportMessage;
@@ -725,29 +668,13 @@ type CodexTransportOccurrence =
   | { readonly type: "process-close"; readonly code: number | null }
   | { readonly type: "escalation"; readonly stage: "SIGTERM" | "SIGKILL" };
 
-type CodexRunOccurrence =
-  | CodexTransportOccurrence
-  | { readonly type: "control"; readonly admission: ControlAdmission }
-  | { readonly type: "control-source-close" }
-  | { readonly type: "steering-settled" }
-  | { readonly type: "cancel" };
-
-interface OrderedOccurrence {
-  readonly sequence: number;
-  readonly occurrence: CodexRunOccurrence;
-}
-
 interface PendingRequest {
   readonly accept: (value: unknown) => void;
   readonly reject: (error: Error) => void;
   readonly settleOnTransport: boolean;
 }
 
-type CodexProcessConclusion =
-  | { readonly status: "clean" }
-  | { readonly status: "failed"; readonly errorMessage?: string };
-
-interface CodexTransportObserver {
+export interface CodexTransportObserver {
   readonly admit: (occurrence: CodexTransportOccurrence) => void;
   readonly beginFrame: () => void;
   readonly endFrame: () => void;
@@ -757,7 +684,7 @@ type ProcessStartResult =
   | { readonly status: "ready" }
   | { readonly status: "failed"; readonly errorMessage: string };
 
-interface CodexTransportTurn {
+export interface CodexTransportTurn {
   steer(
     text: string,
     clientUserMessageId: string,
@@ -769,7 +696,7 @@ interface CodexTransportTurn {
   completeInterruption(): void;
 }
 
-interface CodexAppServerTransport {
+export interface CodexAppServerTransport {
   readonly continuationAvailable: boolean;
   readonly hasIssuedTurn: boolean;
   readonly stdoutTail: string;
@@ -790,14 +717,10 @@ interface CodexAppServerTransport {
     value: string,
     additionalIdentities?: ReadonlySet<string>,
   ): string;
-  rejectPending(error: Error): void;
+  settlePending(reason: CodexAppServerTransportRejectionReason): void;
   terminate(): void;
   escalate(stage: "SIGTERM" | "SIGKILL"): void;
   close(): Promise<void>;
-}
-
-interface CodexAppServerRunOptions extends CodexAppServerTurnOptions {
-  readonly connection: CodexAppServerTransport;
 }
 
 /** Process-scoped state retained by one App Server session. */
@@ -1072,6 +995,10 @@ class CodexAppServerConnection implements CodexAppServerTransport {
       this.notifyRequestRejection(error);
       if (request.settleOnTransport) request.reject(error);
     }
+  }
+
+  settlePending(reason: CodexAppServerTransportRejectionReason): void {
+    this.rejectPending(new CodexAppServerTransportError(reason));
   }
 
   interrupt(threadId: string, turnId: string): void {
@@ -1401,6 +1328,7 @@ class CodexAppServerSessionOwner implements CodexAppServerSession {
   private started = false;
   private closePromise: Promise<void> | undefined;
   private readonly connection: CodexAppServerTransport;
+  private readonly cwd: string;
 
   constructor(
     sessionOptions: CodexAppServerSessionOptions,
@@ -1409,6 +1337,7 @@ class CodexAppServerSessionOwner implements CodexAppServerSession {
     ),
   ) {
     this.connection = connection;
+    this.cwd = sessionOptions.cwd;
   }
 
   get continuationAvailable(): boolean {
@@ -1441,9 +1370,10 @@ class CodexAppServerSessionOwner implements CodexAppServerSession {
       turnOptions.signal?.addEventListener("abort", forwardAbort, {
         once: true,
       });
-    const promise = runCodexAppServerTurn({
+    const promise = runCodexAttempt({
       ...turnOptions,
-      connection: this.connection,
+      cwd: this.cwd,
+      conversation: this.connection,
       signal: controller.signal,
     }).finally(() => {
       turnOptions.signal?.removeEventListener("abort", forwardAbort);
@@ -1472,508 +1402,6 @@ class CodexAppServerSessionOwner implements CodexAppServerSession {
     })();
     return this.closePromise;
   }
-}
-
-/**
- * TODO(ticket 04): this unchanged ordered Turn reducer is the temporary
- * contraction surface for extraction into the Codex Attempt module.
- *
- * Execute one fresh Turn for the session owner. All externally occurring
- * inputs receive an ingress sequence before this reducer interprets them; the
- * Turn is the sole producer of its terminal Ending.
- */
-function runCodexAppServerTurn(
-  options: CodexAppServerRunOptions,
-): Promise<RunEnding> {
-  const {
-    connection,
-    prompt,
-    translate,
-    report,
-    signal = new AbortController().signal,
-    controls = {
-      subscribe: (_onAdmission, onClose) => {
-        onClose?.();
-        return () => {};
-      },
-    },
-    missingAnswerMessage,
-  } = options;
-  if (signal.aborted) return Promise.resolve({ ending: "cancelled" });
-  connection.beginTurn();
-  return new Promise((resolve, reject) => {
-    let nextSequence = 1;
-    let turn: CodexTransportTurn | undefined;
-    let cancellationSequence: number | undefined;
-    let endingSettled = false;
-    let sawStderr = false;
-    let terminalAnswer = false;
-    let witnessedError: string | undefined;
-    let firstUsageUpdate = true;
-    let draining = false;
-    let framingStdout = false;
-    let reducingSequence: number | undefined;
-    const queue: OrderedOccurrence[] = [];
-    const earlyNotifications: {
-      readonly sequence: number;
-      readonly notification: CodexAppServerEvent;
-    }[] = [];
-    const pendingSteeringCorrelations = new Set<string>();
-    const consumedSteeringItems = new Set<string>();
-    const providerIdentities = new Set<string>();
-    const queuedControls: ControlAdmission[] = [];
-    let steeringInFlight = false;
-    let controlsClosed = false;
-    let unsubscribeControls = () => {};
-    let observer: CodexTransportObserver;
-
-    const redactDiagnostic = (value: string): string => {
-      return connection
-        .redactDiagnostic(value, providerIdentities)
-        .slice(0, RESULT_DIAGNOSTIC_LIMIT);
-    };
-    const closeControlAdmissions = (): void => {
-      if (controlsClosed) return;
-      controlsClosed = true;
-      for (const admission of queuedControls) admission.acknowledge();
-      queuedControls.length = 0;
-      unsubscribeControls();
-    };
-    const clearSteeringState = (): void => {
-      steeringInFlight = false;
-      pendingSteeringCorrelations.clear();
-      consumedSteeringItems.clear();
-    };
-    const closeTurnState = (): void => {
-      closeControlAdmissions();
-      clearSteeringState();
-    };
-    const cancellationPrecedes = (sequence: number | undefined): boolean =>
-      cancellationSequence !== undefined &&
-      (sequence === undefined || cancellationSequence <= sequence);
-    const endingFrom = (
-      conclusion: CodexProcessConclusion,
-      conclusionSequence: number | undefined,
-    ): RunEnding => {
-      if (terminalAnswer) return { ending: "answered" };
-      if (cancellationPrecedes(conclusionSequence))
-        return { ending: "cancelled" };
-      if (conclusion.status === "failed") {
-        const errorMessage = witnessedError ?? conclusion.errorMessage;
-        return {
-          ending: "failed",
-          ...(errorMessage === undefined ? {} : { errorMessage }),
-        };
-      }
-      return {
-        ending: "failed",
-        errorMessage: witnessedError ?? missingAnswerMessage,
-      };
-    };
-    const settle = (conclusion: CodexProcessConclusion): void => {
-      if (endingSettled) return;
-      endingSettled = true;
-      closeTurnState();
-      signal.removeEventListener("abort", onAbort);
-      connection.detach(observer);
-      resolve(endingFrom(conclusion, reducingSequence));
-    };
-    const failExecution = (error: unknown): void => {
-      if (endingSettled) return;
-      endingSettled = true;
-      closeTurnState();
-      signal.removeEventListener("abort", onAbort);
-      connection.detach(observer);
-      connection.terminate();
-      connection.rejectPending(
-        new CodexAppServerTransportError("transport-settled"),
-      );
-      reject(error);
-    };
-    const finish = (
-      conclusion: CodexProcessConclusion,
-      terminate: boolean,
-      requestSettlement: CodexAppServerTransportRejectionReason,
-    ): void => {
-      if (endingSettled) return;
-      closeControlAdmissions();
-      connection.rejectPending(
-        new CodexAppServerTransportError(requestSettlement),
-      );
-      if (terminate && conclusion.status === "failed") connection.terminate();
-      settle(conclusion);
-    };
-    const reportStderr = (chunk: string): boolean => {
-      sawStderr = true;
-      try {
-        report.stderr(redactDiagnostic(chunk));
-        return true;
-      } catch (error) {
-        finish(
-          {
-            status: "failed",
-            errorMessage:
-              error instanceof Error ? error.message : String(error),
-          },
-          true,
-          "transport-settled",
-        );
-        return false;
-      }
-    };
-    const startNextControl = (): void => {
-      if (controlsClosed || endingSettled || steeringInFlight || !turn) return;
-      const admission = queuedControls.shift();
-      if (!admission) return;
-      admission.acknowledge();
-      steeringInFlight = true;
-      const clientUserMessageId = globalThis.crypto.randomUUID();
-      pendingSteeringCorrelations.add(clientUserMessageId);
-      providerIdentities.add(clientUserMessageId);
-      turn.steer(
-        admission.control.text,
-        clientUserMessageId,
-        () => {
-          queueMicrotask(() => admit({ type: "steering-settled" }));
-        },
-        (error) => {
-          pendingSteeringCorrelations.delete(clientUserMessageId);
-          if (error instanceof CodexAppServerRequestError)
-            reportStderr(steeringDiagnostic(error, redactDiagnostic));
-          queueMicrotask(() => admit({ type: "steering-settled" }));
-        },
-      );
-    };
-    const startupFailure = (error: Error): void => {
-      finish(
-        { status: "failed", errorMessage: redactDiagnostic(error.message) },
-        true,
-        "transport-settled",
-      );
-    };
-    const start = (): void => {
-      if (endingSettled || cancellationSequence !== undefined) return;
-      connection.startTurn(
-        prompt,
-        (attachedTurn) => {
-          turn = attachedTurn;
-          flushEarlyNotifications();
-          startNextControl();
-        },
-        startupFailure,
-      );
-    };
-    const applyTranslation = (
-      sequence: number,
-      notification: CodexAppServerEvent,
-    ): void => {
-      let translation: CodexTranslation | undefined;
-      if (notification.method === "turn/completed") {
-        providerIdentities.add(notification.params.turn.id);
-        for (const item of notification.params.turn.items)
-          providerIdentities.add(item.id);
-      } else {
-        providerIdentities.add(notification.params.turnId);
-        if (
-          notification.method === "item/started" ||
-          notification.method === "item/completed"
-        )
-          providerIdentities.add(notification.params.item.id);
-        else if (
-          notification.method === "item/agentMessage/delta" ||
-          notification.method === "item/commandExecution/outputDelta" ||
-          notification.method === "item/reasoning/summaryTextDelta"
-        )
-          providerIdentities.add(notification.params.itemId);
-      }
-      const steering = correlatedSteeringFact(
-        notification,
-        pendingSteeringCorrelations,
-        consumedSteeringItems,
-      );
-      try {
-        let currentNotification = notification;
-        if (notification.method === "thread/tokenUsage/updated") {
-          const tokenUsage = connection.normalizeTurnUsage(
-            notification.params.tokenUsage,
-            firstUsageUpdate,
-          );
-          firstUsageUpdate = false;
-          currentNotification = {
-            ...notification,
-            params: { ...notification.params, tokenUsage },
-          };
-        }
-        translation = translate(currentNotification);
-      } catch (error) {
-        failExecution(error);
-        return;
-      }
-      if (translation) {
-        translation = {
-          ...translation,
-          ...(translation.errorMessage === undefined
-            ? {}
-            : { errorMessage: redactDiagnostic(translation.errorMessage) }),
-          ...(translation.facts
-            ? {
-                facts: translation.facts.map((fact) =>
-                  fact.errorMessage === undefined
-                    ? fact
-                    : {
-                        ...fact,
-                        errorMessage: redactDiagnostic(fact.errorMessage),
-                      },
-                ),
-              }
-            : {}),
-        };
-      }
-      if ((!translation && !steering) || endingSettled) return;
-      if (
-        translation?.terminal === true &&
-        (cancellationSequence === undefined || sequence < cancellationSequence)
-      )
-        terminalAnswer = true;
-      if (translation?.errorMessage !== undefined)
-        witnessedError = translation.errorMessage;
-      try {
-        if (steering) {
-          report.message(steering.fact);
-          pendingSteeringCorrelations.delete(steering.correlation);
-          consumedSteeringItems.add(steering.itemId);
-        }
-        for (const fact of translation?.facts ?? []) report.message(fact);
-        if (translation?.transcript !== undefined)
-          report.transcript(translation.transcript);
-        if (translation?.activity !== undefined)
-          report.activity(translation.activity ?? undefined);
-      } catch (error) {
-        finish(
-          {
-            status: "failed",
-            errorMessage:
-              error instanceof Error ? error.message : String(error),
-          },
-          true,
-          "transport-settled",
-        );
-      }
-    };
-    const matchesRunIdentity = (notification: CodexAppServerEvent): boolean => {
-      return turn?.matches(notification) ?? false;
-    };
-    const forwardNotification = (
-      sequence: number,
-      notification: CodexAppServerEvent,
-    ): void => {
-      if (endingSettled || !matchesRunIdentity(notification)) return;
-      applyTranslation(sequence, notification);
-      if (!endingSettled && notification.method === "turn/completed") {
-        if (cancellationPrecedes(sequence)) turn?.completeInterruption();
-        finish(
-          { status: "clean" },
-          !cancellationPrecedes(sequence),
-          "semantic-settled",
-        );
-      }
-    };
-    function flushEarlyNotifications(): void {
-      if (!turn || endingSettled) return;
-      const retained = earlyNotifications.splice(0);
-      for (const entry of retained) {
-        forwardNotification(entry.sequence, entry.notification);
-        if (endingSettled) return;
-      }
-    }
-    const handleProviderMessage = (
-      sequence: number,
-      message: CodexTransportMessage,
-    ): void => {
-      const consumed = message.consume();
-      if (typeof consumed === "string") {
-        reportStderr(consumed);
-        return;
-      }
-      if (!consumed) return;
-      if (!turn) {
-        earlyNotifications.push({ sequence, notification: consumed });
-        return;
-      }
-      forwardNotification(sequence, consumed);
-    };
-    const handleProcessClose = (
-      sequence: number,
-      code: number | null,
-    ): void => {
-      if (endingSettled) return;
-      if (cancellationPrecedes(sequence)) {
-        finish({ status: "clean" }, false, "child-exited");
-        return;
-      }
-      if (code === 0) {
-        if (!sawStderr && !terminalAnswer) {
-          const tail = redactProviderIds(connection.stdoutTail.trim());
-          if (
-            !reportStderr(
-              tail ? `Last stdout:\n${tail}` : "No stdout was captured.",
-            )
-          )
-            return;
-        }
-        finish({ status: "clean" }, false, "child-exited");
-        return;
-      }
-      if (!sawStderr && !terminalAnswer && connection.stdoutTail.trim()) {
-        if (
-          !reportStderr(
-            `Last stdout:\n${redactProviderIds(connection.stdoutTail.trim())}`,
-          )
-        )
-          return;
-      }
-      finish(
-        {
-          status: "failed",
-          errorMessage: `Child codex exited with code ${code ?? "unknown"}`,
-        },
-        false,
-        "child-exited",
-      );
-    };
-    const reduce = ({ sequence, occurrence }: OrderedOccurrence): void => {
-      if (
-        endingSettled &&
-        occurrence.type !== "process-close" &&
-        occurrence.type !== "escalation"
-      )
-        return;
-      switch (occurrence.type) {
-        case "provider-message":
-          handleProviderMessage(sequence, occurrence.message);
-          return;
-        case "control":
-          if (controlsClosed || endingSettled) {
-            occurrence.admission.acknowledge();
-            return;
-          }
-          queuedControls.push(occurrence.admission);
-          startNextControl();
-          return;
-        case "control-source-close":
-          closeControlAdmissions();
-          return;
-        case "steering-settled":
-          steeringInFlight = false;
-          startNextControl();
-          return;
-        case "cancel":
-          closeControlAdmissions();
-          if (turn) turn.interrupt();
-          else connection.terminate();
-          return;
-        case "stderr":
-          reportStderr(occurrence.chunk);
-          return;
-        case "stdin-error":
-          reportStderr(`stdin: ${occurrence.error.message}\n`);
-          return;
-        case "stdin-write-error":
-          reportStderr(`stdin: ${occurrence.error.message}\n`);
-          finish({ status: "failed" }, true, "transport-settled");
-          return;
-        case "process-error":
-          {
-            const errorMessage = redactDiagnostic(occurrence.error.message);
-            if (!reportStderr(`${errorMessage}\n`)) return;
-            finish(
-              { status: "failed", errorMessage },
-              true,
-              "transport-settled",
-            );
-          }
-          return;
-        case "process-close":
-          handleProcessClose(sequence, occurrence.code);
-          return;
-        case "escalation":
-          connection.escalate(occurrence.stage);
-      }
-    };
-    function drainQueue(): void {
-      if (draining) return;
-      draining = true;
-      try {
-        while (queue.length > 0) {
-          const next = queue.shift();
-          if (next) {
-            reducingSequence = next.sequence;
-            reduce(next);
-          }
-        }
-      } finally {
-        reducingSequence = undefined;
-        draining = false;
-      }
-    }
-    function admit(occurrence: CodexRunOccurrence): void {
-      if (
-        endingSettled &&
-        occurrence.type !== "process-close" &&
-        occurrence.type !== "escalation"
-      ) {
-        if (occurrence.type === "control") occurrence.admission.acknowledge();
-        return;
-      }
-      const ordered = { sequence: nextSequence++, occurrence };
-      if (occurrence.type === "cancel" && cancellationSequence === undefined)
-        cancellationSequence = ordered.sequence;
-      queue.push(ordered);
-      if (!framingStdout) drainQueue();
-    }
-    function onAbort(): void {
-      admit({ type: "cancel" });
-    }
-
-    observer = {
-      admit,
-      beginFrame: () => {
-        framingStdout = true;
-      },
-      endFrame: () => {
-        framingStdout = false;
-        drainQueue();
-      },
-    };
-    connection.attach(observer);
-    signal.addEventListener("abort", onAbort, { once: true });
-    unsubscribeControls = controls.subscribe(
-      (admission) => {
-        if (controlsClosed) {
-          admission.acknowledge();
-          return;
-        }
-        admit({ type: "control", admission });
-      },
-      () => {
-        if (!controlsClosed) admit({ type: "control-source-close" });
-      },
-    );
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-    const processStart = connection.start();
-    if (processStart.status === "failed") {
-      finish(
-        { status: "failed", errorMessage: processStart.errorMessage },
-        true,
-        "transport-settled",
-      );
-      return;
-    }
-    start();
-  });
 }
 
 /**

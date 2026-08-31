@@ -1781,7 +1781,6 @@ test("retained Turns isolate reused item state and stale interleaved notificatio
     const stderr: string[] = [];
     const ending = await session.runNextTurn({
       prompt,
-      translate: createCodexTranslator("/work"),
       report: {
         message: (fact) => facts.push(fact),
         transcript: () => {},
@@ -1947,7 +1946,6 @@ test("retained steering is Turn-local FIFO and disposes prior correlations", asy
     const controls = createControlSource();
     const ending = session.runNextTurn({
       prompt,
-      translate: createCodexTranslator("/work"),
       report: {
         message: (fact) => facts.push(fact),
         transcript: () => {},
@@ -2201,7 +2199,6 @@ test("cancelling an active Turn interrupts only that Turn and preserves partial 
     prompt: "resumed prompt",
     spawn: (() => child) as unknown as ChildProcessSpawn,
     killEscalationMs: 1,
-    translate: createCodexTranslator("/work"),
     report: {
       message: (fact) => facts.push(fact),
       transcript: () => {},
@@ -3176,7 +3173,6 @@ test("one retained App Server owns cumulative usage while fresh Turn translators
     assert.deepEqual(
       await session.runNextTurn({
         prompt: `prompt ${index + 1}`,
-        translate: createCodexTranslator("/work"),
         report: {
           message: (fact) => {
             if (fact.usage?.turns === 1) usage.push(fact.usage);
