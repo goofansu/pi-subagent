@@ -373,11 +373,13 @@ export function registerDeliveryEventHandlers(
     if (notification) delivery.notificationLanded(notification.id);
   });
 
-  pi.on("turn_end", (event) => {
+  pi.on("turn_end", (event, ctx) => {
     const message = event.message as { stopReason?: string } | undefined;
-    // This is the host turn_end stop reason, not an executor outcome. It
-    // tells delivery that an in-flight notification needs to be retried.
-    if (message?.stopReason === "aborted") delivery.turnAborted();
+    // Some providers surface an aborted host request as an error message. The
+    // host signal remains the provider-neutral evidence that Escape cleared
+    // its queued follow-ups, so those notifications need to be retried too.
+    if (message?.stopReason === "aborted" || ctx.signal?.aborted)
+      delivery.turnAborted();
   });
 
   pi.on("agent_settled", () => delivery.agentSettled());

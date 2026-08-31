@@ -1622,6 +1622,69 @@ test("INV-9 boundary: lost notification retries once without changing result", a
   assert.match(result.content[0].text, / {2}answer\n$/);
 });
 
+test("INV-9 boundary: settlement retries notifications discarded by an error-shaped abort", async () => {
+  const boundary = runtimeBoundary([
+    "run-completed",
+    "run-failed-first",
+    "run-failed-second",
+  ]);
+  const ids = await Promise.all([
+    boundary.start(),
+    boundary.start(),
+    boundary.start(),
+  ]);
+  boundary.active[0].report.message({
+    role: "assistant",
+    parts: [{ type: "text", text: "answer" }],
+  });
+  boundary.active[0].resolve({ ending: "answered" });
+  boundary.active[1].resolve({
+    ending: "failed",
+    errorMessage: "provider capacity",
+  });
+  boundary.active[2].resolve({
+    ending: "failed",
+    errorMessage: "provider capacity",
+  });
+  await boundary.flush();
+
+  assert.equal(boundary.pushed.length, 3);
+  assert.equal(boundary.runs.list().length, 3);
+
+  // The captured parent session was interrupted while these custom follow-ups
+  // were queued. Its provider persisted the abort as an error, then Pi settled
+  // with an empty queue. Every still-unlanded notification must be retried.
+  const parentAbort = new AbortController();
+  parentAbort.abort();
+  boundary.events.turn_end(
+    {
+      message: {
+        stopReason: "error",
+        errorMessage: "This operation was aborted",
+      },
+    },
+    { signal: parentAbort.signal },
+  );
+  boundary.events.agent_settled({});
+
+  assert.equal(boundary.pushed.length, 6);
+  for (const id of ids) {
+    boundary.events.message_start({
+      message: {
+        role: "custom",
+        customType: "subagent-notification",
+        details: {
+          id,
+          subagentId: boundary.delivery.result(id)?.subagentId,
+          agent: "worker",
+          status: boundary.delivery.result(id)?.status,
+        },
+      },
+    });
+  }
+  assert.equal(boundary.runs.list().length, 0);
+});
+
 test("INV-9 boundary: a failed notification push preserves the exact result", async () => {
   const boundary = runtimeBoundary(["run-1"], { pushThrows: true });
   const id = await boundary.start();
