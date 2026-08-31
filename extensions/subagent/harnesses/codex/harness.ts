@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { Translation } from "../../one-shot.ts";
 import type {
   Fact,
   RunEnding,
@@ -17,6 +16,7 @@ import {
 import type {
   CodexAppServerEvent,
   CodexAppServerSessionOptions,
+  CodexTranslation,
   ThreadItem,
   ThreadTokenUsage,
   Turn,
@@ -172,7 +172,7 @@ function reasoningHeadline(summary: string): string | undefined {
 /** Create the fresh stateful translator for one App Server Turn. */
 export function createCodexTranslator(
   cwd: string,
-): (event: CodexAppServerEvent) => Translation | undefined {
+): (event: CodexAppServerEvent) => CodexTranslation | undefined {
   const reasoning = new Map<string, string>();
   const commands = new Map<string, string>();
   const outputTails = new Map<string, string>();

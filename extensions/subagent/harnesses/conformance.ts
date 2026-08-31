@@ -1,5 +1,5 @@
 /**
- * The shared conformance battery for one-shot harness executors.
+ * The shared conformance battery for Harness executors.
  *
  * This module knows only the core harness and run contracts. A rig supplies a
  * harness backed by a fake implementation for each scenario; backend wire

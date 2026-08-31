@@ -4,8 +4,8 @@ These invariants define the correctness contract of the subagent runtime.
 
 ## Harness seam
 
-Runs are one-shot and backend-neutral. A profile names a harness (default
-`pi`); the registry resolves it before dispatch. Harness preparation receives
+Runs are backend-neutral and settle exactly once. A profile names a harness
+(default `pi`); the registry resolves it before dispatch. Harness preparation receives
 only fixed Subagent inputs and returns one adapter instance. That adapter may
 own private provider Conversation state, declares neutral capabilities,
 prepares each Run from its description and prompt, and closes idempotently.
@@ -115,7 +115,7 @@ cancellation is still reported. Every provider identity remains adapter-local.
 ## INV-1 — Subagent and Run identities are stable
 
 A Subagent ID identifies exactly one Session-scoped Subagent. A Run ID
-identifies exactly one one-shot Run owned by a Subagent. The two identity kinds
+identifies exactly one Run owned by a Subagent. The two identity kinds
 are distinct, locally generated, and never provider identities.
 
 Neither identity is reused within the Session, including after notification

@@ -1,7 +1,7 @@
 /**
  * Session-scoped Subagent ownership.
  *
- * A Subagent is the stable identity above one-shot Runs. This manager is the
+ * A Subagent is the stable identity above its sequential Runs. This manager is the
  * sole owner of its Profile association, prepared Harness adapter, lifecycle,
  * and active-Run relationship. The Dispatcher still owns every Run record and
  * terminal transition.
@@ -49,7 +49,7 @@ export interface StartManagedSubagentOptions {
 export interface StartedManagedSubagent {
   /** Stable Session-scoped identity retained after the first Run settles. */
   readonly subagentId: string;
-  /** Identity of the first one-shot Run. */
+  /** Identity of the first Run. */
   readonly runId: string;
   readonly settled: Promise<SingleResult>;
 }

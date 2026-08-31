@@ -3,9 +3,7 @@ import {
   spawn as defaultSpawn,
   type SpawnOptions,
 } from "node:child_process";
-import type { ChildProcessSpawn } from "../../child-process.ts";
 import type { ControlAdmission, ControlSource } from "../../control-source.ts";
-import type { Translation } from "../../one-shot.ts";
 import {
   DEPTH_ENV_KEY,
   type Fact,
@@ -34,6 +32,21 @@ const CLIENT_INFO = {
 
 type JsonObject = Record<string, unknown>;
 type TurnStatus = "completed" | "interrupted" | "failed" | "inProgress";
+
+export type ChildProcessSpawn = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => ChildProcess;
+
+export interface CodexTranslation {
+  facts?: Fact[];
+  transcript?: Fact[];
+  /** Live UI activity: absent leaves it unchanged, null clears it. */
+  activity?: string | null;
+  terminal?: boolean;
+  errorMessage?: string;
+}
 
 export interface CodexAppServerJsonRpcError {
   readonly code: number;
@@ -240,7 +253,9 @@ export interface CodexAppServerSessionOptions {
 
 export interface CodexAppServerTurnOptions {
   readonly prompt: string;
-  readonly translate: (event: CodexAppServerEvent) => Translation | undefined;
+  readonly translate: (
+    event: CodexAppServerEvent,
+  ) => CodexTranslation | undefined;
   readonly report: RunReporter;
   readonly signal?: AbortSignal;
   readonly controls?: ControlSource;
@@ -722,7 +737,7 @@ interface PendingRequest {
   readonly settleOnTransport: boolean;
 }
 
-type SourceConclusion =
+type CodexProcessConclusion =
   | { readonly status: "clean" }
   | { readonly status: "failed"; readonly errorMessage?: string };
 
@@ -1422,7 +1437,7 @@ function runCodexAppServerTurn(
       cancellationSequence !== undefined &&
       (sequence === undefined || cancellationSequence <= sequence);
     const endingFrom = (
-      conclusion: SourceConclusion,
+      conclusion: CodexProcessConclusion,
       conclusionSequence: number | undefined,
     ): RunEnding => {
       if (terminalAnswer) return { ending: "answered" };
@@ -1440,7 +1455,7 @@ function runCodexAppServerTurn(
         errorMessage: witnessedError ?? missingAnswerMessage,
       };
     };
-    const settle = (conclusion: SourceConclusion): void => {
+    const settle = (conclusion: CodexProcessConclusion): void => {
       if (endingSettled) return;
       endingSettled = true;
       closeTurnState();
@@ -1461,7 +1476,7 @@ function runCodexAppServerTurn(
       reject(error);
     };
     const finish = (
-      conclusion: SourceConclusion,
+      conclusion: CodexProcessConclusion,
       terminate: boolean,
       requestSettlement: CodexAppServerTransportRejectionReason,
     ): void => {
@@ -1574,7 +1589,7 @@ function runCodexAppServerTurn(
       sequence: number,
       notification: CodexAppServerEvent,
     ): void => {
-      let translation: Translation | undefined;
+      let translation: CodexTranslation | undefined;
       if (notification.method === "turn/completed") {
         providerIdentities.add(notification.params.turn.id);
         for (const item of notification.params.turn.items)

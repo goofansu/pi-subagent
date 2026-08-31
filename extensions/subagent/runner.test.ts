@@ -9,8 +9,8 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, test } from "node:test";
-import type { ChildProcessSpawn } from "./child-process.ts";
 import type { ControlSource } from "./control-source.ts";
+import type { ChildProcessSpawn } from "./harnesses/codex/app-server.ts";
 import { createCodexHarness } from "./harnesses/codex/harness.ts";
 import {
   createHarnessRegistry,

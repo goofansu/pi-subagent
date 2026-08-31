@@ -133,7 +133,7 @@ export function createSubagentRuns(
 
   const notify = (): void => {
     for (const listener of [...listeners]) {
-      // Notify runs inside child-process stream callbacks, where an uncaught
+      // Notify runs inside provider stream callbacks, where an uncaught
       // throw kills the whole pi process. One broken or stale listener — a
       // widget whose session has since been torn down — must not do that, nor
       // stop the listeners after it from hearing the change.

@@ -12,7 +12,7 @@ pi install https://github.com/goofansu/pi-subagent
 
 - `/agents` lists loaded agent profiles, shows their prompts, and hands one a task. With no agents configured, it prints the directory to add one to.
 
-Delegation uses six tools. `agent_start` creates a stable, Session-scoped Subagent and immediately starts its first one-shot Run. The Run is detached from the turn that started it, so starting work and retrieving its answer are separate steps:
+Delegation uses six tools. `agent_start` creates a stable, Session-scoped Subagent and immediately starts its first Run. The Run is detached from the turn that started it and settles exactly once, so starting work and retrieving its answer are separate steps:
 
 | Tool | What it does |
 | --- | --- |
@@ -195,9 +195,9 @@ every attachment; see [ADR 0009](docs/adr/0009-codex-trust-posture-and-environme
 | `model` only | profile model / Pi default thinking | profile alias / SDK default | profile model / Codex default |
 | both | profile model / profile effort | profile alias / profile budget | profile model / profile effort |
 
-Every Run is one-shot: one prompt in and one terminal answer out. Every
-production Subagent may own several sequential Runs through its private
-provider Conversation. The adapter translates
+Every Run begins with one new prompt and settles exactly once with one immutable
+terminal Result. Every production Subagent may own several sequential Runs
+through its private provider Conversation. The adapter translates
 provider messages into neutral facts; profiles and the rest of the runtime
 never depend on provider wire types.
 
@@ -252,7 +252,7 @@ association is forgotten.
 
 For the Pi harness, project trust is [pi's](https://pi.dev/docs/latest/security#project-trust): the extension resolves none of its own and applies Pi's decision to the retained SDK resource loader and settings. The Claude and Codex harnesses do not consult that trust flag in this version: Claude bypasses permissions unconditionally, and Codex always bypasses approvals and sandbox — deliberate parity, with the forwarded value reserved for a future shared posture, documented in [ADR 0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md).
 
-A subagent reads files, writes files, and runs commands as far as its `tools` list allows, and cannot delegate further — delegation is one level deep. The neutral `agent_steer` operation is implemented at each adapter's private provider boundary. See [ADR 0003](docs/adr/0003-one-shot-children.md) for the one-shot Run behavior.
+A subagent reads files, writes files, and runs commands as far as its `tools` list allows, and cannot delegate further — delegation is one level deep. The neutral `agent_steer` operation is implemented at each adapter's private provider boundary. See [ADR 0020](docs/adr/0020-run-settlement-through-harness-conformance.md) for the current Run-settlement decision.
 
 ## Release verification
 

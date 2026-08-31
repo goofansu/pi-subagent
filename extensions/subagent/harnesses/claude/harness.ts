@@ -4,9 +4,9 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { Translation } from "../../one-shot.ts";
 import {
   DEPTH_ENV_KEY,
+  type Fact,
   type FactPart,
   type RunEnding,
   type SubagentContext,
@@ -59,6 +59,15 @@ const THINKING_BUDGETS: Record<string, number> = {
   max: 32_768,
 };
 
+interface ClaudeTranslation {
+  facts?: Fact[];
+  transcript?: Fact[];
+  /** Live UI activity: absent leaves it unchanged, null clears it. */
+  activity?: string | null;
+  terminal?: boolean;
+  errorMessage?: string;
+}
+
 export type ClaudeQuery = (params: {
   prompt: string | AsyncIterable<SDKUserMessage>;
   options?: Options;
@@ -99,7 +108,9 @@ function contentParts(content: unknown): FactPart[] {
 }
 
 /** Translate one SDK wire object into domain facts; SDK objects stop here. */
-function translateClaudeMessage(message: SDKMessage): Translation | undefined {
+function translateClaudeMessage(
+  message: SDKMessage,
+): ClaudeTranslation | undefined {
   const wire = message as unknown as Record<string, unknown>;
   if (wire.type === "assistant" && isRecord(wire.message)) {
     const parts = contentParts(wire.message.content);
@@ -239,7 +250,7 @@ function translateClaudeMessage(message: SDKMessage): Translation | undefined {
  */
 export function createClaudeTranslator(): (
   message: SDKMessage,
-) => Translation | undefined {
+) => ClaudeTranslation | undefined {
   const turnCounter = createClaudeTurnCounter();
   let previousUsage = {
     input: 0,

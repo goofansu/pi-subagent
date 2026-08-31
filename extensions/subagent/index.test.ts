@@ -9,9 +9,9 @@ import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { type ExtensionAPI, initTheme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import type { ChildProcessSpawn } from "./child-process.ts";
 import { type ControlAdmission, createControlGate } from "./control-source.ts";
 import { createSubagentDelivery, type PushedNotification } from "./delivery.ts";
+import type { ChildProcessSpawn } from "./harnesses/codex/app-server.ts";
 import { createCodexHarness } from "./harnesses/codex/harness.ts";
 import { createHarnessRegistry, type Harness } from "./harnesses/contract.ts";
 import subagentExtension, {

@@ -29,10 +29,11 @@ successful `agent_resume` synchronously claims a resumable idle Subagent and
 starts its next Run; an active Subagent rejects resume rather than queueing it.
 
 **Run** — one managed goal cycle of one Subagent's fixed Profile, begun by one
-new prompt and completed by one immutable terminal Result. A Run may span
-several provider Turns: intermediate provider completion is accounting and
-Conversation evidence, not a second Run and not necessarily settlement. A Run
-has its own local id, lifecycle, transcript, usage, Result, and owning Subagent.
+new prompt and settled exactly once with one immutable terminal Result. A Run
+may span several provider Turns: intermediate provider completion is
+accounting and Conversation evidence, not a second Run and not necessarily
+settlement. A Run has its own local id, lifecycle, transcript, usage, Result,
+and owning Subagent.
 The registry holds live-display Runs, and the widget lists them. Not "job", not
 "task", not "call", and not a provider Turn. Notification delivery state is a
 separate state machine, tracked by the delivery module keyed by Run id — never
@@ -207,13 +208,6 @@ it never touches the run record. Steering support is declared per prepared Run;
 there is no Harness control method or provider session in core. Wire format
 stops inside the harness — no backend's message shapes cross this seam.
 
-**One-shot protocol** — the module owning terminal-before-abort ordering, the
-missing-answer policy, and ending derivation, whichever source feeds it. It
-runs one source to one ending, reports facts live, and discards calls after
-settlement. Its sink returns `true` only for a terminal answer witnessed before
-abort, `false` for a translated nonterminal or post-abort terminal event, and
-`undefined` for ignored or post-settlement events.
-
 **Conformance** — the capability-aware battery of thirteen required scenarios every
 harness's executor must pass as part of its own tests: `backend-crash`,
 `abort-mid-run`, `terminal-answer-then-abort`, `usage-totals`, `child-depth`,
@@ -238,7 +232,7 @@ bookkeeping and asks this one what a notification says.
 
 **Session lifecycle** (`session-lifecycle.ts`) — owns Session start and
 shutdown: refilling stable profile/session-fact references, re-aiming pushes,
-replacing the widget, one-shot feature registration, warnings, and ordered
+replacing the widget, single feature registration, warnings, and ordered
 cleanup. Shutdown unbinds delivery, asks the manager to close Subagents and
 cancel active Runs, then clears delivery and live Run state. The composition
 root only forwards host events to it.

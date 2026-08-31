@@ -4,9 +4,9 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import type { ChildProcessSpawn } from "../child-process.ts";
 import type { RunEnding } from "../run.ts";
 import { type ClaudeQuery, createClaudeHarness } from "./claude/harness.ts";
+import type { ChildProcessSpawn } from "./codex/app-server.ts";
 import { createCodexHarness } from "./codex/harness.ts";
 import type { Harness, HarnessAdapter } from "./contract.ts";
 import {

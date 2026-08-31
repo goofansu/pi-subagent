@@ -3,14 +3,12 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { type TestContext, test } from "node:test";
-import type { ChildProcessSpawn } from "../../child-process.ts";
 import {
   CONTROL_MAX_PENDING,
   type ControlSource,
   type ControlSourceOwner,
   createControlSource,
 } from "../../control-source.ts";
-import type { OneShotSink } from "../../one-shot.ts";
 import {
   DEPTH_ENV_KEY,
   type Fact,
@@ -18,6 +16,7 @@ import {
   type RunReporter,
 } from "../../run.ts";
 import {
+  type ChildProcessSpawn,
   type CodexAppServerEvent,
   CodexAppServerRequestError,
   type CodexAppServerSessionOptions,
@@ -25,6 +24,11 @@ import {
   type CodexAppServerTurnOptions,
   createCodexAppServerSession,
 } from "./app-server.ts";
+
+interface EventSink<E> {
+  event(event: E): boolean | undefined;
+  stderr(chunk: string): void;
+}
 
 interface FakeChild extends EventEmitter {
   stdin: PassThrough;
@@ -228,10 +232,7 @@ function sourceWith(
     if (replacementKill) child.kill = replacementKill;
     return child as unknown as ChildProcess;
   };
-  const source = (
-    sink: OneShotSink<CodexAppServerEvent>,
-    signal: AbortSignal,
-  ) =>
+  const source = (sink: EventSink<CodexAppServerEvent>, signal: AbortSignal) =>
     runCodexAppServer({
       cwd: "/work",
       childDepth: 2,
@@ -809,7 +810,7 @@ test("abort-first writes turn/interrupt and no later turn/steer", async () => {
 function sinkFor(
   events: CodexAppServerEvent[],
   stderr: string[],
-): OneShotSink<CodexAppServerEvent> {
+): EventSink<CodexAppServerEvent> {
   return {
     event: (event) => {
       events.push(event);

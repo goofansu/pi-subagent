@@ -3,7 +3,6 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
-import type { ChildProcessSpawn } from "../../child-process.ts";
 import {
   type ControlSource,
   createControlSource,
@@ -24,6 +23,7 @@ import {
 } from "../conformance.ts";
 import type { Harness, HarnessRun } from "../contract.ts";
 import {
+  type ChildProcessSpawn,
   type CodexAppServerEvent,
   type CodexAppServerSessionOptions,
   type CodexAppServerTurnOptions,

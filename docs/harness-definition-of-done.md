@@ -171,14 +171,14 @@ comments and ordinary string literals are not.
   through the dispatcher and fold, asserting additive deltas; the Pi and fake
   rigs also prove latest-context replacement, while the Claude rig proves no
   double count between per-message usage and the terminal result.
-- [x] **One-shot binds every Run** — one prompt in, one terminal answer out
-  (ADR-0003 is a property of Run). Harness preparation binds the fixed
+- [x] **Every Run settles exactly once** — one new prompt produces one
+  immutable terminal Result (ADR-0020). Harness preparation binds the fixed
   Subagent context and returns an adapter that can prepare independent Runs,
   declare neutral resume capability, and close idempotently. The Session
   manager retains it while the Subagent is idle and closes it at Session
   shutdown; the dispatcher owns only each Run execution. *Test:*
-  `one-shot.test.ts` has compile-time exact `keyof` assertions for `Harness`,
-  `HarnessAdapter`, `HarnessCapabilities`, `HarnessRun`, `SubagentContext`,
+  `harnesses/contract.test.ts` has compile-time exact `keyof` assertions for
+  `Harness`, `HarnessAdapter`, `HarnessCapabilities`, `HarnessRun`, `SubagentContext`,
   `SubagentTask`, `SubagentRun`, `Fact`, `RunEnding`, and `SingleResult`, plus
   runtime checks covering every adapter. Prepared Runs declare neutral Control
   capability, and executors receive only a fresh reporter, AbortSignal, and
