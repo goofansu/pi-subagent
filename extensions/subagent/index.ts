@@ -199,7 +199,7 @@ export function registerSubagentFeatureTools(
       "when only the run's answer is left, call agent_wait instead of ending " +
       "the turn.",
     "One agent_wait covers a whole barrier: pass every id at once, with a " +
-      "timeout_seconds that comfortably exceeds the work you delegated.",
+      "timeoutSeconds that comfortably exceeds the work you delegated.",
     "agent_wait returning still-running means it timed out, not that the run " +
       "failed — the notification still arrives on its own, so do not " +
       "immediately call agent_wait for the same ids again.",
@@ -213,7 +213,7 @@ export function registerSubagentFeatureTools(
     promptGuidelines: waitGuidelines,
     parameters: Type.Object({
       ids: ID_LIST,
-      timeout_seconds: Type.Optional(
+      timeoutSeconds: Type.Optional(
         Type.Number({
           description:
             "Give up waiting after this long. Prefer a value that comfortably " +
@@ -226,9 +226,9 @@ export function registerSubagentFeatureTools(
 
     async execute(_toolCallId, params, signal) {
       const outcome = await delivery.wait(params.ids, {
-        ...(params.timeout_seconds === undefined
+        ...(params.timeoutSeconds === undefined
           ? {}
-          : { timeoutMs: params.timeout_seconds * 1_000 }),
+          : { timeoutMs: params.timeoutSeconds * 1_000 }),
         ...(signal ? { signal } : {}),
       });
 

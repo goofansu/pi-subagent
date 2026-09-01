@@ -18,7 +18,7 @@ Delegation uses six tools. `agent_start` creates a stable, Session-scoped Subage
 | --- | --- |
 | `agent_start` | Creates a stable Subagent, starts its first Run, and immediately returns distinct Subagent and Run ids. Takes `agent`, `description`, and `prompt`; the profile decides the model, effort, and tools. |
 | `agent_resume` | Targets an idle Subagent id with a new `description` and full `prompt`, starts a distinct Run immediately, and returns its Run id rather than an answer. It never queues behind an active Run. |
-| `agent_wait` | Waits for named runs to become terminal and returns lifecycle state only. Takes an optional `timeout_seconds`; waiting never suppresses notifications or consumes results. |
+| `agent_wait` | Waits for named runs to become terminal and returns lifecycle state only. Takes an optional `timeoutSeconds`; waiting never suppresses notifications or consumes results. |
 | `agent_cancel` | Stops named runs; partial output remains available after cancellation settles. |
 | `agent_steer` | Offers bounded guidance to an active run. Acceptance means local mailbox admission only; every production harness delivers accepted guidance serially through its active provider execution. |
 | `agent_result` | Reads a finished run's authoritative full output by id. |

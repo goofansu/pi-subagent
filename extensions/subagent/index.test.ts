@@ -1400,7 +1400,7 @@ test("Run-scoped tools never redirect a Subagent id and landing retains its adap
 
   const wait = await boundary.tools.agent_wait.execute("wait", {
     ids: [started.subagentId],
-    timeout_seconds: 0,
+    timeoutSeconds: 0,
   });
   const result = await boundary.tools.agent_result.execute("result", {
     id: started.subagentId,
