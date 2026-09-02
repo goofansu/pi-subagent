@@ -60,6 +60,8 @@ export interface V2BoundaryGraph {
   readonly v2Entry: string;
   /** The plain-TypeScript domain module, which may import only itself. */
   readonly domainRoot: string;
+  /** The backend contract module, which is Effect-typed but mechanism-free. */
+  readonly contractRoot: string;
   /** The checker itself, excluded from the legacy-name scan. */
   readonly checkerFile?: string;
 }
@@ -69,6 +71,12 @@ const productionGraph: V2BoundaryGraph = {
   v2Root: path.join(repositoryRoot, "extensions", "subagent-v2"),
   v2Entry: path.join(repositoryRoot, "extensions", "subagent-v2", "index.ts"),
   domainRoot: path.join(repositoryRoot, "extensions", "subagent-v2", "domain"),
+  contractRoot: path.join(
+    repositoryRoot,
+    "extensions",
+    "subagent-v2",
+    "backend",
+  ),
   checkerFile,
 };
 
@@ -135,6 +143,21 @@ const DOMAIN_TEST_PACKAGES = new Set([
 function isTestFile(file: string): boolean {
   return file.endsWith(".test.ts");
 }
+
+/**
+ * Runtime mechanism vocabulary that belongs at the host boundary and in tests.
+ *
+ * The domain has no runtime in it at all, and the backend contract expresses
+ * lifetime with `Scope` and cancellation with interruption — so an adapter is
+ * never handed a signal to poll, and nothing in either module runs an Effect.
+ * Tests are exempt: a test has to run the Effect it is testing, and the
+ * contract's own shape test names these very words as forbidden.
+ */
+const MECHANISM_VOCABULARY = [
+  "AbortController",
+  "AbortSignal",
+  "Effect.runPromise",
+] as const;
 
 function specifiersOf(file: string): string[] {
   return readImportSpecifiers(fs.readFileSync(file, "utf8"));
@@ -228,7 +251,21 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 5. No v2 file reaches a provider SDK before the adapter milestones.
+  // 5. Runtime mechanism vocabulary stays out of the neutral core.
+  for (const file of [
+    ...listSourceFiles(graph.domainRoot, { includeTests: false }),
+    ...listSourceFiles(graph.contractRoot, { includeTests: false }),
+  ]) {
+    const source = fs.readFileSync(file, "utf8");
+    for (const mechanism of MECHANISM_VOCABULARY) {
+      if (!source.includes(mechanism)) continue;
+      violations.add(
+        `${describe(file)} contains runtime mechanism vocabulary ${mechanism}`,
+      );
+    }
+  }
+
+  // 6. No v2 file reaches a provider SDK before the adapter milestones.
   for (const file of listSourceFiles(v2Root, { includeTests: true })) {
     for (const specifier of specifiersOf(file)) {
       if (isProviderSdk(specifier)) {
@@ -239,7 +276,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 6. The freeze runs in both directions: v1 gains neither Effect nor a
+  // 7. The freeze runs in both directions: v1 gains neither Effect nor a
   //    dependency on the tree that is replacing it.
   for (const file of listSourceFiles(v1Root, { includeTests: true })) {
     for (const specifier of specifiersOf(file)) {
@@ -278,6 +315,12 @@ function fixtureGraph(
     v2Root: path.join(fixtureRoot, "extensions", "subagent-v2"),
     v2Entry: path.join(fixtureRoot, "extensions", "subagent-v2", "index.ts"),
     domainRoot: path.join(fixtureRoot, "extensions", "subagent-v2", "domain"),
+    contractRoot: path.join(
+      fixtureRoot,
+      "extensions",
+      "subagent-v2",
+      "backend",
+    ),
   };
   return {
     graph,
@@ -517,6 +560,48 @@ test("any v2 file importing a provider SDK is rejected, tests included", (t) => 
     `${describe(path.join(graph.v2Root, "backend", "fake.test.ts"))} imports forbidden provider SDK @openai/some-sdk`,
     `${describe(graph.v2Entry)} imports forbidden provider SDK @anthropic-ai/claude-agent-sdk`,
   ]);
+});
+
+test("mechanism vocabulary in the domain or the contract is rejected", (t) => {
+  const { graph, write } = fixtureGraph(t, "mechanism-vocabulary");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/domain/reduce.ts",
+    "export const cancel = new AbortController();\n",
+  );
+  write(
+    "extensions/subagent-v2/backend/contract.ts",
+    "/** The adapter never sees an AbortSignal. */\nexport {};\n",
+  );
+  write(
+    "extensions/subagent-v2/backend/fake.ts",
+    'import { Effect } from "effect";\nawait Effect.runPromise(Effect.void);\n',
+  );
+
+  assert.deepEqual(
+    findV2BoundaryViolations(graph),
+    [
+      `${describe(path.join(graph.contractRoot, "contract.ts"))} contains runtime mechanism vocabulary AbortSignal`,
+      `${describe(path.join(graph.contractRoot, "fake.ts"))} contains runtime mechanism vocabulary Effect.runPromise`,
+      `${describe(path.join(graph.domainRoot, "reduce.ts"))} contains runtime mechanism vocabulary AbortController`,
+    ].sort(),
+  );
+});
+
+test("a test may name mechanism vocabulary, because a test has to run things", (t) => {
+  const { graph, write } = fixtureGraph(t, "mechanism-vocabulary-tests");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/backend/contract.test.ts",
+    [
+      'import { Effect } from "effect";',
+      'const forbidden = ["AbortController", "AbortSignal"];',
+      "await Effect.runPromise(Effect.void);",
+      "void forbidden;",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), []);
 });
 
 test("the real v1 and v2 trees hold the boundary", () => {
