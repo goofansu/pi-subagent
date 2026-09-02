@@ -22,6 +22,7 @@ export * from "./reconcile-run.ts";
 export * from "./reconciliation.ts";
 export * from "./reduce-run.ts";
 export * from "./result.ts";
+export * from "./result-bounding.ts";
 export * from "./subagent-context.ts";
 export * from "./text.ts";
 export * from "./transcript.ts";

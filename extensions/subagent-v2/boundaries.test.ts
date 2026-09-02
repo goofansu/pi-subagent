@@ -65,6 +65,8 @@ export interface V2BoundaryGraph {
   readonly domainRoot: string;
   /** The backend contract module, which is Effect-typed but mechanism-free. */
   readonly contractRoot: string;
+  /** The Session runtime, where the supervisor and its services live. */
+  readonly runtimeRoot: string;
   /** The checker itself, excluded from the legacy-name scan. */
   readonly checkerFile?: string;
 }
@@ -79,6 +81,12 @@ const productionGraph: V2BoundaryGraph = {
     "extensions",
     "subagent-v2",
     "backend",
+  ),
+  runtimeRoot: path.join(
+    repositoryRoot,
+    "extensions",
+    "subagent-v2",
+    "runtime",
   ),
   checkerFile,
 };
@@ -204,6 +212,28 @@ const RUNTIME_PRIMITIVES = [
 function namesIdentifier(source: string, identifier: string): boolean {
   return new RegExp(`\\b${identifier}\\b`).test(source);
 }
+
+/**
+ * The runtime files allowed to import `Layer`.
+ *
+ * ADR-0023's rule is that no Subagent, BackendAgent, or Run is a Layer, and
+ * the way that rule is broken is gradually: one more `Layer.effect` in one
+ * more module, each reasonable on its own. Naming the files that may wire one
+ * makes each addition a deliberate edit here, where the rule is written, and
+ * keeps the composition of the Session runtime readable in one place.
+ *
+ * Everything on this list is session-long by construction: the six services,
+ * the module that wires them, and nothing else.
+ */
+const LAYER_MODULES = new Set([
+  "composition.ts",
+  "repository.ts",
+  "result-store.ts",
+  "backend-catalog.ts",
+  "profile-catalog.ts",
+  "supervisor.ts",
+  "delivery.ts",
+]);
 
 function specifiersOf(file: string): string[] {
   return readImportSpecifiers(fs.readFileSync(file, "utf8"));
@@ -342,7 +372,25 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 6. No v2 file reaches a provider SDK before the adapter milestones.
+  // 6. `Layer` is confined to the composition module and the service
+  //    definitions it wires. A Layer per Subagent, BackendAgent, or Run is the
+  //    thing ADR-0023 forbids, and a runtime file that cannot import `Layer`
+  //    cannot make one by accident.
+  for (const file of listSourceFiles(graph.runtimeRoot, {
+    includeTests: false,
+  })) {
+    if (LAYER_MODULES.has(path.basename(file))) continue;
+    for (const edge of readNamedImports(fs.readFileSync(file, "utf8"))) {
+      if (resolveRelativeSource(file, edge.specifier)) continue;
+      if (!isEffectPackage(edge.specifier)) continue;
+      if (!edge.names.includes("Layer") && !edge.names.includes("*")) continue;
+      violations.add(
+        `${describe(file)} imports Layer, which only the composition module and the services it wires may name`,
+      );
+    }
+  }
+
+  // 7. No v2 file reaches a provider SDK before the adapter milestones.
   for (const file of listSourceFiles(v2Root, { includeTests: true })) {
     for (const specifier of specifiersOf(file)) {
       if (isProviderSdk(specifier)) {
@@ -353,7 +401,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 7. The freeze runs in both directions: v1 gains neither Effect nor a
+  // 8. The freeze runs in both directions: v1 gains neither Effect nor a
   //    dependency on the tree that is replacing it.
   for (const file of listSourceFiles(v1Root, { includeTests: true })) {
     for (const specifier of specifiersOf(file)) {
@@ -398,6 +446,7 @@ function fixtureGraph(
       "subagent-v2",
       "backend",
     ),
+    runtimeRoot: path.join(fixtureRoot, "extensions", "subagent-v2", "runtime"),
   };
   return {
     graph,
@@ -719,6 +768,39 @@ test("a domain test may name the test runner but not a runtime", (t) => {
   assert.deepEqual(findV2BoundaryViolations(graph), [
     `${describe(path.join(graph.domainRoot, "reduce.test.ts"))} imports Effect from effect, and a domain file may name only Schema`,
     `${describe(path.join(graph.domainRoot, "reduce.test.ts"))} imports package node:fs, which a domain test may not name`,
+  ]);
+});
+
+test("a runtime module outside the composition may not import Layer", (t) => {
+  const { graph, write } = fixtureGraph(t, "layer-confinement");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  // The composition module and the services it wires may name it.
+  write(
+    "extensions/subagent-v2/runtime/composition.ts",
+    'import { Layer } from "effect";\nvoid Layer;\n',
+  );
+  write(
+    "extensions/subagent-v2/runtime/repository.ts",
+    'import { Effect, Layer } from "effect";\nvoid Effect;\nvoid Layer;\n',
+  );
+  // A Run is not a service, so the module that owns one may not.
+  write(
+    "extensions/subagent-v2/runtime/run-scope.ts",
+    'import { Effect, Layer } from "effect";\nvoid Effect;\nvoid Layer;\n',
+  );
+  write(
+    "extensions/subagent-v2/runtime/mailbox.ts",
+    'import * as effect from "effect";\nvoid effect;\n',
+  );
+  // Naming other Effect bindings is fine: only `Layer` is confined.
+  write(
+    "extensions/subagent-v2/runtime/arbitration.ts",
+    'import { Effect, Queue } from "effect";\nvoid Effect;\nvoid Queue;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.runtimeRoot, "mailbox.ts"))} imports Layer, which only the composition module and the services it wires may name`,
+    `${describe(path.join(graph.runtimeRoot, "run-scope.ts"))} imports Layer, which only the composition module and the services it wires may name`,
   ]);
 });
 
