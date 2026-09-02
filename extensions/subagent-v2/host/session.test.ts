@@ -175,6 +175,38 @@ test("two Session starts in one process leave exactly one runtime alive", async 
   );
 });
 
+test("a Session switch leaves the new Session with a working widget", async (t) => {
+  const rig = hostRig(t, {
+    resumableSteps: [
+      [{ step: "await-gate", gate: "first" }],
+      [{ step: "await-gate", gate: "second" }],
+    ],
+  });
+  t.after(() => rig.installation.handle.release());
+
+  await rig.host.sessionStart();
+  await rig.text("agent_start", {
+    agent: RIG_RESUMABLE_PROFILE,
+    description: "d",
+    prompt: "p",
+  });
+  await rig.pump();
+  assert.equal(rig.host.hasWidget(), true);
+
+  // A start with no shutdown between them, which is the switch the handle has
+  // to survive: both Sessions' widgets live under one key in Pi's widget map.
+  await rig.host.sessionStart();
+  await rig.text("agent_start", {
+    agent: RIG_RESUMABLE_PROFILE,
+    description: "d",
+    prompt: "p",
+  });
+  await rig.pump();
+
+  assert.equal(rig.host.hasWidget(), true);
+  assert.ok(rig.host.widgetLines().length > 0);
+});
+
 test("a Session shutdown disposes the runtime and leaves nothing alive", async (t) => {
   const rig = hostRig(t);
 

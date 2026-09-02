@@ -121,18 +121,33 @@ function openSession(
 export type SessionStartContext = Pick<ExtensionContext, "ui">;
 
 /**
- * Start a Session: build the runtime, install the surfaces, bind the sink.
+ * Start a Session: dispose the last one, build the runtime, install the
+ * surfaces, bind the sink.
  *
- * The order is not arbitrary. The runtime is built first, because everything
- * else needs its services. The widget goes into the runtime's Scope, so it
- * leaves when the runtime does. The sink is bound last, because binding it is
- * what makes notifications start flowing and there is no point in that before
- * the Session can render them.
+ * The order is not arbitrary.
+ *
+ * **The previous Session's runtime goes first**, before the new one is built.
+ * Nothing currently observable depends on that: a Session's widget appears
+ * only with its first live Run, so a new Session has nothing installed under
+ * the shared widget key at the moment an old Session's Scope closes. The order
+ * is here because that is a coincidence rather than a guarantee — the two
+ * widgets share one key in Pi's widget map, and an old Scope's finalizer
+ * clearing a new Session's widget is the kind of failure that appears the
+ * first time anything makes a widget install earlier. `bind` disposes what was
+ * bound as well, which is what makes "never two runtimes alive" true whatever
+ * a caller does; this makes the ordering explicit rather than incidental.
+ *
+ * Then the runtime, because everything else needs its services. Then the
+ * widget, into the runtime's own Scope, so it leaves when the runtime does.
+ * The sink is bound last, because binding it is what makes notifications start
+ * flowing and there is no point in that before the Session can render them.
  */
 export async function startSession(
   wiring: SessionWiring,
   ctx: SessionStartContext,
 ): Promise<StartedSession> {
+  await wiring.handle.release();
+
   const runtime = ManagedRuntime.make(
     sessionRuntimeLayer({
       backendSet: wiring.backendSet(),
@@ -142,10 +157,25 @@ export async function startSession(
     }),
   );
 
+  // Pi's `setWidget` is overloaded against Pi's own `Theme`, which
+  // presentation does not name — it works against the three colour functions
+  // it actually uses. The cast is where those two views of a theme meet, and
+  // it is here rather than in the widget so the widget stays testable with a
+  // theme that paints nothing.
   const widgetHost = ctx.ui as unknown as WidgetHost;
-  const opened = await runtime.runPromise(
-    Scope.provide(openSession(widgetHost, wiring.now), runtime.scope),
-  );
+  // Disposed rather than orphaned if opening fails. `openSession` is typed as
+  // never failing, so this is about a defect — a host context that throws, an
+  // unreadable Profile directory — and the alternative is a runtime nothing
+  // holds and nothing can ever close.
+  let opened: StartedSession;
+  try {
+    opened = await runtime.runPromise(
+      Scope.provide(openSession(widgetHost, wiring.now), runtime.scope),
+    );
+  } catch (failure) {
+    await runtime.dispose();
+    throw failure;
+  }
 
   await wiring.handle.bind({
     runtime,
