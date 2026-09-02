@@ -35,6 +35,7 @@ import { Effect, ManagedRuntime, Scope } from "effect";
 import type { Profile, ProfileDiagnostic } from "../domain/index.ts";
 import type { BackendSet, SessionServices } from "../runtime/composition.ts";
 import { sessionRuntimeLayer } from "../runtime/composition.ts";
+import type { RuntimePolicy } from "../runtime/policy.ts";
 import { ProfileCatalog } from "../runtime/profile-catalog.ts";
 import type { SessionPushSink } from "./push-sink.ts";
 import type { SessionHandle } from "./session-handle.ts";
@@ -58,6 +59,8 @@ export interface SessionWiring {
   readonly backendSet: () => BackendSet;
   /** Where user Profiles are read from. User scope only, as M1 decided. */
   readonly agentDir: string;
+  /** The bounds this Session enforces. Omitted means the defaults. */
+  readonly policy?: RuntimePolicy;
   /**
    * The live `agent_start` guideline array, rewritten in place per Session.
    *
@@ -135,6 +138,7 @@ export async function startSession(
       backendSet: wiring.backendSet(),
       profiles: { from: "directory", agentDir: wiring.agentDir },
       sink: wiring.sink,
+      ...(wiring.policy === undefined ? {} : { policy: wiring.policy }),
     }),
   );
 

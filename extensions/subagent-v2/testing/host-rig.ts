@@ -29,6 +29,10 @@ import {
 import { installSubagentV2, type SubagentV2Installation } from "../index.ts";
 import type { BackendSet } from "../runtime/composition.ts";
 import { probeIsClear, type RuntimeProbe } from "../runtime/counters.ts";
+import {
+  DEFAULT_RUNTIME_POLICY,
+  type RuntimePolicy,
+} from "../runtime/policy.ts";
 import { SubagentSupervisor } from "../runtime/supervisor.ts";
 import {
   createFakeOneShotBackend,
@@ -75,6 +79,19 @@ export const RIG_RUN: readonly FakeStep[] = [
 /** How many Runs a rig backend is scripted for when a test says nothing. */
 const DEFAULT_SCRIPTED_RUNS = 8;
 
+/**
+ * The defaults, with one push attempt and no delay between attempts.
+ *
+ * The real budget waits a second between attempts on the runtime clock, and no
+ * test in this lane lets real time pass. Delivery's own retry is proven at the
+ * M2 seam with a test clock; what a host test is about is what happens *after*
+ * a push, which is landing.
+ */
+export const RIG_POLICY: RuntimePolicy = {
+  ...DEFAULT_RUNTIME_POLICY,
+  deliveryRetryBudget: { attempts: 1, delayMillis: 0 },
+};
+
 export interface HostRigOptions extends StandInHostOptions {
   /** One script per resumable Run, consumed in order. */
   readonly resumableSteps?: readonly (readonly FakeStep[])[];
@@ -86,6 +103,15 @@ export interface HostRigOptions extends StandInHostOptions {
   readonly profileFiles?: Readonly<Record<string, string>>;
   /** A shared ordering log the fakes append their lifecycle events to. */
   readonly trace?: string[];
+  /**
+   * The bounds the Session enforces.
+   *
+   * A test that proves what happens at a bound has to be able to lower it. The
+   * delivery retry budget is the one most tests here want to change, because
+   * its default waits a second between attempts on the runtime clock and no
+   * test in this lane lets real time pass.
+   */
+  readonly policy?: RuntimePolicy;
 }
 
 export interface HostRig {
@@ -238,6 +264,7 @@ export function hostRig(
     agentDir: root,
     backendSet,
     now: () => RIG_NOW,
+    policy: options.policy ?? RIG_POLICY,
   });
 
   let readProbe: (() => RuntimeProbe) | undefined;

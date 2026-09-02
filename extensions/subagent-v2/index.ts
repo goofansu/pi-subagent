@@ -18,6 +18,7 @@ import { registerSubagentTools } from "./host/tools.ts";
 import type { ActiveWidget } from "./host/widget.ts";
 import { profilesDir } from "./profiles/discovery.ts";
 import type { BackendSet } from "./runtime/composition.ts";
+import type { RuntimePolicy } from "./runtime/policy.ts";
 
 /** What the extension needs from the process it is loaded into. */
 export interface SubagentV2Options {
@@ -31,6 +32,15 @@ export interface SubagentV2Options {
    * share both.
    */
   readonly backendSet: () => BackendSet;
+  /**
+   * The bounds each Session's runtime enforces.
+   *
+   * Omitted means the defaults, which is what a real Pi process wants. It is
+   * an option because the bounds are configuration rather than policy the host
+   * decides — and because a test proving what happens *at* a bound has to be
+   * able to lower it.
+   */
+  readonly policy?: RuntimePolicy;
   /** Reads the wall clock. Supplied by a test so widget durations are fixed. */
   readonly now?: () => number;
 }
@@ -98,6 +108,7 @@ export function installSubagentV2(
     backendSet: options.backendSet,
     agentDir: options.agentDir,
     agentGuidelines,
+    ...(options.policy === undefined ? {} : { policy: options.policy }),
     setProfiles: (loaded: readonly Profile[]) => {
       profiles = loaded;
     },
