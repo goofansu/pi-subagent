@@ -67,6 +67,14 @@ export interface V2BoundaryGraph {
   readonly contractRoot: string;
   /** The Session runtime, where the supervisor and its services live. */
   readonly runtimeRoot: string;
+  /** Pure prose and row formatting, which may name only the domain and Pi. */
+  readonly presentationRoot: string;
+  /** The `Subagents` façade, between presentation and the host. */
+  readonly applicationRoot: string;
+  /** The Pi host boundary: the one place that runs an Effect. */
+  readonly hostRoot: string;
+  /** Test helpers, which are a test boundary and may run Effects. */
+  readonly testingRoot: string;
   /** The checker itself, excluded from the legacy-name scan. */
   readonly checkerFile?: string;
 }
@@ -87,6 +95,25 @@ const productionGraph: V2BoundaryGraph = {
     "extensions",
     "subagent-v2",
     "runtime",
+  ),
+  presentationRoot: path.join(
+    repositoryRoot,
+    "extensions",
+    "subagent-v2",
+    "presentation",
+  ),
+  applicationRoot: path.join(
+    repositoryRoot,
+    "extensions",
+    "subagent-v2",
+    "application",
+  ),
+  hostRoot: path.join(repositoryRoot, "extensions", "subagent-v2", "host"),
+  testingRoot: path.join(
+    repositoryRoot,
+    "extensions",
+    "subagent-v2",
+    "testing",
   ),
   checkerFile,
 };
@@ -187,7 +214,67 @@ const MECHANISM_VOCABULARY = [
   "AbortController",
   "AbortSignal",
   "Effect.runPromise",
+  "ManagedRuntime",
 ] as const;
+
+/**
+ * Where the host boundary is.
+ *
+ * M3 makes the exit-gate rule checkable rather than reviewable: the host
+ * module is the one place a Pi callback crosses into Effect, so it is the one
+ * place that may run one, hold a managed runtime, or touch an abort signal.
+ * Everything else in the production tree — the domain, the contract, the
+ * runtime, presentation, the façade, Profile discovery — runs *inside* an
+ * Effect and is scanned for the vocabulary above.
+ *
+ * The test helpers are exempt for the same reason tests are: a rig is where a
+ * `node:test` callback crosses into Effect, which makes it a test boundary
+ * rather than production code that reached for a runtime.
+ */
+function isHostBoundaryFile(file: string, graph: V2BoundaryGraph): boolean {
+  return (
+    file === graph.v2Entry ||
+    isInside(file, graph.hostRoot) ||
+    isInside(file, graph.testingRoot)
+  );
+}
+
+/** Pi's own packages: the host API and the TUI primitives it ships. */
+function isHostPackage(specifier: string): boolean {
+  return specifier.startsWith("@earendil-works/");
+}
+
+/**
+ * The schema library v2 does not use.
+ *
+ * ADR-0029 adopted Effect Schema for v2, and the M2 spike cleared the last
+ * thing that was keeping `typebox` alive in v2: emitting a JSON Schema
+ * document the Pi host accepts for a tool's `parameters`. The dependency
+ * itself stays in the manifest until v1 is deleted at M7, because v1 uses it —
+ * so the rule that keeps it out of v2 has to be a check rather than the
+ * absence of a dependency.
+ */
+const SECOND_SCHEMA_LIBRARY = "typebox";
+
+/**
+ * The only files that may name a backend or a fake.
+ *
+ * "Only the composition root names backends" is the rule that keeps the host
+ * from reaching around the runtime: a host handler that could import a
+ * `Backend` could open one, and then two things would own BackendAgent
+ * lifetime. Naming the files here makes each addition a deliberate edit where
+ * the rule is written.
+ */
+const COMPOSITION_ROOT_FILES = new Set([
+  "runtime/composition.ts",
+  "host/demo-backends.ts",
+]);
+
+function isCompositionRoot(file: string, graph: V2BoundaryGraph): boolean {
+  return COMPOSITION_ROOT_FILES.has(
+    path.relative(graph.v2Root, file).split(path.sep).join("/"),
+  );
+}
 
 /**
  * Runtime primitives, which the domain may not name at all.
@@ -353,11 +440,8 @@ export function findV2BoundaryViolations(
   //    the Session runtime, and the runtime primitives stay out of the domain
   //    specifically — the contract names `Scope` on purpose, because lifetime
   //    is what it is about.
-  for (const file of [
-    ...listSourceFiles(graph.domainRoot, { includeTests: false }),
-    ...listSourceFiles(graph.contractRoot, { includeTests: false }),
-    ...listSourceFiles(graph.runtimeRoot, { includeTests: false }),
-  ]) {
+  for (const file of listSourceFiles(v2Root, { includeTests: false })) {
+    if (isHostBoundaryFile(file, graph)) continue;
     const source = fs.readFileSync(file, "utf8");
     for (const mechanism of MECHANISM_VOCABULARY) {
       if (!source.includes(mechanism)) continue;
@@ -426,6 +510,107 @@ export function findV2BoundaryViolations(
     }
   }
 
+  // 9. Presentation is prose, and prose has no dependencies. A presentation
+  //    file may name another presentation file, the domain, and Pi's own
+  //    packages — which is where the row measuring and the theme come from —
+  //    and nothing else. Not the runtime, not a backend, not a fake, not even
+  //    `effect`: a presentation module that could reach the repository would
+  //    be one edit away from folding state, and v1's dispatcher ended up
+  //    owning presentation state for exactly that reason.
+  for (const file of listSourceFiles(graph.presentationRoot, {
+    includeTests: true,
+  })) {
+    const test = isTestFile(file);
+    for (const specifier of specifiersOf(file)) {
+      const target = resolveRelativeSource(file, specifier);
+      if (target) {
+        if (isInside(target, graph.presentationRoot)) continue;
+        if (isInside(target, graph.domainRoot)) continue;
+        violations.add(
+          `${describe(file)} imports ${describe(target)}, and a presentation file may name only the domain and Pi`,
+        );
+        continue;
+      }
+      if (isHostPackage(specifier)) continue;
+      if (test && specifier.startsWith("node:")) continue;
+      violations.add(
+        `${describe(file)} imports package ${specifier}, and a presentation file may name only the domain and Pi`,
+      );
+    }
+  }
+
+  // 10. The application module is the façade: it maps decoded input to
+  //     supervisor requests and outcomes to prose. So it may name the domain,
+  //     the runtime's services, presentation, and Effect — and no Pi package,
+  //     because a façade that knew the host would be the host.
+  for (const file of listSourceFiles(graph.applicationRoot, {
+    includeTests: true,
+  })) {
+    const test = isTestFile(file);
+    for (const specifier of specifiersOf(file)) {
+      const target = resolveRelativeSource(file, specifier);
+      if (target) {
+        if (
+          isInside(target, graph.applicationRoot) ||
+          isInside(target, graph.domainRoot) ||
+          isInside(target, graph.presentationRoot) ||
+          isInside(target, graph.runtimeRoot)
+        ) {
+          continue;
+        }
+        if (test && isInside(target, graph.testingRoot)) continue;
+        violations.add(
+          `${describe(file)} imports ${describe(target)}, which the application module may not name`,
+        );
+        continue;
+      }
+      if (isEffectPackage(specifier)) continue;
+      if (test && specifier.startsWith("node:")) continue;
+      violations.add(
+        `${describe(file)} imports package ${specifier}, which the application module may not name`,
+      );
+    }
+  }
+
+  // 11. The host does not reach around the runtime. Every backend a Session
+  //     has is named by the composition root and handed to the runtime; a
+  //     host handler that could import a `Backend` could open one, and then
+  //     two things would own BackendAgent lifetime.
+  for (const file of [
+    ...listSourceFiles(graph.hostRoot, { includeTests: false }),
+    ...(fs.existsSync(v2Entry) ? [v2Entry] : []),
+  ]) {
+    if (isCompositionRoot(file, graph)) continue;
+    for (const specifier of specifiersOf(file)) {
+      const target = resolveRelativeSource(file, specifier);
+      if (!target) continue;
+      if (
+        isInside(target, graph.contractRoot) ||
+        isInside(target, graph.testingRoot)
+      ) {
+        violations.add(
+          `${describe(file)} imports ${describe(target)}, which only the composition root may name`,
+        );
+      }
+    }
+  }
+
+  // 12. One schema library. v2 declares every schema with Effect Schema, and
+  //     the dependency v1 still needs must not creep back in through a tool
+  //     parameter document or a custom message payload.
+  for (const file of listSourceFiles(v2Root, { includeTests: true })) {
+    for (const specifier of specifiersOf(file)) {
+      if (
+        specifier === SECOND_SCHEMA_LIBRARY ||
+        specifier.startsWith(`${SECOND_SCHEMA_LIBRARY}/`)
+      ) {
+        violations.add(
+          `${describe(file)} imports ${specifier}, and v2 declares its schemas with Effect Schema alone`,
+        );
+      }
+    }
+  }
+
   return [...violations].sort();
 }
 
@@ -453,6 +638,20 @@ function fixtureGraph(
       "backend",
     ),
     runtimeRoot: path.join(fixtureRoot, "extensions", "subagent-v2", "runtime"),
+    presentationRoot: path.join(
+      fixtureRoot,
+      "extensions",
+      "subagent-v2",
+      "presentation",
+    ),
+    applicationRoot: path.join(
+      fixtureRoot,
+      "extensions",
+      "subagent-v2",
+      "application",
+    ),
+    hostRoot: path.join(fixtureRoot, "extensions", "subagent-v2", "host"),
+    testingRoot: path.join(fixtureRoot, "extensions", "subagent-v2", "testing"),
   };
   return {
     graph,
@@ -890,6 +1089,179 @@ test("a test may name mechanism vocabulary, because a test has to run things", (
   );
 
   assert.deepEqual(findV2BoundaryViolations(graph), []);
+});
+
+test("a presentation file importing the runtime, a backend, or a fake is rejected", (t) => {
+  const { graph, write } = fixtureGraph(t, "presentation-edges");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write("extensions/subagent-v2/domain/index.ts", "export {};\n");
+  write("extensions/subagent-v2/runtime/repository.ts", "export {};\n");
+  write("extensions/subagent-v2/backend/contract.ts", "export {};\n");
+  write("extensions/subagent-v2/testing/fakes/backend.ts", "export {};\n");
+  // Prose over the domain, painted with Pi's own primitives: allowed.
+  write(
+    "extensions/subagent-v2/presentation/status.ts",
+    [
+      'import type {} from "../domain/index.ts";',
+      'import { truncateToWidth } from "@earendil-works/pi-tui";',
+      "void truncateToWidth;",
+    ].join("\n"),
+  );
+  // A test may name the runner and the assertion library.
+  write(
+    "extensions/subagent-v2/presentation/status.test.ts",
+    'import assert from "node:assert/strict";\nvoid assert;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), []);
+
+  write(
+    "extensions/subagent-v2/presentation/rows.ts",
+    'import "../runtime/repository.ts";\n',
+  );
+  write(
+    "extensions/subagent-v2/presentation/card.ts",
+    'import "../backend/contract.ts";\nimport "../testing/fakes/backend.ts";\n',
+  );
+  // Not even Effect: presentation runs nothing.
+  write(
+    "extensions/subagent-v2/presentation/prose.ts",
+    'import { Effect } from "effect";\nvoid Effect;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.presentationRoot, "card.ts"))} imports ${describe(path.join(graph.contractRoot, "contract.ts"))}, and a presentation file may name only the domain and Pi`,
+    `${describe(path.join(graph.presentationRoot, "card.ts"))} imports ${describe(path.join(graph.testingRoot, "fakes", "backend.ts"))}, and a presentation file may name only the domain and Pi`,
+    `${describe(path.join(graph.presentationRoot, "prose.ts"))} imports package effect, and a presentation file may name only the domain and Pi`,
+    `${describe(path.join(graph.presentationRoot, "rows.ts"))} imports ${describe(path.join(graph.runtimeRoot, "repository.ts"))}, and a presentation file may name only the domain and Pi`,
+  ]);
+});
+
+test("an application file importing the host, a backend, or a Pi package is rejected", (t) => {
+  const { graph, write } = fixtureGraph(t, "application-edges");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write("extensions/subagent-v2/domain/index.ts", "export {};\n");
+  write("extensions/subagent-v2/presentation/index.ts", "export {};\n");
+  write("extensions/subagent-v2/runtime/supervisor.ts", "export {};\n");
+  write("extensions/subagent-v2/backend/contract.ts", "export {};\n");
+  write("extensions/subagent-v2/host/tools.ts", "export {};\n");
+  // The four edges the façade is allowed: domain, runtime, presentation, Effect.
+  write(
+    "extensions/subagent-v2/application/subagents.ts",
+    [
+      'import { Effect } from "effect";',
+      'import "../domain/index.ts";',
+      'import "../presentation/index.ts";',
+      'import "../runtime/supervisor.ts";',
+      "void Effect;",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), []);
+
+  write(
+    "extensions/subagent-v2/application/subagents.ts",
+    [
+      'import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";',
+      'import "../backend/contract.ts";',
+      'import "../host/tools.ts";',
+      "export type Api = ExtensionAPI;",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.applicationRoot, "subagents.ts"))} imports ${describe(path.join(graph.contractRoot, "contract.ts"))}, which the application module may not name`,
+    `${describe(path.join(graph.applicationRoot, "subagents.ts"))} imports ${describe(path.join(graph.hostRoot, "tools.ts"))}, which the application module may not name`,
+    `${describe(path.join(graph.applicationRoot, "subagents.ts"))} imports package @earendil-works/pi-coding-agent, which the application module may not name`,
+  ]);
+});
+
+test("a host file importing a backend or a fake is rejected unless it is the composition root", (t) => {
+  const { graph, write } = fixtureGraph(t, "host-composition-root");
+  write("extensions/subagent-v2/index.ts", 'import "./host/session.ts";\n');
+  write("extensions/subagent-v2/backend/contract.ts", "export {};\n");
+  write("extensions/subagent-v2/testing/fakes/backend.ts", "export {};\n");
+  write("extensions/subagent-v2/host/session.ts", "export {};\n");
+  // The composition root supplies the demo backend set, so it names both.
+  write(
+    "extensions/subagent-v2/host/demo-backends.ts",
+    'import "../backend/contract.ts";\nimport "../testing/fakes/backend.ts";\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), []);
+
+  write(
+    "extensions/subagent-v2/host/session.ts",
+    'import "../backend/contract.ts";\n',
+  );
+  write(
+    "extensions/subagent-v2/index.ts",
+    'import "../subagent-v2/host/session.ts";\nimport "./testing/fakes/backend.ts";\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.hostRoot, "session.ts"))} imports ${describe(path.join(graph.contractRoot, "contract.ts"))}, which only the composition root may name`,
+    `${describe(graph.v2Entry)} imports ${describe(path.join(graph.testingRoot, "fakes", "backend.ts"))}, which only the composition root may name`,
+  ]);
+});
+
+test("a managed runtime or a signal outside the host module is rejected", (t) => {
+  const { graph, write } = fixtureGraph(t, "host-boundary-vocabulary");
+  // The host module is where a Pi callback crosses into Effect, so it is the
+  // one place these words belong.
+  write(
+    "extensions/subagent-v2/index.ts",
+    'import "./host/session.ts";\nimport "./application/subagents.ts";\n',
+  );
+  write(
+    "extensions/subagent-v2/host/session.ts",
+    [
+      'import { Effect, ManagedRuntime } from "effect";',
+      "export const stop = new AbortController();",
+      "void ManagedRuntime;",
+      "await Effect.runPromise(Effect.void);",
+    ].join("\n"),
+  );
+  write("extensions/subagent-v2/application/subagents.ts", "export {};\n");
+
+  assert.deepEqual(findV2BoundaryViolations(graph), []);
+
+  write(
+    "extensions/subagent-v2/application/subagents.ts",
+    [
+      'import { Effect, ManagedRuntime } from "effect";',
+      "void ManagedRuntime;",
+      "await Effect.runPromise(Effect.void);",
+    ].join("\n"),
+  );
+  write(
+    "extensions/subagent-v2/presentation/rows.ts",
+    "/** Never handed an AbortSignal. */\nexport {};\n",
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.applicationRoot, "subagents.ts"))} contains runtime mechanism vocabulary Effect.runPromise`,
+    `${describe(path.join(graph.applicationRoot, "subagents.ts"))} contains runtime mechanism vocabulary ManagedRuntime`,
+    `${describe(path.join(graph.presentationRoot, "rows.ts"))} contains runtime mechanism vocabulary AbortSignal`,
+  ]);
+});
+
+test("the second schema library is rejected anywhere in v2, tests included", (t) => {
+  const { graph, write } = fixtureGraph(t, "second-schema-library");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/host/tool-schemas.ts",
+    'import { Type } from "typebox";\nvoid Type;\n',
+  );
+  write(
+    "extensions/subagent-v2/host/tool-schemas.test.ts",
+    'import { Value } from "typebox/value";\nvoid Value;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.hostRoot, "tool-schemas.test.ts"))} imports typebox/value, and v2 declares its schemas with Effect Schema alone`,
+    `${describe(path.join(graph.hostRoot, "tool-schemas.ts"))} imports typebox, and v2 declares its schemas with Effect Schema alone`,
+  ]);
 });
 
 test("the real v1 and v2 trees hold the boundary", () => {
