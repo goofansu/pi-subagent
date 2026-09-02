@@ -12,9 +12,13 @@
  * bound for it, which is a visible change rather than an accident.
  */
 
+import { Schema } from "effect";
+
 export const MESSAGE_ROLES = ["user", "assistant"] as const;
 
-export type MessageRole = (typeof MESSAGE_ROLES)[number];
+export const MessageRole = Schema.Literals(MESSAGE_ROLES);
+
+export type MessageRole = typeof MessageRole.Type;
 
 /**
  * One piece of a message.
@@ -27,18 +31,26 @@ export type MessageRole = (typeof MESSAGE_ROLES)[number];
  * one, and the reducer keeps such calls distinct rather than inventing an id
  * that could collide.
  */
-export type MessagePart =
-  | { readonly kind: "text"; readonly text: string }
-  | {
-      readonly kind: "tool_call";
-      readonly name: string;
-      readonly callId?: string;
-    };
+export const MessagePart = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("text"),
+    text: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("tool_call"),
+    name: Schema.String.check(Schema.isNonEmpty()),
+    callId: Schema.optionalKey(Schema.String),
+  }),
+]);
+
+export type MessagePart = typeof MessagePart.Type;
 
 /** How a native tool call is going, as a backend reports it. */
 export const TOOL_STATUSES = ["running", "completed", "failed"] as const;
 
-export type ToolStatus = (typeof TOOL_STATUSES)[number];
+export const ToolStatus = Schema.Literals(TOOL_STATUSES);
+
+export type ToolStatus = typeof ToolStatus.Type;
 
 /**
  * How a tool call ended up in the projection.
@@ -54,20 +66,26 @@ export const TOOL_ENTRY_STATUSES = [
   "unfinished",
 ] as const;
 
-export type ToolEntryStatus = (typeof TOOL_ENTRY_STATUSES)[number];
+export const ToolEntryStatus = Schema.Literals(TOOL_ENTRY_STATUSES);
 
-export interface TranscriptItem {
-  readonly role: MessageRole;
-  readonly parts: readonly MessagePart[];
-  readonly model?: string;
-}
+export type ToolEntryStatus = typeof ToolEntryStatus.Type;
 
-export interface ToolEntry {
-  readonly name?: string;
-  readonly status: ToolEntryStatus;
-  readonly callId?: string;
-  readonly outputSummary?: string;
-}
+export const TranscriptItem = Schema.Struct({
+  role: MessageRole,
+  parts: Schema.Array(MessagePart),
+  model: Schema.optionalKey(Schema.String),
+});
+
+export type TranscriptItem = typeof TranscriptItem.Type;
+
+export const ToolEntry = Schema.Struct({
+  name: Schema.optionalKey(Schema.String),
+  status: ToolEntryStatus,
+  callId: Schema.optionalKey(Schema.String),
+  outputSummary: Schema.optionalKey(Schema.String),
+});
+
+export type ToolEntry = typeof ToolEntry.Type;
 
 /** The text of a transcript item, which is its text parts joined. */
 export function transcriptItemText(item: TranscriptItem): string {

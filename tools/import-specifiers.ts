@@ -146,3 +146,74 @@ export function writeSourceFile(
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.writeFileSync(dest, source);
 }
+
+/** One import edge, with the bindings it names. */
+export interface NamedImport {
+  readonly specifier: string;
+  /**
+   * The bindings taken from the specifier.
+   *
+   * A default import is `default`, a namespace import is `*`, and a bare
+   * `import "x"` names nothing. Renaming (`import { a as b }`) reports the
+   * name as the module exports it, which is what a rule about a module's
+   * surface is about.
+   */
+  readonly names: readonly string[];
+}
+
+/**
+ * Read import edges with their named bindings.
+ *
+ * A rule of the form "this module may import only *this binding* from that
+ * package" cannot be checked at the specifier level, which is all
+ * {@link readImportSpecifiers} reports. ADR-0029 makes exactly that rule for
+ * the v2 domain module and Effect's `Schema`, so the walker learns to read one
+ * level finer.
+ *
+ * Only static `import` declarations carry named bindings. A dynamic `import()`
+ * or a `require()` reaches the whole module, so each is reported as a
+ * namespace import of it.
+ */
+export function readNamedImports(source: string): NamedImport[] {
+  const sourceFile = ts.createSourceFile(
+    "boundary-fixture.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const imports: NamedImport[] = [];
+
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      const specifier = node.moduleSpecifier.text;
+      const clause = node.importClause;
+      const names: string[] = [];
+      if (clause?.name) names.push("default");
+      const bindings = clause?.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) names.push("*");
+      if (bindings && ts.isNamedImports(bindings)) {
+        for (const element of bindings.elements) {
+          names.push((element.propertyName ?? element.name).text);
+        }
+      }
+      imports.push({ specifier, names });
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sourceFile);
+
+  // Whatever the syntax-level reader found that is not a static import is a
+  // whole-module reach: report it as a namespace import so no rule can be
+  // sidestepped by writing `await import("effect")`.
+  const statics = new Set(imports.map((entry) => entry.specifier));
+  for (const specifier of readImportSpecifiers(source)) {
+    if (statics.has(specifier)) continue;
+    imports.push({ specifier, names: ["*"] });
+  }
+  return imports;
+}

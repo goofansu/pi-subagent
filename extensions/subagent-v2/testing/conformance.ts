@@ -32,7 +32,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Deferred, Effect, Exit, Fiber, Scope } from "effect";
+import { Deferred, Effect, Exit, Fiber, Schema, Scope } from "effect";
 import type {
   Backend,
   BackendCapabilities,
@@ -50,7 +50,7 @@ import type {
   ToolEntryStatus,
   UsageTotals,
 } from "../domain/index.ts";
-import { runId } from "../domain/index.ts";
+import { EXACT_KEYS, RunObservation, runId } from "../domain/index.ts";
 import {
   DRIVER_STAGES,
   type DriveOutcome,
@@ -58,10 +58,6 @@ import {
   driveRun,
 } from "./driver.ts";
 import type { ResourceCountersSnapshot } from "./fakes/counters.ts";
-import {
-  findForbiddenKeys,
-  OBSERVATION_KEYS,
-} from "./observation-vocabulary.ts";
 
 /* ============================================================== */
 /* The scenarios                                                   */
@@ -603,20 +599,23 @@ const SCENARIO_CHECKS: {
     }
   },
   "observations-carry-no-provider-vocabulary": (_fixture, outcome) => {
+    // The whole rule, checked the way the seam checks it: an observation is
+    // what the domain declares an observation to be, and an unlisted key at
+    // any depth — a thread id, a request id, an exit code, or anything else a
+    // provider wire object carries — is a decode failure rather than a key a
+    // list had to have thought of.
+    const decode = Schema.decodeUnknownResult(RunObservation, EXACT_KEYS);
     for (const run of outcome.outcomes) {
       assert.ok(run.observations.length > 0, "the fixture emitted nothing");
       for (const observation of run.observations) {
-        assert.deepEqual(
-          findForbiddenKeys(observation),
-          [],
-          `${observation.kind} carries provider bookkeeping`,
+        const decoded = decode(observation);
+        assert.equal(
+          decoded._tag,
+          "Success",
+          `${observation.kind} does not decode: ${
+            decoded._tag === "Failure" ? decoded.failure.message : ""
+          }`,
         );
-        for (const key of Object.keys(observation)) {
-          assert.ok(
-            OBSERVATION_KEYS[observation.kind].includes(key),
-            `${observation.kind} carries an unlisted key '${key}'`,
-          );
-        }
       }
     }
   },

@@ -1,71 +1,23 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  findForbiddenKeys,
-  OBSERVATION_KEYS,
-  sampleObservations,
-} from "../testing/observation-vocabulary.ts";
-import type { Equals, Expect } from "../testing/type-level.ts";
+import { Schema } from "effect";
+import { sampleObservations } from "../testing/observation-vocabulary.ts";
+import { EXACT_KEYS } from "./decoding.ts";
 import {
   isRunObservationKind,
-  type ObservationOfKind,
   RUN_OBSERVATION_KINDS,
+  RunObservation,
 } from "./observations.ts";
 
-/**
- * The exact key set of every observation kind, proven at compile time.
- *
- * `keyof` is the assertion that matters: adding a field to an observation
- * changes it, so a provider identifier cannot be slipped into the vocabulary
- * without this tuple failing to compile.
- */
-type ObservationKeySetsAreExact = [
-  Expect<
-    Equals<
-      keyof ObservationOfKind<"message">,
-      "kind" | "role" | "parts" | "model"
-    >
-  >,
-  Expect<
-    Equals<
-      keyof ObservationOfKind<"tool_progress">,
-      "kind" | "callId" | "status" | "outputSummary"
-    >
-  >,
-  Expect<Equals<keyof ObservationOfKind<"activity">, "kind" | "activity">>,
-  Expect<Equals<keyof ObservationOfKind<"usage">, "kind" | "usage">>,
-  Expect<Equals<keyof ObservationOfKind<"context">, "kind" | "context">>,
-  Expect<Equals<keyof ObservationOfKind<"diagnostic">, "kind" | "diagnostic">>,
-  Expect<Equals<keyof ObservationOfKind<"link">, "kind" | "link">>,
-  Expect<Equals<keyof ObservationOfKind<"model">, "kind" | "model">>,
-  Expect<
-    Equals<keyof ObservationOfKind<"reconciliation">, "kind" | "reconciliation">
-  >,
-  Expect<Equals<keyof ObservationOfKind<"ending">, "kind" | "ending">>,
-];
+const decode = Schema.decodeUnknownResult(RunObservation, EXACT_KEYS);
 
-test("every observation kind has exactly the keys the vocabulary lists", () => {
-  const proofs: ObservationKeySetsAreExact = [
-    true,
-    true,
-    true,
-    true,
-    true,
-    true,
-    true,
-    true,
-    true,
-    true,
-  ];
+function reason(input: unknown): string {
+  const decoded = decode(input);
+  assert.equal(decoded._tag, "Failure", JSON.stringify(input));
+  return decoded._tag === "Failure" ? decoded.failure.message : "";
+}
 
-  assert.equal(proofs.length, RUN_OBSERVATION_KINDS.length);
-  assert.deepEqual(
-    Object.keys(OBSERVATION_KEYS).sort(),
-    [...RUN_OBSERVATION_KINDS].sort(),
-  );
-});
-
-test("a fully populated observation of every kind carries no unlisted key", () => {
+test("the union declares exactly the ten kinds the vocabulary lists", () => {
   const samples = sampleObservations();
 
   assert.deepEqual(
@@ -73,34 +25,61 @@ test("a fully populated observation of every kind carries no unlisted key", () =
     [...RUN_OBSERVATION_KINDS],
   );
   for (const observation of samples) {
-    assert.deepEqual(
-      Object.keys(observation).sort(),
-      [...OBSERVATION_KEYS[observation.kind]].sort(),
-      observation.kind,
-    );
+    assert.equal(decode(observation)._tag, "Success", observation.kind);
   }
 });
 
-test("no observation names a provider thread, turn, item, request, or session", () => {
-  for (const observation of sampleObservations()) {
-    assert.deepEqual(findForbiddenKeys(observation), [], observation.kind);
-  }
-});
-
-test("the forbidden-key walker finds provider bookkeeping however it is nested", () => {
-  assert.deepEqual(
-    findForbiddenKeys({
+test("a key the vocabulary does not list is rejected, however deeply nested", () => {
+  // The one rule that used to need two mechanisms. A `keyof` test could see a
+  // field added to the observation itself and nothing below it; a runtime key
+  // walker could see a nested key but only if somebody had listed its name.
+  assert.match(
+    reason({ kind: "message", role: "user", parts: [], threadId: "t-1" }),
+    /no excess property[\s\S]*\["threadId"\]/,
+  );
+  assert.match(
+    reason({
       kind: "message",
+      role: "user",
       parts: [{ kind: "text", text: "hi", thread_id: "t-1" }],
     }),
-    ["parts[0].thread_id"],
+    /no excess property[\s\S]*\["parts"\]\[0\]\["thread_id"\]/,
   );
-  assert.deepEqual(findForbiddenKeys({ nested: { deeper: { exitCode: 1 } } }), [
-    "nested.deeper.exitCode",
-  ]);
-  // A turn count is a usage figure the core owns; a turn id is not.
-  assert.deepEqual(findForbiddenKeys({ usage: { turns: 3 } }), []);
-  assert.deepEqual(findForbiddenKeys({ turnId: "3" }), ["turnId"]);
+  assert.match(
+    reason({ kind: "usage", usage: { input: 1, requestId: "r-1" } }),
+    /no excess property[\s\S]*\["usage"\]\["requestId"\]/,
+  );
+  assert.match(
+    reason({
+      kind: "tool_progress",
+      callId: "c-1",
+      status: "running",
+      exitCode: 1,
+    }),
+    /no excess property[\s\S]*\["exitCode"\]/,
+  );
+});
+
+test("a turn count is a usage figure the core owns; a turn id is not", () => {
+  assert.equal(
+    decode({ kind: "usage", usage: usageDeltaFixture() })._tag,
+    "Success",
+  );
+  assert.match(
+    reason({ kind: "usage", usage: { turns: 3, turnId: "3" } }),
+    /no excess property[\s\S]*\["turnId"\]/,
+  );
+});
+
+function usageDeltaFixture(): { readonly turns: number } {
+  return { turns: 3 };
+}
+
+test("a whole provider wire object is not an observation at all", () => {
+  assert.match(
+    reason({ type: "response.delta", delta: { text: "hi" } }),
+    /Expected/,
+  );
 });
 
 test("the observation kind guard accepts the ten kinds and nothing else", () => {

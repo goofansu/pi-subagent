@@ -10,25 +10,37 @@
  * See docs/adr/0010-run-endings.md and docs/adr/0025-v2-terminal-settlement.md.
  */
 
-import type {
+import { Schema } from "effect";
+import {
   CancellationReason,
-  RunEvent,
-  TerminalRunPhase,
+  type RunEvent,
+  type TerminalRunPhase,
 } from "./phases.ts";
 import { boundOneLine } from "./text.ts";
 import type { ToolEntryStatus } from "./transcript.ts";
 
 export const RUN_ENDING_KINDS = ["answered", "failed", "cancelled"] as const;
 
-export type RunEndingKind = (typeof RUN_ENDING_KINDS)[number];
+export const RunEndingKind = Schema.Literals(RUN_ENDING_KINDS);
+
+export type RunEndingKind = typeof RunEndingKind.Type;
 
 /** Bound on the fallback message a failed ending may carry. */
 export const RUN_ENDING_MESSAGE_MAX_BYTES = 2048;
 
-export type RunEnding =
-  | { readonly ending: "answered" }
-  | { readonly ending: "failed"; readonly message?: string }
-  | { readonly ending: "cancelled"; readonly reason: CancellationReason };
+export const RunEnding = Schema.Union([
+  Schema.Struct({ ending: Schema.Literal("answered") }),
+  Schema.Struct({
+    ending: Schema.Literal("failed"),
+    message: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({
+    ending: Schema.Literal("cancelled"),
+    reason: CancellationReason,
+  }),
+]);
+
+export type RunEnding = typeof RunEnding.Type;
 
 export function answeredEnding(): RunEnding {
   return { ending: "answered" };

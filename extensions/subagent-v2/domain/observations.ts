@@ -13,15 +13,24 @@
  * crosses is a bounded typed {@link RunDiagnostic} and a bounded typed
  * {@link ResultLink}. Ordering and identity stay adapter-local.
  *
- * See docs/adr/0024-v2-observation-ordering.md.
+ * The union is one schema declaration, and that is what makes ADR-0024's rule
+ * *checked* rather than trusted. Decoding it under `EXACT_KEYS` rejects an
+ * unlisted key at any depth, including one nested inside a message part or
+ * inside a usage delta. M1 needed a compile-time key-set table and a separate
+ * runtime key walker to cover those two cases between them; the decoder covers
+ * both.
+ *
+ * See docs/adr/0024-v2-observation-ordering.md and
+ * docs/adr/0029-v2-effect-schema.md.
  */
 
-import type { RunDiagnostic } from "./diagnostics.ts";
-import type { RunEnding } from "./endings.ts";
-import type { ResultLink } from "./links.ts";
-import type { TerminalReconciliation } from "./reconciliation.ts";
-import type { MessagePart, MessageRole, ToolStatus } from "./transcript.ts";
-import type { ContextGauge, UsageDelta } from "./usage.ts";
+import { Schema } from "effect";
+import { RunDiagnostic } from "./diagnostics.ts";
+import { RunEnding } from "./endings.ts";
+import { ResultLink } from "./links.ts";
+import { TerminalReconciliation } from "./reconciliation.ts";
+import { MessagePart, MessageRole, ToolStatus } from "./transcript.ts";
+import { UsableContextGauge, UsageDelta } from "./usage.ts";
 
 export const RUN_OBSERVATION_KINDS = [
   "message",
@@ -36,98 +45,123 @@ export const RUN_OBSERVATION_KINDS = [
   "ending",
 ] as const;
 
-export type RunObservationKind = (typeof RUN_OBSERVATION_KINDS)[number];
+export const RunObservationKind = Schema.Literals(RUN_OBSERVATION_KINDS);
+
+export type RunObservationKind = typeof RunObservationKind.Type;
 
 /** One message the backend witnessed, with the model that produced it. */
-export interface MessageObservation {
-  readonly kind: "message";
-  readonly role: MessageRole;
-  readonly parts: readonly MessagePart[];
-  readonly model?: string;
-}
+export const MessageObservation = Schema.Struct({
+  kind: Schema.Literal("message"),
+  role: MessageRole,
+  parts: Schema.Array(MessagePart),
+  model: Schema.optionalKey(Schema.String),
+});
+
+export type MessageObservation = typeof MessageObservation.Type;
 
 /**
  * How one native tool call is going.
  *
  * `callId` is required here, unlike on a tool call part: a progress update
- * that cannot be joined to a call is not progress about anything.
+ * that cannot be joined to a call is not progress about anything. There is no
+ * entry it could join and none it could create.
  */
-export interface ToolProgressObservation {
-  readonly kind: "tool_progress";
-  readonly callId: string;
-  readonly status: ToolStatus;
-  readonly outputSummary?: string;
-}
+export const ToolProgressObservation = Schema.Struct({
+  kind: Schema.Literal("tool_progress"),
+  callId: Schema.String.check(Schema.isNonEmpty()),
+  status: ToolStatus,
+  outputSummary: Schema.optionalKey(Schema.String),
+});
+
+export type ToolProgressObservation = typeof ToolProgressObservation.Type;
 
 /**
  * What the Run is doing right now.
  *
  * Display-only and conflated: the latest value wins and intermediate values
- * may be dropped. `undefined` clears it. Settlement clears it too, so a
- * settled Run is quiet.
+ * may be dropped. `undefined` clears it, and the key is required so that
+ * clearing is something a backend says rather than something it omits.
+ * Settlement clears it too, so a settled Run is quiet.
  */
-export interface ActivityObservation {
-  readonly kind: "activity";
-  readonly activity: string | undefined;
-}
+export const ActivityObservation = Schema.Struct({
+  kind: Schema.Literal("activity"),
+  activity: Schema.UndefinedOr(Schema.String),
+});
 
-export interface UsageObservation {
-  readonly kind: "usage";
-  readonly usage: UsageDelta;
-}
+export type ActivityObservation = typeof ActivityObservation.Type;
 
-export interface ContextObservation {
-  readonly kind: "context";
-  readonly context: ContextGauge;
-}
+export const UsageObservation = Schema.Struct({
+  kind: Schema.Literal("usage"),
+  usage: UsageDelta,
+});
 
-export interface DiagnosticObservation {
-  readonly kind: "diagnostic";
-  readonly diagnostic: RunDiagnostic;
-}
+export type UsageObservation = typeof UsageObservation.Type;
 
-export interface LinkObservation {
-  readonly kind: "link";
-  readonly link: ResultLink;
-}
+export const ContextObservation = Schema.Struct({
+  kind: Schema.Literal("context"),
+  context: UsableContextGauge,
+});
+
+export type ContextObservation = typeof ContextObservation.Type;
+
+export const DiagnosticObservation = Schema.Struct({
+  kind: Schema.Literal("diagnostic"),
+  diagnostic: RunDiagnostic,
+});
+
+export type DiagnosticObservation = typeof DiagnosticObservation.Type;
+
+export const LinkObservation = Schema.Struct({
+  kind: Schema.Literal("link"),
+  link: ResultLink,
+});
+
+export type LinkObservation = typeof LinkObservation.Type;
 
 /** The model the backend actually ran, when it differs from what was asked. */
-export interface ModelObservation {
-  readonly kind: "model";
-  readonly model: string;
-}
+export const ModelObservation = Schema.Struct({
+  kind: Schema.Literal("model"),
+  model: Schema.String.check(Schema.isNonEmpty()),
+});
 
-export interface ReconciliationObservation {
-  readonly kind: "reconciliation";
-  readonly reconciliation: TerminalReconciliation;
-}
+export type ModelObservation = typeof ModelObservation.Type;
+
+export const ReconciliationObservation = Schema.Struct({
+  kind: Schema.Literal("reconciliation"),
+  reconciliation: TerminalReconciliation,
+});
+
+export type ReconciliationObservation = typeof ReconciliationObservation.Type;
 
 /** The last observation a Run reduces. */
-export interface EndingObservation {
-  readonly kind: "ending";
-  readonly ending: RunEnding;
-}
+export const EndingObservation = Schema.Struct({
+  kind: Schema.Literal("ending"),
+  ending: RunEnding,
+});
 
-export type RunObservation =
-  | MessageObservation
-  | ToolProgressObservation
-  | ActivityObservation
-  | UsageObservation
-  | ContextObservation
-  | DiagnosticObservation
-  | LinkObservation
-  | ModelObservation
-  | ReconciliationObservation
-  | EndingObservation;
+export type EndingObservation = typeof EndingObservation.Type;
 
-/** Narrow the union to one kind, for exact-key-set tests and helpers. */
+export const RunObservation = Schema.Union([
+  MessageObservation,
+  ToolProgressObservation,
+  ActivityObservation,
+  UsageObservation,
+  ContextObservation,
+  DiagnosticObservation,
+  LinkObservation,
+  ModelObservation,
+  ReconciliationObservation,
+  EndingObservation,
+]);
+
+export type RunObservation = typeof RunObservation.Type;
+
+/** Narrow the union to one kind, for helpers and for type-level tests. */
 export type ObservationOfKind<K extends RunObservationKind> = Extract<
   RunObservation,
   { readonly kind: K }
 >;
 
-export function isRunObservationKind(
+export const isRunObservationKind: (
   value: unknown,
-): value is RunObservationKind {
-  return (RUN_OBSERVATION_KINDS as readonly unknown[]).includes(value);
-}
+) => value is RunObservationKind = Schema.is(RunObservationKind);

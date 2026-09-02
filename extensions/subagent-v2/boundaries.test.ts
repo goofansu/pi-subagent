@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   listSourceFiles,
   readImportSpecifiers,
+  readNamedImports,
   resolveRelativeSource,
   writeSourceFile,
 } from "../../tools/import-specifiers.ts";
@@ -21,8 +22,10 @@ import {
  * the scan for exactly that reason.
  *
  * Later v2 import rules (adapter confinement) belong here too. M0 added the v1
- * and Effect edges; M1 adds the rules that keep the domain module plain
- * TypeScript and keep provider SDKs out of the tree entirely.
+ * and Effect edges; M1 added the rules that keep provider SDKs out of the tree
+ * entirely; M2 replaces the domain's "no package specifiers at all" rule with
+ * the named-import check ADR-0029 asks for, which is stricter because it
+ * checks the properties the rule is *for* rather than a proxy for them.
  */
 
 /**
@@ -128,6 +131,21 @@ function isProviderSdk(specifier: string): boolean {
 }
 
 /**
+ * The one package a domain production file may name, and the one binding it
+ * may take from it.
+ *
+ * ADR-0029 replaced "the domain imports nothing" with this. The old rule was a
+ * proxy: it was easy to check, and that was the only thing it had going for
+ * it. What the rule is actually for is that the fold stays testable with no
+ * runtime, no provider SDK reaches the core, and no runtime machinery appears
+ * in the domain — and a schema declaration breaks none of those. Admitting the
+ * binding by name, rather than the specifier, is what keeps the other Effect
+ * bindings out.
+ */
+const DOMAIN_PACKAGE = "effect";
+const DOMAIN_PACKAGE_BINDING = "Schema";
+
+/**
  * The only package specifiers a domain *test* may name.
  *
  * A domain test is still domain code and must not reach for a runtime or an
@@ -158,6 +176,34 @@ const MECHANISM_VOCABULARY = [
   "AbortSignal",
   "Effect.runPromise",
 ] as const;
+
+/**
+ * Runtime primitives, which the domain may not name at all.
+ *
+ * ADR-0029 admits `Schema` into the domain because a schema declaration is a
+ * plain value. The other Effect bindings are the runtime, and the named-import
+ * rule above already keeps them out of the import list — this catches the same
+ * thing spelled a different way, such as a type annotation reached through a
+ * relative re-export or a comment promising a `Layer` that a later edit would
+ * then feel free to add.
+ *
+ * Matched as capitalized identifiers, so the prose "a queue overflow" and the
+ * domain's own `queue-overflow` diagnostic category are not violations. They
+ * are domain words; `Queue` is a runtime type.
+ */
+const RUNTIME_PRIMITIVES = [
+  "Fiber",
+  "Scope",
+  "Queue",
+  "Deferred",
+  "Layer",
+  "SubscriptionRef",
+  "SynchronizedRef",
+] as const;
+
+function namesIdentifier(source: string, identifier: string): boolean {
+  return new RegExp(`\\b${identifier}\\b`).test(source);
+}
 
 function specifiersOf(file: string): string[] {
   return readImportSpecifiers(fs.readFileSync(file, "utf8"));
@@ -225,33 +271,53 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 4. The domain module is plain TypeScript. A production domain file may
-  //    name only another domain file, which rules out `effect`, every SDK, and
-  //    every `node:` module by construction rather than by enumeration. A
+  // 4. The domain module holds meaning, not machinery. A production domain
+  //    file may name another domain file and, from `effect`, only the `Schema`
+  //    binding — checked at the named-import level, so `Effect`, `Layer`, and
+  //    the rest are violations of the same import. Every other package
+  //    specifier is a violation by construction rather than by enumeration. A
   //    domain test may additionally name the test runner and the assertion
   //    library, and may share relative test helpers with the rest of v2.
   for (const file of listSourceFiles(graph.domainRoot, {
     includeTests: true,
   })) {
-    for (const specifier of specifiersOf(file)) {
-      const target = resolveRelativeSource(file, specifier);
-      if (isTestFile(file)) {
-        if (!target && !DOMAIN_TEST_PACKAGES.has(specifier)) {
+    const test = isTestFile(file);
+    for (const edge of readNamedImports(fs.readFileSync(file, "utf8"))) {
+      const target = resolveRelativeSource(file, edge.specifier);
+      if (target) {
+        // A test may share a relative helper with the rest of v2; a
+        // production file may name only another domain file.
+        if (!test && !isInside(target, graph.domainRoot)) {
           violations.add(
-            `${describe(file)} imports package ${specifier}, which a domain test may not name`,
+            `${describe(file)} imports ${edge.specifier} from outside the domain module`,
           );
         }
         continue;
       }
-      if (!target || !isInside(target, graph.domainRoot)) {
+      if (test && DOMAIN_TEST_PACKAGES.has(edge.specifier)) continue;
+      if (edge.specifier !== DOMAIN_PACKAGE) {
         violations.add(
-          `${describe(file)} imports ${specifier} from outside the domain module`,
+          test
+            ? `${describe(file)} imports package ${edge.specifier}, which a domain test may not name`
+            : `${describe(file)} imports ${edge.specifier} from outside the domain module`,
+        );
+        continue;
+      }
+      // The one-binding rule holds for a test too: a domain test exercises the
+      // declarations it is about, and reaching for the runtime to do it would
+      // be the first step towards a domain that needs one.
+      for (const name of edge.names) {
+        if (name === DOMAIN_PACKAGE_BINDING) continue;
+        violations.add(
+          `${describe(file)} imports ${name} from ${edge.specifier}, and a domain file may name only ${DOMAIN_PACKAGE_BINDING}`,
         );
       }
     }
   }
 
-  // 5. Runtime mechanism vocabulary stays out of the neutral core.
+  // 5. Runtime mechanism vocabulary stays out of the neutral core, and the
+  //    runtime primitives stay out of the domain specifically — the contract
+  //    names `Scope` on purpose, because lifetime is what it is about.
   for (const file of [
     ...listSourceFiles(graph.domainRoot, { includeTests: false }),
     ...listSourceFiles(graph.contractRoot, { includeTests: false }),
@@ -261,6 +327,17 @@ export function findV2BoundaryViolations(
       if (!source.includes(mechanism)) continue;
       violations.add(
         `${describe(file)} contains runtime mechanism vocabulary ${mechanism}`,
+      );
+    }
+  }
+  for (const file of listSourceFiles(graph.domainRoot, {
+    includeTests: false,
+  })) {
+    const source = fs.readFileSync(file, "utf8");
+    for (const primitive of RUNTIME_PRIMITIVES) {
+      if (!namesIdentifier(source, primitive)) continue;
+      violations.add(
+        `${describe(file)} names the runtime primitive ${primitive}`,
       );
     }
   }
@@ -485,10 +562,9 @@ test("dynamic and require edges out of v2 are checked like static imports", (t) 
   ]);
 });
 
-test("a domain module importing a package is rejected, whatever the package", (t) => {
+test("a domain module importing a package other than effect is rejected", (t) => {
   const { graph, write } = fixtureGraph(t, "domain-purity");
   write("extensions/subagent-v2/index.ts", "export {};\n");
-  write("extensions/subagent-v2/domain/reduce.ts", 'import "effect";\n');
   write("extensions/subagent-v2/domain/ids.ts", 'import "node:crypto";\n');
   write(
     "extensions/subagent-v2/domain/profile.ts",
@@ -498,8 +574,100 @@ test("a domain module importing a package is rejected, whatever the package", (t
   assert.deepEqual(findV2BoundaryViolations(graph), [
     `${describe(path.join(graph.domainRoot, "ids.ts"))} imports node:crypto from outside the domain module`,
     `${describe(path.join(graph.domainRoot, "profile.ts"))} imports @earendil-works/pi-coding-agent from outside the domain module`,
-    `${describe(path.join(graph.domainRoot, "reduce.ts"))} imports effect from outside the domain module`,
   ]);
+});
+
+test("a domain module may take Schema from effect and nothing else", (t) => {
+  const { graph, write } = fixtureGraph(t, "domain-named-imports");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/domain/ids.ts",
+    'import { Schema } from "effect";\nexport const Id = Schema.String;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), []);
+
+  write(
+    "extensions/subagent-v2/domain/reduce.ts",
+    'import { Effect, Schema } from "effect";\nvoid Effect;\nvoid Schema;\n',
+  );
+  write(
+    "extensions/subagent-v2/domain/result.ts",
+    'import * as effect from "effect";\nvoid effect;\n',
+  );
+  write(
+    "extensions/subagent-v2/domain/usage.ts",
+    'import Effect from "effect";\nvoid Effect;\n',
+  );
+  write(
+    "extensions/subagent-v2/domain/endings.ts",
+    'const it = await import("effect");\nvoid it;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.domainRoot, "endings.ts"))} imports * from effect, and a domain file may name only Schema`,
+    `${describe(path.join(graph.domainRoot, "reduce.ts"))} imports Effect from effect, and a domain file may name only Schema`,
+    `${describe(path.join(graph.domainRoot, "result.ts"))} imports * from effect, and a domain file may name only Schema`,
+    `${describe(path.join(graph.domainRoot, "usage.ts"))} imports default from effect, and a domain file may name only Schema`,
+  ]);
+});
+
+test("a renamed import is judged by the name the module exports", (t) => {
+  const { graph, write } = fixtureGraph(t, "domain-renamed-import");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  // Renaming `Layer` to `S` hides it from a reader and from a rule that looked
+  // at local bindings. Both rules still fire, because both read the name the
+  // module exports.
+  write(
+    "extensions/subagent-v2/domain/ids.ts",
+    'import { Layer as S } from "effect";\nvoid S;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.domainRoot, "ids.ts"))} imports Layer from effect, and a domain file may name only Schema`,
+    `${describe(path.join(graph.domainRoot, "ids.ts"))} names the runtime primitive Layer`,
+  ]);
+});
+
+test("a domain module naming a runtime primitive is rejected", (t) => {
+  const { graph, write } = fixtureGraph(t, "domain-runtime-primitives");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/domain/reduce.ts",
+    "export type Sink = Queue<string>;\n",
+  );
+  write(
+    "extensions/subagent-v2/domain/result.ts",
+    "/** Held for the life of the Run Scope. */\nexport {};\n",
+  );
+  write(
+    "extensions/subagent-v2/domain/ids.ts",
+    "declare const layer: Layer;\ndeclare const fiber: Fiber;\nvoid layer;\nvoid fiber;\n",
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.domainRoot, "ids.ts"))} names the runtime primitive Fiber`,
+    `${describe(path.join(graph.domainRoot, "ids.ts"))} names the runtime primitive Layer`,
+    `${describe(path.join(graph.domainRoot, "reduce.ts"))} names the runtime primitive Queue`,
+    `${describe(path.join(graph.domainRoot, "result.ts"))} names the runtime primitive Scope`,
+  ]);
+});
+
+test("the domain's own vocabulary is not a runtime primitive", (t) => {
+  const { graph, write } = fixtureGraph(t, "domain-vocabulary");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  // The diagnostic category and the prose around it are domain words. Only
+  // the capitalized runtime type is machinery.
+  write(
+    "extensions/subagent-v2/domain/diagnostics.ts",
+    [
+      "/** A diagnostic the core authored — a late event, a queue overflow. */",
+      'export const categories = ["queue-overflow", "late-event"] as const;',
+      "",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), []);
 });
 
 test("a domain module importing a v2 file outside the domain is rejected", (t) => {
@@ -534,13 +702,22 @@ test("a domain test may name the test runner but not a runtime", (t) => {
 
   assert.deepEqual(findV2BoundaryViolations(graph), []);
 
+  // A domain test may exercise the declarations it is about, so `Schema` is
+  // admitted on the same one-binding terms as a production file.
+  write(
+    "extensions/subagent-v2/domain/schemas.test.ts",
+    'import { Schema } from "effect";\nvoid Schema;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), []);
+
   write(
     "extensions/subagent-v2/domain/reduce.test.ts",
     'import { Effect } from "effect";\nimport "node:fs";\nvoid Effect;\n',
   );
 
   assert.deepEqual(findV2BoundaryViolations(graph), [
-    `${describe(path.join(graph.domainRoot, "reduce.test.ts"))} imports package effect, which a domain test may not name`,
+    `${describe(path.join(graph.domainRoot, "reduce.test.ts"))} imports Effect from effect, and a domain file may name only Schema`,
     `${describe(path.join(graph.domainRoot, "reduce.test.ts"))} imports package node:fs, which a domain test may not name`,
   ]);
 });

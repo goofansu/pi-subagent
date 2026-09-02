@@ -15,6 +15,8 @@
  * docs/adr/0025-v2-terminal-settlement.md for the Run rules.
  */
 
+import { Schema } from "effect";
+
 /** What a transition function returns when the table has no legal next phase. */
 export const ILLEGAL_TRANSITION = "illegal";
 
@@ -26,7 +28,9 @@ export type IllegalTransition = typeof ILLEGAL_TRANSITION;
 
 export const SUBAGENT_PHASES = ["running", "idle", "closed"] as const;
 
-export type SubagentPhase = (typeof SUBAGENT_PHASES)[number];
+export const SubagentPhase = Schema.Literals(SUBAGENT_PHASES);
+
+export type SubagentPhase = typeof SubagentPhase.Type;
 
 /**
  * The three things that can happen to a Subagent.
@@ -95,7 +99,9 @@ export const RUN_PHASES = [
   "cancelled",
 ] as const;
 
-export type RunPhase = (typeof RUN_PHASES)[number];
+export const RunPhase = Schema.Literals(RUN_PHASES);
+
+export type RunPhase = typeof RunPhase.Type;
 
 export const TERMINAL_RUN_PHASES = [
   "completed",
@@ -103,11 +109,13 @@ export const TERMINAL_RUN_PHASES = [
   "cancelled",
 ] as const;
 
-export type TerminalRunPhase = (typeof TERMINAL_RUN_PHASES)[number];
+export const TerminalRunPhase = Schema.Literals(TERMINAL_RUN_PHASES);
 
-export function isTerminalRunPhase(phase: RunPhase): phase is TerminalRunPhase {
-  return (TERMINAL_RUN_PHASES as readonly string[]).includes(phase);
-}
+export type TerminalRunPhase = typeof TerminalRunPhase.Type;
+
+export const isTerminalRunPhase: (
+  phase: RunPhase,
+) => phase is TerminalRunPhase = Schema.is(TerminalRunPhase);
 
 /**
  * The four things that can happen to a Run.
@@ -184,11 +192,15 @@ export const CANCELLATION_REASONS = [
  * Why a Run was cancelled. `timeout` is here from the start so the optional
  * Run timeout a later milestone may add needs no domain change.
  */
-export type CancellationReason = (typeof CANCELLATION_REASONS)[number];
+export const CancellationReason = Schema.Literals(CANCELLATION_REASONS);
 
-export interface CancellationRequest {
-  readonly reason: CancellationReason;
-}
+export type CancellationReason = typeof CancellationReason.Type;
+
+export const CancellationRequest = Schema.Struct({
+  reason: CancellationReason,
+});
+
+export type CancellationRequest = typeof CancellationRequest.Type;
 
 /**
  * What recording a cancellation request did.

@@ -4,15 +4,13 @@ import { boundText, byteLength } from "./text.ts";
 import {
   addUsageDelta,
   contextGauge,
-  contextGaugeProblem,
   EMPTY_USAGE_SNAPSHOT,
+  isUsableContextGauge,
   raiseTurns,
   replaceContextGauge,
   replaceUsageTotals,
   USAGE_DELTA_FIELDS,
-  UsageValidationError,
   usageDelta,
-  usageDeltaProblem,
 } from "./usage.ts";
 
 test("a delta keeps only the fields it was given, so equal deltas compare equal", () => {
@@ -38,52 +36,59 @@ test("a counter that is negative, non-finite, or fractional is rejected", () => 
   for (const rejected of [-1, Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
     assert.throws(
       () => usageDelta({ input: rejected }),
-      UsageValidationError,
+      /Expected/,
       String(rejected),
     );
   }
 });
 
 test("a turn count follows the counter rule, not the cost rule", () => {
-  assert.throws(() => usageDelta({ turns: 0.5 }), UsageValidationError);
+  assert.throws(() => usageDelta({ turns: 0.5 }), /an integer/);
   assert.deepEqual(usageDelta({ turns: 2 }), { turns: 2 });
 });
 
 test("cost may be fractional but not negative or non-finite", () => {
   assert.deepEqual(usageDelta({ cost: 0.125 }), { cost: 0.125 });
-  assert.throws(() => usageDelta({ cost: -0.01 }), UsageValidationError);
-  assert.throws(() => usageDelta({ cost: Number.NaN }), UsageValidationError);
+  assert.throws(
+    () => usageDelta({ cost: -0.01 }),
+    /greater than or equal to 0/,
+  );
+  assert.throws(() => usageDelta({ cost: Number.NaN }), /Expected/);
 });
 
-test("a rejected delta names the field and the reason rather than coercing", () => {
+test("a rejected delta names the field and the rule rather than coercing", () => {
   assert.throws(
     () => usageDelta({ output: -2 }),
     (error: unknown) => {
-      assert.ok(error instanceof UsageValidationError);
-      assert.equal(error.field, "output");
-      assert.match(error.message, /output is negative/);
+      const message = String((error as Error).message);
+      assert.match(message, /greater than or equal to 0/);
+      assert.match(message, /\["output"\]/);
+      // The rejected value never appears: a rejection says what was expected.
+      assert.ok(!message.includes("-2"), message);
       return true;
     },
   );
 });
 
-test("the delta problem report is a predicate the reducer can use", () => {
-  assert.equal(usageDeltaProblem({ input: 1 }), undefined);
-  assert.equal(usageDeltaProblem({ input: -1 }), "input is negative");
-  assert.equal(usageDeltaProblem({ nope: 1 }), "unknown field 'nope'");
-  assert.equal(usageDeltaProblem(null), "not an object");
-  assert.equal(usageDeltaProblem("7"), "not an object");
+test("an unlisted field is rejected rather than carried", () => {
+  assert.throws(() => usageDelta({ nope: 1 } as never), /no excess property/);
 });
 
 test("a context gauge is tokens with an optional window", () => {
   assert.deepEqual(contextGauge(10), { tokens: 10 });
   assert.deepEqual(contextGauge(10, 200), { tokens: 10, window: 200 });
-  assert.throws(() => contextGauge(-1), UsageValidationError);
-  assert.equal(
-    contextGaugeProblem({ tokens: 1, extra: 2 }),
-    "unknown field 'extra'",
-  );
-  assert.equal(contextGaugeProblem({}), "tokens is not a number");
+  assert.throws(() => contextGauge(-1), /greater than or equal to 0/);
+});
+
+test("the gauge predicate is what the reducer and reconciliation both use", () => {
+  assert.equal(isUsableContextGauge({ tokens: 1 }), true);
+  assert.equal(isUsableContextGauge({ tokens: 1, window: 2 }), true);
+  assert.equal(isUsableContextGauge({ tokens: -1 }), false);
+  assert.equal(isUsableContextGauge({ tokens: Number.NaN }), false);
+  assert.equal(isUsableContextGauge({ tokens: 1, extra: 2 }), false);
+  assert.equal(isUsableContextGauge({}), false);
+  assert.equal(isUsableContextGauge(null), false);
+  assert.equal(isUsableContextGauge("7"), false);
 });
 
 test("deltas are summed and the gauge is left alone", () => {

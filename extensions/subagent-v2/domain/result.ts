@@ -9,49 +9,62 @@
  * The ContextGauge a Run ended with is carried inside `usage`, at
  * `usage.context`, rather than duplicated as a second field: a gauge stored
  * twice is a gauge that can disagree with itself.
+ *
+ * This is the one domain type with an encoder as well as a decoder, because
+ * the Result store persists it. Encoding and decoding on the way in and out is
+ * what proves the round trip and what stops provider vocabulary being stored
+ * by accident.
  */
 
-import type { RunDiagnostic } from "./diagnostics.ts";
+import { Schema } from "effect";
+import { RunDiagnostic } from "./diagnostics.ts";
 import { type RunEnding, terminalPhaseForEnding } from "./endings.ts";
-import type { BackendId, RunId, SubagentId } from "./ids.ts";
-import type { ResultLink } from "./links.ts";
-import type { CancellationReason, TerminalRunPhase } from "./phases.ts";
-import type { RunProjection, TruncationRecord } from "./projection.ts";
-import type { ToolEntry, TranscriptItem } from "./transcript.ts";
-import type { UsageSnapshot } from "./usage.ts";
+import { BackendId, RunId, SubagentId } from "./ids.ts";
+import { ResultLink } from "./links.ts";
+import { CancellationReason, TerminalRunPhase } from "./phases.ts";
+import { type RunProjection, TruncationRecord } from "./projection.ts";
+import { ToolEntry, TranscriptItem } from "./transcript.ts";
+import { UsageSnapshot } from "./usage.ts";
+
+/** A wall-clock instant in milliseconds. */
+const Instant = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 
 /** Who a Run belongs to. Fixed when the Run is admitted. */
-export interface RunIdentity {
-  readonly runId: RunId;
-  readonly subagentId: SubagentId;
-  readonly backendId: BackendId;
+export const RunIdentity = Schema.Struct({
+  runId: RunId,
+  subagentId: SubagentId,
+  backendId: BackendId,
   /** The Profile's name, as the caller asked for it. */
-  readonly agent: string;
-  readonly description: string;
-}
+  agent: Schema.String,
+  description: Schema.String,
+});
 
-export interface RunResult {
-  readonly runId: RunId;
-  readonly subagentId: SubagentId;
-  readonly backendId: BackendId;
-  readonly agent: string;
-  readonly description: string;
-  readonly status: TerminalRunPhase;
+export type RunIdentity = typeof RunIdentity.Type;
+
+export const RunResult = Schema.Struct({
+  runId: RunId,
+  subagentId: SubagentId,
+  backendId: BackendId,
+  agent: Schema.String,
+  description: Schema.String,
+  status: TerminalRunPhase,
   /** Present exactly when the status is `cancelled`. */
-  readonly cancellationReason?: CancellationReason;
+  cancellationReason: Schema.optionalKey(CancellationReason),
   /** Present only for a failed Run that had a message to give. */
-  readonly errorMessage?: string;
-  readonly finalOutput: string;
-  readonly transcript: readonly TranscriptItem[];
-  readonly tools: readonly ToolEntry[];
-  readonly usage: UsageSnapshot;
-  readonly diagnostics: readonly RunDiagnostic[];
-  readonly links: readonly ResultLink[];
-  readonly model?: string;
-  readonly startedAt: number;
-  readonly settledAt: number;
-  readonly truncation: TruncationRecord;
-}
+  errorMessage: Schema.optionalKey(Schema.String),
+  finalOutput: Schema.String,
+  transcript: Schema.Array(TranscriptItem),
+  tools: Schema.Array(ToolEntry),
+  usage: UsageSnapshot,
+  diagnostics: Schema.Array(RunDiagnostic),
+  links: Schema.Array(ResultLink),
+  model: Schema.optionalKey(Schema.String),
+  startedAt: Instant,
+  settledAt: Instant,
+  truncation: TruncationRecord,
+});
+
+export type RunResult = typeof RunResult.Type;
 
 export interface RunSettlement {
   readonly identity: RunIdentity;

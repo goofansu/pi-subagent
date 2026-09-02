@@ -2,26 +2,45 @@
  * The four v2 identifiers.
  *
  * Every one of them is a string at runtime and a distinct type at compile
- * time, so a Run id can never be passed where a Subagent id is expected. The
- * brand is a phantom property that no value actually carries: it exists only
- * to make the four types mutually unassignable.
+ * time, so a Run id can never be passed where a Subagent id is expected. Each
+ * is one branded schema: the shape rule, the brand, the constructor, and the
+ * guard are four readings of the same declaration rather than four things to
+ * keep in step.
  *
  * `BackendId` is deliberately not an enum. A fake backend in a test and a real
  * backend added in a later milestone both need an id, and neither should
  * require editing a central union to get one.
+ *
+ * See docs/adr/0029-v2-effect-schema.md.
  */
 
-declare const brand: unique symbol;
+import { Schema } from "effect";
 
-/** A string carrying a compile-time-only tag. */
-export type Branded<Tag extends string> = string & {
-  readonly [brand]: Tag;
-};
+/**
+ * The shape every identifier shares: printable, compact, and free of
+ * whitespace, so an id can appear in a diagnostic, a log line, or a widget row
+ * without quoting or escaping.
+ */
+const IDENTIFIER_PATTERN = /^[A-Za-z0-9._:-]+$/;
 
-export type BackendId = Branded<"BackendId">;
-export type SubagentId = Branded<"SubagentId">;
-export type RunId = Branded<"RunId">;
-export type ControlId = Branded<"ControlId">;
+/** Long enough for a uuid with a prefix, short enough to print. */
+export const IDENTIFIER_MAX_LENGTH = 128;
+
+/** The unbranded rule. Every identifier is this plus one brand. */
+const IdentifierText = Schema.String.check(
+  Schema.isLengthBetween(1, IDENTIFIER_MAX_LENGTH),
+  Schema.isPattern(IDENTIFIER_PATTERN),
+);
+
+export const BackendId = IdentifierText.pipe(Schema.brand("BackendId"));
+export const SubagentId = IdentifierText.pipe(Schema.brand("SubagentId"));
+export const RunId = IdentifierText.pipe(Schema.brand("RunId"));
+export const ControlId = IdentifierText.pipe(Schema.brand("ControlId"));
+
+export type BackendId = typeof BackendId.Type;
+export type SubagentId = typeof SubagentId.Type;
+export type RunId = typeof RunId.Type;
+export type ControlId = typeof ControlId.Type;
 
 /** Every identifier kind, for diagnostics and for enumerating in tests. */
 export const IDENTIFIER_KINDS = [
@@ -34,108 +53,33 @@ export const IDENTIFIER_KINDS = [
 export type IdentifierKind = (typeof IDENTIFIER_KINDS)[number];
 
 /**
- * The shape every identifier shares: printable, compact, and free of
- * whitespace, so an id can appear in a diagnostic, a log line, or a widget row
- * without quoting or escaping.
+ * Whether a value has the runtime shape every identifier constructor
+ * enforces.
+ *
+ * There is one such predicate rather than four, and that is the honest number:
+ * a brand is a compile-time fact with no runtime witness, so nothing at
+ * runtime can tell a `RunId` from a `SubagentId`. M1 had four guards whose
+ * bodies were identical and whose names promised a discrimination they could
+ * not perform.
  */
-const IDENTIFIER_PATTERN = /^[A-Za-z0-9._:-]+$/;
-
-/** Long enough for a uuid with a prefix, short enough to print. */
-export const IDENTIFIER_MAX_LENGTH = 128;
-
-export class InvalidIdentifierError extends Error {
-  readonly kind: IdentifierKind;
-  readonly rejected: unknown;
-
-  constructor(kind: IdentifierKind, rejected: unknown, reason: string) {
-    super(`invalid ${kind}: ${reason}`);
-    this.name = "InvalidIdentifierError";
-    this.kind = kind;
-    this.rejected = rejected;
-  }
-}
+export const hasIdentifierShape: (value: unknown) => value is string =
+  Schema.is(IdentifierText);
 
 /**
- * Whether a value has the runtime shape every identifier constructor
- * enforces. The brand itself is a compile-time fact with no runtime witness,
- * so this is the strongest check a guard can make.
+ * The four constructors.
+ *
+ * Each decodes an `unknown` and throws on anything that is not an identifier,
+ * because a caller that has just built an id from a literal wants the mistake
+ * at the call site rather than a `Result` to unwrap. Callers that hold
+ * genuinely untrusted input decode the schema themselves.
  */
-export function hasIdentifierShape(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= IDENTIFIER_MAX_LENGTH &&
-    IDENTIFIER_PATTERN.test(value)
-  );
-}
-
-function makeIdentifier<Tag extends IdentifierKind>(
-  kind: Tag,
-  value: unknown,
-): Branded<Tag> {
-  if (typeof value !== "string") {
-    throw new InvalidIdentifierError(kind, value, "not a string");
-  }
-  if (value.length === 0) {
-    throw new InvalidIdentifierError(kind, value, "empty");
-  }
-  if (value.length > IDENTIFIER_MAX_LENGTH) {
-    throw new InvalidIdentifierError(
-      kind,
-      value,
-      `longer than ${IDENTIFIER_MAX_LENGTH} characters`,
-    );
-  }
-  if (!IDENTIFIER_PATTERN.test(value)) {
-    throw new InvalidIdentifierError(
-      kind,
-      value,
-      "contains characters outside letters, digits, '.', '_', ':' and '-'",
-    );
-  }
-  return value as Branded<Tag>;
-}
-
-export function backendId(value: unknown): BackendId {
-  return makeIdentifier("BackendId", value);
-}
-
-export function subagentId(value: unknown): SubagentId {
-  return makeIdentifier("SubagentId", value);
-}
-
-export function runId(value: unknown): RunId {
-  return makeIdentifier("RunId", value);
-}
-
-export function controlId(value: unknown): ControlId {
-  return makeIdentifier("ControlId", value);
-}
-
-/*
- * The four guards below all call {@link hasIdentifierShape}, because that is
- * the only honest thing a guard can do here: a brand has no runtime witness,
- * so nothing at runtime can tell a `RunId` from a `SubagentId`. Each one
- * therefore answers "could this string be an X" rather than "is this an X".
- * They exist so a caller narrowing an `unknown` at a boundary has a named
- * predicate to reach for; they are not a way to discriminate between the four.
- */
-
-export function isBackendId(value: unknown): value is BackendId {
-  return hasIdentifierShape(value);
-}
-
-export function isSubagentId(value: unknown): value is SubagentId {
-  return hasIdentifierShape(value);
-}
-
-export function isRunId(value: unknown): value is RunId {
-  return hasIdentifierShape(value);
-}
-
-export function isControlId(value: unknown): value is ControlId {
-  return hasIdentifierShape(value);
-}
+export const backendId: (value: unknown) => BackendId =
+  Schema.decodeUnknownSync(BackendId);
+export const subagentId: (value: unknown) => SubagentId =
+  Schema.decodeUnknownSync(SubagentId);
+export const runId: (value: unknown) => RunId = Schema.decodeUnknownSync(RunId);
+export const controlId: (value: unknown) => ControlId =
+  Schema.decodeUnknownSync(ControlId);
 
 /** The backend a Profile names when it names none. */
 export const DEFAULT_BACKEND_ID: BackendId = backendId("pi");

@@ -9,17 +9,27 @@
  * Reconciliation happens before settlement, as the last ordered observation of
  * the Run, so it is not a late event healing a terminal Run.
  *
+ * Two fields are declared more loosely than their observation counterparts,
+ * and the looseness is the design rather than an oversight. `context` and
+ * `turns` are checked for *shape* here and for *usability* in `reconcileRun`,
+ * so a snapshot the domain cannot read one number of still heals the
+ * transcript, the output, and the usage it also carried. Rejecting the whole
+ * snapshot for one bad field is the opposite of what a snapshot is for.
+ *
  * See docs/adr/0025-v2-terminal-settlement.md.
  */
 
-import type { TranscriptItem } from "./transcript.ts";
-import type { ContextGauge, UsageTotalsPatch } from "./usage.ts";
+import { Schema } from "effect";
+import { TranscriptItem } from "./transcript.ts";
+import { ContextGauge, UsageTotalsPatch } from "./usage.ts";
 
-export interface TerminalReconciliation {
-  readonly transcript?: readonly TranscriptItem[];
-  readonly finalOutput?: string;
-  readonly usage?: UsageTotalsPatch;
-  readonly context?: ContextGauge;
-  readonly turns?: number;
-  readonly model?: string;
-}
+export const TerminalReconciliation = Schema.Struct({
+  transcript: Schema.optionalKey(Schema.Array(TranscriptItem)),
+  finalOutput: Schema.optionalKey(Schema.String),
+  usage: Schema.optionalKey(UsageTotalsPatch),
+  context: Schema.optionalKey(ContextGauge),
+  turns: Schema.optionalKey(Schema.Number),
+  model: Schema.optionalKey(Schema.String),
+});
+
+export type TerminalReconciliation = typeof TerminalReconciliation.Type;

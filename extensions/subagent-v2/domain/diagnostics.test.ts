@@ -4,13 +4,11 @@ import {
   DIAGNOSTIC_CATEGORIES,
   DIAGNOSTIC_MESSAGE_MAX_BYTES,
   DIAGNOSTIC_REDACTED,
-  InvalidDiagnosticError,
   isDiagnosticCategory,
   redactedDiagnostic,
   runDiagnostic,
 } from "./diagnostics.ts";
 import {
-  InvalidResultLinkError,
   isResultLinkKind,
   RESULT_LINK_KINDS,
   RESULT_LINK_LABEL_MAX_BYTES,
@@ -42,13 +40,11 @@ test("a diagnostic outside the category set is rejected", () => {
     assert.equal(isDiagnosticCategory(category), true);
   }
   assert.equal(isDiagnosticCategory("provider-said-no"), false);
-  assert.throws(
-    () =>
-      runDiagnostic(
-        "provider-said-no" as (typeof DIAGNOSTIC_CATEGORIES)[number],
-        "no",
-      ),
-    InvalidDiagnosticError,
+  assert.throws(() =>
+    runDiagnostic(
+      "provider-said-no" as (typeof DIAGNOSTIC_CATEGORIES)[number],
+      "no",
+    ),
   );
 });
 
@@ -86,14 +82,12 @@ test("the result link kinds are the four the domain admits", () => {
 });
 
 test("a link outside the kind set is rejected", () => {
-  assert.throws(
-    () =>
-      resultLink(
-        "provider-object" as (typeof RESULT_LINK_KINDS)[number],
-        "label",
-        "target",
-      ),
-    InvalidResultLinkError,
+  assert.throws(() =>
+    resultLink(
+      "provider-object" as (typeof RESULT_LINK_KINDS)[number],
+      "label",
+      "target",
+    ),
   );
 });
 

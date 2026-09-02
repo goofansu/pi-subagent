@@ -21,6 +21,23 @@
  * See docs/adr/0027-v2-usage-normalization.md.
  */
 
+import { Schema } from "effect";
+import { EXACT_KEYS } from "./decoding.ts";
+
+/** A whole unit of something a backend counted. */
+const Count = Schema.Finite.check(
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(0),
+);
+
+/**
+ * A real-valued amount, which cost is and no counter is.
+ *
+ * Split from {@link Count} rather than shared with it because a fractional
+ * token total is a wrong number and a fractional cost is the normal case.
+ */
+const Amount = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
+
 /** Counters a backend reports as whole units. */
 export const USAGE_COUNT_FIELDS = [
   "input",
@@ -40,88 +57,20 @@ export type UsageDeltaField = (typeof USAGE_DELTA_FIELDS)[number];
  *
  * Every field is optional because backends report different subsets, and every
  * present field is a nonnegative finite number — the counters additionally
- * integers. A delta that fails those rules is rejected at construction rather
- * than coerced, because a coerced counter is a wrong number that no later
- * reader can distinguish from a right one.
+ * integers. A delta that fails those rules is rejected rather than coerced,
+ * because a coerced counter is a wrong number that no later reader can
+ * distinguish from a right one.
  */
-export interface UsageDelta {
-  readonly input?: number;
-  readonly output?: number;
-  readonly cacheRead?: number;
-  readonly cacheWrite?: number;
-  readonly cost?: number;
-  readonly turns?: number;
-}
+export const UsageDelta = Schema.Struct({
+  input: Schema.optionalKey(Count),
+  output: Schema.optionalKey(Count),
+  cacheRead: Schema.optionalKey(Count),
+  cacheWrite: Schema.optionalKey(Count),
+  cost: Schema.optionalKey(Amount),
+  turns: Schema.optionalKey(Count),
+});
 
-export class UsageValidationError extends Error {
-  readonly field: string;
-
-  constructor(field: string, reason: string) {
-    super(`invalid usage field '${field}': ${reason}`);
-    this.name = "UsageValidationError";
-    this.field = field;
-  }
-}
-
-function countReason(value: unknown): string | undefined {
-  if (typeof value !== "number") return "not a number";
-  if (!Number.isFinite(value)) return "not finite";
-  if (!Number.isInteger(value)) return "not an integer";
-  if (value < 0) return "negative";
-  return undefined;
-}
-
-function costReason(value: unknown): string | undefined {
-  if (typeof value !== "number") return "not a number";
-  if (!Number.isFinite(value)) return "not finite";
-  if (value < 0) return "negative";
-  return undefined;
-}
-
-/**
- * Why a value is not a usable delta, or `undefined` when it is.
- *
- * The reducer needs this as a predicate rather than as an exception: an
- * adapter that emits a malformed delta gets its observation reported as
- * invalid, and the Run carries on.
- */
-export function usageDeltaProblem(value: unknown): string | undefined {
-  if (typeof value !== "object" || value === null) return "not an object";
-  const record = value as Record<string, unknown>;
-  for (const field of Object.keys(record)) {
-    if (!(USAGE_DELTA_FIELDS as readonly string[]).includes(field)) {
-      return `unknown field '${field}'`;
-    }
-  }
-  for (const field of USAGE_COUNT_FIELDS) {
-    if (record[field] === undefined) continue;
-    const reason = countReason(record[field]);
-    if (reason) return `${field} is ${reason}`;
-  }
-  if (record.cost !== undefined) {
-    const reason = costReason(record.cost);
-    if (reason) return `cost is ${reason}`;
-  }
-  return undefined;
-}
-
-/**
- * Build a validated delta carrying only the fields that were supplied, so two
- * deltas meaning the same thing compare deep-equal.
- */
-export function usageDelta(fields: UsageDelta): UsageDelta {
-  const problem = usageDeltaProblem(fields);
-  if (problem) {
-    const [field] = problem.split(" ");
-    throw new UsageValidationError(field ?? "usage", problem);
-  }
-  const delta: Record<string, number> = {};
-  for (const field of USAGE_DELTA_FIELDS) {
-    const value = fields[field];
-    if (value !== undefined) delta[field] = value;
-  }
-  return delta as UsageDelta;
-}
+export type UsageDelta = typeof UsageDelta.Type;
 
 /**
  * How much of a Conversation's context window is occupied right now.
@@ -129,49 +78,79 @@ export function usageDelta(fields: UsageDelta): UsageDelta {
  * `window` is the denominator when a backend reports one; occupancy is
  * meaningful without it.
  */
-export interface ContextGauge {
-  readonly tokens: number;
-  readonly window?: number;
+export const ContextGauge = Schema.Struct({
+  tokens: Schema.Number,
+  window: Schema.optionalKey(Schema.Number),
+});
+
+export type ContextGauge = typeof ContextGauge.Type;
+
+/**
+ * The same shape with the domain's numeric rules applied.
+ *
+ * The two exist separately because a gauge is read in two situations with two
+ * honest answers. A `context` *observation* that fails these rules is a
+ * malformed observation and is reported as one. A gauge inside a terminal
+ * reconciliation that fails them is one bad field of a snapshot that may also
+ * carry a transcript, an output, and a usage total — so it is ignored on its
+ * own and the rest of the snapshot still heals. {@link ContextGauge} is what
+ * both accept; this is what both check against.
+ */
+export const UsableContextGauge = Schema.Struct({
+  tokens: Count,
+  window: Schema.optionalKey(Count),
+});
+
+const decodeUsableContextGauge = Schema.decodeUnknownResult(
+  UsableContextGauge,
+  EXACT_KEYS,
+);
+
+/** Whether a gauge's numbers are ones the domain can use. */
+export function isUsableContextGauge(value: unknown): boolean {
+  return decodeUsableContextGauge(value)._tag === "Success";
 }
 
 export const EMPTY_CONTEXT_GAUGE: ContextGauge = { tokens: 0 };
 
-export function contextGaugeProblem(value: unknown): string | undefined {
-  if (typeof value !== "object" || value === null) return "not an object";
-  const record = value as Record<string, unknown>;
-  for (const field of Object.keys(record)) {
-    if (field !== "tokens" && field !== "window") {
-      return `unknown field '${field}'`;
-    }
+const decodeUsageDelta = Schema.decodeUnknownSync(UsageDelta, EXACT_KEYS);
+
+const decodeUsableGauge = Schema.decodeUnknownSync(
+  UsableContextGauge,
+  EXACT_KEYS,
+);
+
+/**
+ * Build a validated delta carrying only the fields that were supplied, so two
+ * deltas meaning the same thing compare deep-equal.
+ */
+export function usageDelta(fields: UsageDelta): UsageDelta {
+  // A field explicitly set to `undefined` is dropped so that two deltas
+  // meaning the same thing compare deep-equal; every other key is carried
+  // through, so an unlisted one reaches the decoder and is rejected there.
+  const supplied: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(fields)) {
+    if (value !== undefined) supplied[field] = value;
   }
-  const tokens = countReason(record.tokens);
-  if (tokens) return `tokens is ${tokens}`;
-  if (record.window !== undefined) {
-    const window = countReason(record.window);
-    if (window) return `window is ${window}`;
-  }
-  return undefined;
+  return decodeUsageDelta(supplied);
 }
 
 export function contextGauge(tokens: number, window?: number): ContextGauge {
-  const gauge: ContextGauge =
-    window === undefined ? { tokens } : { tokens, window };
-  const problem = contextGaugeProblem(gauge);
-  if (problem) {
-    const [field] = problem.split(" ");
-    throw new UsageValidationError(field ?? "context", problem);
-  }
-  return gauge;
+  return decodeUsableGauge(
+    window === undefined ? { tokens } : { tokens, window },
+  );
 }
 
 /** The summed counters, with every field present because they start at zero. */
-export interface UsageTotals {
-  readonly input: number;
-  readonly output: number;
-  readonly cacheRead: number;
-  readonly cacheWrite: number;
-  readonly cost: number;
-}
+export const UsageTotals = Schema.Struct({
+  input: Count,
+  output: Count,
+  cacheRead: Count,
+  cacheWrite: Count,
+  cost: Amount,
+});
+
+export type UsageTotals = typeof UsageTotals.Type;
 
 export const EMPTY_USAGE_TOTALS: UsageTotals = {
   input: 0,
@@ -182,14 +161,24 @@ export const EMPTY_USAGE_TOTALS: UsageTotals = {
 };
 
 /** The fields a terminal reconciliation may replace, each independently. */
-export type UsageTotalsPatch = Partial<UsageTotals>;
+export const UsageTotalsPatch = Schema.Struct({
+  input: Schema.optionalKey(Count),
+  output: Schema.optionalKey(Count),
+  cacheRead: Schema.optionalKey(Count),
+  cacheWrite: Schema.optionalKey(Count),
+  cost: Schema.optionalKey(Amount),
+});
+
+export type UsageTotalsPatch = typeof UsageTotalsPatch.Type;
 
 /** What a Run spent: summed totals, the current gauge, and the turn count. */
-export interface UsageSnapshot {
-  readonly totals: UsageTotals;
-  readonly context: ContextGauge;
-  readonly turns: number;
-}
+export const UsageSnapshot = Schema.Struct({
+  totals: UsageTotals,
+  context: ContextGauge,
+  turns: Count,
+});
+
+export type UsageSnapshot = typeof UsageSnapshot.Type;
 
 export const EMPTY_USAGE_SNAPSHOT: UsageSnapshot = {
   totals: EMPTY_USAGE_TOTALS,
@@ -256,8 +245,7 @@ export function raiseTurns(
   snapshot: UsageSnapshot,
   turns: unknown,
 ): UsageSnapshot {
-  if (countReason(turns)) return snapshot;
-  const raised = turns as number;
-  if (raised <= snapshot.turns) return snapshot;
-  return { ...snapshot, turns: raised };
+  if (!Schema.is(Count)(turns)) return snapshot;
+  if (turns <= snapshot.turns) return snapshot;
+  return { ...snapshot, turns };
 }

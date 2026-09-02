@@ -7,13 +7,9 @@ import {
   type ControlId,
   controlId,
   DEFAULT_BACKEND_ID,
+  hasIdentifierShape,
   IDENTIFIER_KINDS,
   IDENTIFIER_MAX_LENGTH,
-  InvalidIdentifierError,
-  isBackendId,
-  isControlId,
-  isRunId,
-  isSubagentId,
   type RunId,
   runId,
   type SubagentId,
@@ -53,6 +49,14 @@ test("passing one identifier where another is expected is a compile error", () =
   assert.equal(takesSubagentId(subagentId("run-1")), "run-1");
 });
 
+test("a bare string is not an identifier, so one cannot be smuggled in", () => {
+  const takesRunId = (id: RunId): string => id;
+
+  // @ts-expect-error the brand is what stops an unvalidated string here
+  assert.equal(takesRunId("run-1"), "run-1");
+  assert.equal(takesRunId(runId("run-1")), "run-1");
+});
+
 test("every identifier constructor accepts a printable compact string", () => {
   assert.equal(backendId("pi"), "pi");
   assert.equal(subagentId("subagent-01"), "subagent-01");
@@ -60,26 +64,23 @@ test("every identifier constructor accepts a printable compact string", () => {
   assert.equal(controlId("control_1.2"), "control_1.2");
 });
 
-test("an identifier constructor rejects a non-string, naming its kind", () => {
+test("an identifier constructor rejects a non-string, saying what it expected", () => {
   assert.throws(
     () => runId(undefined),
     (error: unknown) => {
-      assert.ok(error instanceof InvalidIdentifierError);
-      assert.equal(error.kind, "RunId");
-      assert.equal(error.rejected, undefined);
-      assert.match(error.message, /invalid RunId: not a string/);
+      assert.match(String((error as Error).message), /Expected string/);
       return true;
     },
   );
 });
 
 test("an identifier constructor rejects an empty string", () => {
-  assert.throws(() => subagentId(""), InvalidIdentifierError);
+  assert.throws(() => subagentId(""), /length between 1 and 128/);
 });
 
 test("an identifier constructor rejects whitespace and unprintable characters", () => {
   for (const rejected of ["run 1", "run\n1", "run/1", "run#1", "  "]) {
-    assert.throws(() => runId(rejected), InvalidIdentifierError, rejected);
+    assert.throws(() => runId(rejected), /matching the RegExp/, rejected);
   }
 });
 
@@ -87,28 +88,32 @@ test("an identifier constructor rejects a value longer than the bound", () => {
   const longest = "a".repeat(IDENTIFIER_MAX_LENGTH);
 
   assert.equal(runId(longest), longest);
+  assert.throws(() => runId(`${longest}a`), /length between 1 and 128/);
+});
+
+test("a rejection names what was expected and never the value it rejected", () => {
+  const secret = "sk-live-must-not-appear";
+
   assert.throws(
-    () => runId(`${longest}a`),
+    () => runId(`${secret} has a space`),
     (error: unknown) => {
-      assert.ok(error instanceof InvalidIdentifierError);
-      assert.match(error.message, /longer than 128 characters/);
+      const message = String((error as Error).message);
+      assert.ok(!message.includes(secret), message);
       return true;
     },
   );
 });
 
-test("each guard accepts the shape its constructor produces and rejects others", () => {
-  assert.equal(isBackendId(backendId("claude")), true);
-  assert.equal(isSubagentId(subagentId("s1")), true);
-  assert.equal(isRunId(runId("r1")), true);
-  assert.equal(isControlId(controlId("c1")), true);
+test("one shape predicate answers what a runtime check honestly can", () => {
+  assert.equal(hasIdentifierShape(backendId("claude")), true);
+  assert.equal(hasIdentifierShape(subagentId("s1")), true);
+  assert.equal(hasIdentifierShape(runId("r1")), true);
+  assert.equal(hasIdentifierShape(controlId("c1")), true);
 
-  for (const guard of [isBackendId, isSubagentId, isRunId, isControlId]) {
-    assert.equal(guard(""), false);
-    assert.equal(guard("has space"), false);
-    assert.equal(guard(7), false);
-    assert.equal(guard(undefined), false);
-  }
+  assert.equal(hasIdentifierShape(""), false);
+  assert.equal(hasIdentifierShape("has space"), false);
+  assert.equal(hasIdentifierShape(7), false);
+  assert.equal(hasIdentifierShape(undefined), false);
 });
 
 test("the default backend a Profile falls back to is pi", () => {

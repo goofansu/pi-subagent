@@ -12,11 +12,18 @@
  * is honest about being bounded rather than quietly lossy.
  */
 
+import { Schema } from "effect";
 import type { RunDiagnostic } from "./diagnostics.ts";
 import type { RunEnding } from "./endings.ts";
 import type { ResultLink } from "./links.ts";
 import type { ToolEntry, TranscriptItem } from "./transcript.ts";
 import { EMPTY_USAGE_SNAPSHOT, type UsageSnapshot } from "./usage.ts";
+
+/** A count of things bounding removed. Never negative, never fractional. */
+const Dropped = Schema.Finite.check(
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(0),
+);
 
 /**
  * What bounding has removed from a projection so far.
@@ -29,18 +36,20 @@ import { EMPTY_USAGE_SNAPSHOT, type UsageSnapshot } from "./usage.ts";
  * reconciliation would stop being idempotent — replaying it would add the same
  * cut a second time.
  */
-export interface TruncationRecord {
-  readonly droppedTranscriptItems: number;
-  readonly droppedToolEntries: number;
-  readonly droppedDiagnostics: number;
-  readonly droppedLinks: number;
+export const TruncationRecord = Schema.Struct({
+  droppedTranscriptItems: Dropped,
+  droppedToolEntries: Dropped,
+  droppedDiagnostics: Dropped,
+  droppedLinks: Dropped,
   /** Bytes cut from the text parts of the transcript as it stands. */
-  readonly truncatedTranscriptBytes: number;
+  truncatedTranscriptBytes: Dropped,
   /** Bytes cut from tool output summaries. */
-  readonly truncatedToolOutputBytes: number;
+  truncatedToolOutputBytes: Dropped,
   /** Bytes cut from the final output as it stands. */
-  readonly truncatedOutputBytes: number;
-}
+  truncatedOutputBytes: Dropped,
+});
+
+export type TruncationRecord = typeof TruncationRecord.Type;
 
 export const EMPTY_TRUNCATION_RECORD: TruncationRecord = {
   droppedTranscriptItems: 0,

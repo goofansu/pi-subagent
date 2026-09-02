@@ -8,12 +8,13 @@
  * that shape: the category is the useful part at the public seam, and the raw
  * provider value stays adapter-local.
  *
- * A diagnostic authored by the core itself — a late event, a queue overflow —
- * has no provider text to fear, so it may carry a real message. The bound
- * applies either way, at construction, so nothing downstream has to remember
- * to apply it.
+ * A diagnostic authored by the core itself — a late event, an overflowing
+ * intake — has no provider text to fear, so it may carry a real message. The
+ * bound applies either way, at construction, so nothing downstream has to
+ * remember to apply it.
  */
 
+import { Schema } from "effect";
 import { boundOneLine } from "./text.ts";
 
 export const DIAGNOSTIC_CATEGORIES = [
@@ -29,7 +30,9 @@ export const DIAGNOSTIC_CATEGORIES = [
   "other",
 ] as const;
 
-export type DiagnosticCategory = (typeof DIAGNOSTIC_CATEGORIES)[number];
+export const DiagnosticCategory = Schema.Literals(DIAGNOSTIC_CATEGORIES);
+
+export type DiagnosticCategory = typeof DiagnosticCategory.Type;
 
 /** Long enough to explain a failure, short enough to keep on a heap. */
 export const DIAGNOSTIC_MESSAGE_MAX_BYTES = 2048;
@@ -37,23 +40,16 @@ export const DIAGNOSTIC_MESSAGE_MAX_BYTES = 2048;
 /** What a redacted diagnostic says instead of provider text. */
 export const DIAGNOSTIC_REDACTED = "[redacted]";
 
-export interface RunDiagnostic {
-  readonly category: DiagnosticCategory;
-  readonly message: string;
-}
+export const RunDiagnostic = Schema.Struct({
+  category: DiagnosticCategory,
+  message: Schema.String,
+});
 
-export class InvalidDiagnosticError extends Error {
-  constructor(category: unknown) {
-    super(`unknown diagnostic category: ${String(category)}`);
-    this.name = "InvalidDiagnosticError";
-  }
-}
+export type RunDiagnostic = typeof RunDiagnostic.Type;
 
-export function isDiagnosticCategory(
+export const isDiagnosticCategory: (
   value: unknown,
-): value is DiagnosticCategory {
-  return (DIAGNOSTIC_CATEGORIES as readonly unknown[]).includes(value);
-}
+) => value is DiagnosticCategory = Schema.is(DiagnosticCategory);
 
 /**
  * Build a diagnostic, rejecting an unknown category and bounding the message.
@@ -65,13 +61,10 @@ export function runDiagnostic(
   category: DiagnosticCategory,
   message: string,
 ): RunDiagnostic {
-  if (!isDiagnosticCategory(category)) {
-    throw new InvalidDiagnosticError(category);
-  }
-  return {
+  return RunDiagnostic.make({
     category,
     message: boundOneLine(message, DIAGNOSTIC_MESSAGE_MAX_BYTES),
-  };
+  });
 }
 
 /**

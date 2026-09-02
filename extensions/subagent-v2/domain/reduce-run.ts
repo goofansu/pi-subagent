@@ -29,17 +29,16 @@
  * See docs/adr/0024-v2-observation-ordering.md.
  */
 
+import { Schema } from "effect";
 import {
   boundList,
   boundParts,
   boundProjectionText,
   type TruncationEvent,
 } from "./bounding.ts";
-import { isDiagnosticCategory } from "./diagnostics.ts";
-import { RUN_ENDING_KINDS, unfinishedToolStatusForEnding } from "./endings.ts";
-import { isResultLinkKind } from "./links.ts";
-import type { RunObservation, RunObservationKind } from "./observations.ts";
-import { CANCELLATION_REASONS } from "./phases.ts";
+import { EXACT_KEYS } from "./decoding.ts";
+import { unfinishedToolStatusForEnding } from "./endings.ts";
+import { RunObservation, type RunObservationKind } from "./observations.ts";
 import {
   DEFAULT_PROJECTION_BOUNDS,
   type ProjectionBounds,
@@ -47,18 +46,8 @@ import {
   type TruncationRecord,
 } from "./projection.ts";
 import { reconcileRun } from "./reconcile-run.ts";
-import {
-  MESSAGE_ROLES,
-  TOOL_STATUSES,
-  type ToolEntry,
-  transcriptItemText,
-} from "./transcript.ts";
-import {
-  addUsageDelta,
-  contextGaugeProblem,
-  replaceContextGauge,
-  usageDeltaProblem,
-} from "./usage.ts";
+import { type ToolEntry, transcriptItemText } from "./transcript.ts";
+import { addUsageDelta, replaceContextGauge } from "./usage.ts";
 
 /**
  * What one call to {@link reduceRun} did.
@@ -92,110 +81,35 @@ export function missingCallIdNote(name: string): string {
   return `tool call '${name}' carries no call id; kept as a distinct tool`;
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function endingProblem(ending: unknown): string | undefined {
-  if (typeof ending !== "object" || ending === null) return "not an object";
-  const record = ending as Record<string, unknown>;
-  if (!(RUN_ENDING_KINDS as readonly unknown[]).includes(record.ending)) {
-    return `unknown ending '${String(record.ending)}'`;
-  }
-  if (
-    record.ending === "cancelled" &&
-    !(CANCELLATION_REASONS as readonly unknown[]).includes(record.reason)
-  ) {
-    return `unknown cancellation reason '${String(record.reason)}'`;
-  }
-  return undefined;
-}
+/**
+ * The decoder every observation is checked against.
+ *
+ * Built once rather than per call: a decoder is a compiled schema, and
+ * rebuilding it for every observation of a busy Run would be the one place
+ * this fold does real work.
+ */
+const decodeObservation = Schema.decodeUnknownResult(
+  RunObservation,
+  EXACT_KEYS,
+);
 
 /**
  * Why an observation cannot be reduced, or `undefined` when it can.
  *
  * The reducer checks rather than trusts, because a malformed observation is an
  * adapter defect and the honest answer to one is to report it and carry on —
- * not to throw inside a fold, and not to write nonsense into a Run.
+ * not to throw inside a fold, and not to write nonsense into a Run. The
+ * argument is typed, and the check still runs: a type is a promise an adapter
+ * makes, and an adapter that breaks it is exactly the case this is here for.
+ *
+ * The reason text is the formatted schema issue, which names what was expected
+ * and the key path it was expected at, and never the value it rejected.
  */
 export function observationProblem(
   observation: RunObservation,
 ): string | undefined {
-  switch (observation.kind) {
-    case "message": {
-      if (!(MESSAGE_ROLES as readonly unknown[]).includes(observation.role)) {
-        return `unknown message role '${String(observation.role)}'`;
-      }
-      if (!Array.isArray(observation.parts)) return "parts is not a list";
-      for (const part of observation.parts) {
-        if (part.kind === "text") {
-          if (typeof part.text !== "string") return "a text part has no text";
-          continue;
-        }
-        if (part.kind === "tool_call") {
-          if (!isNonEmptyString(part.name)) {
-            return "a tool call part has no name";
-          }
-          continue;
-        }
-        return `unknown message part '${String((part as { kind: unknown }).kind)}'`;
-      }
-      return undefined;
-    }
-    case "tool_progress": {
-      // A call id is required here and optional on a tool call part, which
-      // looks inconsistent and is not: a *call* with no id is still a call the
-      // transcript can show, kept distinct and reported. Progress with no id
-      // is progress about nothing — there is no entry it could join and none
-      // it could create — so it is the one thing that is genuinely malformed.
-      if (!isNonEmptyString(observation.callId)) {
-        return "tool progress carries no call id";
-      }
-      if (!(TOOL_STATUSES as readonly unknown[]).includes(observation.status)) {
-        return `unknown tool status '${String(observation.status)}'`;
-      }
-      return undefined;
-    }
-    case "activity":
-      return observation.activity === undefined ||
-        typeof observation.activity === "string"
-        ? undefined
-        : "activity is neither text nor a clear";
-    case "usage":
-      return usageDeltaProblem(observation.usage);
-    case "context":
-      return contextGaugeProblem(observation.context);
-    case "diagnostic":
-      return isDiagnosticCategory(observation.diagnostic?.category)
-        ? undefined
-        : `unknown diagnostic category '${String(observation.diagnostic?.category)}'`;
-    case "link":
-      return isResultLinkKind(observation.link?.kind)
-        ? undefined
-        : `unknown link kind '${String(observation.link?.kind)}'`;
-    case "model":
-      return isNonEmptyString(observation.model) ? undefined : "model is empty";
-    case "reconciliation": {
-      const reconciliation = observation.reconciliation;
-      if (typeof reconciliation !== "object" || reconciliation === null) {
-        return "reconciliation is not an object";
-      }
-      if (
-        reconciliation.transcript !== undefined &&
-        !Array.isArray(reconciliation.transcript)
-      ) {
-        return "reconciliation transcript is not a list";
-      }
-      // An unusable gauge or turn count inside a reconciliation is *not* a
-      // malformed observation. Rejecting the whole reconciliation for one bad
-      // field would throw away the transcript, output, and usage healing it
-      // also carried, which is the opposite of what a snapshot is for. Those
-      // two fields are ignored individually instead — see `reconcileRun`.
-      return undefined;
-    }
-    case "ending":
-      return endingProblem(observation.ending);
-  }
+  const decoded = decodeObservation(observation);
+  return decoded._tag === "Failure" ? decoded.failure.message : undefined;
 }
 
 function mergeToolEntry(

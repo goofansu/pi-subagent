@@ -376,59 +376,125 @@ test("a tool left running is marked with the Run's terminal outcome", () => {
 /* -------------------------------------------------------------- */
 
 test("a malformed observation is ignored and the reason is reported", () => {
-  const cases: readonly [RunObservation, string][] = [
+  // The reason is the formatted schema issue: what the declaration expected,
+  // and the key path it expected it at. Each case pairs an observation an
+  // adapter could plausibly emit with the part of the issue that names the
+  // rule it broke.
+  const cases: readonly [RunObservation, RegExp][] = [
     [
       { kind: "message", role: "system" as "user", parts: [] },
-      "unknown message role 'system'",
+      /Expected "user" \| "assistant"[\s\S]*\["role"\]/,
     ],
     [
-      { kind: "tool_progress", callId: "", status: "running" },
-      "tool progress carries no call id",
+      {
+        kind: "message",
+        role: "user",
+        parts: [{ kind: "tool_call", name: "" }],
+      },
+      /\["parts"\]\[0\]/,
     ],
+    [{ kind: "tool_progress", callId: "", status: "running" }, /\["callId"\]/],
     [
       { kind: "tool_progress", callId: "c1", status: "pending" as "running" },
-      "unknown tool status 'pending'",
+      /Expected "running" \| "completed" \| "failed"[\s\S]*\["status"\]/,
     ],
-    [{ kind: "usage", usage: { input: -1 } }, "input is negative"],
-    [{ kind: "context", context: { tokens: 1.5 } }, "tokens is not an integer"],
+    [
+      { kind: "usage", usage: { input: -1 } },
+      /greater than or equal to 0[\s\S]*\["usage"\]\["input"\]/,
+    ],
+    [
+      { kind: "context", context: { tokens: 1.5 } },
+      /an integer[\s\S]*\["context"\]\["tokens"\]/,
+    ],
     [
       {
         kind: "diagnostic",
         diagnostic: { category: "nope" as "other", message: "m" },
       },
-      "unknown diagnostic category 'nope'",
+      /\["diagnostic"\]\["category"\]/,
     ],
     [
       {
         kind: "link",
         link: { kind: "socket" as "url", label: "l", target: "t" },
       },
-      "unknown link kind 'socket'",
+      /\["link"\]\["kind"\]/,
     ],
-    [{ kind: "model", model: "" }, "model is empty"],
+    [{ kind: "model", model: "" }, /\["model"\]/],
     [
       { kind: "ending", ending: { ending: "done" as "answered" } },
-      "unknown ending 'done'",
+      /\["ending"\]/,
     ],
     [
       {
         kind: "ending",
         ending: { ending: "cancelled", reason: "why" as "requested" },
       },
-      "unknown cancellation reason 'why'",
+      /\["ending"\]/,
     ],
   ];
 
   for (const [observation, reason] of cases) {
     const step = reduceRun(createRunProjection(), observation);
 
-    assert.deepEqual(
-      step.report,
-      { report: "ignored-invalid", kind: observation.kind, reason },
-      reason,
+    assert.equal(step.report.report, "ignored-invalid", observation.kind);
+    assert.equal(
+      step.report.report === "ignored-invalid" && step.report.kind,
+      observation.kind,
     );
+    const reported =
+      step.report.report === "ignored-invalid" ? step.report.reason : "";
+    assert.match(reported, reason);
     assert.deepEqual(step.projection, createRunProjection());
   }
+});
+
+test("an observation carrying an unlisted key is malformed, however deep it is", () => {
+  // The rule M1 needed a compile-time key-set table *and* a separate runtime
+  // key walker for. One decode covers both: a key added to the observation
+  // itself and a key added inside a message part or a usage delta.
+  const cases: readonly [Record<string, unknown>, string][] = [
+    [{ kind: "message", role: "user", parts: [], threadId: "t-1" }, "threadId"],
+    [
+      {
+        kind: "message",
+        role: "user",
+        parts: [{ kind: "text", text: "hi", spanId: "s-1" }],
+      },
+      "spanId",
+    ],
+    [{ kind: "usage", usage: { input: 1, requestId: "r-1" } }, "requestId"],
+  ];
+
+  for (const [observation, key] of cases) {
+    const step = reduceRun(
+      createRunProjection(),
+      observation as unknown as RunObservation,
+    );
+
+    assert.equal(step.report.report, "ignored-invalid", key);
+    const reported =
+      step.report.report === "ignored-invalid" ? step.report.reason : "";
+    assert.match(reported, /no excess property/);
+    assert.ok(reported.includes(key), reported);
+    assert.deepEqual(step.projection, createRunProjection());
+  }
+});
+
+test("a rejection reason never carries the value it rejected", () => {
+  const secret = "sk-live-must-not-appear";
+
+  const step = reduceRun(createRunProjection(), {
+    kind: "message",
+    role: "user",
+    parts: [{ kind: "text", text: { token: secret } as unknown as string }],
+  });
+
+  assert.equal(step.report.report, "ignored-invalid");
+  const reported =
+    step.report.report === "ignored-invalid" ? step.report.reason : "";
+  assert.ok(!reported.includes(secret), reported);
+  assert.match(reported, /Expected string[\s\S]*\["parts"\]\[0\]\["text"\]/);
 });
 
 test("a malformed observation after the ending is reported as late, not invalid", () => {

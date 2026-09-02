@@ -30,7 +30,7 @@ import {
 } from "./projection.ts";
 import type { TerminalReconciliation } from "./reconciliation.ts";
 import {
-  contextGaugeProblem,
+  isUsableContextGauge,
   raiseTurns,
   replaceContextGauge,
   replaceUsageTotals,
@@ -102,7 +102,7 @@ export function reconcileRun(
 
   if (
     reconciliation.context !== undefined &&
-    contextGaugeProblem(reconciliation.context) === undefined
+    isUsableContextGauge(reconciliation.context)
   ) {
     // An absent *or unusable* gauge leaves the streamed one in place. A gauge
     // never resets to zero, and never becomes nonsense, because a snapshot

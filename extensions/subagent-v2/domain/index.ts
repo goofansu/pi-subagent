@@ -8,6 +8,7 @@
  */
 
 export * from "./bounding.ts";
+export * from "./decoding.ts";
 export * from "./diagnostics.ts";
 export * from "./endings.ts";
 export * from "./ids.ts";
