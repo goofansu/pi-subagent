@@ -35,6 +35,16 @@ export interface SupervisorCounters {
   readonly seamDecodeFailures: number;
   /** An ending arrived after one had already won. */
   readonly lateEndings: number;
+  /**
+   * A terminal Run's stored result could not be read back.
+   *
+   * Either the entry is missing when the repository says the Run settled, or
+   * the stored form does not decode. Both are defects in the runtime rather
+   * than in a backend, and `agent_result` has no outcome that says so — it can
+   * only report that the output is gone — so the counter is what makes the
+   * difference visible.
+   */
+  readonly unreadableResults: number;
 }
 
 export type SupervisorCounter = keyof SupervisorCounters;
@@ -48,6 +58,7 @@ const ZERO_COUNTERS: SupervisorCounters = {
   deliveryFailures: 0,
   seamDecodeFailures: 0,
   lateEndings: 0,
+  unreadableResults: 0,
 };
 
 /** What is still alive. Every field should be zero once a Session has closed. */

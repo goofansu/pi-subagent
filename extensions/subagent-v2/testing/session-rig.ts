@@ -10,6 +10,10 @@
  * It is deliberately not a driver. It builds a Session and gets out of the way;
  * everything a test does to a Run it does through the supervisor's public
  * operations, which is the whole point of having deleted the M1 driver.
+ *
+ * Like the conformance suite, this is a *test boundary*: it is where a
+ * `node:test` callback crosses into Effect, and therefore one of the two
+ * places in the lane that runs one. No production module does.
  */
 
 import type { Deferred, Scope } from "effect";
@@ -133,7 +137,7 @@ export function withSession<A>(
     { ...RIG_PROFILE, backend: backend.backend.id },
   ];
 
-  const program = Effect.gen(function* () {
+  const built = Effect.gen(function* () {
     const supervisor = yield* SubagentSupervisor;
     const repository = yield* RunRepository;
     const store = yield* ResultStore;
@@ -161,17 +165,20 @@ export function withSession<A>(
           : { maxDelegationDepth: options.maxDelegationDepth }),
       }),
     ),
-    Effect.scoped,
   );
 
-  const runnable = program as Effect.Effect<
-    { readonly value: A; readonly readProbe: () => RuntimeProbe },
-    never
-  >;
+  // Annotated rather than inferred. `Effect.provide` of a Layer that itself
+  // needs a `Scope` leaves the requirement as `any` in this release, and an
+  // `any` here would silently swallow a real missing service later.
+  const program: Effect.Effect<{
+    readonly value: A;
+    readonly readProbe: () => RuntimeProbe;
+  }> = Effect.scoped(built);
+
   return Effect.runPromise(
     options.testClock
-      ? runnable.pipe(Effect.provide(TestClock.layer()))
-      : runnable,
+      ? program.pipe(Effect.provide(TestClock.layer()))
+      : program,
   ).then(({ value, readProbe }) => {
     const probeAfterClose = readProbe();
     return { value, probeAfterClose, noLeaks: probeIsClear(probeAfterClose) };

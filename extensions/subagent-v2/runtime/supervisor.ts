@@ -867,9 +867,10 @@ const makeSupervisor = (settings: SessionSettings) =>
         }
         if (stored.outcome === "ResultExpired") return stored;
         // A terminal Run whose entry is missing or unreadable. The output is
-        // gone either way, and saying so is the only honest outcome the union
-        // has; the counter is what makes the difference visible.
-        counters.count("duplicateSettlements", 0);
+        // gone either way, and `ResultExpired` is the only outcome the union
+        // has for that — so the counter is what tells a maintainer this was a
+        // defect rather than eviction doing its job.
+        counters.count("unreadableResults");
         return {
           outcome: "ResultExpired",
           runId,
