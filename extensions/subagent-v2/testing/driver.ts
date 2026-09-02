@@ -48,6 +48,7 @@ import {
   type RunResult,
   redactedDiagnostic,
   reduceRun,
+  type SteerOutcome,
   settlementEventForEnding,
   toRunResult,
   transitionRun,
@@ -95,6 +96,15 @@ export interface DriveOutcome {
   readonly bundleReport: AppliedReport;
   /** How the execution resolved, before the core classified it. */
   readonly resolution: "completed" | "interrupted" | "defect";
+  /**
+   * One admission outcome per offered Control, in admission order.
+   *
+   * This is the one place M1 *produces* a public outcome rather than only
+   * defining it. The driver stands in for M2's admission path, and it has to,
+   * because "an unsupported Control is refused without the backend being
+   * called" is a rule about the caller rather than about the backend.
+   */
+  readonly controlOutcomes: readonly SteerOutcome[];
 }
 
 /** The stage names the driver records, so ordering is assertable. */
@@ -175,7 +185,17 @@ export function driveRun(
         return Effect.void;
       });
 
-    const pending = [...(options.controls ?? [])];
+    // Capabilities are enforced by the caller, so a backend that declared no
+    // steering is never called about a Control at all: it is refused before
+    // the feed exists, which is what makes `unsupported` free of provider I/O.
+    const offered = options.controls ?? [];
+    const steerable = agent.capabilities.steer;
+    const controlOutcomes: SteerOutcome[] = offered.map((_control) =>
+      steerable
+        ? { outcome: "accepted" as const, runId: options.input.runId }
+        : { outcome: "unsupported" as const, runId: options.input.runId },
+    );
+    const pending = steerable ? [...offered] : [];
     // A fresh feed per Run, which is why a Control admitted to one Run can
     // never reach the next: there is no shared queue to leak through.
     const controls: ControlFeed = {
@@ -252,6 +272,7 @@ export function driveRun(
       trace,
       bundleReport,
       resolution: classified.resolution,
+      controlOutcomes,
     };
   });
 }
