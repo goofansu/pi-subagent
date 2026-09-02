@@ -18,15 +18,27 @@ import type { ResultLink } from "./links.ts";
 import type { ToolEntry, TranscriptItem } from "./transcript.ts";
 import { EMPTY_USAGE_SNAPSHOT, type UsageSnapshot } from "./usage.ts";
 
-/** What bounding has removed from a projection so far. */
+/**
+ * What bounding has removed from a projection so far.
+ *
+ * The byte counts are split by what they measure rather than pooled, because
+ * the fields they measure are bounded differently. A transcript *accumulates*,
+ * so its counts add up; the final output is *replaced* by every assistant
+ * message and by reconciliation, so its count is the count for the text that
+ * is there now. A pooled counter could not be both, and terminal
+ * reconciliation would stop being idempotent — replaying it would add the same
+ * cut a second time.
+ */
 export interface TruncationRecord {
   readonly droppedTranscriptItems: number;
   readonly droppedToolEntries: number;
   readonly droppedDiagnostics: number;
   readonly droppedLinks: number;
-  /** Bytes cut from transcript text parts. */
-  readonly truncatedTextBytes: number;
-  /** Bytes cut from the final output. */
+  /** Bytes cut from the text parts of the transcript as it stands. */
+  readonly truncatedTranscriptBytes: number;
+  /** Bytes cut from tool output summaries. */
+  readonly truncatedToolOutputBytes: number;
+  /** Bytes cut from the final output as it stands. */
   readonly truncatedOutputBytes: number;
 }
 
@@ -35,7 +47,8 @@ export const EMPTY_TRUNCATION_RECORD: TruncationRecord = {
   droppedToolEntries: 0,
   droppedDiagnostics: 0,
   droppedLinks: 0,
-  truncatedTextBytes: 0,
+  truncatedTranscriptBytes: 0,
+  truncatedToolOutputBytes: 0,
   truncatedOutputBytes: 0,
 };
 

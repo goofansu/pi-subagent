@@ -7,6 +7,7 @@
  * module; it depends on nothing.
  */
 
+export * from "./bounding.ts";
 export * from "./diagnostics.ts";
 export * from "./endings.ts";
 export * from "./ids.ts";
@@ -16,7 +17,9 @@ export * from "./outcomes.ts";
 export * from "./phases.ts";
 export * from "./profile.ts";
 export * from "./projection.ts";
+export * from "./reconcile-run.ts";
 export * from "./reconciliation.ts";
+export * from "./reduce-run.ts";
 export * from "./result.ts";
 export * from "./subagent-context.ts";
 export * from "./text.ts";
