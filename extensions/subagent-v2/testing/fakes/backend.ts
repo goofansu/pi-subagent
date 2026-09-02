@@ -311,6 +311,17 @@ function createFakeBackend(
               );
               break;
             }
+            case "gate-the-finalizer": {
+              const held = gate(step.gate);
+              yield* Effect.acquireRelease(Effect.void, () =>
+                Effect.gen(function* () {
+                  trace.push(`finalizer-waiting:${input.runId}`);
+                  yield* Deferred.await(held);
+                  trace.push(`finalizer-released:${input.runId}`);
+                }),
+              );
+              break;
+            }
             case "hang-in-finalizer": {
               // Acquired now, released never. Closing the execution scope
               // waits on this forever, which is what the cleanup budget and

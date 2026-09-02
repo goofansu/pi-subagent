@@ -71,6 +71,14 @@ export type FakeStep =
    */
   | { readonly step: "emit-in-finalizer"; readonly observation: RunObservation }
   /**
+   * Hold the execution scope's finalizer open until the test releases it.
+   *
+   * This is how a test gets a Run that is genuinely in `finalizing`: the
+   * execution has ended, the Run has not settled, and the window between them
+   * is as wide as the test wants it.
+   */
+  | { readonly step: "gate-the-finalizer"; readonly gate: string }
+  /**
    * Make the execution scope's finalizer never finish.
    *
    * A real adapter can do this by waiting on a provider teardown that never

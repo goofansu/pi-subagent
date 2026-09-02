@@ -37,7 +37,6 @@ import {
 } from "effect";
 import type {
   BackendAgent,
-  ControlFeed,
   RunInput,
   TerminalBundle,
 } from "../backend/contract.ts";
@@ -61,7 +60,9 @@ import {
   type SettlementCandidate,
 } from "./arbitration.ts";
 import type { RuntimeCounters } from "./counters.ts";
+import { type ControlMailbox, makeMailbox } from "./mailbox.ts";
 import { makeIntake, type ObservationIntake } from "./observation-intake.ts";
+import type { ControlBounds } from "./policy.ts";
 import type { RunRepository } from "./repository.ts";
 import type { ResultStore } from "./result-store.ts";
 
@@ -121,25 +122,27 @@ export interface RunContext {
   readonly identity: RunIdentity;
   readonly input: RunInput;
   readonly agent: BackendAgent;
-  readonly controls: ControlFeed;
   readonly repository: RunRepository["Service"];
   readonly store: ResultStore["Service"];
   readonly counters: RuntimeCounters;
   readonly bounds: ProjectionBounds;
   readonly observationQueueBound: number;
+  readonly controlBounds: ControlBounds;
   readonly startedAt: number;
   /** Reads the clock for the settled-at stamp. */
   readonly now: Effect.Effect<number>;
   /** Appended to by every stage, so ordering is assertable. */
   readonly trace: (stage: RunStage) => void;
   /**
-   * Close the native execution scope, however the caller wants that bounded.
+   * Close the native execution scope, bounded however the caller bounds it.
    *
-   * M2's ticket for cleanup escalation replaces the plain close with a race
-   * against the cleanup budget. Passing it in keeps the settlement order in
-   * one place and the budget policy in another.
+   * Returns a diagnostic when the close did not finish inside its budget and
+   * the caller escalated past it. Passing this in keeps the settlement order
+   * in one place and the cleanup policy in another.
    */
-  readonly closeExecutionScope: (scope: Scope.Closeable) => Effect.Effect<void>;
+  readonly closeExecutionScope: (
+    scope: Scope.Closeable,
+  ) => Effect.Effect<RunDiagnostic | undefined>;
   /** Called after the terminal snapshot is published. Delivery hooks in here. */
   readonly onSettled: (result: RunResult) => Effect.Effect<void>;
 }
@@ -151,6 +154,7 @@ export interface RunHandle {
   /** Completed when the Run is terminal. A wake-up, never the value. */
   readonly completion: Deferred.Deferred<void>;
   readonly intake: ObservationIntake;
+  readonly mailbox: ControlMailbox;
   /** Interrupted by cancel, timeout, shutdown, and Subagent close. */
   readonly executionFiber: Fiber.Fiber<TerminalBundle, never>;
 }
@@ -237,6 +241,7 @@ export function runToSettlement(
     const { counters, identity, repository, store } = context;
 
     const intake = yield* makeIntake(context.observationQueueBound, counters);
+    const mailbox = yield* makeMailbox(context.controlBounds, counters);
     const coordinator = yield* makeCoordinator(counters);
     const completion = yield* Deferred.make<void>();
     const projection = yield* Ref.make(createRunProjection());
@@ -265,10 +270,7 @@ export function runToSettlement(
     const executionScope = yield* Scope.make();
     const executionFiber = yield* Effect.forkChild(
       context.agent
-        .execute(context.input, {
-          emit: intake.emit,
-          controls: context.controls,
-        })
+        .execute(context.input, { emit: intake.emit, controls: mailbox.feed })
         .pipe(Scope.provide(executionScope)),
     );
 
@@ -277,6 +279,7 @@ export function runToSettlement(
       coordinator,
       completion,
       intake,
+      mailbox,
       executionFiber,
     });
 
@@ -289,8 +292,11 @@ export function runToSettlement(
     const candidate = yield* Deferred.await(coordinator.captured);
     context.trace(RUN_STAGES.candidateCaptured);
 
-    // 2. Seal intake. Everything after this is a late event.
+    // 2. Seal intake and close the mailbox. Everything emitted after this is
+    //    a late event, and nothing more can be admitted to steer a Run that
+    //    has already decided how it ended.
     yield* intake.seal();
+    yield* mailbox.close();
     context.trace(RUN_STAGES.intakeSealed);
 
     // 3. `finalizing`, published before any cleanup runs, so nothing shows a
@@ -299,8 +305,10 @@ export function runToSettlement(
     context.trace(RUN_STAGES.finalizingPublished);
 
     // 4. Close the native execution scope, bounded by whatever the caller
-    //    bounds it by.
-    yield* context.closeExecutionScope(executionScope);
+    //    bounds it by. A close that outlived its budget hands back the
+    //    diagnostic saying so, and settlement carries on with what it has —
+    //    a hung finalizer must not leave a Run in `finalizing` forever.
+    const escalation = yield* context.closeExecutionScope(executionScope);
     context.trace(RUN_STAGES.executionScopeClosed);
 
     // 5. Drain and reduce every accepted observation. Sealing ended the queue,
@@ -322,6 +330,7 @@ export function runToSettlement(
     if (decided.late) counters.count("lateEndings");
 
     const extra: RunObservation[] = [];
+    if (escalation) extra.push({ kind: "diagnostic", diagnostic: escalation });
     if (decided.diagnostic) {
       extra.push({ kind: "diagnostic", diagnostic: decided.diagnostic });
     }

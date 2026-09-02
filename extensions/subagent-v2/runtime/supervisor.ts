@@ -32,27 +32,30 @@ import {
   Deferred,
   Effect,
   Exit,
-  type Fiber,
+  Fiber,
   Layer,
   Ref,
   Scope,
 } from "effect";
-import type {
-  Backend,
-  BackendAgent,
-  ControlFeed,
-} from "../backend/contract.ts";
-import type {
-  ParentModel,
-  Profile,
-  ResultOutcome,
-  ResumeOutcome,
-  RunId,
-  RunIdentity,
-  StartOutcome,
-  SubagentContext,
-  SubagentId,
-  SubagentPhase,
+import type { Backend, BackendAgent, RunControl } from "../backend/contract.ts";
+import {
+  alreadyTerminal,
+  type CancellationReason,
+  type CancelOutcome,
+  type ParentModel,
+  type Profile,
+  type ResultOutcome,
+  type ResumeOutcome,
+  type RunDiagnostic,
+  type RunId,
+  type RunIdentity,
+  runDiagnostic,
+  type StartOutcome,
+  type SteerOutcome,
+  type SubagentContext,
+  type SubagentId,
+  type SubagentPhase,
+  type WaitOutcome,
 } from "../domain/index.ts";
 import { BackendCatalog } from "./backend-catalog.ts";
 import {
@@ -99,8 +102,19 @@ interface SubagentRecord {
   readonly agent: BackendAgent;
   readonly scope: Scope.Closeable;
   phase: SubagentPhase;
+  /**
+   * Whether this Subagent's Conversation is gone.
+   *
+   * Tracked here as well as in the adapter because cleanup escalation is a
+   * *core* decision: when a finalizer outlives its budget the core closes the
+   * BackendAgent out from under it, and a later resume has to report that
+   * honestly rather than discovering it at the provider.
+   */
+  conversationLost: boolean;
   /** The Run currently in flight, if any. */
   run?: RunHandle;
+  /** The fiber settling that Run, so a close can wait for it. */
+  runFiber?: Fiber.Fiber<unknown, never>;
 }
 
 /**
@@ -121,9 +135,6 @@ const EMPTY_ADMISSION: AdmissionState = {
   activeRuns: 0,
   running: new Set(),
 };
-
-/** A feed that is closed and drained, which is what a Run with no mailbox has. */
-const CLOSED_FEED: ControlFeed = { take: Effect.succeed(undefined) };
 
 const makeSupervisor = (settings: SessionSettings) =>
   Effect.gen(function* () {
@@ -240,23 +251,20 @@ const makeSupervisor = (settings: SessionSettings) =>
                   prompt,
                 },
                 agent: record.agent,
-                // The bounded mailbox arrives with the Control ticket. Until
-                // then a Run has a feed that is closed and drained, which is
-                // exactly what the contract says `undefined` means.
-                controls: CLOSED_FEED,
                 repository,
                 store,
                 counters,
                 bounds: policy.projection,
                 observationQueueBound: policy.observationQueueBound,
+                controlBounds: policy.controls,
                 startedAt,
                 now,
                 trace: (stage) => {
                   trace.push(stage);
                   stages.push(`${identity.runId}:${stage}`);
                 },
-                closeExecutionScope: (scope) => Scope.close(scope, Exit.void),
-                onSettled: () => Effect.void,
+                closeExecutionScope: closeUnderCleanupBudget(record),
+                onSettled: () => releaseWaiterPinIfIdle(identity.runId),
               },
               (handle) =>
                 Effect.gen(function* () {
@@ -277,10 +285,75 @@ const makeSupervisor = (settings: SessionSettings) =>
           ),
           sessionScope,
         );
-        void fiber;
+        record.runFiber = fiber;
         // Returning only once the Run Scope exists means a caller that has an
         // id can immediately steer, cancel, or wait on it.
         yield* Deferred.await(started);
+        yield* armDefaultTimeout(record, identity.runId);
+      });
+
+    /**
+     * Close the native execution scope, or give up on it and say so.
+     *
+     * A provider finalizer that never returns is a real thing — a socket that
+     * will not close, a child process that ignores its signal — and the one
+     * answer that is not acceptable is leaving the Run in `finalizing`
+     * forever. So the close is raced against the cleanup budget, and when the
+     * budget wins the core takes over: it records a `cleanup-escalation`
+     * diagnostic on the Run, closes the BackendAgent itself, marks the
+     * Conversation lost so a later resume is honest about it, and settles the
+     * Run with the observations it has.
+     *
+     * Adapter-specific forced termination is M4 to M6 work. The policy and the
+     * diagnostic are decided here.
+     */
+    const closeUnderCleanupBudget =
+      (record: SubagentRecord) =>
+      (scope: Scope.Closeable): Effect.Effect<RunDiagnostic | undefined> =>
+        Effect.gen(function* () {
+          const closed = yield* Effect.exit(
+            Effect.timeout(
+              Scope.close(scope, Exit.void),
+              policy.cleanupBudgetMillis,
+            ),
+          );
+          if (Exit.isSuccess(closed)) return undefined;
+          counters.count("cleanupEscalations");
+          yield* record.agent.close();
+          record.conversationLost = true;
+          return runDiagnostic(
+            "cleanup-escalation",
+            `native cleanup did not finish within ${policy.cleanupBudgetMillis}ms; the BackendAgent was closed and its conversation is lost`,
+          );
+        });
+
+    /**
+     * The optional default timeout, as a cancellation rather than a second way
+     * for a Run to end.
+     *
+     * Waiting on the Run's own completion and cancelling if it has not arrived
+     * means a timeout goes through exactly the path a user's cancel goes
+     * through, and arrives at `cancelled` with reason `timeout`. A Run that
+     * finishes first resolves the wait and this fiber does nothing.
+     */
+    const armDefaultTimeout = (
+      record: SubagentRecord,
+      runId: RunId,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const budget = policy.defaultRunTimeoutMillis;
+        const handle = record.run;
+        if (budget === undefined || handle === undefined) return;
+        yield* Effect.forkIn(
+          Effect.gen(function* () {
+            const finished = yield* Effect.exit(
+              Effect.timeout(Deferred.await(handle.completion), budget),
+            );
+            if (Exit.isSuccess(finished)) return;
+            yield* cancelOne(runId, "timeout");
+          }),
+          record.scope,
+        );
       });
 
     /* ------------------------------------------------------------ */
@@ -363,6 +436,7 @@ const makeSupervisor = (settings: SessionSettings) =>
           agent: opened.agent,
           scope: opened.scope,
           phase: "running",
+          conversationLost: false,
         };
         subagents.set(subagentId, record);
 
@@ -461,7 +535,12 @@ const makeSupervisor = (settings: SessionSettings) =>
         }
 
         // Synchronous and free of provider I/O, so a rejected resume costs no
-        // provider quota and cannot block the caller's turn.
+        // provider quota and cannot block the caller's turn. The core's own
+        // view comes first: a cleanup escalation closed this BackendAgent, and
+        // the adapter may not have noticed.
+        if (record.conversationLost && record.agent.capabilities.resume) {
+          return { outcome: "conversation lost" } as const;
+        }
         const admitted = record.agent.admitResume();
         if (admitted === "unsupported") {
           return { outcome: "resume unsupported" } as const;
@@ -502,6 +581,243 @@ const makeSupervisor = (settings: SessionSettings) =>
       });
 
     /* ------------------------------------------------------------ */
+    /* steer                                                         */
+    /* ------------------------------------------------------------ */
+
+    /** The Run handle for an id, if it has one in flight right now. */
+    const handleOf = (runId: RunId): RunHandle | undefined => {
+      for (const record of subagents.values()) {
+        if (record.run?.identity.runId === runId) return record.run;
+      }
+      return undefined;
+    };
+
+    const recordOf = (runId: RunId): SubagentRecord | undefined => {
+      for (const record of subagents.values()) {
+        if (record.run?.identity.runId === runId) return record;
+      }
+      return undefined;
+    };
+
+    const steer = (
+      runId: RunId,
+      control: RunControl,
+    ): Effect.Effect<SteerOutcome> =>
+      Effect.gen(function* () {
+        const state = yield* Ref.get(admission);
+        if (state.shuttingDown) return { outcome: "shutting down" } as const;
+
+        const known = yield* repository.lookup(runId);
+        if (known.state === "unknown") {
+          return { outcome: "unknown Run", runId } as const;
+        }
+        if (known.state === "terminal") {
+          return {
+            outcome: alreadyTerminal(known.snapshot.terminalStatus ?? "failed"),
+            runId,
+          } as const;
+        }
+
+        const record = recordOf(runId);
+        const handle = record?.run;
+        if (!record || !handle) {
+          // Active in the index but with no live Run Scope: it is settling.
+          return { outcome: "mailbox closed", runId } as const;
+        }
+        // A backend that declared no steering is never called about a Control
+        // at all, which is what makes `unsupported` free of provider I/O.
+        if (!record.agent.capabilities.steer) {
+          return { outcome: "unsupported", runId } as const;
+        }
+
+        const admitted = yield* handle.mailbox.admit(control);
+        return admitted === "invalid"
+          ? ({
+              outcome: "invalid",
+              reason:
+                "a Control must be non-empty text within the per-message byte bound",
+            } as const)
+          : ({ outcome: admitted, runId } as const);
+      });
+
+    /* ------------------------------------------------------------ */
+    /* cancel                                                        */
+    /* ------------------------------------------------------------ */
+
+    /**
+     * Record the request, close the mailbox, and interrupt the execution.
+     *
+     * The Run fiber is deliberately *not* interrupted: it stays alive to
+     * settle, because a cancelled Run still produces one immutable result with
+     * whatever partial output it had (ADR-0025). Cancelling also does not
+     * close the Subagent — it returns to idle and stays resumable.
+     */
+    const cancelOne = (
+      runId: RunId,
+      reason: CancellationReason,
+    ): Effect.Effect<CancelOutcome> =>
+      Effect.gen(function* () {
+        const recorded = yield* repository.recordCancellation(runId, reason);
+        if (recorded.outcome === "unknown Run") {
+          return { outcome: "unknown Run", runId } as const;
+        }
+        if (recorded.outcome === "already terminal") {
+          return { outcome: alreadyTerminal(recorded.status), runId } as const;
+        }
+        if (recorded.outcome === "unchanged") {
+          // Idempotent: it changes nothing, does not re-forward, and does not
+          // turn an admitted request into an error.
+          return { outcome: "idempotent", runId } as const;
+        }
+        const handle = handleOf(runId);
+        if (handle) {
+          yield* handle.mailbox.close();
+          yield* Fiber.interrupt(handle.executionFiber);
+        }
+        return { outcome: "admitted", runId } as const;
+      });
+
+    const cancel = (
+      runIds: readonly RunId[],
+    ): Effect.Effect<readonly CancelOutcome[]> =>
+      Effect.forEach(runIds, (runId) => cancelOne(runId, "requested"));
+
+    /* ------------------------------------------------------------ */
+    /* wait                                                          */
+    /* ------------------------------------------------------------ */
+
+    /** How many waiters registered at settlement have yet to read. */
+    const waiters = new Map<RunId, number>();
+
+    /**
+     * Let go of the waiters' pin once nobody is holding it.
+     *
+     * Settlement calls this too, so a Run nobody waited on releases its pin
+     * immediately rather than holding a result open for a reader who never
+     * arrives.
+     */
+    const releaseWaiterPinIfIdle = (runId: RunId): Effect.Effect<void> =>
+      Effect.suspend(() =>
+        (waiters.get(runId) ?? 0) > 0
+          ? Effect.void
+          : store.releasePin(runId, "waiters"),
+      );
+
+    const waitOne = (
+      runId: RunId,
+      timeoutMillis?: number,
+    ): Effect.Effect<WaitOutcome> =>
+      Effect.gen(function* () {
+        const known = yield* repository.lookup(runId);
+        if (known.state === "unknown") {
+          return { outcome: "unknown Run", runId } as const;
+        }
+        if (known.state === "terminal") {
+          return {
+            outcome: "terminal",
+            runId,
+            status: known.snapshot.terminalStatus ?? "failed",
+          } as const;
+        }
+        const handle = handleOf(runId);
+        if (!handle) return { outcome: "still running", runId } as const;
+
+        waiters.set(runId, (waiters.get(runId) ?? 0) + 1);
+        counters.acquired("unresolvedWaiters");
+        const finished = yield* Effect.exit(
+          timeoutMillis === undefined
+            ? Deferred.await(handle.completion)
+            : Effect.timeout(Deferred.await(handle.completion), timeoutMillis),
+        ).pipe(
+          // Aborting or timing out a wait stops only that waiter. The Run
+          // continues, still settles exactly once, and still stores its
+          // result — so the bookkeeping has to be released either way.
+          Effect.ensuring(
+            Effect.suspend(() => {
+              counters.released("unresolvedWaiters");
+              const left = (waiters.get(runId) ?? 1) - 1;
+              if (left <= 0) waiters.delete(runId);
+              else waiters.set(runId, left);
+              return releaseWaiterPinIfIdle(runId);
+            }),
+          ),
+        );
+
+        if (Exit.isFailure(finished)) {
+          return { outcome: "still running", runId } as const;
+        }
+        const settled = yield* repository.lookup(runId);
+        return settled.state === "terminal"
+          ? ({
+              outcome: "terminal",
+              runId,
+              status: settled.snapshot.terminalStatus ?? "failed",
+            } as const)
+          : ({ outcome: "still running", runId } as const);
+      });
+
+    const wait = (
+      runIds: readonly RunId[],
+      timeoutMillis?: number,
+    ): Effect.Effect<readonly WaitOutcome[]> =>
+      Effect.forEach(
+        runIds,
+        (runId) =>
+          timeoutMillis === undefined
+            ? waitOne(runId)
+            : waitOne(runId, timeoutMillis),
+        { concurrency: "unbounded" },
+      );
+
+    /* ------------------------------------------------------------ */
+    /* Subagent close and shutdown                                   */
+    /* ------------------------------------------------------------ */
+
+    /**
+     * Cancel-and-await-cleanup, in the order operation semantics section 4
+     * fixes it.
+     *
+     * The Subagent is marked closed *first*, so from that instant it admits no
+     * new Run and no late settlement can move it back to idle.
+     */
+    const closeSubagent = (
+      record: SubagentRecord,
+      reason: CancellationReason,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (record.phase === "closed") return;
+        record.phase = "closed";
+        const runId = record.run?.identity.runId;
+        if (runId !== undefined) yield* cancelOne(runId, reason);
+        const fiber = record.runFiber;
+        // Wait for the Run Scope's finalizers and the BackendAgent's native
+        // cleanup to finish before the Subagent Scope closes them.
+        if (fiber) yield* Effect.ignore(Fiber.join(fiber));
+        yield* Scope.close(record.scope, Exit.void);
+      });
+
+    const shutdown = (): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        // One observable instant, before any cleanup runs. From here, start,
+        // resume, and steer all answer `shutting down`.
+        const first = yield* Ref.modify(admission, (current) =>
+          current.shuttingDown
+            ? [false, current]
+            : [true, { ...current, shuttingDown: true }],
+        );
+        if (!first) return;
+
+        // Reverse acquisition order: the newest Subagent closes first, which
+        // is what closing the Session Scope would do on its own.
+        for (const record of [...subagents.values()].reverse()) {
+          yield* closeSubagent(record, "shutdown");
+        }
+        // The next Session's model did not start these Runs and has no context
+        // in which to act on their answers.
+        yield* store.clear();
+      });
+
+    /* ------------------------------------------------------------ */
     /* result                                                        */
     /* ------------------------------------------------------------ */
 
@@ -534,7 +850,17 @@ const makeSupervisor = (settings: SessionSettings) =>
     return {
       start,
       resume,
+      steer,
+      cancel,
+      wait,
       result,
+      shutdown,
+      /** Not a public tool. Shutdown uses it, and so does one race test. */
+      closeSubagentById: (subagentId: SubagentId): Effect.Effect<void> =>
+        Effect.suspend(() => {
+          const record = subagents.get(subagentId);
+          return record ? closeSubagent(record, "shutdown") : Effect.void;
+        }),
       /** Every Run stage, in order, for ordering assertions. */
       stages: (): readonly string[] => [...stages],
       counters: (): SupervisorCounters => counters.counters(),
@@ -573,6 +899,3 @@ export class SubagentSupervisor extends Context.Service<
     );
   }
 }
-
-/** Kept so the unused-import checker sees the primitives this module needs. */
-export type { Fiber };
