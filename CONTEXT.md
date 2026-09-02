@@ -325,6 +325,42 @@ replaces v1's hand-ordered shutdown machinery.
 and lossless within a Run. Replaces v1's **Fact**.
 [ADR-0024](docs/adr/0024-v2-observation-ordering.md).
 
+**Observation kinds** — the ten things an observation can be: `message`,
+`tool_progress`, `activity`, `usage`, `context`, `diagnostic`, `link`, `model`,
+`reconciliation`, and `ending`. One union, so everything a backend witnesses
+crosses the boundary in one vocabulary. A type-level test pins the exact key
+set of each kind, which is how ADR-0024's no-provider-vocabulary rule is
+enforced rather than merely stated.
+
+**Projection** — what a Run looks like after its observations have been folded:
+transcript, tools, diagnostics, links, usage, activity, model, final output,
+and a truncation record. Every list and every text in it is bounded. The pure
+`reduceRun` is its only writer — no adapter, host handler, or presentation code
+writes to one. Replaces v1's mutable Run record.
+
+**Applied report** — what `reduceRun` says about one observation, alongside the
+next projection: `applied`, `applied-with-truncation`, `ignored-late` (the
+projection was already terminal), or `ignored-invalid` (the observation was
+malformed). The reducer reports rather than logs, so it stays a function of its
+arguments and the runtime decides what to emit as a diagnostic.
+
+**Terminal reconciliation** — a backend's authoritative terminal snapshot,
+applied as the last ordered observation of a Run and before settlement. Present
+fields replace, absent fields retain, usage replaces rather than adds, and
+replaying it is a no-op. A backend with no snapshot sends none and never
+fabricates one. [ADR-0025](docs/adr/0025-v2-terminal-settlement.md).
+
+**Terminal bundle** — what one backend execution resolves to: an ending plus an
+optional terminal reconciliation. It is a *report*, not a settlement — the
+core applies it and performs the terminal transition, because an adapter that
+could settle its own Run could settle it twice.
+
+**Capabilities** — the three booleans a BackendAgent declares when it is
+opened: `resume`, `steer`, and `terminalTranscriptSnapshot`. Declared rather
+than discovered, so the core can answer `unsupported` without calling the
+backend and without spending provider quota.
+[ADR-0028](docs/adr/0028-v2-backend-contract.md).
+
 **AgentHarness** — reserved for Pi's own native abstraction. v2 never uses it
 for anything of ours.
 

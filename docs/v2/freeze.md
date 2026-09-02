@@ -53,6 +53,17 @@ Pi extension list, the pinned `effect` dependency), `tsconfig.json`,
 `tsconfig.v2.json`, `biome.json`, and the `Makefile` — none of which is v1
 source.
 
+## What M1 changed in v1
+
+**Nothing.** `git diff` between the recorded baseline commit and
+[the M1 exit gate](m1-exit-gate.md) touches no file under
+`extensions/subagent/`, and the v1 lane's test counts are unchanged: 540 tests
+with 539 passing and one visible skip.
+
+Outside v1, M1 added the `test:v2:conformance` script to `package.json` and a
+matching `Makefile` target, so the shared backend conformance suite can be run
+on its own and later pointed at a real adapter.
+
 ## The recorded baseline
 
 The baseline is the full repository quality gate, `npm run check`:

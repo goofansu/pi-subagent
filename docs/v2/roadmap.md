@@ -193,6 +193,11 @@ Rewrite rather than reuse:
 
 ### M1 — Domain kernel and fake backends
 
+**Status: complete (2026-09-02).** Every deliverable below landed; the
+verification is recorded in [the M1 exit gate](m1-exit-gate.md), which links
+every artifact. The backend contract is
+[ADR-0028](../adr/0028-v2-backend-contract.md).
+
 **Purpose:** Define the product semantics before introducing provider SDK behavior.
 
 Deliverables:
