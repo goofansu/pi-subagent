@@ -319,3 +319,9 @@ with every race test.
   running → finalizing → terminal transition — is all pure domain calls, so the
   supervisor inherits the knowledge without inheriting the code.
 - Four boundary rules and one timing rule the lane enforces on itself.
+- One decision taken after this gate, for M2 to build against:
+  [ADR-0029](../adr/0029-v2-effect-schema-at-the-boundaries.md) adopts Effect
+  Schema at the backend seam and the host boundary, and leaves the domain
+  module plain. It also states the standing direction — adopt Effect wherever
+  it removes machinery v2 would otherwise own — and the three limits that still
+  bind it.
