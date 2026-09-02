@@ -3,9 +3,10 @@ import { test } from "node:test";
 import { AGENTS_COMMAND_NAME } from "./host/agents-command.ts";
 import {
   createDemoBackendSet,
-  DEMO_ANSWER,
+  DEMO_ANSWER_PREFIX,
   DEMO_ONE_SHOT_PROFILE,
   DEMO_RESUMABLE_PROFILE,
+  demoAnswer,
 } from "./host/demo-backends.ts";
 import { NOTIFICATION_MESSAGE_TYPE } from "./host/notification-message.ts";
 import { V2_TOOL_NAMES } from "./host/tools.ts";
@@ -119,9 +120,11 @@ test("a Session built from the demo set offers two Profiles and answers", async 
   );
   await host.call("agent_wait", { ids: [started.runId] });
 
+  // The demo backend echoes the brief, so the result proves the prompt made
+  // the whole round trip rather than merely that a Run ran.
   assert.match(
     resultText(await host.call("agent_result", { id: started.runId })),
-    new RegExp(DEMO_ANSWER),
+    new RegExp(demoAnswer("say something")),
   );
 });
 
@@ -137,5 +140,5 @@ test("the demo Profiles describe themselves and name one backend each", () => {
     assert.ok(profile.description.length > 0);
     assert.ok(profile.systemPrompt.length > 0);
   }
-  assert.ok(DEMO_ANSWER.length > 0);
+  assert.ok(DEMO_ANSWER_PREFIX.length > 0);
 });

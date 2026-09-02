@@ -4,12 +4,15 @@
  * A golden test asserts on an exact string, so what goes into it has to be
  * boring and identical everywhere: the same agent, the same ids, the same
  * instants. Building those once means a new golden test states only what it is
- * about, and a change to the shared fixture shows up as a diff in every
- * golden at once rather than in one of them.
+ * about, and a change to the shared fixture shows up as a diff in every golden
+ * at once rather than in one of them.
  *
- * This is a fixture module rather than a test file, so it may be imported by
- * the host and application tests too — they assert on the same strings from
- * the other side of the boundary.
+ * It lives in the test tree rather than beside the module it is for. A file
+ * under `presentation/` that is not a `.test.ts` is *production* presentation
+ * code as far as the boundary test is concerned, and a fixture module is not
+ * that — the boundary rule for presentation exists to keep a production
+ * renderer from reaching the runtime, and a fixture sitting inside it would be
+ * a hole in that rule rather than an exception to it.
  */
 
 import {
@@ -30,7 +33,7 @@ import {
   toRunResult,
   type UsageSnapshot,
 } from "../domain/index.ts";
-import type { RunRowView } from "./views.ts";
+import type { RunRowView } from "../presentation/views.ts";
 
 export const FIXTURE_IDENTITY: RunIdentity = {
   runId: runId("run-1"),

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect } from "effect";
 import { cancelledEnding, failedEnding, runId } from "../domain/index.ts";
-import { fixtureNotification } from "../presentation/fixtures.ts";
+import { fixtureNotification } from "../testing/presentation-fixtures.ts";
 import type {
   buildNotificationMessage,
   NotificationMessage,

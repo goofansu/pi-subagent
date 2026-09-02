@@ -33,6 +33,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Effect, ManagedRuntime, Scope } from "effect";
 import type { Profile, ProfileDiagnostic } from "../domain/index.ts";
+import { formatInvalidProfilesWarning } from "../presentation/index.ts";
 import type { BackendSet, SessionServices } from "../runtime/composition.ts";
 import { sessionRuntimeLayer } from "../runtime/composition.ts";
 import type { RuntimePolicy } from "../runtime/policy.ts";
@@ -82,25 +83,6 @@ export interface StartedSession {
   readonly widget: ActiveWidget;
 }
 
-/**
- * How a Session start names Profile files it could not use.
- *
- * A broken Profile has to be visible without opening a log: a user who wrote
- * one and got silence would conclude the feature does not work. One line per
- * diagnostic, because a Profile with two mistakes should be fixable in one
- * pass.
- */
-export function formatInvalidProfilesWarning(
-  diagnostics: readonly ProfileDiagnostic[],
-): string {
-  return [
-    "Invalid subagent Profiles were skipped:",
-    ...diagnostics.map(
-      (diagnostic) => `- ${diagnostic.filePath}: ${diagnostic.reason}`,
-    ),
-  ].join("\n");
-}
-
 /** What the Session installs inside its own Scope, and reads once. */
 function openSession(
   host: WidgetHost,
@@ -117,8 +99,19 @@ function openSession(
   });
 }
 
-/** The slice of a Session's context this module reads. */
-export type SessionStartContext = Pick<ExtensionContext, "ui">;
+/**
+ * The slice of a Session's context this module reads.
+ *
+ * `modelRegistry` is read for its catalogue, which the backends validate
+ * pinned models against. It is optional because a host that offers no registry
+ * is a host with an empty catalogue, which is a Session a Profile can still be
+ * loaded into — and a diagnostic a Profile author can still be shown.
+ */
+export type SessionStartContext = Pick<ExtensionContext, "ui"> & {
+  readonly modelRegistry?: {
+    getAll(): readonly { readonly provider: string; readonly id: string }[];
+  };
+};
 
 /**
  * Start a Session: dispose the last one, build the runtime, install the
@@ -153,6 +146,10 @@ export async function startSession(
       backendSet: wiring.backendSet(),
       profiles: { from: "directory", agentDir: wiring.agentDir },
       sink: wiring.sink,
+      // Read from the live Session rather than the process: a Session's model
+      // catalogue is a Session's, and a Profile is validated against the one
+      // it is being loaded into.
+      validation: { models: [...(ctx.modelRegistry?.getAll() ?? [])] },
       ...(wiring.policy === undefined ? {} : { policy: wiring.policy }),
     }),
   );

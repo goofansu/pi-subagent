@@ -28,7 +28,7 @@ conversation, and two demo backends behind all of it, with nothing to configure.
 | `npm run test:conformance` | 164 tests, 163 pass, 1 skipped |
 | `npm run test:managed-conformance` | 6 tests, 6 pass |
 | `npm test` (v1 suite, repository scripts, `tools/`) | 540 tests, 539 pass, 1 skipped |
-| `npm run test:v2` | 654 tests, 646 pass, 8 skipped |
+| `npm run test:v2` | 658 tests, 650 pass, 8 skipped |
 | `npm run test:v2:conformance` | 77 tests, 69 pass, 8 skipped |
 | `npm run codex:protocol:check` | `CODEX_PROTOCOL_CHECK_PASS — codex-cli 0.150.1` |
 
@@ -37,7 +37,7 @@ Outside the v2 tree, M3 changed exactly two things — `CONTEXT.md` (the glossar
 v2 section) and the `Makefile` (`dev-v2` now mirrors the v1 target's `--tools`
 list, because there are now tools to mirror) — plus this record and the roadmap.
 
-The v2 lane grew from 452 tests to 654. The skip list is unchanged at eight, all
+The v2 lane grew from 452 tests to 658. The skip list is unchanged at eight, all
 of them `FakeOneShotBackend conformance: …` scenarios about capabilities that
 backend declares it does not have.
 
@@ -66,19 +66,77 @@ backend` in
 [`host/end-to-end.test.ts`](../../extensions/subagent-v2/host/end-to-end.test.ts).
 
 **Live, in a real Pi process.** `pi --offline -np -nc -ns -ne -e
-extensions/subagent-v2/index.ts` with the six tools allowlisted, on a real
-provider:
+extensions/subagent-v2/index.ts` with the six tools allowlisted, against a real
+provider. Quoted verbatim from the run:
 
-- the model called `agent_start` on `demo-resumable`, received a Subagent id and
-  a Run id, waited on the Run id, and read back
-  `This is a demo subagent answering.` through `agent_result`;
-- the same against `demo-one-shot`, whose `agent_resume` was refused as
-  unsupported, and whose completion Notification landed in the conversation and
-  triggered a turn the model then acknowledged;
-- a probe extension in the same process reported all six tools registered with
-  the Effect-emitted JSON Schema documents, the `agents` command registered, and
-  the Session's Profile catalog holding the two demo Profiles merged with the
-  five in the operator's own agent directory.
+`agent_start` on a demo Profile, which is the whole of gate item 2 in one
+answer — ids, not the answer, and a promise about the notification:
+
+```
+Started demo-one-shot:
+subagent id subagent-1
+run id run-2
+
+Use run id run-2 for agent_wait, agent_result, agent_cancel, and agent_steer.
+Its notification will arrive when the Run finishes; carry on until then.
+```
+
+`agent_result` after the Run, proving the brief made the whole round trip —
+through the backend, the projection, the Result store, and back out as prose:
+
+```
+demo-resumable (subagent subagent-1), run run-2:
+
+The demo subagent was asked: count to three
+```
+
+`agent_resume` on the one-shot Profile, refused without starting anything:
+
+```
+Cannot resume subagent subagent-1: its backend does not support resume. No Run
+or provider work was started. Start a new Subagent to continue this work.
+```
+
+And the completion Notification, as it reached the conversation — a custom
+message of this extension's type, shown, carrying exactly the four identity
+fields and an accounting line, which then triggered a turn the model
+acknowledged:
+
+```json
+{"customType":"subagent-v2-notification",
+ "content":"Subagent demo-resumable (subagent-1), run run-2 completed.\n\nThe demo subagent was asked: ping\n\nUse agent_result with id run-2 to retrieve the full result.\n\n12 in / 8 out · 1 turn",
+ "display":true,
+ "details":{"runId":"run-2","subagentId":"subagent-1","agent":"demo-resumable","status":"completed"}}
+```
+
+A disposable probe extension loaded alongside it in the same process reported
+all six tools registered with the Effect-emitted JSON Schema documents, the
+`agents` command registered, and the Session's Profile catalog holding the two
+demo Profiles merged with the five in the operator's own agent directory.
+
+## 2a. A Run inherits the facts of the Session that started it ✅
+
+The working directory, the project-trust decision, and the parent model and
+thinking level are read from the live Session at execute time rather than at
+Session start, because the model and thinking level change during a Session and
+a Run should inherit what was true when it began
+([`host/tools.ts`](../../extensions/subagent-v2/host/tools.ts),
+`sessionFactsOf`).
+
+The Session's **model catalogue** goes the other way — it is read once at
+`session_start` and handed to the Profile catalog as a
+`BackendValidationContext`, because validating a Profile is what a Session start
+does. An adapter that pins a model has to check it against what *this* Session
+can reach, and a Session that never handed its catalogue over would leave every
+pinned model either unvalidated or wrongly rejected. Asserted end to end with a
+backend that validates against the list it is given:
+
+- `the Session's model catalogue reaches the backend that validates a Profile`
+- `a Profile pinning a model this Session cannot reach is a diagnostic`
+
+Both in [`host/session.test.ts`](../../extensions/subagent-v2/host/session.test.ts).
+The fakes themselves validate nothing, so the *content* of a real backend's
+model validation is M4 to M6; what is proven here is that the catalogue arrives.
 
 ## 3. A terminal snapshot and its immutable result are visible together ✅
 
@@ -136,11 +194,28 @@ declared in
 domain types only, so a `RunSnapshot` is structurally assignable and no mapping
 layer exists to drift.
 
-The widget is the one presentation consumer with a lifetime, and it holds no
-lifecycle state: `the widget lists only Runs that are not terminal` and `the
-widget module imports only the repository's snapshot type and presentation` are
-covered by the rule above plus
-[`host/widget.test.ts`](../../extensions/subagent-v2/host/widget.test.ts).
+The widget is the one consumer of that layer with a lifetime of its own, and it
+is worth being precise about what it does and does not hold. It lives in the
+**host** module, not in presentation, so it does name `Effect`, `Stream`,
+`Scope`, and `RunRepository` — a subscriber has to. What it holds is one
+variable caching the latest published index, and that is a cache rather than
+state: throwing it away and re-reading the repository would produce the same
+rows. It folds nothing, and it decides no Run's lifecycle.
+
+What is asserted, rather than argued:
+
+- `the widget lists only Runs that are not terminal` — the phase filter is the
+  whole of its "which Runs exist" logic, and it reads the published phase
+  rather than deciding one;
+- `the widget appears with the first live Run and its row reads as the matrix
+  says`, `the widget redraws on a change instead of reinstalling`, `a terminal
+  Run leaves the widget at publication, and the last one takes it away` — every
+  transition follows from the index it was handed;
+
+both in [`host/widget.test.ts`](../../extensions/subagent-v2/host/widget.test.ts),
+with the row text itself fixed by
+[`presentation/rows.test.ts`](../../extensions/subagent-v2/presentation/rows.test.ts),
+which runs against a theme that paints nothing and a fixed instant.
 
 ## 6. Repeated fake Sessions start and shut down without retained fibers, queues, subscriptions, or waiters ✅
 
@@ -195,8 +270,8 @@ production tree rather than the three modules M2 checked.
 
 ## Recorded v2 differences
 
-Three places where M3 deliberately behaves differently from v1. None is a
-regression; each is a decision with a reason.
+Five places where M3 deliberately differs from v1 or from the letter of its own
+spec. None is a regression; each is a decision with a reason.
 
 **1. Tool parameters are strict.** v1's `Type.Object` permitted unlisted keys;
 the Effect-emitted document carries `additionalProperties: false`, so a call
@@ -223,6 +298,28 @@ A notice is an orientation message pointing at `agent_result`; the whole answer
 is one tool call away either way. Asserted by `a long answer is previewed rather
 than delivered`.
 
+**4. The domain Notification carries accounting, the primary error, and the
+cancellation reason.** M3 extended `RunNotification` — a domain type — beyond
+what M2 left there. Two things made it necessary and one keeps it honest. The
+matrix's Notification row requires the accounting line and the primary error, so
+the notice has to carry them; and a notice that had to re-read the store to say
+what it was about would be a notice that could say something different from what
+was stored, which is the one thing "storage precedes notification" exists to
+prevent. What stayed exactly as the ticket specified is the *custom message's*
+details — Run id, Subagent id, agent, and status, and nothing else — because
+details that repeated the text would be a second copy that could disagree with
+it. Asserted by `the details carry identity only, never the text`.
+
+**5. Presentation names one Pi package beyond the TUI one.** The spec says
+presentation imports "the domain and Pi's TUI primitives". Two of the helpers
+the ported renderers need — `getMarkdownTheme` and `keyHint` — ship from
+`@earendil-works/pi-coding-agent` rather than `@earendil-works/pi-tui`, exactly
+as they do in v1. The boundary rule is therefore written as "the domain and Pi",
+admitting `@earendil-works/*` and nothing else: not the runtime, not a backend,
+not a fake, not `effect`. The property the spec's wording was protecting — that
+presentation cannot reach state — is unaffected by which of Pi's two packages a
+markdown theme comes from.
+
 The three differences the compatibility matrix already recorded for these rows —
 `mailbox full` and `mailbox closed` replacing `queue full` and `not steerable`,
 `ResultExpired` and `RunNotTerminal` as typed outcomes, and a distinct
@@ -245,10 +342,11 @@ with a real provider: every row's provider-specific half is M4 to M6.
 | `agent_cancel` — expected outcome, repeated cancel, already terminal, unknown Run, request vs. terminal | `host/tools.test.ts`, `presentation/prose.test.ts` |
 | `agent_wait` — expected outcome, timeout, aborted turn, repeated wait, unknown Run, duplicate ids | `host/tools.test.ts` |
 | `agent_result` — expected outcome, not yet terminal, evicted output, unknown Run, after a failed Notification, after shutdown | `host/tools.test.ts`, `host/end-to-end.test.ts`, `host/session.test.ts`, `presentation/prose.test.ts` |
-| Subagent close — expected outcome, late settlement, idempotence, identity cleanup | `host/session.test.ts` |
+| Subagent close — expected outcome, idempotence, identity cleanup | `host/session.test.ts` (`a Session shutdown closes an active Run and its retained BackendAgent`; `a shutdown with no Session is a no-op rather than an error`; `two Session starts in one process leave exactly one runtime alive`, which asserts the previous Session's Run id is unknown to the next). **Late settlement is not asserted at the host surface** — it is proven at the runtime seam by the M2 races, and no host test drives it. |
 | `/agents` — expected outcome, no Profiles | `host/agents-command.test.ts` |
 | Active widget — expected outcome, observation only, lifecycle | `presentation/rows.test.ts`, `host/widget.test.ts` |
 | Completion Notification — expected outcome, failed Run, cancelled Run, landing, push failure, no live Session | `presentation/notification-text.test.ts`, `host/notification-message.test.ts`, `host/push-sink.test.ts`, `host/end-to-end.test.ts` |
+| Active widget — the coalescing the M2 gate deferred to its first consumer | `host/widget.test.ts` (`a burst of index changes coalesces into one render request per draw`, measured against a stand-in host that draws one request in fifty) |
 | Profile loading — generic parsing, unknown backend name, unrecognized field, scope, backend field name | `domain/profile.test.ts`, `profiles/discovery.test.ts`, `host/session.test.ts` |
 
 Rows whose v2 half is **not** proven, and why:
@@ -268,10 +366,19 @@ Rows whose v2 half is **not** proven, and why:
 **1. Conflating the Run index stream is the consumer's job — answered.** The
 widget subscribes once, keeps only the latest index, and asks the host to render
 at most once per change batch: a render request is armed, and further changes
-arriving before the host renders re-arm nothing. `a burst of index changes
-produces far fewer render requests than changes` measures the ratio over a
-200-change burst, and `a slow subscriber still renders the latest state after
-the burst` proves the conflation is not lossy.
+arriving before the host renders re-arm nothing.
+
+The measurement needed the stand-in host to *draw*, not merely to count. A host
+that never draws leaves the widget's pending-render flag set forever, which
+makes every subsequent change free by construction and the assertion
+unfalsifiable — so the stand-in draws one request in `renderEvery`, and a slow
+terminal is `renderEvery: 50`. The invariant asserted is the one that can fail:
+`renderRequests <= rendersPerformed + 1`. Over a 200-change burst that is 4
+requests against 4 draws; with the pending-render guard deleted it becomes 200
+against 4, and the test says so. `a slow subscriber still renders the latest
+state after the burst` proves the conflation is not lossy, and `a host that
+draws every request still gets one request per change batch` pins the other end
+of the same rule — a fast terminal is asked again immediately, which is correct.
 
 **2. `typebox` at the tool-parameter call site — answered.** Gone from v2, and
 banned by the boundary test. The dependency stays in the manifest until v1 is
@@ -295,12 +402,17 @@ runs inside a Subagent in M3, because no adapter exists to spawn one, so
 extension inert inside a Pi child are Pi-adapter knowledge and arrive with it.
 
 **2. Expanded result presentation is a stub.** `RunCard` carries identity,
-status, duration, accounting, and the final output. The recent transcript, the
-tool list, diagnostics, and native links are M4, and the card is where they go.
+status, duration, accounting, and the final output, and `agent_result`'s text is
+built from it — so the card is wired rather than merely present. The recent
+transcript, the tool list, diagnostics, and native links are M4, and widening
+the card's view is where they go.
 
-**3. The demo backend set is a demo.** Its script is fixed before a Run starts,
-so a demo Subagent cannot echo the prompt it was given — it names itself
-instead. M4 replaces the set, and the demo Profiles go with it.
+**3. The demo backend's script reads only the prompt.** `echo-prompt` is the one
+script step that reads the Run's input; everything else a script says is decided
+before the Run exists. That is enough for the demo — the answer repeats the
+question, so the round trip is visible end to end — but a fake cannot *react* to
+a brief, and no test here should be read as evidence that a backend which does
+will behave the same way. M4 replaces the set, and the demo Profiles go with it.
 
 **4. The `agent_start` guidelines are a live array.** Pi stores the
 `promptGuidelines` array a tool was registered with, so the Session module

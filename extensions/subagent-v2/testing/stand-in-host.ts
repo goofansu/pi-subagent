@@ -94,6 +94,19 @@ export interface StandInHostOptions {
   }[];
   /** Make `sendMessage` throw, the way a stale Session's host does. */
   readonly sendFails?: () => boolean;
+  /**
+   * How often the host actually draws when a widget asks it to.
+   *
+   * `1` is a fast terminal: every request is drawn at once. A higher number is
+   * a **slow** one — it draws every nth request and ignores the rest, which is
+   * the shape a coalescing assertion needs, because coalescing is only visible
+   * against a consumer that has not caught up. `0` never draws at all.
+   *
+   * Drawing matters because it is what clears a widget's pending-render flag,
+   * so a host that never draws makes every subsequent change free by
+   * construction — and an assertion against it could not fail.
+   */
+  readonly renderEvery?: number;
 }
 
 /** A theme that paints nothing, so an assertion reads the text itself. */
@@ -147,6 +160,8 @@ export interface StandInHost {
   readonly widgetClears: () => number;
   /** How many redraws the widget asked the host for. */
   readonly renderRequests: () => number;
+  /** How many of those the host actually drew. See `renderEvery`. */
+  readonly rendersPerformed: () => number;
   /** The widget's current lines, with no theme escapes. */
   readonly widgetLines: (width?: number) => readonly string[];
 }
@@ -170,10 +185,18 @@ export function createStandInHost(
   let widgetInstalls = 0;
   let widgetClears = 0;
   let renderRequests = 0;
+  let rendersPerformed = 0;
 
+  const renderEvery = options.renderEvery ?? 1;
   const tui = {
     requestRender: () => {
       renderRequests += 1;
+      // A real host draws in response to the request, and drawing is what
+      // clears the widget's pending flag. A stand-in that only counted would
+      // leave that flag set forever and make coalescing unfalsifiable.
+      if (renderEvery <= 0 || renderRequests % renderEvery !== 0) return;
+      rendersPerformed += 1;
+      widget?.render(DEFAULT_WIDGET_WIDTH);
     },
   };
 
@@ -309,6 +332,7 @@ export function createStandInHost(
     widgetInstalls: () => widgetInstalls,
     widgetClears: () => widgetClears,
     renderRequests: () => renderRequests,
+    rendersPerformed: () => rendersPerformed,
     widgetLines: (width = DEFAULT_WIDGET_WIDTH) =>
       widget ? widget.render(width).map((line) => line.trimEnd()) : [],
   };

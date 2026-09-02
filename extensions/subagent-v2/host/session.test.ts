@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
+import { formatInvalidProfilesWarning } from "../presentation/index.ts";
 import {
   hostRig,
   RIG_RESUMABLE_PROFILE,
   startedIds,
 } from "../testing/host-rig.ts";
-import { formatInvalidProfilesWarning } from "./session.ts";
 
 /**
  * Starting and shutting down Sessions, through the host events that do it.
@@ -20,6 +20,10 @@ import { formatInvalidProfilesWarning } from "./session.ts";
 
 const A_BROKEN_PROFILE = "---\nbackend: pi\n---\n";
 const A_GOOD_PROFILE = "---\ndescription: A user Profile\n---\nDo the thing.\n";
+const A_PINNED_PROFILE =
+  "---\ndescription: Pins a model\nmodel: claude-opus-5\n---\nDo the thing.\n";
+const A_MISSING_MODEL_PROFILE =
+  "---\ndescription: Pins a model this Session lacks\nmodel: not-installed\n---\nDo it.\n";
 
 test("a Session start loads the backend set's Profiles and the user's own", async (t) => {
   const rig = hostRig(t, {
@@ -91,6 +95,75 @@ test("a Profile naming a backend the Session lacks is a diagnostic, not a crash"
   assert.match(warnings[0].message, /elsewhere\.md/);
   assert.equal(
     rig.installation.profiles().some((profile) => profile.name === "elsewhere"),
+    false,
+  );
+});
+
+test("the Session's model catalogue reaches the backend that validates a Profile", async (t) => {
+  const seen: (readonly {
+    readonly provider: string;
+    readonly id: string;
+  }[])[] = [];
+  const rig = hostRig(t, {
+    models: [
+      { provider: "anthropic", id: "claude-opus-5" },
+      { provider: "openai", id: "gpt-5" },
+    ],
+    profileFiles: { "pinned.md": A_PINNED_PROFILE },
+    // A backend that validates a pinned model against the Session's own
+    // catalogue, which is what a real adapter does.
+    diagnose: (profile, filePath, context) => {
+      const models = context?.models ?? [];
+      seen.push(models);
+      const pinned = profile.fields.model;
+      if (typeof pinned !== "string") return [];
+      return models.some((model) => model.id === pinned)
+        ? []
+        : [{ filePath, reason: `no model '${pinned}' in this Session` }];
+    },
+  });
+  t.after(() => rig.installation.handle.release());
+
+  await rig.host.sessionStart();
+
+  assert.ok(seen.length > 0, "the backend was never asked to validate");
+  assert.deepEqual(seen[0], [
+    { provider: "anthropic", id: "claude-opus-5" },
+    { provider: "openai", id: "gpt-5" },
+  ]);
+  // The pinned model is in the catalogue, so the Profile loads.
+  assert.ok(
+    rig.installation.profiles().some((profile) => profile.name === "pinned"),
+  );
+  assert.deepEqual(
+    rig.host.notices().filter((notice) => notice.level === "warning"),
+    [],
+  );
+});
+
+test("a Profile pinning a model this Session cannot reach is a diagnostic", async (t) => {
+  const rig = hostRig(t, {
+    models: [{ provider: "anthropic", id: "claude-opus-5" }],
+    profileFiles: { "pinned.md": A_MISSING_MODEL_PROFILE },
+    diagnose: (profile, filePath, context) => {
+      const pinned = profile.fields.model;
+      if (typeof pinned !== "string") return [];
+      return (context?.models ?? []).some((model) => model.id === pinned)
+        ? []
+        : [{ filePath, reason: `no model '${pinned}' in this Session` }];
+    },
+  });
+  t.after(() => rig.installation.handle.release());
+
+  await rig.host.sessionStart();
+
+  const warnings = rig.host
+    .notices()
+    .filter((notice) => notice.level === "warning");
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0].message, /no model 'not-installed' in this Session/);
+  assert.equal(
+    rig.installation.profiles().some((profile) => profile.name === "pinned"),
     false,
   );
 });

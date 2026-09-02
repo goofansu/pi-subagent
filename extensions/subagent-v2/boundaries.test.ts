@@ -526,6 +526,12 @@ export function findV2BoundaryViolations(
       if (target) {
         if (isInside(target, graph.presentationRoot)) continue;
         if (isInside(target, graph.domainRoot)) continue;
+        // A presentation *test* may share a fixture with the rest of the lane,
+        // exactly as a domain test may. The rule is about what a production
+        // renderer can reach; a fixture module living inside `presentation/`
+        // would be a hole in it rather than an exception to it, which is why
+        // the shared fixtures live in the test tree.
+        if (test && isInside(target, graph.testingRoot)) continue;
         violations.add(
           `${describe(file)} imports ${describe(target)}, and a presentation file may name only the domain and Pi`,
         );
@@ -1131,13 +1137,47 @@ test("a presentation file importing the runtime, a backend, or a fake is rejecte
       "void truncateToWidth;",
     ].join("\n"),
   );
-  // A test may name the runner and the assertion library.
+  // A test may name the runner, the assertion library, and a shared fixture.
+  write(
+    "extensions/subagent-v2/testing/presentation-fixtures.ts",
+    "export {};\n",
+  );
   write(
     "extensions/subagent-v2/presentation/status.test.ts",
-    'import assert from "node:assert/strict";\nvoid assert;\n',
+    [
+      'import assert from "node:assert/strict";',
+      'import "../testing/presentation-fixtures.ts";',
+      "void assert;",
+    ].join("\n"),
   );
 
   assert.deepEqual(findV2BoundaryViolations(graph), []);
+
+  // A production presentation file may not, which is the half of the rule the
+  // fixture exemption must not widen.
+  write(
+    "extensions/subagent-v2/presentation/status.ts",
+    [
+      'import type {} from "../domain/index.ts";',
+      'import "../testing/presentation-fixtures.ts";',
+      'import { truncateToWidth } from "@earendil-works/pi-tui";',
+      "void truncateToWidth;",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.presentationRoot, "status.ts"))} imports ${describe(path.join(graph.testingRoot, "presentation-fixtures.ts"))}, and a presentation file may name only the domain and Pi`,
+  ]);
+
+  // Restore the good production file for the rejections below.
+  write(
+    "extensions/subagent-v2/presentation/status.ts",
+    [
+      'import type {} from "../domain/index.ts";',
+      'import { truncateToWidth } from "@earendil-works/pi-tui";',
+      "void truncateToWidth;",
+    ].join("\n"),
+  );
 
   write(
     "extensions/subagent-v2/presentation/rows.ts",

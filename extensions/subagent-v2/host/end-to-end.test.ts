@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { DEFAULT_BACKEND_ID, runId, subagentId } from "../domain/index.ts";
 import {
   hostRig,
   RIG_ANSWER,
@@ -321,9 +322,9 @@ test("the message the sink sends is the one the renderer can parse", async (t) =
   // rather than two shapes that happen to agree today.
   const sent = rig.host.sent()[0].message;
   const rebuilt = buildNotificationMessage({
-    runId: ids.runId as never,
-    subagentId: ids.subagentId as never,
-    backendId: "pi" as never,
+    runId: runId(ids.runId),
+    subagentId: subagentId(ids.subagentId),
+    backendId: DEFAULT_BACKEND_ID,
     agent: RIG_RESUMABLE_PROFILE,
     description: "look around",
     status: "completed",

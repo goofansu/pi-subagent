@@ -137,9 +137,7 @@ export function renderNotificationMessage(
 ): Component | undefined {
   const details = parseNotificationDetails(message.details);
   if (!details) return undefined;
-  const text = contentText(
-    message.content as Parameters<typeof contentText>[0],
-  );
+  const text = contentText(message.content);
 
   const box = new Box(options.outputPad ?? 1, 1, (line: string) =>
     theme.bg("customMessageBg", line),

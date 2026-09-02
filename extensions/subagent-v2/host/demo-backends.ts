@@ -20,10 +20,11 @@
  *
  * The script is one Run's worth of behaviour, chosen so that every product
  * surface has something to show: it reports an activity so a widget row has a
- * tail, answers so `agent_result` returns something a user recognizes, and
- * reports a small usage delta so the notification has an accounting line. It
- * is deterministic by construction — no gate, no sleep, no randomness — which
- * is what lets a host test assert on the text a user would see.
+ * tail, echoes the brief it was given so `agent_result` returns something the
+ * user can recognize as an answer to their own question, and reports a small
+ * usage delta so the notification has an accounting line. It is deterministic
+ * by construction — no gate, no sleep, no randomness — which is what lets a
+ * host test assert on the text a user would see.
  */
 
 import {
@@ -39,7 +40,6 @@ import {
 } from "../testing/fakes/backend.ts";
 import {
   emitActivity,
-  emitText,
   type FakeStep,
   scripts,
 } from "../testing/fakes/script.ts";
@@ -65,22 +65,26 @@ export const DEMO_ONE_SHOT_BACKEND = backendId("demo-one-shot");
 const DEMO_SCRIPT_RUNS = 32;
 
 /**
- * What a demo Run answers with.
+ * How a demo Run opens its answer, before echoing the brief it was given.
  *
- * The fake cannot see the prompt from a script step — a script is fixed before
- * the Run starts — so the answer names itself rather than echoing the brief.
- * That is honest about what a fake is, and it is still recognizable in a widget
- * row, a notification preview, and a result body, which is what the demo is
- * for.
+ * Echoing is what makes the demo worth having: an answer that named itself
+ * would prove a Run ran, and an answer that repeats the question proves the
+ * brief reached the backend and came back through the projection, the Result
+ * store, `agent_result`, and the notification preview unchanged.
  */
-export const DEMO_ANSWER = "This is a demo subagent answering.";
+export const DEMO_ANSWER_PREFIX = "The demo subagent was asked: ";
+
+/** What a demo Run answers with, for a given brief. */
+export function demoAnswer(prompt: string): string {
+  return `${DEMO_ANSWER_PREFIX}${prompt}`;
+}
 
 /** What a demo Run reports it is doing, so a widget row has an activity tail. */
 export const DEMO_ACTIVITY = "thinking";
 
 const DEMO_RUN: readonly FakeStep[] = [
   emitActivity(DEMO_ACTIVITY),
-  emitText(DEMO_ANSWER),
+  { step: "echo-prompt", prefix: DEMO_ANSWER_PREFIX },
   { step: "cumulative-usage", total: { input: 12, output: 8 } },
   { step: "complete", ending: answeredEnding() },
 ];

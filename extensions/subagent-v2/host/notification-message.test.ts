@@ -3,11 +3,14 @@ import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { cancelledEnding, failedEnding } from "../domain/index.ts";
-import { fixtureNotification, fixtureUsage } from "../presentation/fixtures.ts";
 import {
   formatNotificationText,
   type RenderableTheme,
 } from "../presentation/index.ts";
+import {
+  fixtureNotification,
+  fixtureUsage,
+} from "../testing/presentation-fixtures.ts";
 import {
   buildNotificationMessage,
   NOTIFICATION_MESSAGE_TYPE,

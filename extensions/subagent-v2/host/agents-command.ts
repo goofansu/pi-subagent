@@ -53,10 +53,36 @@ const AGENT_SELECT_LIST_LAYOUT = {
   maxPrimaryColumnWidth: 32,
 };
 
+/** How many Profiles the list shows before it starts scrolling. */
+const MAX_VISIBLE_PROFILE_ROWS = 15;
+
 interface KeybindingMatcher {
   matches(data: string, action: string): boolean;
 }
 
+/**
+ * The five colours a `SelectList` paints, in one place.
+ *
+ * Both lists in this command — the Profile list and the action menu — take the
+ * same five, and v1 spelled them out twice. Two copies of a palette is two
+ * places for a theme change to be applied in one of.
+ */
+function selectListStyle(theme: Theme) {
+  return {
+    selectedPrefix: (text: string) => theme.fg("accent", text),
+    selectedText: (text: string) => theme.fg("accent", text),
+    description: (text: string) => theme.fg("muted", text),
+    scrollInfo: (text: string) => theme.fg("dim", text),
+    noMatch: (text: string) => theme.fg("warning", text),
+  };
+}
+
+/** Whether a select item's value is one of the two actions on offer. */
+function isAgentAction(value: unknown): value is AgentAction {
+  return value === "view" || value === "work";
+}
+
+/** One list item per Profile: its name, and what it is for. */
 export function getAgentSelectItems(
   profiles: readonly Profile[],
 ): SelectItem[] {
@@ -67,6 +93,12 @@ export function getAgentSelectItems(
   }));
 }
 
+/**
+ * Narrow the list by a query, fuzzily, across name and description.
+ *
+ * An empty or whitespace-only query is not a filter that matches nothing — it
+ * is no filter, which is what a user who has just cleared the box means.
+ */
 export function getFilteredAgentSelectItems(
   items: readonly SelectItem[],
   query: string,
@@ -80,6 +112,7 @@ export function getFilteredAgentSelectItems(
   );
 }
 
+/** The two things a user can do with a Profile: read it, or hand it work. */
 export function getAgentActionItems(): SelectItem[] {
   return [
     { value: "view", label: "View" },
@@ -87,6 +120,7 @@ export function getAgentActionItems(): SelectItem[] {
   ];
 }
 
+/** The action menu's title, which names the Profile it is about. */
 export function formatAgentActionTitle(agentName: string): string {
   return `Choose action for ${agentName}`;
 }
@@ -96,6 +130,12 @@ export function formatAgentPromptMarkdown(profile: Profile): string {
   return profile.systemPrompt.trim();
 }
 
+/**
+ * The user message the work action sends.
+ *
+ * Phrased as an instruction to the model rather than as a tool call, because
+ * the model is the thing that knows how to brief a Subagent.
+ */
 export function buildAgentWorkMessage(agentName: string, task: string): string {
   return `Use agent_start with agent "${agentName}" for the task: ${task}`;
 }
@@ -105,6 +145,7 @@ export function formatNoAgentsMessage(agentsDir: string): string {
   return `No subagents are configured. Add a Profile to ${agentsDir}.`;
 }
 
+/** What the Profile list says its keys do. */
 export function formatAgentListHint(
   separator: string,
   renderKeyHint = keyHint,
@@ -112,6 +153,7 @@ export function formatAgentListHint(
   return `${renderKeyHint("tui.select.confirm", "actions")}${separator}${renderKeyHint("tui.select.cancel", "close")}`;
 }
 
+/** What the action menu says its keys do. */
 export function formatAgentActionHint(
   separator: string,
   renderKeyHint = keyHint,
@@ -119,6 +161,7 @@ export function formatAgentActionHint(
   return `${renderKeyHint("tui.select.confirm", "to confirm")}${separator}${renderKeyHint("tui.select.cancel", "back")}`;
 }
 
+/** What the prompt view says its keys do, scrolling included. */
 export function formatAgentDetailHint(
   separator: string,
   renderKeyHint = keyHint,
@@ -248,14 +291,8 @@ class AgentsListComponent extends Container {
 
     this.selectList = new SelectList(
       filtered,
-      Math.min(filtered.length, 15),
-      {
-        selectedPrefix: (text) => this.theme.fg("accent", text),
-        selectedText: (text) => this.theme.fg("accent", text),
-        description: (text) => this.theme.fg("muted", text),
-        scrollInfo: (text) => this.theme.fg("dim", text),
-        noMatch: (text) => this.theme.fg("warning", text),
-      },
+      Math.min(filtered.length, MAX_VISIBLE_PROFILE_ROWS),
+      selectListStyle(this.theme),
       AGENT_SELECT_LIST_LAYOUT,
     );
     this.selectList.onSelect = (item) => {
@@ -287,18 +324,18 @@ class AgentActionMenuComponent extends Container {
     );
     this.addChild(new Spacer(1));
 
+    const actions = getAgentActionItems();
     this.selectList = new SelectList(
-      getAgentActionItems(),
-      getAgentActionItems().length,
-      {
-        selectedPrefix: (text) => theme.fg("accent", text),
-        selectedText: (text) => theme.fg("accent", text),
-        description: (text) => theme.fg("muted", text),
-        scrollInfo: (text) => theme.fg("dim", text),
-        noMatch: (text) => theme.fg("warning", text),
-      },
+      actions,
+      actions.length,
+      selectListStyle(theme),
     );
-    this.selectList.onSelect = (item) => onSelect(item.value as AgentAction);
+    // Checked rather than cast: the list is built from `getAgentActionItems`,
+    // so this cannot fail today, and a third action added there without a
+    // branch here would otherwise be silently treated as `work`.
+    this.selectList.onSelect = (item) => {
+      if (isAgentAction(item.value)) onSelect(item.value);
+    };
     this.selectList.onCancel = onCancel;
 
     this.addChild(this.selectList);

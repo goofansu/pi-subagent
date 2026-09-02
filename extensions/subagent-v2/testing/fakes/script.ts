@@ -50,6 +50,17 @@ export type FakeStep =
   | { readonly step: "cumulative-usage"; readonly total: CumulativeUsage }
   /** Report the retained conversation again, carrying no usage. */
   | { readonly step: "replay-history" }
+  /**
+   * Answer with the Run's own prompt, prefixed.
+   *
+   * A script is fixed before the Run starts, so a step that wanted to say
+   * something *about* the input could not be written as an `emit`. This one
+   * reads `RunInput.prompt` at execution time, which is what lets the demo
+   * backend set behave like a backend that actually read its brief — and what
+   * makes a demo Run's answer recognizable as the answer to the question that
+   * was asked.
+   */
+  | { readonly step: "echo-prompt"; readonly prefix?: string }
   /** Finish with an ending, and a terminal snapshot if this backend has one. */
   | {
       readonly step: "complete";

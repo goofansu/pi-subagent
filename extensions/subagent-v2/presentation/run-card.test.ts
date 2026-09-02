@@ -6,7 +6,7 @@ import {
   fixtureResult,
   fixtureRow,
   fixtureUsage,
-} from "./fixtures.ts";
+} from "../testing/presentation-fixtures.ts";
 import { runCard, runCardLines } from "./run-card.ts";
 
 test("a live card comes from a snapshot and carries no output", () => {

@@ -22,7 +22,7 @@
  */
 
 import type { RunId, RunNotification, UsageSnapshot } from "../domain/index.ts";
-import { formatTokenCount } from "./status.ts";
+import { formatTokenCount, formatTurns } from "./status.ts";
 
 /** How every notice tells a model where the rest of the answer is. */
 export function formatResultPointer(runId: RunId): string {
@@ -58,9 +58,10 @@ export function formatNotificationAccounting(
     }
     parts.push(tokens.join(" / "));
   }
-  if (usage.turns !== 0) {
-    parts.push(`${usage.turns} ${usage.turns === 1 ? "turn" : "turns"}`);
-  }
+  // `formatTurns` is the one place turn grammar is decided, and it renders a
+  // zero as a dash — which is right for a widget column and wrong here, so the
+  // guard is what keeps both readings honest rather than a second format.
+  if (usage.turns !== 0) parts.push(formatTurns(usage.turns));
   if (parts.length > 0 && model !== undefined && model !== "") {
     parts.push(model);
   }

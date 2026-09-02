@@ -3,7 +3,11 @@ import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { backendId } from "../domain/index.ts";
-import { FIXTURE_NOW, fixtureRow, fixtureUsage } from "./fixtures.ts";
+import {
+  FIXTURE_NOW,
+  fixtureRow,
+  fixtureUsage,
+} from "../testing/presentation-fixtures.ts";
 import {
   formatRowSummary,
   formatRunRow,

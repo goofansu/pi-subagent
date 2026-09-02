@@ -109,9 +109,15 @@ export function createSessionPushSink(): SessionPushSink {
       target(buildNotificationMessage(notification));
       return true;
     } catch {
-      // A Session that went stale before its shutdown event throws on every
-      // method. What it can no longer accept is not this Session's problem,
-      // and the Result is already stored either way.
+      // A throw stops this sink using the Session at all, and the cost of that
+      // is worth stating: a *transient* throw silences every later
+      // notification until the next `bind`. It is v1's behaviour and it is
+      // deliberate, because the throw that actually happens is a Session that
+      // went stale before its shutdown event arrived — such a Session throws
+      // on every method, and re-attempting it once per settled Run would turn
+      // one dead Session into one dead push per Run. The Result is stored
+      // either way, so nothing is lost that `agent_result` cannot return, and
+      // the next Session's `bind` restores the sink.
       unlanded.delete(notification.runId);
       send = undefined;
       return false;

@@ -6,12 +6,9 @@ import {
   redactedDiagnostic,
   runDiagnostic,
 } from "../domain/index.ts";
-import { fixtureResult } from "./fixtures.ts";
-import {
-  formatResult,
-  formatResultBody,
-  primaryFailure,
-} from "./result-body.ts";
+import { fixtureResult } from "../testing/presentation-fixtures.ts";
+import { formatResultBody, primaryFailure } from "./result-body.ts";
+import { formatResult } from "./run-card.ts";
 
 test("a completed result preserves its output exactly", () => {
   const output = "Line one\n\n  indented\ttabbed\n";

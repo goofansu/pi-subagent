@@ -38,6 +38,7 @@ import {
   createFakeOneShotBackend,
   createFakeResumableBackend,
   type FakeBackendHandle,
+  type FakeBackendOptions,
 } from "./fakes/backend.ts";
 import {
   emitActivity,
@@ -112,6 +113,14 @@ export interface HostRigOptions extends StandInHostOptions {
    * test in this lane lets real time pass.
    */
   readonly policy?: RuntimePolicy;
+  /**
+   * What the resumable fake reports from `validateProfile`.
+   *
+   * The `BackendValidationContext` it is handed is the Session's own — its
+   * model catalogue among it — so a test can assert that what the host read
+   * from the live Session reached the backend that needed it.
+   */
+  readonly diagnose?: FakeBackendOptions["diagnose"];
 }
 
 export interface HostRig {
@@ -245,6 +254,7 @@ export function hostRig(
     id: DEFAULT_BACKEND_ID,
     gates,
     ...(options.trace === undefined ? {} : { trace: options.trace }),
+    ...(options.diagnose === undefined ? {} : { diagnose: options.diagnose }),
   });
   const oneShot = createFakeOneShotBackend({
     scripts: perRun(options.oneShotSteps),

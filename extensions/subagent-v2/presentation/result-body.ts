@@ -84,11 +84,3 @@ export function formatResultBody(result: RunResult): string {
       return cancelledBody(result);
   }
 }
-
-/** The complete `agent_result` text, including the stable Run identity. */
-export function formatResult(result: RunResult): string {
-  return (
-    `${result.agent} (subagent ${result.subagentId}), run ${result.runId}:\n\n` +
-    formatResultBody(result)
-  );
-}

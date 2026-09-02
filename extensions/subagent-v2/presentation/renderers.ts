@@ -1,9 +1,15 @@
 /**
  * How a subagent tool call and its result are drawn in the transcript.
  *
- * Ported from v1's renderers, with the bodies drawn from the {@link RunCard}
- * so that M4's expanded presentation is a change to the card rather than a
- * change to four renderers. The rules the port preserves:
+ * Ported from v1's renderers. What they draw comes from two different places,
+ * and the split is worth naming: an **expanded** result is the text the façade
+ * already produced — for `agent_result` that text comes from the `RunCard`, so
+ * M4's expanded presentation is a change to the card rather than to a
+ * renderer — while a **collapsed** result is a summary of the `details` the
+ * façade attached, because a collapsed line may stand for several Runs and a
+ * card is about one.
+ *
+ * The rules the port preserves:
  *
  * - **A started Run's row shows the brief and nothing else.** Its progress
  *   lives in the widget and its answer is retrieved separately, so a row that
@@ -59,12 +65,27 @@ export type KeyHintRenderer = typeof keyHint;
 /** How many lines of the brief a collapsed `agent_start` row shows. */
 const COLLAPSED_PROMPT_LINES = 3;
 
-/** The text of a tool result or message body, whatever shape it arrived in. */
-export function contentText(content: RenderableToolResult["content"]): string {
+/**
+ * The text of a tool result or message body, whatever shape it arrived in.
+ *
+ * Takes `unknown` and checks, rather than taking the declared shape and
+ * trusting it. This is a renderer boundary: a result or message reaches it
+ * through the host as `unknown`, may have been round-tripped through a session
+ * file, and may have come from another extension entirely. As
+ * `presentation/details.ts` puts it, the type that says otherwise is only as
+ * good as the boundary it was written at — and this is that boundary.
+ */
+export function contentText(content: unknown): string {
   if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
   return content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text ?? "")
+    .map((part) => {
+      if (typeof part !== "object" || part === null) return "";
+      const candidate = part as { type?: unknown; text?: unknown };
+      return candidate.type === "text" && typeof candidate.text === "string"
+        ? candidate.text
+        : "";
+    })
     .join("");
 }
 

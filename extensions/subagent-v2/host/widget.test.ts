@@ -135,13 +135,16 @@ test("the widget is cleared when the Session shuts down", async (t) => {
 
 // -- Coalescing --------------------------------------------------------------
 
-test("a burst of index changes produces far fewer render requests than changes", async (t) => {
+test("a burst of index changes coalesces into one render request per draw", async (t) => {
   const BURST = 200;
+  /** A slow terminal: it draws one request in fifty and ignores the rest. */
+  const DRAWS_ONE_IN = 50;
   const activity = Array.from({ length: BURST }, (_unused, index) => ({
     step: "emit" as const,
     observation: { kind: "activity" as const, activity: `step ${index}` },
   }));
   const rig = hostRig(t, {
+    renderEvery: DRAWS_ONE_IN,
     resumableSteps: [[...activity, { step: "await-gate", gate: "hold" }]],
   });
   await rig.host.sessionStart();
@@ -150,25 +153,64 @@ test("a burst of index changes produces far fewer render requests than changes",
   await heldRun(rig);
   await rig.pump();
 
-  const activityCounts = rig.installation.widget()?.activity();
-  assert.ok(activityCounts, "the Session installed no widget");
-  // The subscriber saw the burst...
+  const counts = rig.installation.widget()?.activity();
+  assert.ok(counts, "the Session installed no widget");
+
+  // The subscriber saw the burst: the change stream is not conflated, and
+  // conflating it is what this widget is for.
   assert.ok(
-    activityCounts.changes > BURST / 2,
-    `only ${activityCounts.changes} changes reached the subscriber`,
+    counts.changes > BURST / 2,
+    `only ${counts.changes} changes reached the subscriber`,
   );
-  // ...and asked for a small number of renders, because a render that has not
-  // happened yet will read the newer value anyway.
+
+  // The coalescing invariant, and the assertion that can actually fail: a
+  // request is armed only while none is outstanding, so the widget never asks
+  // for more renders than the host drew, plus the one still outstanding.
+  // Delete the pending-render guard and this becomes ~200 against 4.
   assert.ok(
-    activityCounts.renderRequests * 4 < activityCounts.changes,
-    `${activityCounts.renderRequests} renders for ${activityCounts.changes} changes is not coalescing`,
+    counts.renderRequests <= rig.host.rendersPerformed() + 1,
+    `${counts.renderRequests} requests for ${rig.host.rendersPerformed()} draws`,
   );
-  // The row shows the latest state rather than a stale one.
+  assert.ok(
+    counts.renderRequests * 4 < counts.changes,
+    `${counts.renderRequests} renders for ${counts.changes} changes is not coalescing`,
+  );
+
+  // And the conflation is not lossy: the row shows the latest state.
   assert.match(rig.host.widgetLines(80)[1], new RegExp(`step ${BURST - 1}$`));
+});
+
+test("a host that draws every request still gets one request per change batch", async (t) => {
+  // The other end of the same rule. A fast terminal clears the pending flag at
+  // once, so it is asked again for the next change — which is correct, and is
+  // why the invariant is "never more than draws plus one" rather than "few".
+  const rig = hostRig(t, {
+    renderEvery: 1,
+    resumableSteps: [
+      [
+        { step: "emit", observation: { kind: "activity", activity: "one" } },
+        { step: "emit", observation: { kind: "activity", activity: "two" } },
+        { step: "await-gate", gate: "hold" },
+      ],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  await heldRun(rig);
+  await rig.pump();
+
+  const counts = rig.installation.widget()?.activity();
+  assert.ok(counts);
+  assert.ok(
+    counts.renderRequests <= rig.host.rendersPerformed() + 1,
+    `${counts.renderRequests} requests for ${rig.host.rendersPerformed()} draws`,
+  );
 });
 
 test("a slow subscriber still renders the latest state after the burst", async (t) => {
   const rig = hostRig(t, {
+    renderEvery: 3,
     resumableSteps: [
       [
         { step: "emit", observation: { kind: "activity", activity: "first" } },

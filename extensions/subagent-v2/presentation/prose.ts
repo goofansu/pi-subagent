@@ -31,7 +31,6 @@ import type {
   StartOutcome,
   SteerOutcome,
   SubagentId,
-  TerminalRunPhase,
   WaitOutcome,
 } from "../domain/index.ts";
 
@@ -60,6 +59,14 @@ function runPointer(runId: RunId): string {
 const NOTIFICATION_PROMISE =
   "Its notification will arrive when the Run finishes; carry on until then.";
 
+/**
+ * Profile diagnostics as one line each.
+ *
+ * Shared by the two places a user or a model is told a Profile does not work —
+ * `agent_start`'s `invalid profile` rejection and the Session's start-up
+ * warning — because the same fact read two ways in two places is how a reader
+ * ends up unsure whether they are the same fact.
+ */
 function diagnosticLines(
   diagnostics: readonly ProfileDiagnostic[],
 ): readonly string[] {
@@ -447,6 +454,23 @@ export function formatSessionNotReady(tool: string): string {
 }
 
 /**
+ * How a Session start names the Profile files it could not use.
+ *
+ * A broken Profile has to be visible without opening a log: a user who wrote
+ * one and got silence would conclude the feature does not work. One line per
+ * diagnostic, in the same shape `agent_start` uses, because a Profile with two
+ * mistakes should be fixable in one pass.
+ */
+export function formatInvalidProfilesWarning(
+  diagnostics: readonly ProfileDiagnostic[],
+): string {
+  return [
+    "Invalid subagent Profiles were skipped:",
+    ...diagnosticLines(diagnostics),
+  ].join("\n");
+}
+
+/**
  * What a tool says when its arguments did not decode.
  *
  * `detail` names the field and the rule it broke and carries no part of the
@@ -458,9 +482,4 @@ export function formatToolInputRejected(tool: string, detail: string): string {
     `Cannot run ${tool}: its arguments were not usable. ${detail}. Nothing ` +
     "was started. Correct the arguments and call it again."
   );
-}
-
-/** The status word a terminal Run is named by, for callers that need it bare. */
-export function terminalStatusWord(status: TerminalRunPhase): string {
-  return status;
 }

@@ -16,6 +16,7 @@
  */
 
 import { Context, Effect, Layer } from "effect";
+import type { BackendValidationContext } from "../backend/contract.ts";
 import type { Profile, ProfileDiagnostic } from "../domain/index.ts";
 import { discoverProfiles, profilesDir } from "../profiles/discovery.ts";
 import { BackendCatalog } from "./backend-catalog.ts";
@@ -73,6 +74,16 @@ export class ProfileCatalog extends Context.Service<
      * be replaced would be a Profile a user could not fix.
      */
     builtIn: readonly Profile[] = [],
+    /**
+     * What a backend needs in order to validate a Profile against the Session
+     * it is being loaded into — today, the model catalogue the host reported.
+     *
+     * Passed through rather than looked up, because the catalog does not know
+     * what a backend will want from a Session and must not start guessing: an
+     * adapter that validates a pinned model against what this Session can
+     * actually reach needs the Session's own list, not a global one.
+     */
+    validation?: BackendValidationContext,
   ): Layer.Layer<ProfileCatalog, never, BackendCatalog> {
     return Layer.effect(
       ProfileCatalog,
@@ -80,7 +91,7 @@ export class ProfileCatalog extends Context.Service<
         const backends = yield* BackendCatalog;
         const discovered = yield* Effect.sync(() =>
           discoverProfiles(profilesDir(agentDir), (profile, filePath) =>
-            backends.validateProfile(profile, filePath),
+            backends.validateProfile(profile, filePath, validation),
           ),
         );
         const merged = new Map<string, Profile>(

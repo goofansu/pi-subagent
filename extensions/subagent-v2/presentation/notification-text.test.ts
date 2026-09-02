@@ -9,7 +9,10 @@ import {
   NOTIFICATION_PREVIEW_MAX_BYTES,
   redactedDiagnostic,
 } from "../domain/index.ts";
-import { fixtureNotification, fixtureUsage } from "./fixtures.ts";
+import {
+  fixtureNotification,
+  fixtureUsage,
+} from "../testing/presentation-fixtures.ts";
 import {
   formatNotificationAccounting,
   formatNotificationText,

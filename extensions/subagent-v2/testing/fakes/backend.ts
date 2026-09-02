@@ -26,6 +26,7 @@ import type {
   BackendAgent,
   BackendCapabilities,
   BackendOpenFailure,
+  BackendValidationContext,
   ExecutionIO,
   ResumeAdmission,
   RunInput,
@@ -79,10 +80,17 @@ export interface FakeBackendOptions {
   /** A shared ordering log. The fake appends its own lifecycle events. */
   readonly trace?: string[];
   readonly id?: BackendId;
-  /** What `validateProfile` reports, so validation scenarios can vary it. */
+  /**
+   * What `validateProfile` reports, so validation scenarios can vary it.
+   *
+   * Handed the `BackendValidationContext` as well as the Profile, because the
+   * Session's model catalogue reaches a backend through exactly that argument
+   * and a fake that dropped it could not prove the catalogue arrived.
+   */
   readonly diagnose?: (
     profile: Profile,
     filePath: string,
+    context?: BackendValidationContext,
   ) => readonly ProfileDiagnostic[];
 }
 
@@ -268,6 +276,23 @@ function createFakeBackend(
               });
               break;
             }
+            case "echo-prompt": {
+              // The one step that reads the Run's input. Everything else a
+              // script says is decided before the Run exists.
+              const observation: RunObservation = {
+                kind: "message",
+                role: "assistant",
+                parts: [
+                  {
+                    kind: "text",
+                    text: `${step.prefix ?? ""}${input.prompt}`,
+                  },
+                ],
+              };
+              remember(observation);
+              yield* io.emit(observation);
+              break;
+            }
             case "replay-history": {
               // A provider replaying the conversation. It carries no usage:
               // replay is not new work.
@@ -368,8 +393,8 @@ function createFakeBackend(
 
   const backend: Backend = {
     id: options.id ?? backendId("fake"),
-    validateProfile: (profile, filePath) =>
-      options.diagnose?.(profile, filePath) ?? [],
+    validateProfile: (profile, filePath, context) =>
+      options.diagnose?.(profile, filePath, context) ?? [],
     open: (): Effect.Effect<
       BackendAgent,
       BackendOpenFailure,

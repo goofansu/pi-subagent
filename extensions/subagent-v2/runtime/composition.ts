@@ -18,7 +18,7 @@
  */
 
 import { Layer } from "effect";
-import type { Backend } from "../backend/contract.ts";
+import type { Backend, BackendValidationContext } from "../backend/contract.ts";
 import type { Profile, ProfileDiagnostic } from "../domain/index.ts";
 import { BackendCatalog } from "./backend-catalog.ts";
 import { createRuntimeCounters, type RuntimeCounters } from "./counters.ts";
@@ -102,6 +102,15 @@ interface SessionRuntimeBaseOptions {
   readonly sink: NotificationSink;
   /** Shared with the caller when a test wants to read the probe directly. */
   readonly counters?: RuntimeCounters;
+  /**
+   * What a backend needs in order to validate a Profile against this Session.
+   *
+   * Today that is the model catalogue the host reported: an adapter that pins
+   * a model has to check it against what *this* Session can reach, and a
+   * Session that never handed its catalogue over would make every pinned model
+   * either unvalidated or wrongly rejected.
+   */
+  readonly validation?: BackendValidationContext;
 }
 
 export type SessionRuntimeOptions = SessionRuntimeBaseOptions & BackendSource;
@@ -132,7 +141,11 @@ export function sessionRuntimeLayer(
   const backendCatalog = BackendCatalog.layerOf(backends);
   const profileCatalog = (
     options.profiles.from === "directory"
-      ? ProfileCatalog.layerOf(options.profiles.agentDir, builtInProfiles)
+      ? ProfileCatalog.layerOf(
+          options.profiles.agentDir,
+          builtInProfiles,
+          options.validation,
+        )
       : ProfileCatalog.layerOfProfiles(
           [...builtInProfiles, ...options.profiles.profiles],
           options.profiles.diagnostics ?? [],

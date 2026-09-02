@@ -89,18 +89,45 @@ export function runCard(source: RunCardSource): RunCard {
 }
 
 /**
+ * How a card names the Run it is about.
+ *
+ * One line, and the same line wherever a Run is identified: the agent a caller
+ * asked for, the Subagent that owns the work, and the Run this particular
+ * answer belongs to. A reader who has three ids in front of them and no idea
+ * which is which has been given three strings.
+ */
+export function runCardIdentity(card: RunCard): string {
+  return `${card.agent} (subagent ${card.subagentId}), run ${card.runId}`;
+}
+
+/**
  * The card as plain lines, for an expanded view.
  *
- * One blank line separates the header block from the body, because the body
- * is agent-authored Markdown and two adjacent paragraphs of different voices
- * read as one.
+ * One blank line separates the header block from the body, because the body is
+ * agent-authored Markdown and two adjacent paragraphs of different voices read
+ * as one.
  */
 export function runCardLines(card: RunCard): readonly string[] {
   const header = [
-    `${card.agent} (subagent ${card.subagentId}), run ${card.runId}`,
+    runCardIdentity(card),
     `${card.description} · ${card.backendId} · ${card.status}`,
     ...(card.accounting === undefined ? [] : [card.accounting]),
   ];
   if (card.output === undefined) return header;
   return [...header, "", card.output];
+}
+
+/**
+ * The complete `agent_result` text: the Run's identity, then its answer.
+ *
+ * Built from the card rather than from the Result directly, which is what
+ * makes the card the one place Run presentation grows. M3's text is v1's — the
+ * identity line and the body, and nothing else — and the fields M4 adds
+ * (recent transcript, tools, diagnostics, native links) arrive by widening
+ * this function's view of the card rather than by a second assembly of the
+ * same fields somewhere else.
+ */
+export function formatResult(result: RunResult): string {
+  const card = runCard({ from: "result", result });
+  return `${runCardIdentity(card)}:\n\n${card.output ?? ""}`;
 }
