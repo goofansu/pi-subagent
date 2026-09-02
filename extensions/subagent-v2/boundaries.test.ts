@@ -20,8 +20,9 @@ import {
  * only place in v2 that spells that legacy name, and it excludes itself from
  * the scan for exactly that reason.
  *
- * Later v2 import rules (adapter confinement, `Effect.runPromise` confinement)
- * belong here too; M0 adds only the v1 and Effect edges.
+ * Later v2 import rules (adapter confinement) belong here too. M0 added the v1
+ * and Effect edges; M1 adds the rules that keep the domain module plain
+ * TypeScript and keep provider SDKs out of the tree entirely.
  */
 
 /**
@@ -57,6 +58,8 @@ export interface V2BoundaryGraph {
   readonly v2Root: string;
   /** The v2 extension entry point the transitive walk starts from. */
   readonly v2Entry: string;
+  /** The plain-TypeScript domain module, which may import only itself. */
+  readonly domainRoot: string;
   /** The checker itself, excluded from the legacy-name scan. */
   readonly checkerFile?: string;
 }
@@ -65,6 +68,7 @@ const productionGraph: V2BoundaryGraph = {
   v1Root: path.join(repositoryRoot, "extensions", "subagent"),
   v2Root: path.join(repositoryRoot, "extensions", "subagent-v2"),
   v2Entry: path.join(repositoryRoot, "extensions", "subagent-v2", "index.ts"),
+  domainRoot: path.join(repositoryRoot, "extensions", "subagent-v2", "domain"),
   checkerFile,
 };
 
@@ -99,6 +103,37 @@ function isEffectPackage(specifier: string): boolean {
     specifier === "@effect" ||
     specifier.startsWith("@effect/")
   );
+}
+
+/**
+ * Provider SDKs, which no v2 file may import before the adapter milestones.
+ *
+ * Pi's own packages are deliberately not on this list: they are also the host
+ * API this extension is written against, and the M0 entry point imports the
+ * host types from them. Keeping them out of the neutral core is the job of the
+ * domain and backend rules below, which admit no package specifier at all.
+ */
+const PROVIDER_SDK_PREFIXES = ["@anthropic-ai/", "@openai/"] as const;
+
+function isProviderSdk(specifier: string): boolean {
+  return PROVIDER_SDK_PREFIXES.some((prefix) => specifier.startsWith(prefix));
+}
+
+/**
+ * The only package specifiers a domain *test* may name.
+ *
+ * A domain test is still domain code and must not reach for a runtime or an
+ * SDK, but it does need a test runner and an assertion library, and neither
+ * can be a relative import.
+ */
+const DOMAIN_TEST_PACKAGES = new Set([
+  "node:test",
+  "node:assert",
+  "node:assert/strict",
+]);
+
+function isTestFile(file: string): boolean {
+  return file.endsWith(".test.ts");
 }
 
 function specifiersOf(file: string): string[] {
@@ -167,7 +202,44 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 4. The freeze runs in both directions: v1 gains neither Effect nor a
+  // 4. The domain module is plain TypeScript. A production domain file may
+  //    name only another domain file, which rules out `effect`, every SDK, and
+  //    every `node:` module by construction rather than by enumeration. A
+  //    domain test may additionally name the test runner and the assertion
+  //    library, and may share relative test helpers with the rest of v2.
+  for (const file of listSourceFiles(graph.domainRoot, {
+    includeTests: true,
+  })) {
+    for (const specifier of specifiersOf(file)) {
+      const target = resolveRelativeSource(file, specifier);
+      if (isTestFile(file)) {
+        if (!target && !DOMAIN_TEST_PACKAGES.has(specifier)) {
+          violations.add(
+            `${describe(file)} imports package ${specifier}, which a domain test may not name`,
+          );
+        }
+        continue;
+      }
+      if (!target || !isInside(target, graph.domainRoot)) {
+        violations.add(
+          `${describe(file)} imports ${specifier} from outside the domain module`,
+        );
+      }
+    }
+  }
+
+  // 5. No v2 file reaches a provider SDK before the adapter milestones.
+  for (const file of listSourceFiles(v2Root, { includeTests: true })) {
+    for (const specifier of specifiersOf(file)) {
+      if (isProviderSdk(specifier)) {
+        violations.add(
+          `${describe(file)} imports forbidden provider SDK ${specifier}`,
+        );
+      }
+    }
+  }
+
+  // 6. The freeze runs in both directions: v1 gains neither Effect nor a
   //    dependency on the tree that is replacing it.
   for (const file of listSourceFiles(v1Root, { includeTests: true })) {
     for (const specifier of specifiersOf(file)) {
@@ -205,6 +277,7 @@ function fixtureGraph(
     v1Root: path.join(fixtureRoot, "extensions", "subagent"),
     v2Root: path.join(fixtureRoot, "extensions", "subagent-v2"),
     v2Entry: path.join(fixtureRoot, "extensions", "subagent-v2", "index.ts"),
+    domainRoot: path.join(fixtureRoot, "extensions", "subagent-v2", "domain"),
   };
   return {
     graph,
@@ -366,6 +439,83 @@ test("dynamic and require edges out of v2 are checked like static imports", (t) 
 
   assert.deepEqual(findV2BoundaryViolations(graph), [
     `${describe(graph.v2Entry)} imports forbidden v1 module ${describe(path.join(graph.v1Root, "runner.ts"))}`,
+  ]);
+});
+
+test("a domain module importing a package is rejected, whatever the package", (t) => {
+  const { graph, write } = fixtureGraph(t, "domain-purity");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write("extensions/subagent-v2/domain/reduce.ts", 'import "effect";\n');
+  write("extensions/subagent-v2/domain/ids.ts", 'import "node:crypto";\n');
+  write(
+    "extensions/subagent-v2/domain/profile.ts",
+    'import "@earendil-works/pi-coding-agent";\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.domainRoot, "ids.ts"))} imports node:crypto from outside the domain module`,
+    `${describe(path.join(graph.domainRoot, "profile.ts"))} imports @earendil-works/pi-coding-agent from outside the domain module`,
+    `${describe(path.join(graph.domainRoot, "reduce.ts"))} imports effect from outside the domain module`,
+  ]);
+});
+
+test("a domain module importing a v2 file outside the domain is rejected", (t) => {
+  const { graph, write } = fixtureGraph(t, "domain-reaches-out");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write("extensions/subagent-v2/backend/contract.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/domain/reduce.ts",
+    'import "../backend/contract.ts";\nimport "./ids.ts";\n',
+  );
+  write("extensions/subagent-v2/domain/ids.ts", "export {};\n");
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.domainRoot, "reduce.ts"))} imports ../backend/contract.ts from outside the domain module`,
+  ]);
+});
+
+test("a domain test may name the test runner but not a runtime", (t) => {
+  const { graph, write } = fixtureGraph(t, "domain-test-packages");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write("extensions/subagent-v2/testing/type-level.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/domain/reduce.test.ts",
+    [
+      'import assert from "node:assert/strict";',
+      'import { test } from "node:test";',
+      'import "../testing/type-level.ts";',
+      "void assert;",
+      "void test;",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), []);
+
+  write(
+    "extensions/subagent-v2/domain/reduce.test.ts",
+    'import { Effect } from "effect";\nimport "node:fs";\nvoid Effect;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.domainRoot, "reduce.test.ts"))} imports package effect, which a domain test may not name`,
+    `${describe(path.join(graph.domainRoot, "reduce.test.ts"))} imports package node:fs, which a domain test may not name`,
+  ]);
+});
+
+test("any v2 file importing a provider SDK is rejected, tests included", (t) => {
+  const { graph, write } = fixtureGraph(t, "provider-sdk");
+  write(
+    "extensions/subagent-v2/index.ts",
+    'import "@anthropic-ai/claude-agent-sdk";\n',
+  );
+  write(
+    "extensions/subagent-v2/backend/fake.test.ts",
+    'import "@openai/some-sdk";\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.v2Root, "backend", "fake.test.ts"))} imports forbidden provider SDK @openai/some-sdk`,
+    `${describe(graph.v2Entry)} imports forbidden provider SDK @anthropic-ai/claude-agent-sdk`,
   ]);
 });
 
