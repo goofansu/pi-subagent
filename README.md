@@ -87,6 +87,12 @@ You are an implementation agent. Follow the approved plan and verify your work.
 An unknown harness, or a field that the selected harness does not understand,
 is reported as a profile diagnostic at session start.
 
+The v2 rewrite renames this one field to `backend:`, with the same values and
+the same `pi` default. Nothing changes for an installed package, which loads
+only v1. If you run v2, rename the field first —
+[Profile migration: naming your backend in v2](docs/v2/profile-backend-field-migration.md)
+is the one-line change and the reasoning.
+
 #### Pi profiles
 
 Pi understands `model`, `effort`, `tools`, and `appendSystemPrompt`.
@@ -281,9 +287,16 @@ A subagent reads files, writes files, and runs commands as far as its `tools` li
 
 ## Release verification
 
-`npm run check` runs typechecking, lint, per-Run Harness Conformance, repeated
-managed Subagent conformance for the controlled harness and every production
-adapter, the full test suite, and a byte-for-byte generated Codex protocol
+v1 is frozen. Only critical fixes and testability changes that add proof for a
+compatibility-matrix row land in `extensions/subagent/`; the policy, and the
+commit at which the quality gate was recorded green, are in
+[`docs/v2/freeze.md`](docs/v2/freeze.md). The rewrite lives beside it in
+`extensions/subagent-v2/` and is opted into per Pi process with `make dev-v2`.
+
+`npm run check` runs typechecking for both extension trees, lint, per-Run
+Harness Conformance, repeated managed Subagent conformance for the controlled
+harness and every production adapter, the full test suite, the v2 lane (v2 tests
+plus the v1/v2 import boundary), and a byte-for-byte generated Codex protocol
 check (`npm run codex:protocol:check`). `npm run release:check` adds all six
 authenticated provider gates and the retained-Codex evidence gate. It remains
 red until the pinned authenticated smoke and human Desktop record both exist.

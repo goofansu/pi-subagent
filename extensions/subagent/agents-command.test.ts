@@ -75,6 +75,27 @@ test("getAgentSelectItems lists each agent by name and description", () => {
   ]);
 });
 
+test("the agents list is identical whichever harness a profile names", () => {
+  // Compatibility-matrix proof: /agents lists a profile by name and
+  // description only, so the list is harness-independent.
+  // See docs/v2/compatibility-matrix.md.
+  const listings = ["pi", "claude", "codex"].map((harness) =>
+    getAgentSelectItems(
+      new Map([["explore", { ...exploreAgent, harness } as AgentConfig]]),
+    ),
+  );
+
+  for (const listing of listings) {
+    assert.deepEqual(listing, [
+      {
+        value: "explore",
+        label: "explore",
+        description: "Fast codebase exploration.",
+      },
+    ]);
+  }
+});
+
 test("getFilteredAgentSelectItems filters agents by name and description", () => {
   const items = getAgentSelectItems(
     new Map([

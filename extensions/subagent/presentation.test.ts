@@ -243,6 +243,27 @@ test("a completed notification uses lifecycle vocabulary", () => {
   assert.equal(notificationVerb("cancelled"), "cancelled");
 });
 
+test("completion notification prose is identical whichever harness ran the Run", () => {
+  // Compatibility-matrix proof: the completion Notification is derived from
+  // the neutral Result alone. Only the model string, which the profile
+  // chooses, differs between harnesses.
+  // See docs/v2/compatibility-matrix.md.
+  const notificationFor = (harness: string): string => {
+    const result = createEmptyResult("explore", "look", 0, harness, "sub-1");
+    result.lifecycle = { phase: "completed", finishedAt: 10 };
+    result.messages = [assistantText("done")];
+    return formatNotification("run-1", result);
+  };
+
+  const expected =
+    "Subagent explore (sub-1), run run-1 completed.\n\n" +
+    "done\n\n" +
+    "Use agent_result with id run-1 to retrieve the full result.";
+  assert.equal(notificationFor("pi"), expected);
+  assert.equal(notificationFor("claude"), expected);
+  assert.equal(notificationFor("codex"), expected);
+});
+
 test("notification accounting abbreviates usage and includes the model", () => {
   const result = createEmptyResult("explore", "look", 0);
   result.lifecycle = { phase: "completed", finishedAt: 10 };

@@ -63,6 +63,23 @@ test("a run line carries agent, harness, turns and status, and nothing else fixe
   assert.doesNotMatch(line, /a3f81c2b/);
 });
 
+test("a run line names each harness the same way", () => {
+  // Compatibility-matrix proof: the active widget row is harness-independent
+  // apart from the harness's own name. See docs/v2/compatibility-matrix.md.
+  const lines = ["pi", "claude", "codex"].map((harness) =>
+    stripVTControlCharacters(formatRunLine(view({ harness }), theme, 120)),
+  );
+
+  assert.deepEqual(
+    lines.map((line) => line.trimEnd()),
+    [
+      "explore  pi  3 turns  running · look around",
+      "explore  claude  3 turns  running · look around",
+      "explore  codex  3 turns  running · look around",
+    ],
+  );
+});
+
 test("INV-10: the widget observes runtime state without determining it", () => {
   const line = stripVTControlCharacters(
     formatRunLine(view({ status: "completed" }), theme, 120),

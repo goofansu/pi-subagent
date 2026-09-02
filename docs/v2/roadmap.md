@@ -1,6 +1,6 @@
 # pi-subagent v2 roadmap
 
-**Status:** Proposed  
+**Status:** Accepted. **M0 is complete** (2026-09-02); M1 is next.  
 **Strategy:** Rewrite the execution architecture inside the existing `pi-subagent` product  
 **Delivery model:** Gate-driven milestones, not a date-driven big-bang rewrite
 
@@ -86,7 +86,7 @@ flowchart TD
 
 | Milestone | Primary outcome                                    | Gate                                                             |
 | --------- | -------------------------------------------------- | ---------------------------------------------------------------- |
-| M0        | v1 behavior is captured; v2 compiles independently | Baseline CI and compatibility matrix are green                   |
+| M0 ✅     | v1 behavior is captured; v2 compiles independently | Baseline CI and compatibility matrix are green — **passed**, see [the M0 exit gate](m0-exit-gate.md) |
 | M1        | Plain domain kernel and two fake backends          | Lifecycle behavior is demonstrable without a provider SDK        |
 | M2        | Scoped Effect supervisor and central projection    | All lifecycle and race tests pass against fakes                  |
 | M3        | Complete fake-backed product vertical slice        | Actual host handlers, UI, delivery, and shutdown work end to end |
@@ -98,6 +98,10 @@ flowchart TD
 ## 5. Milestone details
 
 ### M0 — Freeze, baseline, and v2 skeleton
+
+**Status: complete (2026-09-02).** Every deliverable below landed; the
+verification is recorded in [the M0 exit gate](m0-exit-gate.md), which links
+every artifact.
 
 **Purpose:** Turn v1 into an executable behavioral specification and create a clean construction site for v2.
 
@@ -126,7 +130,7 @@ Deliverables:
   - lifecycle machinery to rewrite;
   - obsolete and removable.
 - Record architecture decisions for terminology, scope ownership, observation ordering, terminal settlement, control admission, and usage normalization.
-- Decide how any existing public/profile `harness` field migrates to `backend`: preserve it as a deprecated boundary alias or make a documented configuration migration. Do not leak the old name into the v2 core.
+- Decide how any existing public/profile `harness` field migrates to `backend`: preserve it as a deprecated boundary alias or make a documented configuration migration. Do not leak the old name into the v2 core. **Decided: a documented configuration migration with no alias** — [ADR-0022](../adr/0022-v2-terminology-and-backend-field.md), [migration note](profile-backend-field-migration.md). The old name is kept out of the v2 tree by a check in `extensions/subagent-v2/boundaries.test.ts`.
 - Specify public operation semantics before implementation:
   - failed start admission creates no public Run, never reuses allocated IDs, and releases every scope, capacity reservation, and retained native resource;
   - start/resume admission atomically enforces global capacity and one active Run per Subagent;
@@ -136,7 +140,7 @@ Deliverables:
   - aborting `agent_wait` does not cancel its Run;
   - a full control mailbox returns an immediate typed result rather than blocking;
   - requesting an evicted result returns a distinct typed outcome rather than `unknown run`.
-- Select and pin one exact Effect v4 version after a small compatibility spike.
+- Select and pin one exact Effect v4 version after a small compatibility spike. **Pinned: `effect@4.0.0-rc.112`** — [spike findings](effect-compatibility-spike.md).
 - Add dependency rules preventing v2 runtime code from importing v1 lifecycle code.
 
 Recommended reuse candidates:
@@ -158,13 +162,34 @@ Rewrite rather than reuse:
 - Provider Attempt cancellation and cleanup.
 - Session shutdown machinery.
 
-**Exit gate:**
+**Exit gate — all items passed. Verification: [M0 exit gate](m0-exit-gate.md).**
 
-- v1 baseline tests are green.
-- The compatibility matrix has an explicit expected outcome for every command and backend capability.
-- All three backend spikes confirm that the proposed Subagent-scoped/Run-scoped ownership model is viable, or any exception is captured as an ADR before the core contract is implemented.
-- v2 builds and runs a placeholder extension without importing v1 runtime modules.
-- The selected Effect version is exact-pinned and the initial primitive set compiles.
+- ✅ v1 baseline tests are green. [Freeze policy and recorded baseline](freeze.md).
+- ✅ The compatibility matrix has an explicit expected outcome for every command and backend capability. [Compatibility matrix](compatibility-matrix.md), with [public operation semantics](operation-semantics.md).
+- ✅ All three backend spikes confirm that the proposed Subagent-scoped/Run-scoped ownership model is viable, or any exception is captured as an ADR before the core contract is implemented. [Pi](spikes/pi-backend-api-risk.md), [Claude](spikes/claude-backend-api-risk.md), [Codex](spikes/codex-backend-api-risk.md); exceptions carried into [ADR-0023](../adr/0023-v2-scope-ownership.md), [ADR-0024](../adr/0024-v2-observation-ordering.md), and [ADR-0027](../adr/0027-v2-usage-normalization.md).
+- ✅ v2 builds and runs a placeholder extension without importing v1 runtime modules. `extensions/subagent-v2/`, enforced by `extensions/subagent-v2/boundaries.test.ts`.
+- ✅ The selected Effect version is exact-pinned and the initial primitive set compiles. [Effect compatibility spike](effect-compatibility-spike.md).
+
+**M0 artifacts:**
+
+| Artifact | Where |
+| --- | --- |
+| Freeze policy and recorded baseline | [`freeze.md`](freeze.md) |
+| Public compatibility matrix | [`compatibility-matrix.md`](compatibility-matrix.md) |
+| Public operation semantics | [`operation-semantics.md`](operation-semantics.md) |
+| Effect compatibility spike and pin | [`effect-compatibility-spike.md`](effect-compatibility-spike.md) |
+| Pi backend API-risk spike | [`spikes/pi-backend-api-risk.md`](spikes/pi-backend-api-risk.md) |
+| Claude backend API-risk spike | [`spikes/claude-backend-api-risk.md`](spikes/claude-backend-api-risk.md) |
+| Codex backend API-risk spike | [`spikes/codex-backend-api-risk.md`](spikes/codex-backend-api-risk.md) |
+| v1 knowledge inventory | [`v1-inventory.md`](v1-inventory.md) |
+| Profile backend field migration | [`profile-backend-field-migration.md`](profile-backend-field-migration.md) |
+| ADR — v2 terminology and the Profile backend field | [`../adr/0022-v2-terminology-and-backend-field.md`](../adr/0022-v2-terminology-and-backend-field.md) |
+| ADR — v2 scope ownership | [`../adr/0023-v2-scope-ownership.md`](../adr/0023-v2-scope-ownership.md) |
+| ADR — v2 observation ordering | [`../adr/0024-v2-observation-ordering.md`](../adr/0024-v2-observation-ordering.md) |
+| ADR — v2 terminal settlement | [`../adr/0025-v2-terminal-settlement.md`](../adr/0025-v2-terminal-settlement.md) |
+| ADR — v2 control admission | [`../adr/0026-v2-control-admission.md`](../adr/0026-v2-control-admission.md) |
+| ADR — v2 usage normalization | [`../adr/0027-v2-usage-normalization.md`](../adr/0027-v2-usage-normalization.md) |
+| v2 glossary section | [`../../CONTEXT.md`](../../CONTEXT.md) |
 
 ### M1 — Domain kernel and fake backends
 

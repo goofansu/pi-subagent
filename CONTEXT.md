@@ -284,3 +284,59 @@ every unlanded notification, clears the Result store, releases live display
 state, and forgets local Subagent and Run identities. A late settlement cannot
 move a closed Subagent to idle or notify the next Session. The next Session's
 model never started these Runs and has no context to act on their answers.
+
+## v2 vocabulary
+
+Everything above describes v1, which is frozen (see
+[`docs/v2/freeze.md`](docs/v2/freeze.md)). The rewrite in
+`extensions/subagent-v2/` uses the vocabulary below from its first line of code.
+Where a v2 term replaces a v1 one, the v1 term stays valid for v1 and is deleted
+with it at milestone M7. The decision is
+[ADR-0022](docs/adr/0022-v2-terminology-and-backend-field.md).
+
+**Backend** — the identity of Pi, Claude, or Codex. `BackendId` is its type.
+Replaces v1's **Harness** as the name for a named provider integration.
+
+**Adapter** — the integration boundary that implements one backend. Provider
+wire objects never cross it. v1 already uses this word for the object a Harness
+prepares; v2 uses it for the whole module.
+
+**BackendAgent** — the adapter-owned retained native conversation, session, or
+process. Owned by exactly one Subagent Scope and alive for that Subagent's whole
+life. v1 has no single word for this: it is the retained Pi SDK session, the
+retained Claude Conversation identity, and the retained Codex App Server process
+plus its ephemeral root, described separately.
+
+**SubagentId** — the stable logical specialist the product exposes. v1 calls it
+the Subagent id.
+
+**RunId** — one public `start` or `resume` operation. v1 calls it the Run id.
+
+**Attempt** — adapter-internal vocabulary for native execution details and
+retries. In v2 this is explicitly *not* a core product type and never appears in
+a core signature; in v1 it is a documented domain term (see **Attempt** above).
+
+**Scope** — an Effect resource lifetime. v2 nests them Session → Subagent → Run
+→ native execution, and closing one releases everything beneath it. This
+replaces v1's hand-ordered shutdown machinery.
+[ADR-0023](docs/adr/0023-v2-scope-ownership.md).
+
+**Observation** — the neutral record of something a backend witnessed, ordered
+and lossless within a Run. Replaces v1's **Fact**.
+[ADR-0024](docs/adr/0024-v2-observation-ordering.md).
+
+**AgentHarness** — reserved for Pi's own native abstraction. v2 never uses it
+for anything of ours.
+
+### v1-only terms, scheduled for deletion at M7
+
+**Harness**, **Executor**, **Dispatcher**, **Registry**, and **Subagent
+manager** name v1 modules and seams that v2 does not have. They remain correct
+for v1 and must not be used in v2 code, plans, or documents.
+
+### Configuration
+
+A v2 Profile names its backend with `backend:`, not v1's field. The values are
+unchanged and the default is still `pi`. The migration is a documented rename
+with no alias and no tool; see
+[`docs/v2/profile-backend-field-migration.md`](docs/v2/profile-backend-field-migration.md).

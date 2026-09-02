@@ -5,6 +5,12 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import {
+  listSourceFiles,
+  readImportSpecifiers,
+  resolveRelativeSource,
+  writeSourceFile,
+} from "../../tools/import-specifiers.ts";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const forbiddenPackages = new Set([
@@ -25,71 +31,6 @@ const piSessionSymbols = new Set([
   "createBashToolDefinition",
   "withFileMutationQueue",
 ]);
-
-/** Read module specifiers from syntax, not arbitrary strings or comments. */
-function readImportSpecifiers(source: string): string[] {
-  const sourceFile = ts.createSourceFile(
-    "boundary-fixture.ts",
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
-  const specifiers: string[] = [];
-  const add = (node: ts.StringLiteralLike | undefined): void => {
-    if (node) specifiers.push(node.text);
-  };
-  const staticString = (
-    node: ts.Node | undefined,
-  ): node is ts.StringLiteralLike =>
-    Boolean(
-      node &&
-        (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)),
-    );
-  const isRequireCallee = (node: ts.Expression): boolean =>
-    (ts.isIdentifier(node) && node.text === "require") ||
-    (ts.isPropertyAccessExpression(node) && node.name.text === "require") ||
-    (ts.isElementAccessExpression(node) &&
-      staticString(node.argumentExpression) &&
-      node.argumentExpression.text === "require");
-
-  const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node)) {
-      add(
-        ts.isStringLiteral(node.moduleSpecifier)
-          ? node.moduleSpecifier
-          : undefined,
-      );
-    } else if (ts.isExportDeclaration(node)) {
-      add(
-        node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)
-          ? node.moduleSpecifier
-          : undefined,
-      );
-    } else if (ts.isImportEqualsDeclaration(node)) {
-      const reference = node.moduleReference;
-      add(
-        ts.isExternalModuleReference(reference) &&
-          ts.isStringLiteral(reference.expression)
-          ? reference.expression
-          : undefined,
-      );
-    } else if (
-      ts.isCallExpression(node) &&
-      node.expression.kind === ts.SyntaxKind.ImportKeyword
-    ) {
-      const [argument] = node.arguments;
-      add(argument && staticString(argument) ? argument : undefined);
-    } else if (ts.isCallExpression(node) && isRequireCallee(node.expression)) {
-      const [argument] = node.arguments;
-      add(argument && staticString(argument) ? argument : undefined);
-    }
-    ts.forEachChild(node, visit);
-  };
-
-  visit(sourceFile);
-  return specifiers;
-}
 
 /** Find Pi Conversation/session symbols even when imports are type-only or aliased. */
 function readPiSessionSymbolImports(source: string): string[] {
@@ -153,46 +94,8 @@ function readPiSessionSymbolImports(source: string): string[] {
   return found;
 }
 
-function resolveSourceFile(
-  importer: string,
-  specifier: string,
-): string | undefined {
-  if (!specifier.startsWith(".")) return undefined;
-  const base = path.resolve(path.dirname(importer), specifier);
-  const candidates = [
-    base,
-    `${base}.ts`,
-    `${base}.tsx`,
-    path.join(base, "index.ts"),
-  ];
-  return candidates.find((candidate) => {
-    try {
-      return fs.statSync(candidate).isFile();
-    } catch {
-      return false;
-    }
-  });
-}
-
 function describe(file: string, graphRoot: string): string {
   return path.relative(graphRoot, file) || file;
-}
-
-function listProductionSources(dir: string): string[] {
-  const files: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name.startsWith(".")) continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === "node_modules") continue;
-      files.push(...listProductionSources(full));
-      continue;
-    }
-    if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
-      files.push(full);
-    }
-  }
-  return files;
 }
 
 type AdapterOwner = "claude" | "pi" | "codex" | "other";
@@ -218,12 +121,6 @@ function isHarnessAdapter(file: string, graphRoot: string): boolean {
   );
 }
 
-function writeSource(rootDir: string, relative: string, source: string): void {
-  const dest = path.join(rootDir, relative);
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.writeFileSync(dest, source);
-}
-
 /**
  * Walk a source root with the same production parser and resolver used below.
  * A root parameter lets the regression test supply a disposable graph without
@@ -236,7 +133,7 @@ function writeSource(rootDir: string, relative: string, source: string): void {
  * - adapters must not import a foreign backend directory or another backend's wire
  */
 export function findForbiddenImports(graphRoot: string = root): string[] {
-  const sourceFiles = listProductionSources(graphRoot);
+  const sourceFiles = listSourceFiles(graphRoot, { includeTests: false });
   const adapterPaths = new Set(
     sourceFiles.filter(
       (file) => adapterOwnership(file, graphRoot) !== undefined,
@@ -248,7 +145,7 @@ export function findForbiddenImports(graphRoot: string = root): string[] {
   const allowedCompositionImports = new Set(
     fs.existsSync(compositionRoot)
       ? readImportSpecifiers(fs.readFileSync(compositionRoot, "utf8"))
-          .map((specifier) => resolveSourceFile(compositionRoot, specifier))
+          .map((specifier) => resolveRelativeSource(compositionRoot, specifier))
           .filter((file): file is string => file !== undefined)
           .filter((file) => adapterPaths.has(file))
           .filter((file) => isHarnessAdapter(file, graphRoot))
@@ -287,7 +184,7 @@ export function findForbiddenImports(graphRoot: string = root): string[] {
         continue;
       }
 
-      const target = resolveSourceFile(adapter, specifier);
+      const target = resolveRelativeSource(adapter, specifier);
       if (
         target &&
         adapterPaths.has(target) &&
@@ -324,7 +221,7 @@ export function findForbiddenImports(graphRoot: string = root): string[] {
         continue;
       }
 
-      const target = resolveSourceFile(file, specifier);
+      const target = resolveRelativeSource(file, specifier);
       if (!target) continue;
       if (adapterPaths.has(target)) {
         if (file === compositionRoot && allowedCompositionImports.has(target)) {
@@ -359,7 +256,7 @@ test("no-substitution imports and static property requires are checked", (t) => 
     path.join(os.tmpdir(), "pi-subagent-boundary-static-forms-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "runner.ts",
     [
@@ -368,7 +265,7 @@ test("no-substitution imports and static property requires are checked", (t) => 
       'module["require"]("./harnesses/codex/harness.ts");',
     ].join("\n"),
   );
-  writeSource(fixtureRoot, "harnesses/codex/harness.ts", "export {};");
+  writeSourceFile(fixtureRoot, "harnesses/codex/harness.ts", "export {};");
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), [
     "runner.ts imports forbidden harness adapter harnesses/codex/harness.ts",
@@ -382,12 +279,12 @@ test("static CommonJS require edges are checked like imports", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-require-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "runner.ts",
     'const adapter = require("./harnesses/codex/harness.ts");\nvoid adapter;\n',
   );
-  writeSource(fixtureRoot, "harnesses/codex/harness.ts", "export {};\n");
+  writeSourceFile(fixtureRoot, "harnesses/codex/harness.ts", "export {};\n");
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), [
     "runner.ts imports forbidden harness adapter harnesses/codex/harness.ts",
@@ -399,13 +296,13 @@ test("adapter discovery follows the harnesses directory", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-codex-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "composition.ts",
     'import "./harnesses/codex/harness.ts";\n',
   );
-  writeSource(fixtureRoot, "harnesses/codex/harness.ts", "export {};\n");
-  writeSource(
+  writeSourceFile(fixtureRoot, "harnesses/codex/harness.ts", "export {};\n");
+  writeSourceFile(
     fixtureRoot,
     "runner.ts",
     'import "./harnesses/codex/harness.ts";\n',
@@ -421,8 +318,8 @@ test("a root file named like an adapter is still core", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-root-name-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(fixtureRoot, "runner.ts", 'import "./codex-harness.ts";\n');
-  writeSource(fixtureRoot, "codex-harness.ts", "export {};\n");
+  writeSourceFile(fixtureRoot, "runner.ts", 'import "./codex-harness.ts";\n');
+  writeSourceFile(fixtureRoot, "codex-harness.ts", "export {};\n");
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), []);
 });
@@ -432,8 +329,12 @@ test("the production graph checker catches a controlled forbidden adapter edge",
     path.join(os.tmpdir(), "pi-subagent-boundary-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(fixtureRoot, "runner.ts", 'import "./harnesses/pi/agent.ts";\n');
-  writeSource(fixtureRoot, "harnesses/pi/agent.ts", "export {};\n");
+  writeSourceFile(
+    fixtureRoot,
+    "runner.ts",
+    'import "./harnesses/pi/agent.ts";\n',
+  );
+  writeSourceFile(fixtureRoot, "harnesses/pi/agent.ts", "export {};\n");
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), [
     "runner.ts imports forbidden harness adapter harnesses/pi/agent.ts",
@@ -445,7 +346,7 @@ test("core-to-SDK package edges are forbidden too", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-sdk-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "runner.ts",
     'import "@anthropic-ai/claude-agent-sdk";\n',
@@ -461,7 +362,7 @@ test("Pi SDK session types and symbols are confined to the Pi adapter", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-pi-sdk-symbols-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "runner.ts",
     [
@@ -483,7 +384,7 @@ test("a foreign adapter cannot import Pi SDK session construction", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-foreign-pi-sdk-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "harnesses/claude/harness.ts",
     'import { createAgentSession } from "@earendil-works/pi-coding-agent";\n',
@@ -499,12 +400,12 @@ test("each named adapter may import only its owned wire", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-owned-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "harnesses/claude/harness.ts",
     'import "@anthropic-ai/claude-agent-sdk";\n',
   );
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "harnesses/pi/agent.ts",
     'import "@earendil-works/pi-ai";\n',
@@ -518,17 +419,17 @@ test("crossed Claude and Pi adapter wire imports are rejected", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-crossed-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "composition.ts",
     'import "./harnesses/claude/harness.ts"; import "./harnesses/pi/harness.ts";\n',
   );
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "harnesses/claude/harness.ts",
     'import "@earendil-works/pi-ai";\n',
   );
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "harnesses/pi/harness.ts",
     'import "@anthropic-ai/claude-agent-sdk";\n',
@@ -545,12 +446,12 @@ test("core cannot import the Codex App Server transport", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-codex-transport-core-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "runner.ts",
     'import "./harnesses/codex/app-server.ts";\n',
   );
-  writeSource(fixtureRoot, "harnesses/codex/app-server.ts", "export {};\n");
+  writeSourceFile(fixtureRoot, "harnesses/codex/app-server.ts", "export {};\n");
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), [
     "runner.ts imports forbidden harness adapter harnesses/codex/app-server.ts",
@@ -562,12 +463,12 @@ test("a foreign Claude adapter cannot import the Codex transport", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-codex-transport-claude-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "harnesses/claude/harness.ts",
     'import "../codex/app-server.ts";\n',
   );
-  writeSource(fixtureRoot, "harnesses/codex/app-server.ts", "export {};\n");
+  writeSourceFile(fixtureRoot, "harnesses/codex/app-server.ts", "export {};\n");
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), [
     "harnesses/claude/harness.ts imports forbidden foreign adapter harnesses/codex/app-server.ts",
@@ -579,18 +480,18 @@ test("Attempt modules remain internal to their owning provider adapter", (t) => 
     path.join(os.tmpdir(), "pi-subagent-boundary-attempt-ownership-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "runner.ts",
     'import "./harnesses/codex/attempt.ts";\n',
   );
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "harnesses/claude/harness.ts",
     'import "../pi/attempt.ts";\n',
   );
-  writeSource(fixtureRoot, "harnesses/codex/attempt.ts", "export {};\n");
-  writeSource(fixtureRoot, "harnesses/pi/attempt.ts", "export {};\n");
+  writeSourceFile(fixtureRoot, "harnesses/codex/attempt.ts", "export {};\n");
+  writeSourceFile(fixtureRoot, "harnesses/pi/attempt.ts", "export {};\n");
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), [
     "harnesses/claude/harness.ts imports forbidden foreign adapter harnesses/pi/attempt.ts",
@@ -603,12 +504,12 @@ test("an unclassified adapter cannot import the Codex transport", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-codex-transport-other-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "harnesses/mystery/harness.ts",
     'import "../codex/app-server.ts";\n',
   );
-  writeSource(fixtureRoot, "harnesses/codex/app-server.ts", "export {};\n");
+  writeSourceFile(fixtureRoot, "harnesses/codex/app-server.ts", "export {};\n");
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), [
     "harnesses/mystery/harness.ts imports forbidden foreign adapter harnesses/codex/app-server.ts",
@@ -620,17 +521,17 @@ test("the Codex harness may import its Codex-owned transport", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-codex-transport-owned-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "composition.ts",
     'import "./harnesses/codex/harness.ts";\n',
   );
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "harnesses/codex/harness.ts",
     'import "./app-server.ts";\n',
   );
-  writeSource(fixtureRoot, "harnesses/codex/app-server.ts", "export {};\n");
+  writeSourceFile(fixtureRoot, "harnesses/codex/app-server.ts", "export {};\n");
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), []);
 });
@@ -643,12 +544,12 @@ test("composition cannot register the Codex transport directly", (t) => {
     ),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "composition.ts",
     'import "./harnesses/codex/app-server.ts";\n',
   );
-  writeSource(fixtureRoot, "harnesses/codex/app-server.ts", "export {};\n");
+  writeSourceFile(fixtureRoot, "harnesses/codex/app-server.ts", "export {};\n");
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), [
     "composition.ts imports forbidden harness adapter harnesses/codex/app-server.ts",
@@ -660,7 +561,7 @@ test("an unclassified adapter cannot import either wire", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-other-adapter-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "harnesses/mystery/harness.ts",
     'import "@earendil-works/pi-ai"; import "@anthropic-ai/claude-agent-sdk";\n',
@@ -677,13 +578,17 @@ test("only the composition registration edge may import adapters", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-composition-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "composition.ts",
     'import "./harnesses/pi/harness.ts";\n',
   );
-  writeSource(fixtureRoot, "index.ts", 'import "./harnesses/pi/harness.ts";\n');
-  writeSource(fixtureRoot, "harnesses/pi/harness.ts", "export {};\n");
+  writeSourceFile(
+    fixtureRoot,
+    "index.ts",
+    'import "./harnesses/pi/harness.ts";\n',
+  );
+  writeSourceFile(fixtureRoot, "harnesses/pi/harness.ts", "export {};\n");
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), [
     "index.ts imports forbidden harness adapter harnesses/pi/harness.ts",
@@ -695,8 +600,12 @@ test("core may import the shared harness contract", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-contract-core-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(fixtureRoot, "runner.ts", 'import "./harnesses/contract.ts";\n');
-  writeSource(fixtureRoot, "harnesses/contract.ts", "export {};\n");
+  writeSourceFile(
+    fixtureRoot,
+    "runner.ts",
+    'import "./harnesses/contract.ts";\n',
+  );
+  writeSourceFile(fixtureRoot, "harnesses/contract.ts", "export {};\n");
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), []);
 });
@@ -706,12 +615,12 @@ test("the shared harness contract cannot import adapters", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-contract-adapter-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "harnesses/contract.ts",
     'import "./pi/harness.ts";\n',
   );
-  writeSource(fixtureRoot, "harnesses/pi/harness.ts", "export {};\n");
+  writeSourceFile(fixtureRoot, "harnesses/pi/harness.ts", "export {};\n");
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), [
     "harnesses/contract.ts imports forbidden harness adapter harnesses/pi/harness.ts",
@@ -723,17 +632,17 @@ test("adapters may import the shared harness contract", (t) => {
     path.join(os.tmpdir(), "pi-subagent-boundary-adapter-contract-"),
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "composition.ts",
     'import "./harnesses/pi/harness.ts";\n',
   );
-  writeSource(
+  writeSourceFile(
     fixtureRoot,
     "harnesses/pi/harness.ts",
     'import "../contract.ts";\n',
   );
-  writeSource(fixtureRoot, "harnesses/contract.ts", "export {};\n");
+  writeSourceFile(fixtureRoot, "harnesses/contract.ts", "export {};\n");
 
   assert.deepEqual(findForbiddenImports(fixtureRoot), []);
 });
