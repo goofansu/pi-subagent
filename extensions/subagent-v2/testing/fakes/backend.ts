@@ -25,6 +25,7 @@ import type {
   Backend,
   BackendAgent,
   BackendCapabilities,
+  BackendOpenFailure,
   ExecutionIO,
   ResumeAdmission,
   RunInput,
@@ -38,6 +39,7 @@ import {
   type Profile,
   type ProfileDiagnostic,
   type RunObservation,
+  redactedDiagnostic,
   type TranscriptItem,
   usageDelta,
 } from "../../domain/index.ts";
@@ -45,7 +47,11 @@ import {
   createResourceCounters,
   type ResourceCountersSnapshot,
 } from "./counters.ts";
-import type { CumulativeUsage, FakeRunScript } from "./script.ts";
+import type {
+  CumulativeUsage,
+  FakeOpenScript,
+  FakeRunScript,
+} from "./script.ts";
 
 const CUMULATIVE_FIELDS = [
   "input",
@@ -66,6 +72,8 @@ const EMPTY_CUMULATIVE: CumulativeTotals = {
 export interface FakeBackendOptions {
   /** One script per Run, consumed in order. */
   readonly scripts: readonly FakeRunScript[];
+  /** How the fake behaves when it is opened. Succeeds unless a test says so. */
+  readonly open?: FakeOpenScript;
   /** Gates the scripts wait on, owned and completed by the test. */
   readonly gates?: Readonly<Record<string, Deferred.Deferred<void>>>;
   /** A shared ordering log. The fake appends its own lifecycle events. */
@@ -293,6 +301,22 @@ function createFakeBackend(
               yield* Effect.never;
               break;
             }
+            case "hang-in-finalizer": {
+              // Acquired now, released never. Closing the execution scope
+              // waits on this forever, which is what the cleanup budget and
+              // its escalation are for.
+              yield* Effect.acquireRelease(
+                Effect.sync(() => {
+                  trace.push(`finalizer-armed:${input.runId}`);
+                }),
+                () =>
+                  Effect.gen(function* () {
+                    trace.push(`finalizer-hanging:${input.runId}`);
+                    yield* Effect.never;
+                  }),
+              );
+              break;
+            }
             case "lose-conversation": {
               conversationLost = true;
               break;
@@ -319,19 +343,41 @@ function createFakeBackend(
     };
   };
 
+  const openScript: FakeOpenScript = options.open ?? { open: "succeeds" };
+
   const backend: Backend = {
     id: options.id ?? backendId("fake"),
     validateProfile: (profile, filePath) =>
       options.diagnose?.(profile, filePath) ?? [],
-    open: () =>
-      Effect.acquireRelease(
-        Effect.sync(() => {
-          counters.opened();
-          trace.push("agent-opened");
-          return openAgent();
-        }),
-        (agent) => agent.close(),
-      ),
+    open: (): Effect.Effect<
+      BackendAgent,
+      BackendOpenFailure,
+      import("effect").Scope.Scope
+    > =>
+      Effect.gen(function* () {
+        if (openScript.open === "fails") {
+          trace.push(`agent-open-failed:${openScript.reason}`);
+          // The reason is the fake's own provider text, and it stops here.
+          // What crosses is the category, exactly as a real adapter's would.
+          return yield* Effect.fail<BackendOpenFailure>({
+            diagnostic: redactedDiagnostic("backend-failure"),
+          });
+        }
+        if (openScript.open === "hangs") {
+          trace.push("agent-open-hanging");
+          yield* openScript.gate === undefined
+            ? Effect.never
+            : Deferred.await(gate(openScript.gate));
+        }
+        return yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            counters.opened();
+            trace.push("agent-opened");
+            return openAgent();
+          }),
+          (agent) => agent.close(),
+        );
+      }),
   };
 
   return {

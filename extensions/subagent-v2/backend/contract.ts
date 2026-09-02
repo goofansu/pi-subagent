@@ -31,9 +31,16 @@
  *   anyway, or dies, is classified by the caller as failed with a
  *   `backend-failure` diagnostic and its partial observations retained.
  *
+ * `open` is different from an execution and has a typed failure channel, which
+ * ADR-0030 added after ADR-0028 deferred it. An open that fails has produced
+ * no Run to report through, and inventing one — a public Run id, a failed
+ * result, and a completion Notification for work that never started — is
+ * exactly what operation semantics section 1 forbids.
+ *
  * See docs/adr/0023-v2-scope-ownership.md,
- * docs/adr/0025-v2-terminal-settlement.md, and
- * docs/adr/0026-v2-control-admission.md.
+ * docs/adr/0025-v2-terminal-settlement.md,
+ * docs/adr/0026-v2-control-admission.md, and
+ * docs/adr/0030-v2-backend-open-failure.md.
  */
 
 import type { Effect, Scope } from "effect";
@@ -41,12 +48,33 @@ import type {
   BackendId,
   Profile,
   ProfileDiagnostic,
+  RunDiagnostic,
   RunEnding,
   RunId,
   RunObservation,
   SubagentContext,
   TerminalReconciliation,
 } from "../domain/index.ts";
+
+/**
+ * Why a BackendAgent could not be opened.
+ *
+ * Exactly one field, and it is a {@link RunDiagnostic} the adapter has already
+ * redacted. Provider text never crosses: an open failure is usually the
+ * provider's own error string, and that string is the one thing about a failed
+ * open that is guaranteed to be free-form and untrustworthy. What the caller
+ * needs is the category — `backend-failure` — and the caller is what turns
+ * this into the public `backend unavailable` outcome.
+ *
+ * There is deliberately no place to put a cause, an exit code, a retry hint,
+ * or a provider payload. A type-level test asserts the field list.
+ */
+export interface BackendOpenFailure {
+  readonly diagnostic: RunDiagnostic;
+}
+
+/** The member names of {@link BackendOpenFailure}, as data for the shape test. */
+export const BACKEND_OPEN_FAILURE_MEMBERS = ["diagnostic"] as const;
 
 /**
  * What a backend may consult while validating a Profile.
@@ -165,11 +193,6 @@ export interface BackendAgent {
 
 /**
  * One named backend, for the life of the Session.
- *
- * `open` has no failure channel in M1. A backend whose provider I/O fails
- * while opening reports it through its first execution's `failed` ending,
- * which the unopened-BackendAgent state already makes natural. Adding a typed
- * failure channel later is a visible contract change the shape test guards.
  */
 export interface Backend {
   readonly id: BackendId;
@@ -194,7 +217,7 @@ export interface Backend {
   readonly open: (
     profile: Profile,
     subagent: SubagentContext,
-  ) => Effect.Effect<BackendAgent, never, Scope.Scope>;
+  ) => Effect.Effect<BackendAgent, BackendOpenFailure, Scope.Scope>;
 }
 
 /**

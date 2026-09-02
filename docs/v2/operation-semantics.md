@@ -22,8 +22,8 @@ milestone M0.
 ## 1. Failed start admission allocates nothing
 
 `agent_start` and `agent_resume` admit before they allocate. Admission is the
-single synchronous decision point; everything that happens after it belongs to
-a public Run.
+single synchronous decision point for everything that can be decided without
+provider I/O; everything that happens after it belongs to a public Run.
 
 When admission fails:
 
@@ -39,9 +39,30 @@ When admission fails:
 - **No Notification is emitted**, because no Run existed to complete.
 
 Rejection reasons a caller can observe from `agent_start`: unknown agent,
-invalid profile, at capacity, shutting down, delegation-depth exceeded.
+invalid profile, at capacity, shutting down, delegation-depth exceeded,
+`backend unavailable`.
 From `agent_resume`: unknown Subagent, Subagent already running, resume
 unsupported by the backend, Conversation loss, at capacity, shutting down.
+
+### `agent_start` awaits the backend opening
+
+`agent_start` has one step that admission cannot decide, because it is the one
+step that talks to a provider: opening the Subagent's BackendAgent. The call
+therefore returns only after that open has either succeeded or failed, and it
+is bounded by an **open budget** so a backend that hangs while opening cannot
+hold the caller.
+
+`backend unavailable` is what the caller observes when the open fails or
+exceeds its budget. It carries the backend's redacted diagnostic and **no Run
+id**, and everything above still holds: no public Run, no Notification,
+capacity and result reservations released, the Subagent Scope closed, and the
+identifiers that were allocated left spent. A caller never holds an id for work
+that never began.
+
+`agent_resume` has no such outcome, because resume reuses the BackendAgent its
+Subagent already holds and opens nothing.
+
+See [ADR-0030](../adr/0030-v2-backend-open-failure.md).
 
 **Difference from v1.** v1 already creates no Run and reuses no identifier when
 `agent_resume` is rejected (`subagents.ts` returns before dispatch; `runs.ts`
@@ -49,6 +70,13 @@ keeps `issuedIds` spent until Session reset). v1 has no global capacity, so it
 has no at-capacity rejection at all, and `agent_start` throws on an unknown
 agent rather than returning a typed outcome. v2 makes at-capacity a typed
 rejection and folds the unknown-agent throw into the same typed shape.
+
+v1 `agent_start` also **returns before any provider work**: it creates the Run
+and dispatches it, and a backend that cannot start is discovered later and
+reported as that Run failing. v2 returns after the open instead, so a start
+that could never have run is a rejection rather than a Run with a Result and a
+Notification for work that never happened. This is an intentional change, and
+the reason it is worth the wait is recorded in ADR-0030.
 
 ---
 

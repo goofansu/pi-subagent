@@ -62,12 +62,36 @@ export type FakeStep =
   | { readonly step: "defect"; readonly message: string }
   /** Never finish. Only interruption ends this execution. */
   | { readonly step: "hang" }
+  /**
+   * Make the execution scope's finalizer never finish.
+   *
+   * A real adapter can do this by waiting on a provider teardown that never
+   * comes. It is what the cleanup budget and its escalation exist for, so the
+   * fakes need a way to produce it.
+   */
+  | { readonly step: "hang-in-finalizer" }
   /** From now on, this conversation cannot be resumed. */
   | { readonly step: "lose-conversation" };
 
 export interface FakeRunScript {
   readonly steps: readonly FakeStep[];
 }
+
+/**
+ * How the fake behaves when it is opened.
+ *
+ * `open` is the one part of the contract with a typed failure channel, so it
+ * needs its own script rather than a step: nothing about a Run has happened
+ * yet, and the two failure modes — refusing and hanging — are both things a
+ * real provider does before there is anything to run.
+ */
+export type FakeOpenScript =
+  /** Open normally. The default. */
+  | { readonly open: "succeeds" }
+  /** Refuse to open, with a reason the adapter would have redacted. */
+  | { readonly open: "fails"; readonly reason: string }
+  /** Block until the named gate completes, or until interruption. */
+  | { readonly open: "hangs"; readonly gate?: string };
 
 /** One script per Run, in order. */
 export function scripts(

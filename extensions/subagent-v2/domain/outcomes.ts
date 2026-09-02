@@ -14,6 +14,7 @@
  * agreed to.
  */
 
+import type { RunDiagnostic } from "./diagnostics.ts";
 import type { RunId, SubagentId } from "./ids.ts";
 import type { TerminalRunPhase } from "./phases.ts";
 import type { ProfileDiagnostic } from "./profile.ts";
@@ -29,8 +30,15 @@ export function alreadyTerminal(status: TerminalRunPhase): AlreadyTerminal {
 /**
  * `agent_start`.
  *
- * Admission is the single synchronous decision point: a rejection allocates
- * nothing, creates no public Run, and spends no identifier.
+ * Admission is the single synchronous decision point for everything that can
+ * be decided without provider I/O: a rejection allocates nothing and creates
+ * no public Run. Identifiers allocated for a start that then fails at open
+ * stay spent, because no identifier is ever reused.
+ *
+ * `backend unavailable` is the one rejection that happens *after* admission,
+ * because opening a BackendAgent is the one part of starting that talks to a
+ * provider. It carries the backend's redacted diagnostic and no Run id: a
+ * caller must never hold an id for work that never started. See ADR-0030.
  */
 export type StartOutcome =
   | {
@@ -48,10 +56,17 @@ export type StartOutcome =
   | {
       readonly outcome: "delegation-depth exceeded";
       readonly depth: number;
+    }
+  | {
+      readonly outcome: "backend unavailable";
+      readonly diagnostic: RunDiagnostic;
     };
 
 /**
  * `agent_resume`.
+ *
+ * There is no `backend unavailable` here, and the absence is the rule: resume
+ * reuses the BackendAgent its Subagent already holds, so it opens nothing.
  *
  * `conversation lost` is what the semantics document calls Conversation loss,
  * spelled as ADR-0014 and the backend contract spell it so the outcome a
@@ -145,6 +160,7 @@ export const START_OUTCOMES = [
   "at capacity",
   "shutting down",
   "delegation-depth exceeded",
+  "backend unavailable",
 ] as const;
 
 export const RESUME_OUTCOMES = [

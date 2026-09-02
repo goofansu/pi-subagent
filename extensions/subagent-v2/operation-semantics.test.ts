@@ -82,6 +82,9 @@ const REQUIRED_PHRASES = [
   "mailbox closed",
   "already <status>",
   "shutting down",
+  // Added by ADR-0030. The union and the document have to gain it together,
+  // or this test fails — which is the point of it.
+  "backend unavailable",
 ] as const;
 
 test("the semantics document spells every phrase the milestone requires", () => {

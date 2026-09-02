@@ -50,7 +50,7 @@ test("every outcome union has exactly the members its name list declares", () =>
   assert.equal(proofs.length, 6);
 });
 
-test("start rejects with the five reasons the semantics document lists", () => {
+test("start rejects with the six reasons the semantics document lists", () => {
   assert.deepEqual(
     START_OUTCOMES.filter((name) => name !== "started"),
     [
@@ -59,8 +59,15 @@ test("start rejects with the five reasons the semantics document lists", () => {
       "at capacity",
       "shutting down",
       "delegation-depth exceeded",
+      // The one rejection that happens after admission, because opening a
+      // BackendAgent is the one part of starting that talks to a provider.
+      "backend unavailable",
     ],
   );
+});
+
+test("resume has no backend-unavailable outcome, because resume opens nothing", () => {
+  assert.equal(RESUME_OUTCOMES.includes("backend unavailable" as never), false);
 });
 
 test("resume rejects with the six reasons the semantics document lists", () => {

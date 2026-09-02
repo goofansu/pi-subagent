@@ -6,6 +6,7 @@ import {
   backendId,
   DEFAULT_BACKEND_ID,
   type Profile,
+  redactedDiagnostic,
   runId,
   type SubagentContext,
   subagentId,
@@ -16,9 +17,11 @@ import {
   BACKEND_AGENT_MEMBERS,
   BACKEND_CAPABILITY_MEMBERS,
   BACKEND_MEMBERS,
+  BACKEND_OPEN_FAILURE_MEMBERS,
   type Backend,
   type BackendAgent,
   type BackendCapabilities,
+  type BackendOpenFailure,
   CONTROL_FEED_MEMBERS,
   type ControlFeed,
   EXECUTION_IO_MEMBERS,
@@ -81,13 +84,22 @@ type ContractShapeIsExact = [
   Expect<
     Equals<keyof TerminalBundle, (typeof TERMINAL_BUNDLE_MEMBERS)[number]>
   >,
+  Expect<
+    Equals<
+      keyof BackendOpenFailure,
+      (typeof BACKEND_OPEN_FAILURE_MEMBERS)[number]
+    >
+  >,
   Expect<Equals<ResumeAdmission, (typeof RESUME_ADMISSIONS)[number]>>,
 ];
 
-/** `open` and `execute` both require a Scope, and neither can fail. */
+/**
+ * `open` and `execute` both require a Scope. Only `open` may fail, and the one
+ * thing it may fail with is the redacted diagnostic.
+ */
 type LifetimesAreInTheTypes = [
   Expect<Equals<Effect.Services<ReturnType<Backend["open"]>>, Scope.Scope>>,
-  Expect<Equals<Effect.Error<ReturnType<Backend["open"]>>, never>>,
+  Expect<Equals<Effect.Error<ReturnType<Backend["open"]>>, BackendOpenFailure>>,
   Expect<
     Equals<Effect.Services<ReturnType<BackendAgent["execute"]>>, Scope.Scope>
   >,
@@ -106,9 +118,10 @@ test("the three interfaces and the terminal bundle have exactly these members", 
     true,
     true,
     true,
+    true,
   ];
 
-  assert.equal(proofs.length, 8);
+  assert.equal(proofs.length, 9);
   assert.deepEqual([...BACKEND_MEMBERS], ["id", "validateProfile", "open"]);
   assert.deepEqual(
     [...BACKEND_AGENT_MEMBERS],
@@ -122,9 +135,25 @@ test("the three interfaces and the terminal bundle have exactly these members", 
   assert.deepEqual([...EXECUTION_IO_MEMBERS], ["emit", "controls"]);
   assert.deepEqual([...CONTROL_FEED_MEMBERS], ["take"]);
   assert.deepEqual([...RUN_INPUT_MEMBERS], ["runId", "description", "prompt"]);
+  assert.deepEqual([...BACKEND_OPEN_FAILURE_MEMBERS], ["diagnostic"]);
 });
 
-test("scope requirements and the absent failure channel are in the types", () => {
+test("an open failure carries a redacted diagnostic and no provider text", () => {
+  // The type-level half: there is nowhere to put provider text, a cause, an
+  // exit code, or a retry hint, because there is exactly one field.
+  const failure: BackendOpenFailure = {
+    diagnostic: redactedDiagnostic("backend-failure"),
+  };
+
+  assert.deepEqual(Object.keys(failure), [...BACKEND_OPEN_FAILURE_MEMBERS]);
+  assert.equal(failure.diagnostic.category, "backend-failure");
+
+  // @ts-expect-error there is no second field, and this is the proof
+  const widened: BackendOpenFailure = { ...failure, cause: "ECONNREFUSED" };
+  assert.equal("cause" in widened, true);
+});
+
+test("only open may fail, and only with the open failure", () => {
   const proofs: LifetimesAreInTheTypes = [true, true, true, true, true];
 
   assert.equal(proofs.length, 5);
