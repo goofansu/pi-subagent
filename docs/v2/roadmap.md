@@ -1,6 +1,6 @@
 # pi-subagent v2 roadmap
 
-**Status:** Accepted. **M1 is complete** (2026-09-02); M2 is next.  
+**Status:** Accepted. **M2 is complete** (2026-09-02); M3 is next.  
 **Strategy:** Rewrite the execution architecture inside the existing `pi-subagent` product  
 **Delivery model:** Gate-driven milestones, not a date-driven big-bang rewrite
 
@@ -246,6 +246,12 @@ shutdown → all retained resources close
 - Provider-native payloads cannot be represented in public domain types except as bounded, typed annotations or links.
 
 ### M2 — Effect supervisor and projection runtime
+
+**Status: complete (2026-09-02).** Every deliverable below landed; the
+verification is recorded in [the M2 exit gate](m2-exit-gate.md), which links
+every artifact. The open failure channel is
+[ADR-0030](../adr/0030-v2-backend-open-failure.md), and the Schema adoption was
+gated by [the Effect Schema spike](spikes/effect-schema.md).
 
 **Purpose:** Build the complete lifecycle once against deterministic fakes.
 

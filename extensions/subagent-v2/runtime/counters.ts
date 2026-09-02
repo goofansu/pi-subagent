@@ -57,6 +57,8 @@ export interface RuntimeProbe {
   readonly openObservationQueues: number;
   readonly openMailboxes: number;
   readonly unresolvedWaiters: number;
+  /** Consumers holding a live view of the Run index. */
+  readonly repositorySubscriptions: number;
   readonly openBackendAgents: number;
 }
 
@@ -68,6 +70,7 @@ const ZERO_PROBE: RuntimeProbe = {
   openObservationQueues: 0,
   openMailboxes: 0,
   unresolvedWaiters: 0,
+  repositorySubscriptions: 0,
   openBackendAgents: 0,
 };
 

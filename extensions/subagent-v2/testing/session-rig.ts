@@ -12,7 +12,7 @@
  * operations, which is the whole point of having deleted the M1 driver.
  */
 
-import type { Deferred } from "effect";
+import type { Deferred, Scope } from "effect";
 import { Effect } from "effect";
 import { TestClock } from "effect/testing";
 import {
@@ -113,7 +113,9 @@ export interface SessionOutcome<A> {
  */
 export function withSession<A>(
   options: SessionRigOptions,
-  body: (rig: SessionRig) => Effect.Effect<A>,
+  // The body may require a `Scope`: it is the Session's own, so anything a
+  // test acquires there is released by the same close the probe is read after.
+  body: (rig: SessionRig) => Effect.Effect<A, never, Scope.Scope>,
 ): Promise<SessionOutcome<A>> {
   const create =
     options.resumable === false
@@ -162,10 +164,14 @@ export function withSession<A>(
     Effect.scoped,
   );
 
+  const runnable = program as Effect.Effect<
+    { readonly value: A; readonly readProbe: () => RuntimeProbe },
+    never
+  >;
   return Effect.runPromise(
     options.testClock
-      ? program.pipe(Effect.provide(TestClock.layer()))
-      : program,
+      ? runnable.pipe(Effect.provide(TestClock.layer()))
+      : runnable,
   ).then(({ value, readProbe }) => {
     const probeAfterClose = readProbe();
     return { value, probeAfterClose, noLeaks: probeIsClear(probeAfterClose) };

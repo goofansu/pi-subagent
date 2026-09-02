@@ -328,9 +328,11 @@ and lossless within a Run. Replaces v1's **Fact**.
 **Observation kinds** — the ten things an observation can be: `message`,
 `tool_progress`, `activity`, `usage`, `context`, `diagnostic`, `link`, `model`,
 `reconciliation`, and `ending`. One union, so everything a backend witnesses
-crosses the boundary in one vocabulary. A type-level test pins the exact key
-set of each kind, which is how ADR-0024's no-provider-vocabulary rule is
-enforced rather than merely stated.
+crosses the boundary in one vocabulary. The union is one schema declaration,
+and decoding it at the backend seam with excess properties rejected is how
+ADR-0024's no-provider-vocabulary rule is enforced rather than merely stated:
+an unlisted key at any depth is a rejection, not a silent strip.
+[ADR-0029](docs/adr/0029-v2-effect-schema.md).
 
 **Projection** — what a Run looks like after its observations have been folded:
 transcript, tools, diagnostics, links, usage, activity, model, final output,
@@ -360,6 +362,73 @@ opened: `resume`, `steer`, and `terminalTranscriptSnapshot`. Declared rather
 than discovered, so the core can answer `unsupported` without calling the
 backend and without spending provider quota.
 [ADR-0028](docs/adr/0028-v2-backend-contract.md).
+
+**Session runtime** — the one managed Effect runtime per Pi Session, composed
+in a single module from Layers for six session-long services — `BackendCatalog`,
+`ProfileCatalog`, `RunRepository`, `ResultStore`, `SubagentSupervisor`, and
+`CompletionDelivery` — plus a runtime policy value and the ambient clock.
+Nothing shorter-lived than the Session is a Layer, and the boundary test
+enforces that by confining `Layer` to this module and the services it wires.
+[ADR-0023](docs/adr/0023-v2-scope-ownership.md).
+
+**Runtime policy** — every bound the Session enforces, as one plain value:
+maximum active Runs, the three Control mailbox bounds, projection bounds, the
+maximum bytes one stored result may occupy, the total result-store budget, the
+observation queue bound, the open budget, the cleanup budget, the delivery
+retry budget, and an optional default Run timeout. Configuration rather than a
+service, so a test lowers a bound by spreading over the defaults.
+
+**Run Scope** — what one Run holds for its lifetime: a bounded observation
+intake, one reducer fiber, a Control mailbox, a completion `Deferred` used only
+as a wake-up, a settlement coordinator, and — nested inside it — the native
+execution scope. Closing the Run Scope releases all of them; the nested scope
+can close independently, because a provider turn may end without ending the Run.
+
+**Settlement coordinator** — the per-Run thing that captures exactly one
+terminal **candidate** into a `Deferred`. Later candidates increment a
+duplicate-settlement counter and change nothing. That is what "a Run settles
+exactly once" means when four things — a returned bundle, an interruption, a
+defect, and an in-stream `ending` — can each decide a Run is over at the same
+moment.
+
+**Arbitration** — the pure function that decides which candidate the Run
+actually had. An ending already reduced from the stream wins; a bundle the
+execution returned wins over a cancellation request that arrived afterwards; an
+interruption that took effect first yields `cancelled` with the *first*
+recorded reason; a defect yields `failed` with a redacted `backend-failure`
+diagnostic. Pure and tested alone, so the rule is decided in one place rather
+than inferred from a race.
+
+**Sealing** — closing a Run's observation intake at the moment its candidate is
+captured. Everything emitted afterwards is a counted late event and a no-op, so
+the contract's "emit never fails" holds for an adapter emitting from its own
+finalizer.
+
+**Cleanup escalation** — what happens when closing the native execution scope
+outlives the cleanup budget: a `cleanup-escalation` diagnostic on the Run, the
+BackendAgent closed by the core, its Conversation marked lost so a later resume
+is honest, and settlement continuing with the observations it has. A hung
+finalizer must not leave a Run in `finalizing` forever.
+
+**Reservation** — the room a Run takes in the Result store at admission, before
+it starts. A Run that cannot reserve one is rejected `at capacity`, so a
+reservation is a guarantee that the result can be stored rather than an
+estimate. Released by a failed open.
+
+**Pin** — a hold on a stored result that stops eviction reaching it. Set at
+commit for three named holders, and released when terminal publication is done,
+when every waiter registered at settlement has read, and when delivery has
+succeeded or exhausted its budget.
+
+**Delivery sweep** — a pass comparing stored terminal results against what has
+been announced, delivering anything missed. It is why a lost wake-up costs one
+extra pass rather than a Notification.
+
+**Runtime probe** — the test-facing count of what is still alive: live Run
+fibers, live reducer fibers, open observation queues, open mailboxes,
+unresolved waiters, and open BackendAgents. Every race, backpressure, fault,
+and leak test asserts it reads zero after the Session Scope closes, which turns
+"nothing leaked" from a hope into an assertion.
 
 **AgentHarness** — reserved for Pi's own native abstraction. v2 never uses it
 for anything of ours.

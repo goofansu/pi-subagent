@@ -115,7 +115,7 @@ export function sessionRuntimeLayer(
   const foundation = Layer.mergeAll(
     backendCatalog,
     profileCatalog,
-    RunRepository.layer,
+    RunRepository.layerOf(counters),
     delivery,
   );
 

@@ -118,7 +118,16 @@ is a `failed` ending, because the core — not the adapter — decides when a Ru
 is terminal and what its result says. An adapter that fails its Effect anyway,
 or dies, is classified by the caller as failed with a `backend-failure`
 diagnostic and its partial observations retained: the driver does that in M1
-and the supervisor does it in M2.
+and the supervisor does it in M2. **This half still stands.**
+
+> **Amended by [ADR-0030](0030-v2-backend-open-failure.md) at M2.** The
+> paragraph below deferred a failure channel on `open`, and the deferral did
+> not survive contact with operation semantics section 1: reporting a failed
+> open through a Run's `failed` ending means publishing a public Run, storing a
+> Result, and sending a Notification for work that never began. `open` now
+> returns an Effect that may fail with `BackendOpenFailure`, carrying one
+> redacted diagnostic and nothing else, and `StartOutcome` gained `backend
+> unavailable`. An **execution** still has no error channel.
 
 `open` has no failure channel either, which is the narrower of the two
 decisions. A backend whose provider I/O fails while opening reports it through

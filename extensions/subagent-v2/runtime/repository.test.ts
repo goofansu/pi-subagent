@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Deferred, Effect, Fiber, Stream, SubscriptionRef } from "effect";
+import {
+  Deferred,
+  Effect,
+  Fiber,
+  type Scope,
+  Stream,
+  SubscriptionRef,
+} from "effect";
 import {
   backendId,
   createRunProjection,
@@ -10,6 +17,7 @@ import {
   type SubagentId,
   subagentId,
 } from "../domain/index.ts";
+import { createRuntimeCounters } from "./counters.ts";
 import { RunRepository } from "./repository.ts";
 
 /**
@@ -30,13 +38,18 @@ const identityOf = (subagent: SubagentId, run: string): RunIdentity => ({
 });
 
 const withRepository = <A>(
-  body: (repository: RunRepository["Service"]) => Effect.Effect<A>,
+  body: (
+    repository: RunRepository["Service"],
+  ) => Effect.Effect<A, never, Scope.Scope>,
 ): Promise<A> =>
   Effect.runPromise(
     Effect.gen(function* () {
       const repository = yield* RunRepository;
       return yield* body(repository);
-    }).pipe(Effect.provide(RunRepository.layer), Effect.scoped),
+    }).pipe(
+      Effect.provide(RunRepository.layerOf(createRuntimeCounters())),
+      Effect.scoped,
+    ),
   );
 
 test("an allocated identifier is spent the moment it is handed out", async () => {
@@ -307,4 +320,26 @@ test("one Subagent's active Run is findable, and it has at most one", async () =
     after: undefined,
     other: "run-2",
   });
+});
+
+test("a live view of the index is counted while it is held, and released after", async () => {
+  const counters = createRuntimeCounters();
+  const readings = await Effect.runPromise(
+    Effect.gen(function* () {
+      const repository = yield* RunRepository;
+      const before = counters.probe().repositorySubscriptions;
+      const held = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const changes = yield* repository.subscribe();
+          void changes;
+          return counters.probe().repositorySubscriptions;
+        }),
+      );
+      return { before, held, after: counters.probe().repositorySubscriptions };
+    }).pipe(Effect.provide(RunRepository.layerOf(counters)), Effect.scoped),
+  );
+
+  // A subscription that outlived its consumer is exactly the leak the probe
+  // exists to catch, so it is counted rather than invisible.
+  assert.deepEqual(readings, { before: 0, held: 1, after: 0 });
 });

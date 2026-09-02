@@ -215,9 +215,7 @@ test("a slow subscriber to the Run index sees the latest value, not every value"
         const attached = yield* Deferred.make<void>();
         // A subscriber that reads two frames and then stops. Without
         // conflation it would be a hundred frames behind by the end.
-        const subscriber = yield* SubscriptionRef.changes(
-          rig.repository.index,
-        ).pipe(
+        const subscriber = yield* (yield* rig.repository.subscribe()).pipe(
           Stream.tap(() => Deferred.succeed(attached, undefined)),
           Stream.take(2),
           Stream.runCollect,

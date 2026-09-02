@@ -4,8 +4,11 @@ Date: 2026-09-02
 
 ## Status
 
-Accepted for the v2 tree, **scheduled for M2**. No code implements this yet; M1
-closed without it, and this ADR is what M2 and M3 build against.
+Accepted for the v2 tree. **Implemented in M2**, whose exit gate records what
+it deleted; the spike that gated it is
+[`docs/v2/spikes/effect-schema.md`](../v2/spikes/effect-schema.md). The two
+M3 obligations in the table below — the Notification custom message and
+replacing `typebox` — are still ahead.
 
 Revised the day it was written. The first draft kept schemas out of the domain
 module in order to preserve M1's "domain imports nothing" boundary test

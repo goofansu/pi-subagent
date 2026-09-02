@@ -19,7 +19,15 @@
  * Run was ever published.
  */
 
-import { Context, Effect, Layer, Ref, SubscriptionRef } from "effect";
+import {
+  Context,
+  Effect,
+  Layer,
+  Ref,
+  type Scope,
+  type Stream,
+  SubscriptionRef,
+} from "effect";
 import {
   type CancellationReason,
   type CancellationRequest,
@@ -39,6 +47,7 @@ import {
   transitionRun,
   type UsageSnapshot,
 } from "../domain/index.ts";
+import type { RuntimeCounters } from "./counters.ts";
 
 /**
  * What one Run looks like right now.
@@ -105,235 +114,259 @@ function withRun(
   return next;
 }
 
-const make = Effect.gen(function* () {
-  const index = yield* SubscriptionRef.make<RunIndex>(new Map());
-  const spentRunIds = yield* Ref.make<ReadonlySet<string>>(new Set());
-  const spentSubagentIds = yield* Ref.make<ReadonlySet<string>>(new Set());
-  let sequence = 0;
-
-  /**
-   * Allocate an id and spend it in the same step.
-   *
-   * Allocation and spending cannot be two calls, because the gap between
-   * them is exactly where a reused id would come from: a start that fails
-   * between allocating and publishing would otherwise release the id.
-   */
-  const allocate = <T extends string>(
-    spent: Ref.Ref<ReadonlySet<string>>,
-    prefix: string,
-    brand: (value: string) => T,
-  ): Effect.Effect<T> =>
-    Ref.modify(spent, (ids) => {
-      sequence += 1;
-      const value = `${prefix}-${sequence}`;
-      return [brand(value), new Set(ids).add(value)];
-    });
-
-  return {
-    /** The published index, for a UI consumer to subscribe to. */
-    index,
-
-    allocateRunId: (): Effect.Effect<RunId> =>
-      allocate(spentRunIds, "run", (value) => RunIdSchema.make(value)),
-
-    allocateSubagentId: (): Effect.Effect<SubagentId> =>
-      allocate(spentSubagentIds, "subagent", (value) =>
-        SubagentIdSchema.make(value),
-      ),
-
-    /** Whether an id was ever handed out this Session. */
-    isSpent: (id: string): Effect.Effect<boolean> =>
-      Effect.gen(function* () {
-        const runs = yield* Ref.get(spentRunIds);
-        const subagents = yield* Ref.get(spentSubagentIds);
-        return runs.has(id) || subagents.has(id);
-      }),
+const make = (counters: RuntimeCounters) =>
+  Effect.gen(function* () {
+    const index = yield* SubscriptionRef.make<RunIndex>(new Map());
+    const spentRunIds = yield* Ref.make<ReadonlySet<string>>(new Set());
+    const spentSubagentIds = yield* Ref.make<ReadonlySet<string>>(new Set());
+    let sequence = 0;
 
     /**
-     * Publish a Run for the first time, in `running`.
+     * Allocate an id and spend it in the same step.
      *
-     * This is what makes a Run public: before it, the caller holds ids and
-     * nothing else, which is what lets a failed open leave nothing behind.
+     * Allocation and spending cannot be two calls, because the gap between
+     * them is exactly where a reused id would come from: a start that fails
+     * between allocating and publishing would otherwise release the id.
      */
-    publish: (
-      identity: RunIdentity,
-      startedAt: number,
-    ): Effect.Effect<RunSnapshot> =>
-      SubscriptionRef.modify(index, (current) => {
-        const snapshot: RunSnapshot = {
-          identity,
-          phase: "running",
-          usage: EMPTY_USAGE_SNAPSHOT,
-          tools: 0,
-          startedAt,
-        };
-        const next = new Map(current);
-        next.set(identity.runId, snapshot);
-        return [snapshot, next];
-      }),
+    const allocate = <T extends string>(
+      spent: Ref.Ref<ReadonlySet<string>>,
+      prefix: string,
+      brand: (value: string) => T,
+    ): Effect.Effect<T> =>
+      Ref.modify(spent, (ids) => {
+        sequence += 1;
+        const value = `${prefix}-${sequence}`;
+        return [brand(value), new Set(ids).add(value)];
+      });
 
-    /**
-     * Fold what the reducer produced into the row.
-     *
-     * The projection stays with the Run fiber; only the few figures a
-     * reader needs are published.
-     */
-    recordProjection: (
-      runId: RunId,
-      projection: RunProjection,
-    ): Effect.Effect<void> =>
-      SubscriptionRef.update(index, (current) =>
-        withRun(current, runId, (snapshot) => {
-          const next: RunSnapshot = {
-            ...snapshot,
-            usage: projection.usage,
-            tools: projection.tools.length,
-          };
-          // Activity is conflated *and clearable*: a backend that reported
-          // nothing is doing nothing in particular, and a stale value left on
-          // the row would read as though it still were.
-          if (projection.activity === undefined) {
-            delete (next as { activity?: string }).activity;
-          } else {
-            (next as { activity?: string }).activity = projection.activity;
-          }
-          return next;
+    return {
+      /** The published index, for a UI consumer to subscribe to. */
+      index,
+
+      /**
+       * A live view of the index, held for the caller's scope.
+       *
+       * Counted, because a subscription that outlives its consumer is a leak of
+       * exactly the kind the probe exists to catch, and a raw
+       * `SubscriptionRef.changes` would be invisible to it.
+       */
+      subscribe: (): Effect.Effect<
+        Stream.Stream<RunIndex>,
+        never,
+        Scope.Scope
+      > =>
+        Effect.map(
+          Effect.acquireRelease(
+            Effect.sync(() => counters.acquired("repositorySubscriptions")),
+            () =>
+              Effect.sync(() => counters.released("repositorySubscriptions")),
+          ),
+          () => SubscriptionRef.changes(index),
+        ),
+
+      allocateRunId: (): Effect.Effect<RunId> =>
+        allocate(spentRunIds, "run", (value) => RunIdSchema.make(value)),
+
+      allocateSubagentId: (): Effect.Effect<SubagentId> =>
+        allocate(spentSubagentIds, "subagent", (value) =>
+          SubagentIdSchema.make(value),
+        ),
+
+      /** Whether an id was ever handed out this Session. */
+      isSpent: (id: string): Effect.Effect<boolean> =>
+        Effect.gen(function* () {
+          const runs = yield* Ref.get(spentRunIds);
+          const subagents = yield* Ref.get(spentSubagentIds);
+          return runs.has(id) || subagents.has(id);
         }),
-      ),
 
-    transition: (
-      runId: RunId,
-      event: RunEvent,
-    ): Effect.Effect<TransitionOutcome> =>
-      SubscriptionRef.modify(index, (current) => {
-        const snapshot = current.get(runId);
-        if (!snapshot) {
-          return [{ outcome: "unknown Run" } as TransitionOutcome, current];
-        }
-        const phase = transitionRun(snapshot.phase, event);
-        if (phase === ILLEGAL_TRANSITION) {
-          return [
-            {
-              outcome: "illegal",
-              phase: snapshot.phase,
-            } as TransitionOutcome,
-            current,
-          ];
-        }
-        const next = new Map(current);
-        const moved: RunSnapshot = {
-          ...snapshot,
-          phase,
-          ...(isTerminalRunPhase(phase) ? { terminalStatus: phase } : {}),
-        };
-        // A settled Run is quiet: the activity a backend last reported is
-        // not what it is doing, because it is not doing anything.
-        if (phase !== "running")
-          delete (moved as { activity?: string }).activity;
-        next.set(runId, moved);
-        return [{ outcome: "moved", phase } as TransitionOutcome, next];
-      }),
+      /**
+       * Publish a Run for the first time, in `running`.
+       *
+       * This is what makes a Run public: before it, the caller holds ids and
+       * nothing else, which is what lets a failed open leave nothing behind.
+       */
+      publish: (
+        identity: RunIdentity,
+        startedAt: number,
+      ): Effect.Effect<RunSnapshot> =>
+        SubscriptionRef.modify(index, (current) => {
+          const snapshot: RunSnapshot = {
+            identity,
+            phase: "running",
+            usage: EMPTY_USAGE_SNAPSHOT,
+            tools: 0,
+            startedAt,
+          };
+          const next = new Map(current);
+          next.set(identity.runId, snapshot);
+          return [snapshot, next];
+        }),
 
-    /**
-     * Record a cancellation request. The first reason wins.
-     *
-     * A request is not a phase change: the Run reaches `cancelled` only
-     * when its execution and finalizers have finished. ADR-0025.
-     */
-    recordCancellation: (
-      runId: RunId,
-      reason: CancellationReason,
-    ): Effect.Effect<CancellationOutcome> =>
-      SubscriptionRef.modify(index, (current) => {
-        const snapshot = current.get(runId);
-        if (!snapshot) {
-          return [{ outcome: "unknown Run" } as CancellationOutcome, current];
-        }
-        const recording = recordCancellation(
-          snapshot.phase,
-          snapshot.cancellation,
-          reason,
-        );
-        if (recording.outcome === ILLEGAL_TRANSITION) {
+      /**
+       * Fold what the reducer produced into the row.
+       *
+       * The projection stays with the Run fiber; only the few figures a
+       * reader needs are published.
+       */
+      recordProjection: (
+        runId: RunId,
+        projection: RunProjection,
+      ): Effect.Effect<void> =>
+        SubscriptionRef.update(index, (current) =>
+          withRun(current, runId, (snapshot) => {
+            const next: RunSnapshot = {
+              ...snapshot,
+              usage: projection.usage,
+              tools: projection.tools.length,
+            };
+            // Activity is conflated *and clearable*: a backend that reported
+            // nothing is doing nothing in particular, and a stale value left on
+            // the row would read as though it still were.
+            if (projection.activity === undefined) {
+              delete (next as { activity?: string }).activity;
+            } else {
+              (next as { activity?: string }).activity = projection.activity;
+            }
+            return next;
+          }),
+        ),
+
+      transition: (
+        runId: RunId,
+        event: RunEvent,
+      ): Effect.Effect<TransitionOutcome> =>
+        SubscriptionRef.modify(index, (current) => {
+          const snapshot = current.get(runId);
+          if (!snapshot) {
+            return [{ outcome: "unknown Run" } as TransitionOutcome, current];
+          }
+          const phase = transitionRun(snapshot.phase, event);
+          if (phase === ILLEGAL_TRANSITION) {
+            return [
+              {
+                outcome: "illegal",
+                phase: snapshot.phase,
+              } as TransitionOutcome,
+              current,
+            ];
+          }
+          const next = new Map(current);
+          const moved: RunSnapshot = {
+            ...snapshot,
+            phase,
+            ...(isTerminalRunPhase(phase) ? { terminalStatus: phase } : {}),
+          };
+          // A settled Run is quiet: the activity a backend last reported is
+          // not what it is doing, because it is not doing anything.
+          if (phase !== "running")
+            delete (moved as { activity?: string }).activity;
+          next.set(runId, moved);
+          return [{ outcome: "moved", phase } as TransitionOutcome, next];
+        }),
+
+      /**
+       * Record a cancellation request. The first reason wins.
+       *
+       * A request is not a phase change: the Run reaches `cancelled` only
+       * when its execution and finalizers have finished. ADR-0025.
+       */
+      recordCancellation: (
+        runId: RunId,
+        reason: CancellationReason,
+      ): Effect.Effect<CancellationOutcome> =>
+        SubscriptionRef.modify(index, (current) => {
+          const snapshot = current.get(runId);
+          if (!snapshot) {
+            return [{ outcome: "unknown Run" } as CancellationOutcome, current];
+          }
+          const recording = recordCancellation(
+            snapshot.phase,
+            snapshot.cancellation,
+            reason,
+          );
+          if (recording.outcome === ILLEGAL_TRANSITION) {
+            return [
+              {
+                outcome: "already terminal",
+                status: recording.phase as TerminalRunPhase,
+              } as CancellationOutcome,
+              current,
+            ];
+          }
+          if (recording.outcome === "unchanged") {
+            return [
+              {
+                outcome: "unchanged",
+                request: recording.request,
+              } as CancellationOutcome,
+              current,
+            ];
+          }
+          const next = new Map(current);
+          next.set(runId, { ...snapshot, cancellation: recording.request });
           return [
             {
-              outcome: "already terminal",
-              status: recording.phase as TerminalRunPhase,
-            } as CancellationOutcome,
-            current,
-          ];
-        }
-        if (recording.outcome === "unchanged") {
-          return [
-            {
-              outcome: "unchanged",
+              outcome: "recorded",
               request: recording.request,
             } as CancellationOutcome,
-            current,
+            next,
           ];
-        }
-        const next = new Map(current);
-        next.set(runId, { ...snapshot, cancellation: recording.request });
-        return [
-          {
-            outcome: "recorded",
-            request: recording.request,
-          } as CancellationOutcome,
-          next,
-        ];
-      }),
+        }),
 
-    get: (runId: RunId): Effect.Effect<RunSnapshot | undefined> =>
-      Effect.map(SubscriptionRef.get(index), (current) => current.get(runId)),
+      get: (runId: RunId): Effect.Effect<RunSnapshot | undefined> =>
+        Effect.map(SubscriptionRef.get(index), (current) => current.get(runId)),
 
-    lookup: (runId: RunId): Effect.Effect<RunLookup> =>
-      Effect.map(SubscriptionRef.get(index), (current) => {
-        const snapshot = current.get(runId);
-        if (!snapshot) return { state: "unknown" } as RunLookup;
-        return isTerminalRunPhase(snapshot.phase)
-          ? ({ state: "terminal", snapshot } as RunLookup)
-          : ({ state: "active", snapshot } as RunLookup);
-      }),
+      lookup: (runId: RunId): Effect.Effect<RunLookup> =>
+        Effect.map(SubscriptionRef.get(index), (current) => {
+          const snapshot = current.get(runId);
+          if (!snapshot) return { state: "unknown" } as RunLookup;
+          return isTerminalRunPhase(snapshot.phase)
+            ? ({ state: "terminal", snapshot } as RunLookup)
+            : ({ state: "active", snapshot } as RunLookup);
+        }),
 
-    /** Every Run this Session has published, newest last. */
-    list: (): Effect.Effect<readonly RunSnapshot[]> =>
-      Effect.map(SubscriptionRef.get(index), (current) => [
-        ...current.values(),
-      ]),
+      /** Every Run this Session has published, newest last. */
+      list: (): Effect.Effect<readonly RunSnapshot[]> =>
+        Effect.map(SubscriptionRef.get(index), (current) => [
+          ...current.values(),
+        ]),
 
-    /** How many Runs are not yet terminal. */
-    activeCount: (): Effect.Effect<number> =>
-      Effect.map(
-        SubscriptionRef.get(index),
-        (current) =>
-          [...current.values()].filter(
-            (snapshot) => !isTerminalRunPhase(snapshot.phase),
-          ).length,
-      ),
-
-    /** The active Run of one Subagent, if it has one. */
-    activeRunOf: (
-      subagentId: SubagentId,
-    ): Effect.Effect<RunSnapshot | undefined> =>
-      Effect.map(SubscriptionRef.get(index), (current) =>
-        [...current.values()].find(
-          (snapshot) =>
-            snapshot.identity.subagentId === subagentId &&
-            !isTerminalRunPhase(snapshot.phase),
+      /** How many Runs are not yet terminal. */
+      activeCount: (): Effect.Effect<number> =>
+        Effect.map(
+          SubscriptionRef.get(index),
+          (current) =>
+            [...current.values()].filter(
+              (snapshot) => !isTerminalRunPhase(snapshot.phase),
+            ).length,
         ),
-      ),
-  };
-});
+
+      /** The active Run of one Subagent, if it has one. */
+      activeRunOf: (
+        subagentId: SubagentId,
+      ): Effect.Effect<RunSnapshot | undefined> =>
+        Effect.map(SubscriptionRef.get(index), (current) =>
+          [...current.values()].find(
+            (snapshot) =>
+              snapshot.identity.subagentId === subagentId &&
+              !isTerminalRunPhase(snapshot.phase),
+          ),
+        ),
+    };
+  });
 
 /** What the service exposes, derived from what builds it. */
-export type RunRepositoryApi = Effect.Success<typeof make>;
+export type RunRepositoryApi = Effect.Success<ReturnType<typeof make>>;
 
 export class RunRepository extends Context.Service<
   RunRepository,
   RunRepositoryApi
 >()("pi-subagent-v2/runtime/RunRepository") {
-  static readonly layer: Layer.Layer<RunRepository> = Layer.effect(
-    RunRepository,
-    Effect.map(make, (api) => RunRepository.of(api)),
-  );
+  static layerOf(counters: RuntimeCounters): Layer.Layer<RunRepository> {
+    return Layer.effect(
+      RunRepository,
+      Effect.map(make(counters), (api) => RunRepository.of(api)),
+    );
+  }
 }
