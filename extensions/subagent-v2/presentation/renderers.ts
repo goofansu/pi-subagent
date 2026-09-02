@@ -1,0 +1,263 @@
+/**
+ * How a subagent tool call and its result are drawn in the transcript.
+ *
+ * Ported from v1's renderers, with the bodies drawn from the {@link RunCard}
+ * so that M4's expanded presentation is a change to the card rather than a
+ * change to four renderers. The rules the port preserves:
+ *
+ * - **A started Run's row shows the brief and nothing else.** Its progress
+ *   lives in the widget and its answer is retrieved separately, so a row that
+ *   showed either would be a stale copy of both.
+ * - **A collapsed result is one line.** Agent output is Markdown and can be
+ *   thousands of characters; the flat default is both hard to read and hard to
+ *   scroll past.
+ * - **Lifecycle state is written as a word, not a glyph,** painted in the
+ *   phase's tone so a failure still stands out in a column of rows.
+ *
+ * These functions are pure: given the same result, options, and theme they
+ * produce the same component. They read no service and no clock.
+ */
+
+import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { Markdown, Text } from "@earendil-works/pi-tui";
+import type { TerminalRunPhase } from "../domain/index.ts";
+import {
+  type CollectedRuns,
+  isCollectedRuns,
+  isResumedRun,
+  type ResumedRun,
+} from "./details.ts";
+import type { RenderableTheme } from "./rows.ts";
+import { formatCharacterCount, runPhaseTone, runPhaseVerb } from "./status.ts";
+
+/** What `agent_start` was asked, as the renderer receives it. */
+export interface StartCallArguments {
+  readonly agent: string;
+  readonly description: string;
+  readonly prompt: string;
+}
+
+/** The slice of Pi's render context these renderers use. */
+export interface RenderCallContext {
+  readonly lastComponent?: Component;
+  readonly expanded: boolean;
+}
+
+export interface RenderResultOptions {
+  readonly expanded: boolean;
+}
+
+/** A tool result as the host hands it back for rendering. */
+export interface RenderableToolResult {
+  readonly content: string | ReadonlyArray<{ type: string; text?: string }>;
+  readonly details?: unknown;
+}
+
+export type KeyHintRenderer = typeof keyHint;
+
+/** How many lines of the brief a collapsed `agent_start` row shows. */
+const COLLAPSED_PROMPT_LINES = 3;
+
+/** The text of a tool result or message body, whatever shape it arrived in. */
+export function contentText(content: RenderableToolResult["content"]): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text ?? "")
+    .join("");
+}
+
+/** Keep parenthetical punctuation dim even when the hint resets ANSI. */
+export function formatParentheticalKeyHint(
+  theme: RenderableTheme,
+  action: Parameters<KeyHintRenderer>[0],
+  description: string,
+  renderKeyHint: KeyHintRenderer = keyHint,
+): string {
+  return `${theme.fg("dim", "(")}${renderKeyHint(action, description)}${theme.fg("dim", ")")}`;
+}
+
+/**
+ * The transcript row for `agent_start`: who was asked, and what for.
+ *
+ * The host paints the tool result below this row in the same grey as the
+ * prompt, and two adjacent grey paragraphs read as one voice. A `Prompt:`
+ * label and a blank line on each side are what keep the brief and the answer
+ * apart — plain text, no Markdown, so the row reads the same however the brief
+ * is written and however narrow the terminal wraps it.
+ */
+export function renderStartCall(
+  args: StartCallArguments,
+  theme: RenderableTheme,
+  context: RenderCallContext,
+): Component {
+  const text =
+    context.lastComponent instanceof Text
+      ? context.lastComponent
+      : new Text("", 0, 0);
+  const header =
+    `${theme.fg("toolTitle", theme.bold(args.agent))} ` +
+    theme.fg("muted", args.description);
+  const lines = args.prompt.split("\n");
+  // A cut preview must say it is one: three lines that just stop read as the
+  // whole brief.
+  const preview = context.expanded
+    ? args.prompt
+    : lines.slice(0, COLLAPSED_PROMPT_LINES).join("\n") +
+      (lines.length > COLLAPSED_PROMPT_LINES ? "\n…" : "");
+  // The trailing newline is air between the brief and whatever the host paints
+  // below it — the tool result otherwise reads as the prompt's last line.
+  text.setText(
+    `${header}\n\n${theme.fg("muted", "Prompt:")} ${theme.fg("dim", preview)}\n`,
+  );
+  return text;
+}
+
+/** The actionable one-line handoff for a resumed Run. */
+export function formatResumeSummary(
+  resumed: ResumedRun,
+  theme: RenderableTheme,
+  renderKeyHint?: KeyHintRenderer,
+): string {
+  return (
+    theme.fg("toolTitle", "Resumed subagent") +
+    theme.fg("dim", ` ${resumed.subagentId} · run ${resumed.runId} `) +
+    formatParentheticalKeyHint(
+      theme,
+      "app.tools.expand",
+      "to expand",
+      renderKeyHint,
+    )
+  );
+}
+
+/**
+ * The single line a collapsed result shows in place of the whole body.
+ *
+ * A lone Run states its status as a word. A fan-out is usually N of the same
+ * agent, and naming it N times says nothing the count does not, so names
+ * appear only where they differ.
+ */
+export function formatCollectedSummary(
+  collected: CollectedRuns,
+  characters: number,
+  theme: RenderableTheme,
+  renderKeyHint?: KeyHintRenderer,
+): string {
+  const { runs } = collected;
+  let line: string;
+
+  if (runs.length === 1) {
+    const run = runs[0];
+    line =
+      theme.fg("toolTitle", run.agent) +
+      theme.fg("dim", ` (${run.runId}) `) +
+      theme.fg(runPhaseTone(run.status), run.status);
+  } else {
+    const counts = new Map<string, number>();
+    for (const run of runs) {
+      counts.set(run.agent, (counts.get(run.agent) ?? 0) + 1);
+    }
+    line =
+      counts.size === 1
+        ? theme.fg("toolTitle", `${runs.length} ${runs[0].agent} results`)
+        : theme.fg("toolTitle", `${runs.length} results`) +
+          theme.fg(
+            "dim",
+            ` from ${[...counts]
+              .map(([agent, n]) => (n > 1 ? `${agent} ×${n}` : agent))
+              .join(", ")}`,
+          );
+  }
+
+  line += theme.fg("dim", ` · ${formatCharacterCount(characters)}`);
+  if (collected.stillRunning) {
+    line += theme.fg("warning", ` · ${collected.stillRunning} still running`);
+  }
+  return `${line} ${formatParentheticalKeyHint(
+    theme,
+    "app.tools.expand",
+    "to expand",
+    renderKeyHint,
+  )}`;
+}
+
+/**
+ * Render a collected result: a summary line collapsed, Markdown expanded.
+ *
+ * Without Runs to name there is nothing to summarise, so a result whose
+ * details this renderer does not recognize falls back to its opening line
+ * rather than announcing "0 results".
+ */
+export function renderCollectedResult(
+  result: RenderableToolResult,
+  options: RenderResultOptions,
+  theme: RenderableTheme,
+): Component {
+  const text = contentText(result.content).trim();
+  if (!text) return new Text("", 0, 0);
+
+  if (options.expanded) return new Markdown(text, 0, 0, getMarkdownTheme());
+
+  if (!isCollectedRuns(result.details) || result.details.runs.length === 0) {
+    const firstLine = text.split("\n", 1)[0] ?? "";
+    return new Text(theme.fg("toolOutput", firstLine), 0, 0);
+  }
+
+  return new Text(
+    formatCollectedSummary(result.details, text.length, theme),
+    0,
+    0,
+  );
+}
+
+/** Render the immediate `agent_resume` result at its registered tool seam. */
+export function renderResumeResult(
+  result: RenderableToolResult,
+  options: RenderResultOptions,
+  theme: RenderableTheme,
+): Component {
+  const text = contentText(result.content).trim();
+  if (!text || options.expanded || !isResumedRun(result.details)) {
+    return renderCollectedResult(result, options, theme);
+  }
+  return new Text(formatResumeSummary(result.details, theme), 0, 0);
+}
+
+/**
+ * The one line a collapsed completion notice shows.
+ *
+ * No status glyph: lifecycle state is written as a word, painted in the
+ * phase's tone so a failure still stands out. The hint names the direction the
+ * toggle will actually go, because one key does both and a hint that always
+ * offered to expand would be wrong half the time.
+ */
+export function formatNotificationSummary(
+  details: {
+    readonly agent: string;
+    readonly subagentId: string;
+    readonly runId: string;
+    readonly status: TerminalRunPhase;
+  },
+  characters: number,
+  theme: RenderableTheme,
+  expanded = false,
+  renderKeyHint?: KeyHintRenderer,
+): string {
+  const line =
+    theme.fg("toolTitle", theme.bold(details.agent)) +
+    theme.fg(
+      "dim",
+      ` (subagent ${details.subagentId}, run ${details.runId}) `,
+    ) +
+    theme.fg(runPhaseTone(details.status), runPhaseVerb(details.status)) +
+    theme.fg("dim", ` · ${formatCharacterCount(characters)}`);
+  const hint = formatParentheticalKeyHint(
+    theme,
+    "app.tools.expand",
+    expanded ? "to collapse" : "to expand",
+    renderKeyHint,
+  );
+  return `${line} ${hint}`;
+}

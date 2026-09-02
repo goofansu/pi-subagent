@@ -65,6 +65,14 @@ export class ProfileCatalog extends Context.Service<
    */
   static layerOf(
     agentDir: string,
+    /**
+     * Profiles that ship with the Session's backend set.
+     *
+     * Merged *under* the discovered ones: a user file with the same name wins,
+     * because it is the user's machine and a built-in Profile that could not
+     * be replaced would be a Profile a user could not fix.
+     */
+    builtIn: readonly Profile[] = [],
   ): Layer.Layer<ProfileCatalog, never, BackendCatalog> {
     return Layer.effect(
       ProfileCatalog,
@@ -75,7 +83,15 @@ export class ProfileCatalog extends Context.Service<
             backends.validateProfile(profile, filePath),
           ),
         );
-        return ProfileCatalog.of(fromDiscovery(discovered));
+        const merged = new Map<string, Profile>(
+          builtIn.map((profile) => [profile.name, profile]),
+        );
+        for (const [name, profile] of discovered.profiles) {
+          merged.set(name, profile);
+        }
+        return ProfileCatalog.of(
+          fromDiscovery({ ...discovered, profiles: merged }),
+        );
       }),
     );
   }

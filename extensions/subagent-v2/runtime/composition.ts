@@ -41,8 +41,41 @@ export type SessionServices =
 /** How deeply a Subagent may itself delegate, when nothing says otherwise. */
 export const DEFAULT_MAX_DELEGATION_DEPTH = 2;
 
-export interface SessionRuntimeOptions {
+/**
+ * A named set of backends, with the Profiles that ship with it.
+ *
+ * A Session is built from one set, and the set is what decides which backends
+ * exist and which Profiles a user gets for free. M3's set is the **demo set**:
+ * the two fakes, and one Profile per fake, so launching Pi with only the v2
+ * entry point gives a working extension with nothing to configure. M4 replaces
+ * it with a set containing the real Pi backend, and the demo Profiles go with
+ * it.
+ *
+ * A set is a value rather than a service. Nothing about it is decided at run
+ * time, and a Session that could change its backends half-way through would be
+ * a Session whose Subagents disagreed about what they were.
+ */
+export interface BackendSet {
+  /** What the set is called, for the start-up diagnostic. */
+  readonly name: string;
   readonly backends: readonly Backend[];
+  /** Profiles the set supplies, merged under the user's own. */
+  readonly profiles: readonly Profile[];
+}
+
+/**
+ * Where a Session's backends come from.
+ *
+ * Two forms, and exactly one may be given — the type says so rather than a
+ * runtime check. A **list** is what a test has: the fakes it built for one
+ * scenario, with the Profiles the scenario needs supplied directly. A **set**
+ * is what a Session has, and it brings its own Profiles.
+ */
+export type BackendSource =
+  | { readonly backends: readonly Backend[]; readonly backendSet?: never }
+  | { readonly backendSet: BackendSet; readonly backends?: never };
+
+interface SessionRuntimeBaseOptions {
   /**
    * Where Profiles come from.
    *
@@ -71,6 +104,8 @@ export interface SessionRuntimeOptions {
   readonly counters?: RuntimeCounters;
 }
 
+export type SessionRuntimeOptions = SessionRuntimeBaseOptions & BackendSource;
+
 /**
  * Build the Session runtime's Layer.
  *
@@ -91,12 +126,15 @@ export function sessionRuntimeLayer(
     counters,
   };
 
-  const backendCatalog = BackendCatalog.layerOf(options.backends);
+  const backends = options.backendSet?.backends ?? options.backends ?? [];
+  const builtInProfiles = options.backendSet?.profiles ?? [];
+
+  const backendCatalog = BackendCatalog.layerOf(backends);
   const profileCatalog = (
     options.profiles.from === "directory"
-      ? ProfileCatalog.layerOf(options.profiles.agentDir)
+      ? ProfileCatalog.layerOf(options.profiles.agentDir, builtInProfiles)
       : ProfileCatalog.layerOfProfiles(
-          options.profiles.profiles,
+          [...builtInProfiles, ...options.profiles.profiles],
           options.profiles.diagnostics ?? [],
         )
   ).pipe(Layer.provide(backendCatalog));

@@ -1,111 +1,141 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-} from "@earendil-works/pi-coding-agent";
-import { PINNED_EFFECT_VERSION } from "./effect-version.ts";
-import subagentV2Extension, {
-  formatSkeletonStatus,
-  V2_COMMAND_NAME,
-  V2_SKELETON_MARKER,
-} from "./index.ts";
-
-type RegisteredCommand = {
-  name: string;
-  options: Parameters<ExtensionAPI["registerCommand"]>[1];
-};
+import { AGENTS_COMMAND_NAME } from "./host/agents-command.ts";
+import {
+  createDemoBackendSet,
+  DEMO_ANSWER,
+  DEMO_ONE_SHOT_PROFILE,
+  DEMO_RESUMABLE_PROFILE,
+} from "./host/demo-backends.ts";
+import { NOTIFICATION_MESSAGE_TYPE } from "./host/notification-message.ts";
+import { V2_TOOL_NAMES } from "./host/tools.ts";
+import subagentV2Extension, { installSubagentV2 } from "./index.ts";
+import { hostRig, startedIds } from "./testing/host-rig.ts";
+import { createStandInHost, resultText } from "./testing/stand-in-host.ts";
 
 /**
- * Record every registration surface a Pi host offers an extension.
+ * What the v2 entry point registers, and that it registers it once.
  *
- * A widget is not one of them: `setWidget` lives on the UI context a session
- * event hands out, never on `ExtensionAPI`. An extension that registers no
- * session event handler therefore cannot install one, which is what the
- * `events` assertion below proves.
+ * Pi's registries are per-process, so "once" is a real property rather than a
+ * tidiness one: a tool registered twice is a tool the model sees twice. Every
+ * assertion here is about the registration surface; what the handlers *do* is
+ * the host tests' business.
  */
-function stubHost(): {
-  pi: ExtensionAPI;
-  commands: RegisteredCommand[];
-  tools: string[];
-  renderers: string[];
-  events: string[];
-} {
-  const commands: RegisteredCommand[] = [];
-  const tools: string[] = [];
-  const renderers: string[] = [];
-  const events: string[] = [];
-  const pi = {
-    registerCommand(name: string, options: unknown) {
-      commands.push({
-        name,
-        options: options as RegisteredCommand["options"],
-      });
-    },
-    registerTool(tool: { name: string }) {
-      tools.push(tool.name);
-    },
-    registerMessageRenderer(customType: string) {
-      renderers.push(customType);
-    },
-    on(event: string) {
-      events.push(event);
-    },
-    sendMessage() {},
-    sendUserMessage() {},
-  } as unknown as ExtensionAPI;
-  return { pi, commands, tools, renderers, events };
-}
 
-test("the v2 entry registers exactly one slash command", () => {
-  const host = stubHost();
+test("the v2 entry registers the six tools, the agents command, and the notification renderer", () => {
+  const host = createStandInHost();
+
+  installSubagentV2(host.pi, {
+    agentDir: "/nowhere",
+    backendSet: createDemoBackendSet,
+  });
+
+  assert.deepEqual(
+    host.tools().map((tool) => tool.name),
+    [...V2_TOOL_NAMES],
+  );
+  assert.deepEqual(
+    host.commands().map((command) => command.name),
+    [AGENTS_COMMAND_NAME],
+  );
+  assert.deepEqual(host.renderers(), [NOTIFICATION_MESSAGE_TYPE]);
+});
+
+test("the v2 entry subscribes to the two Session events and the three landing events", () => {
+  const host = createStandInHost();
+
+  installSubagentV2(host.pi, {
+    agentDir: "/nowhere",
+    backendSet: createDemoBackendSet,
+  });
+
+  assert.deepEqual(host.subscribed(), [
+    "session_start",
+    "session_shutdown",
+    "message_start",
+    "turn_end",
+    "agent_settled",
+  ]);
+});
+
+test("the default export installs the same surface against the machine's agent directory", () => {
+  const host = createStandInHost();
 
   subagentV2Extension(host.pi);
 
   assert.deepEqual(
-    host.commands.map((command) => command.name),
-    [V2_COMMAND_NAME],
+    host.tools().map((tool) => tool.name),
+    [...V2_TOOL_NAMES],
+  );
+  assert.deepEqual(host.renderers(), [NOTIFICATION_MESSAGE_TYPE]);
+});
+
+test("every registered tool carries a label, a description, and a prompt snippet", () => {
+  const host = createStandInHost();
+
+  installSubagentV2(host.pi, {
+    agentDir: "/nowhere",
+    backendSet: createDemoBackendSet,
+  });
+
+  for (const tool of host.tools()) {
+    assert.ok(tool.label.length > 0, `${tool.name} has no label`);
+    assert.ok(tool.description.length > 0, `${tool.name} has no description`);
+    assert.ok(
+      (tool.promptSnippet ?? "").length > 0,
+      `${tool.name} has no prompt snippet`,
+    );
+    // A snippet is one line for Pi's Available tools section, so it carries no
+    // sentence-ending period and no newline.
+    assert.doesNotMatch(tool.promptSnippet ?? "", /[.\n]$/);
+  }
+});
+
+// ── The demo backend set ─────────────────────────────────────────────────────
+
+test("a Session built from the demo set offers two Profiles and answers", async (t) => {
+  const host = createStandInHost();
+  const installation = installSubagentV2(host.pi, {
+    // A directory with no Profile files, so the only Profiles are the set's.
+    agentDir: hostRig(t).agentsDir,
+    backendSet: createDemoBackendSet,
+  });
+  await host.sessionStart();
+  t.after(() => installation.handle.release());
+
+  assert.deepEqual(
+    installation.profiles().map((profile) => profile.name),
+    [DEMO_RESUMABLE_PROFILE, DEMO_ONE_SHOT_PROFILE],
+  );
+
+  const started = startedIds(
+    resultText(
+      await host.call("agent_start", {
+        agent: DEMO_RESUMABLE_PROFILE,
+        description: "try the demo",
+        prompt: "say something",
+      }),
+    ),
+  );
+  await host.call("agent_wait", { ids: [started.runId] });
+
+  assert.match(
+    resultText(await host.call("agent_result", { id: started.runId })),
+    new RegExp(DEMO_ANSWER),
   );
 });
 
-test("the v2 entry registers no model tools, renderers, or session event handlers", () => {
-  const host = stubHost();
+test("the demo Profiles describe themselves and name one backend each", () => {
+  const set = createDemoBackendSet();
 
-  subagentV2Extension(host.pi);
-
-  assert.deepEqual(host.tools, []);
-  assert.deepEqual(host.renderers, []);
-  // No session event handler means no UI context, so no widget either.
-  assert.deepEqual(host.events, []);
-});
-
-test("the placeholder command reports the skeleton marker and the pinned Effect version", async () => {
-  const host = stubHost();
-  const notified: Array<{ message: string; level: string }> = [];
-
-  subagentV2Extension(host.pi);
-  await host.commands[0].options.handler("", {
-    ui: {
-      notify(message: string, level: string) {
-        notified.push({ message, level });
-      },
-    },
-  } as unknown as ExtensionCommandContext);
-
-  assert.equal(notified.length, 1);
-  assert.equal(notified[0].level, "info");
-  assert.ok(notified[0].message.includes(V2_SKELETON_MARKER));
-  assert.ok(notified[0].message.includes(PINNED_EFFECT_VERSION));
-  assert.equal(notified[0].message, formatSkeletonStatus());
-});
-
-test("the placeholder command describes itself for the command list", () => {
-  const host = stubHost();
-
-  subagentV2Extension(host.pi);
-
-  assert.equal(
-    host.commands[0].options.description,
-    "Report that the pi-subagent v2 skeleton is loaded.",
+  assert.equal(set.backends.length, 2);
+  assert.deepEqual(
+    set.profiles.map((profile) => profile.backend),
+    set.backends.map((backend) => backend.id),
   );
+  for (const profile of set.profiles) {
+    assert.ok(profile.description.length > 0);
+    assert.ok(profile.systemPrompt.length > 0);
+  }
+  assert.ok(DEMO_ANSWER.length > 0);
 });

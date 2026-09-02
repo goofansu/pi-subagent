@@ -426,6 +426,40 @@ export function formatResultRejection(
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* The host boundary's own two sentences                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * What a tool says when there is no live Session runtime to answer it.
+ *
+ * This is the teardown race, and it is a message rather than a crash: a tool
+ * call can arrive between a Session ending and the next one starting, and Pi
+ * registers tools once per process, so the handler exists whether or not a
+ * runtime does.
+ */
+export function formatSessionNotReady(tool: string): string {
+  return (
+    `Cannot run ${tool}: this Session has no subagent runtime, so nothing ` +
+    "was started. That happens only while a Session is starting or shutting " +
+    "down; try again once it is ready."
+  );
+}
+
+/**
+ * What a tool says when its arguments did not decode.
+ *
+ * `detail` names the field and the rule it broke and carries no part of the
+ * value — Effect Schema's messages are value-free, which was the M2 spike's
+ * gating question. The caller bounds it before it gets here.
+ */
+export function formatToolInputRejected(tool: string, detail: string): string {
+  return (
+    `Cannot run ${tool}: its arguments were not usable. ${detail}. Nothing ` +
+    "was started. Correct the arguments and call it again."
+  );
+}
+
 /** The status word a terminal Run is named by, for callers that need it bare. */
 export function terminalStatusWord(status: TerminalRunPhase): string {
   return status;
