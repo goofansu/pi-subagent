@@ -301,6 +301,16 @@ function createFakeBackend(
               yield* Effect.never;
               break;
             }
+            case "emit-in-finalizer": {
+              const late = step.observation;
+              yield* Effect.acquireRelease(Effect.void, () =>
+                Effect.gen(function* () {
+                  trace.push(`finalizer-emitting:${input.runId}`);
+                  yield* io.emit(late);
+                }),
+              );
+              break;
+            }
             case "hang-in-finalizer": {
               // Acquired now, released never. Closing the execution scope
               // waits on this forever, which is what the cleanup budget and

@@ -173,9 +173,13 @@ function isTestFile(file: string): boolean {
 /**
  * Runtime mechanism vocabulary that belongs at the host boundary and in tests.
  *
- * The domain has no runtime in it at all, and the backend contract expresses
- * lifetime with `Scope` and cancellation with interruption — so an adapter is
- * never handed a signal to poll, and nothing in either module runs an Effect.
+ * The domain has no runtime in it at all, the backend contract expresses
+ * lifetime with `Scope` and cancellation with interruption, and the Session
+ * runtime runs *inside* an Effect rather than starting one — so an adapter is
+ * never handed a signal to poll, and none of the three modules runs an Effect.
+ * `Effect.runPromise` belongs at the host boundary, which is where a Pi
+ * callback crosses into Effect and nowhere else.
+ *
  * Tests are exempt: a test has to run the Effect it is testing, and the
  * contract's own shape test names these very words as forbidden.
  */
@@ -345,12 +349,14 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 5. Runtime mechanism vocabulary stays out of the neutral core, and the
-  //    runtime primitives stay out of the domain specifically — the contract
-  //    names `Scope` on purpose, because lifetime is what it is about.
+  // 5. Runtime mechanism vocabulary stays out of the neutral core and out of
+  //    the Session runtime, and the runtime primitives stay out of the domain
+  //    specifically — the contract names `Scope` on purpose, because lifetime
+  //    is what it is about.
   for (const file of [
     ...listSourceFiles(graph.domainRoot, { includeTests: false }),
     ...listSourceFiles(graph.contractRoot, { includeTests: false }),
+    ...listSourceFiles(graph.runtimeRoot, { includeTests: false }),
   ]) {
     const source = fs.readFileSync(file, "utf8");
     for (const mechanism of MECHANISM_VOCABULARY) {
@@ -845,6 +851,29 @@ test("mechanism vocabulary in the domain or the contract is rejected", (t) => {
       `${describe(path.join(graph.domainRoot, "reduce.ts"))} contains runtime mechanism vocabulary AbortController`,
     ].sort(),
   );
+});
+
+test("a runtime module running an Effect or polling a signal is rejected", (t) => {
+  const { graph, write } = fixtureGraph(t, "runtime-mechanism");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/runtime/supervisor.ts",
+    'import { Effect } from "effect";\nawait Effect.runPromise(Effect.void);\n',
+  );
+  write(
+    "extensions/subagent-v2/runtime/run-scope.ts",
+    "export const stop = new AbortController();\n",
+  );
+  write(
+    "extensions/subagent-v2/runtime/mailbox.ts",
+    "/** Never handed an AbortSignal. */\nexport {};\n",
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.runtimeRoot, "mailbox.ts"))} contains runtime mechanism vocabulary AbortSignal`,
+    `${describe(path.join(graph.runtimeRoot, "run-scope.ts"))} contains runtime mechanism vocabulary AbortController`,
+    `${describe(path.join(graph.runtimeRoot, "supervisor.ts"))} contains runtime mechanism vocabulary Effect.runPromise`,
+  ]);
 });
 
 test("a test may name mechanism vocabulary, because a test has to run things", (t) => {

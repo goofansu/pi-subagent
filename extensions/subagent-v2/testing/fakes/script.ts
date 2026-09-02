@@ -63,6 +63,14 @@ export type FakeStep =
   /** Never finish. Only interruption ends this execution. */
   | { readonly step: "hang" }
   /**
+   * Emit one observation from the execution scope's finalizer.
+   *
+   * A real adapter does this when a provider callback lands during teardown.
+   * By then the Run has sealed its intake, so the observation is late and the
+   * contract's "emit never fails" has to hold for it anyway.
+   */
+  | { readonly step: "emit-in-finalizer"; readonly observation: RunObservation }
+  /**
    * Make the execution scope's finalizer never finish.
    *
    * A real adapter can do this by waiting on a provider teardown that never

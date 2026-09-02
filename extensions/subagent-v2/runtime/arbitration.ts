@@ -47,12 +47,13 @@ import {
 export const DEFECT_FALLBACK_MESSAGE = "the backend execution failed";
 
 /**
- * The one thing the coordinator captured.
+ * The four things that can tell a Run it is over.
  *
- * There is no candidate for "the backend announced an ending in the stream",
- * because that is not something the coordinator races for — it is already in
- * the projection by the time anything else happens, and it reaches arbitration
- * as {@link ArbitrationInput.announced}.
+ * The coordinator captures whichever arrives first and counts the rest. An
+ * in-stream ending is a candidate even though it does not *end* the Run — the
+ * execution still has to return — because it is the ending that closed the
+ * projection, and capturing it is how "first ending wins" is recorded rather
+ * than re-derived.
  */
 export type SettlementCandidate =
   /** The execution returned. */
@@ -60,7 +61,9 @@ export type SettlementCandidate =
   /** The execution fiber was interrupted: cancel, timeout, shutdown, close. */
   | { readonly source: "interruption"; readonly reason: CancellationReason }
   /** The execution failed or died, which an adapter must never do. */
-  | { readonly source: "defect" };
+  | { readonly source: "defect" }
+  /** The backend said how the Run ended, in the observation stream. */
+  | { readonly source: "in-stream-ending"; readonly ending: RunEnding };
 
 export interface ArbitrationInput {
   readonly candidate: SettlementCandidate;
@@ -107,6 +110,12 @@ export function arbitrate(input: ArbitrationInput): Arbitration {
   }
 
   switch (candidate.source) {
+    // Rule 1 again, for the case where the coordinator captured the in-stream
+    // ending before the reducer had written it back to the projection. Same
+    // answer, reached from the candidate rather than from `announced`.
+    case "in-stream-ending":
+      return { ending: candidate.ending, from: "in-stream", late: false };
+
     // Rule 2.
     case "bundle":
       return { ending: candidate.bundle.ending, from: "bundle", late: false };

@@ -120,6 +120,23 @@ test("an in-stream ending survives a later interruption and a later defect", () 
   assert.equal(died.diagnostic?.category, "backend-failure");
 });
 
+test("an in-stream ending captured as the candidate decides the same way", () => {
+  // The coordinator captured it before the reducer wrote it back, so it
+  // arrives as the candidate rather than as `announced`. Same answer.
+  const decided = arbitrate({
+    candidate: {
+      source: "in-stream-ending",
+      ending: cancelledEnding("timeout"),
+    },
+  });
+
+  assert.deepEqual(decided, {
+    ending: { ending: "cancelled", reason: "timeout" },
+    from: "in-stream",
+    late: false,
+  });
+});
+
 test("arbitration is a function of its arguments and nothing else", () => {
   const input = {
     candidate: { source: "bundle", bundle: { ending: answeredEnding() } },
