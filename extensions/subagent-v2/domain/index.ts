@@ -13,6 +13,7 @@ export * from "./diagnostics.ts";
 export * from "./endings.ts";
 export * from "./ids.ts";
 export * from "./links.ts";
+export * from "./notification.ts";
 export * from "./observations.ts";
 export * from "./outcomes.ts";
 export * from "./phases.ts";

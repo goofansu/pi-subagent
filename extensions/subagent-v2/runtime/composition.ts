@@ -21,6 +21,12 @@ import { Layer } from "effect";
 import type { Backend } from "../backend/contract.ts";
 import type { Profile, ProfileDiagnostic } from "../domain/index.ts";
 import { BackendCatalog } from "./backend-catalog.ts";
+import { createRuntimeCounters, type RuntimeCounters } from "./counters.ts";
+import {
+  CompletionDelivery,
+  createFakeNotificationSink,
+  type NotificationSink,
+} from "./delivery.ts";
 import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
 import { ProfileCatalog } from "./profile-catalog.ts";
 import { RunRepository } from "./repository.ts";
@@ -33,6 +39,7 @@ export type SessionServices =
   | ProfileCatalog
   | RunRepository
   | ResultStore
+  | CompletionDelivery
   | SubagentSupervisor;
 
 /** How deeply a Subagent may itself delegate, when nothing says otherwise. */
@@ -56,6 +63,16 @@ export interface SessionRuntimeOptions {
       };
   readonly policy?: RuntimePolicy;
   readonly maxDelegationDepth?: number;
+  /**
+   * Where completion Notifications go.
+   *
+   * M3 supplies the real Session push. Until then the default is a fake that
+   * records what it was given, so a Session built with no sink still has
+   * delivery running rather than silently skipping it.
+   */
+  readonly sink?: NotificationSink;
+  /** Shared with the caller when a test wants to read the probe directly. */
+  readonly counters?: RuntimeCounters;
 }
 
 /**
@@ -70,10 +87,12 @@ export interface SessionRuntimeOptions {
 export function sessionRuntimeLayer(
   options: SessionRuntimeOptions,
 ): Layer.Layer<SessionServices> {
+  const counters = options.counters ?? createRuntimeCounters();
   const settings: SessionSettings = {
     policy: options.policy ?? DEFAULT_RUNTIME_POLICY,
     maxDelegationDepth:
       options.maxDelegationDepth ?? DEFAULT_MAX_DELEGATION_DEPTH,
+    counters,
   };
 
   const backendCatalog = BackendCatalog.layerOf(options.backends);
@@ -86,11 +105,18 @@ export function sessionRuntimeLayer(
         )
   ).pipe(Layer.provide(backendCatalog));
 
+  const resultStore = ResultStore.layerOf(settings.policy);
+  const delivery = CompletionDelivery.layerOf(
+    settings.policy,
+    options.sink ?? createFakeNotificationSink(),
+    counters,
+  ).pipe(Layer.provideMerge(resultStore));
+
   const foundation = Layer.mergeAll(
     backendCatalog,
     profileCatalog,
     RunRepository.layer,
-    ResultStore.layerOf(settings.policy),
+    delivery,
   );
 
   return SubagentSupervisor.layerOf(settings).pipe(

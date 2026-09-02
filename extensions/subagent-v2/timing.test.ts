@@ -17,6 +17,14 @@ import { listSourceFiles } from "../../tools/import-specifiers.ts";
  * accidentally — one `await new Promise((resolve) => setTimeout(resolve, 10))`
  * to "let things settle" is all it takes, and it will pass for months before
  * it starts failing intermittently.
+ *
+ * The sleep rule applies to **tests**, which is where it is about proof. A
+ * production module that sleeps — the delivery retry budget is the one that
+ * does — sleeps against the runtime `Clock`, which is exactly the thing a
+ * test replaces with `TestClock`. Forbidding that would push the delay
+ * somewhere the test clock could not reach it, which is the opposite of what
+ * this file is for. Timers stay forbidden everywhere, because a timer is the
+ * one thing no clock can replace.
  */
 
 const repositoryRoot = path.resolve(
@@ -58,11 +66,14 @@ test("no v2 source calls a timer", () => {
   assert.deepEqual(offenders, []);
 });
 
-test("a v2 source that sleeps does so against a test clock", () => {
+test("a v2 test that sleeps does so against a test clock", () => {
   const offenders: string[] = [];
 
   for (const file of listSourceFiles(v2Root, { includeTests: true })) {
     if (file === fileURLToPath(import.meta.url)) continue;
+    // A production module sleeps against the runtime clock, which a test
+    // replaces. Only a test that lets real time pass is the problem.
+    if (!file.endsWith(".test.ts")) continue;
     const source = readFileSync(file, "utf8");
     if (!source.includes(SLEEP)) continue;
     if (source.includes(TEST_CLOCK)) continue;

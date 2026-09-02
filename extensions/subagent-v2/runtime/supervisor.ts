@@ -58,12 +58,12 @@ import {
   type WaitOutcome,
 } from "../domain/index.ts";
 import { BackendCatalog } from "./backend-catalog.ts";
-import {
-  createRuntimeCounters,
-  type RuntimeCounters,
-  type RuntimeProbe,
-  type SupervisorCounters,
+import type {
+  RuntimeCounters,
+  RuntimeProbe,
+  SupervisorCounters,
 } from "./counters.ts";
+import { CompletionDelivery } from "./delivery.ts";
 import type { RuntimePolicy } from "./policy.ts";
 import { ProfileCatalog } from "./profile-catalog.ts";
 import { RunRepository } from "./repository.ts";
@@ -92,6 +92,14 @@ export interface SessionSettings {
   readonly policy: RuntimePolicy;
   /** How deeply a Subagent may itself delegate. */
   readonly maxDelegationDepth: number;
+  /**
+   * The Session's counters and probe.
+   *
+   * Shared rather than created here, because delivery counts into the same
+   * set and a test that read two different snapshots would be reading two
+   * different Sessions.
+   */
+  readonly counters: RuntimeCounters;
 }
 
 /** One Subagent: a fixed Profile, a retained BackendAgent, and a scope. */
@@ -142,7 +150,8 @@ const makeSupervisor = (settings: SessionSettings) =>
     const profiles = yield* ProfileCatalog;
     const repository = yield* RunRepository;
     const store = yield* ResultStore;
-    const counters: RuntimeCounters = createRuntimeCounters();
+    const delivery = yield* CompletionDelivery;
+    const counters = settings.counters;
     const { policy } = settings;
     /**
      * The Session Scope: the layer's own scope, and the parent of every
@@ -264,7 +273,7 @@ const makeSupervisor = (settings: SessionSettings) =>
                   stages.push(`${identity.runId}:${stage}`);
                 },
                 closeExecutionScope: closeUnderCleanupBudget(record),
-                onSettled: () => releaseWaiterPinIfIdle(identity.runId),
+                onSettled: () => settled(identity.runId),
               },
               (handle) =>
                 Effect.gen(function* () {
@@ -290,6 +299,26 @@ const makeSupervisor = (settings: SessionSettings) =>
         // id can immediately steer, cancel, or wait on it.
         yield* Deferred.await(started);
         yield* armDefaultTimeout(record, identity.runId);
+      });
+
+    /**
+     * What settlement does once the terminal snapshot is published.
+     *
+     * Delivery is *initiated*, not awaited: it retries on a clock, and a Run
+     * fiber that waited for it would hold its Run Scope open for as long as a
+     * failing sink took to give up. The sweep goes with it, so a wake-up this
+     * fork somehow misses is recovered by the pass that follows it.
+     */
+    const settled = (runId: RunId): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        yield* releaseWaiterPinIfIdle(runId);
+        yield* Effect.forkIn(
+          Effect.gen(function* () {
+            yield* delivery.deliver(runId);
+            yield* delivery.sweep();
+          }),
+          sessionScope,
+        );
       });
 
     /**
@@ -813,7 +842,9 @@ const makeSupervisor = (settings: SessionSettings) =>
           yield* closeSubagent(record, "shutdown");
         }
         // The next Session's model did not start these Runs and has no context
-        // in which to act on their answers.
+        // in which to act on their answers, so an undelivered notification is
+        // dropped rather than queued.
+        yield* delivery.stop();
         yield* store.clear();
       });
 
@@ -891,7 +922,11 @@ export class SubagentSupervisor extends Context.Service<
   ): Layer.Layer<
     SubagentSupervisor,
     never,
-    BackendCatalog | ProfileCatalog | RunRepository | ResultStore
+    | BackendCatalog
+    | ProfileCatalog
+    | RunRepository
+    | ResultStore
+    | CompletionDelivery
   > {
     return Layer.effect(
       SubagentSupervisor,

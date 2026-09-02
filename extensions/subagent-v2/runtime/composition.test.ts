@@ -6,6 +6,7 @@ import { createFakeResumableBackend } from "../testing/fakes/backend.ts";
 import { scripts } from "../testing/fakes/script.ts";
 import { BackendCatalog } from "./backend-catalog.ts";
 import { sessionRuntimeLayer } from "./composition.ts";
+import { CompletionDelivery } from "./delivery.ts";
 import { ProfileCatalog } from "./profile-catalog.ts";
 import { RunRepository } from "./repository.ts";
 import { ResultStore } from "./result-store.ts";
@@ -29,12 +30,13 @@ const profile: Profile = {
   systemPrompt: "Explore.",
 };
 
-/** The six session-long services the roadmap starts with, less the clock. */
+/** The six session-long services the roadmap names, and no seventh. */
 const SESSION_SERVICES = [
   BackendCatalog,
   ProfileCatalog,
   RunRepository,
   ResultStore,
+  CompletionDelivery,
   SubagentSupervisor,
 ] as const;
 
