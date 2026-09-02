@@ -1,6 +1,6 @@
 # pi-subagent v2 roadmap
 
-**Status:** Accepted. **M0 is complete** (2026-09-02); M1 is next.  
+**Status:** Accepted. **M1 is complete** (2026-09-02); M2 is next.  
 **Strategy:** Rewrite the execution architecture inside the existing `pi-subagent` product  
 **Delivery model:** Gate-driven milestones, not a date-driven big-bang rewrite
 
