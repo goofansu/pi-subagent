@@ -1,17 +1,17 @@
 /**
  * Resolving a backend by name.
  *
- * A plain map in M1, deliberately. The registry's job is to answer "which
+ * A plain map in M1, deliberately. The catalog's job is to answer "which
  * backend does this Profile name, and does it exist" — and doing that as a
  * function of a list makes Profile validation testable without a runtime. M2
- * turns it into a session-long service built once when the Session Scope
- * opens; the lookup rule stays exactly this.
+ * turns it into the session-long `BackendCatalog` service, built once when the
+ * Session Scope opens; the lookup rule stays exactly this.
  */
 
 import type { BackendId, Profile, ProfileDiagnostic } from "../domain/index.ts";
 import type { Backend, BackendValidationContext } from "./contract.ts";
 
-export interface BackendRegistry {
+export interface BackendCatalog {
   readonly ids: readonly BackendId[];
   readonly get: (id: BackendId) => Backend | undefined;
   /**
@@ -28,9 +28,9 @@ export interface BackendRegistry {
   ) => readonly ProfileDiagnostic[];
 }
 
-export function createBackendRegistry(
+export function createBackendCatalog(
   backends: readonly Backend[],
-): BackendRegistry {
+): BackendCatalog {
   const byId = new Map(backends.map((backend) => [backend.id, backend]));
   return {
     ids: [...byId.keys()],

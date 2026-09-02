@@ -128,7 +128,7 @@ export function unrecognizedFields(
 }
 
 export interface CommonProfileFieldOptions {
-  /** How diagnostics name the backend. Not necessarily its registry id. */
+  /** How diagnostics name the backend. Not necessarily its `BackendId`. */
   readonly displayName: string;
   /** Every field this backend understands beyond the shared four. */
   readonly ownFields?: readonly string[];

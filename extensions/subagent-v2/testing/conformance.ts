@@ -22,6 +22,12 @@
  * those map onto scenarios here one to one: backend crash, abort mid-run,
  * terminal answer then abort, usage totals, no terminal answer, transcript
  * healing, and the four steering scenarios.
+ *
+ * This module registers tests, so it is the conformance lane's test boundary —
+ * the one place it crosses from Effect into a `node:test` callback, and
+ * therefore the one place it runs an Effect. It carries no `.test.ts` suffix
+ * because `node --test` would collect it and it registers nothing until a rig
+ * asks it to.
  */
 
 import assert from "node:assert/strict";

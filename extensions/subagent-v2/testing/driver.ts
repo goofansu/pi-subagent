@@ -3,7 +3,7 @@
  *
  * M2 builds the real supervisor. This is the smallest thing that can run one
  * Run end to end so the M1 lifecycle rules are demonstrable *before* that
- * supervisor exists: it opens nothing, owns no registry, has no capacity, no
+ * supervisor exists: it opens nothing, owns no catalog, has no capacity, no
  * mailbox bounds, and no result store. It does exactly five things, in the
  * order ADR-0025 fixes:
  *

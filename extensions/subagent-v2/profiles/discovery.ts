@@ -5,9 +5,9 @@
  * it reads a directory, so it lives out here, and it is deliberately the only
  * v2 module that touches the filesystem to find Profiles.
  *
- * Validation is a callback rather than a registry lookup. Discovery does not
+ * Validation is a callback rather than a catalog lookup. Discovery does not
  * need to know what a backend is; it needs to know whether this Profile is
- * usable, and the caller — which does have a backend registry — answers that.
+ * usable, and the caller — which does have a backend catalog — answers that.
  */
 
 import fs from "node:fs";

@@ -11,6 +11,7 @@ import {
   subagentId,
 } from "../domain/index.ts";
 import type { Equals, Expect } from "../testing/type-level.ts";
+import { createBackendCatalog } from "./catalog.ts";
 import {
   BACKEND_AGENT_MEMBERS,
   BACKEND_CAPABILITY_MEMBERS,
@@ -29,7 +30,6 @@ import {
   TERMINAL_BUNDLE_MEMBERS,
   type TerminalBundle,
 } from "./contract.ts";
-import { createBackendRegistry } from "./registry.ts";
 
 /**
  * The contract's shape, pinned.
@@ -311,10 +311,10 @@ test("admitting a resume is a plain synchronous call, not an Effect", async () =
 });
 
 /* -------------------------------------------------------------- */
-/* Registry                                                       */
+/* Catalog                                                        */
 /* -------------------------------------------------------------- */
 
-test("the registry validates a Profile through the backend it names", () => {
+test("the catalog validates a Profile through the backend it names", () => {
   const backend: Backend = {
     ...standInBackend([]),
     id: backendId("pi"),
@@ -322,20 +322,20 @@ test("the registry validates a Profile through the backend it names", () => {
       { filePath, reason: `pi saw ${subject.name}` },
     ],
   };
-  const registry = createBackendRegistry([backend]);
+  const catalog = createBackendCatalog([backend]);
 
-  assert.deepEqual(registry.ids, ["pi"]);
-  assert.equal(registry.get(backendId("pi")), backend);
-  assert.equal(registry.get(backendId("codex")), undefined);
-  assert.deepEqual(registry.validateProfile(profile, "/agents/x.md"), [
+  assert.deepEqual(catalog.ids, ["pi"]);
+  assert.equal(catalog.get(backendId("pi")), backend);
+  assert.equal(catalog.get(backendId("codex")), undefined);
+  assert.deepEqual(catalog.validateProfile(profile, "/agents/x.md"), [
     { filePath: "/agents/x.md", reason: "pi saw stand-in" },
   ]);
 });
 
 test("a Profile naming an unknown backend is one diagnostic, not an exception", () => {
-  const registry = createBackendRegistry([]);
+  const catalog = createBackendCatalog([]);
 
-  assert.deepEqual(registry.validateProfile(profile, "/agents/x.md"), [
+  assert.deepEqual(catalog.validateProfile(profile, "/agents/x.md"), [
     { filePath: "/agents/x.md", reason: "unknown backend 'pi'" },
   ]);
 });

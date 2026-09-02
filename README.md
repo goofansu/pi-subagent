@@ -296,8 +296,10 @@ commit at which the quality gate was recorded green, are in
 `npm run check` runs typechecking for both extension trees, lint, per-Run
 Harness Conformance, repeated managed Subagent conformance for the controlled
 harness and every production adapter, the full test suite, the v2 lane (v2 tests
-plus the v1/v2 import boundary), and a byte-for-byte generated Codex protocol
-check (`npm run codex:protocol:check`). `npm run release:check` adds all six
+plus the v1/v2 import boundary), the shared v2 backend conformance suite against
+both fake backends (`npm run test:v2:conformance`, also runnable on its own so
+it can be pointed at a real adapter), and a byte-for-byte generated Codex
+protocol check (`npm run codex:protocol:check`). `npm run release:check` adds all six
 authenticated provider gates and the retained-Codex evidence gate. It remains
 red until the pinned authenticated smoke and human Desktop record both exist.
 `npm run codex:smoke` preserves the live
