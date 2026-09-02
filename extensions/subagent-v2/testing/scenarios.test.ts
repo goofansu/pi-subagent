@@ -528,17 +528,17 @@ test("shutdown, all retained resources close: every counter returns to zero", as
         yield* untilUnderWay(rig);
         yield* rig.supervisor.shutdown();
         return {
-          snapshot: yield* rig.repository.get(started.runId),
+          // Shutdown clears the store and forgets every identity, so nothing
+          // survives into a Session that did not start these Runs.
+          forgotten: (yield* rig.repository.lookup(started.runId)).state,
           counters: rig.backend.counters(),
-          // Shutdown clears the store, so nothing survives into the next
-          // Session that did not start these Runs.
           stored: yield* rig.store.stored(),
           rejected: (yield* rig.supervisor.start(rigRequest())).outcome,
         };
       }),
   );
 
-  assert.equal(value.snapshot?.phase, "cancelled");
+  assert.equal(value.forgotten, "unknown");
   assert.equal(value.counters.opens - value.counters.closes, 0);
   assert.equal(value.counters.liveExecutions, 0);
   assert.equal(value.counters.liveSubscriptions, 0);
@@ -577,6 +577,9 @@ test("a scripted late observation is ignored and changes nothing", async () => {
   // A terminal projection is absorbing: everything after the ending is late.
   assert.deepEqual(texts(value.read.result), ["the answer"]);
   assert.equal(value.read.result.usage.totals.input, 0);
-  assert.ok(value.counters.lateEvents >= 1);
+  // It reached the reducer and changed nothing, which is a different fact
+  // from an emit that never got that far.
+  assert.ok(value.counters.lateObservations >= 1);
+  assert.equal(value.counters.lateEvents, 0);
   assert.ok(value.counters.lateEndings >= 1);
 });

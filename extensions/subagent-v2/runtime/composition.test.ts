@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type Context, Effect } from "effect";
 import { DEFAULT_BACKEND_ID, type Profile } from "../domain/index.ts";
+import { createFakeNotificationSink } from "../testing/fake-sink.ts";
 import { createFakeResumableBackend } from "../testing/fakes/backend.ts";
 import { scripts } from "../testing/fakes/script.ts";
 import { BackendCatalog } from "./backend-catalog.ts";
@@ -44,6 +45,7 @@ function layerFor(): ReturnType<typeof sessionRuntimeLayer> {
   const backend = createFakeResumableBackend({ scripts: scripts([]) });
   return sessionRuntimeLayer({
     backends: [backend.backend],
+    sink: createFakeNotificationSink(),
     profiles: {
       from: "list",
       profiles: [{ ...profile, backend: backend.backend.id }],
@@ -98,6 +100,7 @@ test("the Profile catalog validates through the backend catalog it is given", as
       Effect.provide(
         sessionRuntimeLayer({
           backends: [rejecting.backend],
+          sink: createFakeNotificationSink(),
           profiles: {
             from: "list",
             profiles: [{ ...profile, backend: rejecting.backend.id }],
@@ -141,6 +144,7 @@ test("a Profile naming a backend this Session does not have is a diagnostic, not
       Effect.provide(
         sessionRuntimeLayer({
           backends: [],
+          sink: createFakeNotificationSink(),
           profiles: { from: "list", profiles: [profile] },
         }),
       ),

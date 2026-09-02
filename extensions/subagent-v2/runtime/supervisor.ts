@@ -34,10 +34,16 @@ import {
   Exit,
   Fiber,
   Layer,
+  type Option,
   Ref,
   Scope,
 } from "effect";
-import type { Backend, BackendAgent, RunControl } from "../backend/contract.ts";
+import type {
+  Backend,
+  BackendAgent,
+  BackendOpenFailure,
+  RunControl,
+} from "../backend/contract.ts";
 import {
   alreadyTerminal,
   type CancellationReason,
@@ -66,9 +72,17 @@ import type {
 import { CompletionDelivery } from "./delivery.ts";
 import type { RuntimePolicy } from "./policy.ts";
 import { ProfileCatalog } from "./profile-catalog.ts";
-import { RunRepository } from "./repository.ts";
+import { RunRepository, type RunSnapshot } from "./repository.ts";
 import { ResultStore } from "./result-store.ts";
-import { type RunHandle, type RunStage, runToSettlement } from "./run-scope.ts";
+import { type RunHandle, runToSettlement } from "./run-scope.ts";
+
+/** What an adapter that died rather than failing says instead. */
+const OPEN_FAILED_MESSAGE = "the backend could not be opened";
+
+/** What an open that outlived its budget says. */
+export function openBudgetExceededMessage(millis: number): string {
+  return `the backend did not open within ${millis}ms`;
+}
 
 /** What `agent_start` is given. The four fixed facts come from the caller. */
 export interface StartRequest {
@@ -144,6 +158,31 @@ const EMPTY_ADMISSION: AdmissionState = {
   running: new Set(),
 };
 
+/**
+ * What a failed open tells the caller.
+ *
+ * Three cases, one outcome. A backend that said why keeps the diagnostic it
+ * already redacted; an open that outlived its budget says so, because that is
+ * a different thing for a maintainer to see; an adapter that died rather than
+ * failing gets the neutral message, because it said nothing that could be
+ * carried. No provider text crosses in any of the three.
+ */
+function openFailure(
+  failure: Option.Option<BackendOpenFailure | Cause.TimeoutError>,
+  budgetMillis?: number,
+): RunDiagnostic {
+  if (failure._tag !== "Some") {
+    return runDiagnostic("backend-failure", OPEN_FAILED_MESSAGE);
+  }
+  if (Cause.isTimeoutError(failure.value)) {
+    return runDiagnostic(
+      "backend-failure",
+      openBudgetExceededMessage(budgetMillis ?? 0),
+    );
+  }
+  return failure.value.diagnostic;
+}
+
 const makeSupervisor = (settings: SessionSettings) =>
   Effect.gen(function* () {
     const backends = yield* BackendCatalog;
@@ -165,7 +204,6 @@ const makeSupervisor = (settings: SessionSettings) =>
 
     const admission = yield* Ref.make(EMPTY_ADMISSION);
     const subagents = new Map<SubagentId, SubagentRecord>();
-    const trace: RunStage[] = [];
     /** Hooks the conformance suite reads instead of the deleted driver's log. */
     const stages: string[] = [];
 
@@ -203,6 +241,15 @@ const makeSupervisor = (settings: SessionSettings) =>
         ];
       });
 
+    /**
+     * Give back what one Run claimed.
+     *
+     * Clamped at zero deliberately. Every path that claims releases exactly
+     * once, so the clamp should never fire — but if one ever released twice,
+     * a negative count would permanently *raise* the effective capacity and
+     * let more Runs in than the policy allows, which is much worse than a
+     * count that is briefly one too high.
+     */
     const releaseClaim = (subagentId: SubagentId): Effect.Effect<void> =>
       Ref.update(admission, (current) => {
         const running = new Set(current.running);
@@ -268,10 +315,7 @@ const makeSupervisor = (settings: SessionSettings) =>
                 controlBounds: policy.controls,
                 startedAt,
                 now,
-                trace: (stage) => {
-                  trace.push(stage);
-                  stages.push(`${identity.runId}:${stage}`);
-                },
+                trace: (stage) => stages.push(`${identity.runId}:${stage}`),
                 closeExecutionScope: closeUnderCleanupBudget(record),
                 onSettled: () => settled(identity.runId),
               },
@@ -522,22 +566,12 @@ const makeSupervisor = (settings: SessionSettings) =>
           return { outcome: "opened" as const, agent: attempt.value, scope };
         }
         yield* Scope.close(scope, Exit.void);
-        const failure = Cause.findErrorOption(attempt.cause);
-        const diagnostic =
-          failure._tag === "Some" &&
-          typeof failure.value === "object" &&
-          failure.value !== null &&
-          "diagnostic" in failure.value
-            ? (
-                failure.value as {
-                  diagnostic: import("../domain/index.ts").RunDiagnostic;
-                }
-              ).diagnostic
-            : // A timeout, or an adapter that died rather than failing. Either
-              // way the caller learns the same thing: this backend could not
-              // be opened, and no provider text crosses.
-              redacted();
-        return { outcome: "failed" as const, diagnostic };
+        const failure: Option.Option<BackendOpenFailure | Cause.TimeoutError> =
+          Cause.findErrorOption(attempt.cause);
+        return {
+          outcome: "failed" as const,
+          diagnostic: openFailure(failure, policy.openBudgetMillis),
+        };
       });
 
     /* ------------------------------------------------------------ */
@@ -613,20 +647,17 @@ const makeSupervisor = (settings: SessionSettings) =>
     /* steer                                                         */
     /* ------------------------------------------------------------ */
 
-    /** The Run handle for an id, if it has one in flight right now. */
-    const handleOf = (runId: RunId): RunHandle | undefined => {
-      for (const record of subagents.values()) {
-        if (record.run?.identity.runId === runId) return record.run;
-      }
-      return undefined;
-    };
-
+    /** The Subagent whose Run this is, if that Run is in flight right now. */
     const recordOf = (runId: RunId): SubagentRecord | undefined => {
       for (const record of subagents.values()) {
         if (record.run?.identity.runId === runId) return record;
       }
       return undefined;
     };
+
+    /** Its Run Scope, which exists for exactly as long as the Run does. */
+    const handleOf = (runId: RunId): RunHandle | undefined =>
+      recordOf(runId)?.run;
 
     const steer = (
       runId: RunId,
@@ -637,7 +668,7 @@ const makeSupervisor = (settings: SessionSettings) =>
         if (state.shuttingDown) return { outcome: "shutting down" } as const;
 
         const known = yield* repository.lookup(runId);
-        if (known.state === "unknown") {
+        if (known.state === "unknown" || known.state === "spent") {
           return { outcome: "unknown Run", runId } as const;
         }
         if (known.state === "terminal") {
@@ -732,21 +763,40 @@ const makeSupervisor = (settings: SessionSettings) =>
           : store.releasePin(runId, "waiters"),
       );
 
+    /**
+     * What a waiter answers about a Run it has seen settle.
+     *
+     * The status comes from the **store**, so a waiter and `agent_result`
+     * cannot disagree about one Run: they read the same value, and a Run whose
+     * output was evicted still carries its status in the entry that stayed.
+     * The repository's snapshot is the fallback for the moment between
+     * publication and a store that has not been asked yet.
+     */
+    const terminalStatusOf = (
+      runId: RunId,
+      snapshot: RunSnapshot,
+    ): Effect.Effect<WaitOutcome> =>
+      Effect.map(store.read(runId), (stored) => {
+        const status =
+          stored.outcome === "result"
+            ? stored.result.status
+            : stored.outcome === "ResultExpired"
+              ? stored.status
+              : (snapshot.terminalStatus ?? "failed");
+        return { outcome: "terminal", runId, status } as const;
+      });
+
     const waitOne = (
       runId: RunId,
       timeoutMillis?: number,
     ): Effect.Effect<WaitOutcome> =>
       Effect.gen(function* () {
         const known = yield* repository.lookup(runId);
-        if (known.state === "unknown") {
+        if (known.state === "unknown" || known.state === "spent") {
           return { outcome: "unknown Run", runId } as const;
         }
         if (known.state === "terminal") {
-          return {
-            outcome: "terminal",
-            runId,
-            status: known.snapshot.terminalStatus ?? "failed",
-          } as const;
+          return yield* terminalStatusOf(runId, known.snapshot);
         }
         const handle = handleOf(runId);
         if (!handle) return { outcome: "still running", runId } as const;
@@ -777,11 +827,7 @@ const makeSupervisor = (settings: SessionSettings) =>
         }
         const settled = yield* repository.lookup(runId);
         return settled.state === "terminal"
-          ? ({
-              outcome: "terminal",
-              runId,
-              status: settled.snapshot.terminalStatus ?? "failed",
-            } as const)
+          ? yield* terminalStatusOf(runId, settled.snapshot)
           : ({ outcome: "still running", runId } as const);
       });
 
@@ -843,9 +889,12 @@ const makeSupervisor = (settings: SessionSettings) =>
         }
         // The next Session's model did not start these Runs and has no context
         // in which to act on their answers, so an undelivered notification is
-        // dropped rather than queued.
+        // dropped rather than queued, the store is cleared, and every local
+        // identity is forgotten.
         yield* delivery.stop();
         yield* store.clear();
+        subagents.clear();
+        yield* repository.forget();
       });
 
     /* ------------------------------------------------------------ */
@@ -855,7 +904,10 @@ const makeSupervisor = (settings: SessionSettings) =>
     const result = (runId: RunId): Effect.Effect<ResultOutcome> =>
       Effect.gen(function* () {
         const known = yield* repository.lookup(runId);
-        if (known.state === "unknown") {
+        // A spent id and an id nothing ever had get one answer, because
+        // operation semantics gives them one: no Run in this Session has ever
+        // had it. The repository keeps them apart for a maintainer's benefit.
+        if (known.state === "unknown" || known.state === "spent") {
           return { outcome: "unknown Run", runId } as const;
         }
         if (known.state === "active") {
@@ -897,18 +949,8 @@ const makeSupervisor = (settings: SessionSettings) =>
       stages: (): readonly string[] => [...stages],
       counters: (): SupervisorCounters => counters.counters(),
       probe: (): RuntimeProbe => counters.probe(),
-      /** Internal, for the operations the later tickets add. */
-      internals: { admission, subagents, counters, repository, store, policy },
     };
   });
-
-/** The redacted diagnostic an open failure the adapter did not name becomes. */
-function redacted(): import("../domain/index.ts").RunDiagnostic {
-  return {
-    category: "backend-failure",
-    message: "the backend could not be opened",
-  };
-}
 
 export type SubagentSupervisorApi = Effect.Success<
   ReturnType<typeof makeSupervisor>

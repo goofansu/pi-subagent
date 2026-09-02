@@ -3,15 +3,25 @@
  *
  * Everything that displays or acts on a Run reads its snapshot from here, and
  * exactly one thing writes them. That is the whole design: v1's shared mutable
- * Run record (ADR-0004) let the dispatcher, the executor, delivery, and the
- * widget all reach the same object, and the cost was that no single place knew
- * what a Run currently looked like. Here the reducer fiber and the settlement
- * coordinator call methods; adapters, delivery, and presentation never do.
+ * Run record (ADR-0004) let four different modules reach the same object, and
+ * the cost was that no single place knew what a Run currently looked like.
+ * Here the reducer fiber and the settlement coordinator call methods;
+ * adapters, delivery, and presentation never do.
  *
- * The index is published through a `SubscriptionRef`, which gives conflation
- * for free: a subscriber that falls behind a fast activity stream sees the
- * latest value rather than a backlog of every value it missed. That is exactly
- * the semantics a UI wants, and it is why activity needs no special handling.
+ * The index is published through a `SubscriptionRef`. Two different things are
+ * often confused about that, and only one of them is free:
+ *
+ * - **The snapshot is conflated.** A row holds one activity value, replaced
+ *   rather than appended, so a hundred progress updates grow the index by
+ *   nothing. That falls out of the projection's own rule and is what stops a
+ *   chatty backend from growing what every reader has to walk.
+ * - **The change stream is not.** `SubscriptionRef.changes` delivers every
+ *   value a subscriber has not yet taken, so a slow one gets a backlog rather
+ *   than the latest. {@link RunRepositoryApi.subscribe} therefore reads the
+ *   *current* index at the moment each change is delivered, which means a
+ *   consumer never renders a value that is already stale — but it may be
+ *   handed the same value more than once, and a consumer that must not do
+ *   redundant work has to say so itself.
  *
  * The repository also owns the **spent-id set**, so identifier allocation and
  * the promise that no identifier is ever reused are the same fact. An id
@@ -79,14 +89,21 @@ export type RunIndex = ReadonlyMap<RunId, RunSnapshot>;
 /**
  * What the repository knows about an id.
  *
- * Three answers, and the third is the one that matters for honesty: `unknown`
- * means no Run in this Session has ever had this id, which is different from
- * a Run whose stored output has since been evicted. That one is `terminal`
- * here and `ResultExpired` at the store.
+ * Four answers, and the last two are the distinction that has to exist
+ * somewhere. `spent` means the id was allocated for a start that never got as
+ * far as publishing a Run — a failed open — so no Run ever had it and it can
+ * never be handed out again. `unknown` means it was never allocated at all.
+ * Both are `unknown Run` to a caller, because operation semantics gives them
+ * one answer; they are separate here so a maintainer reading the repository
+ * can tell a spent id from a wrong one.
+ *
+ * A Run whose stored output has since been evicted is `terminal` here and
+ * `ResultExpired` at the store.
  */
 export type RunLookup =
   | { readonly state: "active"; readonly snapshot: RunSnapshot }
   | { readonly state: "terminal"; readonly snapshot: RunSnapshot }
+  | { readonly state: "spent" }
   | { readonly state: "unknown" };
 
 /** What recording a cancellation on the index did. */
@@ -324,6 +341,20 @@ const make = (counters: RuntimeCounters) =>
           return isTerminalRunPhase(snapshot.phase)
             ? ({ state: "terminal", snapshot } as RunLookup)
             : ({ state: "active", snapshot } as RunLookup);
+        }),
+
+      /**
+       * Forget every identity, at shutdown.
+       *
+       * Operation semantics section 5: the next Session's model did not start
+       * these Runs. The spent set goes with the index, because an id can only
+       * be reused by a Session that never issued it, and this Session is over.
+       */
+      forget: (): Effect.Effect<void> =>
+        Effect.gen(function* () {
+          yield* SubscriptionRef.set(index, new Map());
+          yield* Ref.set(spentRunIds, new Set());
+          yield* Ref.set(spentSubagentIds, new Set());
         }),
 
       /** Every Run this Session has published, newest last. */

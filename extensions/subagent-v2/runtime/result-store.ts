@@ -35,6 +35,7 @@ import {
   type SubagentId,
   type TerminalRunPhase,
 } from "../domain/index.ts";
+import type { RuntimeCounters } from "./counters.ts";
 import type { RuntimePolicy } from "./policy.ts";
 
 const encodeResult = Schema.encodeUnknownSync(RunResult);
@@ -106,32 +107,16 @@ export type CommitOutcome =
       readonly diagnostic: RunDiagnostic;
     };
 
-export interface ResultStoreCounters {
-  readonly duplicateCommits: number;
-  readonly conflictingCommits: number;
-  readonly evictions: number;
-  readonly decodeFailures: number;
-}
-
 interface StoreState {
   readonly entries: ReadonlyMap<RunId, StoredEntry>;
   readonly reservations: ReadonlyMap<RunId, number>;
   readonly sequence: number;
-  readonly counters: ResultStoreCounters;
 }
-
-const EMPTY_COUNTERS: ResultStoreCounters = {
-  duplicateCommits: 0,
-  conflictingCommits: 0,
-  evictions: 0,
-  decodeFailures: 0,
-};
 
 const EMPTY_STATE: StoreState = {
   entries: new Map(),
   reservations: new Map(),
   sequence: 0,
-  counters: EMPTY_COUNTERS,
 };
 
 /** Reserved plus stored, which is what the budget is measured against. */
@@ -149,9 +134,12 @@ function committedBytes(state: StoreState): number {
  * a store that evicted what it had just been given would make committing
  * pointless. It falls out of the pin the commit itself takes.
  */
-function evict(state: StoreState, budget: number): StoreState {
+function evict(
+  state: StoreState,
+  budget: number,
+  counters: RuntimeCounters,
+): StoreState {
   let current = state;
-  let evictions = 0;
   while (committedBytes(current) > budget) {
     const candidates = [...current.entries.values()]
       .filter((entry) => entry.encoded !== undefined && entry.pins.size === 0)
@@ -162,19 +150,12 @@ function evict(state: StoreState, budget: number): StoreState {
     const { encoded: _dropped, ...kept } = oldest;
     entries.set(oldest.runId, { ...kept, bytes: 0 });
     current = { ...current, entries };
-    evictions += 1;
+    counters.count("evictions");
   }
-  if (evictions === 0) return current;
-  return {
-    ...current,
-    counters: {
-      ...current.counters,
-      evictions: current.counters.evictions + evictions,
-    },
-  };
+  return current;
 }
 
-const makeStore = (policy: RuntimePolicy) =>
+const makeStore = (policy: RuntimePolicy, counters: RuntimeCounters) =>
   Effect.gen(function* () {
     const state = yield* Ref.make(EMPTY_STATE);
 
@@ -223,17 +204,10 @@ const makeStore = (policy: RuntimePolicy) =>
           Ref.modify(state, (current) => {
             const existing = current.entries.get(bounded.runId);
             if (existing) {
-              const decoded = existing.encoded;
-              const same = decoded === encoded;
-              const counters = {
-                ...current.counters,
-                duplicateCommits:
-                  current.counters.duplicateCommits + (same ? 1 : 0),
-                conflictingCommits:
-                  current.counters.conflictingCommits + (same ? 0 : 1),
-              };
+              const same = existing.encoded === encoded;
+              counters.count(same ? "duplicateCommits" : "conflictingCommits");
               const stored =
-                decoded === undefined
+                existing.encoded === undefined
                   ? bounded
                   : (readEntry(existing) ?? bounded);
               const outcome: CommitOutcome = same
@@ -246,7 +220,7 @@ const makeStore = (policy: RuntimePolicy) =>
                       `a second, different result was committed for ${bounded.runId}`,
                     ),
                   };
-              return [outcome, { ...current, counters }];
+              return [outcome, current];
             }
 
             const sequence = current.sequence + 1;
@@ -267,6 +241,7 @@ const makeStore = (policy: RuntimePolicy) =>
             const stored = evict(
               { ...current, entries, reservations, sequence },
               policy.resultStoreBytes,
+              counters,
             );
             return [
               { outcome: "stored", result: bounded } as CommitOutcome,
@@ -286,7 +261,11 @@ const makeStore = (policy: RuntimePolicy) =>
         entries.set(runId, { ...entry, pins });
         // Releasing a pin can put the store back inside its budget's reach,
         // so this is the other moment eviction becomes possible.
-        return evict({ ...current, entries }, policy.resultStoreBytes);
+        return evict(
+          { ...current, entries },
+          policy.resultStoreBytes,
+          counters,
+        );
       });
 
     const read = (runId: RunId): Effect.Effect<ResultRead> =>
@@ -305,13 +284,7 @@ const makeStore = (policy: RuntimePolicy) =>
         const decoded = readEntry(entry);
         if (decoded)
           return { outcome: "result", result: decoded } as ResultRead;
-        yield* Ref.update(state, (now) => ({
-          ...now,
-          counters: {
-            ...now.counters,
-            decodeFailures: now.counters.decodeFailures + 1,
-          },
-        }));
+        counters.count("unreadableResults");
         return {
           outcome: "defect",
           runId,
@@ -333,10 +306,18 @@ const makeStore = (policy: RuntimePolicy) =>
       has: (runId: RunId): Effect.Effect<boolean> =>
         Effect.map(Ref.get(state), (current) => current.entries.has(runId)),
 
-      /** Every entry that still holds its output, oldest first. */
+      /**
+       * Every entry that still holds its output, oldest first.
+       *
+       * An evicted entry is deliberately not in this list: it is still
+       * addressable by id, but there is nothing left to read, and a delivery
+       * sweep that treated it as deliverable would announce a Run whose
+       * preview it cannot build.
+       */
       stored: (): Effect.Effect<readonly RunId[]> =>
         Effect.map(Ref.get(state), (current) =>
           [...current.entries.values()]
+            .filter((entry) => entry.encoded !== undefined)
             .sort((left, right) => left.sequence - right.sequence)
             .map((entry) => entry.runId),
         ),
@@ -350,20 +331,13 @@ const makeStore = (policy: RuntimePolicy) =>
       accountedBytes: (): Effect.Effect<number> =>
         Effect.map(Ref.get(state), committedBytes),
 
-      counters: (): Effect.Effect<ResultStoreCounters> =>
-        Effect.map(Ref.get(state), (current) => current.counters),
-
       /**
        * Forget everything, at shutdown.
        *
        * The next Session's model did not start these Runs and has no context
        * in which to act on their answers. Operation semantics section 5.
        */
-      clear: (): Effect.Effect<void> =>
-        Ref.update(state, (current) => ({
-          ...EMPTY_STATE,
-          counters: current.counters,
-        })),
+      clear: (): Effect.Effect<void> => Ref.set(state, EMPTY_STATE),
     };
   });
 
@@ -385,10 +359,13 @@ export type ResultStoreApi = Effect.Success<ReturnType<typeof makeStore>>;
 export class ResultStore extends Context.Service<ResultStore, ResultStoreApi>()(
   "pi-subagent-v2/runtime/ResultStore",
 ) {
-  static layerOf(policy: RuntimePolicy): Layer.Layer<ResultStore> {
+  static layerOf(
+    policy: RuntimePolicy,
+    counters: RuntimeCounters,
+  ): Layer.Layer<ResultStore> {
     return Layer.effect(
       ResultStore,
-      Effect.map(makeStore(policy), (api) => ResultStore.of(api)),
+      Effect.map(makeStore(policy, counters), (api) => ResultStore.of(api)),
     );
   }
 }

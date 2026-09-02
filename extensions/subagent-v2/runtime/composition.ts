@@ -22,11 +22,7 @@ import type { Backend } from "../backend/contract.ts";
 import type { Profile, ProfileDiagnostic } from "../domain/index.ts";
 import { BackendCatalog } from "./backend-catalog.ts";
 import { createRuntimeCounters, type RuntimeCounters } from "./counters.ts";
-import {
-  CompletionDelivery,
-  createFakeNotificationSink,
-  type NotificationSink,
-} from "./delivery.ts";
+import { CompletionDelivery, type NotificationSink } from "./delivery.ts";
 import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
 import { ProfileCatalog } from "./profile-catalog.ts";
 import { RunRepository } from "./repository.ts";
@@ -64,13 +60,13 @@ export interface SessionRuntimeOptions {
   readonly policy?: RuntimePolicy;
   readonly maxDelegationDepth?: number;
   /**
-   * Where completion Notifications go.
+   * Where completion Notifications go. Required, and deliberately so.
    *
-   * M3 supplies the real Session push. Until then the default is a fake that
-   * records what it was given, so a Session built with no sink still has
-   * delivery running rather than silently skipping it.
+   * M3 supplies the real Session push; until then every caller is a test and
+   * passes its own fake. A default would mean a Session built without a sink
+   * delivered into something that discarded, and looked like it was working.
    */
-  readonly sink?: NotificationSink;
+  readonly sink: NotificationSink;
   /** Shared with the caller when a test wants to read the probe directly. */
   readonly counters?: RuntimeCounters;
 }
@@ -105,10 +101,10 @@ export function sessionRuntimeLayer(
         )
   ).pipe(Layer.provide(backendCatalog));
 
-  const resultStore = ResultStore.layerOf(settings.policy);
+  const resultStore = ResultStore.layerOf(settings.policy, counters);
   const delivery = CompletionDelivery.layerOf(
     settings.policy,
-    options.sink ?? createFakeNotificationSink(),
+    options.sink,
     counters,
   ).pipe(Layer.provideMerge(resultStore));
 

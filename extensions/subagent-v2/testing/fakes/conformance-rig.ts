@@ -801,10 +801,24 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
           );
 
         case "settlement-stores-the-result-exactly-once":
-          return fixtureOf(kind, scripts(ORDINARY), {
-            plans: [{}],
-            expected: { runs: [{ status: "completed" }], notifications: 1 },
-          });
+          // Two endings compete, so a runtime that settled twice would have
+          // something to settle twice *with*. A script with one ending would
+          // make the counter zero by construction.
+          return fixtureOf(
+            kind,
+            scripts([
+              emitText("the answer"),
+              { step: "announce-ending", ending: { ending: "answered" } },
+              { step: "complete", ending: { ending: "failed" } },
+            ]),
+            {
+              plans: [{}],
+              expected: {
+                runs: [{ status: "completed", finalOutput: "the answer" }],
+                notifications: 1,
+              },
+            },
+          );
 
         case "wait-and-result-observe-the-same-value":
           return fixtureOf(kind, scripts(ORDINARY), {

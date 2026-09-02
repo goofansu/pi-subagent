@@ -52,10 +52,6 @@ import {
   type SupervisorCounters,
 } from "../runtime/counters.ts";
 import {
-  createFakeNotificationSink,
-  type FakeNotificationSink,
-} from "../runtime/delivery.ts";
-import {
   DEFAULT_RUNTIME_POLICY,
   type RuntimePolicy,
 } from "../runtime/policy.ts";
@@ -63,6 +59,10 @@ import { RunRepository } from "../runtime/repository.ts";
 import { ResultStore } from "../runtime/result-store.ts";
 import { RUN_STAGES } from "../runtime/run-scope.ts";
 import { SubagentSupervisor } from "../runtime/supervisor.ts";
+import {
+  createFakeNotificationSink,
+  type FakeNotificationSink,
+} from "./fake-sink.ts";
 import type { ResourceCountersSnapshot } from "./fakes/counters.ts";
 
 /* ============================================================== */
@@ -828,8 +828,11 @@ const SCENARIO_CHECKS: {
     );
   },
   "late-events-cannot-mutate-a-terminal-run": (_fixture, outcome) => {
+    // Something reached the reducer after the ending and changed nothing.
+    // The shared expectations already checked *what* the Run says; this is
+    // that a late observation actually happened, so the check is not vacuous.
     assert.ok(
-      outcome.counters.lateEvents >= 1,
+      outcome.counters.lateObservations >= 1,
       "the fixture emitted nothing late",
     );
   },
@@ -977,8 +980,22 @@ const SCENARIO_CHECKS: {
       );
     }
   },
-  "usage-deltas-are-run-local": (_fixture, outcome) => {
-    for (const run of outcome.runs) {
+  "usage-deltas-are-run-local": (fixture, outcome) => {
+    for (const [index, run] of outcome.runs.entries()) {
+      const declared = fixture.expected.runs[index].usageTotals?.input;
+      assert.equal(
+        typeof declared,
+        "number",
+        "this scenario needs the Run's own total declared, to compare against",
+      );
+      assert.ok(
+        (declared ?? 0) > 0,
+        "the Run spent nothing, so Run-locality proves nothing",
+      );
+      // What the Run reports is what *it* spent — the shared expectations
+      // check the figure; this checks the figure is worth checking.
+      assert.equal(run.result.usage.totals.input, declared);
+      assert.ok(run.result.usage.turns > 0);
       for (const value of Object.values(run.result.usage.totals)) {
         assert.ok(value >= 0 && Number.isFinite(value));
       }
@@ -1065,9 +1082,16 @@ const SCENARIO_CHECKS: {
   },
   "settlement-stores-the-result-exactly-once": (_fixture, outcome) => {
     for (const run of outcome.runs) assert.equal(run.resultOutcome, "result");
-    // A second commit for one Run would have been a conflict, and a second
-    // candidate for a settled Run is counted rather than acted on.
-    assert.equal(outcome.counters.duplicateSettlements, 0);
+    // Two endings competed — so the Run had a second candidate to settle
+    // with, and a duplicate settlement attempt was counted rather than acted
+    // on. What it must *not* have done is commit twice.
+    assert.ok(
+      outcome.counters.duplicateSettlements >= 1,
+      "no second candidate arrived, so nothing proves the property",
+    );
+    assert.equal(outcome.counters.conflictingCommits, 0);
+    assert.equal(outcome.counters.duplicateCommits, 0);
+    assert.equal(outcome.notifications.length, outcome.runs.length);
   },
   "wait-and-result-observe-the-same-value": (_fixture, outcome) => {
     for (const run of outcome.runs) {

@@ -49,19 +49,22 @@ export interface NotificationSink {
 }
 
 interface DeliveryState {
-  /** Ids that must never be pushed again: delivered, or given up on. */
-  readonly done: ReadonlySet<RunId>;
+  /**
+   * Ids this Session has taken responsibility for.
+   *
+   * Claimed *before* the push, and kept whatever the push did, because a Run
+   * that was announced and a Run whose budget ran out are equally finished as
+   * far as delivery is concerned. `delivered` says which of the two it was.
+   */
+  readonly claimed: ReadonlySet<RunId>;
   /** Ids that actually landed. */
   readonly delivered: ReadonlySet<RunId>;
-  /** Ids whose retry budget ran out. */
-  readonly exhausted: ReadonlySet<RunId>;
   readonly stopped: boolean;
 }
 
 const EMPTY_DELIVERY: DeliveryState = {
-  done: new Set(),
+  claimed: new Set(),
   delivered: new Set(),
-  exhausted: new Set(),
   stopped: false,
 };
 
@@ -82,8 +85,13 @@ const makeDelivery = (
      */
     const claim = (runId: RunId): Effect.Effect<boolean> =>
       Ref.modify(state, (current) => {
-        if (current.stopped || current.done.has(runId)) return [false, current];
-        return [true, { ...current, done: new Set(current.done).add(runId) }];
+        if (current.stopped || current.claimed.has(runId)) {
+          return [false, current];
+        }
+        return [
+          true,
+          { ...current, claimed: new Set(current.claimed).add(runId) },
+        ];
       });
 
     const push = (notification: RunNotification): Effect.Effect<boolean> =>
@@ -115,18 +123,14 @@ const makeDelivery = (
           return;
         }
         const landed = yield* push(toRunNotification(stored.result));
-        yield* Ref.update(state, (current) =>
-          landed
-            ? {
-                ...current,
-                delivered: new Set(current.delivered).add(runId),
-              }
-            : {
-                ...current,
-                exhausted: new Set(current.exhausted).add(runId),
-              },
-        );
-        if (!landed) counters.count("deliveryFailures");
+        if (landed) {
+          yield* Ref.update(state, (current) => ({
+            ...current,
+            delivered: new Set(current.delivered).add(runId),
+          }));
+        } else {
+          counters.count("deliveryFailures");
+        }
         // Either way the pin goes: a result held open for a notification that
         // is never going to land is a result nothing can ever evict.
         yield* store.releasePin(runId, "delivery");
@@ -144,7 +148,7 @@ const makeDelivery = (
         if (current.stopped) return;
         const stored = yield* store.stored();
         yield* Effect.forEach(
-          stored.filter((runId) => !current.done.has(runId)),
+          stored.filter((runId) => !current.claimed.has(runId)),
           deliver,
           { discard: true },
         );
@@ -161,10 +165,14 @@ const makeDelivery = (
        */
       stop: (): Effect.Effect<void> =>
         Ref.update(state, (current) => ({ ...current, stopped: true })),
+      /** Ids whose notification landed. */
       delivered: (): Effect.Effect<readonly RunId[]> =>
         Effect.map(Ref.get(state), (current) => [...current.delivered]),
+      /** Ids this Session gave up announcing, after exhausting the budget. */
       exhausted: (): Effect.Effect<readonly RunId[]> =>
-        Effect.map(Ref.get(state), (current) => [...current.exhausted]),
+        Effect.map(Ref.get(state), (current) =>
+          [...current.claimed].filter((runId) => !current.delivered.has(runId)),
+        ),
     };
   });
 
@@ -188,44 +196,4 @@ export class CompletionDelivery extends Context.Service<
       ),
     );
   }
-}
-
-/**
- * A sink that records what it was given, and can be told to fail.
- *
- * Lives beside the interface rather than in the test tree because both the
- * conformance rig and the race tests need one, and two copies of it would
- * drift.
- */
-export interface FakeNotificationSink extends NotificationSink {
-  readonly received: () => readonly RunNotification[];
-  /** How many pushes were attempted, including the ones that failed. */
-  readonly attempts: () => number;
-  /** Fail the next `count` pushes. `Infinity` fails every one. */
-  readonly failNext: (count: number) => void;
-}
-
-export function createFakeNotificationSink(): FakeNotificationSink {
-  const received: RunNotification[] = [];
-  let attempts = 0;
-  let failing = 0;
-  return {
-    push: (notification) =>
-      Effect.suspend(() => {
-        attempts += 1;
-        if (failing > 0) {
-          failing -= 1;
-          return Effect.fail<NotificationPushFailure>({
-            reason: "the sink refused the push",
-          });
-        }
-        received.push(notification);
-        return Effect.void;
-      }),
-    received: () => [...received],
-    attempts: () => attempts,
-    failNext: (count) => {
-      failing = count;
-    },
-  };
 }

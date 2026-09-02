@@ -184,7 +184,7 @@ function reducerLoop(
       });
       reports.push(folded.report);
       if (folded.report.report === "ignored-late") {
-        context.counters.count("lateEvents");
+        context.counters.count("lateObservations");
       }
       yield* context.repository.recordProjection(
         context.identity.runId,
@@ -240,8 +240,18 @@ export function runToSettlement(
   return Effect.gen(function* () {
     const { counters, identity, repository, store } = context;
 
-    const intake = yield* makeIntake(context.observationQueueBound, counters);
-    const mailbox = yield* makeMailbox(context.controlBounds, counters);
+    // The Run Scope proper: everything the Run holds while it is running, in
+    // a scope settlement can close *before* it commits. Forked from the
+    // caller's so that a Run fiber that dies without settling still releases
+    // all of it.
+    const runScope = yield* Scope.fork(yield* Effect.scope);
+    const intake = yield* makeIntake(
+      context.observationQueueBound,
+      counters,
+    ).pipe(Scope.provide(runScope));
+    const mailbox = yield* makeMailbox(context.controlBounds, counters).pipe(
+      Scope.provide(runScope),
+    );
     const coordinator = yield* makeCoordinator(counters);
     const completion = yield* Deferred.make<void>();
     const projection = yield* Ref.make(createRunProjection());
@@ -262,7 +272,7 @@ export function runToSettlement(
           counters.released("liveReducerFibers");
           void fiber;
         }),
-    );
+    ).pipe(Scope.provide(runScope));
 
     // The native execution scope, nested inside the Run Scope. It can close
     // independently — a provider turn ending is not the Run ending — but it
@@ -369,8 +379,10 @@ export function runToSettlement(
     });
     context.trace(RUN_STAGES.resultProduced);
 
-    // 8. The rest of the Run Scope closes when this fiber's scope closes; the
-    //    stage is recorded here because the order is what is being asserted.
+    // 8. Close the rest of the Run Scope. The intake queue, the mailbox, and
+    //    the reducer fiber's bookkeeping all go here — before the commit, so
+    //    a Run that is retrievable is a Run that is holding nothing.
+    yield* Scope.close(runScope, Exit.void);
     context.trace(RUN_STAGES.runScopeClosed);
 
     // 9. Commit, idempotently.

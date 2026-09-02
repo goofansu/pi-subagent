@@ -21,8 +21,23 @@
 export interface SupervisorCounters {
   /** A second terminal candidate arrived for a Run that already had one. */
   readonly duplicateSettlements: number;
-  /** An observation was emitted after intake was sealed. */
+  /**
+   * An observation was emitted after intake was sealed.
+   *
+   * Distinct from {@link lateObservations}: this one never reached the
+   * reducer at all, because the Run had already captured its candidate. It is
+   * the seam's count, and it is what tells an adapter author that their
+   * finalizer is still talking.
+   */
   readonly lateEvents: number;
+  /**
+   * An observation was reduced into a projection that was already terminal.
+   *
+   * The backend announced its ending and then kept going. It reached the
+   * reducer and changed nothing, which is a different fact from an emit that
+   * never got that far.
+   */
+  readonly lateObservations: number;
   /** A non-blocking bridge could not hand an observation over. */
   readonly queueOverflows: number;
   /** A native finalizer outlived the cleanup budget. */
@@ -45,6 +60,12 @@ export interface SupervisorCounters {
    * difference visible.
    */
   readonly unreadableResults: number;
+  /** The same result was committed twice for one Run. */
+  readonly duplicateCommits: number;
+  /** A *different* result was committed for a Run that already had one. */
+  readonly conflictingCommits: number;
+  /** A stored output was dropped to keep the store inside its budget. */
+  readonly evictions: number;
 }
 
 export type SupervisorCounter = keyof SupervisorCounters;
@@ -52,6 +73,7 @@ export type SupervisorCounter = keyof SupervisorCounters;
 const ZERO_COUNTERS: SupervisorCounters = {
   duplicateSettlements: 0,
   lateEvents: 0,
+  lateObservations: 0,
   queueOverflows: 0,
   cleanupEscalations: 0,
   reconciliationDifferences: 0,
@@ -59,6 +81,9 @@ const ZERO_COUNTERS: SupervisorCounters = {
   seamDecodeFailures: 0,
   lateEndings: 0,
   unreadableResults: 0,
+  duplicateCommits: 0,
+  conflictingCommits: 0,
+  evictions: 0,
 };
 
 /** What is still alive. Every field should be zero once a Session has closed. */

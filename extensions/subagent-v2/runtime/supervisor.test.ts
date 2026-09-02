@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { Deferred, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 import { runId as makeRunId } from "../domain/index.ts";
+import { createFakeNotificationSink } from "../testing/fake-sink.ts";
 import {
   createFakeResumableBackend,
   type FakeBackendHandle,
@@ -21,7 +22,7 @@ import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
 import { RunRepository } from "./repository.ts";
 import { ResultStore } from "./result-store.ts";
 import { RUN_STAGES } from "./run-scope.ts";
-import { SubagentSupervisor } from "./supervisor.ts";
+import { openBudgetExceededMessage, SubagentSupervisor } from "./supervisor.ts";
 
 /**
  * The supervisor, driven through its public operations.
@@ -386,6 +387,7 @@ test("a start whose backend hangs while opening is rejected when the budget runs
       Effect.provide(
         sessionRuntimeLayer({
           backends: [backend.backend],
+          sink: createFakeNotificationSink(),
           profiles: {
             from: "list",
             profiles: [{ ...RIG_PROFILE, backend: backend.backend.id }],
@@ -401,8 +403,13 @@ test("a start whose backend hangs while opening is rejected when the budget runs
   assert.equal(outcome.started.outcome, "backend unavailable");
   if (outcome.started.outcome === "backend unavailable") {
     assert.equal(outcome.started.diagnostic.category, "backend-failure");
-    // No provider text: the backend never got to say anything.
-    assert.match(outcome.started.diagnostic.message, /could not be opened/);
+    // No provider text — the backend never got to say anything — and the
+    // reason names the budget, so a maintainer can tell a hung open from an
+    // adapter that died.
+    assert.equal(
+      outcome.started.diagnostic.message,
+      openBudgetExceededMessage(policy.openBudgetMillis),
+    );
   }
   assert.equal(outcome.published, 0);
   assert.equal(outcome.accounted, 0);

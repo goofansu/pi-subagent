@@ -28,8 +28,9 @@ M3 starts from an explicitly closed milestone. It follows the shape of
 
 The v1 lane's numbers are unchanged from M1: **M2 changed no v1 file.** Outside
 the v2 tree, M2 changed `tools/import-specifiers.ts` (a named-import reader the
-boundary test needed), the operation-semantics document, ADR-0030, the Schema
-spike findings, this record, the roadmap, and the glossary.
+boundary test needed), the operation-semantics document, ADR-0028 (an amendment
+notice), ADR-0029 (its status), ADR-0030, the Schema spike findings, this
+record, the roadmap, and the glossary.
 
 ### The skips are all visible and all explained
 
@@ -94,10 +95,14 @@ than the rule. What is not a disjunction is the part that matters — one status
 one result, one notification, and nothing left running.
 
 No test in the lane lets real time pass. The
-[timing lint](../../extensions/subagent-v2/timing.test.ts) enforces it, and it
-was narrowed in M2 so its sleep rule applies to tests, which is where it is
-about proof; a production module sleeps against the runtime `Clock`, which is
-exactly the thing a test replaces.
+[timing lint](../../extensions/subagent-v2/timing.test.ts) enforces it. Its
+timer rule is unchanged and applies to every v2 file; its **sleep** rule was
+narrowed in M2 to files whose name ends `.test.ts`, which exempts production
+modules *and* test-support modules such as the conformance suite, the session
+rig, and the fakes. The narrowing is deliberate for production — a module that
+sleeps does so against the runtime `Clock`, which is exactly the thing a test
+replaces — and is wider than it needs to be for test support. None of those
+modules sleeps today; if one starts to, the lint will not catch it.
 
 ## 4. Closing the Session Scope closes everything beneath it ✅
 
@@ -283,6 +288,18 @@ process that ignores that is adapter work.
 **5. A public Subagent close tool does not exist and is not planned.** The
 supervisor has `closeSubagentById` internally, because shutdown uses it and one
 race test needs it, but no tool exposes it.
+
+**6. Conflating the Run index *stream* is left to its consumer.** The roadmap
+asks for conflated activity state, and the *snapshot* is conflated: a row holds
+one activity value, replaced rather than appended, so a hundred progress
+updates grow the index by nothing. The change **stream** is a separate matter,
+and `SubscriptionRef.changes` does not conflate: it delivers one element per
+change however far behind a consumer is. `subscribe` therefore reads the
+current index at the moment of each delivery, so a slow consumer is never
+handed a value that has already been superseded — but it is still handed one
+element per change, some of them repeats. A backpressure test pins exactly
+that. M3 has the first real consumer and is the right place to decide whether
+it needs to throttle.
 
 ## What M3 starts from
 

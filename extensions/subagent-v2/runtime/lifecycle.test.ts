@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Fiber, Queue } from "effect";
 import { TestClock } from "effect/testing";
+import { bridgeOverflowObservations } from "../backend/native-bridge.ts";
 import { runId as makeRunId } from "../domain/index.ts";
 import { emitText } from "../testing/fakes/script.ts";
 import {
@@ -11,11 +12,7 @@ import {
   withSession,
 } from "../testing/session-rig.ts";
 import { createRuntimeCounters } from "./counters.ts";
-import {
-  bridgeOverflowObservations,
-  makeIntake,
-  offerWithoutWaiting,
-} from "./observation-intake.ts";
+import { makeIntake, offerWithoutWaiting } from "./observation-intake.ts";
 import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
 
 /**
@@ -478,20 +475,23 @@ test("shutdown closes a Subagent by cancel-and-await-cleanup, so its Run settles
         for (let step = 0; step < 5; step += 1) yield* Effect.yieldNow;
         yield* rig.supervisor.shutdown();
         return {
-          // Read before the store is consulted: the Run reached a terminal
-          // phase, which means its cleanup finished.
-          snapshot: yield* rig.repository.get(started.runId),
+          // Every local identity is forgotten, per operation semantics
+          // section 5: the next Session did not start these Runs.
+          forgotten: (yield* rig.repository.lookup(started.runId)).state,
+          published: (yield* rig.repository.list()).length,
         };
       }),
   );
 
-  assert.equal(value?.snapshot?.phase, "cancelled");
-  // The execution was released before the BackendAgent closed.
+  assert.equal(value?.forgotten, "unknown");
+  assert.equal(value?.published, 0);
+  // The Run settled before its Subagent closed: the execution was released
+  // first, which is what cancel-and-await-cleanup means.
   const released = trace.findIndex((entry) =>
     entry.startsWith("execution-released"),
   );
   const closed = trace.indexOf("agent-closed");
-  assert.ok(released !== -1 && closed !== -1);
+  assert.ok(released !== -1 && closed !== -1, trace.join(" "));
   assert.ok(released < closed, trace.join(" "));
 });
 

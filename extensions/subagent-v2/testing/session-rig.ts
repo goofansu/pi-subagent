@@ -33,11 +33,7 @@ import {
   type RuntimeCounters,
   type RuntimeProbe,
 } from "../runtime/counters.ts";
-import {
-  CompletionDelivery,
-  createFakeNotificationSink,
-  type FakeNotificationSink,
-} from "../runtime/delivery.ts";
+import { CompletionDelivery } from "../runtime/delivery.ts";
 import type { RuntimePolicy } from "../runtime/policy.ts";
 import { RunRepository } from "../runtime/repository.ts";
 import { ResultStore } from "../runtime/result-store.ts";
@@ -45,6 +41,10 @@ import {
   type StartRequest,
   SubagentSupervisor,
 } from "../runtime/supervisor.ts";
+import {
+  createFakeNotificationSink,
+  type FakeNotificationSink,
+} from "./fake-sink.ts";
 import {
   createFakeOneShotBackend,
   createFakeResumableBackend,

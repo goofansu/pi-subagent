@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Deferred, Effect, Fiber, Stream, SubscriptionRef } from "effect";
+import { Deferred, Effect, Fiber, Stream } from "effect";
 import {
   DEFAULT_PROJECTION_BOUNDS,
   type RunObservation,
@@ -11,7 +11,6 @@ import {
   type FakeStep,
 } from "../testing/fakes/script.ts";
 import {
-  quiesce,
   rigRequest as request,
   startedRun,
   untilTerminal,
@@ -31,9 +30,11 @@ import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
  * - the **control mailbox** is bounded and *refuses*, because a caller must
  *   never be blocked by one;
  * - **activity** is conflated, so a fast progress stream cannot grow anything;
- * - a **slow subscriber** to the Run index sees the latest value rather than a
- *   backlog, which falls out of `SubscriptionRef` and is checked rather than
- *   assumed.
+ * - a **slow subscriber** to the Run index is never handed a value that is
+ *   already stale. That does *not* fall out of `SubscriptionRef`, which
+ *   delivers one element per change however far behind a consumer is — it is
+ *   why `subscribe` reads the current index at delivery time, and it is
+ *   checked here rather than assumed.
  *
  * Every test here ends with the probe clear, like every other M2 test.
  */
@@ -195,7 +196,7 @@ test("high-frequency activity is conflated: the row holds one value, not a backl
   assert.equal(outcome.noLeaks, true);
 });
 
-test("a slow subscriber to the Run index sees the latest value, not every value", async () => {
+test("a slow subscriber is never handed a value that is already stale", async () => {
   const updates = 100;
   const outcome = await withSession(
     {
@@ -213,33 +214,54 @@ test("a slow subscriber to the Run index sees the latest value, not every value"
     (rig) =>
       Effect.gen(function* () {
         const attached = yield* Deferred.make<void>();
-        // A subscriber that reads two frames and then stops. Without
-        // conflation it would be a hundred frames behind by the end.
+        // A deliberately slow consumer: many scheduler points per frame, so
+        // the publisher gets a long way ahead of it.
+        const seen: (string | undefined)[] = [];
         const subscriber = yield* (yield* rig.repository.subscribe()).pipe(
           Stream.tap(() => Deferred.succeed(attached, undefined)),
-          Stream.take(2),
-          Stream.runCollect,
+          Stream.tap((index) =>
+            Effect.gen(function* () {
+              seen.push([...index.values()][0]?.activity);
+              for (let step = 0; step < 20; step += 1) yield* Effect.yieldNow;
+            }),
+          ),
+          Stream.takeUntil(
+            (index) => [...index.values()][0]?.phase === "completed",
+          ),
+          Stream.runDrain,
           Effect.forkChild,
         );
         yield* Deferred.await(attached);
 
         const run = startedRun(yield* rig.supervisor.start(request()));
         yield* untilTerminal(rig, run.runId);
-        const frames = yield* Fiber.join(subscriber);
-        yield* quiesce();
-        return {
-          frames: frames.length,
-          latest: (yield* SubscriptionRef.get(rig.repository.index)).get(
-            run.runId,
-          )?.phase,
-        };
+        yield* Fiber.join(subscriber);
+        return { seen, published: updates };
       }),
   );
 
-  // The subscriber took what it asked for and the Run was unaffected by how
-  // slowly it read.
-  assert.equal(outcome.value.frames, 2);
-  assert.equal(outcome.value.latest, "completed");
+  const activities = outcome.value.seen.filter(
+    (activity): activity is string => activity !== undefined,
+  );
+  assert.ok(activities.length > 0, "the subscriber saw no activity at all");
+  // Every value it was handed was the index as it stood at that moment, so
+  // the sequence never goes backwards — a consumer that renders each one in
+  // turn never draws a screen that has already been superseded.
+  const indexes = activities.map((activity) =>
+    Number(activity.replace("step ", "")),
+  );
+  assert.deepEqual(
+    indexes,
+    [...indexes].sort((left, right) => left - right),
+  );
+  // What it does *not* do is skip. `SubscriptionRef.changes` delivers one
+  // element per change however far behind a consumer is, so a slow one gets
+  // at least as many deliveries as there were changes — each carrying the
+  // latest index, none carrying a stale one, and some carrying a value it has
+  // already been given. Conflating those deliveries is the consumer's
+  // business, and M3's is the first consumer there is.
+  assert.equal(new Set(indexes).size, outcome.value.published);
+  assert.ok(activities.length >= outcome.value.published);
   assert.equal(outcome.noLeaks, true);
 });
 

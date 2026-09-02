@@ -28,7 +28,6 @@
 
 import { type Cause, Effect, Queue, Schema, type Scope } from "effect";
 import {
-  DIAGNOSTIC_MESSAGE_MAX_BYTES,
   EXACT_KEYS,
   type RunObservation,
   RunObservation as RunObservationSchema,
@@ -103,12 +102,7 @@ export function makeIntake(
         if (decoded._tag === "Failure") {
           counters.count("seamDecodeFailures");
           return Effect.asVoid(
-            Queue.offer(
-              queue,
-              seamFailureObservation(
-                decoded.failure.message.slice(0, DIAGNOSTIC_MESSAGE_MAX_BYTES),
-              ),
-            ),
+            Queue.offer(queue, seamFailureObservation(decoded.failure.message)),
           );
         }
         return Effect.asVoid(Queue.offer(queue, decoded.success));
@@ -129,19 +123,14 @@ export function makeIntake(
 }
 
 /**
- * The native-callback-bridge helper.
+ * Hand one observation over without waiting, for a bridge that cannot.
  *
- * An adapter whose provider hands it events through a callback that cannot
- * await has no way to apply backpressure. The policy for that case is decided
- * here rather than per adapter, and it is: **never drop**. A bridge that
- * cannot hand an observation over fails the Run visibly — a `queue-overflow`
- * diagnostic and a `failed` ending — because a Run that quietly lost half its
- * transcript is worse than a Run that says it could not keep up.
- *
- * `offerWithoutWaiting` returns whether the observation was taken. A caller
- * that gets `false` must fail its Run; the M4 adapters use
- * `bridgeOverflowObservations` to say so in the two observations that report
- * it.
+ * The policy this serves is decided in the backend module, in
+ * `backend/native-bridge.ts`, because it is a rule about what an adapter must
+ * do. This is the half that belongs with the intake: it returns whether the
+ * observation was taken, and a caller that gets `false` must emit
+ * `bridgeOverflowObservations()` rather than carry on. Dropping is not on the
+ * list.
  */
 export function offerWithoutWaiting(
   intake: ObservationIntake,
@@ -165,30 +154,4 @@ export function offerWithoutWaiting(
   const taken = Queue.offerUnsafe(intake.queue, decoded.success);
   if (!taken) counters.count("queueOverflows");
   return taken;
-}
-
-/**
- * What a bridge that could not hand an observation over must emit instead.
- *
- * Two observations, in this order: the diagnostic that says what happened, and
- * the ending that stops the Run. Dropping is never an option, so this is the
- * whole of the alternative.
- */
-export function bridgeOverflowObservations(): readonly RunObservation[] {
-  return [
-    {
-      kind: "diagnostic",
-      diagnostic: runDiagnostic(
-        "queue-overflow",
-        "the backend produced observations faster than they could be accepted, and this Run cannot report what it missed",
-      ),
-    },
-    {
-      kind: "ending",
-      ending: {
-        ending: "failed",
-        message: "the backend outran its observation intake",
-      },
-    },
-  ];
 }

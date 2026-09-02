@@ -12,6 +12,7 @@ import {
   runDiagnostic,
   subagentId,
 } from "../domain/index.ts";
+import { createRuntimeCounters, type RuntimeCounters } from "./counters.ts";
 import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
 import { PIN_HOLDERS, ResultStore } from "./result-store.ts";
 
@@ -50,16 +51,30 @@ function resultOf(
   };
 }
 
+/**
+ * A store and the counters it writes into.
+ *
+ * The counters are the Session's, not the store's own: a module that invented
+ * its own would be a module a test had to know to ask separately.
+ */
 const withStore = <A>(
   policy: RuntimePolicy,
-  body: (store: ResultStore["Service"]) => Effect.Effect<A>,
-): Promise<A> =>
-  Effect.runPromise(
+  body: (
+    store: ResultStore["Service"],
+    counters: RuntimeCounters,
+  ) => Effect.Effect<A>,
+): Promise<A> => {
+  const counters = createRuntimeCounters();
+  return Effect.runPromise(
     Effect.gen(function* () {
       const store = yield* ResultStore;
-      return yield* body(store);
-    }).pipe(Effect.provide(ResultStore.layerOf(policy)), Effect.scoped),
+      return yield* body(store, counters);
+    }).pipe(
+      Effect.provide(ResultStore.layerOf(policy, counters)),
+      Effect.scoped,
+    ),
   );
+};
 
 /** Free every pin, which is what a fully delivered Run does. */
 const unpin = (store: ResultStore["Service"], run: RunId) =>
@@ -110,7 +125,7 @@ test("reserving the same Run twice takes the room once", async () => {
 });
 
 test("committing the same result twice stores one and counts a duplicate", async () => {
-  const outcome = await withStore(DEFAULT_RUNTIME_POLICY, (store) =>
+  const outcome = await withStore(DEFAULT_RUNTIME_POLICY, (store, counters) =>
     Effect.gen(function* () {
       const result = resultOf("run-1", "the answer");
       yield* store.reserve(result.runId);
@@ -125,7 +140,7 @@ test("committing the same result twice stores one and counts a duplicate", async
           second.result.finalOutput === "the answer",
         read:
           read.outcome === "result" ? read.result.finalOutput : read.outcome,
-        counters: yield* store.counters(),
+        counters: counters.counters(),
       };
     }),
   );
@@ -139,7 +154,7 @@ test("committing the same result twice stores one and counts a duplicate", async
 });
 
 test("a different result under the same id leaves the first and records a defect", async () => {
-  const outcome = await withStore(DEFAULT_RUNTIME_POLICY, (store) =>
+  const outcome = await withStore(DEFAULT_RUNTIME_POLICY, (store, counters) =>
     Effect.gen(function* () {
       yield* store.commit(resultOf("run-1", "the first answer"));
       const second = yield* store.commit(resultOf("run-1", "a second answer"));
@@ -147,7 +162,7 @@ test("a different result under the same id leaves the first and records a defect
       return {
         second,
         stored: read.outcome === "result" ? read.result.finalOutput : undefined,
-        counters: yield* store.counters(),
+        counters: counters.counters(),
       };
     }),
   );
@@ -201,7 +216,7 @@ test("an unknown id and an evicted id get different answers", async () => {
     resultStoreBytes: encodedResultBytes(one) + 10,
   };
 
-  const outcome = await withStore(policy, (store) =>
+  const outcome = await withStore(policy, (store, counters) =>
     Effect.gen(function* () {
       yield* store.commit(one);
       // Unpinning makes it eligible; committing the second forces the choice.
@@ -212,7 +227,7 @@ test("an unknown id and an evicted id get different answers", async () => {
         evicted: yield* store.read(one.runId),
         newest: yield* store.read(two.runId),
         unknown: yield* store.read(makeRunId("run-never")),
-        counters: yield* store.counters(),
+        counters: counters.counters(),
       };
     }),
   );

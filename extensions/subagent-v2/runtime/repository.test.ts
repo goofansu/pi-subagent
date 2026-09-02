@@ -164,7 +164,7 @@ test("an illegal transition is reported, never thrown, and changes nothing", asy
   });
 });
 
-test("the repository is the only writer, and a subscriber sees the latest value", async () => {
+test("the repository is the only writer, and a subscriber sees each change", async () => {
   const observed = await withRepository((repository) =>
     Effect.gen(function* () {
       const subagent = yield* repository.allocateSubagentId();
@@ -195,15 +195,17 @@ test("the repository is the only writer, and a subscriber sees the latest value"
   assert.deepEqual(observed, [null, null, "reading files"]);
 });
 
-test("activity is conflated: a slow subscriber sees the newest value, not every value", async () => {
+test("activity is conflated in the row: twenty updates leave one value", async () => {
   const latest = await withRepository((repository) =>
     Effect.gen(function* () {
       const subagent = yield* repository.allocateSubagentId();
       const identity = identityOf(subagent, "run-1");
       yield* repository.publish(identity, 0);
 
-      // Twenty activity updates with nobody reading between them. A queue
-      // would hold twenty; a SubscriptionRef holds the latest.
+      // Twenty activity updates with nobody reading between them. The row is
+      // one value, replaced each time, so a chatty backend grows the index by
+      // nothing — which is the conflation the projection rule gives, and is a
+      // different thing from what the change stream delivers.
       for (let step = 1; step <= 20; step += 1) {
         const folded = reduceRun(createRunProjection(), {
           kind: "activity",
