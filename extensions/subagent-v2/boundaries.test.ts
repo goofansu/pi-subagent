@@ -595,7 +595,31 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 12. One schema library. v2 declares every schema with Effect Schema, and
+  // 12. The runtime does not know the host exists. `CompletionDelivery`
+  //     reaches its Session through the `NotificationSink` interface and
+  //     nothing else, which is what let M3 supply the real Session push
+  //     without changing delivery — and a runtime file that could import the
+  //     host or presentation would be one edit away from taking that back.
+  for (const file of listSourceFiles(graph.runtimeRoot, {
+    includeTests: false,
+  })) {
+    for (const specifier of specifiersOf(file)) {
+      const target = resolveRelativeSource(file, specifier);
+      if (!target) continue;
+      if (
+        isInside(target, graph.hostRoot) ||
+        isInside(target, graph.presentationRoot) ||
+        isInside(target, graph.applicationRoot) ||
+        isInside(target, graph.testingRoot)
+      ) {
+        violations.add(
+          `${describe(file)} imports ${describe(target)}, and the runtime does not know the host exists`,
+        );
+      }
+    }
+  }
+
+  // 13. One schema library. v2 declares every schema with Effect Schema, and
   //     the dependency v1 still needs must not creep back in through a tool
   //     parameter document or a custom message payload.
   for (const file of listSourceFiles(v2Root, { includeTests: true })) {
@@ -1243,6 +1267,37 @@ test("a managed runtime or a signal outside the host module is rejected", (t) =>
     `${describe(path.join(graph.applicationRoot, "subagents.ts"))} contains runtime mechanism vocabulary Effect.runPromise`,
     `${describe(path.join(graph.applicationRoot, "subagents.ts"))} contains runtime mechanism vocabulary ManagedRuntime`,
     `${describe(path.join(graph.presentationRoot, "rows.ts"))} contains runtime mechanism vocabulary AbortSignal`,
+  ]);
+});
+
+test("a runtime module importing the host, presentation, or the façade is rejected", (t) => {
+  const { graph, write } = fixtureGraph(t, "runtime-knows-no-host");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write("extensions/subagent-v2/host/push-sink.ts", "export {};\n");
+  write("extensions/subagent-v2/presentation/index.ts", "export {};\n");
+  write("extensions/subagent-v2/application/subagents.ts", "export {};\n");
+  write("extensions/subagent-v2/domain/index.ts", "export {};\n");
+  // The runtime reaching its own domain is the whole design.
+  write(
+    "extensions/subagent-v2/runtime/delivery.ts",
+    'import "../domain/index.ts";\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), []);
+
+  write(
+    "extensions/subagent-v2/runtime/delivery.ts",
+    'import "../host/push-sink.ts";\nimport "../presentation/index.ts";\n',
+  );
+  write(
+    "extensions/subagent-v2/runtime/supervisor.ts",
+    'import "../application/subagents.ts";\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.runtimeRoot, "delivery.ts"))} imports ${describe(path.join(graph.hostRoot, "push-sink.ts"))}, and the runtime does not know the host exists`,
+    `${describe(path.join(graph.runtimeRoot, "delivery.ts"))} imports ${describe(path.join(graph.presentationRoot, "index.ts"))}, and the runtime does not know the host exists`,
+    `${describe(path.join(graph.runtimeRoot, "supervisor.ts"))} imports ${describe(path.join(graph.applicationRoot, "subagents.ts"))}, and the runtime does not know the host exists`,
   ]);
 });
 

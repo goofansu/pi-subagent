@@ -106,6 +106,17 @@ export interface HostRig {
   /** Call a tool and return the whole result, details included. */
   readonly call: StandInHost["call"];
 
+  /**
+   * Give the Session's fibers turns to run, without letting real time pass.
+   *
+   * The reducer, the settlement coordinator, and the widget's subscriber are
+   * all fibers, and a host call that returns does not mean they have caught
+   * up. Where a test asserts on something they produce — a widget row, a
+   * counter — it has to let them run first, and yielding is how that is done
+   * with no clock involved.
+   */
+  readonly pump: (turns?: number) => Promise<void>;
+
   /** A gate the fakes can wait on, created on first mention. */
   readonly gate: (name: string) => Deferred.Deferred<void>;
   /** Release a gate, letting whatever waits on it continue. */
@@ -178,11 +189,22 @@ export function hostRig(
     fs.writeFileSync(path.join(agentsDir, name), body);
   }
 
-  const gates: Record<string, Deferred.Deferred<void>> = {};
-  const gate = (name: string): Deferred.Deferred<void> => {
-    gates[name] ??= Effect.runSync(Deferred.make<void>());
-    return gates[name];
-  };
+  /**
+   * Every gate a script mentions, created the first time it is asked for.
+   *
+   * A proxy rather than a map a test has to populate, because the fake looks
+   * its gates up by name from a plain object at execution time and throws for
+   * one it cannot find — and a test whose gate did not exist yet would see the
+   * Run fail for a reason that has nothing to do with what it is testing. With
+   * the proxy, mentioning a gate in a script is all it takes to have one.
+   */
+  const gates = new Proxy({} as Record<string, Deferred.Deferred<void>>, {
+    get: (target, name: string) => {
+      target[name] ??= Effect.runSync(Deferred.make<void>());
+      return target[name];
+    },
+  });
+  const gate = (name: string): Deferred.Deferred<void> => gates[name];
 
   const perRun = (
     steps: readonly (readonly FakeStep[])[] | undefined,
@@ -248,6 +270,15 @@ export function hostRig(
     text: async (name, params, callOptions) =>
       resultText(
         (await host.call(name, params, callOptions)) as StandInToolResult,
+      ),
+    pump: (turns = 40) =>
+      installation.handle.run(
+        Effect.forEach(
+          Array.from({ length: turns }, (_unused, index) => index),
+          () => Effect.yieldNow,
+          { discard: true },
+        ),
+        undefined,
       ),
     gate,
     release: (name) =>

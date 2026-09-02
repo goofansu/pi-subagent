@@ -15,6 +15,7 @@ import { shutdownSession, startSession } from "./host/session.ts";
 import type { SessionHandle } from "./host/session-handle.ts";
 import { createSessionHandle } from "./host/session-handle.ts";
 import { registerSubagentTools } from "./host/tools.ts";
+import type { ActiveWidget } from "./host/widget.ts";
 import { profilesDir } from "./profiles/discovery.ts";
 import type { BackendSet } from "./runtime/composition.ts";
 
@@ -47,6 +48,14 @@ export interface SubagentV2Installation {
   readonly sink: SessionPushSink;
   readonly profiles: () => readonly Profile[];
   readonly agentGuidelines: () => readonly string[];
+  /**
+   * The live Session's widget, or nothing between Sessions.
+   *
+   * Here for one measurement no host surface reports: how many index changes
+   * the subscriber saw against how many renders it asked for. Coalescing is a
+   * ratio, and a ratio needs both numbers.
+   */
+  readonly widget: () => ActiveWidget | undefined;
 }
 
 /**
@@ -80,6 +89,7 @@ export function installSubagentV2(
   const agentGuidelines: string[] = [];
   /** The live Session's Profiles, for `/agents` to list. */
   let profiles: readonly Profile[] = [];
+  let widget: ActiveWidget | undefined;
 
   const wiring = {
     pi,
@@ -102,10 +112,11 @@ export function installSubagentV2(
   );
 
   pi.on("session_start", async (_event, ctx) => {
-    await startSession(wiring, ctx);
+    widget = (await startSession(wiring, ctx)).widget;
   });
   pi.on("session_shutdown", async () => {
     await shutdownSession(wiring);
+    widget = undefined;
   });
 
   // The three events notification landing is decided by. The sink owns the
@@ -126,6 +137,7 @@ export function installSubagentV2(
     sink,
     profiles: () => profiles,
     agentGuidelines: () => [...agentGuidelines],
+    widget: () => widget,
   };
 }
 
