@@ -1,4 +1,4 @@
-.PHONY: check dev dev-v2 protocol-check release-gate smoke-codex test-conformance
+.PHONY: check dev dev-v2 protocol-check release-gate smoke-codex test-conformance test-v2-conformance
 
 dev:
 	pi --offline -np -nc -ns -ne -e extensions/subagent --tools agent_start,agent_wait,agent_cancel,agent_steer,agent_result
@@ -11,6 +11,11 @@ dev-v2:
 
 test-conformance:
 	npm run test:conformance
+
+# The shared v2 backend conformance suite. Pointed at the two fake backends
+# today; every real adapter from M4 onward runs the same scenarios.
+test-v2-conformance:
+	npm run test:v2:conformance
 
 protocol-check:
 	npm run codex:protocol:check
