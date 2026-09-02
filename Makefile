@@ -4,10 +4,11 @@ dev:
 	pi --offline -np -nc -ns -ne -e extensions/subagent --tools agent_start,agent_wait,agent_cancel,agent_steer,agent_result
 
 # v2 is opted into per Pi process: every extension disabled, only the v2 entry
-# point loaded. The M0 skeleton registers no model tools, so there is no
-# --tools list to mirror.
+# point loaded. Since M3 this is a usable extension — six model tools, the
+# agents command, the active widget, and two demo backends behind it — so the
+# --tools list mirrors the v1 target's.
 dev-v2:
-	pi --offline -np -nc -ns -ne -e extensions/subagent-v2/index.ts
+	pi --offline -np -nc -ns -ne -e extensions/subagent-v2/index.ts --tools agent_start,agent_resume,agent_wait,agent_result,agent_cancel,agent_steer
 
 test-conformance:
 	npm run test:conformance

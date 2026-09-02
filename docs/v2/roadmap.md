@@ -1,6 +1,6 @@
 # pi-subagent v2 roadmap
 
-**Status:** Accepted. **M2 is complete** (2026-09-02); M3 is next.  
+**Status:** Accepted. **M3 is complete** (2026-09-03); M4 is next.  
 **Strategy:** Rewrite the execution architecture inside the existing `pi-subagent` product  
 **Delivery model:** Gate-driven milestones, not a date-driven big-bang rewrite
 
@@ -87,9 +87,9 @@ flowchart TD
 | Milestone | Primary outcome                                    | Gate                                                             |
 | --------- | -------------------------------------------------- | ---------------------------------------------------------------- |
 | M0 ✅     | v1 behavior is captured; v2 compiles independently | Baseline CI and compatibility matrix are green — **passed**, see [the M0 exit gate](m0-exit-gate.md) |
-| M1        | Plain domain kernel and two fake backends          | Lifecycle behavior is demonstrable without a provider SDK        |
-| M2        | Scoped Effect supervisor and central projection    | All lifecycle and race tests pass against fakes                  |
-| M3        | Complete fake-backed product vertical slice        | Actual host handlers, UI, delivery, and shutdown work end to end |
+| M1 ✅     | Plain domain kernel and two fake backends          | Lifecycle behavior is demonstrable without a provider SDK — **passed**, see [the M1 exit gate](m1-exit-gate.md) |
+| M2 ✅     | Scoped Effect supervisor and central projection    | All lifecycle and race tests pass against fakes — **passed**, see [the M2 exit gate](m2-exit-gate.md) |
+| M3 ✅     | Complete fake-backed product vertical slice        | Actual host handlers, UI, delivery, and shutdown work end to end — **passed**, see [the M3 exit gate](m3-exit-gate.md) |
 | M4        | Native Pi backend and product dogfood              | Pi passes conformance and v2 is usable as the daily driver       |
 | M5        | Claude adapter                                     | Claude fits without generic lifecycle changes                    |
 | M6        | Codex adapter                                      | Codex fits without generic lifecycle changes                     |
@@ -341,6 +341,14 @@ Required race tests:
 - No Subagent, BackendAgent, or Run is represented as a Layer.
 
 ### M3 — Fake-backed host and presentation vertical slice
+
+**Status: complete (2026-09-03).** Every deliverable below landed; the
+verification is recorded in [the M3 exit gate](m3-exit-gate.md), which links
+every artifact and records the three deliberate v2 differences. `Schema`
+emitted tool parameter documents the Pi host accepts, so the `typebox` fallback
+ADR-0029 reserved was not needed: the second schema library is now banned
+anywhere in v2 by the boundary test, and the dependency stays in the manifest
+only until v1 is deleted at M7.
 
 **Purpose:** Prove the real product boundaries before provider lifecycle work begins.
 

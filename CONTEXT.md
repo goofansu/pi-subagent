@@ -430,6 +430,60 @@ unresolved waiters, and open BackendAgents. Every race, backpressure, fault,
 and leak test asserts it reads zero after the Session Scope closes, which turns
 "nothing leaked" from a hope into an assertion.
 
+**Host boundary** — the v2 `host/` module plus the entry point: the one place
+where a Pi callback crosses into Effect. It is the only place `Effect.runPromise`,
+`ManagedRuntime`, `AbortSignal`, and `AbortController` may appear, and the only
+place that touches Pi's registries, UI context, and message surface. The
+boundary test enforces both halves, so the exit-gate rule is checked rather
+than reviewed.
+
+**Session handle** — the one process-level variable holding the current
+Session's managed runtime, or none. Pi registers tools, commands, and renderers
+once per process while a Session starts and ends many times inside it, and this
+is where the two lifetimes are reconciled: the registrations close over the
+handle and each `session_start` refills it. Binding a runtime disposes whatever
+was bound, so a Session switch cannot leave two alive; running against no
+runtime returns a text outcome rather than throwing, because a tool call can
+arrive between Sessions.
+
+**Façade** — `Subagents`, the six functions the host handlers call and the only
+caller of the supervisor from outside the runtime. Each maps a decoded tool
+input plus the Session facts to a supervisor request and hands the outcome to
+presentation. It has no fields and holds no state; lifecycle stays in the
+runtime and prose stays in presentation. It exists because v1's dispatcher
+talked to lifecycle, presentation, and delivery directly, and once three callers
+could reach one mutable Run record, no single place knew what a Run looked like.
+
+**Backend set** — a named set of backends plus the Profiles that ship with it.
+A Session is built from exactly one. The **demo backend set** is M3's: the two
+fake backends and one **demo Profile** per fake, merged under whatever the user
+directory holds, so launching Pi with only the v2 entry point gives a working
+extension with nothing to configure. M4 replaces the set with one containing
+the real Pi backend, and the demo Profiles go with it.
+
+**Session push sink** — the `NotificationSink` implementation that pushes a
+completion Notification into a live Pi Session as a follow-up message that
+triggers a turn. It exists because *pushed is not landed*: `CompletionDelivery`
+is done when a push succeeds, correctly, since it stored the Result first — but
+Pi queues a follow-up and an interrupted turn discards what was queued.
+
+**Landing** — a pushed Notification actually reaching the conversation. Tracked
+by the sink through four host events: a push records the notice unlanded, a
+`message_start` carrying it marks it landed and forgets it, a turn whose stop
+reason or signal says it was aborted marks every unlanded notice lost, and
+`agent_settled` pushes each lost notice again exactly once. Exactly one landing
+per Notification is the sink's contract. The retained value is the bounded
+notice rather than a pin on the stored Result, because delivery releases that
+pin on a successful push.
+
+**RunCard** — the pure presentation of one Run, built from a published index row
+(live, and therefore carrying no output) or from an immutable stored Result
+(terminal, and therefore carrying everything). It is where Run presentation
+grows: M3 gives it identity, status, duration, accounting, and the final output,
+and M4 adds the recent transcript, tools, diagnostics, and native links. Having
+one place for that is what stops four renderers each assembling the same fields
+in a slightly different order.
+
 **AgentHarness** — reserved for Pi's own native abstraction. v2 never uses it
 for anything of ours.
 
