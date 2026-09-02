@@ -17,7 +17,7 @@ import {
  * the one that only means something for a backend that declares none.
  */
 
-test("the scenario list is exactly the four sections, with nothing forgotten", () => {
+test("the scenario list is exactly the five sections, with nothing forgotten", () => {
   assert.deepEqual(
     Object.values(BACKEND_CONFORMANCE_SECTIONS).flatMap((section) => [
       ...section,
@@ -34,6 +34,7 @@ test("the scenario list is exactly the four sections, with nothing forgotten", (
     "run",
     "control",
     "usage",
+    "projection-and-delivery",
   ]);
 });
 

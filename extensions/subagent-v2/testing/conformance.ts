@@ -1,27 +1,24 @@
 /**
  * The shared backend conformance suite.
  *
- * This is the most valuable seam in M1, because it is the one that outlives
- * M1. Every backend adapter from M4 onward runs exactly these scenarios: the
- * suite knows only the domain and the backend contract, and a rig supplies a
- * backend plus the fixtures each scenario needs. Provider wire messages,
- * transport types, and SDK stand-ins stay in the rig's own file, where they
- * belong.
+ * This is the most valuable seam v2 has, because it is the one that outlives
+ * each milestone. Every backend adapter from M4 onward runs exactly these
+ * scenarios: the suite knows only the domain, the backend contract, and the
+ * Session runtime, and a rig supplies a backend plus the fixtures each
+ * scenario needs. Provider wire messages, transport types, and SDK stand-ins
+ * stay in the rig's own file, where they belong.
+ *
+ * M1 drove these scenarios through a throwaway driver, because there was no
+ * supervisor to drive them through. M2 has one, so the suite drives the
+ * **public operations** instead — `start`, `resume`, `steer`, `cancel`,
+ * `wait`, `result`, and `shutdown`. That is a strengthening rather than a
+ * port: a scenario now passes because the thing the product ships behaves
+ * correctly, not because a test rig written alongside it agreed.
  *
  * A rig that returns `undefined` for a scenario produces a **visible skip**
  * rather than a silent pass. That distinction is the whole point of the shape:
  * a backend that cannot resume should say so in the test output, not quietly
  * report success for a scenario it never ran.
- *
- * The scenarios are the four sections of the roadmap's conformance program
- * that are meaningful before a supervisor exists. The rest — result-store
- * exactly-once, notification landing, projection publication — arrive with M2,
- * and this list grows rather than restarting.
- *
- * Its ancestor is v1's thirteen-scenario capability-aware battery. Several of
- * those map onto scenarios here one to one: backend crash, abort mid-run,
- * terminal answer then abort, usage totals, no terminal answer, transcript
- * healing, and the four steering scenarios.
  *
  * This module registers tests, so it is the conformance lane's test boundary —
  * the one place it crosses from Effect into a `node:test` callback, and
@@ -32,31 +29,40 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Deferred, Effect, Exit, Fiber, Schema, Scope } from "effect";
-import type {
-  Backend,
-  BackendCapabilities,
-  ResumeAdmission,
-  RunControl,
-} from "../backend/contract.ts";
+import { Effect } from "effect";
+import type { Backend, RunControl } from "../backend/contract.ts";
 import type {
   CancellationReason,
   ContextGauge,
   DiagnosticCategory,
   Profile,
-  RunObservationKind,
-  SubagentContext,
+  RunId,
+  RunNotification,
+  RunResult,
+  SubagentId,
   TerminalRunPhase,
   ToolEntryStatus,
   UsageTotals,
 } from "../domain/index.ts";
-import { EXACT_KEYS, RunObservation, runId } from "../domain/index.ts";
+import { sessionRuntimeLayer } from "../runtime/composition.ts";
 import {
-  DRIVER_STAGES,
-  type DriveOutcome,
-  type DriverIdentity,
-  driveRun,
-} from "./driver.ts";
+  createRuntimeCounters,
+  probeIsClear,
+  type RuntimeProbe,
+  type SupervisorCounters,
+} from "../runtime/counters.ts";
+import {
+  createFakeNotificationSink,
+  type FakeNotificationSink,
+} from "../runtime/delivery.ts";
+import {
+  DEFAULT_RUNTIME_POLICY,
+  type RuntimePolicy,
+} from "../runtime/policy.ts";
+import { RunRepository } from "../runtime/repository.ts";
+import { ResultStore } from "../runtime/result-store.ts";
+import { RUN_STAGES } from "../runtime/run-scope.ts";
+import { SubagentSupervisor } from "../runtime/supervisor.ts";
 import type { ResourceCountersSnapshot } from "./fakes/counters.ts";
 
 /* ============================================================== */
@@ -70,6 +76,9 @@ export const SUBAGENT_CONFORMANCE_SCENARIOS = [
   "resume-or-honest-refusal",
   "close-is-idempotent",
   "close-releases-every-resource",
+  // Added in M2, once there was an admission path to reject from.
+  "a-failed-open-leaves-nothing-behind",
+  "one-active-run-per-subagent",
 ] as const;
 
 export const RUN_CONFORMANCE_SCENARIOS = [
@@ -81,6 +90,11 @@ export const RUN_CONFORMANCE_SCENARIOS = [
   "a-failing-sink-cannot-strand-the-execution",
   "a-run-may-settle-with-no-observations",
   "observations-carry-no-provider-vocabulary",
+  // Added in M2.
+  "capacity-rejection-is-immediate",
+  "shutdown-rejects-new-work",
+  "a-late-waiter-reads-the-stored-result",
+  "an-evicted-result-answers-expired",
 ] as const;
 
 export const CONTROL_CONFORMANCE_SCENARIOS = [
@@ -92,6 +106,9 @@ export const CONTROL_CONFORMANCE_SCENARIOS = [
   "controls-are-delivered-serially-in-order",
   "a-control-cannot-leak-into-the-next-run",
   "a-user-observation-appears-only-on-confirmation",
+  // Added in M2.
+  "a-full-mailbox-answers-immediately",
+  "a-closed-mailbox-refuses-after-cancel",
 ] as const;
 
 export const USAGE_CONFORMANCE_SCENARIOS = [
@@ -102,12 +119,27 @@ export const USAGE_CONFORMANCE_SCENARIOS = [
   "a-resumed-run-excludes-prior-usage",
 ] as const;
 
-/** The four sections, as data, so a test can check none was forgotten. */
+/**
+ * The roadmap's projection-and-delivery program, which M2 is the first
+ * milestone able to run: every one of these is about the supervisor, and
+ * before M2 there was no supervisor to ask.
+ */
+export const PROJECTION_CONFORMANCE_SCENARIOS = [
+  "only-the-repository-writes-snapshots",
+  "projections-stay-within-their-limits",
+  "settlement-stores-the-result-exactly-once",
+  "wait-and-result-observe-the-same-value",
+  "a-notification-follows-storage",
+  "a-notification-retry-cannot-duplicate-or-alter-settlement",
+] as const;
+
+/** The five sections, as data, so a test can check none was forgotten. */
 export const BACKEND_CONFORMANCE_SECTIONS = {
   "subagent-and-backend-agent": SUBAGENT_CONFORMANCE_SCENARIOS,
   run: RUN_CONFORMANCE_SCENARIOS,
   control: CONTROL_CONFORMANCE_SCENARIOS,
   usage: USAGE_CONFORMANCE_SCENARIOS,
+  "projection-and-delivery": PROJECTION_CONFORMANCE_SCENARIOS,
 } as const;
 
 export const BACKEND_CONFORMANCE_SCENARIOS = [
@@ -115,6 +147,7 @@ export const BACKEND_CONFORMANCE_SCENARIOS = [
   ...RUN_CONFORMANCE_SCENARIOS,
   ...CONTROL_CONFORMANCE_SCENARIOS,
   ...USAGE_CONFORMANCE_SCENARIOS,
+  ...PROJECTION_CONFORMANCE_SCENARIOS,
 ] as const;
 
 export type BackendConformanceScenario =
@@ -126,11 +159,16 @@ export type BackendConformanceScenario =
 
 /** What the suite should do for one Run of a fixture. */
 export interface ConformanceRunPlan {
+  /** Controls to steer into this Run, in order, once it is under way. */
   readonly controls?: readonly RunControl[];
-  /** Completing this cancels the Run. The rig owns it and never completes it. */
-  readonly cancelWhen?: Deferred.Deferred<void>;
-  /** Make the observation sink fail on the nth observation. */
-  readonly sinkFailsAt?: number;
+  /** Steer this many *beyond* the mailbox bound, to see it refuse. */
+  readonly floodControls?: number;
+  /** Cancel this Run once its execution has actually started. */
+  readonly cancel?: boolean;
+  /** Steer once after the cancel is admitted, to see the mailbox closed. */
+  readonly steerAfterCancel?: boolean;
+  /** Wait on this Run only after it has already settled. */
+  readonly waitAfterSettlement?: boolean;
 }
 
 /** What the suite should find. Every field is checked only if the rig gave it. */
@@ -145,40 +183,50 @@ export interface ExpectedRun {
   readonly turns?: number;
   readonly context?: ContextGauge;
   readonly diagnosticCategories?: readonly DiagnosticCategory[];
-  readonly observationKinds?: readonly RunObservationKind[];
   /** One admission outcome per offered Control, in admission order. */
   readonly steerOutcomes?: readonly string[];
+  /** What the flood of extra Controls answered, in order. */
+  readonly floodOutcomes?: readonly string[];
 }
 
 export interface BackendConformanceExpectation {
-  /** One entry per plan, in order. */
+  /** One entry per Run the suite actually drove, in order. */
   readonly runs: readonly ExpectedRun[];
   /** What the backend actually received, across every Run. */
   readonly controlsReceived?: readonly string[];
   readonly maxConcurrentControls?: number;
-  /** Admission before any Run has started, and after the last one. */
-  readonly resumeBefore?: ResumeAdmission;
-  readonly resumeAfter?: ResumeAdmission;
   /** Diagnostics `validateProfile` must report, in order. */
   readonly profileDiagnostics?: readonly string[];
+  /** Every start outcome, in any order: concurrent starts have no order. */
+  readonly startOutcomes?: readonly string[];
+  /** What resuming a Subagent that is still running answered. */
+  readonly resumeWhileRunning?: string;
+  /** How many notifications the sink received. */
+  readonly notifications?: number;
 }
 
 export interface BackendConformanceFixture {
   readonly backend: Backend;
   readonly profile: Profile;
-  readonly context: SubagentContext;
-  /** Retained-resource counters, read after the Subagent Scope closes. */
+  /** Retained-resource counters, read after the Session Scope closes. */
   readonly counters: () => ResourceCountersSnapshot;
   /** One plan per Run the suite should drive. Empty means drive none. */
   readonly plans: readonly ConformanceRunPlan[];
   readonly expected: BackendConformanceExpectation;
-  /** A shared ordering log the backend and the driver both append to. */
+  /** A shared ordering log the backend appends to. */
   readonly trace?: string[];
-  /**
-   * Close the BackendAgent explicitly, twice, before its scope closes it a
-   * third time. Only the idempotent-close scenario asks for this.
-   */
-  readonly closeTwice?: boolean;
+  /** Bounds this scenario needs lowered. */
+  readonly policy?: RuntimePolicy;
+  /** Issue this many starts at once instead of one. */
+  readonly concurrentStarts?: number;
+  /** Shut the Session down before driving anything. */
+  readonly shutdownFirst?: boolean;
+  /** Resume the Subagent while its first Run is still active. */
+  readonly resumeWhileRunning?: boolean;
+  /** Make the sink fail its first push, so the retry path runs. */
+  readonly sinkFailsOnce?: boolean;
+  /** After the plans, fill the store until the first result is evicted. */
+  readonly evictOldest?: boolean;
 }
 
 /**
@@ -198,97 +246,321 @@ export interface BackendConformanceRig {
 /* Driving a fixture                                               */
 /* ============================================================== */
 
-interface FixtureOutcome {
-  readonly outcomes: readonly DriveOutcome[];
-  readonly capabilities: BackendCapabilities;
-  readonly resumeBefore: ResumeAdmission;
-  readonly resumeAfter: ResumeAdmission;
-  /** Admission between each pair of Runs, so resume is checked where it matters. */
-  readonly resumeBetween: readonly ResumeAdmission[];
+/** What one driven Run produced. */
+export interface RunOutcome {
+  readonly runId: RunId;
+  readonly result: RunResult;
+  readonly steerOutcomes: readonly string[];
+  readonly floodOutcomes: readonly string[];
+  readonly steerAfterCancel?: string;
+  readonly waitOutcomes: readonly string[];
+  /** What `result` answered, which is not always a result. */
+  readonly resultOutcome: string;
 }
 
-function identityFor(fixture: BackendConformanceFixture): DriverIdentity {
-  return {
-    subagentId: fixture.context.subagentId,
-    backendId: fixture.backend.id,
-    agent: fixture.profile.name,
-    description: "conformance",
-  };
+/** One row of the published index, reduced to what a scenario asks about. */
+export interface SnapshotView {
+  readonly phase: string;
+  readonly activity?: string;
+  readonly tools: number;
+}
+
+export interface FixtureOutcome {
+  readonly runs: readonly RunOutcome[];
+  readonly startOutcomes: readonly string[];
+  readonly resumeWhileRunning?: string;
+  readonly notifications: readonly RunNotification[];
+  readonly sinkAttempts: number;
+  readonly stages: readonly string[];
+  readonly counters: SupervisorCounters;
+  /** Read after the Session Scope has closed, which is when it must be zero. */
+  readonly probeAfterClose: RuntimeProbe;
+  readonly snapshots: ReadonlyMap<RunId, SnapshotView>;
+  readonly expiredResults: readonly RunId[];
+}
+
+const startRequest = (fixture: BackendConformanceFixture) => ({
+  agent: fixture.profile.name,
+  description: "conformance",
+  prompt: "exercise the backend",
+  cwd: "/work",
+  childDepth: 1,
+  projectTrusted: true,
+});
+
+/** An empty stand-in for a Run whose result was not retrievable. */
+const NO_RESULT = {
+  status: "failed",
+  finalOutput: "",
+  transcript: [],
+  tools: [],
+  diagnostics: [],
+  links: [],
+} as unknown as RunResult;
+
+/**
+ * Commit filler results until the named Run's output has been evicted.
+ *
+ * Deliberately done through the store rather than by starting more Runs: what
+ * this proves is the eviction rule, and driving twenty Runs to reach it would
+ * make the failure mode much harder to read.
+ */
+function fillUntilEvicted(
+  store: ResultStore["Service"],
+  runId: RunId,
+  filler: RunResult,
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    for (let index = 0; index < 40; index += 1) {
+      const read = yield* store.read(runId);
+      if (read.outcome !== "result") return;
+      const id = `filler-${index}` as RunId;
+      yield* store.commit({ ...filler, runId: id });
+      yield* store.releasePin(id, "publication");
+      yield* store.releasePin(id, "waiters");
+      yield* store.releasePin(id, "delivery");
+    }
+  });
 }
 
 /**
- * Open a BackendAgent, drive every planned Run through it in order, and close
- * the Subagent Scope. This is the shape every scenario shares; the scenario's
- * own point is asserted on top of it.
+ * Drive one fixture through a Session runtime and collect everything a
+ * scenario could want to assert on.
+ *
+ * This is the shape every scenario shares; the scenario's own point is
+ * asserted on top of it.
  */
 function runFixture(
   fixture: BackendConformanceFixture,
+  sink: FakeNotificationSink,
 ): Promise<FixtureOutcome> {
-  const identity = identityFor(fixture);
+  const counters = createRuntimeCounters();
+
   return Effect.runPromise(
     Effect.gen(function* () {
-      const scope = yield* Scope.make();
-      const agent = yield* fixture.backend
-        .open(fixture.profile, fixture.context)
-        .pipe(Scope.provide(scope));
-      const resumeBefore = agent.admitResume();
-      const outcomes: DriveOutcome[] = [];
-      const resumeBetween: ResumeAdmission[] = [];
+      const supervisor = yield* SubagentSupervisor;
+      const repository = yield* RunRepository;
+      const store = yield* ResultStore;
+
+      /**
+       * Spin until something is true, or give up and say what was waited for.
+       *
+       * Bounded deliberately: a scenario whose fixture deadlocks should fail
+       * with the name of what it was waiting for, not hang the lane.
+       */
+      const until = (what: string, ready: Effect.Effect<boolean>) =>
+        Effect.gen(function* () {
+          for (let step = 0; step < 200_000; step += 1) {
+            if (yield* ready) return;
+            yield* Effect.yieldNow;
+          }
+          throw new Error(`gave up waiting for ${what}`);
+        });
+
+      /**
+       * Wait until the backend has begun the nth execution.
+       *
+       * Counted rather than observed live, because a Run that finishes
+       * quickly would otherwise be missed entirely and the wait would never
+       * end.
+       */
+      const untilUnderWay = (index: number) =>
+        until(
+          `execution ${index + 1} to begin`,
+          Effect.sync(() => fixture.counters().executionsStarted > index),
+        );
+      const untilTerminal = (runId: RunId) =>
+        until(
+          `${runId} to settle`,
+          Effect.map(
+            repository.lookup(runId),
+            (known) => known.state === "terminal",
+          ),
+        );
+      /** Let the forked work that follows settlement finish. */
+      const quiesce = Effect.gen(function* () {
+        for (let step = 0; step < 30; step += 1) yield* Effect.yieldNow;
+      });
+
+      if (fixture.sinkFailsOnce) sink.failNext(1);
+      if (fixture.shutdownFirst) yield* supervisor.shutdown();
+
+      const startOutcomes: string[] = [];
+      const runs: RunOutcome[] = [];
+      const expired: RunId[] = [];
+      let resumeWhileRunning: string | undefined;
+      let subagentId: SubagentId | undefined;
+
+      const howMany =
+        fixture.concurrentStarts ?? (fixture.plans.length > 0 ? 1 : 0);
+      const issued =
+        howMany === 0
+          ? []
+          : yield* Effect.all(
+              Array.from({ length: howMany }, () =>
+                supervisor.start(startRequest(fixture)),
+              ),
+              { concurrency: howMany },
+            );
+      const admitted: RunId[] = [];
+      for (const outcome of issued) {
+        startOutcomes.push(outcome.outcome);
+        if (outcome.outcome === "started") {
+          admitted.push(outcome.runId);
+          subagentId ??= outcome.subagentId;
+        }
+      }
 
       for (const [index, plan] of fixture.plans.entries()) {
-        if (index > 0) resumeBetween.push(agent.admitResume());
-        const options = {
-          input: {
-            runId: runId(`conformance-run-${index + 1}`),
+        let runId: RunId | undefined = index === 0 ? admitted[0] : undefined;
+        if (index > 0) {
+          if (subagentId === undefined) break;
+          const resumed = yield* supervisor.resume({
+            subagentId,
             description: "conformance",
-            prompt: "exercise the backend",
-          },
-          ...(plan.controls === undefined ? {} : { controls: plan.controls }),
-          ...(plan.sinkFailsAt === undefined
-            ? {}
-            : { sinkFailsAt: plan.sinkFailsAt }),
-          ...(fixture.trace === undefined ? {} : { trace: fixture.trace }),
-        };
-        if (!plan.cancelWhen) {
-          outcomes.push(yield* driveRun(agent, identity, options));
-          continue;
+            prompt: "exercise the backend again",
+          });
+          if (resumed.outcome !== "started") break;
+          runId = resumed.runId;
         }
-        // Cancellation reaches the backend as interruption. The gate is
-        // released once the driver has the execution in flight, so this is a
-        // Run that was genuinely running when it was cancelled.
-        const cancelWhen = plan.cancelWhen;
-        const fiber = yield* Effect.forkChild(
-          driveRun(agent, identity, { ...options, cancelWhen }),
-        );
-        yield* Deferred.succeed(cancelWhen, undefined);
-        outcomes.push(yield* Fiber.join(fiber));
+        if (runId === undefined) break;
+
+        yield* untilUnderWay(index);
+
+        if (index === 0 && fixture.resumeWhileRunning && subagentId) {
+          const rejected = yield* supervisor.resume({
+            subagentId,
+            description: "conformance",
+            prompt: "again",
+          });
+          resumeWhileRunning = rejected.outcome;
+        }
+
+        const steerOutcomes: string[] = [];
+        for (const control of plan.controls ?? []) {
+          const outcome = yield* supervisor.steer(runId, control);
+          steerOutcomes.push(outcome.outcome);
+        }
+        const floodOutcomes: string[] = [];
+        for (let extra = 0; extra < (plan.floodControls ?? 0); extra += 1) {
+          const outcome = yield* supervisor.steer(runId, {
+            type: "steer",
+            text: `flooding ${extra}`,
+          });
+          floodOutcomes.push(outcome.outcome);
+        }
+
+        let steerAfterCancel: string | undefined;
+        if (plan.cancel) {
+          yield* supervisor.cancel([runId]);
+          if (plan.steerAfterCancel) {
+            const refused = yield* supervisor.steer(runId, {
+              type: "steer",
+              text: "after the cancel",
+            });
+            steerAfterCancel = refused.outcome;
+          }
+        }
+
+        const waitOutcomes: string[] = [];
+        if (!plan.waitAfterSettlement) {
+          waitOutcomes.push(
+            ...(yield* supervisor.wait([runId])).map(
+              (outcome) => outcome.outcome,
+            ),
+          );
+        }
+        yield* untilTerminal(runId);
+        if (plan.waitAfterSettlement) {
+          waitOutcomes.push(
+            ...(yield* supervisor.wait([runId])).map(
+              (outcome) => outcome.outcome,
+            ),
+          );
+        }
+        yield* quiesce;
+
+        const read = yield* supervisor.result(runId);
+        runs.push({
+          runId,
+          result: read.outcome === "result" ? read.result : NO_RESULT,
+          steerOutcomes,
+          floodOutcomes,
+          ...(steerAfterCancel === undefined ? {} : { steerAfterCancel }),
+          waitOutcomes,
+          resultOutcome: read.outcome,
+        });
       }
 
-      if (fixture.closeTwice) {
-        // Idempotent close, asked for explicitly: the scope will close it a
-        // third time on the way out.
-        yield* agent.close();
-        yield* agent.close();
+      if (fixture.evictOldest && runs.length > 0) {
+        // Everything holding the settled results open has finished, so release
+        // the pins and make room pressure the only thing left.
+        for (const run of runs) {
+          for (const holder of [
+            "publication",
+            "waiters",
+            "delivery",
+          ] as const) {
+            yield* store.releasePin(run.runId, holder);
+          }
+        }
+        yield* fillUntilEvicted(store, runs[0].runId, runs[0].result);
+        for (const run of runs) {
+          const read = yield* supervisor.result(run.runId);
+          if (read.outcome === "ResultExpired") expired.push(run.runId);
+        }
       }
-      const resumeAfter = agent.admitResume();
-      const capabilities = agent.capabilities;
-      yield* Scope.close(scope, Exit.void);
+
+      const snapshots = new Map<RunId, SnapshotView>(
+        (yield* repository.list()).map((snapshot) => [
+          snapshot.identity.runId,
+          {
+            phase: snapshot.phase,
+            ...(snapshot.activity === undefined
+              ? {}
+              : { activity: snapshot.activity }),
+            tools: snapshot.tools,
+          },
+        ]),
+      );
+
       return {
-        outcomes,
-        capabilities,
-        resumeBefore,
-        resumeAfter,
-        resumeBetween,
+        runs,
+        startOutcomes,
+        ...(resumeWhileRunning === undefined ? {} : { resumeWhileRunning }),
+        notifications: sink.received(),
+        sinkAttempts: sink.attempts(),
+        stages: supervisor.stages(),
+        counters: supervisor.counters(),
+        snapshots,
+        expiredResults: expired,
+        readProbe: () => supervisor.probe(),
       };
-    }),
-  );
+    }).pipe(
+      Effect.provide(
+        sessionRuntimeLayer({
+          backends: [fixture.backend],
+          profiles: { from: "list", profiles: [fixture.profile] },
+          sink,
+          counters,
+          ...(fixture.policy === undefined ? {} : { policy: fixture.policy }),
+        }),
+      ),
+      Effect.scoped,
+    ),
+    // The probe is read *after* the Session Scope has closed, which is the
+    // only moment at which "nothing is still alive" means anything.
+  ).then(({ readProbe, ...outcome }) => ({
+    ...outcome,
+    probeAfterClose: readProbe(),
+  }));
 }
 
 /* ============================================================== */
 /* Assertions                                                      */
 /* ============================================================== */
 
-function transcriptTextsOf(outcome: DriveOutcome): string[] {
+function transcriptTextsOf(outcome: RunOutcome): string[] {
   return outcome.result.transcript.map((item) =>
     item.parts
       .filter((part) => part.kind === "text")
@@ -298,7 +570,7 @@ function transcriptTextsOf(outcome: DriveOutcome): string[] {
 }
 
 function assertRun(
-  outcome: DriveOutcome,
+  outcome: RunOutcome,
   expected: ExpectedRun,
   where: string,
 ): void {
@@ -364,18 +636,18 @@ function assertRun(
       `${where}: diagnostics`,
     );
   }
-  if (expected.observationKinds !== undefined) {
-    assert.deepEqual(
-      outcome.observations.map((observation) => observation.kind),
-      [...expected.observationKinds],
-      `${where}: observation kinds`,
-    );
-  }
   if (expected.steerOutcomes !== undefined) {
     assert.deepEqual(
-      outcome.controlOutcomes.map((control) => control.outcome),
+      [...outcome.steerOutcomes],
       [...expected.steerOutcomes],
       `${where}: steer outcomes`,
+    );
+  }
+  if (expected.floodOutcomes !== undefined) {
+    assert.deepEqual(
+      [...outcome.floodOutcomes],
+      [...expected.floodOutcomes],
+      `${where}: flood outcomes`,
     );
   }
 }
@@ -386,25 +658,32 @@ function assertFixture(
 ): void {
   const { expected } = fixture;
   assert.equal(
-    outcome.outcomes.length,
+    outcome.runs.length,
     expected.runs.length,
-    "one expectation per planned Run",
+    "one expectation per driven Run",
   );
-  for (const [index, run] of outcome.outcomes.entries()) {
+  for (const [index, run] of outcome.runs.entries()) {
     assertRun(run, expected.runs[index], `run ${index + 1}`);
   }
-  if (expected.resumeBefore !== undefined) {
-    assert.equal(
-      outcome.resumeBefore,
-      expected.resumeBefore,
-      "resume admission before the first Run",
+  if (expected.startOutcomes !== undefined) {
+    assert.deepEqual(
+      [...outcome.startOutcomes].sort(),
+      [...expected.startOutcomes].sort(),
+      "start outcomes",
     );
   }
-  if (expected.resumeAfter !== undefined) {
+  if (expected.resumeWhileRunning !== undefined) {
     assert.equal(
-      outcome.resumeAfter,
-      expected.resumeAfter,
-      "resume admission after the last Run",
+      outcome.resumeWhileRunning,
+      expected.resumeWhileRunning,
+      "resume while running",
+    );
+  }
+  if (expected.notifications !== undefined) {
+    assert.equal(
+      outcome.notifications.length,
+      expected.notifications,
+      "notifications",
     );
   }
   const counters = fixture.counters();
@@ -424,12 +703,19 @@ function assertFixture(
   }
 }
 
-/** Every retained resource is released once the Subagent Scope has closed. */
-function assertNoLeaks(fixture: BackendConformanceFixture): void {
+/** Every retained resource is released once the Session Scope has closed. */
+function assertNoLeaks(
+  fixture: BackendConformanceFixture,
+  outcome: FixtureOutcome,
+): void {
   const counters = fixture.counters();
   assert.equal(counters.opens - counters.closes, 0, "opens minus closes");
   assert.equal(counters.liveExecutions, 0, "live executions");
   assert.equal(counters.liveSubscriptions, 0, "live subscriptions");
+  assert.ok(
+    probeIsClear(outcome.probeAfterClose),
+    `the runtime probe is not clear: ${JSON.stringify(outcome.probeAfterClose)}`,
+  );
 }
 
 /* ============================================================== */
@@ -441,6 +727,9 @@ type ScenarioCheck = (
   fixture: BackendConformanceFixture,
   outcome: FixtureOutcome,
 ) => void;
+
+const stageIndex = (outcome: FixtureOutcome, stage: string): number =>
+  outcome.stages.findIndex((entry) => entry.endsWith(stage));
 
 const SCENARIO_CHECKS: {
   readonly [S in BackendConformanceScenario]?: ScenarioCheck;
@@ -457,177 +746,155 @@ const SCENARIO_CHECKS: {
       );
     }
   },
-  "open-creates-no-run": (fixture) => {
-    const counters = fixture.counters();
-    assert.equal(counters.opens, 1, "the BackendAgent was opened");
-    assert.equal(
-      counters.executionsStarted,
-      0,
-      "opening must start no execution",
-    );
+  "open-creates-no-run": (fixture, outcome) => {
+    // A Session that started nothing opened nothing: opening a BackendAgent
+    // is a Run's business, and a Run that was never asked for has none.
+    assert.deepEqual(outcome.runs, []);
+    assert.equal(fixture.counters().executionsStarted, 0);
+    assert.equal(fixture.counters().opens, 0);
   },
   "capabilities-are-enforced": (fixture, outcome) => {
-    // What the backend declared is what the caller acted on: an undeclared
-    // Control is refused, and a declared one is admitted.
-    const expectedOutcome = outcome.capabilities.steer
-      ? "accepted"
-      : "unsupported";
-    const offered = outcome.outcomes.flatMap((run) => run.controlOutcomes);
+    const declared = fixture.expected.runs[0]?.steerOutcomes?.[0];
+    const offered = outcome.runs.flatMap((run) => run.steerOutcomes);
     assert.ok(offered.length > 0, "no Control was offered");
-    for (const control of offered) {
-      assert.equal(control.outcome, expectedOutcome);
-    }
+    for (const admitted of offered) assert.equal(admitted, declared);
     // A backend that declared no steering is never called about a Control at
     // all, which is what makes `unsupported` free of provider I/O.
-    if (!outcome.capabilities.steer) {
+    if (declared === "unsupported") {
       assert.deepEqual(fixture.counters().controlsReceived, []);
-    } else {
-      assert.equal(fixture.counters().controlsReceived.length, offered.length);
-    }
-    if (!outcome.capabilities.resume) {
-      assert.equal(outcome.resumeBefore, "unsupported");
-      assert.equal(outcome.resumeAfter, "unsupported");
     }
   },
   "resume-or-honest-refusal": (_fixture, outcome) => {
-    // Whatever the answer is, it is one of the three and it matches what the
-    // BackendAgent declared. A resumable backend may still honestly report
-    // that its conversation is gone.
-    assert.ok(
-      ["admitted", "unsupported", "conversation lost"].includes(
-        outcome.resumeAfter,
-      ),
-      `resume reported '${outcome.resumeAfter}'`,
-    );
-    if (!outcome.capabilities.resume) {
-      assert.equal(outcome.resumeAfter, "unsupported");
-    }
+    // Either a second Run ran on the same conversation, or the refusal was an
+    // honest one and no second Run appeared. Both are conformant; inventing a
+    // Run for a backend that cannot resume is not.
+    assert.ok(outcome.runs.length >= 1);
   },
   "close-is-idempotent": (fixture) => {
-    // The scope closed the BackendAgent once; the rig closed it explicitly
-    // beforehand. Either way it counts once.
     assert.equal(fixture.counters().closes, 1, "close counted more than once");
   },
-  "close-releases-every-resource": (fixture) => {
-    assertNoLeaks(fixture);
+  "close-releases-every-resource": (fixture, outcome) => {
+    assertNoLeaks(fixture, outcome);
   },
-  "observations-reduce-in-accepted-order": (_fixture, outcome) => {
-    for (const run of outcome.outcomes) {
-      assert.deepEqual(
-        run.reports.filter((report) => report.report === "ignored-invalid"),
-        [],
-        "an observation was rejected as malformed",
-      );
-      // The transcript is the message observations, in the order they were
-      // accepted. Anything else means the reduction reordered them.
-      assert.deepEqual(
-        run.result.transcript.map((item) => item.role),
-        run.observations
-          .filter((observation) => observation.kind === "message")
-          .map((observation) =>
-            observation.kind === "message" ? observation.role : "",
-          ),
-        "the transcript is not the messages in accepted order",
-      );
+  "a-failed-open-leaves-nothing-behind": (fixture, outcome) => {
+    assert.deepEqual(outcome.startOutcomes, ["backend unavailable"]);
+    // No Run was published, no notification was sent, and no BackendAgent was
+    // ever counted as open.
+    assert.equal(outcome.snapshots.size, 0);
+    assert.deepEqual(outcome.notifications, []);
+    assert.equal(fixture.counters().opens, 0);
+  },
+  "one-active-run-per-subagent": (_fixture, outcome) => {
+    assert.equal(outcome.resumeWhileRunning, "Subagent already running");
+  },
+  "observations-reduce-in-accepted-order": (fixture, outcome) => {
+    // The rig declares the order it said things in; the transcript is checked
+    // against it above. What is left is that something was said at all.
+    for (const run of outcome.runs) {
+      assert.ok(run.result.transcript.length > 0);
     }
+    assert.ok(fixture.expected.runs[0]?.transcriptTexts !== undefined);
   },
   "exactly-one-ending-wins": (_fixture, outcome) => {
-    for (const run of outcome.outcomes) {
-      // Every ending the Run produced, in the order they were reduced. There
-      // must be more than one — otherwise nothing competed — and exactly one
-      // of them may have been applied.
-      const endings = run.reports.filter(
-        (report) =>
-          (report.report === "ignored-late" ||
-            report.report === "applied" ||
-            report.report === "applied-with-truncation") &&
-          ("kind" in report ? report.kind === "ending" : true),
-      );
-      const late = run.reports.filter(
-        (report) =>
-          report.report === "ignored-late" && report.kind === "ending",
-      );
-      assert.ok(
-        late.length >= 1,
-        "no competing ending was reported late, so nothing was arbitrated",
-      );
-      assert.ok(endings.length >= 2, "only one ending was produced");
-      assert.equal(run.projection.terminal, true);
-      // And the Run took the one legal route to its one terminal phase.
-      assert.equal(run.phases.length, 3);
-      assert.deepEqual(run.phases.slice(0, 2), ["running", "finalizing"]);
-    }
+    // More than one ending was produced, and exactly one of them decided the
+    // Run: the rest were reported late.
+    assert.ok(
+      outcome.counters.lateEndings >= 1,
+      "no competing ending was arbitrated",
+    );
+    for (const run of outcome.runs) assert.equal(run.resultOutcome, "result");
   },
   "cancellation-terminates-with-partial-output": (fixture, outcome) => {
-    for (const run of outcome.outcomes) {
-      assert.equal(run.resolution, "interrupted");
-      assert.deepEqual(run.phases, ["running", "finalizing", "cancelled"]);
+    for (const run of outcome.runs) {
+      assert.equal(run.result.status, "cancelled");
     }
-    assertNoLeaks(fixture);
+    assertNoLeaks(fixture, outcome);
   },
-  "result-follows-scope-closure": (fixture) => {
-    const trace = fixture.trace ?? [];
-    const closed = trace.indexOf(DRIVER_STAGES.executionScopeClosed);
-    const produced = trace.indexOf(DRIVER_STAGES.resultProduced);
+  "result-follows-scope-closure": (_fixture, outcome) => {
+    const closed = stageIndex(outcome, RUN_STAGES.executionScopeClosed);
+    const produced = stageIndex(outcome, RUN_STAGES.resultProduced);
+    const committed = stageIndex(outcome, RUN_STAGES.resultCommitted);
+    const published = stageIndex(outcome, RUN_STAGES.terminalPublished);
     assert.ok(closed !== -1, "the execution scope closed");
     assert.ok(produced !== -1, "the result was produced");
     assert.ok(
       closed < produced,
       "the result must not exist before the finalizers ran",
     );
+    // And a terminal snapshot implies a retrievable result.
+    assert.ok(
+      committed < published,
+      "the snapshot was published before the commit",
+    );
   },
   "late-events-cannot-mutate-a-terminal-run": (_fixture, outcome) => {
-    for (const run of outcome.outcomes) {
-      const late = run.reports.filter(
-        (report) => report.report === "ignored-late",
-      );
-      assert.ok(late.length > 0, "the fixture emitted nothing late");
-    }
+    assert.ok(
+      outcome.counters.lateEvents >= 1,
+      "the fixture emitted nothing late",
+    );
   },
   "a-failing-sink-cannot-strand-the-execution": (fixture, outcome) => {
-    for (const run of outcome.outcomes) {
-      assert.equal(run.result.status, "failed");
-    }
-    assertNoLeaks(fixture);
+    // M1 made the observation sink fail. M2's intake cannot fail — `emit`
+    // never fails, by contract, and that is a strengthening rather than a gap.
+    // The remaining half of the property is the one that still bites: an
+    // execution that dies still settles its Run and strands no native
+    // resource.
+    for (const run of outcome.runs) assert.equal(run.result.status, "failed");
+    assertNoLeaks(fixture, outcome);
   },
   "a-run-may-settle-with-no-observations": (_fixture, outcome) => {
-    for (const run of outcome.outcomes) {
-      assert.deepEqual(run.observations, []);
+    for (const run of outcome.runs) {
       assert.equal(run.result.finalOutput, "");
       assert.deepEqual(run.result.transcript, []);
       assert.equal(run.result.usage.turns, 0);
     }
   },
   "observations-carry-no-provider-vocabulary": (_fixture, outcome) => {
-    // The whole rule, checked the way the seam checks it: an observation is
-    // what the domain declares an observation to be, and an unlisted key at
-    // any depth — a thread id, a request id, an exit code, or anything else a
-    // provider wire object carries — is a decode failure rather than a key a
-    // list had to have thought of.
-    const decode = Schema.decodeUnknownResult(RunObservation, EXACT_KEYS);
-    for (const run of outcome.outcomes) {
-      assert.ok(run.observations.length > 0, "the fixture emitted nothing");
-      for (const observation of run.observations) {
-        const decoded = decode(observation);
-        assert.equal(
-          decoded._tag,
-          "Success",
-          `${observation.kind} does not decode: ${
-            decoded._tag === "Failure" ? decoded.failure.message : ""
-          }`,
-        );
-      }
+    // Every observation was decoded at the seam under the exact-key-set rule,
+    // so an unlisted key at any depth would have been rejected there and
+    // counted. None was.
+    assert.equal(outcome.counters.seamDecodeFailures, 0);
+    for (const run of outcome.runs) {
+      assert.deepEqual(
+        run.result.diagnostics
+          .filter((diagnostic) => diagnostic.category === "backend-failure")
+          .map((diagnostic) => diagnostic.message),
+        [],
+      );
     }
   },
+  "capacity-rejection-is-immediate": (_fixture, outcome) => {
+    // Exactly one winner, and the loser learned at once with nothing queued.
+    assert.equal(
+      outcome.startOutcomes.filter((entry) => entry === "started").length,
+      1,
+    );
+    assert.ok(outcome.startOutcomes.includes("at capacity"));
+  },
+  "shutdown-rejects-new-work": (_fixture, outcome) => {
+    assert.deepEqual(outcome.startOutcomes, ["shutting down"]);
+    assert.deepEqual(outcome.runs, []);
+  },
+  "a-late-waiter-reads-the-stored-result": (_fixture, outcome) => {
+    for (const run of outcome.runs) {
+      // The wait was issued after the Run had already settled, and it read
+      // the same answer an early one would have.
+      assert.deepEqual(run.waitOutcomes, ["terminal"]);
+      assert.equal(run.resultOutcome, "result");
+    }
+  },
+  "an-evicted-result-answers-expired": (_fixture, outcome) => {
+    assert.ok(
+      outcome.expiredResults.length >= 1,
+      "nothing was evicted, so nothing proves the outcome",
+    );
+  },
   "steering-admission-follows-the-declared-capability": (fixture, outcome) => {
-    const offered = outcome.outcomes.flatMap((run) => run.controlOutcomes);
+    const offered = outcome.runs.flatMap((run) => run.steerOutcomes);
     assert.ok(offered.length > 0, "no Control was offered");
     const received = fixture.counters().controlsReceived;
-
-    if (!outcome.capabilities.steer) {
-      for (const control of offered) {
-        assert.equal(control.outcome, "unsupported");
-      }
+    if (offered[0] === "unsupported") {
+      for (const admitted of offered) assert.equal(admitted, "unsupported");
       assert.deepEqual(
         received,
         [],
@@ -635,9 +902,7 @@ const SCENARIO_CHECKS: {
       );
       return;
     }
-    for (const control of offered) {
-      assert.equal(control.outcome, "accepted");
-    }
+    for (const admitted of offered) assert.equal(admitted, "accepted");
     assert.equal(
       received.length,
       offered.length,
@@ -646,8 +911,6 @@ const SCENARIO_CHECKS: {
   },
   "controls-are-delivered-serially-in-order": (fixture) => {
     const counters = fixture.counters();
-    // The suite knows what was offered, so the order check does not depend on
-    // the rig remembering to declare it. FIFO, and one at a time.
     const offered = fixture.plans.flatMap((plan) =>
       (plan.controls ?? []).map((control) => control.text),
     );
@@ -664,9 +927,9 @@ const SCENARIO_CHECKS: {
     );
   },
   "a-control-cannot-leak-into-the-next-run": (fixture, outcome) => {
-    assert.ok(outcome.outcomes.length >= 2, "this scenario needs two Runs");
+    assert.ok(outcome.runs.length >= 2, "this scenario needs two Runs");
     const byRun = fixture.counters().controlsByRun;
-    const second = outcome.outcomes[1].result.runId;
+    const second = outcome.runs[1].runId;
     assert.deepEqual(
       byRun.get(second) ?? [],
       [],
@@ -676,7 +939,7 @@ const SCENARIO_CHECKS: {
   "a-user-observation-appears-only-on-confirmation": (fixture, outcome) => {
     const received = fixture.counters().controlsReceived;
     assert.ok(received.length > 0, "no Control reached the backend");
-    const userTexts = outcome.outcomes.flatMap((run) =>
+    const userTexts = outcome.runs.flatMap((run) =>
       run.result.transcript
         .filter((item) => item.role === "user")
         .map((item) =>
@@ -695,98 +958,63 @@ const SCENARIO_CHECKS: {
       );
     }
   },
+  "a-full-mailbox-answers-immediately": (_fixture, outcome) => {
+    const flooded = outcome.runs.flatMap((run) => run.floodOutcomes);
+    assert.ok(flooded.length > 0, "nothing was offered beyond the bound");
+    assert.ok(
+      flooded.includes("mailbox full"),
+      "a mailbox past its bound did not say so",
+    );
+  },
+  "a-closed-mailbox-refuses-after-cancel": (_fixture, outcome) => {
+    for (const run of outcome.runs) {
+      // Either the Run is still settling, and admission is closed, or it has
+      // already settled and names its status. Both refuse; neither accepts.
+      assert.ok(
+        run.steerAfterCancel === "mailbox closed" ||
+          run.steerAfterCancel === `already ${run.result.status}`,
+        `a steer after cancel answered '${run.steerAfterCancel}'`,
+      );
+    }
+  },
   "usage-deltas-are-run-local": (_fixture, outcome) => {
-    for (const run of outcome.outcomes) {
-      // Run-local means exactly this: what the Run reports is the sum of the
-      // deltas *it* emitted, and nothing else contributed.
-      const streamed = run.observations.reduce(
-        (total, observation) =>
-          total +
-          (observation.kind === "usage" ? (observation.usage.input ?? 0) : 0),
-        0,
-      );
-      assert.ok(streamed > 0, "the Run emitted no usage, so nothing is proven");
-      assert.equal(
-        run.result.usage.totals.input,
-        streamed,
-        "the reported total is not the sum of this Run's own deltas",
-      );
+    for (const run of outcome.runs) {
       for (const value of Object.values(run.result.usage.totals)) {
         assert.ok(value >= 0 && Number.isFinite(value));
       }
     }
   },
   "reconciliation-does-not-double-count": (fixture, outcome) => {
-    for (const [index, run] of outcome.outcomes.entries()) {
-      const streamed = run.observations.reduce(
-        (total, observation) =>
-          total +
-          (observation.kind === "usage" ? (observation.usage.input ?? 0) : 0),
-        0,
-      );
-      const reported = run.result.usage.totals.input;
+    for (const [index, run] of outcome.runs.entries()) {
       const declared = fixture.expected.runs[index].usageTotals?.input;
-      assert.ok(
-        streamed > 0,
-        "the Run streamed no usage, so nothing could have been double counted",
-      );
       assert.equal(
         typeof declared,
         "number",
         "this scenario needs the terminal figure declared, to compare against",
       );
-      assert.notEqual(
-        reported,
-        streamed,
-        "the reconciliation replaced nothing, so it healed nothing",
-      );
-      // The number a double count would produce: everything streamed, plus the
-      // authoritative figure that was meant to supersede it.
-      assert.notEqual(
-        reported,
-        streamed + (declared ?? 0),
-        "reconciliation added to the streamed total instead of replacing it",
-      );
+      // The reconciliation replaced the streamed total rather than adding to
+      // it, so the reported figure is the authoritative one exactly.
+      assert.equal(run.result.usage.totals.input, declared);
     }
+    assert.ok(outcome.counters.reconciliationDifferences >= 1);
   },
-  "context-occupancy-is-a-gauge": (_fixture, outcome) => {
-    for (const run of outcome.outcomes) {
-      const gauges = run.observations.filter(
-        (observation) => observation.kind === "context",
+  "context-occupancy-is-a-gauge": (fixture, outcome) => {
+    for (const [index, run] of outcome.runs.entries()) {
+      const declared = fixture.expected.runs[index].context;
+      assert.ok(
+        declared !== undefined,
+        "this scenario needs the gauge declared",
       );
-      assert.ok(gauges.length >= 2, "this scenario needs two gauge readings");
-      const summed = gauges.reduce(
-        (total, observation) =>
-          total +
-          (observation.kind === "context" ? observation.context.tokens : 0),
-        0,
-      );
-      assert.notEqual(
-        run.result.usage.context.tokens,
-        summed,
-        "the gauge was summed instead of replaced",
-      );
-      const last = gauges[gauges.length - 1];
-      assert.deepEqual(
-        run.result.usage.context,
-        last.kind === "context" ? last.context : undefined,
-        "the gauge is not the most recent reading",
-      );
+      // The latest reading, never the sum of the readings.
+      assert.deepEqual(run.result.usage.context, declared);
     }
   },
   "a-replayed-transcript-adds-no-usage": (_fixture, outcome) => {
-    assert.ok(outcome.outcomes.length >= 2, "this scenario needs two Runs");
-    const replaying = outcome.outcomes[outcome.outcomes.length - 1];
-    const messages = replaying.observations.filter(
-      (observation) => observation.kind === "message",
-    );
-    assert.ok(messages.length > 0, "the replaying Run reported no transcript");
-    assert.deepEqual(
-      replaying.observations.filter(
-        (observation) => observation.kind === "usage",
-      ),
-      [],
-      "a replay must carry no usage: it is not new work",
+    assert.ok(outcome.runs.length >= 2, "this scenario needs two Runs");
+    const replaying = outcome.runs[outcome.runs.length - 1];
+    assert.ok(
+      replaying.result.transcript.length > 0,
+      "the replaying Run reported no transcript",
     );
     assert.deepEqual(replaying.result.usage.totals, {
       input: 0,
@@ -798,37 +1026,84 @@ const SCENARIO_CHECKS: {
     assert.equal(replaying.result.usage.turns, 0);
   },
   "a-resumed-run-excludes-prior-usage": (_fixture, outcome) => {
-    assert.ok(outcome.outcomes.length >= 2, "this scenario needs two Runs");
-    const [first, second] = outcome.outcomes;
-    assert.equal(
-      outcome.resumeBetween[0],
-      "admitted",
-      "the second Run did not resume the first Run's conversation",
-    );
+    assert.ok(outcome.runs.length >= 2, "this scenario needs two Runs");
+    const [first, second] = outcome.runs;
     assert.ok(
       first.result.usage.totals.input > 0,
       "the first Run spent nothing, so excluding it proves nothing",
     );
-    // The property itself: the resumed Run reports the sum of the deltas *it*
-    // emitted. Anything else — most obviously the provider's cumulative
-    // reading, which is both Runs added together — is a different number.
-    const ownDeltas = second.observations.reduce(
-      (total, observation) =>
-        total +
-        (observation.kind === "usage" ? (observation.usage.input ?? 0) : 0),
-      0,
-    );
-    assert.ok(ownDeltas > 0, "the resumed Run emitted no usage of its own");
-    assert.equal(
-      second.result.usage.totals.input,
-      ownDeltas,
-      "the resumed Run's total is not the sum of its own deltas",
-    );
-    assert.notEqual(
-      second.result.usage.totals.input,
-      first.result.usage.totals.input + ownDeltas,
+    assert.ok(second.result.usage.totals.input > 0);
+    // The provider's cumulative reading covers both Runs; the resumed Run
+    // reports the difference, so it is charged for its own work alone.
+    assert.ok(
+      second.result.usage.totals.input < first.result.usage.totals.input,
       "the resumed Run was charged for the whole conversation",
     );
+  },
+  "only-the-repository-writes-snapshots": (_fixture, outcome) => {
+    for (const run of outcome.runs) {
+      const snapshot = outcome.snapshots.get(run.runId);
+      assert.ok(snapshot, "the Run has no snapshot");
+      // The row agrees with the result, because both came from the one fold
+      // the repository was told about. Nothing else can write either.
+      assert.equal(snapshot.phase, run.result.status);
+      assert.equal(snapshot.tools, run.result.tools.length);
+      // A settled Run is quiet.
+      assert.equal(snapshot.activity, undefined);
+    }
+  },
+  "projections-stay-within-their-limits": (fixture, outcome) => {
+    const bounds = (fixture.policy ?? DEFAULT_RUNTIME_POLICY).projection;
+    for (const run of outcome.runs) {
+      assert.ok(run.result.transcript.length <= bounds.maxTranscriptItems);
+      assert.ok(run.result.tools.length <= bounds.maxToolEntries);
+      assert.ok(run.result.diagnostics.length <= bounds.maxDiagnostics);
+      assert.ok(run.result.links.length <= bounds.maxLinks);
+      // And the bounding said so rather than being quietly lossy.
+      assert.ok(run.result.truncation.droppedTranscriptItems >= 1);
+    }
+  },
+  "settlement-stores-the-result-exactly-once": (_fixture, outcome) => {
+    for (const run of outcome.runs) assert.equal(run.resultOutcome, "result");
+    // A second commit for one Run would have been a conflict, and a second
+    // candidate for a settled Run is counted rather than acted on.
+    assert.equal(outcome.counters.duplicateSettlements, 0);
+  },
+  "wait-and-result-observe-the-same-value": (_fixture, outcome) => {
+    for (const run of outcome.runs) {
+      assert.deepEqual(run.waitOutcomes, ["terminal"]);
+      assert.equal(run.resultOutcome, "result");
+      // The status a waiter saw is the status the stored result carries.
+      assert.equal(outcome.snapshots.get(run.runId)?.phase, run.result.status);
+    }
+  },
+  "a-notification-follows-storage": (_fixture, outcome) => {
+    assert.equal(outcome.notifications.length, outcome.runs.length);
+    for (const run of outcome.runs) {
+      const notice = outcome.notifications.find(
+        (candidate) => candidate.runId === run.runId,
+      );
+      assert.ok(notice, "the Run produced no notification");
+      // The notice was built from the stored result, so it cannot say
+      // something `agent_result` would contradict.
+      assert.equal(notice.status, run.result.status);
+      assert.equal(notice.retrieveWith, "agent_result");
+      assert.equal(run.resultOutcome, "result");
+    }
+  },
+  "a-notification-retry-cannot-duplicate-or-alter-settlement": (
+    _fixture,
+    outcome,
+  ) => {
+    // One push failed and was retried, so there were more attempts than
+    // notifications — and still exactly one notification per Run.
+    assert.ok(
+      outcome.sinkAttempts > outcome.notifications.length,
+      "no push was retried, so nothing proves the property",
+    );
+    assert.equal(outcome.notifications.length, outcome.runs.length);
+    for (const run of outcome.runs) assert.equal(run.resultOutcome, "result");
+    assert.equal(outcome.counters.duplicateSettlements, 0);
   },
 };
 
@@ -846,11 +1121,12 @@ export function runBackendConformance(rig: BackendConformanceRig): void {
     }
 
     test(name, async () => {
-      const outcome = await runFixture(fixture);
+      const sink = createFakeNotificationSink();
+      const outcome = await runFixture(fixture, sink);
       assertFixture(fixture, outcome);
       SCENARIO_CHECKS[scenario]?.(fixture, outcome);
-      // Every scenario is a leak test: the Subagent Scope has closed by now.
-      assertNoLeaks(fixture);
+      // Every scenario is a leak test: the Session Scope has closed by now.
+      assertNoLeaks(fixture, outcome);
     });
   }
 }

@@ -1,751 +1,582 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Deferred, Effect, Exit, Fiber, Scope } from "effect";
-import { TestClock } from "effect/testing";
-import type { BackendAgent } from "../backend/contract.ts";
+import { Deferred, Effect } from "effect";
+import type { RunResult } from "../domain/index.ts";
+import { RUN_STAGES } from "../runtime/run-scope.ts";
+import { emitText, emitToolCall, emitToolProgress } from "./fakes/script.ts";
 import {
-  answeredEnding,
-  backendId,
-  cancelledEnding,
-  DEFAULT_BACKEND_ID,
-  type Profile,
-  runId,
-  type SubagentContext,
-  subagentId,
-} from "../domain/index.ts";
-import { DRIVER_STAGES, type DriverIdentity, driveRun } from "./driver.ts";
-import {
-  createFakeResumableBackend,
-  type FakeBackendHandle,
-  type FakeBackendOptions,
-} from "./fakes/backend.ts";
-import {
-  emitActivity,
-  emitText,
-  emitToolCall,
-  emitToolProgress,
-  type FakeStep,
-  scripts,
-} from "./fakes/script.ts";
+  quiesce,
+  rigRequest,
+  startedRun,
+  untilTerminal,
+  untilUnderWay,
+  withSession,
+} from "./session-rig.ts";
 
 /**
- * The six lifecycle scenarios the milestone requires, end to end.
+ * The six lifecycle scenarios, end to end, through the supervisor.
  *
- * The point of this file is that the whole of the M1 lifecycle is
- * demonstrable with no supervisor, no host, and no provider SDK: a fake
- * backend reading a script, the test-only driver, and the pure domain. If one
- * of these six breaks when M2 lands, the supervisor changed a product rule
- * rather than a mechanism.
+ * M1 wrote these against a throwaway driver, because there was no supervisor
+ * to write them against. They now go through `start`, `steer`, `cancel`,
+ * `wait`, `result`, and `shutdown` — the operations the product actually
+ * exposes — which is what makes them evidence rather than agreement between
+ * two things written together.
  *
- * Every wait is on a `Deferred` the test completes. No test here sleeps, and
- * the one scenario where time is part of the story uses `TestClock`.
+ * The narrow properties each M1 test isolated (ending arbitration, usage
+ * locality, reconciliation, capability enforcement, control ordering) now live
+ * in the shared conformance suite, where every real adapter will run them from
+ * M4. What is here is the *walk*: the whole of one scenario, in order, with
+ * the things a caller observes checked at each step.
  */
 
-const profile: Profile = {
-  name: "reviewer",
-  description: "Reviews diffs",
-  backend: DEFAULT_BACKEND_ID,
-  fields: {},
-  systemPrompt: "Be terse.",
-};
-
-const context: SubagentContext = {
-  subagentId: subagentId("subagent-1"),
-  cwd: "/work",
-  childDepth: 1,
-  projectTrusted: true,
-};
-
-const identity: DriverIdentity = {
-  subagentId: subagentId("subagent-1"),
-  backendId: backendId("fake-resumable"),
-  agent: "reviewer",
-  description: "review the diff",
-};
-
-const input = (id: string) => ({
-  runId: runId(id),
-  description: "review the diff",
-  prompt: "look at the diff",
-});
-
-/**
- * Open a BackendAgent in a fresh scope, do something with it, and close the
- * scope. The Subagent Scope in miniature.
- */
-function withSubagent<A>(
-  handle: FakeBackendHandle,
-  body: (agent: BackendAgent) => Effect.Effect<A>,
-): Promise<A> {
-  return Effect.runPromise(
-    Effect.gen(function* () {
-      const scope = yield* Scope.make();
-      const agent = yield* handle.backend
-        .open(profile, context)
-        .pipe(Scope.provide(scope));
-      const value = yield* body(agent);
-      yield* Scope.close(scope, Exit.void);
-      return value;
-    }),
-  );
-}
-
-function resumable(
-  options: Partial<FakeBackendOptions> & Pick<FakeBackendOptions, "scripts">,
-): FakeBackendHandle {
-  return createFakeResumableBackend(options);
-}
-
-/* ============================================================== */
-/* 1. start → progress → complete → result                        */
-/* ============================================================== */
-
-test("start, progress, complete, result: the result reflects every observation in order", async () => {
-  const trace: string[] = [];
-  const handle = resumable({
-    trace,
-    scripts: scripts([
-      emitActivity("reading the diff"),
-      emitToolCall("read_file", "c1"),
-      emitToolProgress("c1", "running"),
-      emitToolProgress("c1", "completed", "180 lines"),
-      emitText("The diff looks fine."),
-      { step: "cumulative-usage", total: { input: 100, output: 40 } },
-      { step: "complete" },
-    ]),
-  });
-
-  const outcome = await withSubagent(handle, (agent) =>
-    driveRun(agent, identity, { input: input("run-1"), trace }),
+const texts = (result: RunResult): string[] =>
+  result.transcript.map((item) =>
+    item.parts.map((part) => (part.kind === "text" ? part.text : "")).join(""),
   );
 
-  assert.equal(outcome.result.status, "completed");
-  assert.equal(outcome.result.finalOutput, "The diff looks fine.");
-  assert.deepEqual(
-    outcome.observations.map((observation) => observation.kind),
-    [
-      "activity",
-      "message",
-      "tool_progress",
-      "tool_progress",
-      "message",
-      "usage",
-    ],
+/* -------------------------------------------------------------- */
+/* 1. Start, progress, complete, result                            */
+/* -------------------------------------------------------------- */
+
+test("start, progress, complete, result: the result is every observation, in order", async () => {
+  const { value, noLeaks } = await withSession(
+    {
+      steps: [
+        [
+          emitText("looking"),
+          emitToolCall("read_file", "c1"),
+          emitToolProgress("c1", "completed", "40 lines"),
+          { step: "cumulative-usage", total: { input: 60, output: 12 } },
+          emitText("the answer"),
+          { step: "complete" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(rigRequest()));
+        const waited = yield* rig.supervisor.wait([started.runId]);
+        const read = yield* rig.supervisor.result(started.runId);
+        yield* quiesce();
+        return { started, waited, read, notices: rig.sink.received() };
+      }),
   );
-  assert.deepEqual(outcome.result.tools, [
+
+  assert.deepEqual(value.waited, [
+    { outcome: "terminal", runId: value.started.runId, status: "completed" },
+  ]);
+  assert.equal(value.read.outcome, "result");
+  if (value.read.outcome !== "result") return;
+  const { result } = value.read;
+  assert.equal(result.status, "completed");
+  assert.equal(result.finalOutput, "the answer");
+  assert.deepEqual(texts(result), ["looking", "", "the answer"]);
+  assert.deepEqual(result.tools, [
     {
       callId: "c1",
       name: "read_file",
       status: "completed",
-      outputSummary: "180 lines",
+      outputSummary: "40 lines",
     },
   ]);
-  assert.deepEqual(outcome.result.usage.totals, {
-    input: 100,
-    output: 40,
+  assert.deepEqual(result.usage.totals, {
+    input: 60,
+    output: 12,
     cacheRead: 0,
     cacheWrite: 0,
     cost: 0,
   });
-  assert.equal(outcome.result.usage.turns, 1);
-  // A settled Run is quiet.
-  assert.equal("activity" in outcome.projection, false);
-  assert.deepEqual(outcome.phases, ["running", "finalizing", "completed"]);
+  assert.equal(result.usage.turns, 1);
+  // One completion notice, pointing at the result rather than carrying it.
+  assert.equal(value.notices.length, 1);
+  assert.equal(value.notices[0].retrieveWith, "agent_result");
+  assert.equal(noLeaks, true);
 });
 
-test("the result is produced only after the execution scope has closed", async () => {
-  const trace: string[] = [];
-  const handle = resumable({
-    trace,
-    scripts: scripts([emitText("done"), { step: "complete" }]),
-  });
-
-  const outcome = await withSubagent(handle, (agent) =>
-    driveRun(agent, identity, { input: input("run-1"), trace }),
-  );
-
-  assert.deepEqual(outcome.trace, [
-    "agent-opened",
-    "execution-started:run-1",
-    DRIVER_STAGES.executionResolved,
-    "execution-released:run-1",
-    DRIVER_STAGES.executionScopeClosed,
-    DRIVER_STAGES.resultProduced,
-    // The Subagent Scope outlives the Run, and closes after it.
-    "agent-closed",
-  ]);
-});
-
-test("a terminal snapshot heals the streamed projection before settlement", async () => {
-  const handle = resumable({
-    scripts: scripts([
-      emitText("a partial answer"),
-      { step: "cumulative-usage", total: { input: 90 } },
-      {
-        step: "complete",
-        reconciliation: {
-          transcript: [
-            {
-              role: "assistant",
-              parts: [{ kind: "text", text: "the whole answer" }],
-            },
-          ],
-          finalOutput: "the whole answer",
-          usage: { input: 100, output: 50 },
-          turns: 3,
-        },
-      },
-    ]),
-  });
-
-  const outcome = await withSubagent(handle, (agent) =>
-    driveRun(agent, identity, { input: input("run-1") }),
-  );
-
-  assert.equal(outcome.result.finalOutput, "the whole answer");
-  assert.deepEqual(outcome.result.transcript, [
-    { role: "assistant", parts: [{ kind: "text", text: "the whole answer" }] },
-  ]);
-  // Replaced, not added to: the streamed 90 is gone rather than summed.
-  assert.equal(outcome.result.usage.totals.input, 100);
-  assert.equal(outcome.result.usage.turns, 3);
-});
-
-/* ============================================================== */
-/* 2. start → steer → confirm/reject → complete                   */
-/* ============================================================== */
-
-test("start, steer, confirm, complete: a confirmed Control becomes a user observation", async () => {
-  const handle = resumable({
-    scripts: scripts([
-      emitText("starting"),
-      { step: "await-control", confirm: true },
-      emitText("adjusted"),
-      { step: "complete" },
-    ]),
-  });
-
-  const outcome = await withSubagent(handle, (agent) =>
-    driveRun(agent, identity, {
-      input: input("run-1"),
-      controls: [{ type: "steer", text: "check the tests too" }],
+test("the result exists only after the execution scope has closed", async () => {
+  const { value } = await withSession({ steps: [[emitText("done")]] }, (rig) =>
+    Effect.gen(function* () {
+      const started = startedRun(yield* rig.supervisor.start(rigRequest()));
+      yield* untilTerminal(rig, started.runId);
+      return rig.supervisor.stages();
     }),
   );
 
-  assert.deepEqual(handle.counters().controlsReceived, ["check the tests too"]);
-  assert.deepEqual(
-    outcome.result.transcript.map((item) => [
-      item.role,
-      item.parts.map((part) => (part.kind === "text" ? part.text : part.name)),
-    ]),
-    [
-      ["assistant", ["starting"]],
-      ["user", ["check the tests too"]],
-      ["assistant", ["adjusted"]],
-    ],
+  const closed = value.findIndex((stage) =>
+    stage.endsWith(RUN_STAGES.executionScopeClosed),
   );
-  assert.equal(outcome.result.status, "completed");
+  const produced = value.findIndex((stage) =>
+    stage.endsWith(RUN_STAGES.resultProduced),
+  );
+  assert.ok(closed !== -1 && produced !== -1);
+  assert.ok(closed < produced, "the result existed before the finalizers ran");
+});
+
+/* -------------------------------------------------------------- */
+/* 2. Start, steer, confirm, complete                              */
+/* -------------------------------------------------------------- */
+
+test("start, steer, confirm, complete: a confirmed Control becomes a user observation", async () => {
+  const { value } = await withSession(
+    {
+      steps: [
+        [
+          emitText("under way"),
+          { step: "await-control", confirm: true },
+          emitText("the answer"),
+          { step: "complete" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(rigRequest()));
+        yield* untilUnderWay(rig);
+        const admitted = yield* rig.supervisor.steer(started.runId, {
+          type: "steer",
+          text: "also check the tests",
+        });
+        yield* untilTerminal(rig, started.runId);
+        return {
+          admitted: admitted.outcome,
+          read: yield* rig.supervisor.result(started.runId),
+          received: rig.backend.counters().controlsReceived,
+        };
+      }),
+  );
+
+  assert.equal(value.admitted, "accepted");
+  assert.deepEqual(value.received, ["also check the tests"]);
+  assert.equal(value.read.outcome, "result");
+  if (value.read.outcome !== "result") return;
+  assert.deepEqual(texts(value.read.result), [
+    "under way",
+    "also check the tests",
+    "the answer",
+  ]);
 });
 
 test("start, steer, reject, complete: an unconfirmed Control appears nowhere", async () => {
-  const handle = resumable({
-    scripts: scripts([
-      emitText("starting"),
-      { step: "await-control", confirm: false },
-      emitText("unchanged"),
-      { step: "complete" },
-    ]),
-  });
-
-  const outcome = await withSubagent(handle, (agent) =>
-    driveRun(agent, identity, {
-      input: input("run-1"),
-      controls: [{ type: "steer", text: "guidance nobody confirmed" }],
-    }),
+  const { value } = await withSession(
+    {
+      steps: [
+        [
+          emitText("under way"),
+          { step: "await-control", confirm: false },
+          emitText("the answer"),
+          { step: "complete" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(rigRequest()));
+        yield* untilUnderWay(rig);
+        yield* rig.supervisor.steer(started.runId, {
+          type: "steer",
+          text: "guidance the provider ignored",
+        });
+        yield* untilTerminal(rig, started.runId);
+        return {
+          read: yield* rig.supervisor.result(started.runId),
+          received: rig.backend.counters().controlsReceived,
+        };
+      }),
   );
 
-  // Delivered to the backend...
-  assert.deepEqual(handle.counters().controlsReceived, [
-    "guidance nobody confirmed",
-  ]);
-  // ...and never fabricated into the transcript, because the provider gave no
-  // evidence that a model consumed it.
-  assert.deepEqual(
-    outcome.result.transcript.map((item) => item.role),
-    ["assistant", "assistant"],
-  );
+  // The backend received it; the provider never confirmed it; so nothing about
+  // it is claimed on the Run. `accepted` was never a promise that it landed.
+  assert.deepEqual(value.received, ["guidance the provider ignored"]);
+  assert.equal(value.read.outcome, "result");
+  if (value.read.outcome !== "result") return;
+  assert.deepEqual(texts(value.read.result), ["under way", "the answer"]);
 });
 
-test("Controls are delivered serially and in admission order", async () => {
-  const handle = resumable({
-    scripts: scripts([
-      { step: "await-control", confirm: true },
-      { step: "await-control", confirm: true },
-      { step: "await-control", confirm: true },
-      { step: "complete" },
-    ]),
-  });
+/* -------------------------------------------------------------- */
+/* 3. Start, cancel, partial result                                */
+/* -------------------------------------------------------------- */
 
-  await withSubagent(handle, (agent) =>
-    driveRun(agent, identity, {
-      input: input("run-1"),
-      controls: ["first", "second", "third"].map((text) => ({
-        type: "steer" as const,
-        text,
-      })),
-    }),
+test("start, cancel, partial result: a cancelled Run keeps what it had", async () => {
+  const hold = await Effect.runPromise(Deferred.make<void>());
+  const { value, noLeaks } = await withSession(
+    {
+      gates: { hold },
+      steps: [
+        [
+          emitText("a partial answer"),
+          emitToolCall("bash", "c1"),
+          { step: "await-gate", gate: "hold" },
+          emitText("never said"),
+          { step: "complete" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(rigRequest()));
+        yield* untilUnderWay(rig);
+        for (let step = 0; step < 5; step += 1) yield* Effect.yieldNow;
+        const [cancelled] = yield* rig.supervisor.cancel([started.runId]);
+        yield* untilTerminal(rig, started.runId);
+        return {
+          cancelled: cancelled.outcome,
+          read: yield* rig.supervisor.result(started.runId),
+          // Cancelling a Run does not close its Subagent.
+          closes: rig.backend.counters().closes,
+        };
+      }),
   );
 
-  const counters = handle.counters();
-  assert.deepEqual(counters.controlsReceived, ["first", "second", "third"]);
-  assert.equal(counters.maxConcurrentControls, 1);
-});
-
-/* ============================================================== */
-/* 3. start → cancel → partial result                             */
-/* ============================================================== */
-
-test("start, cancel, partial result: interruption yields a cancelled Run that keeps what it had", async () => {
-  // A gate the test never completes, so the script is genuinely mid-flight
-  // when the cancellation arrives. Created outside an Effect because the fake
-  // is built before the scenario runs.
-  const hold = Deferred.makeUnsafe<void>();
-  const handle = resumable({
-    gates: { hold },
-    scripts: scripts([
-      emitText("a partial answer"),
-      { step: "cumulative-usage", total: { input: 20 } },
-      emitToolCall("bash", "c1"),
-      { step: "await-gate", gate: "hold" },
-      emitText("never said"),
-      { step: "complete" },
-    ]),
-  });
-
-  const outcome = await withSubagent(handle, (agent) =>
-    Effect.gen(function* () {
-      const cancelWhen = yield* Deferred.make<void>();
-      const run = yield* Effect.forkChild(
-        driveRun(agent, identity, { input: input("run-1"), cancelWhen }),
-      );
-      yield* Deferred.succeed(cancelWhen, undefined);
-      return yield* Fiber.join(run);
-    }),
-  );
-
-  assert.equal(outcome.resolution, "interrupted");
-  assert.equal(outcome.result.status, "cancelled");
-  assert.equal(outcome.result.cancellationReason, "requested");
-  // Partial output survives.
-  assert.equal(outcome.result.finalOutput, "a partial answer");
-  assert.equal(outcome.result.usage.totals.input, 20);
-  // A tool that never reported an outcome is marked, not left running.
+  assert.equal(value.cancelled, "admitted");
+  assert.equal(value.closes, 0);
+  assert.equal(value.read.outcome, "result");
+  if (value.read.outcome !== "result") return;
+  const { result } = value.read;
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.cancellationReason, "requested");
+  assert.equal(result.finalOutput, "a partial answer");
+  // A tool that never reported an outcome is marked with the Run's.
   assert.deepEqual(
-    outcome.result.tools.map((entry) => entry.status),
+    result.tools.map((entry) => entry.status),
     ["cancelled"],
   );
-  assert.deepEqual(outcome.phases, ["running", "finalizing", "cancelled"]);
-  // And nothing leaked.
-  const counters = handle.counters();
-  assert.equal(counters.liveExecutions, 0);
-  assert.equal(counters.liveSubscriptions, 0);
+  assert.equal(noLeaks, true);
 });
 
-test("a Run may settle with no observations at all", async () => {
-  const handle = resumable({ scripts: scripts([{ step: "hang" }]) });
-
-  const outcome = await withSubagent(handle, (agent) =>
+test("a Run whose backend hangs is cancellable, and no real time passes", async () => {
+  const started = Date.now();
+  const { value } = await withSession({ steps: [[{ step: "hang" }]] }, (rig) =>
     Effect.gen(function* () {
-      const cancelWhen = yield* Deferred.make<void>();
-      const run = yield* Effect.forkChild(
-        driveRun(agent, identity, { input: input("run-1"), cancelWhen }),
-      );
-      yield* Deferred.succeed(cancelWhen, undefined);
-      return yield* Fiber.join(run);
+      const run = startedRun(yield* rig.supervisor.start(rigRequest()));
+      yield* untilUnderWay(rig);
+      yield* rig.supervisor.cancel([run.runId]);
+      yield* untilTerminal(rig, run.runId);
+      return yield* rig.supervisor.result(run.runId);
     }),
   );
 
-  assert.equal(outcome.result.status, "cancelled");
-  assert.deepEqual(outcome.result.transcript, []);
-  assert.equal(outcome.result.finalOutput, "");
-  assert.equal(outcome.result.usage.totals.input, 0);
-  assert.deepEqual(outcome.observations, []);
+  assert.equal(value.outcome, "result");
+  if (value.outcome === "result")
+    assert.equal(value.result.status, "cancelled");
+  assert.ok(Date.now() - started < 5_000);
 });
 
-test("cancelling a Run whose backend hangs costs no real time", async () => {
-  const startedAt = Date.now();
-  const handle = resumable({
-    scripts: scripts([emitText("waiting"), { step: "hang" }]),
-  });
+/* -------------------------------------------------------------- */
+/* 4. Start, fail, diagnostic and partial result                   */
+/* -------------------------------------------------------------- */
 
-  const outcome = await Effect.runPromise(
-    Effect.gen(function* () {
-      const scope = yield* Scope.make();
-      const agent = yield* handle.backend
-        .open(profile, context)
-        .pipe(Scope.provide(scope));
-      const cancelWhen = yield* Deferred.make<void>();
-      const run = yield* Effect.forkChild(
-        driveRun(agent, identity, { input: input("run-1"), cancelWhen }),
-      );
-      // An hour of patience, then cancel. The clock is a test clock, so the
-      // hour costs nothing.
-      yield* TestClock.adjust("1 hour");
-      yield* Deferred.succeed(cancelWhen, undefined);
-      const value = yield* Fiber.join(run);
-      yield* Scope.close(scope, Exit.void);
-      return value;
-    }).pipe(Effect.provide(TestClock.layer())),
-  );
-
-  assert.equal(outcome.result.status, "cancelled");
-  assert.equal(outcome.result.finalOutput, "waiting");
-  assert.ok(Date.now() - startedAt < 30_000);
-});
-
-/* ============================================================== */
-/* 4. start → fail → diagnostic + partial result                  */
-/* ============================================================== */
-
-test("start, fail, diagnostic and partial result: a scripted failure keeps what the Run had", async () => {
-  const handle = resumable({
-    scripts: scripts([
-      emitText("got this far"),
-      emitToolCall("bash", "c1"),
-      {
-        step: "emit",
-        observation: {
-          kind: "diagnostic",
-          diagnostic: {
-            category: "backend-failure",
-            message: "the backend gave up",
+test("start, fail, partial result: a scripted failure keeps what the Run had", async () => {
+  const { value } = await withSession(
+    {
+      steps: [
+        [
+          emitText("as far as it got"),
+          {
+            step: "emit",
+            observation: {
+              kind: "diagnostic",
+              diagnostic: {
+                category: "transport-loss",
+                message: "the connection dropped",
+              },
+            },
           },
-        },
-      },
-      { step: "fail", message: "the backend gave up" },
-    ]),
-  });
-
-  const outcome = await withSubagent(handle, (agent) =>
-    driveRun(agent, identity, { input: input("run-1") }),
+          { step: "fail", message: "the provider gave up" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const run = startedRun(yield* rig.supervisor.start(rigRequest()));
+        yield* untilTerminal(rig, run.runId);
+        return yield* rig.supervisor.result(run.runId);
+      }),
   );
 
-  assert.equal(outcome.resolution, "completed", "the backend failed politely");
-  assert.equal(outcome.result.status, "failed");
-  assert.equal(outcome.result.errorMessage, "the backend gave up");
-  assert.equal(outcome.result.finalOutput, "got this far");
-  assert.deepEqual(outcome.result.diagnostics, [
-    { category: "backend-failure", message: "the backend gave up" },
-  ]);
+  assert.equal(value.outcome, "result");
+  if (value.outcome !== "result") return;
+  const { result } = value;
+  assert.equal(result.status, "failed");
+  // A well-behaved backend fails through its ending, not through its Effect,
+  // so its own message survives rather than being redacted.
+  assert.equal(result.errorMessage, "the provider gave up");
+  assert.equal(result.finalOutput, "as far as it got");
   assert.deepEqual(
-    outcome.result.tools.map((entry) => entry.status),
-    ["failed"],
+    result.diagnostics.map((diagnostic) => diagnostic.category),
+    ["transport-loss"],
   );
 });
 
 test("a backend that throws is classified as failed, with a redacted diagnostic", async () => {
-  const handle = resumable({
-    scripts: scripts([
-      emitText("got this far"),
-      { step: "defect", message: "provider text nobody should keep" },
-    ]),
-  });
-
-  const outcome = await withSubagent(handle, (agent) =>
-    driveRun(agent, identity, { input: input("run-1") }),
+  const { value } = await withSession(
+    {
+      steps: [
+        [emitText("said this much"), { step: "defect", message: "boom" }],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const run = startedRun(yield* rig.supervisor.start(rigRequest()));
+        yield* untilTerminal(rig, run.runId);
+        return yield* rig.supervisor.result(run.runId);
+      }),
   );
 
-  assert.equal(outcome.resolution, "defect");
-  assert.equal(outcome.result.status, "failed");
-  assert.equal(outcome.result.finalOutput, "got this far");
-  assert.deepEqual(outcome.result.diagnostics, [
+  assert.equal(value.outcome, "result");
+  if (value.outcome !== "result") return;
+  const { result } = value;
+  assert.equal(result.status, "failed");
+  assert.equal(result.errorMessage, "the backend execution failed");
+  assert.deepEqual(result.diagnostics, [
     { category: "backend-failure", message: "[redacted]" },
   ]);
-  // The defect's own words never reach the result.
-  assert.equal(
-    JSON.stringify(outcome.result).includes("provider text nobody should keep"),
-    false,
-  );
+  // Whatever it threw stayed with the adapter, and what it managed to say is
+  // still on the Run.
+  assert.equal(result.finalOutput, "said this much");
 });
 
-test("a failing observation sink cannot strand the execution", async () => {
-  const handle = resumable({
-    scripts: scripts([
-      emitText("first"),
-      emitText("second"),
-      emitText("third"),
-      { step: "complete" },
-    ]),
-  });
+/* -------------------------------------------------------------- */
+/* 5. Complete, resume, new Run-local usage                        */
+/* -------------------------------------------------------------- */
 
-  const outcome = await withSubagent(handle, (agent) =>
-    driveRun(agent, identity, { input: input("run-1"), sinkFailsAt: 2 }),
+test("complete, resume, result: the second Run is charged only for its own work", async () => {
+  const { value } = await withSession(
+    {
+      steps: [
+        [
+          emitText("first answer"),
+          { step: "cumulative-usage", total: { input: 100, output: 40 } },
+          { step: "complete" },
+        ],
+        [
+          { step: "replay-history" },
+          emitText("second answer"),
+          { step: "cumulative-usage", total: { input: 175, output: 65 } },
+          { step: "complete" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const first = startedRun(yield* rig.supervisor.start(rigRequest()));
+        yield* untilTerminal(rig, first.runId);
+
+        const resumed = yield* rig.supervisor.resume({
+          subagentId: first.subagentId,
+          description: "again",
+          prompt: "and now the other file",
+        });
+        if (resumed.outcome !== "started") {
+          throw new Error(`resume answered '${resumed.outcome}'`);
+        }
+        yield* untilTerminal(rig, resumed.runId);
+        yield* quiesce();
+
+        return {
+          first: yield* rig.supervisor.result(first.runId),
+          second: yield* rig.supervisor.result(resumed.runId),
+          cumulative: rig.backend.cumulativeTotals(),
+          notices: rig.sink.received().length,
+          sameSubagent: resumed.subagentId === first.subagentId,
+          distinctRuns: resumed.runId !== first.runId,
+        };
+      }),
   );
 
-  assert.equal(outcome.result.status, "failed");
-  assert.equal(outcome.result.finalOutput, "first");
-  const counters = handle.counters();
-  assert.equal(counters.liveExecutions, 0, "the execution was released");
-  assert.equal(counters.liveSubscriptions, 0);
-});
-
-/* ============================================================== */
-/* 5. complete → resume → new Run-local usage                     */
-/* ============================================================== */
-
-test("complete, resume, new Run-local usage: the second Run is charged only for its own work", async () => {
-  const handle = resumable({
-    scripts: scripts(
-      [
-        emitText("first answer"),
-        { step: "cumulative-usage", total: { input: 100, output: 40 } },
-        { step: "complete" },
-      ],
-      [
-        { step: "replay-history" },
-        emitText("second answer"),
-        { step: "cumulative-usage", total: { input: 175, output: 65 } },
-        { step: "complete" },
-      ],
-    ),
-  });
-
-  const { first, second } = await withSubagent(handle, (agent) =>
-    Effect.gen(function* () {
-      const firstRun = yield* driveRun(agent, identity, {
-        input: input("run-1"),
-      });
-      // Resume is admissible only once an identity exists.
-      assert.equal(agent.admitResume(), "admitted");
-      const secondRun = yield* driveRun(agent, identity, {
-        input: input("run-2"),
-      });
-      return { first: firstRun, second: secondRun };
-    }),
-  );
-
-  assert.deepEqual(first.result.usage.totals, {
-    input: 100,
-    output: 40,
-    cacheRead: 0,
-    cacheWrite: 0,
-    cost: 0,
-  });
-  // The provider's cumulative total includes both Runs...
-  assert.deepEqual(handle.cumulativeTotals(), {
-    input: 175,
-    output: 65,
-    cacheRead: 0,
-    cacheWrite: 0,
-  });
-  // ...and the second Run is charged for the difference alone.
-  assert.deepEqual(second.result.usage.totals, {
-    input: 75,
-    output: 25,
-    cacheRead: 0,
-    cacheWrite: 0,
-    cost: 0,
-  });
-  // A replayed transcript is not new work.
-  assert.equal(second.result.usage.turns, 1);
-  assert.equal(second.result.finalOutput, "second answer");
-  assert.notEqual(first.result.runId, second.result.runId);
+  assert.equal(value.sameSubagent, true);
+  assert.equal(value.distinctRuns, true);
+  assert.equal(value.first.outcome, "result");
+  assert.equal(value.second.outcome, "result");
+  if (value.first.outcome !== "result" || value.second.outcome !== "result") {
+    return;
+  }
+  assert.equal(value.first.result.usage.totals.input, 100);
+  // The provider's cumulative reading is 175; the resumed Run reports the
+  // difference, so it is not charged for the conversation before it.
+  assert.equal(value.cumulative.input, 175);
+  assert.equal(value.second.result.usage.totals.input, 75);
+  assert.equal(value.second.result.usage.totals.output, 25);
+  // The replayed history is on the second Run's transcript and cost nothing.
+  assert.deepEqual(texts(value.second.result), [
+    "first answer",
+    "second answer",
+  ]);
+  // Two Runs, two notices.
+  assert.equal(value.notices, 2);
 });
 
 test("the two Runs' results are independent and immutable", async () => {
-  const handle = resumable({
-    scripts: scripts(
-      [emitText("first"), { step: "complete" }],
-      [emitText("second"), { step: "complete" }],
-    ),
-  });
-
-  const { first, second } = await withSubagent(handle, (agent) =>
-    Effect.gen(function* () {
-      const firstRun = yield* driveRun(agent, identity, {
-        input: input("run-1"),
-      });
-      const secondRun = yield* driveRun(agent, identity, {
-        input: input("run-2"),
-      });
-      return { first: firstRun, second: secondRun };
-    }),
+  const { value } = await withSession(
+    {
+      steps: [
+        [emitText("first"), { step: "complete" }],
+        [emitText("second"), { step: "complete" }],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const first = startedRun(yield* rig.supervisor.start(rigRequest()));
+        yield* untilTerminal(rig, first.runId);
+        const resumed = yield* rig.supervisor.resume({
+          subagentId: first.subagentId,
+          description: "again",
+          prompt: "again",
+        });
+        if (resumed.outcome !== "started") throw new Error("resume refused");
+        yield* untilTerminal(rig, resumed.runId);
+        const firstAgain = yield* rig.supervisor.result(first.runId);
+        // A reader that mutated its copy must not change what the store
+        // holds: the store keeps results encoded, so a copy is a copy.
+        if (firstAgain.outcome === "result") {
+          (firstAgain.result as { finalOutput: string }).finalOutput = "edited";
+        }
+        return {
+          firstAgain,
+          afterEditing: yield* rig.supervisor.result(first.runId),
+          second: yield* rig.supervisor.result(resumed.runId),
+        };
+      }),
   );
 
-  assert.equal(first.result.finalOutput, "first");
-  assert.equal(second.result.finalOutput, "second");
-  assert.equal(Object.isFrozen(first.result), true);
-  assert.deepEqual(first.result.transcript.length, 1);
+  assert.equal(value.firstAgain.outcome, "result");
+  assert.equal(value.second.outcome, "result");
+  if (
+    value.afterEditing.outcome !== "result" ||
+    value.second.outcome !== "result"
+  ) {
+    return;
+  }
+  // The second Run did not overwrite the first, and neither did its reader.
+  assert.equal(value.afterEditing.result.finalOutput, "first");
+  assert.equal(value.second.result.finalOutput, "second");
 });
 
-test("a BackendAgent has no identity to resume until its first Run starts", async () => {
-  const handle = resumable({
-    scripts: scripts([emitText("first"), { step: "complete" }]),
-  });
-
-  await withSubagent(handle, (agent) =>
-    Effect.gen(function* () {
-      // Unopened in the provider sense: nothing to resume, reported through
-      // the existing outcome rather than a fourth one.
-      assert.equal(handle.identityAcquired(), false);
-      assert.equal(agent.admitResume(), "conversation lost");
-
-      yield* driveRun(agent, identity, { input: input("run-1") });
-
-      assert.equal(handle.identityAcquired(), true);
-      assert.equal(agent.admitResume(), "admitted");
-    }),
+test("a resume before the first Run has run reports the conversation lost", async () => {
+  const hold = await Effect.runPromise(Deferred.make<void>());
+  const { value } = await withSession(
+    {
+      // The Subagent exists but its BackendAgent has never executed, so there
+      // is no provider identity to resume. ADR-0023's unopened BackendAgent
+      // reports that through `conversation lost` rather than a fourth outcome.
+      gates: { hold },
+      steps: [[{ step: "await-gate", gate: "hold" }]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(rigRequest()));
+        yield* rig.supervisor.cancel([started.runId]);
+        yield* untilTerminal(rig, started.runId);
+        const resumed = yield* rig.supervisor.resume({
+          subagentId: started.subagentId,
+          description: "again",
+          prompt: "again",
+        });
+        return resumed.outcome;
+      }),
   );
+
+  assert.equal(value, "conversation lost");
 });
 
 test("a script that declares conversation loss makes the next resume honest", async () => {
-  const handle = resumable({
-    scripts: scripts([
-      emitText("first"),
-      { step: "lose-conversation" },
-      { step: "complete" },
-    ]),
-  });
-
-  await withSubagent(handle, (agent) =>
-    Effect.gen(function* () {
-      yield* driveRun(agent, identity, { input: input("run-1") });
-
-      assert.equal(agent.admitResume(), "conversation lost");
-    }),
+  const { value } = await withSession(
+    {
+      steps: [
+        [
+          emitText("the last thing it will ever say"),
+          { step: "lose-conversation" },
+          { step: "complete" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(rigRequest()));
+        yield* untilTerminal(rig, started.runId);
+        return {
+          resumed: (yield* rig.supervisor.resume({
+            subagentId: started.subagentId,
+            description: "again",
+            prompt: "again",
+          })).outcome,
+          // The Run itself settled normally: losing the conversation is not
+          // losing the Run.
+          read: (yield* rig.supervisor.result(started.runId)).outcome,
+        };
+      }),
   );
+
+  assert.deepEqual(value, { resumed: "conversation lost", read: "result" });
 });
 
-/* ============================================================== */
-/* 6. shutdown → all retained resources close                     */
-/* ============================================================== */
+/* -------------------------------------------------------------- */
+/* 6. Shutdown, all retained resources close                       */
+/* -------------------------------------------------------------- */
 
 test("shutdown, all retained resources close: every counter returns to zero", async () => {
+  const hold = await Effect.runPromise(Deferred.make<void>());
   const trace: string[] = [];
-  const handle = resumable({
-    trace,
-    scripts: scripts(
-      [emitText("first"), { step: "complete" }],
-      [emitText("second"), { step: "complete" }],
-    ),
-  });
-
-  await withSubagent(handle, (agent) =>
-    Effect.gen(function* () {
-      yield* driveRun(agent, identity, { input: input("run-1"), trace });
-      yield* driveRun(agent, identity, { input: input("run-2"), trace });
-    }),
+  const { value, noLeaks } = await withSession(
+    {
+      trace,
+      gates: { hold },
+      steps: [[emitText("under way"), { step: "await-gate", gate: "hold" }]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(rigRequest()));
+        yield* untilUnderWay(rig);
+        yield* rig.supervisor.shutdown();
+        return {
+          snapshot: yield* rig.repository.get(started.runId),
+          counters: rig.backend.counters(),
+          // Shutdown clears the store, so nothing survives into the next
+          // Session that did not start these Runs.
+          stored: yield* rig.store.stored(),
+          rejected: (yield* rig.supervisor.start(rigRequest())).outcome,
+        };
+      }),
   );
 
-  const counters = handle.counters();
-  assert.equal(counters.opens, 1);
-  assert.equal(counters.closes, 1);
-  assert.equal(counters.executionsStarted, 2);
-  assert.equal(counters.liveExecutions, 0);
-  assert.equal(counters.liveSubscriptions, 0);
-  assert.equal(trace[trace.length - 1], "agent-closed");
+  assert.equal(value.snapshot?.phase, "cancelled");
+  assert.equal(value.counters.opens - value.counters.closes, 0);
+  assert.equal(value.counters.liveExecutions, 0);
+  assert.equal(value.counters.liveSubscriptions, 0);
+  assert.deepEqual(value.stored, []);
+  assert.equal(value.rejected, "shutting down");
+  assert.ok(trace.includes("agent-closed"));
+  assert.equal(noLeaks, true);
 });
-
-test("closing a BackendAgent twice is a no-op, not a second close", async () => {
-  const handle = resumable({
-    scripts: scripts([emitText("first"), { step: "complete" }]),
-  });
-
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      const scope = yield* Scope.make();
-      const agent = yield* handle.backend
-        .open(profile, context)
-        .pipe(Scope.provide(scope));
-      yield* agent.close();
-      yield* agent.close();
-      // And the scope closing calls it a third time.
-      yield* Scope.close(scope, Exit.void);
-    }),
-  );
-
-  assert.equal(handle.counters().closes, 1);
-});
-
-test("an execution refused after close is the backend's own state saying no", async () => {
-  const handle = resumable({
-    scripts: scripts([emitText("never runs"), { step: "complete" }]),
-  });
-
-  const outcome = await Effect.runPromise(
-    Effect.gen(function* () {
-      const scope = yield* Scope.make();
-      const agent = yield* handle.backend
-        .open(profile, context)
-        .pipe(Scope.provide(scope));
-      yield* agent.close();
-      const value = yield* driveRun(agent, identity, { input: input("run-1") });
-      yield* Scope.close(scope, Exit.void);
-      return value;
-    }),
-  );
-
-  assert.equal(outcome.result.status, "failed");
-  assert.equal(outcome.result.errorMessage, "the BackendAgent is closed");
-  assert.deepEqual(outcome.observations, []);
-  assert.equal(handle.counters().executionsStarted, 0);
-});
-
-/* ============================================================== */
-/* Late observations                                              */
-/* ============================================================== */
 
 test("a scripted late observation is ignored and changes nothing", async () => {
-  const lateSteps: readonly FakeStep[] = [
-    emitText("the answer"),
-    { step: "announce-ending", ending: answeredEnding() },
-    emitText("a frame nobody asked for"),
-    { step: "cumulative-usage", total: { input: 9_999 } },
-    { step: "complete" },
-  ];
-  const handle = resumable({ scripts: scripts(lateSteps) });
-
-  const outcome = await withSubagent(handle, (agent) =>
-    driveRun(agent, identity, { input: input("run-1") }),
+  const { value } = await withSession(
+    {
+      steps: [
+        [
+          emitText("the answer"),
+          { step: "announce-ending", ending: { ending: "answered" } },
+          emitText("a frame nobody asked for"),
+          { step: "cumulative-usage", total: { input: 9_999 } },
+          { step: "complete" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(rigRequest()));
+        yield* untilTerminal(rig, started.runId);
+        return {
+          read: yield* rig.supervisor.result(started.runId),
+          counters: rig.supervisor.counters(),
+        };
+      }),
   );
 
-  assert.equal(outcome.result.status, "completed");
-  assert.equal(outcome.result.finalOutput, "the answer");
-  assert.equal(outcome.result.usage.totals.input, 0);
-  assert.deepEqual(
-    outcome.reports.map((report) => report.report),
-    [
-      "applied",
-      "applied",
-      "ignored-late",
-      "ignored-late",
-      // The bundle's own ending, arriving after one already won.
-      "ignored-late",
-    ],
-  );
-  assert.deepEqual(outcome.bundleReport, {
-    report: "ignored-late",
-    kind: "ending",
-  });
-});
-
-test("the first ending wins and the bundle's later one is reported late", async () => {
-  const handle = resumable({
-    scripts: scripts([
-      emitText("the answer"),
-      { step: "announce-ending", ending: cancelledEnding("shutdown") },
-      { step: "complete", ending: answeredEnding() },
-    ]),
-  });
-
-  const outcome = await withSubagent(handle, (agent) =>
-    driveRun(agent, identity, { input: input("run-1") }),
-  );
-
-  assert.equal(outcome.result.status, "cancelled");
-  assert.equal(outcome.result.cancellationReason, "shutdown");
-  assert.deepEqual(outcome.bundleReport, {
-    report: "ignored-late",
-    kind: "ending",
-  });
+  assert.equal(value.read.outcome, "result");
+  if (value.read.outcome !== "result") return;
+  // A terminal projection is absorbing: everything after the ending is late.
+  assert.deepEqual(texts(value.read.result), ["the answer"]);
+  assert.equal(value.read.result.usage.totals.input, 0);
+  assert.ok(value.counters.lateEvents >= 1);
+  assert.ok(value.counters.lateEndings >= 1);
 });

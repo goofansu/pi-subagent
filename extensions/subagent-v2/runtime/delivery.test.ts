@@ -2,29 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect } from "effect";
 import { TestClock } from "effect/testing";
+import type { RunId, StartOutcome, SubagentId } from "../domain/index.ts";
+import { emitText } from "../testing/fakes/script.ts";
 import {
-  DEFAULT_BACKEND_ID,
-  type Profile,
-  type RunId,
-  type StartOutcome,
-  type SubagentId,
-} from "../domain/index.ts";
-import {
-  createFakeResumableBackend,
-  type FakeBackendHandle,
-} from "../testing/fakes/backend.ts";
-import { emitText, type FakeStep, scripts } from "../testing/fakes/script.ts";
-import { sessionRuntimeLayer } from "./composition.ts";
-import { createRuntimeCounters, type RuntimeCounters } from "./counters.ts";
-import {
-  CompletionDelivery,
-  createFakeNotificationSink,
-  type FakeNotificationSink,
-} from "./delivery.ts";
+  rigRequest as request,
+  type SessionRig,
+  startedRun,
+  untilTerminal,
+  withSession,
+} from "../testing/session-rig.ts";
 import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
-import { RunRepository } from "./repository.ts";
-import { ResultStore } from "./result-store.ts";
-import { type StartRequest, SubagentSupervisor } from "./supervisor.ts";
 
 /**
  * Delivery, against a fake sink.
@@ -37,100 +24,7 @@ import { type StartRequest, SubagentSupervisor } from "./supervisor.ts";
  * to alter settlement.
  */
 
-const profile: Profile = {
-  name: "explore",
-  description: "The explore specialist",
-  backend: DEFAULT_BACKEND_ID,
-  fields: {},
-  systemPrompt: "Explore.",
-};
-
-const request = (overrides: Partial<StartRequest> = {}): StartRequest => ({
-  agent: "explore",
-  description: "look around",
-  prompt: "have a look",
-  cwd: "/work",
-  childDepth: 1,
-  projectTrusted: true,
-  ...overrides,
-});
-
-interface Rig {
-  readonly supervisor: SubagentSupervisor["Service"];
-  readonly repository: RunRepository["Service"];
-  readonly store: ResultStore["Service"];
-  readonly delivery: CompletionDelivery["Service"];
-  readonly sink: FakeNotificationSink;
-  readonly backend: FakeBackendHandle;
-  readonly counters: RuntimeCounters;
-}
-
-interface RigOptions {
-  readonly steps?: readonly (readonly FakeStep[])[];
-  readonly policy?: RuntimePolicy;
-  readonly gates?: Record<string, Deferred.Deferred<void>>;
-  readonly testClock?: boolean;
-}
-
-function withSession<A>(
-  options: RigOptions,
-  body: (rig: Rig) => Effect.Effect<A>,
-): Promise<A> {
-  const backend = createFakeResumableBackend({
-    scripts: scripts(...(options.steps ?? [[]])),
-    ...(options.gates === undefined ? {} : { gates: options.gates }),
-  });
-  const sink = createFakeNotificationSink();
-  const counters = createRuntimeCounters();
-
-  const program = Effect.gen(function* () {
-    const supervisor = yield* SubagentSupervisor;
-    const repository = yield* RunRepository;
-    const store = yield* ResultStore;
-    const delivery = yield* CompletionDelivery;
-    return yield* body({
-      supervisor,
-      repository,
-      store,
-      delivery,
-      sink,
-      backend,
-      counters,
-    });
-  }).pipe(
-    Effect.provide(
-      sessionRuntimeLayer({
-        backends: [backend.backend],
-        profiles: {
-          from: "list",
-          profiles: [{ ...profile, backend: backend.backend.id }],
-        },
-        sink,
-        counters,
-        ...(options.policy === undefined ? {} : { policy: options.policy }),
-      }),
-    ),
-    Effect.scoped,
-  );
-
-  return Effect.runPromise(
-    options.testClock
-      ? program.pipe(Effect.provide(TestClock.layer()))
-      : program,
-  );
-}
-
-function startedRun(outcome: StartOutcome): {
-  readonly runId: RunId;
-  readonly subagentId: SubagentId;
-} {
-  if (outcome.outcome !== "started") {
-    throw new Error(`expected a started Run, got '${outcome.outcome}'`);
-  }
-  return outcome;
-}
-
-const untilDelivered = (rig: Rig, count: number): Effect.Effect<void> =>
+const untilDelivered = (rig: SessionRig, count: number): Effect.Effect<void> =>
   Effect.gen(function* () {
     for (;;) {
       if (rig.sink.received().length >= count) return;
@@ -138,17 +32,8 @@ const untilDelivered = (rig: Rig, count: number): Effect.Effect<void> =>
     }
   });
 
-const untilTerminal = (rig: Rig, runId: RunId): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    for (;;) {
-      const known = yield* rig.repository.lookup(runId);
-      if (known.state === "terminal") return;
-      yield* Effect.yieldNow;
-    }
-  });
-
 test("a settled Run produces exactly one notification, built from the stored result", async () => {
-  const outcome = await withSession(
+  const { value: outcome } = await withSession(
     { steps: [[emitText("the answer, at some length")]] },
     (rig) =>
       Effect.gen(function* () {
@@ -186,12 +71,14 @@ test("a settled Run produces exactly one notification, built from the stored res
 test("a result is readable before its notification is pushed", async () => {
   // Storage precedes notification, so a model that reacts to a notification
   // the instant it lands never finds the result missing.
-  const outcome = await withSession({ steps: [[emitText("done")]] }, (rig) =>
-    Effect.gen(function* () {
-      const started = startedRun(yield* rig.supervisor.start(request()));
-      yield* untilDelivered(rig, 1);
-      return yield* rig.supervisor.result(started.runId);
-    }),
+  const { value: outcome } = await withSession(
+    { steps: [[emitText("done")]] },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(request()));
+        yield* untilDelivered(rig, 1);
+        return yield* rig.supervisor.result(started.runId);
+      }),
   );
 
   assert.equal(outcome.outcome, "result");
@@ -203,7 +90,7 @@ test("a sink that fails once is retried on the clock and delivers one notificati
     deliveryRetryBudget: { attempts: 3, delayMillis: 1_000 },
   };
 
-  const outcome = await withSession(
+  const { value: outcome } = await withSession(
     { policy, testClock: true, steps: [[emitText("the answer")]] },
     (rig) =>
       Effect.gen(function* () {
@@ -238,7 +125,7 @@ test("a sink that always fails exhausts its budget, releases the pin, and leaves
     deliveryRetryBudget: { attempts: 3, delayMillis: 1_000 },
   };
 
-  const outcome = await withSession(
+  const { value: outcome } = await withSession(
     { policy, testClock: true, steps: [[emitText("the answer")]] },
     (rig) =>
       Effect.gen(function* () {
@@ -272,20 +159,22 @@ test("a sink that always fails exhausts its budget, releases the pin, and leaves
 });
 
 test("a missed wake-up is recovered by the sweep, and nothing is delivered twice", async () => {
-  const outcome = await withSession({ steps: [[emitText("done")]] }, (rig) =>
-    Effect.gen(function* () {
-      const started = startedRun(yield* rig.supervisor.start(request()));
-      yield* untilDelivered(rig, 1);
-      // The sweep runs again over a store that has already been announced.
-      yield* rig.delivery.sweep();
-      yield* rig.delivery.sweep();
-      return {
-        received: rig.sink.received().length,
-        attempts: rig.sink.attempts(),
-        delivered: yield* rig.delivery.delivered(),
-        runId: started.runId,
-      };
-    }),
+  const { value: outcome } = await withSession(
+    { steps: [[emitText("done")]] },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(request()));
+        yield* untilDelivered(rig, 1);
+        // The sweep runs again over a store that has already been announced.
+        yield* rig.delivery.sweep();
+        yield* rig.delivery.sweep();
+        return {
+          received: rig.sink.received().length,
+          attempts: rig.sink.attempts(),
+          delivered: yield* rig.delivery.delivered(),
+          runId: started.runId,
+        };
+      }),
   );
 
   assert.equal(outcome.received, 1);
@@ -296,7 +185,7 @@ test("a missed wake-up is recovered by the sweep, and nothing is delivered twice
 test("a sweep delivers a stored result whose wake-up never arrived", async () => {
   // Simulating a missed wake-up directly: a result is committed without any
   // settlement having initiated delivery for it.
-  const outcome = await withSession({}, (rig) =>
+  const { value: outcome } = await withSession({}, (rig) =>
     Effect.gen(function* () {
       yield* rig.store.commit({
         runId: "run-orphan" as RunId,
@@ -347,7 +236,7 @@ test("a retry during another Run's settlement changes nothing about either Run",
   };
   const hold = await Effect.runPromise(Deferred.make<void>());
 
-  const outcome = await withSession(
+  const { value: outcome } = await withSession(
     {
       policy,
       testClock: true,
@@ -398,7 +287,7 @@ test("after shutdown, an undelivered notification is dropped rather than queued"
     deliveryRetryBudget: { attempts: 3, delayMillis: 1_000 },
   };
 
-  const outcome = await withSession(
+  const { value: outcome } = await withSession(
     { policy, testClock: true, steps: [[emitText("never announced")]] },
     (rig) =>
       Effect.gen(function* () {

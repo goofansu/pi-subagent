@@ -25,8 +25,9 @@ test("a one-shot backend skips exactly the scenarios its capabilities rule out",
   );
 
   assert.deepEqual(skipped, [...fakeConformanceSkips("one-shot")]);
-  // Every skip is explained by a capability it did not declare.
-  assert.equal(skipped.length, 6);
+  // Every skip is explained by a capability it did not declare: five for
+  // steering, one for the terminal snapshot, two for resume.
+  assert.equal(skipped.length, 8);
 });
 
 runBackendConformance(fakeConformanceRig("one-shot"));

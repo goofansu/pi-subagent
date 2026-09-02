@@ -17,11 +17,14 @@ import { Deferred } from "effect";
 import {
   contextGauge,
   DEFAULT_BACKEND_ID,
+  DEFAULT_PROJECTION_BOUNDS,
   type Profile,
   runDiagnostic,
-  type SubagentContext,
-  subagentId,
 } from "../../domain/index.ts";
+import {
+  DEFAULT_RUNTIME_POLICY,
+  type RuntimePolicy,
+} from "../../runtime/policy.ts";
 import type {
   BackendConformanceFixture,
   BackendConformanceRig,
@@ -52,20 +55,16 @@ const profile: Profile = {
   systemPrompt: "Do the conformance fixture.",
 };
 
-const context: SubagentContext = {
-  subagentId: subagentId("conformance-subagent"),
-  cwd: "/work",
-  childDepth: 1,
-  projectTrusted: true,
-};
-
 /** Scenarios the one-shot backend genuinely cannot exercise. */
 const ONE_SHOT_SKIPS: readonly BackendConformanceScenario[] = [
   // Steering is not declared, so there is no in-order delivery to observe,
-  // no confirmation to require, and no admitted Control to leak.
+  // no confirmation to require, no admitted Control to leak, and no mailbox
+  // to fill or to close.
   "controls-are-delivered-serially-in-order",
   "a-control-cannot-leak-into-the-next-run",
   "a-user-observation-appears-only-on-confirmation",
+  "a-full-mailbox-answers-immediately",
+  "a-closed-mailbox-refuses-after-cancel",
   // No terminal snapshot, so there is no reconciliation to double count.
   "reconciliation-does-not-double-count",
   // No resume, so there is no second Run on the same conversation.
@@ -83,27 +82,37 @@ function build(kind: FakeKind, options: FakeBackendOptions): FakeBackendHandle {
 function fixtureOf(
   kind: FakeKind,
   runScripts: readonly FakeRunScript[],
-  parts: Omit<
-    BackendConformanceFixture,
-    "backend" | "profile" | "context" | "counters"
-  >,
-  diagnose?: FakeBackendOptions["diagnose"],
+  parts: Omit<BackendConformanceFixture, "backend" | "profile" | "counters">,
+  extra?: {
+    readonly diagnose?: FakeBackendOptions["diagnose"];
+    readonly open?: FakeBackendOptions["open"];
+  },
 ): BackendConformanceFixture {
   const handle = build(kind, {
     scripts: runScripts,
     ...(parts.trace === undefined ? {} : { trace: parts.trace }),
-    ...(diagnose === undefined ? {} : { diagnose }),
-    ...(parts.plans.some((plan) => plan.cancelWhen)
-      ? { gates: { hold: Deferred.makeUnsafe<void>() } }
-      : {}),
+    ...(extra?.diagnose === undefined ? {} : { diagnose: extra.diagnose }),
+    ...(extra?.open === undefined ? {} : { open: extra.open }),
+    // Every scenario that cancels or holds a Run open waits on this gate, and
+    // nothing ever completes it: the cancel is what ends the Run.
+    gates: { hold: holdGate() },
   });
   return {
     backend: handle.backend,
-    profile,
-    context,
+    profile: { ...profile, backend: handle.backend.id },
     counters: handle.counters,
     ...parts,
   };
+}
+
+/**
+ * A gate nothing completes.
+ *
+ * Built per fixture so two fixtures cannot share one, and made outside an
+ * Effect because a rig is plain data the suite runs later.
+ */
+function holdGate(): Deferred.Deferred<void> {
+  return Deferred.makeUnsafe<void>();
 }
 
 /** A script that answers after doing a little work. */
@@ -115,10 +124,16 @@ const ORDINARY: readonly FakeStep[] = [
   { step: "complete" },
 ];
 
+/** A policy with the bounds one scenario needs lowered. */
+function lowered(overrides: Partial<RuntimePolicy>): RuntimePolicy {
+  return { ...DEFAULT_RUNTIME_POLICY, ...overrides };
+}
+
 export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
   const skips = kind === "one-shot" ? ONE_SHOT_SKIPS : [];
   const name =
     kind === "resumable" ? "FakeResumableBackend" : "FakeOneShotBackend";
+  const steerable = kind === "resumable";
 
   return {
     name,
@@ -137,9 +152,11 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
                 profileDiagnostics: ["the fixture always says this"],
               },
             },
-            (_subject, filePath) => [
-              { filePath, reason: "the fixture always says this" },
-            ],
+            {
+              diagnose: (_subject, filePath) => [
+                { filePath, reason: "the fixture always says this" },
+              ],
+            },
           );
 
         case "open-creates-no-run":
@@ -152,7 +169,7 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
           return fixtureOf(
             kind,
             scripts([
-              ...(kind === "resumable"
+              ...(steerable
                 ? [{ step: "await-control" as const, confirm: true }]
                 : []),
               emitText("the answer"),
@@ -162,38 +179,72 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
               plans: [
                 { controls: [{ type: "steer", text: "an offered Control" }] },
               ],
-              expected: { runs: [{ status: "completed" }] },
+              expected: {
+                runs: [
+                  {
+                    status: "completed",
+                    steerOutcomes: [steerable ? "accepted" : "unsupported"],
+                  },
+                ],
+                controlsReceived: steerable ? ["an offered Control"] : [],
+              },
             },
           );
 
         case "resume-or-honest-refusal":
-          return fixtureOf(kind, scripts(ORDINARY), {
-            plans: [{}],
+          return fixtureOf(kind, scripts(ORDINARY, ORDINARY), {
+            plans: steerable ? [{}, {}] : [{}],
             expected: {
-              runs: [{ status: "completed" }],
-              resumeBefore:
-                kind === "resumable" ? "conversation lost" : "unsupported",
-              resumeAfter: kind === "resumable" ? "admitted" : "unsupported",
+              runs: steerable
+                ? [{ status: "completed" }, { status: "completed" }]
+                : [{ status: "completed" }],
             },
           });
 
         case "close-is-idempotent":
+          // The Session Scope closes the BackendAgent once, however many ways
+          // it is reached: shutdown closes the Subagent, and the scope closes
+          // it again on the way out.
           return fixtureOf(kind, scripts(ORDINARY), {
             plans: [{}],
-            closeTwice: true,
             expected: { runs: [{ status: "completed" }] },
           });
 
         case "close-releases-every-resource":
           return fixtureOf(kind, scripts(ORDINARY, ORDINARY), {
-            plans: kind === "resumable" ? [{}, {}] : [{}],
+            plans: steerable ? [{}, {}] : [{}],
             expected: {
-              runs:
-                kind === "resumable"
-                  ? [{ status: "completed" }, { status: "completed" }]
-                  : [{ status: "completed" }],
+              runs: steerable
+                ? [{ status: "completed" }, { status: "completed" }]
+                : [{ status: "completed" }],
             },
           });
+
+        case "a-failed-open-leaves-nothing-behind":
+          return fixtureOf(
+            kind,
+            scripts(ORDINARY),
+            {
+              plans: [],
+              concurrentStarts: 1,
+              expected: { runs: [], startOutcomes: ["backend unavailable"] },
+            },
+            { open: { open: "fails", reason: "the provider said no" } },
+          );
+
+        case "one-active-run-per-subagent":
+          return fixtureOf(
+            kind,
+            scripts([{ step: "await-gate", gate: "hold" }, emitText("done")]),
+            {
+              plans: [{ cancel: true }],
+              resumeWhileRunning: true,
+              expected: {
+                runs: [{ status: "cancelled" }],
+                resumeWhileRunning: "Subagent already running",
+              },
+            },
+          );
 
         case "observations-reduce-in-accepted-order":
           return fixtureOf(kind, scripts(ORDINARY), {
@@ -202,14 +253,9 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
               runs: [
                 {
                   status: "completed",
-                  observationKinds: [
-                    "message",
-                    "tool_progress",
-                    "message",
-                    "usage",
-                  ],
                   transcriptTexts: ["", "the answer"],
                   finalOutput: "the answer",
+                  toolStatuses: ["completed"],
                 },
               ],
             },
@@ -246,7 +292,7 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
               { step: "complete" },
             ]),
             {
-              plans: [{ cancelWhen: Deferred.makeUnsafe<void>() }],
+              plans: [{ cancel: true }],
               expected: {
                 runs: [
                   {
@@ -297,21 +343,25 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
             kind,
             scripts([
               emitText("first"),
-              emitText("second"),
-              emitText("third"),
-              { step: "complete" },
+              { step: "defect", message: "the adapter threw" },
             ]),
             {
-              plans: [{ sinkFailsAt: 2 }],
+              plans: [{}],
               expected: {
-                runs: [{ status: "failed", finalOutput: "first" }],
+                runs: [
+                  {
+                    status: "failed",
+                    finalOutput: "first",
+                    diagnosticCategories: ["backend-failure"],
+                  },
+                ],
               },
             },
           );
 
         case "a-run-may-settle-with-no-observations":
           return fixtureOf(kind, scripts([{ step: "hang" }]), {
-            plans: [{ cancelWhen: Deferred.makeUnsafe<void>() }],
+            plans: [{ cancel: true }],
             expected: {
               runs: [{ status: "cancelled", cancellationReason: "requested" }],
             },
@@ -349,10 +399,47 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
             },
           );
 
+        case "capacity-rejection-is-immediate":
+          return fixtureOf(
+            kind,
+            scripts([{ step: "await-gate", gate: "hold" }, emitText("done")]),
+            {
+              plans: [{ cancel: true }],
+              policy: lowered({ maxActiveRuns: 1 }),
+              concurrentStarts: 2,
+              expected: {
+                runs: [{ status: "cancelled" }],
+                startOutcomes: ["started", "at capacity"],
+              },
+            },
+          );
+
+        case "shutdown-rejects-new-work":
+          return fixtureOf(kind, scripts(ORDINARY), {
+            plans: [],
+            concurrentStarts: 1,
+            shutdownFirst: true,
+            expected: { runs: [], startOutcomes: ["shutting down"] },
+          });
+
+        case "a-late-waiter-reads-the-stored-result":
+          return fixtureOf(kind, scripts(ORDINARY), {
+            plans: [{ waitAfterSettlement: true }],
+            expected: { runs: [{ status: "completed" }] },
+          });
+
+        case "an-evicted-result-answers-expired":
+          return fixtureOf(kind, scripts(ORDINARY), {
+            plans: [{}],
+            // Room for a couple of results, so filler forces the choice.
+            policy: lowered({ maxResultBytes: 4_096, resultStoreBytes: 8_192 }),
+            evictOldest: true,
+            expected: { runs: [{ status: "completed" }] },
+          });
+
         case "steering-admission-follows-the-declared-capability": {
           // The same two Controls are offered to both kinds of backend. What
           // differs is only what each declared, which is the point.
-          const steerable = kind === "resumable";
           return fixtureOf(
             kind,
             scripts([
@@ -393,6 +480,7 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
           return fixtureOf(
             kind,
             scripts([
+              emitText("under way"),
               { step: "await-control", confirm: true },
               { step: "await-control", confirm: true },
               { step: "await-control", confirm: true },
@@ -425,24 +513,39 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
           return fixtureOf(
             kind,
             scripts(
-              // The first Run is offered a Control and never takes it.
-              [emitText("first"), { step: "complete" }],
-              // The second Run asks for one and must get nothing.
+              // The first Run is offered a Control and never takes it: it is
+              // waiting when the cancel arrives, and cancellation discards
+              // what was admitted and never sent.
+              [emitText("first"), { step: "await-gate", gate: "hold" }],
+              // The second Run asks for one. Nothing is admitted to it, so it
+              // waits — and what releases it is its own mailbox closing when
+              // it is cancelled, with `undefined` meaning drained. If the
+              // first Run's Control could reach it, this is where it would.
               [
-                { step: "await-control", confirm: true },
                 emitText("second"),
-                { step: "complete" },
+                { step: "await-control", confirm: true },
+                // Whatever the take answered, the Run cannot finish on its
+                // own: the cancel is what ends it, so the outcome does not
+                // depend on which of the two got there first.
+                { step: "await-gate", gate: "hold" },
               ],
             ),
             {
               plans: [
-                { controls: [{ type: "steer", text: "never taken" }] },
-                {},
+                {
+                  controls: [{ type: "steer", text: "never taken" }],
+                  cancel: true,
+                },
+                { cancel: true },
               ],
               expected: {
                 runs: [
-                  { status: "completed", finalOutput: "first" },
-                  { status: "completed", finalOutput: "second" },
+                  {
+                    status: "cancelled",
+                    finalOutput: "first",
+                    steerOutcomes: ["accepted"],
+                  },
+                  { status: "cancelled", finalOutput: "second" },
                 ],
                 controlsReceived: [],
               },
@@ -453,6 +556,7 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
           return fixtureOf(
             kind,
             scripts([
+              emitText("under way"),
               { step: "await-control", confirm: true },
               { step: "await-control", confirm: false },
               emitText("the answer"),
@@ -472,11 +576,54 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
                   {
                     status: "completed",
                     // Only the confirmed one is in the transcript.
-                    transcriptTexts: ["confirmed", "the answer"],
+                    transcriptTexts: ["under way", "confirmed", "the answer"],
                   },
                 ],
                 controlsReceived: ["confirmed", "unconfirmed"],
               },
+            },
+          );
+
+        case "a-full-mailbox-answers-immediately":
+          return fixtureOf(
+            kind,
+            scripts([
+              emitText("under way"),
+              { step: "await-gate", gate: "hold" },
+              { step: "complete" },
+            ]),
+            {
+              // Two fit; the third is refused at once with nothing queued.
+              policy: lowered({
+                controls: {
+                  maxPending: 2,
+                  maxMessageBytes: 16 * 1024,
+                  maxPendingBytes: 64 * 1024,
+                },
+              }),
+              plans: [{ floodControls: 3, cancel: true }],
+              expected: {
+                runs: [
+                  {
+                    status: "cancelled",
+                    floodOutcomes: ["accepted", "accepted", "mailbox full"],
+                  },
+                ],
+              },
+            },
+          );
+
+        case "a-closed-mailbox-refuses-after-cancel":
+          return fixtureOf(
+            kind,
+            scripts([
+              emitText("under way"),
+              { step: "await-gate", gate: "hold" },
+              { step: "complete" },
+            ]),
+            {
+              plans: [{ cancel: true, steerAfterCancel: true }],
+              expected: { runs: [{ status: "cancelled" }] },
             },
           );
 
@@ -502,10 +649,7 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
               { step: "cumulative-usage", total: { input: 40, output: 10 } },
               {
                 step: "complete",
-                reconciliation: {
-                  usage: { input: 50, output: 12 },
-                  turns: 2,
-                },
+                reconciliation: { usage: { input: 50, output: 12 }, turns: 2 },
               },
             ]),
             {
@@ -619,6 +763,71 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
               },
             },
           );
+
+        case "only-the-repository-writes-snapshots":
+          return fixtureOf(kind, scripts(ORDINARY), {
+            plans: [{}],
+            expected: { runs: [{ status: "completed" }] },
+          });
+
+        case "projections-stay-within-their-limits":
+          return fixtureOf(
+            kind,
+            scripts([
+              ...Array.from({ length: 6 }, (_unused, index) =>
+                emitText(`message ${index}`),
+              ),
+              { step: "complete" },
+            ]),
+            {
+              // Tight enough that the Run overruns them and the bounding has
+              // to say so.
+              policy: lowered({
+                projection: {
+                  ...DEFAULT_PROJECTION_BOUNDS,
+                  maxTranscriptItems: 2,
+                },
+              }),
+              plans: [{}],
+              expected: {
+                runs: [
+                  {
+                    status: "completed",
+                    transcriptTexts: ["message 4", "message 5"],
+                  },
+                ],
+              },
+            },
+          );
+
+        case "settlement-stores-the-result-exactly-once":
+          return fixtureOf(kind, scripts(ORDINARY), {
+            plans: [{}],
+            expected: { runs: [{ status: "completed" }], notifications: 1 },
+          });
+
+        case "wait-and-result-observe-the-same-value":
+          return fixtureOf(kind, scripts(ORDINARY), {
+            plans: [{}],
+            expected: { runs: [{ status: "completed" }] },
+          });
+
+        case "a-notification-follows-storage":
+          return fixtureOf(kind, scripts(ORDINARY), {
+            plans: [{}],
+            expected: { runs: [{ status: "completed" }], notifications: 1 },
+          });
+
+        case "a-notification-retry-cannot-duplicate-or-alter-settlement":
+          return fixtureOf(kind, scripts(ORDINARY), {
+            plans: [{}],
+            sinkFailsOnce: true,
+            // No delay between attempts, so the retry runs without a clock.
+            policy: lowered({
+              deliveryRetryBudget: { attempts: 3, delayMillis: 0 },
+            }),
+            expected: { runs: [{ status: "completed" }], notifications: 1 },
+          });
       }
     },
   };

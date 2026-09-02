@@ -2,33 +2,26 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
+import { runId as makeRunId } from "../domain/index.ts";
 import {
-  DEFAULT_BACKEND_ID,
-  runId as makeRunId,
-  type Profile,
-  type RunId,
-  type StartOutcome,
-  type SubagentId,
-} from "../domain/index.ts";
-import {
-  createFakeOneShotBackend,
   createFakeResumableBackend,
   type FakeBackendHandle,
 } from "../testing/fakes/backend.ts";
+import { emitActivity, emitText, scripts } from "../testing/fakes/script.ts";
 import {
-  emitActivity,
-  emitText,
-  type FakeOpenScript,
-  type FakeStep,
-  scripts,
-} from "../testing/fakes/script.ts";
+  RIG_PROFILE,
+  rigRequest as request,
+  startedRun,
+  untilTerminal,
+  withSession,
+} from "../testing/session-rig.ts";
 import { sessionRuntimeLayer } from "./composition.ts";
 import { probeIsClear } from "./counters.ts";
 import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
 import { RunRepository } from "./repository.ts";
 import { ResultStore } from "./result-store.ts";
 import { RUN_STAGES } from "./run-scope.ts";
-import { type StartRequest, SubagentSupervisor } from "./supervisor.ts";
+import { SubagentSupervisor } from "./supervisor.ts";
 
 /**
  * The supervisor, driven through its public operations.
@@ -39,120 +32,8 @@ import { type StartRequest, SubagentSupervisor } from "./supervisor.ts";
  * lets real time pass and nothing sleeps.
  */
 
-const profile = (name: string): Profile => ({
-  name,
-  description: `The ${name} specialist`,
-  backend: DEFAULT_BACKEND_ID,
-  fields: {},
-  systemPrompt: "Do the thing.",
-});
-
-const request = (overrides: Partial<StartRequest> = {}): StartRequest => ({
-  agent: "explore",
-  description: "look around",
-  prompt: "have a look",
-  cwd: "/work",
-  childDepth: 1,
-  projectTrusted: true,
-  ...overrides,
-});
-
-interface Rig {
-  readonly supervisor: SubagentSupervisor["Service"];
-  readonly repository: RunRepository["Service"];
-  readonly store: ResultStore["Service"];
-  readonly backend: FakeBackendHandle;
-}
-
-interface RigOptions {
-  readonly steps?: readonly (readonly FakeStep[])[];
-  readonly open?: FakeOpenScript;
-  readonly policy?: RuntimePolicy;
-  readonly profiles?: readonly Profile[];
-  readonly maxDelegationDepth?: number;
-  readonly resumable?: boolean;
-  readonly gates?: Parameters<typeof createFakeResumableBackend>[0]["gates"];
-  readonly trace?: string[];
-}
-
-/**
- * Build one Session runtime and run a body against it.
- *
- * The Session Scope closes when the body returns, so every test that uses this
- * is also a leak test: the probe is read after the close.
- */
-function withSession<A>(
-  options: RigOptions,
-  body: (rig: Rig) => Effect.Effect<A>,
-): Promise<{ readonly value: A; readonly probeAfterClose: boolean }> {
-  const create =
-    options.resumable === false
-      ? createFakeOneShotBackend
-      : createFakeResumableBackend;
-  const backend = create({
-    scripts: scripts(...(options.steps ?? [[]])),
-    ...(options.open === undefined ? {} : { open: options.open }),
-    ...(options.gates === undefined ? {} : { gates: options.gates }),
-    ...(options.trace === undefined ? {} : { trace: options.trace }),
-  });
-  const profiles = options.profiles ?? [
-    { ...profile("explore"), backend: backend.backend.id },
-  ];
-
-  let probe: (() => boolean) | undefined;
-  return Effect.runPromise(
-    Effect.gen(function* () {
-      const supervisor = yield* SubagentSupervisor;
-      const repository = yield* RunRepository;
-      const store = yield* ResultStore;
-      probe = () => probeIsClear(supervisor.probe());
-      const value = yield* body({ supervisor, repository, store, backend });
-      return value;
-    }).pipe(
-      Effect.provide(
-        sessionRuntimeLayer({
-          backends: [backend.backend],
-          profiles: { from: "list", profiles },
-          ...(options.policy === undefined ? {} : { policy: options.policy }),
-          ...(options.maxDelegationDepth === undefined
-            ? {}
-            : { maxDelegationDepth: options.maxDelegationDepth }),
-        }),
-      ),
-      Effect.scoped,
-    ),
-  ).then((value) => ({ value, probeAfterClose: probe?.() ?? false }));
-}
-
-/**
- * Narrow a start to the one outcome most tests are about.
- *
- * Written as a throw rather than an early return so a test body always has one
- * return type: an `Effect.gen` that returns `undefined` down one branch infers
- * a union every assertion below then has to unwrap.
- */
-function startedRun(outcome: StartOutcome): {
-  readonly runId: RunId;
-  readonly subagentId: SubagentId;
-} {
-  if (outcome.outcome !== "started") {
-    throw new Error(`expected a started Run, got '${outcome.outcome}'`);
-  }
-  return outcome;
-}
-
-/** Wait for a Run to become terminal, without sleeping. */
-const untilTerminal = (rig: Rig, runId: RunId): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    for (;;) {
-      const known = yield* rig.repository.lookup(runId);
-      if (known.state === "terminal") return;
-      yield* Effect.yieldNow;
-    }
-  });
-
 test("a start opens a Subagent, runs it, and its result is retrievable the instant it is terminal", async () => {
-  const { value, probeAfterClose } = await withSession(
+  const { value, noLeaks } = await withSession(
     { steps: [[emitText("on it"), emitText("the answer")]] },
     (rig) =>
       Effect.gen(function* () {
@@ -192,7 +73,7 @@ test("a start opens a Subagent, runs it, and its result is retrievable the insta
       ["on it", "the answer"],
     );
   }
-  assert.equal(probeAfterClose, true);
+  assert.equal(noLeaks, true);
 });
 
 test("settlement goes in the roadmap's order, and the result is committed before the terminal snapshot", async () => {
@@ -285,7 +166,7 @@ test("two concurrent starts against a capacity of one produce one started and on
 
 test("a start whose backend cannot open returns backend unavailable and leaves nothing", async () => {
   const trace: string[] = [];
-  const { value, probeAfterClose } = await withSession(
+  const { value, noLeaks } = await withSession(
     {
       trace,
       open: { open: "fails", reason: "the provider refused the connection" },
@@ -318,7 +199,7 @@ test("a start whose backend cannot open returns backend unavailable and leaves n
     "agent-open-failed:the provider refused the connection",
     "agent-open-failed:the provider refused the connection",
   ]);
-  assert.equal(probeAfterClose, true);
+  assert.equal(noLeaks, true);
 });
 
 test("identifiers spent by a start that failed at open never come back", async () => {
@@ -507,7 +388,7 @@ test("a start whose backend hangs while opening is rejected when the budget runs
           backends: [backend.backend],
           profiles: {
             from: "list",
-            profiles: [{ ...profile("explore"), backend: backend.backend.id }],
+            profiles: [{ ...RIG_PROFILE, backend: backend.backend.id }],
           },
           policy,
         }),
@@ -607,7 +488,7 @@ test("a malformed observation becomes a diagnostic on the Run and the execution 
 });
 
 test("a defect in the execution settles the Run as failed with its observations kept", async () => {
-  const { value, probeAfterClose } = await withSession(
+  const { value, noLeaks } = await withSession(
     {
       steps: [
         [
@@ -642,7 +523,7 @@ test("a defect in the execution settles the Run as failed with its observations 
   assert.equal(result.finalOutput, "got this far");
   // A settled Run is quiet.
   assert.equal(value.snapshot?.activity, undefined);
-  assert.equal(probeAfterClose, true);
+  assert.equal(noLeaks, true);
 });
 
 test("an ending announced in the stream wins, and the bundle's is late", async () => {
@@ -739,7 +620,7 @@ test("a result for an id no Run ever had is unknown, not expired", async () => {
 test("closing the Session Scope closes every BackendAgent beneath it", async () => {
   const trace: string[] = [];
   let handle: FakeBackendHandle | undefined;
-  const { probeAfterClose } = await withSession(
+  const { noLeaks } = await withSession(
     { trace, steps: [[emitText("done")]] },
     (rig) =>
       Effect.gen(function* () {
@@ -756,14 +637,14 @@ test("closing the Session Scope closes every BackendAgent beneath it", async () 
   assert.equal(handle?.counters().closes, 1);
   assert.equal(handle?.counters().liveExecutions, 0);
   assert.equal(handle?.counters().liveSubscriptions, 0);
-  assert.equal(probeAfterClose, true);
+  assert.equal(noLeaks, true);
   assert.ok(trace.includes("agent-closed"));
 });
 
 test("a Run that outlives the body is still closed by the Session Scope", async () => {
   const never = await Effect.runPromise(Deferred.make<void>());
   let handle: FakeBackendHandle | undefined;
-  const { probeAfterClose } = await withSession(
+  const { noLeaks } = await withSession(
     { steps: [[{ step: "await-gate", gate: "never" }]], gates: { never } },
     (rig) =>
       Effect.gen(function* () {
@@ -776,14 +657,14 @@ test("a Run that outlives the body is still closed by the Session Scope", async 
 
   assert.equal(handle?.counters().closes, 1);
   assert.equal(handle?.counters().liveExecutions, 0);
-  assert.equal(probeAfterClose, true);
+  assert.equal(noLeaks, true);
 });
 
 test("no test in this file lets a fiber outlive its Session", async () => {
   // A guard on the guard: `withSession` reads the probe after the Session
   // Scope has closed, and every test above asserts on the value it returned.
-  const { probeAfterClose } = await withSession({}, () => Effect.succeed(0));
-  assert.equal(probeAfterClose, true);
+  const { noLeaks } = await withSession({}, () => Effect.succeed(0));
+  assert.equal(noLeaks, true);
 });
 
 /** Unused in this file, kept so the fiber import is not dead. */

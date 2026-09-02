@@ -2,31 +2,21 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Fiber, Queue } from "effect";
 import { TestClock } from "effect/testing";
+import { runId as makeRunId } from "../domain/index.ts";
+import { emitText } from "../testing/fakes/script.ts";
 import {
-  DEFAULT_BACKEND_ID,
-  runId as makeRunId,
-  type Profile,
-  type RunId,
-  type StartOutcome,
-  type SubagentId,
-} from "../domain/index.ts";
-import {
-  createFakeOneShotBackend,
-  createFakeResumableBackend,
-  type FakeBackendHandle,
-} from "../testing/fakes/backend.ts";
-import { emitText, type FakeStep, scripts } from "../testing/fakes/script.ts";
-import { sessionRuntimeLayer } from "./composition.ts";
-import { createRuntimeCounters, probeIsClear } from "./counters.ts";
+  rigRequest as request,
+  startedRun,
+  untilTerminal,
+  withSession,
+} from "../testing/session-rig.ts";
+import { createRuntimeCounters } from "./counters.ts";
 import {
   bridgeOverflowObservations,
   makeIntake,
   offerWithoutWaiting,
 } from "./observation-intake.ts";
 import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
-import { RunRepository } from "./repository.ts";
-import { ResultStore } from "./result-store.ts";
-import { type StartRequest, SubagentSupervisor } from "./supervisor.ts";
 
 /**
  * Controls, cancellation, timeout, cleanup escalation, shutdown, and wait.
@@ -38,102 +28,6 @@ import { type StartRequest, SubagentSupervisor } from "./supervisor.ts";
  *
  * Nothing sleeps. Where time has to pass it passes on a test clock.
  */
-
-const profile: Profile = {
-  name: "explore",
-  description: "The explore specialist",
-  backend: DEFAULT_BACKEND_ID,
-  fields: {},
-  systemPrompt: "Explore.",
-};
-
-const request = (overrides: Partial<StartRequest> = {}): StartRequest => ({
-  agent: "explore",
-  description: "look around",
-  prompt: "have a look",
-  cwd: "/work",
-  childDepth: 1,
-  projectTrusted: true,
-  ...overrides,
-});
-
-interface Rig {
-  readonly supervisor: SubagentSupervisor["Service"];
-  readonly repository: RunRepository["Service"];
-  readonly store: ResultStore["Service"];
-  readonly backend: FakeBackendHandle;
-}
-
-interface RigOptions {
-  readonly steps?: readonly (readonly FakeStep[])[];
-  readonly policy?: RuntimePolicy;
-  readonly resumable?: boolean;
-  readonly gates?: Record<string, Deferred.Deferred<void>>;
-  readonly trace?: string[];
-  /** Provide a test clock, for the tests where time has to pass. */
-  readonly testClock?: boolean;
-}
-
-function withSession<A>(
-  options: RigOptions,
-  body: (rig: Rig) => Effect.Effect<A>,
-): Promise<{ readonly value: A; readonly probeAfterClose: boolean }> {
-  const create =
-    options.resumable === false
-      ? createFakeOneShotBackend
-      : createFakeResumableBackend;
-  const backend = create({
-    scripts: scripts(...(options.steps ?? [[]])),
-    ...(options.gates === undefined ? {} : { gates: options.gates }),
-    ...(options.trace === undefined ? {} : { trace: options.trace }),
-  });
-
-  let probe: (() => boolean) | undefined;
-  const program = Effect.gen(function* () {
-    const supervisor = yield* SubagentSupervisor;
-    const repository = yield* RunRepository;
-    const store = yield* ResultStore;
-    probe = () => probeIsClear(supervisor.probe());
-    return yield* body({ supervisor, repository, store, backend });
-  }).pipe(
-    Effect.provide(
-      sessionRuntimeLayer({
-        backends: [backend.backend],
-        profiles: {
-          from: "list",
-          profiles: [{ ...profile, backend: backend.backend.id }],
-        },
-        ...(options.policy === undefined ? {} : { policy: options.policy }),
-      }),
-    ),
-    Effect.scoped,
-  );
-
-  return Effect.runPromise(
-    options.testClock
-      ? program.pipe(Effect.provide(TestClock.layer()))
-      : program,
-  ).then((value) => ({ value, probeAfterClose: probe?.() ?? false }));
-}
-
-function startedRun(outcome: StartOutcome): {
-  readonly runId: RunId;
-  readonly subagentId: SubagentId;
-} {
-  if (outcome.outcome !== "started") {
-    throw new Error(`expected a started Run, got '${outcome.outcome}'`);
-  }
-  return outcome;
-}
-
-const untilTerminal = (rig: Rig, runId: RunId): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    for (;;) {
-      const known = yield* rig.repository.lookup(runId);
-      if (known.state === "terminal") return;
-      yield* Effect.yieldNow;
-    }
-  });
 
 const steer = (text: string) => ({ type: "steer" as const, text });
 
@@ -333,7 +227,7 @@ test("a steer on a settled Run names its terminal status, and on an unknown id s
 
 test("cancel twice is admitted then idempotent, and after settlement it names the status", async () => {
   const hold = await Effect.runPromise(Deferred.make<void>());
-  const { value, probeAfterClose } = await withSession(
+  const { value, noLeaks } = await withSession(
     { steps: [[{ step: "await-gate", gate: "hold" }]], gates: { hold } },
     (rig) =>
       Effect.gen(function* () {
@@ -371,7 +265,7 @@ test("cancel twice is admitted then idempotent, and after settlement it names th
   }
   assert.equal(value?.unchanged, true);
   assert.equal(value?.closes, 0);
-  assert.equal(probeAfterClose, true);
+  assert.equal(noLeaks, true);
 });
 
 test("cancelling an unknown Run reports it rather than pretending", async () => {
@@ -420,7 +314,7 @@ test("a Run that outlives the default timeout is cancelled with reason timeout",
     defaultRunTimeoutMillis: 60_000,
   };
 
-  const { value, probeAfterClose } = await withSession(
+  const { value, noLeaks } = await withSession(
     {
       policy,
       testClock: true,
@@ -444,7 +338,7 @@ test("a Run that outlives the default timeout is cancelled with reason timeout",
   // One reason, and it is the timeout's — not a `requested` from the
   // interruption that carried it out.
   assert.equal(value.result.cancellationReason, "timeout");
-  assert.equal(probeAfterClose, true);
+  assert.equal(noLeaks, true);
 });
 
 test("a Run that finishes before its timeout is not cancelled by it", async () => {
@@ -531,7 +425,7 @@ test("a finalizer past the cleanup budget is escalated past, and the Run still s
 
 test("after shutdown begins, start, resume, and steer all answer shutting down", async () => {
   const hold = await Effect.runPromise(Deferred.make<void>());
-  const { value, probeAfterClose } = await withSession(
+  const { value, noLeaks } = await withSession(
     { steps: [[{ step: "await-gate", gate: "hold" }]], gates: { hold } },
     (rig) =>
       Effect.gen(function* () {
@@ -566,7 +460,7 @@ test("after shutdown begins, start, resume, and steer all answer shutting down",
   // The store is cleared and the identities are forgotten.
   assert.deepEqual(value?.stored, []);
   assert.equal(value?.closes, 1);
-  assert.equal(probeAfterClose, true);
+  assert.equal(noLeaks, true);
 });
 
 test("shutdown closes a Subagent by cancel-and-await-cleanup, so its Run settles first", async () => {
@@ -660,7 +554,7 @@ test("a wait that times out reports still running, and the Run carries on", asyn
 
 test("interrupting a wait stops only that waiter", async () => {
   const hold = await Effect.runPromise(Deferred.make<void>());
-  const { value, probeAfterClose } = await withSession(
+  const { value, noLeaks } = await withSession(
     {
       steps: [
         [{ step: "await-gate", gate: "hold" }, emitText("finished anyway")],
@@ -691,7 +585,7 @@ test("interrupting a wait stops only that waiter", async () => {
     assert.equal(value.result.result.finalOutput, "finished anyway");
   }
   assert.ok(!value?.pins.includes("waiters"));
-  assert.equal(probeAfterClose, true);
+  assert.equal(noLeaks, true);
 });
 
 test("waiting on an unknown id reports it rather than blocking forever", async () => {
