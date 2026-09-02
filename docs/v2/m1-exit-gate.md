@@ -320,8 +320,11 @@ with every race test.
   supervisor inherits the knowledge without inheriting the code.
 - Four boundary rules and one timing rule the lane enforces on itself.
 - One decision taken after this gate, for M2 to build against:
-  [ADR-0029](../adr/0029-v2-effect-schema-at-the-boundaries.md) adopts Effect
-  Schema at the backend seam and the host boundary, and leaves the domain
-  module plain. It also states the standing direction — adopt Effect wherever
-  it removes machinery v2 would otherwise own — and the three limits that still
-  bind it.
+  [ADR-0029](../adr/0029-v2-effect-schema.md) adopts Effect Schema — schema
+  declarations in the domain beside the types they describe, decoding invoked
+  at the backend seam and the host boundary. It replaces several things this
+  milestone hand-wrote, including the phantom identifier brand and the
+  duplicated exact-key-set checks, and it tightens the domain boundary rule
+  from "no package specifiers" to a named-import check that admits `Schema`
+  alone. It also states the standing direction — adopt Effect wherever it
+  removes machinery v2 would otherwise own — and the limits that still bind it.

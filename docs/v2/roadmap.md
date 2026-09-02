@@ -301,11 +301,13 @@ capture terminal bundle: candidate ending + optional reconciliation
 → initiate completion delivery
 ```
 
-- Effect Schema at the boundaries, per [ADR-0029](../adr/0029-v2-effect-schema-at-the-boundaries.md):
+- Effect Schema, per [ADR-0029](../adr/0029-v2-effect-schema.md):
   - a disposable spike answering its three questions before any of the below lands;
+  - schema declarations in the domain beside the types they describe, replacing the hand-written validators, the phantom identifier brand and its guards, and the duplicated exact-key-set checks;
   - observations decoded as they cross the backend seam, so ADR-0024's no-provider-vocabulary rule is rejected at the seam rather than trusted;
-  - `RunResult` encoded and decoded for `ResultStore` persistence.
-  The domain module stays plain; the M3 obligations (the Notification custom message, and replacing `typebox` for tool parameter schemas) are listed under M3.
+  - `RunResult` encoded and decoded for `ResultStore` persistence;
+  - the domain boundary rule tightened from "no package specifiers" to a named-import check that admits `Schema` alone and still forbids every runtime primitive, with fixtures.
+  The M3 obligations — the Notification custom message, and replacing `typebox` for tool parameter schemas — are listed under M3.
 - Deterministic supervisor race tests using controlled `Deferred`s and a test clock.
 
 Required race tests:
@@ -339,7 +341,7 @@ Required race tests:
 Deliverables:
 
 - `Subagents` application façade.
-- Actual Pi host DTO mappings and handlers wired to fake backends, with tool input decoded at that boundary by `Schema` ([ADR-0029](../adr/0029-v2-effect-schema-at-the-boundaries.md)). If `Schema.JsonSchema` cannot emit tool parameter schemas the Pi host accepts, `typebox` stays at that one call site and nowhere else — the fallback ADR-0029 records.
+- Actual Pi host DTO mappings and handlers wired to fake backends, with tool input decoded at that boundary by `Schema` ([ADR-0029](../adr/0029-v2-effect-schema.md)). If `Schema.JsonSchema` cannot emit tool parameter schemas the Pi host accepts, `typebox` stays at that one call site and nowhere else — the fallback ADR-0029 records.
 - The completion Notification custom message built and parsed from one `Schema` declaration, replacing v1's hand-written pair.
 - All existing model-tool operations exercised end to end.
 - `wait` backed only by `ResultStore`; aborting the host request affects only the waiter.
@@ -623,10 +625,10 @@ Do not enable or continue a cutover if any of these is reproducible:
 
 ## 10. Engineering guardrails
 
-- Adopt Effect wherever it reduces complexity or buys robustness — that is, wherever it removes machinery v2 would otherwise write, own, and test. Not for its own sake, and not avoided out of caution. Where it would only re-express something already small and clear, leave it alone. [ADR-0029](../adr/0029-v2-effect-schema-at-the-boundaries.md).
+- Adopt Effect wherever it reduces complexity or buys robustness — that is, wherever it removes machinery v2 would otherwise write, own, and test. Not for its own sake, and not avoided out of caution. Where it would only re-express something already small and clear, leave it alone. [ADR-0029](../adr/0029-v2-effect-schema.md).
 - Prefer direct Effect primitives: `Scope`, `Effect.acquireRelease`, `Fiber`, `Deferred`, bounded `Queue`, `SubscriptionRef`, `PubSub`, `Schema` at the host and adapter boundaries, and a semaphore only if capacity policy needs it.
 - Keep the number of session-long services small; start with the six core services named in M2.
-- Decode external input at the host/adapter boundary — with `Schema`, from M2 onward. The domain module decodes nothing, because nothing reaches it from outside.
+- Decode external input at the host/adapter boundary — with `Schema`, from M2 onward, using declarations that live in the domain beside the types they describe. Declaring a schema and invoking a decode are different decisions with different homes.
 - Keep reducers pure and independently testable.
 - Keep native Promises inside backend adapters.
 - Do not create a Layer per Subagent, BackendAgent, or Run.
