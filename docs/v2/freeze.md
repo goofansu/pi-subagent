@@ -69,8 +69,13 @@ The baseline is the full repository quality gate, `npm run check`:
 - `npm run codex:protocol:check` — the byte-for-byte generated Codex protocol
   check against the pinned CLI
 
-**Recorded green at:** `__BASELINE_COMMIT__`
-(`__BASELINE_SUBJECT__`)
+**Recorded green at:** `e00715e3bfce03b1b2499892644ccbbbcc7c9f9b`
+(`feat(v2): freeze v1, baseline the gate, and open the v2 construction site`)
+
+That commit is the one that landed this policy and the whole M0 milestone. The
+gate was run against its tree; this sentence is written into the tree by the
+commit that immediately follows it, because a commit cannot contain its own
+hash. Nothing between the two changes any code.
 
 **Result:** `npm run check` exited 0. `npm test` reported 540 tests, 539 passing
 and 1 skipped — the skip is `claude conformance: terminal-transcript-healing`,
