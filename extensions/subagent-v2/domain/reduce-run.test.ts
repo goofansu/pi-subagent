@@ -242,7 +242,7 @@ test("usage deltas are summed and the gauge is replaced, however they arrive", (
 });
 
 /** Ported from v1's fold: the five additive counters and the one gauge. */
-test("the additive counters and the gauge fold as v1's dispatcher folded them", () => {
+test("the additive counters and the gauge fold as v1's fold folded them", () => {
   const { projection } = fold([
     { kind: "usage", usage: usageDelta({ input: 1, output: 2, turns: 1 }) },
     { kind: "context", context: contextGauge(500) },
@@ -282,6 +282,21 @@ test("activity is cleared by an explicit clear and by whitespace", () => {
 
     assert.equal("activity" in projection, false, String(cleared));
   }
+});
+
+test("an over-long activity is cut and the cut is reported", () => {
+  const { projection, reports } = fold(
+    [{ kind: "activity", activity: "reading a very long file name" }],
+    tight,
+  );
+
+  assert.equal(projection.activity, "reading ");
+  assert.deepEqual(reports[0], {
+    report: "applied-with-truncation",
+    dropped: [{ of: "activity", amount: 21 }],
+  });
+  // Not added to the cumulative record: there is only ever one activity.
+  assert.equal(projection.truncation.truncatedTranscriptBytes, 0);
 });
 
 test("the ending clears activity, so a settled Run is quiet", () => {

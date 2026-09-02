@@ -112,6 +112,15 @@ export function controlId(value: unknown): ControlId {
   return makeIdentifier("ControlId", value);
 }
 
+/*
+ * The four guards below all call {@link hasIdentifierShape}, because that is
+ * the only honest thing a guard can do here: a brand has no runtime witness,
+ * so nothing at runtime can tell a `RunId` from a `SubagentId`. Each one
+ * therefore answers "could this string be an X" rather than "is this an X".
+ * They exist so a caller narrowing an `unknown` at a boundary has a named
+ * predicate to reach for; they are not a way to discriminate between the four.
+ */
+
 export function isBackendId(value: unknown): value is BackendId {
   return hasIdentifierShape(value);
 }

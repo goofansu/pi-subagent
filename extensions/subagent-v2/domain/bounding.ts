@@ -23,7 +23,8 @@ export interface TruncationEvent {
     | "links"
     | "transcript-text"
     | "tool-output"
-    | "final-output";
+    | "final-output"
+    | "activity";
   /** Items dropped for a list, bytes cut for a text. */
   readonly amount: number;
 }

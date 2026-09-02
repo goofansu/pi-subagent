@@ -161,19 +161,29 @@ export function validateCommonProfileFields(
     reason: `${options.displayName} backend does not recognize field '${field}'`,
   }));
 
-  try {
+  // One `try` per field rather than one around all four: a Profile with a bad
+  // `effort` *and* a bad `tools` should hear about both, the same way the
+  // parser reports every problem rather than throwing on the first. v1 wrapped
+  // them together and reported one; this is the deliberate difference.
+  const check = (read: () => void): void => {
+    try {
+      read();
+    } catch (error) {
+      diagnostics.push({
+        filePath,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  // These calls validate field types and values; execution reads them again.
+  check(() => void effortField(profile));
+  check(() => void parseTools(profile));
+  check(() => void shouldAppendSystemPrompt(profile));
+  check(() => {
     const model = stringField(profile, "model");
-    // These calls validate field types and values; execution reads them again.
-    effortField(profile);
-    parseTools(profile);
-    shouldAppendSystemPrompt(profile);
     const modelProblem = options.validateModel?.(model);
     if (modelProblem) diagnostics.push({ filePath, reason: modelProblem });
-  } catch (error) {
-    diagnostics.push({
-      filePath,
-      reason: error instanceof Error ? error.message : String(error),
-    });
-  }
+  });
   return diagnostics;
 }

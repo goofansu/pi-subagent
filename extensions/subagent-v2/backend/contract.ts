@@ -48,7 +48,16 @@ import type {
   TerminalReconciliation,
 } from "../domain/index.ts";
 
-/** What a backend may consult while validating a Profile. */
+/**
+ * What a backend may consult while validating a Profile.
+ *
+ * Nothing in M1 reads this, because model validation is genuinely
+ * provider-specific and M1 has no provider. Its reader arrives with the Pi
+ * adapter at M4, which checks a Profile's pinned model against the catalogue
+ * the session actually loaded — exactly what v1 passes through the equivalent
+ * field. It is here now because `validateProfile` is a contract member and the
+ * shape test makes adding one later a visible change.
+ */
 export interface BackendValidationContext {
   /** Models available to this session; omission means an empty catalogue. */
   readonly models?: readonly {
@@ -175,6 +184,12 @@ export interface Backend {
    *
    * Closing that scope closes the BackendAgent. Opening creates no Run and
    * emits no observation.
+   *
+   * The Profile handed here is a *prepared* one: admission has already run it
+   * through this backend's own `validateProfile` and found no diagnostics, so
+   * `open` may read the fields it recognizes without re-validating them.
+   * Preparation is that guarantee rather than a separate type — a
+   * `PreparedProfile` brand with no other reader would be ceremony.
    */
   readonly open: (
     profile: Profile,

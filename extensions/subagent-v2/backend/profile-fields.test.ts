@@ -189,6 +189,20 @@ test("a field error becomes a diagnostic rather than escaping validation", () =>
   );
 });
 
+test("a Profile with two bad fields hears about both", () => {
+  assert.deepEqual(
+    validateCommonProfileFields(
+      profile({ effort: "extreme", tools: 7 }),
+      filePath,
+      { displayName: "Fake" },
+    ).map((diagnostic) => diagnostic.reason),
+    [
+      "unknown effort 'extreme'; expected one of off, minimal, low, medium, high, xhigh, max",
+      "tools must be a string",
+    ],
+  );
+});
+
 test("validating the same Profile twice yields deep-equal diagnostics", () => {
   const subject = profile({ model: 7, nope: true });
   const options = { displayName: "Fake" };

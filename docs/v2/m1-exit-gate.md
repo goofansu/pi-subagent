@@ -22,8 +22,8 @@ M2 starts from an explicitly closed milestone. It follows the shape of
 | `npm run test:conformance` | 164 tests, 163 pass, 1 skipped |
 | `npm run test:managed-conformance` | 6 tests, 6 pass |
 | `npm test` (v1 suite, repository scripts, `tools/`) | 540 tests, 539 pass, 1 skipped |
-| `npm run test:v2` | 284 tests, 277 pass, 7 skipped |
-| `npm run test:v2:conformance` | 49 tests, 42 pass, 7 skipped |
+| `npm run test:v2` | 288 tests, 282 pass, 6 skipped |
+| `npm run test:v2:conformance` | 49 tests, 43 pass, 6 skipped |
 | `npm run codex:protocol:check` | `CODEX_PROTOCOL_CHECK_PASS — codex-cli 0.150.1` |
 
 The v1 lane's numbers are unchanged from M0: **M1 changed no v1 file.**
@@ -44,7 +44,11 @@ adapter without running the whole lane.
 | v1 conformance | `claude conformance: terminal-transcript-healing` | Unchanged from M0. The Claude adapter has no wire transcript snapshot. |
 | v1 suite | the same scenario, reached through the full suite | As above. |
 | v2 | 6 × `FakeOneShotBackend conformance: …` | The one-shot backend declares no resume, no steering, and no snapshot, so six scenarios have nothing to exercise. |
-| v2 | 1 × `FakeResumableBackend conformance: unsupported-steering-is-refused` | A backend that declares steering has no unsupported steering to refuse. |
+
+`FakeResumableBackend` skips **nothing**: every scenario is written so that it
+means something for whichever capabilities the backend under test declared, so
+a skip always names a capability the backend does not have. Both rig test files
+assert their own skip list, so a skip appearing for a new reason fails the lane.
 
 There are no silent skips. Each one is registered by the suite as a skip with a
 reason, which is the behaviour
@@ -62,12 +66,12 @@ are meaningful before a supervisor exists.
 | --- | --- |
 | Subagent and BackendAgent | validation is deterministic; open creates no Run; capabilities are enforced; resume or honest refusal; close is idempotent; close releases every resource |
 | Run | observations reduce in accepted order; exactly one ending wins; cancellation terminates with partial output; result follows scope closure; late events cannot mutate a terminal Run; a failing sink cannot strand the execution; a Run may settle with no observations; observations carry no provider vocabulary |
-| Control | unsupported steering is refused; Controls are delivered serially in order; a Control cannot leak into the next Run; a user observation appears only on confirmation |
+| Control | steering admission follows the declared capability; Controls are delivered serially in order; a Control cannot leak into the next Run; a user observation appears only on confirmation |
 | Usage | usage deltas are Run-local; reconciliation does not double count; context occupancy is a gauge; a replayed transcript adds no usage; a resumed Run excludes prior usage |
 
-`FakeResumableBackend` passes 22 and skips 1. `FakeOneShotBackend` passes 17 and
-skips 6. Each rig's own test file asserts *which* scenarios it skips, so a skip
-that appears for a new reason fails the lane.
+`FakeResumableBackend` passes all 23. `FakeOneShotBackend` passes 17 and skips
+6. Each rig's own test file asserts *which* scenarios it skips, so a skip that
+appears for a new reason fails the lane.
 
 The section lists are exported data, and a test asserts their concatenation is
 exactly the scenario list — a scenario cannot be added to a section and
@@ -133,6 +137,13 @@ The mechanism is recorded in the code: the truncation record splits its byte
 counts by what they measure, and a replacement **sets** its item and byte counts
 rather than adding to them. A pooled counter could not be both accumulating and
 replaced, and replay would add the same cut twice.
+
+One field is ignored rather than applied: an unusable context gauge inside a
+reconciliation leaves the streamed gauge in place, exactly as an unusable turn
+count does, and it does **not** make the reconciliation observation invalid.
+Rejecting a whole snapshot over one unreadable field would throw away the
+transcript, output, and usage healing it also carried, which is the opposite of
+what a snapshot is for.
 
 ## 6. A previous conversation's usage cannot be charged to a resumed Run ✅
 
@@ -236,6 +247,37 @@ decided it where one exists.
 pointing at this document.
 
 ---
+
+## Deliberate deviations from the spec's letter
+
+Four places where the merged work does not match the spec word for word. Each
+is a decision, made with the reason, rather than an omission.
+
+**1. `RunResult` carries its ContextGauge inside `usage`.** The spec lists
+`UsageSnapshot` *and* `ContextGauge` among the result's fields. A snapshot
+already carries the gauge, so a second top-level copy would be a gauge stored
+twice, able to disagree with itself. It is at `usage.context`, and `result.ts`
+says so.
+
+**2. `ProjectionBounds` and the truncation record are a superset.** The spec
+enumerates five bounds; `maxLinks` is a sixth, with `droppedLinks` and
+`truncatedToolOutputBytes` alongside it in the record. Without them the claim
+that a `RunResult` is fully bounded would be false. Both are tested like the
+other bounds.
+
+**3. `closed + run-settled` and `closed + close` are legal self-transitions.**
+Issue 01 says "closed is absorbing; every other pair is illegal". The spec's own
+prose says a closed Subagent may still have a Run finishing its settlement, and
+closing is cancel-and-await-cleanup, so those two events are legal no-ops there.
+Absorbing is read as "no event leaves `closed`", which is what the table
+enforces; admitting a resume there is the one illegal cell.
+
+**4. The test driver produces `SteerOutcome` values.** The spec's Out of Scope
+says M1 defines the public outcome types and nothing produces them. Issue 08
+requires that an unsupported Control "yields `unsupported` from the driver
+without the fake receiving anything", which cannot be shown without producing
+one. The driver is test code standing in for M2's admission path, and it is the
+only place in the milestone that produces a public outcome.
 
 ## Gaps found at this gate
 

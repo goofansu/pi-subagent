@@ -36,7 +36,7 @@ import {
   type TruncationEvent,
 } from "./bounding.ts";
 import { isDiagnosticCategory } from "./diagnostics.ts";
-import { RUN_ENDING_KINDS, type RunEnding } from "./endings.ts";
+import { RUN_ENDING_KINDS, unfinishedToolStatusForEnding } from "./endings.ts";
 import { isResultLinkKind } from "./links.ts";
 import type { RunObservation, RunObservationKind } from "./observations.ts";
 import { CANCELLATION_REASONS } from "./phases.ts";
@@ -51,7 +51,6 @@ import {
   MESSAGE_ROLES,
   TOOL_STATUSES,
   type ToolEntry,
-  type ToolEntryStatus,
   transcriptItemText,
 } from "./transcript.ts";
 import {
@@ -144,6 +143,11 @@ export function observationProblem(
       return undefined;
     }
     case "tool_progress": {
+      // A call id is required here and optional on a tool call part, which
+      // looks inconsistent and is not: a *call* with no id is still a call the
+      // transcript can show, kept distinct and reported. Progress with no id
+      // is progress about nothing — there is no entry it could join and none
+      // it could create — so it is the one thing that is genuinely malformed.
       if (!isNonEmptyString(observation.callId)) {
         return "tool progress carries no call id";
       }
@@ -182,28 +186,15 @@ export function observationProblem(
       ) {
         return "reconciliation transcript is not a list";
       }
-      if (reconciliation.context !== undefined) {
-        const problem = contextGaugeProblem(reconciliation.context);
-        if (problem) return problem;
-      }
+      // An unusable gauge or turn count inside a reconciliation is *not* a
+      // malformed observation. Rejecting the whole reconciliation for one bad
+      // field would throw away the transcript, output, and usage healing it
+      // also carried, which is the opposite of what a snapshot is for. Those
+      // two fields are ignored individually instead — see `reconcileRun`.
       return undefined;
     }
     case "ending":
       return endingProblem(observation.ending);
-  }
-}
-
-/** The status settlement writes onto a tool that never reported an outcome. */
-function unfinishedToolStatus(ending: RunEnding): ToolEntryStatus {
-  switch (ending.ending) {
-    case "answered":
-      // The Run answered anyway. The tool is not failed and not cancelled; it
-      // simply never said how it went.
-      return "unfinished";
-    case "failed":
-      return "failed";
-    case "cancelled":
-      return "cancelled";
   }
 }
 
@@ -224,6 +215,35 @@ function withTruncation(
   patch: Partial<TruncationRecord>,
 ): RunProjection {
   return { ...projection, truncation: { ...projection.truncation, ...patch } };
+}
+
+/**
+ * Append one entry to a bounded projection list, keeping the newest and
+ * recording what went.
+ *
+ * The transcript and the tool list cannot use this — each does more than
+ * append — but diagnostics and links are exactly this operation over two
+ * different fields.
+ */
+function appendBounded<
+  L extends "diagnostics" | "links",
+  R extends "droppedDiagnostics" | "droppedLinks",
+>(
+  projection: RunProjection,
+  dropped: TruncationEvent[],
+  entry: RunProjection[L][number],
+  field: { readonly list: L; readonly record: R; readonly max: number },
+): RunProjection {
+  const kept = boundList(
+    [...projection[field.list], entry],
+    field.max,
+    field.list,
+  );
+  dropped.push(...kept.dropped);
+  return withTruncation(
+    { ...projection, [field.list]: kept.items },
+    { [field.record]: projection.truncation[field.record] + kept.droppedItems },
+  );
 }
 
 function applied(
@@ -398,21 +418,24 @@ export function reduceRun(
     }
 
     case "activity": {
-      // Conflated and display-only, so it is bounded but not recorded: there
-      // is one value, it is replaced rather than accumulated, and the ending
-      // clears it.
-      const activity =
+      // Conflated and display-only: one value, replaced rather than
+      // accumulated, and cleared by the ending. So a cut to it is *reported*
+      // like any other, but it is not added to the cumulative truncation
+      // record — there is only ever one activity, and a running total of bytes
+      // cut from values that no longer exist would say nothing true.
+      const bounded =
         observation.activity === undefined || observation.activity.trim() === ""
           ? undefined
           : boundProjectionText(
               observation.activity,
               bounds.maxTextPartBytes,
-              "transcript-text",
-            ).text;
+              "activity",
+            );
+      if (bounded) dropped.push(...bounded.dropped);
       const next = { ...projection };
-      if (activity === undefined)
+      if (bounded === undefined)
         delete (next as { activity?: string }).activity;
-      else (next as { activity?: string }).activity = activity;
+      else (next as { activity?: string }).activity = bounded.text;
       return applied(next, dropped, notes);
     }
 
@@ -436,45 +459,29 @@ export function reduceRun(
         notes,
       );
 
-    case "diagnostic": {
-      const kept = boundList(
-        [...projection.diagnostics, observation.diagnostic],
-        bounds.maxDiagnostics,
-        "diagnostics",
-      );
-      dropped.push(...kept.dropped);
+    // Diagnostics and links are one operation over two fields: append an
+    // entry, keep the newest, add what went to the record.
+    case "diagnostic":
       return applied(
-        withTruncation(
-          { ...projection, diagnostics: kept.items },
-          {
-            droppedDiagnostics:
-              projection.truncation.droppedDiagnostics + kept.droppedItems,
-          },
-        ),
+        appendBounded(projection, dropped, observation.diagnostic, {
+          list: "diagnostics",
+          record: "droppedDiagnostics",
+          max: bounds.maxDiagnostics,
+        }),
         dropped,
         notes,
       );
-    }
 
-    case "link": {
-      const kept = boundList(
-        [...projection.links, observation.link],
-        bounds.maxLinks,
-        "links",
-      );
-      dropped.push(...kept.dropped);
+    case "link":
       return applied(
-        withTruncation(
-          { ...projection, links: kept.items },
-          {
-            droppedLinks:
-              projection.truncation.droppedLinks + kept.droppedItems,
-          },
-        ),
+        appendBounded(projection, dropped, observation.link, {
+          list: "links",
+          record: "droppedLinks",
+          max: bounds.maxLinks,
+        }),
         dropped,
         notes,
       );
-    }
 
     case "model":
       return applied(
@@ -494,7 +501,7 @@ export function reduceRun(
 
     case "ending": {
       const ending = observation.ending;
-      const status = unfinishedToolStatus(ending);
+      const status = unfinishedToolStatusForEnding(ending);
       const next: RunProjection = {
         ...projection,
         terminal: true,

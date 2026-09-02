@@ -349,29 +349,45 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
             },
           );
 
-        case "unsupported-steering-is-refused":
-          // Only meaningful for a backend that declared no steering. A
-          // steerable backend has nothing to refuse, so it is a visible skip.
-          if (kind === "resumable") return undefined;
-          return fixtureOf(kind, scripts(ORDINARY), {
-            plans: [
-              {
-                controls: [
-                  { type: "steer", text: "first" },
-                  { type: "steer", text: "second" },
-                ],
-              },
-            ],
-            expected: {
-              runs: [
+        case "steering-admission-follows-the-declared-capability": {
+          // The same two Controls are offered to both kinds of backend. What
+          // differs is only what each declared, which is the point.
+          const steerable = kind === "resumable";
+          return fixtureOf(
+            kind,
+            scripts([
+              ...(steerable
+                ? [
+                    { step: "await-control" as const, confirm: true },
+                    { step: "await-control" as const, confirm: true },
+                  ]
+                : []),
+              emitText("the answer"),
+              { step: "complete" },
+            ]),
+            {
+              plans: [
                 {
-                  status: "completed",
-                  steerOutcomes: ["unsupported", "unsupported"],
+                  controls: [
+                    { type: "steer", text: "first" },
+                    { type: "steer", text: "second" },
+                  ],
                 },
               ],
-              controlsReceived: [],
+              expected: {
+                runs: [
+                  {
+                    status: "completed",
+                    steerOutcomes: steerable
+                      ? ["accepted", "accepted"]
+                      : ["unsupported", "unsupported"],
+                  },
+                ],
+                controlsReceived: steerable ? ["first", "second"] : [],
+              },
             },
-          });
+          );
+        }
 
         case "controls-are-delivered-serially-in-order":
           return fixtureOf(
@@ -608,11 +624,16 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
   };
 }
 
-/** The scenarios a rig for this fake is expected to skip. */
+/**
+ * The scenarios a rig for this fake is expected to skip.
+ *
+ * A backend that declares every capability skips nothing: every scenario is
+ * written so that it means something for whichever capabilities the backend
+ * under test declared, and a skip therefore always names a capability the
+ * backend does not have.
+ */
 export function fakeConformanceSkips(
   kind: FakeKind,
 ): readonly BackendConformanceScenario[] {
-  return kind === "one-shot"
-    ? ONE_SHOT_SKIPS
-    : ["unsupported-steering-is-refused"];
+  return kind === "one-shot" ? ONE_SHOT_SKIPS : [];
 }

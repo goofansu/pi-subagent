@@ -30,6 +30,7 @@ import {
 } from "./projection.ts";
 import type { TerminalReconciliation } from "./reconciliation.ts";
 import {
+  contextGaugeProblem,
   raiseTurns,
   replaceContextGauge,
   replaceUsageTotals,
@@ -99,9 +100,15 @@ export function reconcileRun(
     };
   }
 
-  if (reconciliation.context !== undefined) {
-    // An absent gauge leaves the streamed one in place. A gauge never resets
-    // to zero because a snapshot did not mention it.
+  if (
+    reconciliation.context !== undefined &&
+    contextGaugeProblem(reconciliation.context) === undefined
+  ) {
+    // An absent *or unusable* gauge leaves the streamed one in place. A gauge
+    // never resets to zero, and never becomes nonsense, because a snapshot
+    // said something the domain cannot read. Same rule as the turn count
+    // below, and the reason a bad gauge does not invalidate the whole
+    // reconciliation.
     next = {
       ...next,
       usage: replaceContextGauge(next.usage, reconciliation.context),

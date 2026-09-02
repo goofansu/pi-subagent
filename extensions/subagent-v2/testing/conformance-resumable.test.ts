@@ -37,13 +37,14 @@ test("the scenario list is exactly the four sections, with nothing forgotten", (
   ]);
 });
 
-test("a resumable backend skips only the refuse-steering scenario", () => {
+test("a backend that declares every capability skips nothing", () => {
   const rig = fakeConformanceRig("resumable");
 
   const skipped = BACKEND_CONFORMANCE_SCENARIOS.filter(
     (scenario) => rig.build(scenario) === undefined,
   );
 
+  assert.deepEqual(skipped, []);
   assert.deepEqual(skipped, [...fakeConformanceSkips("resumable")]);
 });
 

@@ -88,7 +88,11 @@ export const RUN_CONFORMANCE_SCENARIOS = [
 ] as const;
 
 export const CONTROL_CONFORMANCE_SCENARIOS = [
-  "unsupported-steering-is-refused",
+  // Named for what it checks on *either* kind of backend: an undeclared
+  // Control is refused without the backend hearing about it, and a declared
+  // one is admitted. A scenario only one kind of backend can build would show
+  // up as a skip that says nothing about the backend under test.
+  "steering-admission-follows-the-declared-capability",
   "controls-are-delivered-serially-in-order",
   "a-control-cannot-leak-into-the-next-run",
   "a-user-observation-appears-only-on-confirmation",
@@ -533,15 +537,29 @@ const SCENARIO_CHECKS: {
   },
   "exactly-one-ending-wins": (_fixture, outcome) => {
     for (const run of outcome.outcomes) {
+      // Every ending the Run produced, in the order they were reduced. There
+      // must be more than one — otherwise nothing competed — and exactly one
+      // of them may have been applied.
       const endings = run.reports.filter(
+        (report) =>
+          (report.report === "ignored-late" ||
+            report.report === "applied" ||
+            report.report === "applied-with-truncation") &&
+          ("kind" in report ? report.kind === "ending" : true),
+      );
+      const late = run.reports.filter(
         (report) =>
           report.report === "ignored-late" && report.kind === "ending",
       );
       assert.ok(
-        endings.length >= 1,
-        "a competing ending must be reported late, not applied",
+        late.length >= 1,
+        "no competing ending was reported late, so nothing was arbitrated",
       );
+      assert.ok(endings.length >= 2, "only one ending was produced");
       assert.equal(run.projection.terminal, true);
+      // And the Run took the one legal route to its one terminal phase.
+      assert.equal(run.phases.length, 3);
+      assert.deepEqual(run.phases.slice(0, 2), ["running", "finalizing"]);
     }
   },
   "cancellation-terminates-with-partial-output": (fixture, outcome) => {
@@ -602,22 +620,46 @@ const SCENARIO_CHECKS: {
       }
     }
   },
-  "unsupported-steering-is-refused": (fixture, outcome) => {
-    for (const run of outcome.outcomes) {
-      assert.ok(run.controlOutcomes.length > 0, "no Control was offered");
-      for (const control of run.controlOutcomes) {
+  "steering-admission-follows-the-declared-capability": (fixture, outcome) => {
+    const offered = outcome.outcomes.flatMap((run) => run.controlOutcomes);
+    assert.ok(offered.length > 0, "no Control was offered");
+    const received = fixture.counters().controlsReceived;
+
+    if (!outcome.capabilities.steer) {
+      for (const control of offered) {
         assert.equal(control.outcome, "unsupported");
       }
+      assert.deepEqual(
+        received,
+        [],
+        "an unsupported Control must not reach the backend at all",
+      );
+      return;
     }
-    assert.deepEqual(
-      fixture.counters().controlsReceived,
-      [],
-      "an unsupported Control must not reach the backend",
+    for (const control of offered) {
+      assert.equal(control.outcome, "accepted");
+    }
+    assert.equal(
+      received.length,
+      offered.length,
+      "a backend that declared steering must receive what was admitted",
     );
   },
   "controls-are-delivered-serially-in-order": (fixture) => {
+    const counters = fixture.counters();
+    // The suite knows what was offered, so the order check does not depend on
+    // the rig remembering to declare it. FIFO, and one at a time.
+    const offered = fixture.plans.flatMap((plan) =>
+      (plan.controls ?? []).map((control) => control.text),
+    );
+    assert.ok(offered.length > 1, "one Control cannot be out of order");
+    assert.deepEqual(
+      counters.controlsReceived,
+      offered,
+      "Controls were not delivered in admission order",
+    );
     assert.equal(
-      fixture.counters().maxConcurrentControls,
+      counters.maxConcurrentControls,
       1,
       "Controls must be delivered one at a time",
     );
@@ -675,8 +717,8 @@ const SCENARIO_CHECKS: {
       }
     }
   },
-  "reconciliation-does-not-double-count": (_fixture, outcome) => {
-    for (const run of outcome.outcomes) {
+  "reconciliation-does-not-double-count": (fixture, outcome) => {
+    for (const [index, run] of outcome.outcomes.entries()) {
       const streamed = run.observations.reduce(
         (total, observation) =>
           total +
@@ -684,20 +726,26 @@ const SCENARIO_CHECKS: {
         0,
       );
       const reported = run.result.usage.totals.input;
+      const declared = fixture.expected.runs[index].usageTotals?.input;
       assert.ok(
         streamed > 0,
         "the Run streamed no usage, so nothing could have been double counted",
+      );
+      assert.equal(
+        typeof declared,
+        "number",
+        "this scenario needs the terminal figure declared, to compare against",
       );
       assert.notEqual(
         reported,
         streamed,
         "the reconciliation replaced nothing, so it healed nothing",
       );
-      // A double count would be the streamed sum plus the terminal figure. The
-      // terminal figure is what is reported, so that sum is what must not be.
+      // The number a double count would produce: everything streamed, plus the
+      // authoritative figure that was meant to supersede it.
       assert.notEqual(
         reported,
-        streamed + reported,
+        streamed + (declared ?? 0),
         "reconciliation added to the streamed total instead of replacing it",
       );
     }
@@ -762,13 +810,24 @@ const SCENARIO_CHECKS: {
       first.result.usage.totals.input > 0,
       "the first Run spent nothing, so excluding it proves nothing",
     );
-    // What a naive adapter would report for the second Run: the provider's
-    // cumulative reading, which is both Runs' work added together.
-    const cumulative =
-      first.result.usage.totals.input + second.result.usage.totals.input;
+    // The property itself: the resumed Run reports the sum of the deltas *it*
+    // emitted. Anything else — most obviously the provider's cumulative
+    // reading, which is both Runs added together — is a different number.
+    const ownDeltas = second.observations.reduce(
+      (total, observation) =>
+        total +
+        (observation.kind === "usage" ? (observation.usage.input ?? 0) : 0),
+      0,
+    );
+    assert.ok(ownDeltas > 0, "the resumed Run emitted no usage of its own");
+    assert.equal(
+      second.result.usage.totals.input,
+      ownDeltas,
+      "the resumed Run's total is not the sum of its own deltas",
+    );
     assert.notEqual(
       second.result.usage.totals.input,
-      cumulative,
+      first.result.usage.totals.input + ownDeltas,
       "the resumed Run was charged for the whole conversation",
     );
   },

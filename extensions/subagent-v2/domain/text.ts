@@ -45,3 +45,15 @@ export function boundText(text: string, maxBytes: number): BoundedText {
   }
   return { text: kept, droppedBytes: total - keptBytes };
 }
+
+/**
+ * The bound every one-line domain text shares: newlines collapsed, trimmed,
+ * then cut to fit.
+ *
+ * A diagnostic message, a link label, and a failed ending's fallback message
+ * are all "one line, at most this many bytes", and all three were applying the
+ * rule themselves. One helper means the rule cannot drift between them.
+ */
+export function boundOneLine(text: string, maxBytes: number): string {
+  return boundText(text.replace(/[\r\n]+/g, " ").trim(), maxBytes).text;
+}

@@ -14,7 +14,7 @@
  * to apply it.
  */
 
-import { boundText } from "./text.ts";
+import { boundOneLine } from "./text.ts";
 
 export const DIAGNOSTIC_CATEGORIES = [
   "backend-failure",
@@ -68,10 +68,9 @@ export function runDiagnostic(
   if (!isDiagnosticCategory(category)) {
     throw new InvalidDiagnosticError(category);
   }
-  const oneLine = message.replace(/[\r\n]+/g, " ").trim();
   return {
     category,
-    message: boundText(oneLine, DIAGNOSTIC_MESSAGE_MAX_BYTES).text,
+    message: boundOneLine(message, DIAGNOSTIC_MESSAGE_MAX_BYTES),
   };
 }
 

@@ -13,7 +13,12 @@ import { reconcileRun } from "./reconcile-run.ts";
 import type { TerminalReconciliation } from "./reconciliation.ts";
 import { reduceRun } from "./reduce-run.ts";
 import { toRunResult } from "./result.ts";
-import { contextGauge, EMPTY_USAGE_SNAPSHOT, usageDelta } from "./usage.ts";
+import {
+  type ContextGauge,
+  contextGauge,
+  EMPTY_USAGE_SNAPSHOT,
+  usageDelta,
+} from "./usage.ts";
 
 function fold(
   observations: readonly RunObservation[],
@@ -285,4 +290,40 @@ test("a Run with no observations settles as a valid cancelled or failed Run", ()
       ending.ending === "failed" ? "failed" : "cancelled",
     );
   }
+});
+
+test("an unusable gauge is ignored without discarding the rest of the snapshot", () => {
+  const before = streamed();
+
+  // A snapshot the domain cannot read one field of must still heal the fields
+  // it can: rejecting the whole reconciliation would throw away the transcript,
+  // the output, and the usage it also carried.
+  const healed = reconcileRun(before, {
+    finalOutput: "the real answer",
+    usage: { input: 12 },
+    context: { tokens: -1 } as ContextGauge,
+  }).projection;
+
+  assert.equal(healed.finalOutput, "the real answer");
+  assert.equal(healed.usage.totals.input, 12);
+  assert.deepEqual(healed.usage.context, { tokens: 1_000, window: 200_000 });
+});
+
+test("an unusable gauge does not make the reconciliation observation invalid", () => {
+  const before = streamed();
+
+  const step = reduceRun(before, {
+    kind: "reconciliation",
+    reconciliation: {
+      finalOutput: "the real answer",
+      context: { tokens: Number.NaN } as ContextGauge,
+    },
+  });
+
+  assert.equal(step.report.report, "applied");
+  assert.equal(step.projection.finalOutput, "the real answer");
+  assert.deepEqual(step.projection.usage.context, {
+    tokens: 1_000,
+    window: 200_000,
+  });
 });

@@ -13,6 +13,8 @@
  * fake-specific.
  */
 
+import type { RunId } from "../../domain/index.ts";
+
 export interface ResourceCountersSnapshot {
   readonly opens: number;
   readonly closes: number;
@@ -26,7 +28,7 @@ export interface ResourceCountersSnapshot {
   /** The most Controls the backend ever had in flight at once. */
   readonly maxConcurrentControls: number;
   /** Which Run each Control was delivered to, so a leak is visible. */
-  readonly controlsByRun: ReadonlyMap<string, readonly string[]>;
+  readonly controlsByRun: ReadonlyMap<RunId, readonly string[]>;
 }
 
 export interface ResourceCounters {
@@ -37,7 +39,7 @@ export interface ResourceCounters {
   executionReleased(): void;
   subscriptionAcquired(): void;
   subscriptionReleased(): void;
-  controlStarted(runId: string, text: string): void;
+  controlStarted(runId: RunId, text: string): void;
   controlFinished(): void;
 }
 
@@ -50,7 +52,7 @@ export function createResourceCounters(): ResourceCounters {
   let concurrentControls = 0;
   let maxConcurrentControls = 0;
   const controlsReceived: string[] = [];
-  const controlsByRun = new Map<string, string[]>();
+  const controlsByRun = new Map<RunId, string[]>();
 
   return {
     snapshot: () => ({

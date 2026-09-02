@@ -8,7 +8,7 @@
  * nothing else.
  */
 
-import { boundText } from "./text.ts";
+import { boundOneLine, boundText } from "./text.ts";
 
 export const RESULT_LINK_KINDS = [
   "native-session",
@@ -50,10 +50,9 @@ export function resultLink(
   if (!isResultLinkKind(kind)) throw new InvalidResultLinkError(kind);
   return {
     kind,
-    label: boundText(
-      label.replace(/[\r\n]+/g, " ").trim(),
-      RESULT_LINK_LABEL_MAX_BYTES,
-    ).text,
+    label: boundOneLine(label, RESULT_LINK_LABEL_MAX_BYTES),
+    // A target is a path or a URL, so its whitespace is trimmed but its
+    // interior is left alone: nothing in it is a line to collapse.
     target: boundText(target.trim(), RESULT_LINK_TARGET_MAX_BYTES).text,
   };
 }
