@@ -24,9 +24,12 @@ import {
 import type { Backend, BackendAgent, BackendOpenFailure } from "../contract.ts";
 import { type ClaudeOpenOptions, openClaudeBackendAgent } from "./agent.ts";
 import {
+  type ClaudeAdapterTally,
   type ClaudeNativeProbe,
   type ClaudeProbeCounters,
+  type ClaudeTallyCounters,
   createClaudeProbeCounters,
+  createClaudeTallyCounters,
 } from "./probe.ts";
 import { validateClaudeProfile } from "./profile.ts";
 
@@ -38,6 +41,8 @@ export interface ClaudeBackendHandle {
   readonly backend: Backend;
   /** What the adapter is still holding. Zero once the Session has closed. */
   readonly probe: () => ClaudeNativeProbe;
+  /** How many BackendAgents were opened, and how many closes took effect. */
+  readonly tally: () => ClaudeAdapterTally;
 }
 
 export interface ClaudeBackendOptions extends ClaudeOpenOptions {
@@ -45,12 +50,15 @@ export interface ClaudeBackendOptions extends ClaudeOpenOptions {
   readonly id?: BackendId;
   /** Shared with the caller when a test wants to read the probe directly. */
   readonly probe?: ClaudeProbeCounters;
+  /** Shared with the caller when a test wants to read the tally directly. */
+  readonly tally?: ClaudeTallyCounters;
 }
 
 export function createClaudeBackend(
   options: ClaudeBackendOptions = {},
 ): ClaudeBackendHandle {
   const probe = options.probe ?? createClaudeProbeCounters();
+  const tally = options.tally ?? createClaudeTallyCounters();
   const backend: Backend = {
     id: options.id ?? backendId(CLAUDE_BACKEND_ID),
     // No validation context is read: Claude's model rule is a fixed family
@@ -64,7 +72,7 @@ export function createClaudeBackend(
       profile: Profile,
       subagent: SubagentContext,
     ): Effect.Effect<BackendAgent, BackendOpenFailure, Scope.Scope> =>
-      openClaudeBackendAgent(profile, subagent, probe, options),
+      openClaudeBackendAgent(profile, subagent, probe, tally, options),
   };
-  return { backend, probe: probe.read };
+  return { backend, probe: probe.read, tally: tally.read };
 }

@@ -44,7 +44,7 @@ import type {
 } from "../contract.ts";
 import { type ClaudeConversation, runClaudeExecution } from "./execution.ts";
 import { createClaudeOptions } from "./options.ts";
-import type { ClaudeProbeCounters } from "./probe.ts";
+import type { ClaudeProbeCounters, ClaudeTallyCounters } from "./probe.ts";
 import { resolveClaudeModel } from "./profile.ts";
 import {
   type ClaudeQuery,
@@ -90,6 +90,7 @@ export function createClaudeBackendAgent(
   profile: Profile,
   subagent: SubagentContext,
   probe: ClaudeProbeCounters,
+  tally: ClaudeTallyCounters,
   options: ClaudeOpenOptions,
 ): BackendAgent {
   const choice = resolveClaudeModel(profile);
@@ -161,6 +162,7 @@ export function createClaudeBackendAgent(
       Effect.sync(() => {
         if (closed) return;
         closed = true;
+        tally.closed();
         for (const listener of [...closeListeners]) {
           closeListeners.delete(listener);
           try {
@@ -195,6 +197,7 @@ export function openClaudeBackendAgent(
   profile: Profile,
   subagent: SubagentContext,
   probe: ClaudeProbeCounters,
+  tally: ClaudeTallyCounters,
   options: ClaudeOpenOptions,
 ): Effect.Effect<BackendAgent, BackendOpenFailure, Scope.Scope> {
   return Effect.gen(function* () {
@@ -228,11 +231,13 @@ export function openClaudeBackendAgent(
       });
     }
 
+    tally.opened();
     const agent = createClaudeBackendAgent(
       loaded.query,
       profile,
       subagent,
       probe,
+      tally,
       options,
     );
     holder.agent = agent;

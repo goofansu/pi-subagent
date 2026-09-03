@@ -45,10 +45,13 @@ export {
   createClaudeOptions,
 } from "./options.ts";
 export {
+  type ClaudeAdapterTally,
   type ClaudeNativeProbe,
   type ClaudeProbeCounters,
+  type ClaudeTallyCounters,
   claudeProbeIsClear,
   createClaudeProbeCounters,
+  createClaudeTallyCounters,
 } from "./probe.ts";
 export {
   CLAUDE_DISPLAY_NAME,
