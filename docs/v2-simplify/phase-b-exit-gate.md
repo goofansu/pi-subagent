@@ -31,7 +31,8 @@ npm run check   →  exit 0
 
 ### 1. ADR-0034 was proposed before the first extraction, and is accepted
 
-The ADR names the two abstractions (the admission lease and the Subagent
+[ADR-0034](../adr/0034-supervisor-mechanisms-admission-lease-and-subagent-records.md)
+names the two abstractions (the admission lease and the Subagent
 records), what each **removes** — the clamped counter and its three release
 sites; seven direct record mutations and a linear scan — what was rejected
 (splitting by public tool; new Effect Layers; the name "registry"), and what

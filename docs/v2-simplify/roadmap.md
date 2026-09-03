@@ -360,7 +360,8 @@ are under the local tracker at `.scratch/v2-simplify-b-supervisor-decomposition/
 as every milestone's have been; the gate is
 [`phase-b-exit-gate.md`](phase-b-exit-gate.md).
 Two lessons from the Phase A gate are built in: **the ADR is written first**
-(ADR-0034, proposed in the first ticket and accepted at the gate), because the
+([ADR-0034](../adr/0034-supervisor-mechanisms-admission-lease-and-subagent-records.md),
+proposed in the first ticket and accepted at the gate), because the
 contributor rules require one for a new generic runtime abstraction and the
 architecture challenge gate's three questions are easier to answer before the
 code than after; and **every commit answers the challenge gate** in its
