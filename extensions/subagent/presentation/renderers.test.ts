@@ -10,6 +10,7 @@ import {
   formatNotificationSummary,
   formatParentheticalKeyHint,
   formatResumeSummary,
+  MAX_NOTICE_LABEL_WIDTH,
   renderCollectedResult,
   renderResumeResult,
   renderStartCall,
@@ -344,28 +345,84 @@ test("a collapsed notice carries no id and no character count", () => {
   assert.doesNotMatch(line, /character/);
 });
 
-test("a long label is truncated to the width it is given rather than wrapped", () => {
-  const line = formatNotificationSummary(
-    {
-      agent: "explore",
-      label: "a".repeat(120),
-      status: "completed",
-      durationMillis: 1_000,
-      cost: 0,
-    },
-    theme,
-    false,
-    keyHintStub,
-    12,
+test("the whole collapsed line is fitted to its width, and the label is what gives", () => {
+  // The agent, the outcome, the cost, and the hint are what the reader came
+  // for, so the label takes whatever is left and never pushes the line wider.
+  for (const width of [120, 100, 80, 70, 60]) {
+    const line = stripVTControlCharacters(
+      formatNotificationSummary(
+        {
+          agent: "explore",
+          label: "a".repeat(200),
+          status: "completed",
+          durationMillis: 1_000,
+          cost: 0.5,
+        },
+        theme,
+        false,
+        keyHintStub,
+        width,
+      ),
+    );
+
+    assert.ok(
+      line.length <= width,
+      `${line.length} columns against a width of ${width}: ${line}`,
+    );
+    assert.equal(line.includes("\n"), false);
+    // Everything but the label survives at every width.
+    assert.match(line, /^explore · /);
+    assert.match(line, /completed in 1\.0s · \$0\.500 \(ctrl\+o to expand\)$/);
+  }
+});
+
+test("a line too narrow for any label drops the label whole, not into a gap", () => {
+  // The label gives way the way a widget row's turn count does. The outcome
+  // never gives: a reader who cannot see how a Run ended has no line worth
+  // having, so a terminal narrower than the fixed parts overflows instead.
+  const line = stripVTControlCharacters(
+    formatNotificationSummary(
+      {
+        agent: "explore",
+        label: "audit auth redirects",
+        status: "failed",
+        durationMillis: 1_000,
+        cost: 0,
+      },
+      theme,
+      false,
+      keyHintStub,
+      10,
+    ),
   );
 
-  // The width helper paints its own ellipsis, so the escapes are stripped to
-  // read the text rather than the colouring.
-  assert.equal(
-    stripVTControlCharacters(line),
-    "explore · aaaaaaaaaaa… · completed in 1.0s (ctrl+o to expand)",
+  assert.equal(line, "explore · failed in 1.0s (ctrl+o to expand)");
+  assert.doesNotMatch(line, /· +·/);
+});
+
+test("a label is capped even when the line has room to spare", () => {
+  // On a wide terminal a 200-byte label would push the outcome and the cost so
+  // far right that a reader scanning a column of notices could not find them.
+  const line = stripVTControlCharacters(
+    formatNotificationSummary(
+      {
+        agent: "explore",
+        label: "a".repeat(200),
+        status: "completed",
+        durationMillis: 1_000,
+        cost: 0,
+      },
+      theme,
+      false,
+      keyHintStub,
+      400,
+    ),
   );
-  assert.equal(line.includes("\n"), false);
+
+  assert.equal(
+    line,
+    `explore · ${"a".repeat(MAX_NOTICE_LABEL_WIDTH - 1)}… · completed in 1.0s (ctrl+o to expand)`,
+  );
 });
 
 test("an expanded notice's hint offers to collapse, because one key does both", () => {

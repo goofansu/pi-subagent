@@ -26,7 +26,12 @@
 
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { Markdown, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+  Markdown,
+  Text,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { TerminalRunPhase } from "../domain/index.ts";
 import {
   type CollectedRuns,
@@ -252,12 +257,29 @@ export function renderResumeResult(
 }
 
 /**
- * How much room the label may take on a collapsed notice line.
+ * The width a collapsed notice line is fitted to when nobody says otherwise.
  *
- * A cap rather than a share of the terminal, for the same reason the widget
- * caps its agent column: a Profile or a description that ran long must not
- * push the outcome and the cost off the line, and those are what the reader
- * came for.
+ * Pi's message-render options carry the expansion state and the output
+ * padding and **no width**, so a message renderer cannot ask how wide the
+ * terminal is. Eighty columns is the conventional floor rather than a
+ * measurement, and it is the one honest default available: fitting to a
+ * guess means a narrow terminal can still wrap, and fitting to nothing means
+ * every terminal can.
+ *
+ * It is a parameter on {@link formatNotificationSummary} rather than a
+ * constant read inside it, so that the day Pi hands a renderer a width there
+ * is one call site to change — and so that "never wraps" can be asserted at a
+ * width small enough to read in a golden.
+ */
+export const NOTICE_SUMMARY_WIDTH = 80;
+
+/**
+ * The most room the label may take, however wide the line is.
+ *
+ * A cap as well as a share, for the same reason the widget caps its agent
+ * column: on a wide terminal a two-hundred-byte label would push the outcome
+ * and the cost so far right that a reader scanning a column of notices could
+ * not find them.
  */
 export const MAX_NOTICE_LABEL_WIDTH = 48;
 
@@ -271,9 +293,15 @@ export const MAX_NOTICE_LABEL_WIDTH = 48;
  * about to make a tool call; the character count told the reader nothing they
  * could act on.
  *
- * Cost is omitted when zero, because a zero is not a fact about spending. The
- * label is truncated to the width it is given and never wraps: a collapsed
- * line that became two lines would defeat the collapsing.
+ * Cost is omitted when zero, because a zero is not a fact about spending.
+ *
+ * **The whole line is fitted, not just the label.** The label takes whatever
+ * `width` leaves after the agent, the outcome, the cost, and the hint — those
+ * are what the reader came for, so they are never the part that gives — and
+ * at most {@link MAX_NOTICE_LABEL_WIDTH} beyond that. It never wraps: a
+ * collapsed line that became two lines would defeat the collapsing. See
+ * {@link NOTICE_SUMMARY_WIDTH} for why the width is a default rather than the
+ * terminal's own.
  *
  * No status glyph: lifecycle state is written as a word, painted in the
  * phase's tone so a failure still stands out. The hint names the direction the
@@ -291,24 +319,41 @@ export function formatNotificationSummary(
   theme: RenderableTheme,
   expanded = false,
   renderKeyHint?: KeyHintRenderer,
-  labelWidth: number = MAX_NOTICE_LABEL_WIDTH,
+  width: number = NOTICE_SUMMARY_WIDTH,
 ): string {
-  const label = truncateToWidth(details.label, labelWidth, "…");
-  const line =
-    theme.fg("toolTitle", theme.bold(details.agent)) +
-    theme.fg("dim", ` · ${label} · `) +
-    theme.fg(
-      runPhaseTone(details.status),
-      `${runPhaseVerb(details.status)} in ${formatDuration(details.durationMillis)}`,
-    ) +
-    (details.cost === 0
-      ? ""
-      : theme.fg("dim", ` · $${details.cost.toFixed(3)}`));
+  const agent = theme.fg("toolTitle", theme.bold(details.agent));
+  const outcome = theme.fg(
+    runPhaseTone(details.status),
+    `${runPhaseVerb(details.status)} in ${formatDuration(details.durationMillis)}`,
+  );
+  const cost =
+    details.cost === 0 ? "" : theme.fg("dim", ` · $${details.cost.toFixed(3)}`);
   const hint = formatParentheticalKeyHint(
     theme,
     "app.tools.expand",
     expanded ? "to collapse" : "to expand",
     renderKeyHint,
   );
-  return `${line} ${hint}`;
+
+  const render = (label: string): string =>
+    `${agent}${theme.fg("dim", ` · ${label} · `)}${outcome}${cost} ${hint}`;
+  /** The label section gone entirely, rather than left as an empty gap. */
+  const withoutLabel = `${agent}${theme.fg("dim", " · ")}${outcome}${cost} ${hint}`;
+
+  // What the line costs with an empty label, which is what the label's budget
+  // is subtracted from. Rendered and measured rather than counted: every part
+  // is themed, a colour is not a column, and a delimiter left out of the
+  // arithmetic is a line three columns too wide.
+  const room = Math.min(
+    MAX_NOTICE_LABEL_WIDTH,
+    width - visibleWidth(render("")),
+  );
+  // Too narrow for even one column of label: the label gives way whole, the
+  // way a widget row's turn count does, rather than leaving `· ·` behind. The
+  // outcome never gives — a reader who cannot see how a Run ended has no line
+  // worth having — so a terminal narrower than the fixed parts overflows, and
+  // that is the honest end of what fitting can do here.
+  return room < 1
+    ? withoutLabel
+    : render(truncateToWidth(details.label, room, "…"));
 }

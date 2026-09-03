@@ -249,21 +249,23 @@ export function registerSubagentCommand(
     handler: async (args, ctx) => {
       const subcommand = args.trim().split(/\s+/, 1)[0] ?? "";
       switch (subcommand) {
-        case "":
+        case "": {
+          const session = await readLiveSession(handle);
           ctx.ui.notify(
             formatSubagentStatus({
-              ...(await readStatus(handle)),
+              ...(session === undefined ? {} : { session }),
               profiles: profiles(),
               agentsDir,
             }),
             "info",
           );
           return;
+        }
         case "profiles":
           await openProfilesUi(pi, profiles, agentsDir, ctx);
           return;
         case "diagnostics":
-          await reportDiagnostics(handle, adapterProbe, ctx);
+          reportDiagnostics(await readLiveSession(handle), adapterProbe, ctx);
           return;
         default:
           ctx.ui.notify(formatUnknownSubcommand(subcommand), "info");
@@ -273,10 +275,19 @@ export function registerSubagentCommand(
 }
 
 /** Read the live Session's contribution to the status, or nothing. */
-async function readStatus(
+/**
+ * Read the live Session once, for whichever of the two reports wants it.
+ *
+ * One reader rather than two, because the status and the diagnostics report
+ * ask the same Session the same three questions and a second reader could
+ * answer them from a different instant. `undefined` means no Session runtime
+ * is live, which is an answer rather than an error: the command registers once
+ * per process and between Sessions there is none.
+ */
+async function readLiveSession(
   handle: SessionHandle,
-): Promise<{ readonly session?: LiveSessionStatus }> {
-  const session = await handle.run<LiveSessionStatus | undefined>(
+): Promise<LiveSessionStatus | undefined> {
+  return handle.run<LiveSessionStatus | undefined>(
     Effect.gen(function* () {
       const supervisor = yield* SubagentSupervisor;
       const repository = yield* RunRepository;
@@ -288,33 +299,23 @@ async function readStatus(
     }),
     undefined,
   );
-  return session === undefined ? {} : { session };
 }
 
 /** The counters-and-probes report, exactly as bare `/subagent` once printed. */
-async function reportDiagnostics(
-  handle: SessionHandle,
+function reportDiagnostics(
+  session: LiveSessionStatus | undefined,
   adapterProbe: () => AdapterProbe | undefined,
   ctx: Pick<ExtensionCommandContext, "ui">,
-): Promise<void> {
-  const read = await handle.run<SessionDiagnostics | undefined>(
-    Effect.map(
-      SubagentSupervisor,
-      (supervisor): SessionDiagnostics => ({
-        counters: { ...supervisor.counters() },
-        probe: { ...supervisor.probe() },
-      }),
-    ),
-    undefined,
-  );
-  if (read === undefined) {
+): void {
+  if (session === undefined) {
     ctx.ui.notify(NO_LIVE_SESSION, "info");
     return;
   }
   const held = adapterProbe();
   ctx.ui.notify(
     formatSessionDiagnostics({
-      ...read,
+      counters: session.counters,
+      probe: session.probe,
       ...(held === undefined ? {} : { adapterProbe: held }),
     }),
     "info",

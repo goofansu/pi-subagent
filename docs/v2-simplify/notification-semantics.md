@@ -181,10 +181,19 @@ blank line; an absent section leaves no blank.
 Subagent "<label>" <verb> in <duration>.
 ```
 
-`<verb>` is `completed`, `failed`, or `was cancelled`, from the existing
-`runPhaseVerb` dictionary. `<duration>` is `formatDuration(durationMillis)`.
-For a cancelled Run the reason follows in parentheses when present:
-`was cancelled in 60.0s (timeout)`.
+`<verb>` is `completed`, `failed`, or `was cancelled`. `<duration>` is
+`formatDuration(durationMillis)`. For a cancelled Run the reason follows in
+parentheses when present: `was cancelled in 1m 0s (timeout)`.
+
+**Corrected at the Phase A gate.** The draft said the verb comes "from the
+existing `runPhaseVerb` dictionary", and it cannot: `runPhaseVerb` answers
+`cancelled`, because it exists to label a widget column and a column is a
+label. A sentence needs `was cancelled`, since a Run does not cancel itself.
+So `presentation/status.ts` gained a second dictionary, `NOTICE_VERB`, keyed
+by the *terminal* phases alone — only a terminal Run has a notice, and a table
+that had to invent a sentence for `running` would be inviting one to be
+written. Two dictionaries in one module, each with one job, rather than one
+column doing two.
 
 Then the identity block, always:
 
@@ -303,15 +312,31 @@ finished; the character count is useless for both. It becomes:
 ```
 
 ```text
-reviewer · audit auth redirects · completed in 41s · $0.042
-implementer · fix flaky cache test · failed in 19s
-explore · inspect the build graph · cancelled in 60s
+reviewer · audit auth redirects · completed in 41.2s · $0.042
+implementer · fix flaky cache test · failed in 19.4s
+explore · inspect the build graph · cancelled in 1m 0s
 ```
 
-Cost appears when non-zero, rounded to three places. Duration appears always.
-The label is truncated to the terminal width with the existing width helper,
-and never wraps. The expand hint is unchanged. The ids are in the expanded
-text.
+Cost appears when non-zero, rounded to three places. Duration appears always,
+through the same `formatDuration` every other surface uses — which is why the
+third line reads `1m 0s`: the formatter switches to minutes at exactly sixty
+seconds, and a second formatter for this one line would be a second answer to
+the same question.
+
+**The whole line is fitted, not just the label**, and the label is what gives:
+it takes whatever the agent, the outcome, the cost, and the hint leave, capped
+at 48 columns so a long label cannot push the outcome off a wide terminal's
+line. Too narrow for even one column of label and the label gives way whole
+rather than leaving `· ·` behind. The outcome never gives.
+
+**Corrected at the Phase A gate.** The draft said "truncated to the terminal
+width". There is no terminal width to truncate to: Pi's `MessageRenderOptions`
+carries the expansion state and the output padding and no width, so a message
+renderer cannot ask. The line is fitted to `NOTICE_SUMMARY_WIDTH`, eighty
+columns, which is a convention and not a measurement — and it is a *parameter*
+of `formatNotificationSummary`, so the day Pi hands a renderer a width there
+is one call site to change. The expand hint is unchanged. The ids are in the
+expanded text.
 
 The message payload the host sends carries what this line needs — agent,
 label, status, duration, cost — alongside `runId` and `subagentId`, so the

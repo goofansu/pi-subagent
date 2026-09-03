@@ -43,6 +43,22 @@ and Conversation evidence, not a second Run and not necessarily settlement. A
 Run has its own local id, phase, projection, usage, Result, and owning
 Subagent. Not "job", not "task", not "call", and not a provider Turn.
 
+**Label** — the Run's one-line description of the work it was given: what
+`agent_start` and `agent_resume` call `description`, bounded to one line of at
+most 200 UTF-8 bytes (`RUN_LABEL_MAX_BYTES`) once, at admission, before the
+Run exists. A label longer than that is **shortened and recorded** as a Run
+diagnostic, never refused — a label is orientation, and refusing a start over
+its length would cost a round trip and buy no safety.
+
+Two words for one thing, deliberately, and this is which is which. The field a
+*caller* fills in is `description`, because that is what the tool schema has
+always called it and a model that learned the name keeps it. Every surface that
+*shows* it calls it the label: the notice's header, the collapsed transcript
+line, the widget's activity tail. The value is the same string everywhere,
+because the bound is applied once and every reader downstream reads what
+admission stored.
+[ADR-0033](docs/adr/0033-notification-vocabulary-pointer-and-label-bound.md).
+
 **Run phase** — where a Run is, as five states: `running`, `finalizing`,
 `completed`, `failed`, `cancelled`. `finalizing` is the window between a
 backend's execution ending and the Run settling, and it exists so that no
@@ -110,9 +126,11 @@ own "result" event is adapter-local Turn evidence; it is not this Result and is
 not synonymous with settlement.
 
 **Notification** — a small status-specific completion notice pushed as a
-follow-up message. It identifies both the owning Subagent and the specific Run,
-orients the model, and points at `agent_result` by Run id; it is not the Result
-itself. **Pushed is not landed**: Pi may hold a follow-up while the model is
+follow-up message. It opens with the Run's **Label**, so a model running
+several Subagents reads which delegation finished before it reads an
+identifier; it identifies the owning Subagent and the specific Run, says how
+much of the Result is there, and points at `agent_result` with the exact
+argument shape. It is not the Result itself. **Pushed is not landed**: Pi may hold a follow-up while the model is
 mid-turn, and if an interrupt discards it the notice is pushed again once the
 agent settles. One landing per Notification is the invariant. The four states a
 notice can be in — **handed off**, **landed**, **lost after hand-off**,

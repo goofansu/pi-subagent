@@ -69,6 +69,11 @@ module would fail the checker before it failed review.
 - `domain/usage.ts` — the notice carries `NotificationAccounting`, which is
   the four figures the line prints; a usage figure the line does not print is
   not a notice field
+- `presentation/run-card.ts` — unless the field is an *accounting* figure. The
+  card shows the same four figures in the same grammar for a Run that has not
+  settled and has no notice, so it is a second **caller** of
+  `toNotificationAccounting` and not a second conversion: one place decides
+  whether there is anything to account for, two surfaces read the answer
 
 **Tests** — `npm test`; the notice-shape assertions in
 `presentation/notification-text.test.ts`.

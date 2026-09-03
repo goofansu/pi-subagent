@@ -39,6 +39,50 @@ same eight as before the phase.
 
 **Status:** PASS.
 
+## Two rules this phase broke, recorded rather than quietly fixed
+
+**The commit rule.** `docs/contributing.md` §Commits: *"A commit that changes
+user-visible text says which compatibility-matrix cell it affects."* Four
+commits change user-visible text and cite only presentation-ledger rows and
+their ticket: `2d6269f`, `143dea1`, `5712226`, and `e0714c6`. `6060430` is the
+one that does it right. The cells they affect, so the information exists and
+is attributable:
+
+| Commit | Matrix cell |
+| --- | --- |
+| `2d6269f` | Completion Notification → *Expected outcome* (the header and identity block), *The Run label*; `agent_start` and `agent_resume` → the description field's copy |
+| `143dea1` | Completion Notification → *Completed Run*, *Failed Run*, *Cancelled Run*, *The pointer* |
+| `5712226` | Completion Notification → *Accounting*, *every row* (backend independence) |
+| `e0714c6` | Completion Notification → *Collapsed transcript line* |
+
+The messages are not being rewritten: this document and
+[the change-surface measurement](change-surface.md#method-so-this-can-be-repeated)
+cite those hashes as evidence, and rewriting them would invalidate the
+measurement they are the evidence for. The rule's purpose — a reader can tell
+which cell moved — is met by the table above and by the matrix's own
+**[Phase A]** markers. The rule itself was broken four times, and a future
+phase should not read this as permission.
+
+**The vocabulary rule, briefly.** `docs/contributing.md` §Vocabulary makes
+`CONTEXT.md` load-bearing: "code using a different word for the same thing is
+a bug in the naming". This phase made *label* the product word for a Run's
+description across the domain, the notice, the host payload, the renderer, and
+both tool schemas, and the glossary did not gain the entry until this gate was
+being written. It has one now, and it says which of the two words is which:
+the field a caller fills in is `description`, because that is what the tool
+schema has always called it, and every surface that shows it calls it the
+label. The `handedOff` rename got its glossary block in the same commit as the
+code; the label rename did not, and should have.
+
+**The architecture challenge gate, commit-wise.** `docs/contributing.md` asks
+for its three questions "in the commit message or in an ADR" for a change that
+adds an abstraction to, or changes a decision in, generic runtime code or the
+domain. The three domain commits answer them in neither; ADR-0033 answers all
+three and arrives in ticket 09, because the spec put the ADR there. Satisfied
+across the phase, not commit by commit. A phase that decides its ADR before
+its code — which this programme's whole premise is — should write the ADR
+first as well.
+
 ## The commits
 
 | Ticket | Commit | What it did |
@@ -173,8 +217,11 @@ the agent, the task, the outcome, and the cost` asserts `reviewer · audit auth
 redirects · completed in 41.2s · $0.042` plus the hint; `S-2: a failed and a
 cancelled summary read the same way, with the verb changed` asserts both with
 the cost omitted; `a collapsed notice carries no id and no character count`
-asserts the absences directly; `a long label is truncated to the width it is
-given rather than wrapped` asserts the ellipsis and no newline.
+asserts the absences directly; `the whole collapsed line is fitted to its
+width, and the label is what gives` asserts at five widths that the line never
+exceeds the width and never contains a newline while the agent, outcome, cost
+and hint all survive; `a line too narrow for any label drops the label whole,
+not into a gap`; `a label is capped even when the line has room to spare`.
 `host/notification-message.test.ts`: `S-1: the ids are in the expanded text,
 where a tool call needs them` asserts the collapsed line has neither id and
 the expanded text has both. Rows S-1 and S-2 are confirmed in the ledger.
@@ -249,14 +296,40 @@ of fixture values rather than code**, and the ledger says which:
   notice uses the shared formatter rather than a second one, which was the
   decision; the sketch was written without checking it.
 
-**And one contradiction inside the semantics document, resolved rather than
-split.** Its worked examples illustrated the accounting line turns-first —
-`3 turns · 12.3k in / 4.5k out · $0.0421` — while its own sentence says the
-order and grammar are the *existing* `formatNotificationAccounting`, which is
-cost-first, and user story 9 asks for the line unchanged so a habit learned on
-the release candidate still holds. Unchanged wins. The illustrations were the
-defect and are corrected in the document; the golden and the ledger's N-9 row
-agree, and the line a model reads did not move.
+**And four places where the semantics document contradicted itself or the
+host API, each resolved and each corrected in the document rather than
+silently worked around.** A row that lands differently from its after column
+is a defect in one or the other, and the gate says which; here the defect was
+in the decided text three times out of four.
+
+1. **The accounting line's order.** Its worked examples illustrated the line
+   turns-first —
+   `3 turns · 12.3k in / 4.5k out · $0.0421` — while its own sentence says
+   the order and grammar are the *existing* `formatNotificationAccounting`,
+   which is cost-first, and user story 9 asks for the line unchanged so a
+   habit learned on the release candidate still holds. Unchanged wins; the
+   illustrations were the defect.
+2. **The header's verb.** §5 said the verb comes "from the existing
+   `runPhaseVerb` dictionary". It cannot: `runPhaseVerb` answers `cancelled`,
+   because it labels a widget column, and a sentence needs `was cancelled`
+   since a Run does not cancel itself. `presentation/status.ts` gained a
+   second dictionary keyed by the terminal phases alone. This is a concept the
+   decided document did not name, which is why it is recorded here.
+3. **"Truncated to the terminal width".** There is no terminal width to
+   truncate to — Pi's `MessageRenderOptions` carries the expansion state and
+   the output padding and nothing else. The collapsed line is fitted to
+   `NOTICE_SUMMARY_WIDTH`, eighty columns, a convention rather than a
+   measurement, and it is a parameter so that the day Pi hands a renderer a
+   width there is one call site to change. What the criterion actually asked
+   for — the line never wraps and the label is what gives — is delivered and
+   asserted at five widths, plus the give-way case where the label goes whole
+   rather than leaving `· ·` behind. **The deviation is that the width is a
+   default and not the terminal's**, and it is a limit of the host API rather
+   than a choice.
+4. **§6's collapsed-line examples** read `completed in 41s` and `cancelled in
+   60s`; the shared `formatDuration` produces `41.2s` and `1m 0s`. Corrected
+   in the document, since a second formatter for one line would be a second
+   answer to the same question.
 
 **Status:** PASS.
 
