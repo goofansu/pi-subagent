@@ -91,6 +91,9 @@ sink already tracks.
 
 ## 3. Ids restart at 1 on a session reload, and the transcript does not
 
+The decision, the rejected alternatives, and the cost are recorded in
+[ADR-0031](../adr/0031-v2-session-scoped-identifiers.md).
+
 **Severity 1 — a wrong answer presented as right. Fixed.**
 
 Resuming a Pi session starts a new process, a new Session runtime, and a new
