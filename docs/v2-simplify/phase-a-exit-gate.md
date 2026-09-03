@@ -143,7 +143,33 @@ changed, and the proof tables name the new goldens.
 filled from real diffs or, for R5 and R6, from a written module list, and the
 estimated column is marked superseded.
 
-**Status:** OPEN.
+**Measured.** R1 `0 / 2`, R2 `0 / 3`, R3 `0 / 3`, R4 `0 / 1`, R5 `0 / 8–12`,
+R6 `9 / 14`, against a tree of 103 production modules of which 23 are generic
+lifecycle. R1 and R2 are counted from tickets 03 and 04; R3 and R4 from a
+throwaway branch off `1991b68`, since deleted; R5 and R6 from written module
+lists checked against the recipes. The method section records the base commit
+(`124fd50`) and the commands, so the Phase B gate can repeat it. The estimated
+baseline is marked superseded and kept.
+
+**Findings**, recorded rather than softened:
+
+1. **R3 exceeds its target by one module** (`0 / 3` against `0 / ≤ 2`). A
+   backend-owned Profile option needs a hook in `backend/profile-fields.ts`,
+   because that module owns the one `try` per field that turns a bad value into
+   a Profile diagnostic rather than an exception inside the adapter. The
+   option's vocabulary still never leaves `backend/claude/`. The reading is
+   that the target was one too low; the Phase B gate either raises it to three
+   or records this again.
+2. **The table has no row for "add a bound enforced at admission", and it is
+   more expensive than any row it has.** Phase A's own label bound touched five
+   modules, two of them generic. Every future bound on caller-supplied input
+   will cost the same. The Phase B gate should add it as R7 with a target,
+   using Phase A's decomposition as the baseline.
+3. **Two estimates were wrong, both in the safe direction.** R2's estimate
+   claimed one generic module and there are none; R4's claimed two total and
+   there is one. Neither changed a verdict.
+
+**Status:** PASS, with three findings carried to the Phase B gate.
 
 ### 12. The architecture note has its map, and the recipes exist
 
