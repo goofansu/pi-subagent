@@ -1,10 +1,11 @@
 # Phase A exit gate — notification semantics and UX
 
-**Status: closed.** Verified against the phase's production code as of
-`6060430`, the last commit that changed any, and the deterministic gate re-run
-on the commit that carries this verdict. The commits after `6060430` are
-documents only, which is why a live gate run on that code is a run on the
-closing code.
+**Status: closed.** The deterministic gate is re-run on the commit that
+carries this verdict. The six live lanes were run against the production code
+as of `6060430`; the review fixes in `6bd572e` then changed two production
+files, so `pi:host-smoke` — the lane that loads the changed renderer inside a
+real Pi process — was re-run on that code and passed again. The other four
+production commits between are documents only.
 **Verified against:** [the roadmap](roadmap.md),
 Phase A; [the notification semantics](notification-semantics.md);
 [the presentation ledger](presentation-ledger.md).
@@ -429,7 +430,12 @@ Model-facing text changed and the host smoke lanes assert on it. All six
 `codex:smoke`, `codex:host-smoke`) are run on the commit that closes this
 gate and their pass markers recorded here.
 
-**Results**, all run on the phase's production code:
+**Results.** The six lanes below were run against the production code as of
+`6060430`. `6bd572e`, which acts on the code review, changed
+`presentation/renderers.ts` and `host/diagnostics-command.ts`; neither is
+reached by any lane's assertions, but `pi:host-smoke` loads the renderer in a
+real Pi process, so it was re-run on that code and passed again
+(`PI_HOST_LIVE_SMOKE_PASS`).
 
 | Lane | Marker | Notes |
 | --- | --- | --- |
