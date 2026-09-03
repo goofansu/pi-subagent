@@ -307,9 +307,22 @@ BackendAgent closed by the core, its Conversation marked lost so a later resume
 is honest, and settlement continuing with the observations it has. A hung
 finalizer must not leave a Run in `finalizing` forever.
 
+**Admission lease** — what one admitted Run holds: a slot in the Session's
+capacity, the Subagent's one-active-Run claim, and the Result-store
+reservation. One atomic `acquire` yields either a lease or a typed refusal —
+*shutting down*, *already running*, or *at capacity* — and the lease gives
+back everything it holds in one idempotent `release`, so no path has to
+remember which of the three it took. A resume's Subagent is claimed inside the
+acquire because its id is known; a start's is `bind`-ed once its backend has
+opened, because until then there was no Subagent. The module also owns the
+shutting-down flag and the first-caller-wins `beginShutdown`, so "once
+shutdown begins, new work is rejected" is one module's promise.
+[ADR-0034](docs/adr/0034-supervisor-mechanisms-admission-lease-and-subagent-records.md).
+
 **Reservation** — the room a Run takes in the Result store at admission, before
 it starts, so that "the result can be stored" is a guarantee rather than an
-estimate discovered at settlement. Released by a failed open.
+estimate discovered at settlement. Released by a failed open, and by the
+admission lease at Run-fiber exit if a commit has not already consumed it.
 
 A reservation that does not fit **evicts the oldest unpinned stored output**
 until one does, and only refuses `at capacity` when there is nothing evictable

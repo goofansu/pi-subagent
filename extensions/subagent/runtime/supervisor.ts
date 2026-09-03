@@ -1,29 +1,31 @@
 /**
- * `SubagentSupervisor`: the six public operations, and admission.
+ * `SubagentSupervisor`: the six public operations, in order.
  *
- * Admission is where almost every rule in operation semantics section 1 and 2
- * lives, and its shape is decided by two of them:
- *
- * - **Nothing waits.** At capacity the answer is `at capacity`, immediately,
- *   with nothing queued. So capacity is a non-blocking reservation rather than
- *   a semaphore, and the roadmap forbids the semaphore explicitly.
- * - **Nothing is allocated by a rejection.** So everything decidable without
- *   provider I/O is decided *before* an identifier is allocated or a Subagent
- *   Scope is opened.
+ * This module sequences a lifecycle; it does not own the state that lifecycle
+ * moves through. Admission — the shutting-down flag, capacity, the running
+ * Subagents, and the Result-store reservation — belongs to
+ * [`admission.ts`](admission.ts), which hands out a lease
+ * ([ADR-0034](../../../docs/adr/0034-supervisor-mechanisms-admission-lease-and-subagent-records.md)).
  *
  * Start is three steps, and the middle one is the only one that talks to a
  * provider:
  *
  * 1. Admission: shutting down, unknown agent, invalid Profile, delegation
- *    depth, then one atomic step for global capacity and the guaranteed result
- *    reservation.
+ *    depth, then one atomic acquire for global capacity, and the guaranteed
+ *    result reservation taken through the lease it yields.
  * 2. Open the BackendAgent inside the new Subagent Scope. A failure here is
- *    `backend unavailable`, everything reserved is released, and the ids stay
- *    spent (ADR-0030).
+ *    `backend unavailable`, the lease releases everything it holds, and the
+ *    ids stay spent (ADR-0030).
  * 3. Publish the Run and fork its Run fiber.
  *
  * `start` returns after step 3, so a caller receives either ids for a Run that
  * exists or a typed rejection — never an id for work that never began.
+ *
+ * The order of those steps is what keeps both admission rules true, and it
+ * does not change: **nothing waits**, because at capacity the answer is
+ * immediate with nothing queued; and **nothing is allocated by a rejection**,
+ * because everything decidable without provider I/O is decided before an
+ * identifier is spent or a Subagent Scope is opened.
  */
 
 import {
@@ -35,7 +37,6 @@ import {
   Fiber,
   Layer,
   type Option,
-  Ref,
   Scope,
 } from "effect";
 import type {
@@ -63,6 +64,7 @@ import {
   type SubagentPhase,
   type WaitOutcome,
 } from "../domain/index.ts";
+import { type AdmissionLease, makeAdmission } from "./admission.ts";
 import { BackendCatalog } from "./backend-catalog.ts";
 import type {
   RuntimeCounters,
@@ -155,23 +157,22 @@ interface SubagentRecord {
 }
 
 /**
- * What admission decides in one atomic step.
+ * One forked Run's facts, as one value.
  *
- * Held in one reference so a concurrent pair of starts has exactly one winner:
- * the loser sees the winner's reservation because both read and write the same
- * value in the same modify.
+ * A parameter object rather than six positions because the fork is where the
+ * admission lease, the Subagent record, the published identity, and the
+ * caller's own diagnostics meet, and a reader of the call site should be able
+ * to see which is which.
  */
-interface AdmissionState {
-  readonly shuttingDown: boolean;
-  readonly activeRuns: number;
-  readonly running: ReadonlySet<SubagentId>;
+interface ForkedRun {
+  readonly record: SubagentRecord;
+  /** Released when the Run fiber exits, whatever ended it. */
+  readonly lease: AdmissionLease;
+  readonly identity: RunIdentity;
+  readonly prompt: string;
+  readonly startedAt: number;
+  readonly diagnostics: AdmissionDiagnostics;
 }
-
-const EMPTY_ADMISSION: AdmissionState = {
-  shuttingDown: false,
-  activeRuns: 0,
-  running: new Set(),
-};
 
 /**
  * What a failed open tells the caller.
@@ -217,7 +218,15 @@ const makeSupervisor = (settings: SessionSettings) =>
      */
     const sessionScope = yield* Scope.Scope;
 
-    const admission = yield* Ref.make(EMPTY_ADMISSION);
+    /**
+     * Admission, with the supervisor's lifetime and no Layer of its own.
+     *
+     * Constructed here rather than wired as a service because it has exactly
+     * this object's lifetime, and ADR-0023's rule is that nothing
+     * shorter-lived than the Session is a Layer. The store is passed for its
+     * two reservation calls and nothing else.
+     */
+    const admission = yield* makeAdmission(policy.maxActiveRuns, store);
     const subagents = new Map<SubagentId, SubagentRecord>();
     /** Hooks the conformance suite reads instead of the deleted driver's log. */
     const stages: string[] = [];
@@ -225,87 +234,17 @@ const makeSupervisor = (settings: SessionSettings) =>
     const now = Effect.clockWith((clock) => clock.currentTimeMillis);
 
     /* ------------------------------------------------------------ */
-    /* Admission                                                     */
-    /* ------------------------------------------------------------ */
-
-    /**
-     * Claim a capacity slot and, for a resume, the Subagent's one active-Run
-     * claim, in one indivisible step.
-     *
-     * `Ref.modify` is the linearization point. Two concurrent starts against a
-     * capacity of one both reach it; one increments and one is refused.
-     */
-    const claim = (
-      subagentId: SubagentId | undefined,
-    ): Effect.Effect<
-      "claimed" | "at capacity" | "shutting down" | "already running"
-    > =>
-      Ref.modify(admission, (current) => {
-        if (current.shuttingDown) return ["shutting down" as const, current];
-        if (subagentId !== undefined && current.running.has(subagentId)) {
-          return ["already running" as const, current];
-        }
-        if (current.activeRuns >= policy.maxActiveRuns) {
-          return ["at capacity" as const, current];
-        }
-        const running = new Set(current.running);
-        if (subagentId !== undefined) running.add(subagentId);
-        return [
-          "claimed" as const,
-          { ...current, activeRuns: current.activeRuns + 1, running },
-        ];
-      });
-
-    /**
-     * Give back what one Run claimed.
-     *
-     * Clamped at zero deliberately. Every path that claims releases exactly
-     * once, so the clamp should never fire — but if one ever released twice,
-     * a negative count would permanently *raise* the effective capacity and
-     * let more Runs in than the policy allows, which is much worse than a
-     * count that is briefly one too high.
-     */
-    const releaseClaim = (subagentId: SubagentId): Effect.Effect<void> =>
-      Ref.update(admission, (current) => {
-        const running = new Set(current.running);
-        running.delete(subagentId);
-        return {
-          ...current,
-          activeRuns: Math.max(0, current.activeRuns - 1),
-          running,
-        };
-      });
-
-    /**
-     * Take the second reservation: room for a result this Run could produce.
-     *
-     * It is a separate step from the capacity claim because it belongs to a
-     * different owner, and the compensation is what keeps the pair honest: a
-     * Run that cannot reserve a result releases its capacity claim and is
-     * refused. The one thing that cannot happen is admitting a Run whose
-     * result could never be stored.
-     */
-    const reserveResult = (
-      runId: RunId,
-      subagentId: SubagentId,
-    ): Effect.Effect<boolean> =>
-      Effect.gen(function* () {
-        const granted = yield* store.reserve(runId);
-        if (!granted) yield* releaseClaim(subagentId);
-        return granted;
-      });
-
-    /* ------------------------------------------------------------ */
     /* Running a Run                                                 */
     /* ------------------------------------------------------------ */
 
-    const forkRun = (
-      record: SubagentRecord,
-      identity: RunIdentity,
-      prompt: string,
-      startedAt: number,
-      admissionDiagnostics: AdmissionDiagnostics = [],
-    ): Effect.Effect<void> =>
+    const forkRun = ({
+      record,
+      lease,
+      identity,
+      prompt,
+      startedAt,
+      diagnostics: admissionDiagnostics,
+    }: ForkedRun): Effect.Effect<void> =>
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
         // Forked into the Session Scope, not into the caller's fiber. Every
@@ -356,7 +295,11 @@ const makeSupervisor = (settings: SessionSettings) =>
                 counters.released("liveRunFibers");
                 record.run = undefined;
                 record.phase = record.phase === "closed" ? "closed" : "idle";
-                yield* releaseClaim(record.id);
+                // Last, and this order matters: the Subagent's active-Run
+                // claim is what stops a resume being admitted, so releasing
+                // it before the record was cleared would let the next Run
+                // arrive while this one still looked in flight.
+                yield* lease.release();
               }),
             ),
             Scope.provide(record.scope),
@@ -460,8 +403,9 @@ const makeSupervisor = (settings: SessionSettings) =>
 
     const start = (request: StartRequest): Effect.Effect<StartOutcome> =>
       Effect.gen(function* () {
-        const state = yield* Ref.get(admission);
-        if (state.shuttingDown) return { outcome: "shutting down" } as const;
+        if (yield* admission.isShuttingDown()) {
+          return { outcome: "shutting down" } as const;
+        }
 
         const profile = profiles.get(request.agent);
         if (!profile) {
@@ -491,18 +435,24 @@ const makeSupervisor = (settings: SessionSettings) =>
           } as const;
         }
 
-        const claimed = yield* claim(undefined);
-        if (claimed === "shutting down") {
-          return { outcome: "shutting down" } as const;
+        // No Subagent id yet, so nothing to claim for one: a start's Subagent
+        // is bound to the lease after the open, below.
+        const acquired = yield* admission.acquire();
+        if (acquired.outcome !== "admitted") {
+          return acquired.outcome === "shutting down"
+            ? ({ outcome: "shutting down" } as const)
+            : ({ outcome: "at capacity" } as const);
         }
-        if (claimed !== "claimed") return { outcome: "at capacity" } as const;
+        const { lease } = acquired;
 
         // Only now are identifiers spent, and they stay spent whatever
         // happens next.
         const subagentId = yield* repository.allocateSubagentId();
         const runId = yield* repository.allocateRunId();
 
-        const reserved = yield* reserveResult(runId, subagentId);
+        // A refusal has already released the lease, so there is nothing to
+        // compensate here.
+        const reserved = yield* lease.reserveResult(runId);
         if (!reserved) return { outcome: "at capacity" } as const;
 
         const context: SubagentContext = {
@@ -517,10 +467,9 @@ const makeSupervisor = (settings: SessionSettings) =>
 
         const opened = yield* openSubagent(backend, profile, context);
         if (opened.outcome !== "opened") {
-          // Everything reserved is released before the rejection returns, and
-          // nothing was published, so no Run ever existed.
-          yield* store.release(runId);
-          yield* releaseClaim(subagentId);
+          // Everything the lease holds is released before the rejection
+          // returns, and nothing was published, so no Run ever existed.
+          yield* lease.release();
           return {
             outcome: "backend unavailable",
             diagnostic: opened.diagnostic,
@@ -545,21 +494,20 @@ const makeSupervisor = (settings: SessionSettings) =>
           agent: profile.name,
           description: request.description,
         };
-        const startedAt = yield* now;
-        yield* repository.publish(identity, startedAt);
         // The Subagent's active-Run claim is taken now rather than at
         // admission, because until the open succeeded there was no Subagent.
-        yield* Ref.update(admission, (current) => ({
-          ...current,
-          running: new Set(current.running).add(subagentId),
-        }));
-        yield* forkRun(
+        yield* lease.bind(subagentId);
+
+        const startedAt = yield* now;
+        yield* repository.publish(identity, startedAt);
+        yield* forkRun({
           record,
+          lease,
           identity,
-          request.prompt,
+          prompt: request.prompt,
           startedAt,
-          request.diagnostics,
-        );
+          diagnostics: request.diagnostics ?? [],
+        });
 
         return { outcome: "started", runId, subagentId } as const;
       });
@@ -611,8 +559,9 @@ const makeSupervisor = (settings: SessionSettings) =>
 
     const resume = (request: ResumeRequest): Effect.Effect<ResumeOutcome> =>
       Effect.gen(function* () {
-        const state = yield* Ref.get(admission);
-        if (state.shuttingDown) return { outcome: "shutting down" } as const;
+        if (yield* admission.isShuttingDown()) {
+          return { outcome: "shutting down" } as const;
+        }
 
         const record = subagents.get(request.subagentId);
         if (!record || record.phase === "closed") {
@@ -643,20 +592,21 @@ const makeSupervisor = (settings: SessionSettings) =>
           return { outcome: "conversation lost" } as const;
         }
 
-        const claimed = yield* claim(record.id);
-        if (claimed === "shutting down") {
-          return { outcome: "shutting down" } as const;
+        // The Subagent id is known, so its one-active-Run claim is taken in
+        // the same atomic step as capacity rather than bound afterwards.
+        const acquired = yield* admission.acquire(record.id);
+        if (acquired.outcome !== "admitted") {
+          return acquired.outcome === "already running"
+            ? ({
+                outcome: "Subagent already running",
+                subagentId: record.id,
+              } as const)
+            : ({ outcome: acquired.outcome } as const);
         }
-        if (claimed === "already running") {
-          return {
-            outcome: "Subagent already running",
-            subagentId: record.id,
-          } as const;
-        }
-        if (claimed !== "claimed") return { outcome: "at capacity" } as const;
+        const { lease } = acquired;
 
         const runId = yield* repository.allocateRunId();
-        const reserved = yield* reserveResult(runId, record.id);
+        const reserved = yield* lease.reserveResult(runId);
         if (!reserved) return { outcome: "at capacity" } as const;
 
         record.phase = "running";
@@ -669,13 +619,14 @@ const makeSupervisor = (settings: SessionSettings) =>
         };
         const startedAt = yield* now;
         yield* repository.publish(identity, startedAt);
-        yield* forkRun(
+        yield* forkRun({
           record,
+          lease,
           identity,
-          request.prompt,
+          prompt: request.prompt,
           startedAt,
-          request.diagnostics,
-        );
+          diagnostics: request.diagnostics ?? [],
+        });
 
         return { outcome: "started", runId, subagentId: record.id } as const;
       });
@@ -701,8 +652,9 @@ const makeSupervisor = (settings: SessionSettings) =>
       control: RunControl,
     ): Effect.Effect<SteerOutcome> =>
       Effect.gen(function* () {
-        const state = yield* Ref.get(admission);
-        if (state.shuttingDown) return { outcome: "shutting down" } as const;
+        if (yield* admission.isShuttingDown()) {
+          return { outcome: "shutting down" } as const;
+        }
 
         const known = yield* repository.lookup(runId);
         if (known.state === "unknown" || known.state === "spent") {
@@ -927,11 +879,7 @@ const makeSupervisor = (settings: SessionSettings) =>
       Effect.gen(function* () {
         // One observable instant, before any cleanup runs. From here, start,
         // resume, and steer all answer `shutting down`.
-        const first = yield* Ref.modify(admission, (current) =>
-          current.shuttingDown
-            ? [false, current]
-            : [true, { ...current, shuttingDown: true }],
-        );
+        const first = yield* admission.beginShutdown();
         if (!first) return;
 
         // Reverse acquisition order: the newest Subagent closes first, which
