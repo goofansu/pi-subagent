@@ -1,16 +1,23 @@
-// The v2 host-level live gate for the Pi backend.
+// The v2 host-level live gate, for one backend at a time.
 //
-// Usage: node --import tsx scripts/v2-pi-host-live-smoke.mjs
+// Usage: node --import tsx scripts/v2-pi-host-live-smoke.mjs [pi|claude]
 //
 // Launches Pi in RPC mode with **only** the v2 entry point loaded, asks the
-// model to delegate, and reads the answer back through `agent_result`. The
-// runtime gate next to this one proves the lifecycle; this proves the other
-// half — that the whole thing is reachable through the surface a user has,
-// with the real registrations, the real Session events, and no v1 in the
-// process at all.
+// model to delegate to a Profile naming the given backend, and reads the
+// answer back through `agent_result`. The runtime gates next to this one
+// prove the lifecycle; this proves the other half — that the whole thing is
+// reachable through the surface a user has, with the real registrations, the
+// real Session events, the production backend set, and no v1 in the process at
+// all.
+//
+// The backend is an argument rather than a second copy of this file because
+// what the gate exercises is the *host*, and the host is the same whichever
+// backend a Profile names. That sameness is the claim; a second script would
+// have let the two drift and hidden it.
 //
 // Credentials follow the existing live-smoke conventions. Override the Pi
-// executable with V2_PI_LIVE_BIN, the model with V2_PI_LIVE_MODEL, and the
+// executable with V2_PI_LIVE_BIN, the parent model with V2_PI_LIVE_MODEL, the
+// delegate's model with V2_PI_LIVE_MODEL or V2_CLAUDE_LIVE_MODEL, and the
 // overall bound with V2_PI_LIVE_TIMEOUT_MS. This spends provider quota and is
 // not part of `npm run check`.
 
@@ -22,8 +29,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-const SUCCESS_MARKER = "V2_PI_HOST_LIVE_SMOKE_PASS";
-const FAILURE_MARKER = "V2_PI_HOST_LIVE_SMOKE_FAIL";
+const BACKENDS = new Set(["pi", "claude"]);
+const backend = process.argv[2] ?? "pi";
+if (!BACKENDS.has(backend)) {
+  console.error(`unknown backend '${backend}'; expected pi or claude`);
+  process.exit(2);
+}
+
+const SUCCESS_MARKER = `V2_${backend.toUpperCase()}_HOST_LIVE_SMOKE_PASS`;
+const FAILURE_MARKER = `V2_${backend.toUpperCase()}_HOST_LIVE_SMOKE_FAIL`;
 
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -36,7 +50,12 @@ const entry = path.join(
   "index.ts",
 );
 const bin = process.env.V2_PI_LIVE_BIN ?? "pi";
-const model = process.env.V2_PI_LIVE_MODEL;
+// The delegate's model. Pi's is a catalogue reference and Claude's is a family
+// alias, so they are different variables and neither default fits the other.
+const model =
+  backend === "claude"
+    ? (process.env.V2_CLAUDE_LIVE_MODEL ?? "haiku")
+    : process.env.V2_PI_LIVE_MODEL;
 const timeoutMs = Number(process.env.V2_PI_LIVE_TIMEOUT_MS ?? 300_000);
 const failures = [];
 let interrupted;
@@ -73,6 +92,10 @@ function writeProfile() {
     [
       "---",
       "description: A specialist that echoes a marker, for the v2 host live gate.",
+      // Omitted for Pi, whose Profiles name no backend by default; written for
+      // every other backend, because that line is the whole selection
+      // mechanism a user has.
+      ...(backend === "pi" ? [] : [`backend: ${backend}`]),
       ...(model ? [`model: ${model}`] : []),
       "---",
       "You answer in as few words as possible and you never ask questions.",
@@ -142,7 +165,7 @@ process.once("SIGINT", onSignal);
 process.once("SIGTERM", onSignal);
 
 try {
-  console.log("v2 Pi host live gate");
+  console.log(`v2 host live gate (${backend})`);
   writeProfile();
 
   const prompt = [
