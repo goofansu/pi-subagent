@@ -207,6 +207,6 @@ test("a failed notice renders the error and a cancelled one renders neither outp
 
   assert.match(failedText, /the backend refused/);
   assert.doesNotMatch(failedText, /half an answer/);
-  assert.match(cancelledText, /was cancelled \(requested\)/);
+  assert.match(cancelledText, /was cancelled in 12\.4s \(requested\)/);
   assert.doesNotMatch(cancelledText, /half an answer/);
 });

@@ -65,7 +65,10 @@ test("a push hands the built message over and records the notice unlanded", asyn
   await Effect.runPromise(sink.push(NOTICE));
 
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].message.content.startsWith("Subagent explore"), true);
+  assert.equal(
+    sent[0].message.content.startsWith('Subagent "look around"'),
+    true,
+  );
   assert.deepEqual(sink.unlanded(), [NOTICE.runId]);
   assert.deepEqual(sink.landed(), []);
 });

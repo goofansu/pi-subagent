@@ -17,14 +17,68 @@
  */
 
 import { Schema } from "effect";
-import { RunDiagnostic } from "./diagnostics.ts";
+import { RunDiagnostic, runDiagnostic } from "./diagnostics.ts";
 import { type RunEnding, terminalPhaseForEnding } from "./endings.ts";
 import { BackendId, RunId, SubagentId } from "./ids.ts";
 import { ResultLink } from "./links.ts";
 import { CancellationReason, TerminalRunPhase } from "./phases.ts";
 import { type RunProjection, TruncationRecord } from "./projection.ts";
+import { boundOneLineText } from "./text.ts";
 import { ToolEntry, TranscriptItem } from "./transcript.ts";
 import { UsageSnapshot } from "./usage.ts";
+
+/**
+ * The bound on a Run's label — the description a model passes to
+ * `agent_start` or `agent_resume`.
+ *
+ * The label is identity, so Result bounding never removes it: a Result that
+ * could not say which Run it belongs to would be worse than one over its
+ * bound. That makes an unbounded label the one input a model can use to carry
+ * a Result past its byte target after everything removable has been cut, and
+ * the one input that can make the push sink retain an unbounded value while a
+ * notice waits to land. Two hundred bytes is a line of orientation; the brief
+ * itself goes in the prompt, which is bounded elsewhere.
+ */
+export const RUN_LABEL_MAX_BYTES = 200;
+
+/**
+ * Bound a description into a label: one line, at most the label bound.
+ *
+ * Applied once, at admission, before a Run exists — so the label that reaches
+ * identity, the Result, and the notice is the same string everywhere, and no
+ * later call site has to remember the rule.
+ *
+ * Truncate-and-record rather than refuse, per contributing invariant 11's
+ * first branch: a label is orientation, and refusing a start over its length
+ * would cost the model a round trip and buy no safety. What was removed is
+ * reported so the Run can carry {@link labelShortenedDiagnostic}.
+ */
+export function boundRunLabel(description: string): {
+  readonly label: string;
+  readonly droppedBytes: number;
+} {
+  const bounded = boundOneLineText(description, RUN_LABEL_MAX_BYTES);
+  return { label: bounded.text, droppedBytes: bounded.droppedBytes };
+}
+
+/**
+ * What a Run says about having had its label shortened.
+ *
+ * The *record* half of truncate-and-record. It travels with the start or
+ * resume request and is emitted onto the Run through the same observation
+ * intake every other diagnostic uses, so the stored Result says the label was
+ * shortened and by how much rather than the shortening being invisible.
+ *
+ * The category is `other` because none of the specific ones is true: nothing
+ * a backend, a transport, a queue, or a Profile did caused it. The model's
+ * description was long.
+ */
+export function labelShortenedDiagnostic(droppedBytes: number): RunDiagnostic {
+  return runDiagnostic(
+    "other",
+    `the Run's label was shortened to ${RUN_LABEL_MAX_BYTES} bytes; ${droppedBytes} bytes were removed`,
+  );
+}
 
 /** A wall-clock instant in milliseconds. */
 const Instant = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
@@ -36,6 +90,14 @@ export const RunIdentity = Schema.Struct({
   backendId: BackendId,
   /** The Profile's name, as the caller asked for it. */
   agent: Schema.String,
+  /**
+   * The Run's label: what the caller said this Run is for.
+   *
+   * Bounded at admission by {@link boundRunLabel}, so what is stored here is
+   * one line of at most {@link RUN_LABEL_MAX_BYTES}. The field keeps the name
+   * a caller uses — `description` is what the tool schema calls it — while
+   * every surface that shows it calls it the label.
+   */
   description: Schema.String,
 });
 

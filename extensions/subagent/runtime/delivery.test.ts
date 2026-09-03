@@ -60,7 +60,7 @@ test("a settled Run produces exactly one notification, built from the stored res
   assert.equal(notification.subagentId, outcome.subagentId);
   assert.equal(notification.status, "completed");
   assert.equal(notification.agent, "explore");
-  assert.equal(notification.description, "look around");
+  assert.equal(notification.label, "look around");
   // A preview, and a pointer to the rest.
   assert.equal(notification.preview, "the answer, at some length");
   assert.equal(notification.retrieveWith, "agent_result");

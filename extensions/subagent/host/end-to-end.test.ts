@@ -312,7 +312,8 @@ test("a cancelled Run still notifies, and its notice is terse", async (t) => {
   assert.equal(sent.length, 1);
   assert.equal(
     sent[0].message.content,
-    `Subagent explore (${ids.subagentId}), run ${ids.runId} was cancelled (requested).`,
+    `Subagent "look around" was cancelled in 0.0s (requested).\n\n` +
+      `Agent: explore\nRun: ${ids.runId}\nSubagent: ${ids.subagentId}`,
   );
 });
 
@@ -333,9 +334,10 @@ test("the message the sink sends is the one the renderer can parse", async (t) =
     subagentId: subagentId(ids.subagentId),
     backendId: DEFAULT_BACKEND_ID,
     agent: RIG_RESUMABLE_PROFILE,
-    description: "look around",
+    label: "look around",
     status: "completed",
     preview: RIG_ANSWER,
+    durationMillis: 0,
     usage: {
       totals: { input: 12, output: 8, cacheRead: 0, cacheWrite: 0, cost: 0 },
       context: { tokens: 0 },

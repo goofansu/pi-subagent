@@ -7,7 +7,14 @@
  * only the model string differs. The compatibility matrix's Notification row
  * is that statement, and the golden tests below it are the proof.
  *
- * Each terminal status says a different thing, and the differences are
+ * Every notice opens the same way, whatever happened: a sentence naming the
+ * work and how long it took, then an identity block. A parent model running
+ * several Subagents reads the label to know *which* delegation finished, and
+ * reads an id only when it is about to make a tool call with one — so the
+ * label comes first and the ids come after it, rather than the reader having
+ * to map two identifiers back to an intention.
+ *
+ * Each terminal status then says a different thing, and the differences are
  * deliberate:
  *
  * - **completed** carries the bounded preview, so a model can decide whether
@@ -22,7 +29,43 @@
  */
 
 import type { RunId, RunNotification, UsageSnapshot } from "../domain/index.ts";
-import { formatTokenCount, formatTurns } from "./status.ts";
+import {
+  formatDuration,
+  formatTokenCount,
+  formatTurns,
+  runPhaseNoticeVerb,
+} from "./status.ts";
+
+/**
+ * The opening sentence: what finished, how it ended, and how long it took.
+ *
+ * The label is quoted so that a description containing a verb cannot be read
+ * as part of the runtime's own sentence. A cancelled Run's reason follows in
+ * parentheses, because a timeout and a shutdown cancel Runs nobody asked to
+ * cancel and a parent told plain `was cancelled` would conclude its own
+ * request had taken effect.
+ */
+function formatNotificationHeader(notice: RunNotification): string {
+  const reason =
+    notice.status === "cancelled" && notice.cancellationReason !== undefined
+      ? ` (${notice.cancellationReason})`
+      : "";
+  return `Subagent "${notice.label}" ${runPhaseNoticeVerb(notice.status)} in ${formatDuration(notice.durationMillis)}${reason}.`;
+}
+
+/**
+ * The three identifiers, one per line, in ownership order.
+ *
+ * Always present and always in the same place, so a model that needs the Run
+ * id for `agent_result` finds it where it found it last time.
+ */
+function formatNotificationIdentity(notice: RunNotification): string {
+  return [
+    `Agent: ${notice.agent}`,
+    `Run: ${notice.runId}`,
+    `Subagent: ${notice.subagentId}`,
+  ].join("\n");
+}
 
 /** How every notice tells a model where the rest of the answer is. */
 export function formatResultPointer(runId: RunId): string {
@@ -75,30 +118,24 @@ function withAccounting(body: string, notice: RunNotification): string {
 
 /** What the model reads when one of its Runs finishes. */
 export function formatNotificationText(notice: RunNotification): string {
-  const name = `${notice.agent} (${notice.subagentId}), run ${notice.runId}`;
+  const opening = `${formatNotificationHeader(notice)}\n\n${formatNotificationIdentity(notice)}`;
   const pointer = formatResultPointer(notice.runId);
 
   switch (notice.status) {
     case "completed": {
       const preview = notice.preview || "No output was produced.";
-      return withAccounting(
-        `Subagent ${name} completed.\n\n${preview}\n\n${pointer}`,
-        notice,
-      );
+      return withAccounting(`${opening}\n\n${preview}\n\n${pointer}`, notice);
     }
     case "failed": {
-      const reason = notice.errorMessage || "no reason reported";
+      const reason = notice.errorMessage || "none reported.";
       return withAccounting(
-        `Subagent ${name} failed: ${reason}\n\n${pointer}`,
+        `${opening}\n\nReason: ${reason}\n\n${pointer}`,
         notice,
       );
     }
-    case "cancelled": {
-      const reason =
-        notice.cancellationReason === undefined
-          ? ""
-          : ` (${notice.cancellationReason})`;
-      return withAccounting(`Subagent ${name} was cancelled${reason}.`, notice);
-    }
+    case "cancelled":
+      // The reason is in the header, so a cancelled notice has no body of its
+      // own — and no partial output either: it stays behind `agent_result`.
+      return withAccounting(opening, notice);
   }
 }

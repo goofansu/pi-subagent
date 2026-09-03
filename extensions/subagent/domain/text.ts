@@ -48,12 +48,23 @@ export function boundText(text: string, maxBytes: number): BoundedText {
 
 /**
  * The bound every one-line domain text shares: newlines collapsed, trimmed,
- * then cut to fit.
+ * then cut to fit — reporting what it removed.
  *
- * A diagnostic message, a link label, and a failed ending's fallback message
- * are all "one line, at most this many bytes", and all three were applying the
- * rule themselves. One helper means the rule cannot drift between them.
+ * A diagnostic message, a link label, a failed ending's fallback message, and
+ * a Run's label are all "one line, at most this many bytes", and all of them
+ * were applying the rule themselves. One helper means the rule cannot drift
+ * between them.
+ *
+ * The reporting form exists because one of those callers has to *say* it
+ * shortened something. Contributing invariant 11 gives a bound two honest
+ * endings — truncate and record, or refuse with a typed outcome — and a
+ * helper that returned only the text could support neither.
  */
+export function boundOneLineText(text: string, maxBytes: number): BoundedText {
+  return boundText(text.replace(/[\r\n]+/g, " ").trim(), maxBytes);
+}
+
+/** The same bound, for the callers with nothing to report. */
 export function boundOneLine(text: string, maxBytes: number): string {
-  return boundText(text.replace(/[\r\n]+/g, " ").trim(), maxBytes).text;
+  return boundOneLineText(text, maxBytes).text;
 }

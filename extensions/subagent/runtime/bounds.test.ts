@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect } from "effect";
+import { Subagents } from "../application/subagents.ts";
 import {
+  boundRunLabel,
+  byteLength,
   DIAGNOSTIC_MESSAGE_MAX_BYTES,
+  encodedResultBytes,
+  labelShortenedDiagnostic,
   RESULT_LINK_TARGET_MAX_BYTES,
   type ResultOutcome,
+  RUN_LABEL_MAX_BYTES,
   type RunObservation,
   type RunResult,
   resultLink,
@@ -19,6 +25,7 @@ import {
 } from "../testing/fakes/script.ts";
 import {
   quiesce,
+  RIG_PROFILE,
   rigRequest as request,
   type SessionRig,
   startedRun,
@@ -365,6 +372,136 @@ test("a diagnostic message and a link target are bounded where they are built", 
     encode(result.links[0]?.target ?? "") <= RESULT_LINK_TARGET_MAX_BYTES,
   );
   assertNothingWentWrong(counters);
+});
+
+/* ---------------------------------------------------------------- */
+/* The Run label bound                                               */
+/* ---------------------------------------------------------------- */
+
+/**
+ * Start a Run through the façade, which is where the label bound lives.
+ *
+ * The other tests in this file drive the supervisor directly, because the
+ * bound they are about is the supervisor's. This one is about a bound applied
+ * where a tool call becomes a request — before a Run exists — so it has to go
+ * in through the same door `agent_start` does, or it would be testing a rule
+ * nothing applies.
+ */
+function settleLabelled(
+  description: string,
+  steps: readonly FakeStep[] = [{ step: "complete" }],
+  policy: RuntimePolicy = STRESS_POLICY,
+): Promise<{
+  readonly result: RunResult;
+  readonly counters: ReturnType<SessionRig["supervisor"]["counters"]>;
+  readonly noLeaks: boolean;
+}> {
+  return withSession(
+    { testClock: true, policy, steps: [steps] },
+    (rig: SessionRig) =>
+      Effect.gen(function* () {
+        yield* Subagents.start(
+          { agent: RIG_PROFILE.name, description, prompt: "have a look" },
+          { cwd: "/work", projectTrusted: true, childDepth: 1 },
+        );
+        const [snapshot] = yield* rig.repository.list();
+        yield* untilTerminal(rig, snapshot.identity.runId);
+        return {
+          read: yield* rig.supervisor.result(snapshot.identity.runId),
+          counters: rig.supervisor.counters(),
+        };
+      }),
+  ).then(({ value, noLeaks }) => ({
+    result: resultOf(value.read),
+    counters: value.counters,
+    noLeaks,
+  }));
+}
+
+test("a label past its byte bound is collapsed to one line, cut, and recorded", async () => {
+  // Ten kilobytes with newlines in it: the shape a model produces when it
+  // pastes the brief into the label field. The label is identity, so result
+  // bounding will never remove it — which is why it has to be bounded here,
+  // before the Run exists, rather than at settlement.
+  const paragraph = `${long(40)}\n${long(40)}`;
+  const description = ` ${Array.from({ length: 125 }, () => paragraph).join("\n")} `;
+  assert.ok(byteLength(description) > 10_000);
+
+  const { result, counters, noLeaks } = await settleLabelled(description);
+
+  // One line, at the bound, cut on a character boundary.
+  assert.doesNotMatch(result.description, /[\r\n]/);
+  assert.equal(byteLength(result.description), RUN_LABEL_MAX_BYTES);
+  assert.equal(
+    result.description,
+    boundRunLabel(description).label,
+    "the stored label is not what the bound produces from the same input",
+  );
+
+  // And the loss is recorded on the Run, which is the other half of
+  // truncate-and-record: a label silently shortened is a label a reader
+  // cannot tell was shortened.
+  const removed =
+    byteLength(description.trim().replaceAll("\n", " ")) - RUN_LABEL_MAX_BYTES;
+  assert.deepEqual(result.diagnostics, [labelShortenedDiagnostic(removed)]);
+  assert.match(
+    result.diagnostics[0].message,
+    new RegExp(`shortened to ${RUN_LABEL_MAX_BYTES} bytes; ${removed} bytes`),
+  );
+
+  assertNothingWentWrong(counters);
+  assert.equal(noLeaks, true);
+});
+
+test("a label within its bound is stored whole and records nothing", async () => {
+  const { result } = await settleLabelled("look around");
+
+  assert.equal(result.description, "look around");
+  assert.deepEqual(result.diagnostics, []);
+});
+
+test("a maximal label leaves a result inside its byte budget once everything removable is cut", async () => {
+  // The reason the bound exists. A result whose every removable section has
+  // been dropped still carries identity, status, and timestamps, because
+  // bounding never removes those — so if the label were unbounded, a Run
+  // could be given one that no amount of cutting could bring inside the
+  // reservation, and the store would have to account for a result it could
+  // not shrink.
+  const items = 400;
+  const policy: RuntimePolicy = {
+    ...STRESS_POLICY,
+    projection: {
+      ...STRESS_POLICY.projection,
+      maxTranscriptItems: items,
+      maxToolEntries: items,
+      maxTextPartBytes: 200,
+    },
+  };
+
+  const { result } = await settleLabelled(
+    long(10_000),
+    [
+      ...Array.from({ length: items }, (_unused, index) =>
+        emitText(`${index}: ${long(150)}`),
+      ),
+      { step: "complete" },
+    ],
+    policy,
+  );
+
+  assert.equal(byteLength(result.description), RUN_LABEL_MAX_BYTES);
+  const stripped: RunResult = {
+    ...result,
+    finalOutput: "",
+    transcript: [],
+    tools: [],
+    links: [],
+    diagnostics: [],
+  };
+  assert.ok(
+    encodedResultBytes(stripped) <= policy.maxResultBytes,
+    `a maximal label leaves ${encodedResultBytes(stripped)} bytes against a ${policy.maxResultBytes}-byte reservation`,
+  );
 });
 
 /* ---------------------------------------------------------------- */

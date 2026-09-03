@@ -30,7 +30,12 @@
  */
 
 import { Result, Schema } from "effect";
-import { EXACT_KEYS, RunId, SubagentId } from "../domain/index.ts";
+import {
+  EXACT_KEYS,
+  RUN_LABEL_MAX_BYTES,
+  RunId,
+  SubagentId,
+} from "../domain/index.ts";
 import { formatToolInputRejected } from "../presentation/index.ts";
 
 /**
@@ -58,12 +63,23 @@ const RUN_ID = RunId.annotate({
   description: "A Run id returned by agent_start or agent_resume",
 });
 
+/**
+ * What the label's bound says to a model that reads the schema.
+ *
+ * Spelled once and appended to both description fields, because a model that
+ * learned the rule on `agent_start` and found it unstated on `agent_resume`
+ * would reasonably conclude the two differ. It states the bound *and* what
+ * happens past it: the answer is that the label is shortened, not that the
+ * call is refused, so nothing here invites a retry.
+ */
+const LABEL_BOUND_CLAUSE = `; one line, at most ${RUN_LABEL_MAX_BYTES} bytes, shortened if longer`;
+
 export const StartInputSchema = Schema.Struct({
   agent: Schema.String.annotate({
     description: "The agent to run the task",
   }),
   description: Schema.String.annotate({
-    description: "Label for this specific Run",
+    description: `Label for this specific Run${LABEL_BOUND_CLAUSE}`,
   }),
   prompt: Schema.String.annotate({ description: "The full task brief" }),
 });
@@ -73,7 +89,7 @@ export const ResumeInputSchema = Schema.Struct({
     description: "A stable Subagent id returned by agent_start",
   }),
   description: Schema.String.annotate({
-    description: "Label for this new Run",
+    description: `Label for this new Run${LABEL_BOUND_CLAUSE}`,
   }),
   prompt: Schema.String.annotate({
     description: "The full next task brief",

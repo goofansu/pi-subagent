@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import { IDENTIFIER_MAX_LENGTH } from "../domain/index.ts";
+import { IDENTIFIER_MAX_LENGTH, RUN_LABEL_MAX_BYTES } from "../domain/index.ts";
 import {
   CancelInputSchema,
   DECODE_FAILURE_MAX_CHARACTERS,
@@ -105,6 +105,22 @@ test("every field a model fills in carries a description", () => {
         `${name}.${field} has no description`,
       );
     }
+  }
+});
+
+test("T1: the label's bound is stated on both description fields", () => {
+  // A model that reads the schema should not have to discover the bound by
+  // exceeding it, and should not conclude a long label is a rejected call.
+  for (const schema of [StartInputSchema, ResumeInputSchema]) {
+    const document = toolParameters(schema) as {
+      properties: { description: { description?: string } };
+    };
+    assert.match(
+      document.properties.description.description ?? "",
+      new RegExp(
+        `^Label for this (specific|new) Run; one line, at most ${RUN_LABEL_MAX_BYTES} bytes, shortened if longer$`,
+      ),
+    );
   }
 });
 

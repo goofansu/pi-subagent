@@ -27,7 +27,10 @@ import {
   type StartOutcome,
   type SubagentId,
 } from "../domain/index.ts";
-import { sessionRuntimeLayer } from "../runtime/composition.ts";
+import {
+  type SessionServices,
+  sessionRuntimeLayer,
+} from "../runtime/composition.ts";
 import {
   createRuntimeCounters,
   probeIsClear,
@@ -120,7 +123,13 @@ export function withSession<A>(
   options: SessionRigOptions,
   // The body may require a `Scope`: it is the Session's own, so anything a
   // test acquires there is released by the same close the probe is read after.
-  body: (rig: SessionRig) => Effect.Effect<A, never, Scope.Scope>,
+  // It may also require any Session service, because it runs inside the same
+  // layer the rig's own fields come from — which is what lets a test drive the
+  // `Subagents` façade rather than the supervisor when the path under test
+  // starts at a tool call.
+  body: (
+    rig: SessionRig,
+  ) => Effect.Effect<A, never, Scope.Scope | SessionServices>,
 ): Promise<SessionOutcome<A>> {
   const create =
     options.resumable === false

@@ -22,7 +22,7 @@
 import { Schema } from "effect";
 import { BackendId, RunId, SubagentId } from "./ids.ts";
 import { CancellationReason, TerminalRunPhase } from "./phases.ts";
-import type { RunResult } from "./result.ts";
+import { RUN_LABEL_MAX_BYTES, type RunResult } from "./result.ts";
 import { boundOneLine } from "./text.ts";
 import { UsageSnapshot } from "./usage.ts";
 
@@ -43,7 +43,15 @@ export const RunNotification = Schema.Struct({
   subagentId: SubagentId,
   backendId: BackendId,
   agent: Schema.String,
-  description: Schema.String,
+  /**
+   * The Run's label: the bounded one-line description the caller gave.
+   *
+   * Bounded at admission, so this is already the stored Result's
+   * `description`. The bound is applied again here rather than trusted,
+   * because the invariant a notice depends on should not depend on a call
+   * site having remembered it.
+   */
+  label: Schema.String,
   status: TerminalRunPhase,
   /** One line of the final output, or empty when there was none. */
   preview: Schema.String,
@@ -51,6 +59,13 @@ export const RunNotification = Schema.Struct({
   errorMessage: Schema.optionalKey(Schema.String),
   /** Present exactly when the status is `cancelled`. */
   cancellationReason: Schema.optionalKey(CancellationReason),
+  /**
+   * How long the Run took, settled instant less started instant.
+   *
+   * The same reading the widget's settled row and the result card use, so the
+   * notice, the row, and the card print one number.
+   */
+  durationMillis: Schema.Number,
   /** What the Run spent, for the notice's accounting line. */
   usage: UsageSnapshot,
   /** The model the Run reported, when it reported one. */
@@ -73,7 +88,7 @@ export function toRunNotification(result: RunResult): RunNotification {
     subagentId: result.subagentId,
     backendId: result.backendId,
     agent: result.agent,
-    description: result.description,
+    label: boundOneLine(result.description, RUN_LABEL_MAX_BYTES),
     status: result.status,
     preview: boundOneLine(result.finalOutput, NOTIFICATION_PREVIEW_MAX_BYTES),
     ...(result.errorMessage === undefined
@@ -87,6 +102,7 @@ export function toRunNotification(result: RunResult): RunNotification {
     ...(result.cancellationReason === undefined
       ? {}
       : { cancellationReason: result.cancellationReason }),
+    durationMillis: Math.max(0, result.settledAt - result.startedAt),
     usage: result.usage,
     ...(result.model === undefined ? {} : { model: result.model }),
     retrieveWith: "agent_result",

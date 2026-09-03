@@ -14,7 +14,7 @@
  * because a reader watching a row wants to know the difference.
  */
 
-import type { RunPhase } from "../domain/index.ts";
+import type { RunPhase, TerminalRunPhase } from "../domain/index.ts";
 
 /** The theme colours presentation may select. */
 export type Tone = "warning" | "success" | "error";
@@ -74,6 +74,29 @@ export function runPhaseTone(phase: RunPhase): Tone {
 /** The one word a collapsed line says about a Run in this phase. */
 export function runPhaseVerb(phase: RunPhase): string {
   return PHASE_PRESENTATION[phase].verb;
+}
+
+/**
+ * The verb a completion notice's opening sentence uses.
+ *
+ * A second dictionary rather than a sixth column on the phase table, and
+ * keyed by the *terminal* phases alone, because only a terminal Run has a
+ * notice: a table that had to invent a sentence for `running` would be
+ * inviting one to be written.
+ *
+ * It differs from {@link runPhaseVerb} in one entry. A column reads
+ * `cancelled` because a column is a label; a sentence reads `was cancelled`
+ * because a Run does not cancel itself, and the notice is the one surface
+ * that says so in prose.
+ */
+const NOTICE_VERB: { readonly [P in TerminalRunPhase]: string } = {
+  completed: "completed",
+  failed: "failed",
+  cancelled: "was cancelled",
+};
+
+export function runPhaseNoticeVerb(phase: TerminalRunPhase): string {
+  return NOTICE_VERB[phase];
 }
 
 /** A Run's phase in words, with the time it took where that is meaningful. */

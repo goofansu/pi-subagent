@@ -19,7 +19,12 @@
  */
 
 import { Effect } from "effect";
-import type { RunId } from "../domain/index.ts";
+import {
+  boundRunLabel,
+  labelShortenedDiagnostic,
+  type RunDiagnostic,
+  type RunId,
+} from "../domain/index.ts";
 import {
   type CollectedRuns,
   formatCancelOutcomes,
@@ -65,6 +70,28 @@ export type SubagentsServices =
   | RunRepository;
 
 /**
+ * Bound a caller's description into the Run's label, before admission.
+ *
+ * This is where tool input becomes a supervisor request, which is the last
+ * point before a Run exists — so it is where the label bound belongs. A
+ * shortened label is recorded rather than refused, and the diagnostic travels
+ * with the request so the Run's own projection carries it and the stored
+ * Result says the label was shortened.
+ */
+function labelled(description: string): {
+  readonly description: string;
+  readonly diagnostics?: readonly RunDiagnostic[];
+} {
+  const { label, droppedBytes } = boundRunLabel(description);
+  return {
+    description: label,
+    ...(droppedBytes === 0
+      ? {}
+      : { diagnostics: [labelShortenedDiagnostic(droppedBytes)] }),
+  };
+}
+
+/**
  * Deduplicate while keeping the caller's order.
  *
  * An id named twice produces one observation, which is v1's behaviour and the
@@ -104,7 +131,7 @@ const start = (
     const profiles = yield* ProfileCatalog;
     const outcome = yield* supervisor.start({
       agent: input.agent,
-      description: input.description,
+      ...labelled(input.description),
       prompt: input.prompt,
       cwd: facts.cwd,
       childDepth: facts.childDepth,
@@ -125,7 +152,7 @@ const resume = (
     const supervisor = yield* SubagentSupervisor;
     const outcome = yield* supervisor.resume({
       subagentId: input.id,
-      description: input.description,
+      ...labelled(input.description),
       prompt: input.prompt,
     });
     return {

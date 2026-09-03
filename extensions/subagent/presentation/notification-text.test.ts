@@ -24,7 +24,8 @@ test("N1/N2: a completed notice carries a bounded preview and the result pointer
 
   assert.equal(
     formatNotificationText(notice),
-    "Subagent explore (subagent-1), run run-1 completed.\n\n" +
+    'Subagent "look around" completed in 12.4s.\n\n' +
+      "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
       "done\n\n" +
       "Use agent_result with id run-1 to retrieve the full result.",
   );
@@ -47,7 +48,8 @@ test("the notice is identical whichever backend ran the Run", () => {
   assert.deepEqual(new Set(texts).size, 1);
   assert.equal(
     texts[0],
-    "Subagent explore (subagent-1), run run-1 completed.\n\n" +
+    'Subagent "look around" completed in 12.4s.\n\n' +
+      "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
       "done\n\n" +
       "Use agent_result with id run-1 to retrieve the full result.",
   );
@@ -56,7 +58,7 @@ test("the notice is identical whichever backend ran the Run", () => {
 test("a completed Run with no output says so rather than showing a blank", () => {
   assert.match(
     formatNotificationText(fixtureNotification({})),
-    /completed\.\n\nNo output was produced\.\n\n/,
+    /Subagent: subagent-1\n\nNo output was produced\.\n\n/,
   );
 });
 
@@ -67,7 +69,9 @@ test("a long answer is previewed rather than delivered", () => {
 
   assert.equal(byteLength(notice.preview), NOTIFICATION_PREVIEW_MAX_BYTES);
   const text = formatNotificationText(notice);
-  assert.ok(text.length < NOTIFICATION_PREVIEW_MAX_BYTES + 200);
+  // The ceiling is the preview's bound plus the fixed sections: a header, a
+  // three-line identity block, a pointer, and the label's own 200 bytes.
+  assert.ok(text.length < NOTIFICATION_PREVIEW_MAX_BYTES + 400);
   assert.match(text, /Use agent_result with id run-1/);
 });
 
@@ -79,7 +83,9 @@ test("N3: a failed notice carries the primary error and the pointer, and no outp
 
   assert.equal(
     formatNotificationText(notice),
-    "Subagent explore (subagent-1), run run-1 failed: the backend refused\n\n" +
+    'Subagent "look around" failed in 12.4s.\n\n' +
+      "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
+      "Reason: the backend refused\n\n" +
       "Use agent_result with id run-1 to retrieve the full result.",
   );
 });
@@ -94,14 +100,14 @@ test("N1: a failed notice bounds a pathological error message", () => {
     NOTIFICATION_ERROR_MAX_BYTES,
   );
   assert.ok(
-    formatNotificationText(notice).length < NOTIFICATION_ERROR_MAX_BYTES + 200,
+    formatNotificationText(notice).length < NOTIFICATION_ERROR_MAX_BYTES + 400,
   );
 });
 
 test("a failed Run that reported no reason says that it reported none", () => {
   assert.match(
     formatNotificationText(fixtureNotification({ ending: failedEnding() })),
-    /run run-1 failed: no reason reported/,
+    /failed in 12\.4s\.\n\nAgent: explore\nRun: run-1\nSubagent: subagent-1\n\nReason: none reported\./,
   );
 });
 
@@ -113,7 +119,8 @@ test("a cancelled notice is terse, names its reason, and carries no partial outp
 
   assert.equal(
     formatNotificationText(notice),
-    "Subagent explore (subagent-1), run run-1 was cancelled (requested).",
+    'Subagent "look around" was cancelled in 12.4s (requested).\n\n' +
+      "Agent: explore\nRun: run-1\nSubagent: subagent-1",
   );
 });
 
@@ -185,7 +192,8 @@ test("accounting omits absent and undisplayed usage facts", () => {
   // accounting at all — and a model name alone is not accounting.
   assert.equal(
     formatNotificationText(cancelled),
-    "Subagent explore (subagent-1), run run-1 was cancelled (requested).",
+    'Subagent "look around" was cancelled in 12.4s (requested).\n\n' +
+      "Agent: explore\nRun: run-1\nSubagent: subagent-1",
   );
 });
 

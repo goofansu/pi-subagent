@@ -84,21 +84,36 @@ export function openBudgetExceededMessage(millis: number): string {
   return `the backend did not open within ${millis}ms`;
 }
 
+/**
+ * Diagnostics the caller already has about a request it is making.
+ *
+ * The label bound is applied where tool input becomes a request, which is
+ * before any Run exists — so the record half of truncate-and-record has to
+ * travel with the request and be emitted onto the Run once there is one.
+ * Carried here rather than through a channel of its own, because the Run's
+ * observation intake is already where every diagnostic reaches a projection.
+ */
+type AdmissionDiagnostics = readonly RunDiagnostic[];
+
 /** What `agent_start` is given. The four fixed facts come from the caller. */
 export interface StartRequest {
   readonly agent: string;
+  /** The Run's label, already bounded by the caller. */
   readonly description: string;
   readonly prompt: string;
   readonly cwd: string;
   readonly childDepth: number;
   readonly projectTrusted: boolean;
   readonly parentModel?: ParentModel;
+  readonly diagnostics?: AdmissionDiagnostics;
 }
 
 export interface ResumeRequest {
   readonly subagentId: SubagentId;
+  /** The Run's label, already bounded by the caller. */
   readonly description: string;
   readonly prompt: string;
+  readonly diagnostics?: AdmissionDiagnostics;
 }
 
 /** Settings that are not bounds, so they are not the runtime policy. */
@@ -289,6 +304,7 @@ const makeSupervisor = (settings: SessionSettings) =>
       identity: RunIdentity,
       prompt: string,
       startedAt: number,
+      admissionDiagnostics: AdmissionDiagnostics = [],
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
@@ -322,6 +338,15 @@ const makeSupervisor = (settings: SessionSettings) =>
               (handle) =>
                 Effect.gen(function* () {
                   record.run = handle;
+                  // Emitted through the Run's own intake, before intake can
+                  // be sealed, so an admission diagnostic reaches the
+                  // projection by the path every other diagnostic takes.
+                  for (const diagnostic of admissionDiagnostics) {
+                    yield* handle.intake.emit({
+                      kind: "diagnostic",
+                      diagnostic,
+                    });
+                  }
                   yield* Deferred.succeed(started, undefined);
                 }),
             );
@@ -528,7 +553,13 @@ const makeSupervisor = (settings: SessionSettings) =>
           ...current,
           running: new Set(current.running).add(subagentId),
         }));
-        yield* forkRun(record, identity, request.prompt, startedAt);
+        yield* forkRun(
+          record,
+          identity,
+          request.prompt,
+          startedAt,
+          request.diagnostics,
+        );
 
         return { outcome: "started", runId, subagentId } as const;
       });
@@ -638,7 +669,13 @@ const makeSupervisor = (settings: SessionSettings) =>
         };
         const startedAt = yield* now;
         yield* repository.publish(identity, startedAt);
-        yield* forkRun(record, identity, request.prompt, startedAt);
+        yield* forkRun(
+          record,
+          identity,
+          request.prompt,
+          startedAt,
+          request.diagnostics,
+        );
 
         return { outcome: "started", runId, subagentId: record.id } as const;
       });
