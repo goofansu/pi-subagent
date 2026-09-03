@@ -17,6 +17,34 @@ defects below are where the interesting part goes.
 
 ---
 
+## What is not available while the soak runs
+
+**Only Pi-backed Profiles work.** v2 has one backend until M5 adds Claude and
+M6 adds Codex, so a Profile naming either is skipped at Session start with a
+diagnostic and does not appear in `/agents`. Renaming `harness:` to `backend:`
+does not help — the field name becomes valid and the backend still does not
+exist.
+
+Measured against this machine's own agents directory on 2026-09-03:
+
+| Profile | Under v2 |
+| --- | --- |
+| `explore` | Runs. No backend field, and its pinned model is in the catalogue. |
+| `librarian` | Runs. Same. |
+| `implementer` | **Unavailable.** Names Codex; M6. |
+| `spec-reviewer` | **Unavailable.** Names Claude; M5. |
+| `standards-reviewer` | **Unavailable.** Names Claude; M5. |
+
+So the soak is a soak of *Pi delegation*, and three of five specialists are off
+the table for its duration. That is worth deciding about rather than
+discovering: if those three are load-bearing for daily work, the honest options
+are to soak in shorter stretches with `make dogfood-v1` in between, or to hold
+the soak until M5 lands and Claude is available again. What is not an option is
+running both at once — v1 and v2 register the same six tool names, so a Pi
+process with both would offer the model each tool twice.
+
+---
+
 ## Tally
 
 | Operation | Occurrences | Distinct days | Exit gate wants |
