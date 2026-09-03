@@ -24,7 +24,7 @@ import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
  * to alter settlement.
  */
 
-const untilDelivered = (rig: SessionRig, count: number): Effect.Effect<void> =>
+const untilHandedOff = (rig: SessionRig, count: number): Effect.Effect<void> =>
   Effect.gen(function* () {
     for (;;) {
       if (rig.sink.received().length >= count) return;
@@ -38,7 +38,7 @@ test("a settled Run produces exactly one notification, built from the stored res
     (rig) =>
       Effect.gen(function* () {
         const started = startedRun(yield* rig.supervisor.start(request()));
-        yield* untilDelivered(rig, 1);
+        yield* untilHandedOff(rig, 1);
         // Let anything that would deliver a second time do so.
         for (let step = 0; step < 10; step += 1) yield* Effect.yieldNow;
         return {
@@ -73,13 +73,13 @@ test("a settled Run produces exactly one notification, built from the stored res
 
 test("a result is readable before its notification is pushed", async () => {
   // Storage precedes notification, so a model that reacts to a notification
-  // the instant it lands never finds the result missing.
+  // the instant it arrives never finds the result missing.
   const { value: outcome } = await withSession(
     { steps: [[emitText("done")]] },
     (rig) =>
       Effect.gen(function* () {
         const started = startedRun(yield* rig.supervisor.start(request()));
-        yield* untilDelivered(rig, 1);
+        yield* untilHandedOff(rig, 1);
         return yield* rig.supervisor.result(started.runId);
       }),
   );
@@ -102,7 +102,7 @@ test("a sink that fails once is retried on the clock and delivers one notificati
         yield* untilTerminal(rig, started.runId);
         // The retry is waiting on the runtime clock, not on real time.
         yield* TestClock.adjust(1_001);
-        yield* untilDelivered(rig, 1);
+        yield* untilHandedOff(rig, 1);
         return {
           received: rig.sink.received().length,
           attempts: rig.sink.attempts(),
@@ -154,8 +154,8 @@ test("a sink that always fails exhausts its budget, releases the pin, and leaves
   assert.equal(outcome.received, 0);
   assert.equal(outcome.attempts, 3);
   assert.deepEqual(outcome.exhausted, [outcome.runId]);
-  // The pin goes even when the notification never lands, or the result would
-  // be one nothing could ever evict.
+  // The pin goes even when no push was ever accepted, or the result would be
+  // one nothing could ever evict.
   assert.ok(!outcome.pins.includes("delivery"));
   assert.equal(outcome.counters.deliveryFailures, 1);
   // And the result is still there to be asked for.
@@ -168,14 +168,14 @@ test("a missed wake-up is recovered by the sweep, and nothing is delivered twice
     (rig) =>
       Effect.gen(function* () {
         const started = startedRun(yield* rig.supervisor.start(request()));
-        yield* untilDelivered(rig, 1);
+        yield* untilHandedOff(rig, 1);
         // The sweep runs again over a store that has already been announced.
         yield* rig.delivery.sweep();
         yield* rig.delivery.sweep();
         return {
           received: rig.sink.received().length,
           attempts: rig.sink.attempts(),
-          delivered: yield* rig.delivery.delivered(),
+          handedOff: yield* rig.delivery.handedOff(),
           runId: started.runId,
         };
       }),
@@ -183,7 +183,7 @@ test("a missed wake-up is recovered by the sweep, and nothing is delivered twice
 
   assert.equal(outcome.received, 1);
   assert.equal(outcome.attempts, 1);
-  assert.deepEqual(outcome.delivered, [outcome.runId]);
+  assert.deepEqual(outcome.handedOff, [outcome.runId]);
 });
 
 test("a sweep delivers a stored result whose wake-up never arrived", async () => {
@@ -267,7 +267,7 @@ test("a retry during another Run's settlement changes nothing about either Run",
         yield* Deferred.succeed(hold, undefined);
         yield* untilTerminal(rig, second.runId);
         yield* TestClock.adjust(1_001);
-        yield* untilDelivered(rig, 2);
+        yield* untilHandedOff(rig, 2);
 
         return {
           received: rig.sink
@@ -304,14 +304,14 @@ test("after shutdown, an undelivered notification is dropped rather than queued"
         yield* rig.delivery.sweep();
         return {
           received: rig.sink.received().length,
-          delivered: yield* rig.delivery.delivered(),
+          handedOff: yield* rig.delivery.handedOff(),
           stored: yield* rig.store.stored(),
         };
       }),
   );
 
   assert.equal(outcome.received, 0);
-  assert.deepEqual(outcome.delivered, []);
+  assert.deepEqual(outcome.handedOff, []);
   // The store was cleared, so there is nothing for a sweep to find either.
   assert.deepEqual(outcome.stored, []);
 });

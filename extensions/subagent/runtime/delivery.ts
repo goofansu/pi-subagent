@@ -17,7 +17,16 @@
  * The sweep exists because a wake-up can be missed — a fiber interrupted
  * between publication and delivery, a subscription that dropped an event — and
  * the store is the source of truth that makes recovery possible: whatever is
- * stored, terminal, and not in the delivered set has not been announced.
+ * stored, terminal, and not in the handed-off set has not been announced.
+ *
+ * **A push the host accepted is not a notice the model has read**, and the
+ * names here say so. Delivery knows three states — pending, handed off,
+ * exhausted — and *handed off* is the strongest of them: the host took the
+ * message. Whether that message ever reached the conversation is the Session
+ * push sink's fact and nobody else's, so this file has no word for it, and a
+ * boundary rule fails the suite if the sink's vocabulary appears here. A
+ * reader who found it would conclude that an accepted push means the model
+ * has the notice, which is the one wrong conclusion this module can cause.
  */
 
 import { Context, Effect, Layer, Ref } from "effect";
@@ -30,7 +39,7 @@ import type { RuntimeCounters } from "./counters.ts";
 import type { RuntimePolicy } from "./policy.ts";
 import { ResultStore } from "./result-store.ts";
 
-/** Why a push did not land. Retryable by definition; nothing else is. */
+/** Why the host would not take the message. Retryable by definition. */
 export interface NotificationPushFailure {
   readonly reason: string;
 }
@@ -54,17 +63,17 @@ interface DeliveryState {
    *
    * Claimed *before* the push, and kept whatever the push did, because a Run
    * that was announced and a Run whose budget ran out are equally finished as
-   * far as delivery is concerned. `delivered` says which of the two it was.
+   * far as delivery is concerned. `handedOff` says which of the two it was.
    */
   readonly claimed: ReadonlySet<RunId>;
-  /** Ids that actually landed. */
-  readonly delivered: ReadonlySet<RunId>;
+  /** Ids the host accepted the message for. What happens to it next is not ours. */
+  readonly handedOff: ReadonlySet<RunId>;
   readonly stopped: boolean;
 }
 
 const EMPTY_DELIVERY: DeliveryState = {
   claimed: new Set(),
-  delivered: new Set(),
+  handedOff: new Set(),
   stopped: false,
 };
 
@@ -122,17 +131,17 @@ const makeDelivery = (
           yield* store.releasePin(runId, "delivery");
           return;
         }
-        const landed = yield* push(toRunNotification(stored.result));
-        if (landed) {
+        const handedOff = yield* push(toRunNotification(stored.result));
+        if (handedOff) {
           yield* Ref.update(state, (current) => ({
             ...current,
-            delivered: new Set(current.delivered).add(runId),
+            handedOff: new Set(current.handedOff).add(runId),
           }));
         } else {
           counters.count("deliveryFailures");
         }
-        // Either way the pin goes: a result held open for a notification that
-        // is never going to land is a result nothing can ever evict.
+        // Either way the pin goes: a result held open for a notification the
+        // host will never take is a result nothing can ever evict.
         yield* store.releasePin(runId, "delivery");
       });
 
@@ -160,18 +169,18 @@ const makeDelivery = (
       /**
        * Stop delivering, at shutdown.
        *
-       * A notification that has not landed is dropped rather than queued: the
-       * next Session's model did not start these Runs.
+       * A notification the host has not taken is dropped rather than queued:
+       * the next Session's model did not start these Runs.
        */
       stop: (): Effect.Effect<void> =>
         Ref.update(state, (current) => ({ ...current, stopped: true })),
-      /** Ids whose notification landed. */
-      delivered: (): Effect.Effect<readonly RunId[]> =>
-        Effect.map(Ref.get(state), (current) => [...current.delivered]),
+      /** Ids whose notification the host accepted. Not ids whose notice arrived. */
+      handedOff: (): Effect.Effect<readonly RunId[]> =>
+        Effect.map(Ref.get(state), (current) => [...current.handedOff]),
       /** Ids this Session gave up announcing, after exhausting the budget. */
       exhausted: (): Effect.Effect<readonly RunId[]> =>
         Effect.map(Ref.get(state), (current) =>
-          [...current.claimed].filter((runId) => !current.delivered.has(runId)),
+          [...current.claimed].filter((runId) => !current.handedOff.has(runId)),
         ),
     };
   });

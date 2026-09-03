@@ -95,6 +95,16 @@ export interface BoundaryGraph {
   readonly widgetFile: string;
   /** The Session push sink, which owns notification delivery and landing. */
   readonly pushSinkFile: string;
+  /**
+   * The delivery module and its test, which may not say what only the sink
+   * knows.
+   *
+   * Two files rather than one, because the vocabulary a maintainer reads is as
+   * much in the test's comments as in the module's: a test asserting that a
+   * push "lands" would teach the wrong reading of `handedOff()` just as
+   * effectively as a doc comment would.
+   */
+  readonly deliveryFiles: readonly string[];
   /** Test helpers, which are a test boundary and may run Effects. */
   readonly testingRoot: string;
   /** The checker itself, excluded from the legacy-name scan. */
@@ -176,6 +186,22 @@ const productionGraph: BoundaryGraph = {
     "host",
     "push-sink.ts",
   ),
+  deliveryFiles: [
+    path.join(
+      repositoryRoot,
+      "extensions",
+      "subagent",
+      "runtime",
+      "delivery.ts",
+    ),
+    path.join(
+      repositoryRoot,
+      "extensions",
+      "subagent",
+      "runtime",
+      "delivery.test.ts",
+    ),
+  ],
   testingRoot: path.join(repositoryRoot, "extensions", "subagent", "testing"),
   checkerFile,
 };
@@ -378,6 +404,22 @@ function isHostPackage(specifier: string): boolean {
  * absence of a dependency.
  */
 const SECOND_SCHEMA_LIBRARY = "typebox";
+
+/**
+ * The word only the Session push sink may say.
+ *
+ * *Handed off* means the host accepted the message; *landed* means
+ * `message_start` carried it into the conversation. Delivery can observe the
+ * first and cannot observe the second, so the delivery module saying "landed"
+ * would be a module claiming knowledge it does not have — and the reader who
+ * believed it would treat a successful push as a notice the model has read.
+ * See docs/v2-simplify/notification-semantics.md §1.
+ *
+ * Inflections are covered because the confusion is in the concept and not in
+ * the suffix: "the notice lands", "an unlanded push", and "on landing" all
+ * assert the same thing the sink alone can assert.
+ */
+const LANDING_VOCABULARY = /\b(un)?land(ed|ing|ings|s)?\b/i;
 
 /**
  * The only files that may name a backend or a fake.
@@ -1146,6 +1188,23 @@ export function findBoundaryViolations(
     }
   }
 
+  // 19. Delivery does not say "landed". It knows pending, handed off, and
+  //     exhausted; the Session push sink knows the rest. This is a scan for a
+  //     word rather than an import check because the mistake it prevents is a
+  //     mistake of reading: a `handedOff` set introduced by a comment about
+  //     landing is a set whose next reader treats an accepted push as a notice
+  //     the model has read. The push sink's own `hasLanded`, `landed`,
+  //     `unlanded`, and `onLanding` are correct and are not covered.
+  for (const file of graph.deliveryFiles) {
+    if (!fs.existsSync(file)) continue;
+    const source = fs.readFileSync(file, "utf8");
+    const found = LANDING_VOCABULARY.exec(source);
+    if (!found) continue;
+    violations.add(
+      `${describe(file)} says "${found[0]}", and only the Session push sink may say whether a notice landed`,
+    );
+  }
+
   return [...violations].sort();
 }
 
@@ -1236,6 +1295,22 @@ function fixtureGraph(
       "host",
       "push-sink.ts",
     ),
+    deliveryFiles: [
+      path.join(
+        fixtureRoot,
+        "extensions",
+        "subagent",
+        "runtime",
+        "delivery.ts",
+      ),
+      path.join(
+        fixtureRoot,
+        "extensions",
+        "subagent",
+        "runtime",
+        "delivery.test.ts",
+      ),
+    ],
     testingRoot: path.join(fixtureRoot, "extensions", "subagent", "testing"),
   };
   return {
@@ -1784,6 +1859,61 @@ test("the widget importing the push sink or delivery is rejected", (t) => {
     `${describe(path.join(graph.hostRoot, "widget.ts"))} imports ${describe(path.join(graph.hostRoot, "push-sink.ts"))}, and the widget reads landing facts rather than owning delivery`,
     `${describe(path.join(graph.hostRoot, "widget.ts"))} imports ${describe(path.join(graph.runtimeRoot, "delivery.ts"))}, and the widget reads landing facts rather than owning delivery`,
   ]);
+});
+
+test('the delivery module saying "landed" is rejected, and the push sink saying it is not', (t) => {
+  const { graph, write } = fixtureGraph(t, "delivery-landing-vocabulary");
+  write("extensions/subagent/index.ts", "export const entry = 1;\n");
+  // The sink is the one owner of the word, so its whole landing API is
+  // written out here: a rule that fired on this file would be a rule that
+  // took the vocabulary away from the component that has it.
+  write(
+    "extensions/subagent/host/push-sink.ts",
+    [
+      "export const hasLanded = () => false;",
+      "export const landed = () => [];",
+      "export const unlanded = () => [];",
+      "export const onLanding = () => () => {};",
+      "",
+    ].join("\n"),
+  );
+  write(
+    "extensions/subagent/runtime/delivery.ts",
+    [
+      "/** Ids that actually landed. */",
+      "export const handedOff = () => [];",
+      "",
+    ].join("\n"),
+  );
+  write(
+    "extensions/subagent/runtime/delivery.test.ts",
+    [
+      "// A push that is accepted lands, eventually.",
+      "export const check = 1;",
+      "",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findBoundaryViolations(graph), [
+    `${describe(path.join(graph.runtimeRoot, "delivery.test.ts"))} says "lands", and only the Session push sink may say whether a notice landed`,
+    `${describe(path.join(graph.runtimeRoot, "delivery.ts"))} says "landed", and only the Session push sink may say whether a notice landed`,
+  ]);
+});
+
+test("delivery's own three states are not landing vocabulary", (t) => {
+  const { graph, write } = fixtureGraph(t, "delivery-handoff-vocabulary");
+  write("extensions/subagent/index.ts", "export const entry = 1;\n");
+  write(
+    "extensions/subagent/runtime/delivery.ts",
+    [
+      "/** pending, handed off, exhausted — and nothing finer. */",
+      "export const handedOff = () => [];",
+      "export const exhausted = () => [];",
+      "",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findBoundaryViolations(graph), []);
 });
 
 test("a managed runtime or a signal outside the host module is rejected", (t) => {

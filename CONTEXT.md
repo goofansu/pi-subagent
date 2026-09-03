@@ -114,7 +114,10 @@ follow-up message. It identifies both the owning Subagent and the specific Run,
 orients the model, and points at `agent_result` by Run id; it is not the Result
 itself. **Pushed is not landed**: Pi may hold a follow-up while the model is
 mid-turn, and if an interrupt discards it the notice is pushed again once the
-agent settles. One landing per Notification is the invariant.
+agent settles. One landing per Notification is the invariant. The four states a
+notice can be in — **handed off**, **landed**, **lost after hand-off**,
+**exhausted** — are defined under **Delivery sweep**, each with the one
+component that decides it.
 
 **Wait** — `agent_wait` observes terminality only. It returns Run identity and
 terminal phase, never output, and neither suppresses Notifications nor touches
@@ -305,6 +308,29 @@ succeeded or exhausted its budget.
 **Delivery sweep** — a pass comparing stored terminal results against what has
 been announced, delivering anything missed. It is why a lost wake-up costs one
 extra pass rather than a Notification.
+
+The four words for where a Notification has got to. Each is decided by exactly
+one component, and no component may use a word for a state it cannot observe;
+[the notification semantics](docs/v2-simplify/notification-semantics.md) is the
+table, and a boundary rule keeps *landed* out of `runtime/delivery.ts`.
+
+**Handed off** — Pi's `sendMessage` accepted the custom message and now holds
+it. Decided by `CompletionDelivery`, from the sink's push result. It is the
+strongest thing delivery knows and it is not a landing: delivery releases the
+stored Result's pin here, on the strength of having stored the Result first.
+
+**Landed** — `message_start` carried the notice into the conversation, so the
+model has it. Decided by the **Session push sink** alone, and terminal: a
+landed notice is never pushed again. See **Landing** for the mechanism.
+
+**Lost after hand-off** — a host turn was aborted while the message was queued
+and Pi discarded it. Decided by the Session push sink, from `agent_end` and
+turn-abort evidence. Re-pushed exactly once, when the parent agent settles.
+
+**Exhausted** — the retry budget ran out with no hand-off accepted; three
+attempts a second apart by default. Decided by `CompletionDelivery`, from its
+own retry loop, and terminal for delivery. The stored Result is untouched, so
+`agent_result` still answers.
 
 **Runtime probe** — the test-facing count of what is still alive: live Run
 fibers, live reducer fibers, open observation queues, open mailboxes,
