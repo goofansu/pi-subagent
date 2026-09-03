@@ -1,6 +1,6 @@
 # pi-subagent v2 roadmap
 
-**Status:** Accepted. **M4 is complete apart from its daily-driver soak** (2026-09-03); M5 is next once the soak closes.  
+**Status:** Accepted. **M5 is complete** (2026-09-03). M4 remains complete apart from its daily-driver soak, which M5 did not close and was never M5's to close; M6 is next.  
 **Strategy:** Rewrite the execution architecture inside the existing `pi-subagent` product  
 **Delivery model:** Gate-driven milestones, not a date-driven big-bang rewrite
 
@@ -91,7 +91,7 @@ flowchart TD
 | M2 ✅     | Scoped Effect supervisor and central projection    | All lifecycle and race tests pass against fakes — **passed**, see [the M2 exit gate](m2-exit-gate.md) |
 | M3 ✅     | Complete fake-backed product vertical slice        | Actual host handlers, UI, delivery, and shutdown work end to end — **passed**, see [the M3 exit gate](m3-exit-gate.md) |
 | M4 ⏳     | Native Pi backend and product dogfood              | Pi passes conformance and v2 is usable as the daily driver — everything **passed** except the soak, see [the M4 exit gate](m4-exit-gate.md) and [the soak record](soak.md) |
-| M5        | Claude adapter                                     | Claude fits without generic lifecycle changes                    |
+| M5 ✅     | Claude adapter                                      | Claude fits without generic lifecycle changes — **passed**, see [the M5 exit gate](m5-exit-gate.md) |
 | M6        | Codex adapter                                      | Codex fits without generic lifecycle changes                     |
 | M7        | v2 becomes the sole implementation                 | Compatibility, soak, release, and deletion gates pass            |
 
@@ -451,6 +451,13 @@ Any requested change outside `backend/claude/` must be classified as one of:
 - Resume does not charge prior conversation usage to the new Run.
 - Provider replay does not create duplicate transcript items or usage.
 - The generic Run lifecycle and result model require no Claude-specific branch.
+
+**Result:** passed on 2026-09-03. Claude passes all 37 shared scenarios with
+**no skips**, the two live gates pass, and the generic runtime, domain,
+presentation, and façade are byte-identical to M4 — the backend contract
+included. Three provider-neutral changes were made outside `backend/claude/`
+and one shared conformance check was loosened; each is classified in
+[the M5 exit gate](m5-exit-gate.md), section 11.
 
 ### M6 — Codex backend adapter
 

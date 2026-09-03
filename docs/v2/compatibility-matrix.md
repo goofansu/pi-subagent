@@ -1,7 +1,8 @@
 # Public compatibility matrix
 
-**Status:** Complete for M0. This is v2's definition of behavioural parity.
-**Date:** 2026-09-02
+**Status:** Complete for M0, with the Pi column proven in v2 at M4 and the
+Claude column at M5. This is v2's definition of behavioural parity.
+**Date:** 2026-09-02, last extended 2026-09-03
 **Scope:** every public command, Subagent close through the existing host and
 session surface, `/agents`, the active widget, completion Notification messages,
 and Profile loading and validation — across the Pi, Claude, and Codex backends.
@@ -285,3 +286,89 @@ there is that the Pi backend is what the Session was actually running.
 | Model and effort inheritance | `with no Profile model, the parent's is inherited provider-qualified`; `the parent's thinking level is inherited only when no model is pinned` (`backend/pi/profile.test.ts`) |
 | Child isolation | `both of this package's extension directories are filtered from a child`; `the Bash spawn carries the child depth without mutating the environment`; `the resource load runs inside the child-load discriminator` (`backend/pi/options.test.ts`) |
 | No provider type leaks | `a Pi session symbol outside the adapter is rejected, its host API is not`; `a Pi message type outside the adapter is rejected`; `only the composition root may import the Pi adapter`; `the Pi adapter may not import the runtime, the host, or presentation` (`boundaries.test.ts`) |
+
+---
+
+## The Claude column, proven in v2
+
+**Added at M5.** The same second half [the Pi table above](#the-pi-column-proven-in-v2)
+supplies, for Claude: one v2 proof per Claude row, so "Claude parity" is a
+thing that has been measured rather than a thing that was intended.
+
+Three kinds of citation appear, and the difference matters:
+
+- **conformance** — `ClaudeBackend conformance: <scenario>`, registered by
+  [`testing/conformance-claude.test.ts`](../../extensions/subagent-v2/testing/conformance-claude.test.ts).
+  These run the *shared* suite against the real adapter with a scriptable
+  stand-in Query behind it, so a pass means the seam behaves, not that a
+  Claude-shaped test was written to agree with a Claude-shaped adapter.
+  **Claude skips none of the thirty-seven**, and a test asserts the empty skip
+  list.
+- **a named v2 test**, with the file it lives in.
+- **live**, meaning one of the two opt-in gates: `npm run v2:claude:smoke` for
+  the runtime lane and `npm run v2:claude:host-smoke` for the host lane.
+
+Rows the matrix marks backend-independent cite the same tests the Pi table
+does, because a behaviour proven against the fakes and against Pi is proven for
+Claude too — what M5 adds there is that the Claude backend is what the Session
+was actually running.
+
+| Row | v2 proof for Claude |
+| --- | --- |
+| `agent_start` — expected outcome | `ClaudeBackend conformance: open-creates-no-run`; `opening loads the SDK and starts no Query, because there is nothing else to open`, `a BackendAgent that has never run holds no conversation to resume` (`testing/claude/claude-backend.test.ts`); live (`v2:claude:smoke`, `v2:claude:host-smoke`) |
+| `agent_start` — unknown agent | Backend-independent: `agent_start refuses an unknown agent and names the ones that exist` (`host/tools.test.ts`) |
+| `agent_start` — nested delegation | `the host facts come from Pi, which is the only backend that has them` (`host/production-backends.test.ts`); `a start already at the maximum depth is refused by admission` (`host/inert-guard.test.ts`). The depth *variable* is shared: `the child environment is the operator's, plus the depth key` (`backend/claude/options.test.ts`) |
+| `agent_start` — at capacity | `ClaudeBackend conformance: capacity-rejection-is-immediate` |
+| `agent_resume` — expected outcome | `ClaudeBackend conformance: resume-or-honest-refusal`; `the first Run's identity frame is what makes a later Run resumable` (`testing/claude/claude-backend.test.ts`); live (`v2:claude:smoke`, "resume answers from the first Run's retained conversation") |
+| `agent_resume` — already running | `ClaudeBackend conformance: one-active-run-per-subagent` |
+| `agent_resume` — unknown Subagent id | Backend-independent: `agent_resume tells an unknown Subagent from a Run id` (`host/tools.test.ts`) |
+| `agent_resume` — `unsupported` | Not reachable for Claude, which declares resume: `Claude declares resume and steering, and no terminal transcript snapshot` (`testing/claude/claude-backend.test.ts`). The outcome itself is proven by the one-shot fake: `the one-shot backend proves resume unsupported at the surface` (`host/tools.test.ts`) |
+| `agent_resume` — Conversation loss | `a BackendAgent that has never run holds no conversation to resume`, `closing drops the identity, and it stays dropped`, `an identity that differs from the retained one fails without falling back`, `a boundary frame with a malformed identity fails the Run` (`testing/claude/claude-backend.test.ts`) |
+| `agent_resume` — during shutdown | `ClaudeBackend conformance: shutdown-rejects-new-work`; live (`v2:claude:smoke`, "shutdown refuses new work") |
+| `agent_steer` — expected outcome | `ClaudeBackend conformance: steering-admission-follows-the-declared-capability`, `controls-are-delivered-serially-in-order`, `a-user-observation-appears-only-on-confirmation`; `guidance becomes a user observation only when the provider echoes it`, `only one Control is provider-visible at a time` (`testing/claude/claude-backend.test.ts`); live (`v2:claude:smoke`, "a confirmed steer produced exactly one user observation") |
+| `agent_steer` — `unsupported` | Not reachable for Claude. Proven by the one-shot fake: `the one-shot backend proves unsupported steering at the surface` (`host/tools.test.ts`) |
+| `agent_steer` — mailbox full | `ClaudeBackend conformance: a-full-mailbox-answers-immediately`. Claude's consumer is not eager, so the bound genuinely binds: guidance the provider is not ready for stays in the mailbox |
+| `agent_steer` — mailbox closed | `ClaudeBackend conformance: a-closed-mailbox-refuses-after-cancel` |
+| `agent_steer` — terminal Run | Backend-independent: `agent_steer names a terminal Run's status rather than calling it unknown` (`host/tools.test.ts`) |
+| `agent_steer` — invalid text | Backend-independent: `agent_steer rejects empty guidance before it looks the Run up` (`host/tools.test.ts`) |
+| `agent_steer` — unknown Run id | Backend-independent: `agent_steer names a terminal Run's status rather than calling it unknown` (`host/tools.test.ts`) |
+| `agent_steer` — one user Fact only on correlation | `guidance the provider never acknowledges is delivered and never claimed`, `a result frame with guidance still outstanding is a Turn boundary, not settlement` (`testing/claude/claude-backend.test.ts`) |
+| `agent_steer` — delivery failure is diagnostic-only | `guidance the input stream will not take is a control diagnostic and nothing else` (`testing/claude/claude-backend.test.ts`) |
+| `agent_cancel` — expected outcome | `ClaudeBackend conformance: cancellation-terminates-with-partial-output`; `a Run cancelled before any frame settles cancelled with nothing at all` (`testing/claude/claude-backend.test.ts`); live (`v2:claude:smoke`) |
+| `agent_cancel` — a Run with no output is a valid outcome | `ClaudeBackend conformance: a-run-may-settle-with-no-observations`; `a Run cancelled before any frame settles cancelled with nothing at all` (`testing/claude/claude-backend.test.ts`) |
+| `agent_cancel` — the retained identity survives | live (`v2:claude:smoke`, "a cancelled Query leaves the conversation resumable") |
+| `agent_cancel` — terminal answer then abort | `ClaudeBackend conformance: exactly-one-ending-wins`; `a successful result already observed survives a later cancel` (`testing/claude/claude-backend.test.ts`) |
+| `agent_cancel` — repeated cancel | Backend-independent: `a repeated agent_cancel is idempotent and the first request stands` (`host/tools.test.ts`) |
+| `agent_cancel` — already terminal / unknown Run id | Backend-independent: `agent_cancel tells a finished Run from an id that never existed` (`host/tools.test.ts`) |
+| `agent_cancel` — request vs. terminal | Backend-independent: `agent_cancel reports request admission, not terminal cancellation` (`host/tools.test.ts`) |
+| `agent_wait` — every row | Backend-independent, as the matrix says: `ClaudeBackend conformance: wait-and-result-observe-the-same-value`, `a-late-waiter-reads-the-stored-result`, plus the `agent_wait` rows in `host/tools.test.ts` |
+| `agent_result` — expected outcome | `ClaudeBackend conformance: wait-and-result-observe-the-same-value`; `a Profile naming claude runs end to end through the production set` (`host/production-backends.test.ts`); live (`v2:claude:host-smoke`) |
+| `agent_result` — not yet terminal | Backend-independent: `agent_result on a live Run says it has not finished, distinctly from unknown` (`host/tools.test.ts`) |
+| `agent_result` — evicted output | `ClaudeBackend conformance: an-evicted-result-answers-expired` |
+| `agent_result` — unknown Run id | Backend-independent: `agent_result on a live Run says it has not finished, distinctly from unknown` (`host/tools.test.ts`) |
+| `agent_result` — after a failed Notification | `ClaudeBackend conformance: a-notification-retry-cannot-duplicate-or-alter-settlement` |
+| `agent_result` — after Session shutdown | `ClaudeBackend conformance: shutdown-rejects-new-work`; `a tool call after shutdown returns the not-ready sentence` (`host/tools.test.ts`) |
+| Subagent close — expected outcome | `ClaudeBackend conformance: close-releases-every-resource`; `closing drops the identity, and it stays dropped` (`testing/claude/claude-backend.test.ts`); live (`v2:claude:smoke`, both probes clear) |
+| Subagent close — idempotence | `ClaudeBackend conformance: close-is-idempotent`; `closing drops the identity, and it stays dropped` (`testing/claude/claude-backend.test.ts`). Claude has no SDK close call, so the adapter's own tally is what makes one effective close a number rather than a claim |
+| Subagent close — late settlement | `ClaudeBackend conformance: late-events-cannot-mutate-a-terminal-run` |
+| Subagent close — identity cleanup | `nothing is left iterating or open once a Run has settled` (`testing/claude/claude-backend.test.ts`); `ClaudeBackend conformance: close-releases-every-resource` |
+| `/agents` — every row | Backend-independent: `the list is identical whatever backend a Profile names` (`host/agents-command.test.ts`). The production set supplies no Profiles of its own: `the production set offers both backends and no Profiles of its own` (`host/production-backends.test.ts`) |
+| Active widget — every row | Backend-independent: the widget rows in `host/widget.test.ts`; `ClaudeBackend conformance: only-the-repository-writes-snapshots` |
+| Completion Notification — every row | Backend-independent: `ClaudeBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; live (`v2:claude:smoke`, one notification per settled Run and no provider identity in any of them) |
+| Profile loading — generic parsing | the `parseProfile` tests in `domain/profile.test.ts` |
+| Profile loading — unknown backend name | `a Profile naming a backend the set does not hold is a diagnostic, not a crash` (`host/production-backends.test.ts`) |
+| Profile loading — unrecognized field | `a field Claude has never heard of is a diagnostic, not a silent pass` (`backend/claude/profile.test.ts`); `ClaudeBackend conformance: validation-is-deterministic` |
+| Profile loading — model validation | `every family alias is accepted, whatever its casing`, `a model that is not a family alias is diagnosed with the alias list`, `the alias reaches the Query lowercased and unresolved` (`backend/claude/profile.test.ts`); `the family alias is passed through, and no alias leaves the SDK's default` (`backend/claude/options.test.ts`) |
+| Profile loading — `tools` and `appendSystemPrompt` | `tools must be a string, and an empty list is meaningful`, `appendSystemPrompt must be a boolean` (`backend/claude/profile.test.ts`); `the Profile's tools narrow the built-in set, and an empty list is kept`, `the system prompt is the Claude Code preset with the Profile's appended`, `a Profile that opted out replaces the preset instead of appending` (`backend/claude/options.test.ts`) |
+| Profile loading — `effort` | `every value on the shared effort scale is accepted`, `an effort outside the shared scale is rejected by name` (`backend/claude/profile.test.ts`); `each effort buys its own thinking budget`, `effort off disables extended thinking rather than buying nothing`, `an effort the table does not hold defaults to the high budget`, `the SDK's own effort parameter carries only the values it accepts` (`backend/claude/options.test.ts`) |
+| Profile loading — scope | Backend-independent: `Profiles are read from the user-scope agents directory only` (`profiles/discovery.test.ts`) |
+| Profile loading — backend field name | `a v2 source containing the legacy backend field name is rejected` (`boundaries.test.ts`) |
+| Environment inheritance (ADR-0008) | `setting sources and MCP servers are absent, so the operator's environment is inherited`, `the child environment is the operator's, plus the depth key`, `building the options does not mutate the process environment` (`backend/claude/options.test.ts`) |
+| Depth and delegation policy | `Agent and Task are always disallowed, whatever the Profile's tools says`, `permissions are bypassed with the explicit skip flag` (`backend/claude/options.test.ts`) |
+| Usage — every model charged, Run-local | `ClaudeBackend conformance: usage-deltas-are-run-local`, `a-resumed-run-excludes-prior-usage`, `a-replayed-transcript-adds-no-usage`; `every model the Query ran is charged, including one the Profile never asked for` (`testing/claude/claude-backend.test.ts`); `two result frames in one Run are differenced, not summed`, `a provider reset charges the new reading rather than a negative delta` (`backend/claude/translate.test.ts`) |
+| Usage — the context gauge | `ClaudeBackend conformance: context-occupancy-is-a-gauge`; `the gauge is the primary model's own tokens over its own window`, `the gauge is omitted when the primary model has no entry` (`backend/claude/translate.test.ts`) |
+| Usage — turn counting | `several assistant frames sharing one message id are one turn`, `a tool-parented assistant frame is a sidechain, not a turn`, `the result's reported total never lowers the count` (`backend/claude/translate.test.ts`); `the terminal bundle carries turns and the model, and never a transcript` (`testing/claude/claude-backend.test.ts`) |
+| Replay filtering | `a resumed Query's replayed history is not part of the resumed Run` (`testing/claude/claude-backend.test.ts`); `ClaudeBackend conformance: a-replayed-transcript-adds-no-usage` |
+| Failure endings | `a result the provider marked as an error fails with a confined diagnostic`, `a Query that ends without a result fails with a fixed message`, `SDK stderr becomes one bounded diagnostic and keeps not a word of itself` (`testing/claude/claude-backend.test.ts`); `ClaudeBackend conformance: a-failing-sink-cannot-strand-the-execution` |
+| Open failure | `an SDK that will not load is backend unavailable with no provider text`, `an SDK loader that never returns is backend unavailable and leaves nothing open` (`testing/claude/claude-backend.test.ts`); `ClaudeBackend conformance: a-failed-open-leaves-nothing-behind` |
+| No provider type leaks | `the Claude SDK is rejected outside the Claude adapter, and admitted inside it`, `only the composition root may import the Claude adapter`, `the two adapters are siblings and neither may name the other`, `the provider's cancellation primitive is admitted in the Claude adapter and nowhere else` (`boundaries.test.ts`) |

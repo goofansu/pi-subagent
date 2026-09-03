@@ -451,11 +451,15 @@ and leak test asserts it reads zero after the Session Scope closes, which turns
 "nothing leaked" from a hope into an assertion.
 
 **Host boundary** — the v2 `host/` module plus the entry point: the one place
-where a Pi callback crosses into Effect. It is the only place `Effect.runPromise`,
-`ManagedRuntime`, `AbortSignal`, and `AbortController` may appear, and the only
-place that touches Pi's registries, UI context, and message surface. The
-boundary test enforces both halves, so the exit-gate rule is checked rather
-than reviewed.
+where a Pi callback crosses into Effect. It is the only place
+`Effect.runPromise` and `ManagedRuntime` may appear, and the only place that
+touches Pi's registries, UI context, and message surface. `AbortSignal` and
+`AbortController` are also confined to it, with one exception added at M5: the
+Claude adapter may name them, because the SDK takes a controller on its options
+bag and offers no other cancellation surface, which is exactly the kind of
+provider mechanism an adapter exists to absorb. The core still cannot name
+either word, and no adapter may name the two runtime words. The boundary test
+enforces every half, so the exit-gate rule is checked rather than reviewed.
 
 **Session handle** — the one process-level variable holding the current
 Session's managed runtime, or none. Pi registers tools, commands, and renderers
@@ -474,13 +478,19 @@ runtime and prose stays in presentation. It exists because v1's dispatcher
 talked to lifecycle, presentation, and delivery directly, and once three callers
 could reach one mutable Run record, no single place knew what a Run looked like.
 
-**Backend set** — a named set of backends plus the Profiles that ship with it.
-A Session is built from exactly one. The **demo backend set** is M3's: the two
-fake backends and one **demo Profile** per fake, merged under whatever the user
-directory holds, so launching Pi with only the v2 entry point gives a working
-extension with nothing to configure. M4 replaced it in the entry point with the
-Pi set; the demo set stays in the tree because a host test needs a
-deterministic backend, and nothing ships it.
+**Backend set** — the value a Session is built from: a name, the backends that
+exist, the Profiles they ship, and two host facts only a backend can answer —
+whether this process is loading as one of its own children, and how deep in a
+delegation chain it is. A Session is built from exactly one.
+
+Three sets exist, and only one ships. The **demo backend set** is M3's: the two
+fake backends and one **demo Profile** per fake, so launching Pi with only the
+v2 entry point gave a working extension with nothing to configure; it stays in
+the tree because a host test needs a deterministic backend. The **Pi set** is
+M4's, and stays for Pi's own live lane and its tests. The **production backend
+set** is M5's and is what the entry point uses: Pi and Claude, no Profiles of
+its own, the host facts from Pi, and one native probe per backend. A Profile's
+`backend:` field is what picks one of the two.
 
 **Session push sink** — the `NotificationSink` implementation that pushes a
 completion Notification into a live Pi Session as a follow-up message that
@@ -515,11 +525,80 @@ Pi session symbol, and nothing outside the composition root imports the
 directory at all. The adapter does not know the runtime, the host, or
 presentation exist.
 
-**Backend set** — the value a Session is built from: a name, the backends that
-exist, the Profiles they ship, and two host facts only a backend can answer —
-whether this process is loading as one of its own children, and how deep in a
-delegation chain it is. The demo set (two fakes, two Profiles, never a child)
-is what host tests use; the Pi set (one backend, no Profiles) is what ships.
+**Claude adapter** — everything v2 knows about Claude, in `backend/claude/`.
+The SDK's `query` function, its forty-member frame union, its options bag, its
+streamed input message, and the provider's own `AbortController` all stop
+there. The boundary test enforces it by *specifier* rather than by binding —
+stricter than the Pi rule, because `@anthropic-ai/claude-agent-sdk` is a
+provider and nothing else, while Pi's package is also the host API — and it
+admits the SDK nowhere outside the directory, not even in the adapter's own
+test doubles, which take the SDK's types through the aliases the adapter
+re-exports. The adapter does not know the runtime, the host, presentation, or
+the *other adapter* exist.
+
+**Conversation identity** — the single opaque string a Claude BackendAgent
+retains for its Subagent's life. It is the whole of what "resume" means for
+Claude, and ADR-0024 forbids it from crossing the seam, so it never appears in
+an observation, a result, or a Notification. Its state is **unopened**,
+**opened**, or **lost**, and loss is monotonic: close, a failed attachment, and
+an identity mismatch each reach `lost`, and nothing moves back.
+
+**Unopened** — a BackendAgent that holds no provider identity because none
+exists yet. The Claude SDK has no open call: `query()` starts an execution, and
+an identity first appears on the init or result frame of the first Run. So
+opening a Claude BackendAgent loads the SDK and constructs nothing, and
+`admitResume` answers `conversation lost` until a Run has produced an identity.
+That is ADR-0023's first exception, and it is why `ResumeAdmission` has three
+answers rather than four: "never opened" and "the conversation is gone" are the
+same fact to a caller.
+[ADR-0023](docs/adr/0023-v2-scope-ownership.md).
+
+**Identity boundary** — the frame that carries a conversation identity
+authoritatively: the init frame, and every result frame. Before its boundary a
+resumed Query may replay user, assistant, and system history belonging to the
+earlier conversation, and none of it is this Run's work — so a resumed Run
+drops every frame until the boundary, whether or not the provider flagged it as
+a replay. At the boundary a missing, malformed, or *different* identity fails
+the Run with a fixed attachment message and marks the conversation lost. It
+never falls back to a fresh conversation, because a resumed Run silently
+answering from an empty context is worse than one that says it could not
+attach.
+
+**Turn boundary** — a provider result frame that ends a *turn* rather than the
+Run. Claude's steering enters a live Query through the same input stream the
+prompt came from, and the provider answers each turn with its own result frame.
+So a Run with guidance still outstanding stays active across a result the
+provider correlated to an input the Run owns, and settles on the result that
+finds nothing outstanding. The execution decides when the Run is semantically
+complete; the core still performs the terminal transition. ADR-0018 meeting
+ADR-0025.
+
+**Client-owned input stream** — the async iterable one Claude Run creates,
+pushes its prompt and each admitted Control into, and closes. The SDK only
+iterates it. It is Run-scoped, because a Query whose input never closes never
+ends — and because guidance has to be able to reach a Query that is still
+running.
+
+**Control slot** — the one place a Claude Control can be provider-visible at a
+time. The steering consumer is deliberately **not eager**: it takes one Control
+from the mailbox and only when the slot is free, so guidance the provider is
+not ready for stays in the mailbox where ADR-0026 puts the bound and where a
+caller learns at once that there is no room. An adapter that drained the
+mailbox into an array of its own would have moved the queue somewhere with
+neither a bound nor an answer.
+
+**Confirmation** — the provider evidence that turns an admitted Control into a
+`user` observation: a user frame echoing the uuid the client pushed, or a result
+frame naming that uuid as the input its turn answered. Nothing else counts. A
+Control the provider never acknowledges was still *accepted*, which is what the
+caller was told, and it appears nowhere in the transcript — a transcript
+showing guidance the model never saw is the one lie this seam must not tell.
+
+**Adapter tally** — BackendAgents an adapter opened, and closes that took
+effect. Beside the native probe and deliberately not part of it: it answers a
+different question and never returns to zero, so a probe carrying it could
+never read clear. It exists because Claude has no SDK close call to count
+twice, and "close is idempotent" needs a number rather than a claim.
 
 **Child-load discriminator** — the `AsyncLocalStorage` flag that says "this
 resource load belongs to a child". Pi initializes an extension's factory while
@@ -535,11 +614,14 @@ admission refuses a Run past `DEFAULT_MAX_DELEGATION_DEPTH`, which is one:
 delegation is one level deep.
 
 **Native probe** — what an adapter is still holding, counted: for Pi, open
-native sessions, live event subscriptions, and native cleanups in flight.
+native sessions, live event subscriptions, and native cleanups in flight; for
+Claude, live Queries, open input streams, and retained conversation identities.
 Deliberately outside the backend contract — a probe on the contract would be a
 field every adapter had to invent something for, and a number the core could
-start believing. It sits beside the runtime's own probe in `/subagent-v2`, and
-both must read zero once a Session has closed.
+start believing. `/subagent-v2` prints one block per backend beside the
+runtime's own, because "which adapter is still holding something" is the only
+question a probe exists to answer and a merged total cannot answer it. Every
+block must read zero once a Session has closed.
 
 **Callback bridge** — the buffer between Pi's synchronous event listener, which
 cannot wait, and the observation intake, which applies backpressure. It never

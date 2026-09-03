@@ -29,6 +29,19 @@ in
 all four are missing provider-neutral semantics with fake-backend proofs, and
 none is provider leakage.
 
+**M5 held it a second time** (2026-09-03), and this is the stronger reading of
+the same measurement. Claude is the backend this contract was most carefully
+shaped around and had never been tested against: a BackendAgent that begins
+holding no provider identity, a provider result frame that is a Turn boundary
+rather than settlement, a per-model usage map that includes models the Profile
+never asked for, and a cancelled Run that can legitimately end with zero
+observations. All four fit, and `contract.ts` is still byte-identical to what
+M1 wrote. Nothing flowing through the contract widened either — `MessageRole`
+was M4's one such change and there was no second. The three provider-neutral
+changes M5 made outside `backend/claude/`, and the one shared conformance check
+it loosened, are enumerated in
+[the M5 exit gate](../v2/m5-exit-gate.md#11-every-change-m5-made-outside-the-claude-adapter-directory).
+
 Stable means a change here is now a decision with a cost rather than a detail.
 If Claude at M5 or Codex at M6 needs one, the roadmap's rule applies: it is an
 exit-gate finding to be classified before it is made, and a contract that
