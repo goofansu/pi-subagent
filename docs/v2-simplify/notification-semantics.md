@@ -1,6 +1,9 @@
 # Completion notification semantics
 
-**Status:** Specified. No code implements this yet; Phase A does.
+**Status:** Implemented by Phase A.
+[ADR-0033](../adr/0033-notification-vocabulary-pointer-and-label-bound.md)
+records the three decisions this document makes: the delivery-state
+vocabulary, the universal pointer with availability, and the Run label bound.
 **Audience:** model authors reading the notices, and maintainers implementing
 them.
 **Vocabulary:** Subagent, Run, Result, Notification, Delivery sweep, Session

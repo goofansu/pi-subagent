@@ -1,6 +1,9 @@
 # Simplification roadmap: fewer concepts, better completion notices
 
-**Status: proposed, not started.** This is the plan that follows
+**Status: Phase A closed; B, C, and D proposed.**
+[The Phase A gate](phase-a-exit-gate.md) is closed, with item 14 carried and
+three change-surface findings for Phase B to settle. This is the plan that
+follows
 [the v2 roadmap](../v2/roadmap.md), which delivered the rewrite and is now
 history. It answers the one definition-of-done clause the rewrite did not meet
 (less lifecycle machinery than v1, per [the deletion ledger](../v2/deletion-ledger.md))
@@ -121,6 +124,11 @@ vocabulary that B and C would otherwise refactor around; D is deferred until
 real usage demands it.
 
 ### Phase A — Notification semantics and UX
+
+**Closed.** [The exit gate](phase-a-exit-gate.md) records every item's status
+and its evidence, and
+[ADR-0033](../adr/0033-notification-vocabulary-pointer-and-label-bound.md) is
+the decision record.
 
 **Why first.** It has the best ratio of mental-model payoff to risk, and it
 changes model-facing text. That text is frozen by
@@ -310,6 +318,23 @@ Expected files: `domain/notification.ts`, `domain/bounding.ts`,
 `host/diagnostics-command.ts`, `boundaries.test.ts`, docs.
 Must not change: `runtime/supervisor.ts`, `runtime/run-scope.ts`,
 `runtime/result-store.ts`, `runtime/repository.ts`, `backend/*`.
+
+**What the phase actually touched**, against the list above. `domain/result.ts`
+and `domain/text.ts` moved instead of `domain/bounding.ts` and
+`domain/decoding.ts`, because the label's bound belongs beside `RunIdentity`
+and its one-line helper beside the other one-line bounds.
+`application/subagents.ts` moved, because the façade is where a decoded tool
+input becomes a request and therefore where a bound at admission goes.
+`presentation/status.ts` and `presentation/run-card.ts` moved, because the
+notice's verb and the card's accounting come from the shared dictionaries.
+And `runtime/supervisor.ts` — on the must-not-change list — moved by 41 lines
+so the diagnostic recording a shortened label reaches the Run's projection
+through the observation intake every other diagnostic uses; a second channel
+would have been worse.
+[Item 15 of the gate](phase-a-exit-gate.md#15-no-runtime-behaviour-changed)
+records that as a deviation with the diff. `run-scope.ts`,
+`result-store.ts`, `repository.ts`, and every file under `backend/` are
+untouched.
 
 ### Phase B — Supervisor decomposition by mechanism
 

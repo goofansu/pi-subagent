@@ -20,8 +20,9 @@ This is the mirror image: a freeze on the properties of the tree being kept.
 > unrelated files to change together, without weakening an existing invariant.
 > Moving correctness from a test into a comment is not a simplification.
 
-Phase A adds this sentence to [contributing.md](../contributing.md). Until
-then it applies here. A reviewer's question on every pull request in the
+Phase A added this sentence to
+[contributing.md](../contributing.md#the-simplification-rule), which is now
+where it lives. A reviewer's question on every pull request in the
 programme is: *which test enforces this property after the change?* If the
 answer is a comment, the change is not done.
 
@@ -36,13 +37,13 @@ and removes nothing from it.
 | F1 | The thirteen invariants in contributing.md, verbatim. | [contributing.md](../contributing.md#the-invariants-a-change-may-not-break) | Each names its own check; the list is the index. |
 | F2 | Ownership is Session Scope → Subagent Scope → Run Scope → native execution. Runs and BackendAgents are not Effect Layers. | [ADR-0023](../adr/0023-v2-scope-ownership.md) | `runtime/lifecycle.test.ts`; the leak probes in `runtime/stress.test.ts` ending at zero. |
 | F3 | One terminal candidate wins; arbitration is pure; cleanup completes or is escalated before the Result is observable. | [ADR-0025](../adr/0025-v2-terminal-settlement.md) | `runtime/arbitration.test.ts`; `runtime/races.test.ts`; conformance `a-run-settles-exactly-once` family. |
-| F4 | Storage precedes notification. Delivery reconstructs the notice from the stored Result. `agent_result` is authoritative. | [ADR-0006](../adr/0006-completion-notifications-and-result-store.md), [architecture §6](../architecture.md#6-delivery-reads-what-was-stored) | Conformance `a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; `runtime/delivery.test.ts`. |
+| F4 | Storage precedes notification. Delivery reconstructs the notice from the stored Result. `agent_result` is authoritative. Delivery says *handed off* and only the push sink says *landed*. | [ADR-0006](../adr/0006-completion-notifications-and-result-store.md), [ADR-0033](../adr/0033-notification-vocabulary-pointer-and-label-bound.md), [architecture §6](../architecture.md#6-delivery-reads-what-was-stored) | Conformance `a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; `runtime/delivery.test.ts`. |
 | F5 | `RunRepository` and `ResultStore` stay two services. The repository is the live index; the store is the immutable terminal output. | [architecture §6, §7](../architecture.md) | Boundary rules in `boundaries.test.ts` on who writes each; `runtime/repository.test.ts`; `runtime/result-store.test.ts`. |
 | F6 | The store's pin holders stay named: `publication`, `waiters`, `delivery`. A release is attributed to one holder. | `runtime/result-store.ts` | `runtime/result-store.test.ts` (double release cannot free twice; each holder releases independently). |
 | F7 | The generic capability set is `resume`, `steer`, `terminalTranscriptSnapshot`. A capability enters the core only when it changes generic lifecycle semantics. | [ADR-0028](../adr/0028-v2-backend-contract.md), [architecture §9](../architecture.md#9-the-backend-contract-and-what-a-new-backend-owes) | The exact contract-member lists in the backend contract tests; conformance skips driven by declared capability, never by backend identity. |
 | F8 | Provider wire objects and vocabulary never cross the adapter boundary. | [ADR-0007](../adr/0007-harness-seam-with-neutral-facts.md), [ADR-0024](../adr/0024-v2-observation-ordering.md) | Provider-confinement rules in `boundaries.test.ts`; the Profile field-word ban. |
-| F9 | Presentation depends only on domain projections. No formatter reads the repository, the store, a backend, a clock, or the profile catalog. | [architecture §8](../architecture.md#8-the-host-boundary-is-the-only-place-an-effect-is-run) | Boundary rules on `presentation/*` imports; Phase A adds the rule that notification text depends on `RunNotification` alone. |
-| F10 | Every bound truncates and records, or refuses with a typed outcome. | contributing invariant 11; [ADR-0032](../adr/0032-reservations-evict-rather-than-refuse.md) | `runtime/bounds.test.ts`, every bound driven past. Phase A's label bound joins this lane. |
+| F9 | Presentation depends only on domain projections. No formatter reads the repository, the store, a backend, a clock, or the profile catalog. | [architecture §8](../architecture.md#8-the-host-boundary-is-the-only-place-an-effect-is-run) | Boundary rules on `presentation/*` imports; rule 20, which restricts `presentation/notification-text.ts` to `domain/` and `presentation/`, so notification text depends on `RunNotification` alone. |
+| F10 | Every bound truncates and records, or refuses with a typed outcome. | contributing invariant 11; [ADR-0032](../adr/0032-reservations-evict-rather-than-refuse.md); [ADR-0033](../adr/0033-notification-vocabulary-pointer-and-label-bound.md) for the label | `runtime/bounds.test.ts`, every bound driven past. Phase A's label bound joined this lane. |
 | F11 | Control admission is not provider confirmation. | [ADR-0026](../adr/0026-v2-control-admission.md) | Conformance steer scenarios; `runtime/mailbox.test.ts`. |
 | F12 | No real time passes in a test. | [contributing.md](../contributing.md#no-real-time-passes-in-a-test) | `timing.test.ts`; the test clock in every runtime lane. |
 

@@ -312,7 +312,9 @@ extra pass rather than a Notification.
 The four words for where a Notification has got to. Each is decided by exactly
 one component, and no component may use a word for a state it cannot observe;
 [the notification semantics](docs/v2-simplify/notification-semantics.md) is the
-table, and a boundary rule keeps *landed* out of `runtime/delivery.ts`.
+table, [ADR-0033](docs/adr/0033-notification-vocabulary-pointer-and-label-bound.md)
+is the decision, and a boundary rule keeps *landed* out of
+`runtime/delivery.ts`.
 
 **Handed off** — Pi's `sendMessage` accepted the custom message and now holds
 it. Decided by `CompletionDelivery`, from the sink's push result. It is the

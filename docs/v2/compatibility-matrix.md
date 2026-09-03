@@ -283,7 +283,12 @@ the row label says which property it is.
 
 ## Active widget
 
-The session widget listing live Runs.
+The session widget listing live Runs. **Unchanged by Phase A of the
+simplification programme**, deliberately: a change to notices is not also a
+change to the widget.
+[The notification semantics §6](../v2-simplify/notification-semantics.md#6-what-the-human-sees)
+says so, and records the one state Phase C adds — an exhausted notice's row
+reading `completed · notification failed` — which is not this table's yet.
 
 | | Pi | Claude | Codex |
 | --- | --- | --- | --- |
@@ -291,7 +296,7 @@ The session widget listing live Runs.
 | **Observation only** | The widget never determines lifecycle state. | Same. | Same. |
 | **Lifecycle** | Appears with the first Run and is removed when none are left; a change redraws rather than reinstalls. | Same. | Same. |
 | **Row lifetime** | A Run's row lasts from `agent_start` until its completion notice reaches the conversation, not until the Run settles. | Same — the row's lifetime is backend-independent. | Same. |
-| **Settled duration** | A settled row states what the Run cost, and the figure stops moving when the Run does: it is the instant the Run settled less the instant it started, published on the row and taken from the same reading of the clock the stored Result records, so the row and the RunCard built from that Result print one number and a redraw never changes it. A live row names no duration at all. | Same — the figure is the Run's, not the draw's, whichever backend ran it. | Same. |
+| **Settled duration** | A settled row states what the Run cost, and the figure stops moving when the Run does: it is the instant the Run settled less the instant it started, published on the row and taken from the same reading of the clock the stored Result records, so the row and the RunCard built from that Result print one number and a redraw never changes it. Since Phase A the completion notice reads the same figure from the same two instants, so a row, a card, and a notice print one number. | Same — the figure is the Run's, not the draw's, whichever backend ran it. | Same. |
 
 
 **Proven by.** A property only one backend has shows a dash for the others;
@@ -300,18 +305,29 @@ the row label says which property it is.
 | Property | Pi | Claude | Codex |
 | --- | --- | --- | --- |
 | **every row** | Backend-independent: `the widget appears with the first live Run and its row reads as the matrix says` and its siblings (`host/widget.test.ts`); `PiBackend conformance: only-the-repository-writes-snapshots` | Backend-independent: the widget rows in `host/widget.test.ts`; `ClaudeBackend conformance: only-the-repository-writes-snapshots` | Backend-independent: the widget rows in `host/widget.test.ts`; `CodexBackend conformance: only-the-repository-writes-snapshots` |
-| **row lifetime** | Backend-independent: `a terminal Run keeps its row until its completion notice lands, and the landing takes it away`; `a notice lost to an interrupt keeps its row until the re-push lands` (`host/widget.test.ts`) | Backend-independent: the row-lifetime tests in `host/widget.test.ts` | Backend-independent: the row-lifetime tests in `host/widget.test.ts` |
-| **settled duration** | Backend-independent: `a settled row says what the Run cost, and the number does not move` (`host/widget.test.ts`), which advances the display's instant past the Run's own and requires the rendered lines to be identical; `a settled row's duration is the Run's cost, so a later draw reads the same` (`presentation/rows.test.ts`) | Backend-independent: the settled-duration tests in `host/widget.test.ts` and `presentation/rows.test.ts` | Backend-independent: the settled-duration tests in `host/widget.test.ts` and `presentation/rows.test.ts` |
+| **row lifetime** | Backend-independent, and Phase A left every one of these tests unmodified: `a terminal Run keeps its row until its completion notice lands, and the landing takes it away`; `a notice lost to an interrupt keeps its row until the re-push lands` (`host/widget.test.ts`) | Backend-independent: the row-lifetime tests in `host/widget.test.ts` | Backend-independent: the row-lifetime tests in `host/widget.test.ts` |
+| **settled duration** | Backend-independent: `a settled row says what the Run cost, and the number does not move` (`host/widget.test.ts`), which advances the display's instant past the Run's own and requires the rendered lines to be identical; `a settled row's duration is the Run's cost, so a later draw reads the same` (`presentation/rows.test.ts`); the notice reads the same figure — `N-1: a completed notice labels and quotes the preview, then points at the full result` prints `12.4s` from the same two fixture instants (`presentation/notification-text.test.ts`) | Backend-independent: the settled-duration tests in `host/widget.test.ts` and `presentation/rows.test.ts` | Backend-independent: the settled-duration tests in `host/widget.test.ts` and `presentation/rows.test.ts` |
 
 ## Completion Notification messages
 
-The status-specific completion notice pushed as a follow-up message.
+The status-specific completion notice pushed as a follow-up message. Every
+cell below that Phase A of the simplification programme changed cites
+[the notification semantics](../v2-simplify/notification-semantics.md), which
+decided the text before it was written, and
+[ADR-0033](../adr/0033-notification-vocabulary-pointer-and-label-bound.md),
+which records the decisions.
 
 | | Pi | Claude | Codex |
 | --- | --- | --- | --- |
-| **Expected outcome** | Derived from the neutral Result alone, so the prose is backend-independent: it names the owning Subagent and the Run, carries a bounded preview for a completed Run, and points at `agent_result` by Run id. Accounting appends usage, turn count, and the model the Profile selected. | Identical prose; the model string is a Claude model. | Identical prose; the model string is a Codex model. |
-| **Failed Run** | Carries only the primary error and the pointer, bounded even for a pathological message. | Same. | Same. |
-| **Cancelled Run** | Terse, with no partial output in the notice; the partial output stays retrievable through `agent_result`. | Same. | Same. |
+| **Expected outcome** | **[Phase A]** Derived from the neutral Result alone, so the prose is backend-independent — and structurally so, since the notice has no field a backend identity could travel in. Four sections in a fixed order: a header naming the Run's label and how long it took, a three-line identity block, the status body, and the pointer, with the accounting line last when the Run reported anything to account for. [Semantics §5](../v2-simplify/notification-semantics.md#5-what-the-model-reads). | Identical prose; the model string is a Claude model. | Identical prose; the model string is a Codex model. |
+| **Completed Run** | **[Phase A]** The bounded preview appears under `Preview from the subagent:` in straight double quotes, so delegated output does not read as an instruction from the runtime. Quoting is not a security boundary and does not claim to be. [Semantics §5](../v2-simplify/notification-semantics.md#5-what-the-model-reads). | Same. | Same. |
+| **Failed Run** | **[Phase A]** `Reason: <error>`, or `Reason: none reported.`, bounded to 500 bytes even for a pathological message. The partial output is not in the notice; the pointer says whether there is any. | Same. | Same. |
+| **Cancelled Run** | **[Phase A]** The reason is in the header — `was cancelled in 60.0s (timeout)` — and there is no body. It now **carries the pointer**, which is the one behaviourally observable change of the phase: a timeout or a shutdown cancels Runs the parent never asked to cancel, and a cancelled Run keeps what it produced. [Semantics §3](../v2-simplify/notification-semantics.md#3-result-availability). | Same. | Same. |
+| **The pointer** | **[Phase A]** Present for every terminal status, as `Full result is available.` / `Partial result is available.` / `No output was produced.` followed by `Call agent_result with {"id":"<runId>"}.` — the exact argument shape, so the parent copies rather than composes. Availability describes the stored Result and not the Run's success. [Semantics §3](../v2-simplify/notification-semantics.md#3-result-availability). | Same. | Same. |
+| **The Run label** | **[Phase A]** One line of at most 200 bytes, bounded once at admission; a shortened label is recorded as a Run diagnostic rather than refusing the start. Both tool schemas state the bound. [Semantics §4](../v2-simplify/notification-semantics.md#4-the-run-label). | Same. | Same. |
+| **Accounting** | **[Phase A]** Unchanged in content and grammar — cost, tokens, turns, then the model — and now fed from a bounded `NotificationAccounting` rather than the Result's whole usage. A Run whose only reported usage was a cache read still produces no line, and a line reading nothing but a model name is impossible rather than merely unwanted. | Same. | Same. |
+| **Collapsed transcript line** | **[Phase A]** `<agent> · <label> · <verb> in <duration>`, with ` · $<cost>` when the cost is non-zero. No id and no character count; the ids are in the expanded text. [Semantics §6](../v2-simplify/notification-semantics.md#6-what-the-human-sees). | Same. | Same. |
+| **Delivery states** | **[Phase A]** Delivery knows pending, handed off, and exhausted. Only the Session push sink says a notice *landed*, and a boundary rule keeps the word out of the delivery module. [Semantics §1](../v2-simplify/notification-semantics.md#1-delivery-states-and-who-owns-each-word). | Same. | Same. |
 | **Landing** | Exactly one landing per Notification; a notice an interrupt discarded is pushed again after the agent settles. | Same. | Same. |
 | **Push failure** | Cannot change or lose the stored Result. | Same. | Same. |
 | **No live Session** | Dropped rather than delivered into a Session that did not start the Run. | Same. | Same. |
@@ -322,7 +338,15 @@ the row label says which property it is.
 
 | Property | Pi | Claude | Codex |
 | --- | --- | --- | --- |
-| **every row** | Backend-independent: `PiBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; the landing rows in `host/push-sink.test.ts`; live (`pi:smoke`, one notification per settled Run) | Backend-independent: `ClaudeBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; live (`claude:smoke`, one notification per settled Run and no provider identity in any of them) | Backend-independent: `CodexBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; live (`codex:smoke`, one notification per settled Run and no provider identity in any of them) |
+| **the four sections and the quoted preview** | `N-1: a completed notice labels and quotes the preview, then points at the full result`, `N-2: a completed Run with no output says so, and its Result is still full`, `N-3: a long answer is previewed rather than delivered` (`presentation/notification-text.test.ts`) | Same. | Same. |
+| **the failed and cancelled bodies** | `N-4: a failed notice states its reason and says partial output is there`, `N-5: a failed Run with no reason and no output says both`, `N-6: a failed notice bounds a pathological error message`, `N-7: a cancelled notice names its reason and points at the partial result`, `a cancelled Run with nothing to show says so and still points at the record` (`presentation/notification-text.test.ts`) | Same. | Same. |
+| **the universal pointer and availability** | `every terminal status ends with the availability sentence and the exact call`, `the pointer says how much is there for each of the three availabilities`, `availability describes the stored Result rather than the Run's success` (`presentation/notification-text.test.ts`) | Same. | Same. |
+| **the Run label's bound** | `a label past its byte bound is collapsed to one line, cut, and recorded`, `a label within its bound is stored whole and records nothing`, `a maximal label leaves a result inside its byte budget once everything removable is cut` (`runtime/bounds.test.ts`); `T1: the label's bound is stated on both description fields` (`host/tool-schemas.test.ts`) | Same. | Same. |
+| **accounting** | `N-9: a Run with nothing to account for carries no accounting at all`, `N-9: the accounting a notice carries is only what the line prints`, `N-9: an accounting line can never read as nothing but a model name`, `accounting abbreviates usage and names the model last`, `accounting omits absent and undisplayed usage facts`, `a pathological model name is bounded where the accounting is built` (`presentation/notification-text.test.ts`) | Same. | Same. |
+| **the collapsed line** | `S-1: a collapsed notice names the agent, the task, the outcome, and the cost`, `S-2: a failed and a cancelled summary read the same way, with the verb changed`, `a collapsed notice carries no id and no character count`, `a long label is truncated to the width it is given rather than wrapped` (`presentation/renderers.test.ts`); `S-1: the ids are in the expanded text, where a tool call needs them`, `the details carry the collapsed line and the ids, never the text`, `a message missing a field the collapsed line needs is rejected` (`host/notification-message.test.ts`) | Same. | Same. |
+| **the delivery-state vocabulary** | `the delivery module saying "landed" is rejected, and the push sink saying it is not`, `delivery's own three states are not landing vocabulary` (`boundaries.test.ts`) | Same. | Same. |
+| **the formatter's fence** | `the notification formatter naming anything but the domain and presentation is rejected` (`boundaries.test.ts`) | Same. | Same. |
+| **every row** | Backend-independent: `N-8: the notice is identical whichever backend ran the Run` (`presentation/notification-text.test.ts`, now structural as well as textual); `PiBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; the landing rows in `host/push-sink.test.ts`; live (`pi:smoke`, one notification per settled Run) | Backend-independent: `N-8: the notice is identical whichever backend ran the Run`; `ClaudeBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; live (`claude:smoke`, one notification per settled Run and no provider identity in any of them) | Backend-independent: `N-8: the notice is identical whichever backend ran the Run`; `CodexBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; live (`codex:smoke`, one notification per settled Run and no provider identity in any of them) |
 
 ## Profile loading and validation
 
