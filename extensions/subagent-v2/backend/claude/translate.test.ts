@@ -533,6 +533,55 @@ test("the gauge is omitted when the primary model has no entry", () => {
   );
 });
 
+test("the gauge is omitted when the entry carries no context window", () => {
+  // A denominator-less figure would be exactly the sum a gauge exists not to
+  // be: these tokens are cumulative across the turns of the Query, so without
+  // a window to read them against they say nothing about occupancy.
+  assert.equal(
+    claudeContextGauge(
+      {
+        modelUsage: {
+          "claude-sonnet-4-6": {
+            inputTokens: 500,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+          },
+        },
+      },
+      "claude-sonnet-4-6",
+    ),
+    undefined,
+  );
+  assert.equal(
+    claudeContextGauge(
+      {
+        modelUsage: {
+          "claude-sonnet-4-6": { inputTokens: 500, contextWindow: 0 },
+        },
+      },
+      "claude-sonnet-4-6",
+    ),
+    undefined,
+  );
+});
+
+test("an assistant frame with nothing readable counts its turn and reports no message", () => {
+  // Near-unreachable in practice, because the SDK always names the model on
+  // the message. What matters is that neither half is lost: no blank
+  // transcript item, and the turn still counted.
+  const { observations, turns } = translate([
+    {
+      type: "assistant",
+      message: { id: "msg_1", role: "assistant", content: [] },
+      parent_tool_use_id: null,
+      session_id: IDENTITY,
+    },
+  ]);
+
+  assert.deepEqual(observations, [{ kind: "usage", usage: { turns: 1 } }]);
+  assert.equal(turns, 1);
+});
+
 test("the gauge is omitted when no model has been named yet", () => {
   assert.equal(
     claudeContextGauge(resultFrame() as Record<string, unknown>, undefined),

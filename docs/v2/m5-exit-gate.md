@@ -18,7 +18,7 @@ health signal:
 arbitration, the mailbox, the intake, the repository, the result store,
 delivery, the domain, presentation, and the façade are byte-identical to M4.
 The backend contract is unchanged: not one member added, removed, or re-typed.
-Section 13 below enumerates everything M5 touched outside
+Section 11 below enumerates everything M5 touched outside
 `extensions/subagent-v2/backend/claude/` and classifies each entry.
 
 ---
@@ -35,12 +35,12 @@ Section 13 below enumerates everything M5 touched outside
 | `npm run test:conformance` | 164 tests, 163 pass, 1 skipped |
 | `npm run test:managed-conformance` | 6 tests, 6 pass |
 | `npm test` (v1 suite, repository scripts, `tools/`) | 540 tests, 539 pass, 1 skipped |
-| `npm run test:v2` | 975 tests, 967 pass, 8 skipped |
+| `npm run test:v2` | 979 tests, 971 pass, 8 skipped |
 | `npm run test:v2:conformance` | 153 tests, 145 pass, 8 skipped |
 | `npm run codex:protocol:check` | `CODEX_PROTOCOL_CHECK_PASS — codex-cli 0.150.1` |
 
 The three v1 lanes are byte-identical to M4's: **M5 changed no v1 file.** The
-v2 lane grew from 807 tests to 975, and the conformance lane from 115 to 153 —
+v2 lane grew from 807 tests to 979, and the conformance lane from 115 to 153 —
 the 38 new ones being the Claude rig's, which is the shared suite plus its own
 no-skips assertion.
 
@@ -229,20 +229,32 @@ scenario, which for Claude is the literal case rather than an analogue.
 
 Proven two ways.
 
-**By enumeration.** Section 13 lists every file M5 touched outside the Claude
+**By enumeration.** Section 11 lists every file M5 touched outside the Claude
 adapter directory. Nothing in `domain/`, `runtime/`, `presentation/`, or
 `application/` changed at all, and `git diff` over those four directories plus
 `backend/contract.ts` since M4 is empty.
 
 **By the boundary test.** Four new rules, each with a fixture proving it rejects
-what it is for and admits what it is not:
+what it is for and admits what it is not. Three are confinements; **the fourth
+is a relaxation, and it is named as one below rather than smuggled in with
+them**:
 
-| Rule | Fixture test |
-| --- | --- |
-| The Claude SDK is named inside `backend/claude/` and nowhere else — not even by the adapter's own test doubles | `the Claude SDK is rejected outside the Claude adapter, and admitted inside it` |
-| Only the composition root may import the adapter | `only the composition root may import the Claude adapter` |
-| The adapter may not import the runtime, host, presentation, the façade — or the *other adapter* | `the two adapters are siblings and neither may name the other` |
-| The provider's own cancellation primitive is admitted in the adapter, by directory, and nowhere else | `the provider's cancellation primitive is admitted in the Claude adapter and nowhere else` |
+| Rule | Kind | Fixture test |
+| --- | --- | --- |
+| The Claude SDK is named inside `backend/claude/` and nowhere else — not even by the adapter's own test doubles, and not another package under the same scope | confinement | `the Claude SDK is rejected outside the Claude adapter, and admitted inside it` |
+| Only the composition root may import the adapter | confinement | `only the composition root may import the Claude adapter` |
+| The adapter may not import the runtime, host, presentation, the façade — or the *other adapter* | confinement | `the two adapters are siblings and neither may name the other` |
+| `AbortController` and `AbortSignal`, previously confined to the host boundary, are admitted inside the Claude adapter | **relaxation** | `the provider's cancellation primitive is admitted in the Claude adapter and nowhere else` |
+
+The relaxation is classified in section 11 as a provider-neutral change, with
+its reasoning. It is narrow in three ways: it is by *directory* rather than by
+dropping the words from the list, it admits only those two words and not
+`Effect.runPromise` or `ManagedRuntime`, and the core still cannot name either.
+
+The SDK confinement is by the **exact specifier** rather than the
+`@anthropic-ai/` prefix, because the exemption is for that SDK and not for the
+scope it happens to live in; the fixture proves a sibling package under the
+same scope is still rejected inside the adapter.
 
 `the real v1 and v2 trees hold the boundary` runs every rule against the actual
 trees.
@@ -306,7 +318,7 @@ back into the adapter.
 **Nothing was classified (b).** Nothing had to be pushed back, and the backend
 contract is unchanged.
 
-### (a) Missing provider-neutral semantics — three
+### (a) Missing provider-neutral semantics — four
 
 **1. The depth environment key moved to `backend/depth.ts`** (from
 `backend/pi/depth.ts`).
@@ -353,6 +365,47 @@ place for the two to drift.
 *Fake-backend proof:* the two fake rigs do not use it (they know their own Run
 ids), and both Pi rigs continue to pass unchanged through the re-export.
 
+**4. The provider's own cancellation primitive is admitted inside an adapter**
+(`boundaries.test.ts`).
+
+`AbortController` and `AbortSignal` were confined to the host boundary, along
+with `Effect.runPromise` and `ManagedRuntime`. The rule's purpose is that the
+*core* is never handed a signal to poll: the contract expresses cancellation as
+interruption, and ADR-0028 says so in as many words. A provider whose only
+cancellation surface is an `AbortController` — which the Claude SDK's options
+bag is — is exactly the case an adapter exists to absorb, so the adapter
+constructs one, owns it for the Run, and aborts it in a scope finalizer.
+
+Admitting the two words **by directory** rather than dropping them from the
+list is what keeps the rule doing its job. `Effect.runPromise` and
+`ManagedRuntime` stay forbidden in the adapter too: an adapter that started its
+own runtime would have stopped living inside the caller's Effect, and the
+fixture proves that half as well as the admitted half.
+
+This is provider-neutral rather than Claude-specific because the rule it
+changes is about the core, not about Claude: any adapter for any provider whose
+cancellation is a signal will need the same admission, and `CONTEXT.md`'s **Host
+boundary** entry now records the exception where the rule itself is documented.
+
+*Fake-backend proof:* none applies — a boundary rule is not runtime behaviour.
+What it has instead is the fixture above, which is a proof in both directions
+on a disposable pair of trees.
+
+**5. The Session wiring for an adapter's own tests became shared**
+(`testing/backend-session.ts`, new; both adapter rigs now call it).
+
+`withPiSession` and `withClaudeSession` had the same forty lines of Session
+wiring — six services, a policy, a sink, a counter set, and a probe read after
+the Scope closes — differing only in which backend they built. With one real
+adapter that was a copy; with two it is a place for the two to drift, and with
+Codex at M6 it would be three. The shared function names no provider and takes
+a `Backend` it never looks inside; everything provider-shaped stayed with each
+rig.
+
+*Fake-backend proof:* not applicable, and not needed — the two fake rigs use
+`testing/session-rig.ts`, which is untouched, and both adapter rigs' full test
+files pass unchanged through the extraction.
+
 ### One shared conformance check loosened — the same one M4 loosened
 
 `late-events-cannot-mutate-a-terminal-run` (`testing/conformance.ts`).
@@ -389,20 +442,30 @@ For completeness, the rest of what M5 touched outside `backend/claude/`:
 
 | File | What changed |
 | --- | --- |
+| `backend/pi/depth.ts` | Re-exports the moved key, so the Pi adapter's surface is unchanged. |
+| `backend/pi/options.ts` | One import line: the key now comes from `backend/depth.ts`. |
 | `host/production-backends.ts` | New. The production set: Pi and Claude, host facts from Pi, one probe block per backend. |
 | `host/production-backends.test.ts` | New. What the set holds, and a Profile naming `claude` run end to end through it. |
+| `host/diagnostics-command.test.ts` | The per-backend probe blocks, in the formatter and through the command's own wiring. |
 | `index.ts` | Uses the production set instead of the Pi-only set. |
+| `testing/backend-session.ts` | New. The Session wiring both adapter rigs share. |
+| `testing/correlate.ts` | New. The Run correlation, provider-neutral. |
+| `testing/pi/correlate.ts` | Re-exports it, so the Pi rigs' imports are unchanged. |
+| `testing/pi/pi-rig.ts` | Calls the shared Session wiring instead of its own copy. |
+| `testing/host-rig.ts` | Can supply adapter probes, so the diagnostics command's wiring is testable. |
 | `testing/claude/stand-in-query.ts` | New. The scriptable stand-in Query. |
 | `testing/claude/stand-in-query.test.ts` | New. The stand-in, tested as the thing it is. |
 | `testing/claude/claude-rig.ts` | New. One Session runtime over the real Claude backend. |
 | `testing/claude/claude-backend.test.ts` | New. The Claude-specific cells. |
 | `testing/claude/conformance-rig.ts` | New. The shared suite's Claude fixtures. |
 | `testing/conformance-claude.test.ts` | New. Registers the suite and asserts the empty skip list. |
-| `boundaries.test.ts` | The four Claude confinement rules and their fixtures; the production set added to the composition root; the two host tests that may name the adapters. |
+| `testing/conformance.ts` | The one loosened non-vacuity check, above. |
+| `boundaries.test.ts` | The four rules above and their fixtures; the production set added to the composition root; the two host tests that may name the adapters. |
 | `scripts/v2-claude-live-smoke.mjs` | New. The opt-in runtime live lane. |
 | `scripts/v2-pi-host-live-smoke.mjs` | Takes the backend as an argument, so one script serves both host lanes. |
-| `package.json` | The Claude rig in the conformance lane; the two live gates in the release gate. |
-| `docs/v2/compatibility-matrix.md`, `docs/v2/roadmap.md`, `CONTEXT.md` | The Claude column, the milestone status, and the M5 glossary terms. |
+| `package.json`, `Makefile` | The Claude rig in the conformance lane; the two live gates in the release gate and behind a `make` target. |
+| `README.md` | Which backends v2 offers, and the four v2 live gates. |
+| `docs/v2/compatibility-matrix.md`, `docs/v2/roadmap.md`, `CONTEXT.md`, `docs/adr/0028-v2-backend-contract.md` | The Claude column, the milestone status, the M5 glossary terms, and the record that the contract held a second time. |
 
 Nothing in the runtime's Run lifecycle, settlement path, arbitration, mailbox,
 intake, repository, result store, or delivery changed. **The seam is healthy by
@@ -413,7 +476,7 @@ able to add Codex through adapter-local work plus new conformance fixtures.
 
 ## 12. Recorded v2 differences from v1
 
-Four, all deliberate.
+Six, all deliberate.
 
 **One fixed attachment-failure message instead of two.** v1 distinguished
 "Claude continuation attachment failed" from "Claude query returned an invalid
@@ -445,6 +508,22 @@ model had already said it in an assistant frame. v2 emits it only when the
 preceding assistant frame carried no text — a Run whose model only called tools
 and whose summary lives on the result frame still gets its answer, and a Run
 whose model answered normally gets it once.
+
+**The result frame's own `model` field is not read.** v1 read it, with a
+comment saying it did so "for wire compatibility even though the installed
+SDK's result type does not currently declare the field". It still does not
+declare it. The model a Claude Run ran is named by the init frame, which
+always precedes and is provenance rather than accounting; letting an
+undeclared field on a later frame override it would let *accounting* rewrite
+provenance. A Run that fails before any assistant frame still names its model,
+which is the case the tolerance existed for — `a Run that fails before
+answering still names the model it ran`.
+
+**A tool result's block list is read, not only its string form.** v1 read a
+tool-result block's `content` only when it was a string. The SDK's own type
+allows a block list, which is what a structured tool return looks like, and a
+`tool` transcript item that read empty for those would lose the part of a tool
+call a reader usually wants. `claudeToolResultText` joins the text blocks.
 
 ---
 
@@ -490,5 +569,20 @@ a single-entry `modelUsage` can be an auxiliary model. A Bedrock or Vertex
 deployment whose entries carry no `canonicalModel` would therefore show no
 context gauge. That is the honest failure rather than a wrong number.
 
-**5. The soak is still M4's open item.** M5 did not close it, and it was never
+**5. A discarded Control the provider later acknowledges is silent.** When a
+successful result frame cannot be correlated to any input the Run owns, the
+outstanding guidance is discarded and the Run settles — that is user story 16
+and v1's rule. The consequence is that if the provider *then* echoes that
+guidance, on the way down, the echo changes nothing: no user observation, no
+diagnostic. Admission told the caller the Control was accepted, which was true,
+and nothing else about it is.
+
+The alternative was considered and is worse. Waiting for an echo that may never
+come is not a settlement policy (ADR-0025 is explicit), and emitting the user
+message when it happens to arrive would grow a transcript whose contents depend
+on how a race went — with the guidance appearing *after* the answer it did not
+shape. It is deterministic silence rather than nondeterministic noise, and the
+code comment at the discard says so.
+
+**6. The soak is still M4's open item.** M5 did not close it, and it was never
 M5's to close. [`soak.md`](soak.md) is the record.

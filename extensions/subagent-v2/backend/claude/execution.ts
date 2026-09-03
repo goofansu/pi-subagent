@@ -237,16 +237,29 @@ export function runClaudeExecution(
     );
 
     /** The stderr diagnostic, at most one, immediately before the bundle. */
+    /**
+     * Report that the SDK wrote to stderr, once, whatever ends the Run.
+     *
+     * The flag is cleared as it is reported, because both the return path and
+     * the interrupt handler call this: an interruption landing between the
+     * emit and the return would otherwise put the same diagnostic on the Run
+     * twice.
+     */
+    const emitStderrOnce = (): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (!sawStderr) return;
+        sawStderr = false;
+        yield* io.emit({
+          kind: "diagnostic",
+          diagnostic: confined(SDK_STDERR_CATEGORY),
+        });
+      });
+
     const withStderr = (
       bundle: TerminalBundle,
     ): Effect.Effect<TerminalBundle> =>
       Effect.gen(function* () {
-        if (sawStderr) {
-          yield* io.emit({
-            kind: "diagnostic",
-            diagnostic: confined(SDK_STDERR_CATEGORY),
-          });
-        }
+        yield* emitStderrOnce();
         return bundle;
       });
 
@@ -402,6 +415,13 @@ export function runClaudeExecution(
         if (step.step === "done") break;
         if (step.step === "threw") {
           if (!semanticComplete) {
+            if (resumed !== undefined) {
+              // A resumed Query that died is a failed attachment however far
+              // it got, so the conversation is lost. Losing it only at the
+              // boundary check would leave a Subagent whose next Run resumed
+              // an identity this one could not reach.
+              conversation.lose();
+            }
             fatal = {
               ending: failedEnding(
                 resumed === undefined
@@ -489,6 +509,13 @@ export function runClaudeExecution(
           // owns cannot prove that outstanding guidance belongs to a later
           // turn. Keep the answer, fabricate no user observation, and stop
           // holding a Query open for input that may never be taken.
+          //
+          // A discarded Control produces nothing from here on, and that is the
+          // decision rather than an oversight: if the provider echoes it after
+          // this point the echo is ignored, because the alternative is a Run
+          // that either never settles or grows a user message *after* its
+          // answer depending on how the race went. Admission told the caller
+          // the Control was accepted, which was true; nothing else about it is.
           discardOutstanding();
         }
         if (hasOutstanding()) {
@@ -526,12 +553,7 @@ export function runClaudeExecution(
      * makes arbitration prefer the answer over the interruption.
      */
     const announceOnInterrupt = Effect.gen(function* () {
-      if (sawStderr) {
-        yield* io.emit({
-          kind: "diagnostic",
-          diagnostic: confined(SDK_STDERR_CATEGORY),
-        });
-      }
+      yield* emitStderrOnce();
       if (!successfulResult) return;
       yield* io.emit({
         kind: "reconciliation",
@@ -551,8 +573,9 @@ export function runClaudeExecution(
  * message list to read at the end of a Query — the frames were the transcript,
  * and they have already been reported — so a snapshot claiming one would be a
  * snapshot the adapter had made up. That is why the Claude BackendAgent
- * declares `terminalTranscriptSnapshot: false`, and why the shared suite's
- * transcript-healing scenarios are the only ones it skips.
+ * declares `terminalTranscriptSnapshot: false`. It costs no coverage: no
+ * shared conformance scenario is gated on that capability, and the Claude rig
+ * skips none of them.
  */
 function reconcile(translator: ClaudeTranslator): TerminalReconciliation {
   const model = translator.primaryModel();

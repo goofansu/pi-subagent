@@ -26,8 +26,6 @@ import { type ClaudeOpenOptions, openClaudeBackendAgent } from "./agent.ts";
 import {
   type ClaudeAdapterTally,
   type ClaudeNativeProbe,
-  type ClaudeProbeCounters,
-  type ClaudeTallyCounters,
   createClaudeProbeCounters,
   createClaudeTallyCounters,
 } from "./probe.ts";
@@ -48,17 +46,15 @@ export interface ClaudeBackendHandle {
 export interface ClaudeBackendOptions extends ClaudeOpenOptions {
   /** Overridden only where a second Claude-shaped backend is wanted. */
   readonly id?: BackendId;
-  /** Shared with the caller when a test wants to read the probe directly. */
-  readonly probe?: ClaudeProbeCounters;
-  /** Shared with the caller when a test wants to read the tally directly. */
-  readonly tally?: ClaudeTallyCounters;
 }
 
 export function createClaudeBackend(
   options: ClaudeBackendOptions = {},
 ): ClaudeBackendHandle {
-  const probe = options.probe ?? createClaudeProbeCounters();
-  const tally = options.tally ?? createClaudeTallyCounters();
+  // Not injectable: every caller reads them off the handle instead, which is
+  // the only way anything outside this module can reach them at all.
+  const probe = createClaudeProbeCounters();
+  const tally = createClaudeTallyCounters();
   const backend: Backend = {
     id: options.id ?? backendId(CLAUDE_BACKEND_ID),
     // No validation context is read: Claude's model rule is a fixed family

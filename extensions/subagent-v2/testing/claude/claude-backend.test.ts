@@ -511,6 +511,119 @@ test("guidance the provider never acknowledges is delivered and never claimed", 
   );
 });
 
+test("a result frame's correlation confirms guidance the provider never echoed", async () => {
+  // The second kind of provider evidence, and the only one on this path: the
+  // Query takes the Control and answers it without ever emitting a user frame
+  // for it, and the result names its uuid as the input the turn answered.
+  // Without this the Run would have delivered guidance the model acted on and
+  // reported nothing about it.
+  const { value } = await withClaudeSession(
+    {
+      scripts: [
+        [
+          { step: "init" },
+          { step: "assistant", messageId: "msg_1", text: "under way" },
+          { step: "await-input" },
+          { step: "assistant", messageId: "msg_2", text: "the steered answer" },
+          {
+            step: "result",
+            text: "the steered answer",
+            numTurns: 2,
+            correlate: "awaited",
+          },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(
+          yield* rig.supervisor.start(claudeRigRequest()),
+        );
+        yield* untilQueried(rig);
+        yield* rig.supervisor.steer(started.runId, {
+          type: "steer",
+          text: "confirmed by correlation alone",
+        });
+        yield* untilTerminal(rig, started.runId);
+        return {
+          result: resultOf(yield* rig.supervisor.result(started.runId)),
+          record: rig.standIn.record(),
+        };
+      }),
+  );
+
+  // No user frame was ever emitted, so the echo path cannot be what confirmed
+  // it.
+  assert.equal(
+    value.result.transcript.filter((item) => item.role === "user").length,
+    1,
+  );
+  // The user message lands *after* the answer it shaped, and that is honest
+  // rather than a bug: the result frame is the moment the adapter learned the
+  // guidance had been seen, and reordering the transcript on a guess about
+  // when the model actually read it would be fiction. An echo, when the
+  // provider sends one, arrives earlier and is ordered earlier.
+  assert.deepEqual(
+    value.result.transcript.map((item) => item.role),
+    ["assistant", "assistant", "user"],
+  );
+  assert.deepEqual(value.record.controls, ["confirmed by correlation alone"]);
+  assert.equal(value.result.status, "completed");
+  assert.equal(value.result.finalOutput, "the steered answer");
+});
+
+test("a resumed Query that dies mid-stream marks the conversation lost", async () => {
+  // Loss has to be monotonic across *every* way an attachment can fail, not
+  // only the two that reach the identity check. A Subagent whose next Run
+  // resumed an identity this one could not reach would be a Run answering
+  // from a conversation nobody knows the state of.
+  const { value } = await withClaudeSession(
+    {
+      scripts: [
+        ANSWERED,
+        [
+          { step: "init" },
+          { step: "assistant", messageId: "msg_2", text: "a partial answer" },
+          { step: "throw" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const first = startedRun(
+          yield* rig.supervisor.start(claudeRigRequest()),
+        );
+        yield* untilTerminal(rig, first.runId);
+        const resumed = startedRun(
+          yield* rig.supervisor.resume({
+            subagentId: first.subagentId,
+            description: "again",
+            prompt: "and again",
+          }),
+        );
+        yield* untilTerminal(rig, resumed.runId);
+        const failed = resultOf(yield* rig.supervisor.result(resumed.runId));
+        const again = yield* rig.supervisor.resume({
+          subagentId: first.subagentId,
+          description: "once more",
+          prompt: "once more",
+        });
+        return {
+          failed,
+          again: again.outcome,
+          retained: rig.probe().retainedIdentities,
+        };
+      }),
+  );
+
+  assert.equal(value.failed.status, "failed");
+  assert.equal(value.failed.errorMessage, CLAUDE_ATTACHMENT_FAILED_MESSAGE);
+  // What it did observe before the transport died is kept.
+  assert.equal(value.failed.finalOutput, "a partial answer");
+  assert.equal(value.again, "conversation lost");
+  assert.equal(value.retained, 0);
+});
+
 test("a result frame with guidance still outstanding is a Turn boundary, not settlement", async () => {
   const { value } = await withClaudeSession(
     {

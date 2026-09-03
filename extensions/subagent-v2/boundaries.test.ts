@@ -209,8 +209,15 @@ function isProviderSdk(specifier: string): boolean {
   return PROVIDER_SDK_PREFIXES.some((prefix) => specifier.startsWith(prefix));
 }
 
-/** The one package specifier prefix the Claude adapter may name. */
-const CLAUDE_SDK_PREFIX = "@anthropic-ai/";
+/**
+ * The one package specifier the Claude adapter may name.
+ *
+ * The exact specifier rather than the `@anthropic-ai/` prefix, because the
+ * exemption is for *this* SDK and not for the scope it happens to live in. A
+ * prefix would silently admit any future package published under the same
+ * scope, which is the opposite of a confinement.
+ */
+const CLAUDE_SDK_SPECIFIER = "@anthropic-ai/claude-agent-sdk";
 
 function mayImportProviderSdk(
   specifier: string,
@@ -218,7 +225,7 @@ function mayImportProviderSdk(
   graph: V2BoundaryGraph,
 ): boolean {
   return (
-    specifier.startsWith(CLAUDE_SDK_PREFIX) &&
+    specifier === CLAUDE_SDK_SPECIFIER &&
     isInside(file, graph.claudeAdapterRoot)
   );
 }
@@ -1808,8 +1815,17 @@ test("the Claude SDK is rejected outside the Claude adapter, and admitted inside
     "extensions/subagent-v2/runtime/repository.ts",
     'import { query } from "@anthropic-ai/claude-agent-sdk";\nexport const held = query;\n',
   );
+  // Rejected even in the adapter: the exemption is for *this* SDK, not for
+  // the scope it happens to live in.
+  write(
+    "extensions/subagent-v2/backend/claude/other.ts",
+    'import Anthropic from "@anthropic-ai/sdk";\nexport const held = Anthropic;\n',
+  );
 
   assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(
+      path.join(graph.claudeAdapterRoot, "other.ts"),
+    )} imports forbidden provider SDK @anthropic-ai/sdk`,
     `${describe(
       path.join(graph.runtimeRoot, "repository.ts"),
     )} imports forbidden provider SDK @anthropic-ai/claude-agent-sdk`,

@@ -12,7 +12,6 @@
 export {
   CLAUDE_CAPABILITIES,
   type ClaudeOpenOptions,
-  createClaudeBackendAgent,
   openClaudeBackendAgent,
 } from "./agent.ts";
 export {
@@ -47,11 +46,8 @@ export {
 export {
   type ClaudeAdapterTally,
   type ClaudeNativeProbe,
-  type ClaudeProbeCounters,
-  type ClaudeTallyCounters,
   claudeProbeIsClear,
   createClaudeProbeCounters,
-  createClaudeTallyCounters,
 } from "./probe.ts";
 export {
   CLAUDE_DISPLAY_NAME,

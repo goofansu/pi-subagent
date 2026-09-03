@@ -59,9 +59,14 @@ import {
  * into the Run's own input stream. A **terminal transcript snapshot is not
  * available**: the frames *were* the transcript, they have already been
  * reported, and there is no authoritative message list to read at the end of a
- * Query. Declaring `false` is what makes the shared suite skip its
- * transcript-healing scenarios visibly rather than have the adapter invent a
- * snapshot to pass them with.
+ * Query.
+ *
+ * Declaring `false` costs nothing in coverage, and that is worth stating
+ * because v1's Claude adapter *did* skip a conformance scenario for it. No v2
+ * shared scenario is gated on the capability, so the Claude rig skips none of
+ * the thirty-seven. What the `false` buys is that the adapter never invents a
+ * snapshot: it reports turns and the model, which it knows, and no transcript,
+ * which it would have to make up.
  */
 export const CLAUDE_CAPABILITIES: BackendCapabilities = {
   resume: true,
@@ -85,7 +90,7 @@ type IdentityState =
   /** Closed, or an attachment failed. Nothing moves back. */
   | { readonly state: "lost" };
 
-export function createClaudeBackendAgent(
+function createClaudeBackendAgent(
   query: ClaudeQuery,
   profile: Profile,
   subagent: SubagentContext,

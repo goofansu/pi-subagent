@@ -376,6 +376,13 @@ export function claudeUsageDelta(
  * a Run that failed before its model answered, or a frame that named a model
  * `modelUsage` does not key — the gauge is omitted rather than borrowed from
  * whatever entry happens to be there.
+ *
+ * **No window, no gauge.** The domain allows a gauge without a denominator,
+ * and for a provider that reports true occupancy that is a reasonable thing to
+ * send. This figure is not that: it is *cumulative across the turns of the
+ * Query*, so without a window to read it against it is exactly the sum a gauge
+ * exists not to be. An entry with no usable `contextWindow` is therefore no
+ * gauge at all.
  */
 export function claudeContextGauge(
   frame: Record<string, unknown>,
@@ -393,7 +400,8 @@ export function claudeContextGauge(
   );
   if (tokens === undefined) return undefined;
   const window = readCounter(entry.contextWindow);
-  return { tokens, ...(window === undefined ? {} : { window }) };
+  if (window === undefined || window === 0) return undefined;
+  return { tokens, window };
 }
 
 /** The entry for the model the Run is running, by key or by canonical name. */
@@ -413,11 +421,16 @@ function primaryModelEntry(
 /* The Run-local translator                                        */
 /* ============================================================== */
 
-/** What one frame produced, plus the two Run-state facts it settled. */
+/**
+ * What one frame produced.
+ *
+ * Observations and nothing else. The provider's own turn total is deliberately
+ * *not* here: the translator has already folded it into its running count,
+ * raise-only, and a second copy on the way out would be a number a caller
+ * could apply twice.
+ */
 export interface ClaudeTranslation {
   readonly observations: readonly RunObservation[];
-  /** The provider's own turn total on a result frame, for reconciliation. */
-  readonly reportedTurns?: number;
 }
 
 export interface ClaudeTranslator {
@@ -481,17 +494,20 @@ export function createClaudeTranslator(): ClaudeTranslator {
     if (model !== undefined) primaryModel ??= model;
     const turnDelta = countAssistantTurn(frame);
     lastAssistantAnswered = parts.some((part) => part.kind === "text");
-    if (parts.length === 0 && model === undefined && turnDelta === 0) {
-      return { observations: [] };
-    }
-    const observations: RunObservation[] = [
-      {
+    const observations: RunObservation[] = [];
+    // A frame with no readable content and no model carries nothing a reader
+    // could use, so no message is reported for it — but if it was a new root
+    // message it was still a turn, and dropping the frame whole would lose
+    // that. Thinking-only frames are the ordinary case here, and they *do*
+    // carry a model, so they keep their message.
+    if (parts.length > 0 || model !== undefined) {
+      observations.push({
         kind: "message",
         role: "assistant",
         parts,
         ...(model === undefined ? {} : { model }),
-      },
-    ];
+      });
+    }
     if (turnDelta > 0) {
       observations.push({ kind: "usage", usage: { turns: turnDelta } });
     }
@@ -563,11 +579,7 @@ export function createClaudeTranslator(): ClaudeTranslator {
     if (context !== undefined) {
       observations.push({ kind: "context", context });
     }
-    const reported = readCounter(frame.num_turns);
-    return {
-      observations,
-      ...(reported === undefined ? {} : { reportedTurns: reported }),
-    };
+    return { observations };
   };
 
   return {
