@@ -44,13 +44,13 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { Profile, SubagentContext } from "../../domain/index.ts";
+import { DEPTH_ENV_KEY } from "../depth.ts";
 import {
   EFFORTS,
   parseTools,
   shouldAppendSystemPrompt,
 } from "../profile-fields.ts";
 import { withChildResourceLoad } from "./child-load.ts";
-import { DEPTH_ENV_KEY } from "./depth.ts";
 import type { PiSessionOptions } from "./session.ts";
 
 /** The six delegation tools a child may not have. */

@@ -69,6 +69,10 @@ export interface V2BoundaryGraph {
   readonly piAdapterRoot: string;
   /** Test doubles and rigs for the Pi adapter, which may name its types. */
   readonly piTestingRoot: string;
+  /** The Claude adapter, where the whole Claude SDK is confined. */
+  readonly claudeAdapterRoot: string;
+  /** Test doubles and rigs for the Claude adapter, which may name its types. */
+  readonly claudeTestingRoot: string;
   /** The Session runtime, where the supervisor and its services live. */
   readonly runtimeRoot: string;
   /** Pure prose and row formatting, which may name only the domain and Pi. */
@@ -107,6 +111,20 @@ const productionGraph: V2BoundaryGraph = {
     "subagent-v2",
     "testing",
     "pi",
+  ),
+  claudeAdapterRoot: path.join(
+    repositoryRoot,
+    "extensions",
+    "subagent-v2",
+    "backend",
+    "claude",
+  ),
+  claudeTestingRoot: path.join(
+    repositoryRoot,
+    "extensions",
+    "subagent-v2",
+    "testing",
+    "claude",
   ),
   runtimeRoot: path.join(
     repositoryRoot,
@@ -170,17 +188,39 @@ function isEffectPackage(specifier: string): boolean {
 }
 
 /**
- * Provider SDKs, which no v2 file may import before the adapter milestones.
+ * Provider SDKs, which no v2 file may import outside its own adapter.
  *
  * Pi's own packages are deliberately not on this list: they are also the host
  * API this extension is written against, and the M0 entry point imports the
  * host types from them. Keeping them out of the neutral core is the job of the
  * domain and backend rules below, which admit no package specifier at all.
+ *
+ * M5 turned the blanket ban into a confinement, because one adapter now needs
+ * one of these packages. The Claude SDK may be named inside
+ * `backend/claude/` and nowhere else — not even by the adapter's own test
+ * doubles, which take the SDK's types through the aliases the adapter
+ * re-exports. That is stricter than the Pi rule has to be: Pi's package is
+ * also the host API, so its rule is by binding, and Claude's package is a
+ * provider and nothing else, so its rule is by specifier.
  */
 const PROVIDER_SDK_PREFIXES = ["@anthropic-ai/", "@openai/"] as const;
 
 function isProviderSdk(specifier: string): boolean {
   return PROVIDER_SDK_PREFIXES.some((prefix) => specifier.startsWith(prefix));
+}
+
+/** The one package specifier prefix the Claude adapter may name. */
+const CLAUDE_SDK_PREFIX = "@anthropic-ai/";
+
+function mayImportProviderSdk(
+  specifier: string,
+  file: string,
+  graph: V2BoundaryGraph,
+): boolean {
+  return (
+    specifier.startsWith(CLAUDE_SDK_PREFIX) &&
+    isInside(file, graph.claudeAdapterRoot)
+  );
 }
 
 /**
@@ -236,6 +276,38 @@ const MECHANISM_VOCABULARY = [
 ] as const;
 
 /**
+ * The two words a provider adapter may name, and where.
+ *
+ * The list above is about the *core*: the contract expresses cancellation as
+ * interruption, so no module of the neutral runtime is ever handed a signal to
+ * poll. A provider whose only cancellation surface is an `AbortController` is
+ * exactly the case an adapter exists to absorb — the Claude SDK takes one on
+ * its options bag and offers nothing else — so the adapter constructs one,
+ * owns it for the Run, and aborts it in a scope finalizer.
+ *
+ * Admitting the two words **by directory** rather than dropping them from the
+ * list is what keeps the rule doing its job: the core still cannot name them,
+ * and `Effect.runPromise` and `ManagedRuntime` stay forbidden in the adapter
+ * too, because an adapter that started its own runtime would be an adapter
+ * that had stopped living inside the caller's Effect.
+ */
+const PROVIDER_CANCELLATION_VOCABULARY = new Set([
+  "AbortController",
+  "AbortSignal",
+]);
+
+function mayNameMechanism(
+  mechanism: string,
+  file: string,
+  graph: V2BoundaryGraph,
+): boolean {
+  return (
+    PROVIDER_CANCELLATION_VOCABULARY.has(mechanism) &&
+    isInside(file, graph.claudeAdapterRoot)
+  );
+}
+
+/**
  * Where the host boundary is.
  *
  * M3 makes the exit-gate rule checkable rather than reviewable: the host
@@ -287,6 +359,7 @@ const COMPOSITION_ROOT_FILES = new Set([
   "runtime/composition.ts",
   "host/demo-backends.ts",
   "host/pi-backends.ts",
+  "host/production-backends.ts",
 ]);
 
 function isCompositionRoot(file: string, graph: V2BoundaryGraph): boolean {
@@ -425,6 +498,35 @@ function mayImportPiAdapter(file: string, graph: V2BoundaryGraph): boolean {
   );
 }
 
+/**
+ * The tests outside the Claude adapter's own directories that may name it.
+ *
+ * Named one by one, exactly as the Pi list is. The one entry is the
+ * diagnostics command's test, which is *about* the two adapter probes the
+ * command reports and has nowhere else to get them.
+ */
+const CLAUDE_ADAPTER_TEST_IMPORTERS = new Set([
+  "host/diagnostics-command.test.ts",
+]);
+
+/**
+ * Who may reach into the Claude adapter.
+ *
+ * The same rule as Pi's, for the same reason: a runtime, presentation,
+ * application, or host module that could import the adapter would be a module
+ * that could start a Query, and then two things would own the Run's lifetime.
+ */
+function mayImportClaudeAdapter(file: string, graph: V2BoundaryGraph): boolean {
+  return (
+    isCompositionRoot(file, graph) ||
+    isInside(file, graph.claudeAdapterRoot) ||
+    isInside(file, graph.claudeTestingRoot) ||
+    CLAUDE_ADAPTER_TEST_IMPORTERS.has(
+      path.relative(graph.v2Root, file).split(path.sep).join("/"),
+    )
+  );
+}
+
 function specifiersOf(file: string): string[] {
   return readImportSpecifiers(fs.readFileSync(file, "utf8"));
 }
@@ -544,6 +646,7 @@ export function findV2BoundaryViolations(
     const source = fs.readFileSync(file, "utf8");
     for (const mechanism of MECHANISM_VOCABULARY) {
       if (!source.includes(mechanism)) continue;
+      if (mayNameMechanism(mechanism, file, graph)) continue;
       violations.add(
         `${describe(file)} contains runtime mechanism vocabulary ${mechanism}`,
       );
@@ -579,14 +682,16 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 7. No v2 file reaches a provider SDK before the adapter milestones.
+  // 7. A provider SDK is named inside its own adapter directory and nowhere
+  //    else. The Claude adapter names the Claude SDK; every other v2 file,
+  //    tests and test doubles included, names none.
   for (const file of listSourceFiles(v2Root, { includeTests: true })) {
     for (const specifier of specifiersOf(file)) {
-      if (isProviderSdk(specifier)) {
-        violations.add(
-          `${describe(file)} imports forbidden provider SDK ${specifier}`,
-        );
-      }
+      if (!isProviderSdk(specifier)) continue;
+      if (mayImportProviderSdk(specifier, file, graph)) continue;
+      violations.add(
+        `${describe(file)} imports forbidden provider SDK ${specifier}`,
+      );
     }
   }
 
@@ -794,6 +899,42 @@ export function findV2BoundaryViolations(
     }
   }
 
+  // 16. The same two directions for the Claude adapter. The sibling edge —
+  //     one adapter naming the other — needs no rule of its own: rule 15's
+  //     importer list does not admit the Claude adapter, so a Claude module
+  //     reaching for Pi is already rejected there, and the reverse is rejected
+  //     by this rule's own list.
+  for (const file of listSourceFiles(v2Root, { includeTests: true })) {
+    if (mayImportClaudeAdapter(file, graph)) continue;
+    for (const specifier of specifiersOf(file)) {
+      const target = resolveRelativeSource(file, specifier);
+      if (target && isInside(target, graph.claudeAdapterRoot)) {
+        violations.add(
+          `${describe(file)} imports ${describe(target)}, and only the composition root may name the Claude adapter`,
+        );
+      }
+    }
+  }
+  for (const file of listSourceFiles(graph.claudeAdapterRoot, {
+    includeTests: false,
+  })) {
+    for (const specifier of specifiersOf(file)) {
+      const target = resolveRelativeSource(file, specifier);
+      if (!target) continue;
+      if (
+        isInside(target, graph.runtimeRoot) ||
+        isInside(target, graph.hostRoot) ||
+        isInside(target, graph.presentationRoot) ||
+        isInside(target, graph.applicationRoot) ||
+        isInside(target, graph.testingRoot)
+      ) {
+        violations.add(
+          `${describe(file)} imports ${describe(target)}, and the Claude adapter lives behind the backend contract`,
+        );
+      }
+    }
+  }
+
   return [...violations].sort();
 }
 
@@ -833,6 +974,20 @@ function fixtureGraph(
       "subagent-v2",
       "testing",
       "pi",
+    ),
+    claudeAdapterRoot: path.join(
+      fixtureRoot,
+      "extensions",
+      "subagent-v2",
+      "backend",
+      "claude",
+    ),
+    claudeTestingRoot: path.join(
+      fixtureRoot,
+      "extensions",
+      "subagent-v2",
+      "testing",
+      "claude",
     ),
     runtimeRoot: path.join(fixtureRoot, "extensions", "subagent-v2", "runtime"),
     presentationRoot: path.join(
@@ -1628,6 +1783,136 @@ test("the Pi adapter may not import the runtime, the host, or presentation", (t)
     `${describe(path.join(graph.piAdapterRoot, "agent.ts"))} imports ${describe(
       path.join(graph.runtimeRoot, "policy.ts"),
     )}, and the Pi adapter lives behind the backend contract`,
+  ]);
+});
+
+test("the Claude SDK is rejected outside the Claude adapter, and admitted inside it", (t) => {
+  const { graph, write } = fixtureGraph(t, "claude-sdk-confinement");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  // Allowed: the adapter is the one place the SDK is named.
+  write(
+    "extensions/subagent-v2/backend/claude/query.ts",
+    'import type { Options } from "@anthropic-ai/claude-agent-sdk";\nexport type Held = Options;\n',
+  );
+  // Rejected: a test double reaching for the SDK rather than the adapter's own
+  // re-exported aliases.
+  write(
+    "extensions/subagent-v2/testing/claude/stand-in-query.ts",
+    'import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";\nexport type Frame = SDKMessage;\n',
+  );
+  // Rejected: the runtime, which has never heard of a provider.
+  write(
+    "extensions/subagent-v2/runtime/repository.ts",
+    'import { query } from "@anthropic-ai/claude-agent-sdk";\nexport const held = query;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(
+      path.join(graph.runtimeRoot, "repository.ts"),
+    )} imports forbidden provider SDK @anthropic-ai/claude-agent-sdk`,
+    `${describe(
+      path.join(graph.claudeTestingRoot, "stand-in-query.ts"),
+    )} imports forbidden provider SDK @anthropic-ai/claude-agent-sdk`,
+  ]);
+});
+
+test("only the composition root may import the Claude adapter", (t) => {
+  const { graph, write } = fixtureGraph(t, "claude-adapter-importers");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/backend/claude/index.ts",
+    "export const claude = 1;\n",
+  );
+  // Allowed: the composition root wires the set.
+  write(
+    "extensions/subagent-v2/host/production-backends.ts",
+    'import { claude } from "../backend/claude/index.ts";\nexport const set = claude;\n',
+  );
+  // Allowed: the adapter's own test doubles.
+  write(
+    "extensions/subagent-v2/testing/claude/stand-in-query.ts",
+    'import { claude } from "../../backend/claude/index.ts";\nexport const held = claude;\n',
+  );
+  // Rejected: the façade reaching around the contract.
+  write(
+    "extensions/subagent-v2/application/subagents.ts",
+    'import { claude } from "../backend/claude/index.ts";\nexport const held = claude;\n',
+  );
+
+  const violations = findV2BoundaryViolations(graph);
+
+  assert.ok(
+    violations.includes(
+      `${describe(
+        path.join(graph.applicationRoot, "subagents.ts"),
+      )} imports ${describe(
+        path.join(graph.claudeAdapterRoot, "index.ts"),
+      )}, and only the composition root may name the Claude adapter`,
+    ),
+    `the façade reached the adapter unchallenged: ${JSON.stringify(violations)}`,
+  );
+});
+
+test("the two adapters are siblings and neither may name the other", (t) => {
+  const { graph, write } = fixtureGraph(t, "claude-adapter-reach");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/backend/pi/depth.ts",
+    "export const key = 1;\n",
+  );
+  write(
+    "extensions/subagent-v2/runtime/policy.ts",
+    "export const bound = 1;\n",
+  );
+  write(
+    "extensions/subagent-v2/backend/claude/options.ts",
+    'import { key } from "../pi/depth.ts";\nexport const used = key;\n',
+  );
+  write(
+    "extensions/subagent-v2/backend/claude/agent.ts",
+    'import { bound } from "../../runtime/policy.ts";\nexport const used = bound;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.claudeAdapterRoot, "agent.ts"))} imports ${describe(
+      path.join(graph.runtimeRoot, "policy.ts"),
+    )}, and the Claude adapter lives behind the backend contract`,
+    // The sibling edge is caught by the Pi rule, whose importer list does not
+    // admit the Claude adapter. One rule, one violation, either direction.
+    `${describe(path.join(graph.claudeAdapterRoot, "options.ts"))} imports ${describe(
+      path.join(graph.piAdapterRoot, "depth.ts"),
+    )}, and only the composition root may name the Pi adapter`,
+  ]);
+});
+
+test("the provider's cancellation primitive is admitted in the Claude adapter and nowhere else", (t) => {
+  const { graph, write } = fixtureGraph(t, "claude-abort-controller");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  // Allowed: the SDK takes an AbortController and offers nothing else, so the
+  // adapter owns one per Run.
+  write(
+    "extensions/subagent-v2/backend/claude/execution.ts",
+    "export const abort = new AbortController();\n",
+  );
+  // Rejected even in the adapter: an adapter that started its own runtime
+  // would have stopped living inside the caller's Effect.
+  write(
+    "extensions/subagent-v2/backend/claude/agent.ts",
+    "export const run = () => Effect.runPromise;\n",
+  );
+  // Rejected: the runtime is handed interruption, never a signal to poll.
+  write(
+    "extensions/subagent-v2/runtime/repository.ts",
+    "export const held = (signal: AbortSignal) => signal;\n",
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(
+      path.join(graph.claudeAdapterRoot, "agent.ts"),
+    )} contains runtime mechanism vocabulary Effect.runPromise`,
+    `${describe(
+      path.join(graph.runtimeRoot, "repository.ts"),
+    )} contains runtime mechanism vocabulary AbortSignal`,
   ]);
 });
 
