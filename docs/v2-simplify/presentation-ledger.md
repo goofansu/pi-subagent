@@ -269,11 +269,21 @@ subscription for its widget on purpose. The counters are behind
 
 ### C-2 · `/agents`
 
-**Before and after** — unchanged output; also reachable as
-`/subagent profiles`. The alias is removed in the first minor after 2.0 and the
-compatibility matrix says so.
+**Before** — a registered command listing Profiles and opening their prompts.
 
-**Why** — roadmap A4.
+**After** — **removed in 2.0.** Not registered, so Pi answers it as an unknown
+command. Its flow is `/subagent profiles`, key for key: the filter, the prompt
+view, the work action and every key are unchanged, so what a 1.x user relearns
+is a name and not a command.
+
+**Why** — roadmap A4, and the decision recorded in
+[semantics §8](notification-semantics.md#8-what-this-document-deliberately-does-not-decide),
+which reverses this ledger's draft. The draft kept `/agents` as an alias
+through 2.0. An alias keeps two ways to list Profiles in `/help` and two entry
+points for a maintainer to keep honest — which is the confusion Phase A was
+about — and it makes the user relearn the name twice: once when the second way
+appears and again when the first goes. It is the one public surface 2.0 removes
+rather than preserves, and the compatibility matrix marks it **[v2 change]**.
 
 ## Tool schema copy
 
@@ -308,7 +318,7 @@ after column, by test name and file.
 | S-1 (ids) | `S-1: the ids are in the expanded text, where a tool call needs them` | `host/notification-message.test.ts` | confirmed |
 | S-2 | `S-2: a failed and a cancelled summary read the same way, with the verb changed` | `presentation/renderers.test.ts` | confirmed |
 | C-1 | `C-1: bare /subagent prints the shallow status and no counters`; `C-1: the status names every Profile with the backend it names`; `C-1: the status counts Runs in the shared phase vocabulary` | `host/diagnostics-command.test.ts` | confirmed |
-| C-2 | `C-2: /subagent profiles opens the same flow /agents opens`; `the agents command registers itself once, with a description` | `host/diagnostics-command.test.ts`; `host/agents-command.test.ts` (unmodified) | confirmed |
+| C-2 | `C-2: /subagent is the only command, and /agents is gone`; `C-2: /subagent profiles opens the Profile flow`; `the Profile flow registers no command of its own`; `the entry point registers the six tools, its one command, and the notification renderer` | `host/diagnostics-command.test.ts`; `host/agents-command.test.ts`; `index.test.ts` | confirmed |
 | T-1 | `T1: the label's bound is stated on both description fields` | `host/tool-schemas.test.ts` | confirmed |
 | W-1 | the row-lifetime and settled-duration tests, unmodified | `host/widget.test.ts`; `presentation/rows.test.ts` | confirmed unchanged |
 | W-2 | — | — | Phase C |

@@ -209,7 +209,7 @@ consumed it. Check the Run's transcript: a user observation appears only on
 authoritative provider confirmation, so no user item means it was never
 confirmed. Do not resend in a loop.
 
-### A Profile does not appear in `/agents`
+### A Profile does not appear in `/subagent profiles`
 
 It failed validation, and the Session said so at start with a warning naming
 the file and the rule. The most likely cause after upgrading from 1.x is the

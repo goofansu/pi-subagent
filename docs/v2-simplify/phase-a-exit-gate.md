@@ -214,7 +214,7 @@ cost when non-zero; it carries no id and no character count. The expanded text
 carries both ids.
 
 **Met, less the cost — and the cost's removal is the finding.** See correction
-5 below: cost is not backend-independent, so it is not on the line.
+6 below: cost is not backend-independent, so it is not on the line.
 
 **Evidence.** `presentation/renderers.test.ts`: `S-1: a collapsed notice names
 the agent, the task, and the outcome` asserts `reviewer · audit auth
@@ -240,6 +240,11 @@ Profile list; `/subagent diagnostics` is the counters and probes; `/agents`
 still works and produces the same list. The compatibility matrix's `/agents`
 row says when the alias goes.
 
+**Met, except that `/agents` does not still work: it is removed in 2.0.** See
+correction 5 below. The alias was built, reviewed, and then removed on the
+release owner's decision, and the matrix records the removal as the mechanism
+the item asked for.
+
 **Evidence.** `host/diagnostics-command.test.ts`: `C-1: bare /subagent prints
 the shallow status and no counters` — which asserts every runtime counter's
 name is *absent* — `C-1: the status names every Profile with the backend it
@@ -247,12 +252,17 @@ names`, `C-1: the status counts Runs in the shared phase vocabulary`, `a
 Session with no Profiles still says where to put one`, `a Session with no
 runtime says so and still says where to put a Profile`, `health is a verdict
 on what was noticed and a count of what is held`, `C-2: /subagent profiles
-opens the same flow /agents opens`, `an unknown subcommand names the two that
-exist`, and `the report names every runtime counter and every probe field`
-against `/subagent diagnostics`. `host/agents-command.test.ts` passes
-unmodified, including `the agents command registers itself once, with a
-description`. The matrix's `/agents` section records the alias and says it goes
-in the first minor after 2.0.
+opens the Profile flow`, `an unknown subcommand names the two that exist`, and
+`the report names every runtime counter and every probe field` against
+`/subagent diagnostics`.
+
+The removal is asserted by **exhaustion, not absence**: `C-2: /subagent is the
+only command, and /agents is gone` and `the entry point registers the six
+tools, its one command, and the notification renderer` both compare the whole
+command list, because a list is the only way to notice a command nobody
+deleted. `the Profile flow registers no command of its own` holds the
+`host/agents-command.ts` side. The matrix's operator-surface section records
+the removal as **[v2 change]**.
 
 **Two notes on the item as written.** The status reports the probe as a
 *count* rather than judging it: a live Session holds a fiber per Run and a
@@ -335,7 +345,29 @@ in the decided text three times out of four.
    60s`; the shared `formatDuration` produces `41.2s` and `1m 0s`. Corrected
    in the document, since a second formatter for one line would be a second
    answer to the same question.
-5. **The cost on the collapsed line, removed.** §6 appended ` · $<cost>` when
+5. **`/agents`, removed rather than kept as an alias.** The spec's Out of
+   Scope said "Removing `/agents` (first minor after 2.0, via the matrix)",
+   user story 17 asked for it to "keep working through 2.0", and §8 of the
+   semantics document left the removal to a later minor. The alias was built
+   to that specification, reviewed, and then removed on the release owner's
+   decision.
+
+   The reason is the reason the namespace exists: two overlapping commands
+   with nothing to say which to type first is the confusion this phase was
+   about, and an alias keeps it under a deprecation note — `/help` still
+   offers two ways to list Profiles, a maintainer still has two entry points
+   to keep honest, and the user relearns the name twice, once when the second
+   way appears and again when the first goes. Nothing inside the flow moved,
+   so what a 1.x user relearns is a name and not a command.
+
+   The compatibility matrix's `/agents` section becomes the operator-surface
+   section and marks the removal **[v2 change]**, which is the mechanism the
+   spec asked removals to go through. It is the one public surface 2.0 removes
+   rather than preserves, and the matrix says so in those words. Semantics §8
+   is struck through and re-decided in place; ledger row C-2 records the
+   before and after.
+
+6. **The cost on the collapsed line, removed.** §6 appended ` · $<cost>` when
    non-zero, and user story 12 asked the line to name "the agent, the task,
    the outcome, the duration, and the cost". **Cost is not
    backend-independent.** `codexUsageDelta` in
@@ -350,8 +382,7 @@ in the decided text three times out of four.
    it carried a backend id. What a Run spent stays on the notice's accounting
    line, where an absent cost is one absent figure among four rather than the
    difference between two shapes of line. **This is a deliberate departure
-   from user story 12**, not an oversight, and it is the only one in the
-   phase.
+   from user story 12**, not an oversight.
 
 **Status:** PASS.
 
@@ -452,10 +483,11 @@ Model-facing text changed and the host smoke lanes assert on it. All six
 gate and their pass markers recorded here.
 
 **Results.** The six lanes below were run against the production code as of
-`6060430`. `6bd572e`, which acts on the code review, changed
-`presentation/renderers.ts` and `host/diagnostics-command.ts`; neither is
-reached by any lane's assertions, but `pi:host-smoke` loads the renderer in a
-real Pi process, so it was re-run on that code and passed again
+`6060430`. Three commits after it changed production
+code — the code review's fixes, the collapsed line's cost, and the removal of
+`/agents` — and none is reached by any lane's assertions. `pi:host-smoke` was
+re-run after each, because it loads the renderer and the command registration
+inside a real Pi process, and passed every time
 (`PI_HOST_LIVE_SMOKE_PASS`).
 
 | Lane | Marker | Notes |
@@ -557,7 +589,7 @@ five rigs, unmodified.
 | 4. The notice carries the label, duration, and accounting, not the backend | PASS |
 | 5. The preview is labelled and quoted | PASS |
 | 6. The collapsed summary identifies the work | PASS |
-| 7. The operator namespace is `/subagent` | PASS |
+| 7. The operator namespace is `/subagent` | PASS, `/agents` removed |
 | 8. Notification text is fenced to `RunNotification` | PASS |
 | 9. Every ledger row is confirmed | PASS |
 | 10. The compatibility matrix cites this phase | PASS |
@@ -580,6 +612,13 @@ environment's and the providers' rather than this phase's. What they assert
 about notifications passes in both. This belongs with the release items the v2
 roadmap left open, where live gates on the cutover build are already tracked;
 it is not a reason to hold this phase.
+
+**Two decided requirements were deliberately not met**, both on the release
+owner's call and both recorded as corrections above: the collapsed line
+carries no cost, because cost is not backend-independent (correction 6), and
+`/agents` is removed in 2.0 rather than kept as an alias (correction 5). Each
+is a departure from a user story this document was written against, which is
+what makes them visible here rather than invisible in a diff.
 
 **What the next gate inherits.** The three change-surface findings under item
 11: R3's target is one too low, the table has no row for a bound enforced at

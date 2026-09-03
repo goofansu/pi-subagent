@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { backendId, type Profile } from "../domain/index.ts";
 import {
-  AGENTS_COMMAND_NAME,
   buildAgentWorkMessage,
   formatAgentActionHint,
   formatAgentActionTitle,
@@ -13,7 +12,7 @@ import {
   getAgentActionItems,
   getAgentSelectItems,
   getFilteredAgentSelectItems,
-  registerAgentsCommand,
+  openProfilesUi,
   runAgentWorkFlow,
 } from "./agents-command.ts";
 
@@ -38,29 +37,19 @@ function profile(overrides: Partial<Profile> = {}): Profile {
   };
 }
 
-/** The minimum host and context the command handler needs. */
+/**
+ * The minimum host and context the Profile flow needs.
+ *
+ * The flow registers no command of its own — `/subagent profiles` is its one
+ * entry point — so this drives {@link openProfilesUi} directly, which is what
+ * the namespace's handler calls.
+ */
 function commandHost(profiles: readonly Profile[], agentsDir = "/agents") {
-  const commands: {
-    name: string;
-    description?: string;
-    handler: (args: string, ctx: unknown) => Promise<void> | void;
-  }[] = [];
   const notices: { message: string; level: string }[] = [];
   const userMessages: string[] = [];
   const pi = {
-    registerCommand: (
-      name: string,
-      definition: { description?: string; handler: never },
-    ) => {
-      commands.push({ name, ...definition });
-    },
     sendUserMessage: (content: string) => void userMessages.push(content),
   };
-  registerAgentsCommand(
-    pi as unknown as Parameters<typeof registerAgentsCommand>[0],
-    () => profiles,
-    agentsDir,
-  );
   let selectorOpened = false;
   const ctx = {
     ui: {
@@ -74,25 +63,29 @@ function commandHost(profiles: readonly Profile[], agentsDir = "/agents") {
     waitForIdle: async () => {},
   };
   return {
-    commands,
     notices,
     userMessages,
     ctx,
     pi,
     selectorOpened: () => selectorOpened,
+    /** What `/subagent profiles` does when an operator types it. */
+    open: () =>
+      openProfilesUi(
+        pi as unknown as Parameters<typeof openProfilesUi>[0],
+        () => profiles,
+        agentsDir,
+        ctx as unknown as Parameters<typeof openProfilesUi>[3],
+      ),
   };
 }
 
-test("the agents command registers itself once, with a description", () => {
-  const host = commandHost([profile()]);
-
-  assert.deepEqual(
-    host.commands.map((command) => command.name),
-    [AGENTS_COMMAND_NAME],
-  );
+test("the Profile flow registers no command of its own", () => {
+  // `/subagent profiles` is the one entry point. v1's `/agents` is removed in
+  // 2.0, and this module owns the flow rather than a registration — so a
+  // second entry point cannot be added here without the namespace knowing.
   assert.equal(
-    host.commands[0].description,
-    "List loaded subagents and view their prompts.",
+    Object.hasOwn(commandHost([profile()]).pi, "registerCommand"),
+    false,
   );
 });
 
@@ -202,7 +195,7 @@ test("the work message is one sentence the model can act on", () => {
 test("with no Profiles the command names the agents directory and opens no selector", async () => {
   const host = commandHost([], "/home/someone/.pi/agents");
 
-  await host.commands[0].handler("", host.ctx);
+  await host.open();
 
   assert.deepEqual(host.notices, [
     {
@@ -217,7 +210,7 @@ test("with no Profiles the command names the agents directory and opens no selec
 test("with Profiles the command opens the selector", async () => {
   const host = commandHost([profile()]);
 
-  await host.commands[0].handler("", host.ctx);
+  await host.open();
 
   assert.deepEqual(host.notices, []);
   assert.equal(host.selectorOpened(), true);

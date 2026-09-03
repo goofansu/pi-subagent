@@ -284,9 +284,10 @@ Phase A's `/subagent` namespace is the model.
 
 - `host/diagnostics-command.ts` — the `/subagent` namespace root: the shallow
   status, the subcommand parse, and the report beneath it
-- `host/agents-command.ts` — only if the Profile flow itself changes;
-  `/agents` and `/subagent profiles` both call `openProfilesUi`, so a change
-  to one is a change to both by construction
+- `host/agents-command.ts` — only if the Profile *flow* itself changes. It
+  registers no command: `openProfilesUi` is the flow and `/subagent` owns the
+  registration, so one place decides what a Profile list looks like and one
+  place decides what an operator can type
 - `index.ts` — only when a command is registered or unregistered
 - `docs/v2/compatibility-matrix.md`, the `/agents` section, which is where a
   command's lifetime is decided
@@ -302,6 +303,9 @@ Phase A's `/subagent` namespace is the model.
 **Tests** — `npm test`; `host/diagnostics-command.test.ts` and
 `host/agents-command.test.ts`.
 
-**Invariants** — F9 for anything the command formats; the rule that a command
-a user knows does not vanish in a release candidate, which is why removals are
-matrix decisions with a named version.
+**Invariants** — F9 for anything the command formats. A removal is a
+compatibility-matrix decision and needs a named version: 2.0 removes `/agents`
+and the matrix marks it **[v2 change]**, which is the mechanism. An *alias* is
+the thing to be suspicious of — it keeps two ways to do one thing in `/help`
+and makes the user relearn the name twice, once when the second way appears
+and again when the first goes.

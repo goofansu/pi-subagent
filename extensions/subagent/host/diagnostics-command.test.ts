@@ -6,7 +6,6 @@ import { backendId } from "../domain/index.ts";
 import { createRuntimeCounters } from "../runtime/counters.ts";
 import { hostRig } from "../testing/host-rig.ts";
 import { fixtureRow } from "../testing/presentation-fixtures.ts";
-import { AGENTS_COMMAND_NAME } from "./agents-command.ts";
 import {
   formatRuntimeHealth,
   formatSessionDiagnostics,
@@ -203,17 +202,24 @@ test("health is a verdict on what was noticed and a count of what is held", () =
 
 // -- The namespace ----------------------------------------------------------
 
-test("C-2: /subagent profiles opens the same flow /agents opens", async (t) => {
+test("C-2: /subagent is the only command, and /agents is gone", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
 
-  const commands = rig.host.commands().map((entry) => entry.name);
-  assert.ok(commands.includes(AGENTS_COMMAND_NAME));
-  assert.ok(commands.includes(SUBAGENT_COMMAND_NAME));
+  // v1's command is removed in 2.0. Asserted by exhaustion rather than by
+  // absence: a list is the only way to notice a command nobody deleted.
+  assert.deepEqual(
+    rig.host.commands().map((entry) => entry.name),
+    [SUBAGENT_COMMAND_NAME],
+  );
+});
 
-  // Both entry points reach the same flow, so both open the Profile selector
-  // rather than one of them notifying and the other opening.
+test("C-2: /subagent profiles opens the Profile flow", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
   let selectors = 0;
   const notices: string[] = [];
   const ctx = {
@@ -226,15 +232,14 @@ test("C-2: /subagent profiles opens the same flow /agents opens", async (t) => {
     },
     waitForIdle: async () => {},
   } as never;
-  for (const [name, args] of [
-    [AGENTS_COMMAND_NAME, ""],
-    [SUBAGENT_COMMAND_NAME, "profiles"],
-  ] as const) {
-    const command = rig.host.commands().find((entry) => entry.name === name);
-    await command?.handler(args, ctx);
-  }
+  const command = rig.host
+    .commands()
+    .find((entry) => entry.name === SUBAGENT_COMMAND_NAME);
+  await command?.handler("profiles", ctx);
 
-  assert.equal(selectors, 2);
+  // The selector opened and nothing was notified: the Profiles are loaded, so
+  // "where to put one" would be the wrong answer.
+  assert.equal(selectors, 1);
   assert.deepEqual(notices, []);
 });
 

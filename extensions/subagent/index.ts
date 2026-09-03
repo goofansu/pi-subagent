@@ -3,7 +3,6 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import type { Profile } from "./domain/index.ts";
-import { registerAgentsCommand } from "./host/agents-command.ts";
 import type { AdapterProbe } from "./host/diagnostics-command.ts";
 import { registerSubagentCommand } from "./host/diagnostics-command.ts";
 import {
@@ -129,7 +128,7 @@ export function installSubagentV2(
   }
   /** Rewritten in place per Session; see `SessionWiring.agentGuidelines`. */
   const agentGuidelines: string[] = [];
-  /** The live Session's Profiles, for `/agents` to list. */
+  /** The live Session's Profiles, for `/subagent` to count and list. */
   let profiles: readonly Profile[] = [];
   let widget: ActiveWidget | undefined;
 
@@ -149,9 +148,8 @@ export function installSubagentV2(
 
   const agentsDir = profilesDir(options.agentDir);
   registerSubagentTools(pi, handle, agentGuidelines, hostFacts.childDepth);
-  // Two entry points, one flow. `/agents` is the alias the compatibility
-  // matrix keeps through 2.0; `/subagent` is the namespace.
-  registerAgentsCommand(pi, () => profiles, agentsDir);
+  // One operator command. v1's `/agents` is gone in 2.0 and its flow is
+  // `/subagent profiles`; the matrix's `/agents` row records the removal.
   registerSubagentCommand(
     pi,
     handle,

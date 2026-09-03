@@ -16,8 +16,9 @@ delivery state is called and who may use the word; what a model reads when one
 of its Runs settles; and what a human sees in the transcript and the widget.
 [The presentation ledger](presentation-ledger.md) records every sentence this
 changes from the current goldens. The compatibility matrix's Notification,
-widget, and `/agents` rows cite this document from every cell it changes, the
-way they cite [operation semantics](../v2/operation-semantics.md).
+widget, and operator-surface rows cite this document from every cell it
+changes, the way they cite
+[operation semantics](../v2/operation-semantics.md).
 
 The v2 [operation semantics](../v2/operation-semantics.md) already decide what
 a caller observes from `agent_start`, `agent_wait`, and `agent_result`. Nothing
@@ -386,6 +387,24 @@ lost one cannot say which half of the pipeline is failing.
   and would keep `RunNotification` one-per-Run.
 - **When delivery's pin is released.** It is released on hand-off today and
   stays so. A consumption lease through landing is Phase D.
-- **Whether `/agents` disappears.** Phase A adds `/subagent profiles` and
-  keeps `/agents` as an alias; the removal is a compatibility-matrix decision
-  for the first minor after 2.0.
+- ~~**Whether `/agents` disappears.**~~ **Decided, and against this
+  document's draft.** The draft said Phase A adds `/subagent profiles`, keeps
+  `/agents` as an alias, and leaves the removal to the first minor after 2.0.
+  `/agents` is **removed in 2.0**.
+
+  The reason is the reason the namespace exists. Two overlapping commands with
+  nothing to say which to type first is the confusion Phase A was about, and
+  an alias keeps that confusion under a deprecation note — an operator reading
+  `/help` still sees two ways to list Profiles, and a maintainer still has two
+  entry points to keep honest. Deferring the removal one minor buys a user the
+  cost of relearning the name *twice*: once when the second way appears, again
+  when the first goes.
+
+  What it costs is real and is smaller than it looks: a 1.x user who types
+  `/agents` gets Pi's unknown-command answer and has to learn
+  `/subagent profiles`. Nothing inside the flow moved — the filter, the prompt
+  view, the work action and every key are the ones they know — so what they
+  relearn is a name and not a command. The
+  [compatibility matrix](../v2/compatibility-matrix.md) marks it
+  **[v2 change]**, which is the mechanism a removal is supposed to go through,
+  and it is the one public surface 2.0 removes rather than preserves.

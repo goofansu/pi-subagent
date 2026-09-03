@@ -5,9 +5,9 @@ repository.
 **Date:** 2026-09-02, rewritten at M7 (2026-09-03) when the 1.x implementation
 was deleted.
 **Scope:** every public command, Subagent close through the existing host and
-Session surface, `/agents`, the active widget, completion Notification
-messages, and Profile loading and validation — across the Pi, Claude, and Codex
-backends.
+Session surface, the operator surface (`/subagent` and its subcommands), the
+active widget, completion Notification messages, and Profile loading and
+validation — across the Pi, Claude, and Codex backends.
 
 ## What this document is
 
@@ -257,20 +257,33 @@ the row label says which property it is.
 | **the graceful path** | — | — | `close ends stdin, and a child that goes needs no signal at all` (`backend/codex/transport.test.ts`), which is the spike's 13 ms exit-code-0 path |
 | **process cleanup** | — | — | `closing the Session ends stdin once and leaves nothing held` (`testing/codex/codex-backend.test.ts`); live (`codex:smoke`, "no App Server child remains after closure", read from `ps` rather than from the adapter) |
 
-## `/agents`
+## The operator surface: `/subagent`
 
-Lists loaded Profiles and opens their prompts. Since Phase A of the
-simplification programme it is an **alias**: the operator surface is one
-namespace under `/subagent`, and
-[notification semantics §8](../v2-simplify/notification-semantics.md#8-what-this-document-deliberately-does-not-decide)
-records the decision.
+One command, with two subcommands. **[v2 change]** 1.x had `/agents`; 2.0
+**removes it**. The Profile list it opened is `/subagent profiles`, key for
+key, and everything inside that flow is unchanged — the filter, the prompt
+view, the work action. What is gone is the name.
+
+This is the one place in the matrix where 2.0 removes a public surface rather
+than preserving it. The reason is the reason the namespace exists: two
+overlapping commands with nothing to say which to type first is the confusion
+Phase A of the simplification programme was about, and keeping the old name as
+an alias would have kept the confusion under a deprecation note.
+[Notification semantics §8](../v2-simplify/notification-semantics.md#8-what-this-document-deliberately-does-not-decide)
+records the decision and what it reverses.
+
+**What a 1.x user has to do:** type `/subagent profiles`, or type `/subagent`
+and read the two subcommands it names.
 
 | | Pi | Claude | Codex |
 | --- | --- | --- | --- |
-| **Expected outcome** | Lists each Profile by name and description, whatever backend it names; the list carries no backend-specific field. Selecting one shows its prompt and offers the work action. | Identical. | Identical. |
-| **No Profiles** | Says where to add one, naming the agents directory, and opens no selector. | Same. | Same. |
-| **Also reachable as** | `/subagent profiles`, which opens the same flow rather than a copy of it. `/agents` keeps working unchanged through 2.0 and is **removed in the first minor after 2.0**; a command a user knows does not vanish in a release candidate. | Same. | Same. |
-| **`/subagent` itself** | A shallow status — Profile count, Run counts in the shared phase vocabulary, runtime health, one line per Profile with its backend, and the two subcommands. The counters and probes it used to print are `/subagent diagnostics`, unchanged. | Same. | Same. |
+| **`/subagent`** | A shallow status: Profile count, Run counts in the shared phase vocabulary, runtime health, one line per Profile with the backend it names, and the two subcommands. No counters — those are one level down. | Same. | Same. |
+| **`/subagent profiles`** | Lists each Profile by name and description, whatever backend it names; the list carries no backend-specific field. Selecting one shows its prompt and offers the work action. This is 1.x's `/agents`, unchanged inside. | Identical. | Identical. |
+| **`/subagent diagnostics`** | The runtime counters and every probe block, zeroes included, one block per backend. This is what bare `/subagent` printed in the release candidates. | Same. | Same. |
+| **No Profiles** | Says where to add one, naming the agents directory, and opens no selector. Bare `/subagent` says it too, so an operator who has not configured anything learns that from the first screen. | Same. | Same. |
+| **No live Session** | Bare `/subagent` and `/subagent diagnostics` say no Session is running; the status still says where to put a Profile. | Same. | Same. |
+| **An unknown subcommand** | Names the two that exist. | Same. | Same. |
+| **`/agents`** | **Removed in 2.0.** Not registered, so Pi reports it as an unknown command. | Same. | Same. |
 
 
 **Proven by.** A property only one backend has shows a dash for the others;
@@ -278,7 +291,7 @@ the row label says which property it is.
 
 | Property | Pi | Claude | Codex |
 | --- | --- | --- | --- |
-| **the alias and the namespace** | `/subagent profiles opens the same flow /agents opens`, `bare /subagent prints the shallow status and no counters`, `/subagent diagnostics` covered by `the report names every runtime counter and every probe field`, and `an unknown subcommand names the two that exist` (`host/diagnostics-command.test.ts`); `the agents command registers itself once, with a description` (`host/agents-command.test.ts`, unmodified) | Same. | Same. |
+| **the namespace, and the removal** | `C-2: /subagent is the only command, and /agents is gone` — a list rather than an absence, because a list is the only way to notice a command nobody deleted — plus `C-2: /subagent profiles opens the Profile flow`, `C-1: bare /subagent prints the shallow status and no counters`, `the report names every runtime counter and every probe field`, and `an unknown subcommand names the two that exist` (`host/diagnostics-command.test.ts`); `the entry point registers the six tools, its one command, and the notification renderer` (`index.test.ts`); `the Profile flow registers no command of its own` (`host/agents-command.test.ts`) | Same. | Same. |
 | **every row** | Backend-independent: `the list holds one item per Profile, by name and description` and `the list is identical whatever backend a Profile names` (`host/agents-command.test.ts`). The Pi set supplies no Profiles of its own: `the Pi set supplies one backend and no Profiles of its own` (`host/inert-guard.test.ts`) | Backend-independent: `the list is identical whatever backend a Profile names` (`host/agents-command.test.ts`). The production set supplies no Profiles of its own: `the production set offers all three backends and no Profiles of its own` (`host/production-backends.test.ts`) | Backend-independent: `the list is identical whatever backend a Profile names` (`host/agents-command.test.ts`). The production set supplies no Profiles of its own: `the production set offers all three backends and no Profiles of its own` (`host/production-backends.test.ts`) |
 
 ## Active widget
@@ -423,7 +436,7 @@ What the matrix does **not** cover, deliberately:
 - **Colour and emphasis.** Every golden test runs against a theme that paints
   nothing, so this document is about words. Tone is shared vocabulary
   (`runPhaseTone`) and no surface picks its own.
-- **Layout of interactive surfaces.** The `/agents` selector and the transcript
+- **Layout of interactive surfaces.** The Profile selector and the transcript
   row renderers are components; their text is proven through the functions
   above, their layout is not.
 - **Provider behaviour.** That a model answered well is not a compatibility

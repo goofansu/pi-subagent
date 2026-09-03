@@ -1,11 +1,18 @@
 /**
- * `/agents`: list the Profiles this Session loaded, and open their prompts.
+ * The Profile flow: list the Profiles this Session loaded, open their prompts,
+ * and hand one some work.
+ *
+ * Reached as `/subagent profiles`. It registers no command of its own — the
+ * `/subagent` namespace owns the registration and this owns the flow, so
+ * there is one place that decides what a Profile list looks like and one place
+ * that decides what an operator can type.
  *
  * Ported from v1, structure and keys included, over the v2 Profile catalog's
  * list. The three things a user does with it — filter the list, read a
  * Profile's prompt, hand a Profile some work — are the compatibility matrix's
- * `/agents` row, and the port keeps them because a command whose keys moved is
- * a command a user has to relearn.
+ * `/agents` row, and the port keeps them because a flow whose keys moved is a
+ * flow a user has to relearn. **`/agents` itself is gone in 2.0**; the keys
+ * inside the flow are not.
  *
  * What changed is only where the list comes from: v1 read a `Map` the session
  * lifecycle refilled, and this reads whatever the live Session runtime's
@@ -42,9 +49,6 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { Profile } from "../domain/index.ts";
-
-/** The command name. */
-export const AGENTS_COMMAND_NAME = "agents";
 
 type AgentAction = "view" | "work";
 
@@ -534,12 +538,8 @@ async function openAgentDetail(
 /**
  * Open the Profile list, or say where to put a Profile when there are none.
  *
- * Exported so that `/subagent profiles` and `/agents` are the same flow and
- * not two copies of it. A second copy is how a user ends up with one entry
- * point that filters and one that does not.
- *
- * `profiles` is read at call time rather than captured, because the commands
- * register once per process and the catalog belongs to whichever Session is
+ * `profiles` is read at call time rather than captured, because the command
+ * registers once per process and the catalog belongs to whichever Session is
  * live.
  */
 export async function openProfilesUi(
@@ -614,24 +614,5 @@ export async function openProfilesUi(
       invalidate: () => activeComponent.invalidate(),
       handleInput: (data: string) => activeComponent.handleInput?.(data),
     };
-  });
-}
-
-/**
- * Register `/agents` once per process.
- *
- * Kept through 2.0 as an alias for `/subagent profiles`, and it opens the same
- * flow rather than a copy of it. The compatibility matrix's `/agents` row says
- * when the alias goes: the first minor after 2.0. A command a user knows does
- * not vanish in a release candidate.
- */
-export function registerAgentsCommand(
-  pi: Pick<ExtensionAPI, "registerCommand" | "sendUserMessage">,
-  profiles: () => readonly Profile[],
-  agentsDir: string,
-): void {
-  pi.registerCommand(AGENTS_COMMAND_NAME, {
-    description: "List loaded subagents and view their prompts.",
-    handler: (_args, ctx) => openProfilesUi(pi, profiles, agentsDir, ctx),
   });
 }

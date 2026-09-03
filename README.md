@@ -30,10 +30,11 @@ a task. With none configured, it prints the directory to add one to.
 `/subagent diagnostics` reports what the live Session's runtime is counting
 and holding — see [Diagnostics](#diagnostics).
 
-`/agents` is `/subagent profiles` under the name it has always had. It opens
-the same flow rather than a copy of it, and it keeps working through 2.0; the
-[compatibility matrix](docs/v2/compatibility-matrix.md) says when the alias
-goes.
+1.x's `/agents` is **removed in 2.0**. Its flow is `/subagent profiles`, key
+for key — the filter, the prompt view and the work action are unchanged — so
+what moved is the name. The
+[compatibility matrix](docs/v2/compatibility-matrix.md) records it as the one
+public surface 2.0 removes.
 
 Delegation uses six tools. `agent_start` creates a stable, Session-scoped
 Subagent and immediately starts its first **Run**. The Run is detached from the
@@ -262,13 +263,16 @@ list allows, and cannot delegate further.
 ## Upgrading from 1.x
 
 **Version 2.0.0 is a rewrite of the execution architecture, and it is what
-`pi install` gives you.** The behaviour it presents is the same: the same six
-tools, the same `/agents` command, the same Profile files in the same
-directory, the same widget rows. The completion notices say more: each one now
-opens with the task you delegated rather than two identifiers, and every one
-of them points at `agent_result` with the exact argument shape.
+`pi install` gives you.** The behaviour it presents is largely the same: the
+same six tools, the same Profile files in the same directory, the same widget
+rows.
 
-**One thing breaks, and it is a one-line edit per Profile.** A Profile names
+**Two things a 1.x user will notice.** `/agents` is gone; the Profile list is
+`/subagent profiles`, unchanged inside. And the completion notices say more:
+each one opens with the task you delegated rather than two identifiers, and
+every one of them points at `agent_result` with the exact argument shape.
+
+**One thing breaks in your files, and it is a one-line edit per Profile.** A Profile names
 its backend with `backend:` where 1.x used `harness:`. The values are unchanged
 — `pi`, `claude`, `codex` — and the default is still `pi`, so a Profile that
 pins nothing needs no edit at all:

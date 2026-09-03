@@ -28,7 +28,7 @@ provider I/O; everything that happens after it belongs to a public Run.
 When admission fails:
 
 - **No public Run is created.** The caller receives a typed rejection, not a
-  Run id, and nothing appears in `/agents` or the active widget.
+  Run id, and nothing appears in the Profile list or the active widget.
 - **No identifier is ever reused.** Identifiers that were allocated and then
   released stay spent for the life of the Session. A caller holding a Run id
   or Subagent id can always trust that it means one thing — including across a
