@@ -353,6 +353,14 @@ commit at which the quality gate was recorded green, are in
 `extensions/subagent-v2/`; `make dev-v2` opts into it for one Pi process, and
 `make dogfood-v2` makes it the default.
 
+> **Note:** `npm run codex:protocol:check` compares the *installed* `codex`
+> CLI's generated schema byte-for-byte against the vendored snapshot in
+> `docs/codex-protocol/`, so `npm run check` goes red the moment the CLI is
+> upgraded past the pinned release. That is the check working. Bumping the pin
+> is the six-step procedure in `.agents/skills/codex-upgrade/SKILL.md`, which
+> ends in a human Desktop-coexistence record — re-vendoring the snapshot on its
+> own would replace a working detector with a green tick that means nothing.
+
 `npm run check` runs typechecking for both extension trees, lint, per-Run
 Harness Conformance, repeated managed Subagent conformance for the controlled
 harness and every production adapter, the full test suite, the v2 lane (v2 tests

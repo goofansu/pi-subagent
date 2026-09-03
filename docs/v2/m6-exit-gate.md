@@ -1,8 +1,11 @@
 # M6 exit gate
 
-**Status:** Passing except items 4 and 12, which are the two credentialed live
-gates: both scripts exist, both are in the release gate, and neither has been
-run yet.
+**Status:** Passing. Both live gates were run and passed. Item 12, the Codex
+Desktop coexistence evidence, remains an M7 question by design — and item 10
+now carries an environment finding rather than a failure: the `codex` CLI on
+the verification machine was upgraded from the pinned 0.150.1 to 0.153.0
+part-way through the milestone, which the byte-for-byte protocol pin correctly
+detected. See item 10.
 **Reviewed:** a two-axis review of the whole change ran before this record was
 finalized. It found one real bug — a signal-escalation stand-down kept per
 BackendAgent rather than per Turn, which would have disarmed the ladder for
@@ -55,7 +58,7 @@ fields.
 | `npm test` (v1 suite, repository scripts, `tools/`) | 540 tests, 539 pass, 1 skipped |
 | `npm run test:v2` | 1,148 tests, 1,140 pass, 8 skipped |
 | `npm run test:v2:conformance` | 191 tests, 183 pass, 8 skipped |
-| `npm run codex:protocol:check` | `CODEX_PROTOCOL_CHECK_PASS — codex-cli 0.150.1` |
+| `npm run codex:protocol:check` | `CODEX_PROTOCOL_CHECK_PASS — codex-cli 0.150.1` when the milestone's work was verified; red afterwards, because the CLI was upgraded on the machine. See item 10. |
 
 The three v1 lanes are byte-identical to M5's: **M6 changed no v1 file.** The
 v2 lane grew from 979 tests to 1,148, and the conformance lane from 153 to 191
@@ -145,9 +148,26 @@ directions**: the current Turn's frames arrive *and* the stale one reached no
 Run and was counted. A test that only asserted the second half would pass for
 an adapter that dropped everything.
 
-## 4. Start, resume, steer, cancel, timeout, and shutdown pass live smoke tests ⏳
+## 4. Start, resume, steer, cancel, timeout, and shutdown pass live smoke tests ✅
 
-Two scripts, both opt-in, both in `release:check`, **neither run yet**:
+Both scripts were run against a real, authenticated `codex app-server` on
+2026-09-03 and both printed their success marker:
+
+| Gate | Result |
+| --- | --- |
+| `npm run v2:codex:smoke` | `V2_CODEX_LIVE_SMOKE_PASS` — 21 checks, exit 0 |
+| `npm run v2:codex:host-smoke` | `V2_CODEX_HOST_LIVE_SMOKE_PASS` — 5 checks, exit 0 |
+
+The CLI in use was **codex-cli 0.153.0**, which is *newer* than the pinned
+0.150.1 the deterministic protocol check compares against. That is worth
+recording rather than tidying away: it means the adapter was proven live
+against a release its vendored schema snapshot does not describe, and it
+passed — which is the first-hand evidence that "an undeclared method is
+ignored rather than rejected" is a real property and not just a comment. The
+0.153.0 protocol adds four client requests and two server notifications and
+removes nothing; every method and field this adapter declares is still there.
+
+Two scripts, both opt-in, both in `release:check`:
 
 - `npm run v2:codex:smoke`
   ([`scripts/v2-codex-live-smoke.mjs`](../../scripts/v2-codex-live-smoke.mjs))
@@ -158,8 +178,8 @@ Two scripts, both opt-in, both in `release:check`, **neither run yet**:
   (`scripts/v2-pi-host-live-smoke.mjs codex`) launches Pi in RPC mode with only
   the v2 entry point and delegates to a Profile naming `codex`.
 
-Four of the runtime gate's checks are Codex's own, one per spike finding plus
-one the spike could not have:
+All 21 runtime checks passed, including the four that are Codex's own — one per
+spike finding, plus one the spike could not have:
 
 - the resumed Run answers from the first Turn's context on the same retained
   root, which is what resume *is* for a backend with no `thread/resume`;
@@ -169,11 +189,13 @@ one the spike could not have:
 - an interrupted Turn leaves the process, the root, and the Subagent alive;
 - **the child process is actually gone**, read from `ps` rather than from the
   adapter's own counter. Codex is the one backend that owns an operating-system
-  process, and "my probe reads zero" is the adapter's word for it.
+  process, and "my probe reads zero" is the adapter's word for it. The gate
+  reported `no App Server child remains after closure ([])` for both Sessions,
+  alongside all three adapter probes reading zero.
 
-**What is needed to close this item:** run both scripts with an authenticated
-`codex` CLI on `PATH` and record the `V2_CODEX_LIVE_SMOKE_PASS` and
-`V2_CODEX_HOST_LIVE_SMOKE_PASS` markers here.
+The host gate additionally confirmed `no v1 module was loaded`: the answer came
+back through `agent_start`, `agent_wait`, and `agent_result` with only the v2
+entry point in the process.
 
 ## 5. A result is unavailable until background terminals are closed ✅
 
@@ -304,12 +326,37 @@ one v2 proof per row, in the same three citation kinds the Pi and Claude tables
 use: a shared conformance scenario, a named v2 test with its file, or one of
 the two live gates. Every cited test name exists in the tree.
 
-## 10. The pinned protocol check still guards the wire ✅
+## 10. The pinned protocol check still guards the wire ✅ — and it fired ⚠️
 
-`npm run codex:protocol:check` stays in `check` and passes
-(`CODEX_PROTOCOL_CHECK_PASS — codex-cli 0.150.1`). It is what proves the pinned
-binary still emits the methods and fields the adapter declares; the adapter's
-own Schema declarations are what prove it consumes nothing else.
+`npm run codex:protocol:check` stays in `check`, unchanged by M6: neither the
+script nor the vendored snapshot under `docs/codex-protocol/` is in this
+milestone's diff. It is what proves the pinned binary still emits the methods
+and fields the adapter declares; the adapter's own Schema declarations are what
+prove it consumes nothing else.
+
+**It passed for the whole of M6's development and then went red, and the cause
+is not this milestone.** The `codex` CLI on the verification machine was
+upgraded from 0.150.1 to 0.153.0 at 16:10 on 2026-09-03, part-way through the
+work. The check compares the *installed* binary's generated schema
+byte-for-byte against the vendored snapshot, so it now reports drift in
+`ClientRequest.json` and `ServerNotification.json`.
+
+The drift is **entirely additive**:
+
+| Kind | Added in 0.153.0 | Removed |
+| --- | --- | --- |
+| Client requests | `plugin/reconcile`, `thread/items/list`, `thread/revert`, `thread/turns/list` | none |
+| Server notifications | `modelProvider/authRecoveryStarted`, `modelProvider/authRecoveryCompleted` | none |
+
+Every one of the eight notification methods and five request methods this
+adapter uses is still present, and the live gate passed against 0.153.0.
+
+**This is not M6's to close.** Bumping the pin is the documented six-step
+procedure in `.agents/skills/codex-upgrade/SKILL.md`, and steps 4 and 5 of it
+are the two v1 credentialed Codex gates and a *human* Desktop-coexistence
+record. Re-vendoring the snapshot without those would replace a detector that
+works with a green tick that means nothing. It is recorded in item 14 as
+carried work.
 
 The declarations are deliberately narrow. Eight notification methods and eight
 item kinds are declared, an **undeclared method is ignored** rather than
@@ -473,11 +520,15 @@ behind.
 
 ## 14. Gaps carried into M7
 
-- **The two Codex live gates have not been run** (item 4). They are written and
-  in `release:check`; closing this needs a credentialed run and the two markers
-  recorded.
+- **The `codex` CLI has moved past the pinned protocol version** (item 10). The
+  installed CLI is 0.153.0 and the vendored snapshot describes 0.150.1, so
+  `npm run check` is red on this machine at the protocol step and nowhere else.
+  The drift is additive and the live gate passed against the newer release, but
+  bumping the pin is the `codex-upgrade` procedure — two v1 credentialed gates
+  and a human Desktop record — and it is deliberately not folded into M6.
 - **The Codex Desktop coexistence evidence has not been re-recorded against
-  v2** (item 12), by design.
+  v2** (item 12), by design. The CLI upgrade above now makes this the same
+  piece of work rather than two.
 - **M4's daily-driver soak is still open.** Neither M5 nor M6 closed it and
   neither was meant to; see [the soak record](soak.md).
 - **M5's five Claude gaps are still Claude's.** M6 touched no Claude code, so

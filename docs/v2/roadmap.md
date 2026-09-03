@@ -1,6 +1,6 @@
 # pi-subagent v2 roadmap
 
-**Status:** Accepted. **M6 is complete apart from its two live gates** (2026-09-03): the Codex adapter, its conformance pass, and the release-gate scripts are done, and the two credentialed gates are written and registered but not yet run. M4 remains complete apart from its daily-driver soak, which neither M5 nor M6 did close and which was never theirs to close; M7 is next.  
+**Status:** Accepted. **M6 is complete** (2026-09-03), including both credentialed live gates. One environment item is carried rather than closed: the `codex` CLI on the verification machine moved past the pinned protocol version mid-milestone, which the byte-for-byte protocol check correctly detected — the drift is additive, the live gate passed against the newer release, and bumping the pin is the separate `codex-upgrade` procedure. M4 remains complete apart from its daily-driver soak, which neither M5 nor M6 did close and which was never theirs to close; M7 is next.  
 **Strategy:** Rewrite the execution architecture inside the existing `pi-subagent` product  
 **Delivery model:** Gate-driven milestones, not a date-driven big-bang rewrite
 
@@ -92,7 +92,7 @@ flowchart TD
 | M3 ✅     | Complete fake-backed product vertical slice        | Actual host handlers, UI, delivery, and shutdown work end to end — **passed**, see [the M3 exit gate](m3-exit-gate.md) |
 | M4 ⏳     | Native Pi backend and product dogfood              | Pi passes conformance and v2 is usable as the daily driver — everything **passed** except the soak, see [the M4 exit gate](m4-exit-gate.md) and [the soak record](soak.md) |
 | M5 ✅     | Claude adapter                                      | Claude fits without generic lifecycle changes — **passed**, see [the M5 exit gate](m5-exit-gate.md) |
-| M6 ⏳     | Codex adapter                                      | Codex fits without generic lifecycle changes — everything **passed** except the two live gates, which are written and registered but not yet run, see [the M6 exit gate](m6-exit-gate.md) |
+| M6 ✅     | Codex adapter                                      | Codex fits without generic lifecycle changes — **passed**, both live gates included, see [the M6 exit gate](m6-exit-gate.md) |
 | M7        | v2 becomes the sole implementation                 | Compatibility, soak, release, and deletion gates pass            |
 
 ## 5. Milestone details
@@ -489,9 +489,12 @@ backend contract are byte-identical to M5 — no file under `runtime/`, `domain/
 suite was not touched. Three changes were made outside `backend/codex/` — the
 composition root, one missing provider-neutral semantic in the shared Profile
 field module, and a test helper — and each is classified in
-[the M6 exit gate](m6-exit-gate.md), section 11. The two live gates —
-`npm run v2:codex:smoke` and `npm run v2:codex:host-smoke` — are written,
-registered in the release gate, and awaiting a credentialed run.
+[the M6 exit gate](m6-exit-gate.md), section 11. Both live gates were run and
+passed: `npm run v2:codex:smoke` printed `V2_CODEX_LIVE_SMOKE_PASS` over 21
+checks and `npm run v2:codex:host-smoke` printed
+`V2_CODEX_HOST_LIVE_SMOKE_PASS`, against a `codex` CLI one release newer than
+the pinned protocol snapshot — which is itself the evidence that an undeclared
+protocol method is ignored rather than fatal.
 
 ### M7 — Cutover, hardening, and v1 deletion
 
