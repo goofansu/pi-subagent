@@ -1,14 +1,28 @@
-.PHONY: check dev dev-v2 protocol-check release-gate smoke-codex test-conformance test-v2-conformance
+.PHONY: check dev dev-v2 dogfood-status dogfood-v1 dogfood-v2 protocol-check release-gate smoke-codex smoke-v2-pi test-conformance test-v2-conformance
 
 dev:
 	pi --offline -np -nc -ns -ne -e extensions/subagent --tools agent_start,agent_wait,agent_cancel,agent_steer,agent_result
 
-# v2 is opted into per Pi process: every extension disabled, only the v2 entry
-# point loaded. Since M3 this is a usable extension — six model tools, the
-# agents command, the active widget, and two demo backends behind it — so the
-# --tools list mirrors the v1 target's.
+# v2 in isolation: every extension disabled, only the v2 entry point loaded.
+# Since M4 the backend behind it is the real Pi adapter, so this runs real
+# work against whatever Profiles the agent directory holds. Offline, because
+# this target is for checking that the surface is there rather than for using
+# it; `dev-v2-alongside` is the daily driver.
 dev-v2:
 	pi --offline -np -nc -ns -ne -e extensions/subagent-v2/index.ts --tools agent_start,agent_resume,agent_wait,agent_result,agent_cancel,agent_steer
+
+# The dogfood switch: v2 with the Pi backend, beside every other extension,
+# and with this package's v1 extension disabled so the two cannot both
+# register `agent_start`. After `dogfood-v2`, plain `pi` runs v2; `dogfood-v1`
+# puts it back. See the README's "Running v2 as the daily driver".
+dogfood-v2:
+	npm run v2:dogfood:on
+
+dogfood-v1:
+	npm run v2:dogfood:off
+
+dogfood-status:
+	npm run v2:dogfood:status
 
 test-conformance:
 	npm run test:conformance
@@ -23,6 +37,11 @@ protocol-check:
 
 smoke-codex:
 	npm run codex:smoke
+
+# The two opt-in v2 live gates. Both spend provider quota, both are in the
+# release gate, and neither is in `check`.
+smoke-v2-pi:
+	npm run v2:pi:smoke && npm run v2:pi:host-smoke
 
 check:
 	npm run check
