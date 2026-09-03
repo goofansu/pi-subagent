@@ -41,7 +41,6 @@ import {
 } from "effect";
 import type {
   Backend,
-  BackendAgent,
   BackendOpenFailure,
   RunControl,
 } from "../backend/contract.ts";
@@ -61,7 +60,6 @@ import {
   type SteerOutcome,
   type SubagentContext,
   type SubagentId,
-  type SubagentPhase,
   type WaitOutcome,
 } from "../domain/index.ts";
 import { type AdmissionLease, makeAdmission } from "./admission.ts";
@@ -77,6 +75,10 @@ import { ProfileCatalog } from "./profile-catalog.ts";
 import { RunRepository, type RunSnapshot } from "./repository.ts";
 import { ResultStore } from "./result-store.ts";
 import { type RunHandle, runToSettlement } from "./run-scope.ts";
+import {
+  makeSubagentRecords,
+  type SubagentRecord,
+} from "./subagent-records.ts";
 
 /** What an adapter that died rather than failing says instead. */
 const OPEN_FAILED_MESSAGE = "the backend could not be opened";
@@ -131,29 +133,6 @@ export interface SessionSettings {
    * different Sessions.
    */
   readonly counters: RuntimeCounters;
-}
-
-/** One Subagent: a fixed Profile, a retained BackendAgent, and a scope. */
-interface SubagentRecord {
-  readonly id: SubagentId;
-  readonly profile: Profile;
-  readonly context: SubagentContext;
-  readonly agent: BackendAgent;
-  readonly scope: Scope.Closeable;
-  phase: SubagentPhase;
-  /**
-   * Whether this Subagent's Conversation is gone.
-   *
-   * Tracked here as well as in the adapter because cleanup escalation is a
-   * *core* decision: when a finalizer outlives its budget the core closes the
-   * BackendAgent out from under it, and a later resume has to report that
-   * honestly rather than discovering it at the provider.
-   */
-  conversationLost: boolean;
-  /** The Run currently in flight, if any. */
-  run?: RunHandle;
-  /** The fiber settling that Run, so a close can wait for it. */
-  runFiber?: Fiber.Fiber<unknown, never>;
 }
 
 /**
@@ -227,7 +206,8 @@ const makeSupervisor = (settings: SessionSettings) =>
      * two reservation calls and nothing else.
      */
     const admission = yield* makeAdmission(policy.maxActiveRuns, store);
-    const subagents = new Map<SubagentId, SubagentRecord>();
+    /** What this supervisor knows about each Subagent it owns. */
+    const records = makeSubagentRecords();
     /** Hooks the conformance suite reads instead of the deleted driver's log. */
     const stages: string[] = [];
 
@@ -276,7 +256,7 @@ const makeSupervisor = (settings: SessionSettings) =>
               },
               (handle) =>
                 Effect.gen(function* () {
-                  record.run = handle;
+                  records.attachRun(record.id, handle);
                   // Emitted through the Run's own intake, before intake can
                   // be sealed, so an admission diagnostic reaches the
                   // projection by the path every other diagnostic takes.
@@ -293,12 +273,11 @@ const makeSupervisor = (settings: SessionSettings) =>
             Effect.ensuring(
               Effect.gen(function* () {
                 counters.released("liveRunFibers");
-                record.run = undefined;
-                record.phase = record.phase === "closed" ? "closed" : "idle";
+                records.detachRun(record.id);
                 // Last, and this order matters: the Subagent's active-Run
                 // claim is what stops a resume being admitted, so releasing
-                // it before the record was cleared would let the next Run
-                // arrive while this one still looked in flight.
+                // it before the record was detached would let the next Run
+                // reach `attachRun` while this one still looked in flight.
                 yield* lease.release();
               }),
             ),
@@ -306,7 +285,7 @@ const makeSupervisor = (settings: SessionSettings) =>
           ),
           sessionScope,
         );
-        record.runFiber = fiber;
+        records.attachFiber(record.id, fiber);
         // Returning only once the Run Scope exists means a caller that has an
         // id can immediately steer, cancel, or wait on it.
         yield* Deferred.await(started);
@@ -361,7 +340,7 @@ const makeSupervisor = (settings: SessionSettings) =>
           if (Exit.isSuccess(closed)) return undefined;
           counters.count("cleanupEscalations");
           yield* record.agent.close();
-          record.conversationLost = true;
+          records.markConversationLost(record.id);
           return runDiagnostic(
             "cleanup-escalation",
             `native cleanup did not finish within ${policy.cleanupBudgetMillis}ms; the BackendAgent was closed and its conversation is lost`,
@@ -476,16 +455,13 @@ const makeSupervisor = (settings: SessionSettings) =>
           } as const;
         }
 
-        const record: SubagentRecord = {
+        const record = records.insert({
           id: subagentId,
           profile,
           context,
           agent: opened.agent,
           scope: opened.scope,
-          phase: "running",
-          conversationLost: false,
-        };
-        subagents.set(subagentId, record);
+        });
 
         const identity: RunIdentity = {
           runId,
@@ -563,7 +539,7 @@ const makeSupervisor = (settings: SessionSettings) =>
           return { outcome: "shutting down" } as const;
         }
 
-        const record = subagents.get(request.subagentId);
+        const record = records.get(request.subagentId);
         if (!record || record.phase === "closed") {
           return {
             outcome: "unknown Subagent",
@@ -609,7 +585,10 @@ const makeSupervisor = (settings: SessionSettings) =>
         const reserved = yield* lease.reserveResult(runId);
         if (!reserved) return { outcome: "at capacity" } as const;
 
-        record.phase = "running";
+        // The phase moves to `running` when the fork attaches the Run, which
+        // is the same rule a start follows. Until then a second resume is
+        // refused by the Subagent's active-Run claim, which this acquire
+        // already took, and answers the same `Subagent already running`.
         const identity: RunIdentity = {
           runId,
           subagentId: record.id,
@@ -635,17 +614,9 @@ const makeSupervisor = (settings: SessionSettings) =>
     /* steer                                                         */
     /* ------------------------------------------------------------ */
 
-    /** The Subagent whose Run this is, if that Run is in flight right now. */
-    const recordOf = (runId: RunId): SubagentRecord | undefined => {
-      for (const record of subagents.values()) {
-        if (record.run?.identity.runId === runId) return record;
-      }
-      return undefined;
-    };
-
-    /** Its Run Scope, which exists for exactly as long as the Run does. */
+    /** The Run Scope of a Run in flight, which lives exactly as long as it. */
     const handleOf = (runId: RunId): RunHandle | undefined =>
-      recordOf(runId)?.run;
+      records.byRun(runId)?.run;
 
     const steer = (
       runId: RunId,
@@ -667,7 +638,7 @@ const makeSupervisor = (settings: SessionSettings) =>
           } as const;
         }
 
-        const record = recordOf(runId);
+        const record = records.byRun(runId);
         const handle = record?.run;
         if (!record || !handle) {
           // Active in the index but with no live Run Scope: it is settling.
@@ -864,8 +835,7 @@ const makeSupervisor = (settings: SessionSettings) =>
       reason: CancellationReason,
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
-        if (record.phase === "closed") return;
-        record.phase = "closed";
+        if (!records.markClosed(record.id)) return;
         const runId = record.run?.identity.runId;
         if (runId !== undefined) yield* cancelOne(runId, reason);
         const fiber = record.runFiber;
@@ -884,7 +854,7 @@ const makeSupervisor = (settings: SessionSettings) =>
 
         // Reverse acquisition order: the newest Subagent closes first, which
         // is what closing the Session Scope would do on its own.
-        for (const record of [...subagents.values()].reverse()) {
+        for (const record of [...records.all()].reverse()) {
           yield* closeSubagent(record, "shutdown");
         }
         // The next Session's model did not start these Runs and has no context
@@ -893,7 +863,7 @@ const makeSupervisor = (settings: SessionSettings) =>
         // identity is forgotten.
         yield* delivery.stop();
         yield* store.clear();
-        subagents.clear();
+        records.clear();
         yield* repository.forget();
       });
 
@@ -942,7 +912,7 @@ const makeSupervisor = (settings: SessionSettings) =>
       /** Not a public tool. Shutdown uses it, and so does one race test. */
       closeSubagentById: (subagentId: SubagentId): Effect.Effect<void> =>
         Effect.suspend(() => {
-          const record = subagents.get(subagentId);
+          const record = records.get(subagentId);
           return record ? closeSubagent(record, "shutdown") : Effect.void;
         }),
       /** Every Run stage, in order, for ordering assertions. */

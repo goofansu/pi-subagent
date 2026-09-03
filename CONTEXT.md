@@ -307,6 +307,16 @@ BackendAgent closed by the core, its Conversation marked lost so a later resume
 is honest, and settlement continuing with the observations it has. A hung
 finalizer must not leave a Run in `finalizing` forever.
 
+**Subagent records** — what the supervisor knows about each Subagent it owns,
+and the only writer of any of it: the fixed facts (id, Profile, context,
+BackendAgent, Scope) and the four things that change — the phase, the Run
+currently in flight, the fiber settling it, and whether the Conversation is
+lost. Every mutation is a call on the module, so the rule that a Subagent owns
+at most one active Run is asserted where the record lives rather than at each
+call site, and finding a Run's owner is an index lookup rather than a scan.
+**Not a registry** — see the historical term of that name.
+[ADR-0034](docs/adr/0034-supervisor-mechanisms-admission-lease-and-subagent-records.md).
+
 **Admission lease** — what one admitted Run holds: a slot in the Session's
 capacity, the Subagent's one-active-Run claim, and the Result-store
 reservation. One atomic `acquire` yields either a lease or a typed refusal —
@@ -674,7 +684,10 @@ and the supervisor's records: ownership is a Scope rather than a map.
 
 **Registry** — 1.x's `SubagentRuns`, which held live-display Runs and handed
 out write access to them. Replaced by the **RunRepository**, which is the only
-writer of Run snapshots and hands out no write access at all.
+writer of Run snapshots and hands out no write access at all. The word stays
+retired: the supervisor's own per-Subagent state is the **Subagent records**,
+and naming a new thing "registry" would make this section, whose whole job is
+to let an old plan still be read, say something untrue.
 
 **Dispatcher** — 1.x's orchestrator, which talked to lifecycle, presentation,
 and delivery directly. Replaced by the **Façade** for input mapping, the
