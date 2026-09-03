@@ -3,16 +3,16 @@ import { test } from "node:test";
 import { assertRetainedReleaseEvidence } from "./codex-retained-release-contract.mjs";
 
 const passingRecord = `
-### 2026-08-31 — codex-cli 0.150.1
+### 2026-09-03 — codex-cli 0.153.0
 
 - Operator: Release Operator
 - OS: macOS 15
 - Codex Desktop version: 1.2.3
-- Smoke log: artifacts/codex-retained-0.150.1.log
+- Smoke log: artifacts/codex-retained-0.153.0.log
 - Desktop before smoke: PASS — prompt completed
 - Desktop during retained-idle prompt: PASS — prompt completed
 - Desktop during active Turn 2: PASS — overlap observed
-- \`CODEX_RESUME_LIVE_SMOKE_PASS\`: PASS — marker in smoke log
+- \`V2_CODEX_LIVE_SMOKE_PASS\`: PASS — marker in smoke log
 - Descendant cleanup: process tree captured; all observed PIDs exited
 - Desktop after Session cleanup: PASS — prompt completed
 - Rollout-writer/storage conflict observed: NO — no conflict
@@ -21,15 +21,30 @@ const passingRecord = `
 
 test("retained Codex release evidence closes only for the matching pinned CLI", () => {
   assert.deepEqual(
-    assertRetainedReleaseEvidence(passingRecord, "codex-cli 0.150.1"),
+    assertRetainedReleaseEvidence(passingRecord, "codex-cli 0.153.0"),
     {
-      heading: "2026-08-31 — codex-cli 0.150.1",
-      smokeLog: "artifacts/codex-retained-0.150.1.log",
+      heading: "2026-09-03 — codex-cli 0.153.0",
+      smokeLog: "artifacts/codex-retained-0.153.0.log",
     },
   );
   assert.throws(
-    () => assertRetainedReleaseEvidence(passingRecord, "codex-cli 0.151.0"),
-    /no complete evidence record.*0\.151\.0/i,
+    () => assertRetainedReleaseEvidence(passingRecord, "codex-cli 0.154.0"),
+    /no complete evidence record.*0\.154\.0/i,
+  );
+});
+
+test("a record naming v1's smoke marker is not a record for this procedure", () => {
+  // The v1 resume smoke's marker was `CODEX_RESUME_LIVE_SMOKE_PASS`, and a
+  // record carrying it is evidence about a gate that no longer exists — a
+  // different adapter, driven by a different lifecycle, deleted in M7. The
+  // release conclusion is only as good as the run it names.
+  const v1Record = passingRecord.replace(
+    "V2_CODEX_LIVE_SMOKE_PASS",
+    "CODEX_RESUME_LIVE_SMOKE_PASS",
+  );
+  assert.throws(
+    () => assertRetainedReleaseEvidence(v1Record, "codex-cli 0.153.0"),
+    /no complete evidence record/i,
   );
 });
 
@@ -44,10 +59,7 @@ test("failed, missing, and unproven operator evidence keep the gate open", () =>
       "Desktop during active Turn 2: PASS",
       "Desktop during active Turn 2: UNPROVEN",
     ],
-    [
-      "`CODEX_RESUME_LIVE_SMOKE_PASS`: PASS",
-      "`CODEX_RESUME_LIVE_SMOKE_PASS`: FAIL",
-    ],
+    ["`V2_CODEX_LIVE_SMOKE_PASS`: PASS", "`V2_CODEX_LIVE_SMOKE_PASS`: FAIL"],
     [
       "Desktop after Session cleanup: PASS",
       "Desktop after Session cleanup: FAIL",
@@ -62,7 +74,7 @@ test("failed, missing, and unproven operator evidence keep the gate open", () =>
       () =>
         assertRetainedReleaseEvidence(
           passingRecord.replace(field, replacement),
-          "codex-cli 0.150.1",
+          "codex-cli 0.153.0",
         ),
       /no complete evidence record/i,
       field,
@@ -73,10 +85,10 @@ test("failed, missing, and unproven operator evidence keep the gate open", () =>
     () =>
       assertRetainedReleaseEvidence(
         passingRecord.replace(
-          "Smoke log: artifacts/codex-retained-0.150.1.log",
+          "Smoke log: artifacts/codex-retained-0.153.0.log",
           "Smoke log:",
         ),
-        "codex-cli 0.150.1",
+        "codex-cli 0.153.0",
       ),
     /no complete evidence record/i,
   );
@@ -89,7 +101,7 @@ test("a later passing record can close the gate without rewriting failed history
   assert.doesNotThrow(() =>
     assertRetainedReleaseEvidence(
       `${failed}\n${passingRecord}`,
-      "codex-cli 0.150.1",
+      "codex-cli 0.153.0",
     ),
   );
 });

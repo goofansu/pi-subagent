@@ -25,22 +25,27 @@ const smokeLogPath = path.isAbsolute(record.smokeLog)
   ? record.smokeLog
   : path.join(repository, record.smokeLog);
 const smokeLog = readFileSync(smokeLogPath, "utf8");
+// The v2 runtime gate's own lines, verbatim. A log that does not carry them
+// is a log of some other run, and the point of reading the log at all is that
+// a record's `PASS` is a human's summary of it.
 for (const required of [
-  "CODEX_RESUME_LIVE_SMOKE_PASS",
-  "Session shutdown closes retained App Server stdio",
-  "the retained App Server is gone after Session shutdown",
+  "V2_CODEX_LIVE_SMOKE_PASS",
+  "the retained root is neither listed nor readable by a second App Server",
+  "no App Server child remains after closure",
 ]) {
   if (!smokeLog.includes(required))
     throw new Error(
       `retained smoke log is missing required evidence: ${required}`,
     );
 }
+// Either the descendants that were observed are gone, or none was observed
+// and the gate said so. An unexercised check must never read as a passing one.
 if (
   !smokeLog.includes(
-    "all observed App Server descendants are gone after Session shutdown",
+    "all observed App Server descendants are gone after closure",
   ) &&
   !smokeLog.includes(
-    "no persistent App Server descendants were observed after thread start",
+    "no persistent App Server descendants were observed before closure",
   )
 )
   throw new Error("retained smoke log is missing descendant cleanup evidence");

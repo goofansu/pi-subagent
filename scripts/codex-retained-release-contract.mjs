@@ -1,3 +1,13 @@
+/**
+ * The success marker of the gate this evidence is about.
+ *
+ * Named here rather than spelled inline because it is the one field that says
+ * *which* gate an operator ran, and after M7 there is one: the v2 Codex
+ * runtime gate. A record carrying v1's marker is evidence about an adapter
+ * that no longer exists, and this constant is what makes the check say so.
+ */
+const RUNTIME_GATE_MARKER = "V2_CODEX_LIVE_SMOKE_PASS";
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -43,7 +53,7 @@ function isComplete(record) {
       "PASS",
     ) &&
     hasEvidence(field(record.body, "Desktop during active Turn 2"), "PASS") &&
-    hasEvidence(field(record.body, "CODEX_RESUME_LIVE_SMOKE_PASS"), "PASS") &&
+    hasEvidence(field(record.body, RUNTIME_GATE_MARKER), "PASS") &&
     present("Descendant cleanup") &&
     hasEvidence(field(record.body, "Desktop after Session cleanup"), "PASS") &&
     hasEvidence(

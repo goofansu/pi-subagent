@@ -266,7 +266,7 @@ comments and ordinary string literals are not.
 - [x] **Codex protocol fidelity is schema-derived** — every App Server
   notification shape the transport consumes is derived from the installed
   codex's generated protocol schema (`codex app-server generate-json-schema`,
-  verified against codex-cli 0.150.1 plus a live stdio smoke run), never from
+  verified against codex-cli 0.153.0 plus a live stdio smoke run), never from
   hand-authored fixtures alone. The parser requires only schema-required
   fields: the notification envelope is `method` + `params` (the live server's
   undeclared `emittedAtMs` stamp is ignored, not required), optional fields

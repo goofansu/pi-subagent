@@ -24,9 +24,28 @@
 //   read went unrecorded.
 // - The cancelled Run must leave the process, the root, and the Subagent
 //   alive, because the spike found that `turn/interrupt` stops only the Turn.
-// - **The child process must actually be gone.** Codex is the one backend that
+// - **The child process must actually be gone** — the whole process tree, not
+//   only the App Server this process spawned. Codex is the one backend that
 //   owns an operating-system process, and the adapter's own probe reading zero
 //   is the adapter's word for it. This gate asks `ps` instead.
+//
+// Three of those checks came from v1's retained resume smoke, which M7 deletes.
+// They are the evidence only that script carried, and they are here so nothing
+// is lost with it:
+//
+// - **The retained root is undiscoverable.** A *second* App Server, spawned
+//   from the same recorded invocation, is asked to list and read threads. It
+//   must be able to read one ordinary stored thread — the positive control,
+//   without which "it could not read ours" would prove nothing — and it must
+//   neither list nor read our ephemeral root.
+// - **The whole process tree is gone after shutdown.** Descendants are
+//   remembered at each phase while the Session is live and every remembered
+//   pid is asked afterwards.
+// - **Codex Desktop coexistence.** With CODEX_DESKTOP_COEXISTENCE_PROBE=1 the
+//   gate pauses at two checkpoints — the retained root idle, and Turn 2 in
+//   flight — so an operator can exercise Desktop and record what happened.
+//   The procedure is `docs/codex-desktop-coexistence-release.md`; the variable
+//   is the one v1's script used, because it is the operator's muscle memory.
 //
 // Credentials follow the existing Codex live-smoke conventions: an
 // authenticated `codex` CLI on PATH (`~/.codex/auth.json`), the same
@@ -34,12 +53,18 @@
 // V2_CODEX_LIVE_MODEL and the overall bound with V2_CODEX_LIVE_TIMEOUT_MS.
 // This spends provider quota and is not part of `npm run check`.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn as nodeSpawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { Effect } from "effect";
+// The one adapter symbol this gate names. A live gate is a composition root
+// of its own — it is the only thing here that decides which backends exist —
+// and wrapping the *production* spawn is what makes the transcript below
+// evidence about production rather than about a stand-in.
+import { spawnCodexAppServer } from "../extensions/subagent-v2/backend/codex/index.ts";
 import { createProductionBackendSet } from "../extensions/subagent-v2/host/production-backends.ts";
 import { sessionRuntimeLayer } from "../extensions/subagent-v2/runtime/composition.ts";
 import {
@@ -49,6 +74,11 @@ import {
 import { DEFAULT_RUNTIME_POLICY } from "../extensions/subagent-v2/runtime/policy.ts";
 import { RunRepository } from "../extensions/subagent-v2/runtime/repository.ts";
 import { SubagentSupervisor } from "../extensions/subagent-v2/runtime/supervisor.ts";
+import {
+  assertStoredThreadInspection,
+  containsProviderIdentityFieldName,
+  readRetainedRoots,
+} from "./v2-codex-smoke-contract.mjs";
 
 const SUCCESS_MARKER = "V2_CODEX_LIVE_SMOKE_PASS";
 const FAILURE_MARKER = "V2_CODEX_LIVE_SMOKE_FAIL";
@@ -80,12 +110,30 @@ const onSignal = (signal) => {
 process.once("SIGINT", onSignal);
 process.once("SIGTERM", onSignal);
 
-const timer = setTimeout(
-  () =>
-    rejectInterruption(new Error(`live smoke timed out after ${timeoutMs}ms`)),
-  timeoutMs,
-);
-timer.unref();
+/**
+ * The gate's own bound, held as a deadline rather than a fixed timer.
+ *
+ * A Desktop coexistence checkpoint is minutes of an operator's attention, and
+ * those minutes are not the gate's to spend — so a pause pushes the deadline
+ * out by exactly how long it lasted and re-arms.
+ */
+let deadline = Date.now() + timeoutMs;
+let timer;
+
+function rearmTimeout(pausedMillis = 0) {
+  clearTimeout(timer);
+  deadline += pausedMillis;
+  timer = setTimeout(
+    () =>
+      rejectInterruption(
+        new Error(`live smoke timed out after ${timeoutMs}ms of gate time`),
+      ),
+    Math.max(0, deadline - Date.now()),
+  );
+  timer.unref();
+}
+
+rearmTimeout();
 
 /**
  * Every `codex` process this process is the parent of.
@@ -118,6 +166,421 @@ function codexChildren() {
       );
   } catch (error) {
     return { unreadable: error instanceof Error ? error.message : "ps failed" };
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* The process tree                                                  */
+/* ---------------------------------------------------------------- */
+
+/** Every (pid, ppid) pair the operating system will admit to. */
+function processTable() {
+  const output = execFileSync("ps", ["-axo", "pid=,ppid="], {
+    encoding: "utf8",
+  });
+  return output
+    .trim()
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/).map(Number))
+    .filter(
+      ([pid, parent]) => Number.isInteger(pid) && Number.isInteger(parent),
+    );
+}
+
+/** Every descendant of one pid, breadth-first, however deep. */
+function descendantsOf(parentPid) {
+  if (!Number.isInteger(parentPid)) return [];
+  const childrenByParent = new Map();
+  for (const [pid, parent] of processTable()) {
+    childrenByParent.set(parent, [
+      ...(childrenByParent.get(parent) ?? []),
+      pid,
+    ]);
+  }
+  const descendants = [];
+  const pending = [...(childrenByParent.get(parentPid) ?? [])];
+  while (pending.length > 0) {
+    const pid = pending.shift();
+    descendants.push(pid);
+    pending.push(...(childrenByParent.get(pid) ?? []));
+  }
+  return descendants;
+}
+
+function pidAlive(pid) {
+  if (!Number.isInteger(pid)) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function processExecutable(pid) {
+  try {
+    return execFileSync("ps", ["-p", String(pid), "-o", "comm="], {
+      encoding: "utf8",
+    }).trim();
+  } catch {
+    return "<executable unavailable>";
+  }
+}
+
+/**
+ * Every descendant this gate has ever seen, with what it was and when.
+ *
+ * Sampled at phases rather than watched continuously: a tool process Codex
+ * spawns for one command may live for a second, and the claim being defended
+ * is that nothing observed alive during the Session is alive after it. A pid
+ * nobody sampled cannot be asserted about, so the note printed at the end says
+ * so rather than letting an unexercised check read as a passing one.
+ */
+const knownDescendants = new Set();
+const descendantEvidence = new Map();
+
+function rememberDescendants(phase) {
+  for (const parent of appServers) {
+    for (const pid of descendantsOf(parent.pid)) {
+      knownDescendants.add(pid);
+      const seen = descendantEvidence.get(pid) ?? {
+        executable: processExecutable(pid),
+        phases: new Set(),
+      };
+      seen.phases.add(phase);
+      descendantEvidence.set(pid, seen);
+    }
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* The recording spawn                                               */
+/* ---------------------------------------------------------------- */
+
+/**
+ * Every App Server this gate started, with the invocation and the transcript.
+ *
+ * One entry per Subagent, because a Subagent is one retained App Server with
+ * one root thread. The invocation is kept so the nondiscoverability proof can
+ * start a *second* App Server exactly as the adapter started the first —
+ * same binary, same arguments, same cwd, same environment. Anything else
+ * would be asking a different Codex home the question.
+ */
+const appServers = [];
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Split a stdio stream into JSON frames, tolerating partial chunks. */
+function createFrameReader(target, label) {
+  let buffered = "";
+  const readLine = (line) => {
+    if (!line.trim()) return;
+    try {
+      const value = JSON.parse(line);
+      if (isRecord(value)) target.push(value);
+      else failures.push(`${label} emitted a non-object JSON frame`);
+    } catch {
+      failures.push(`${label} emitted malformed JSON`);
+    }
+  };
+  return {
+    push(chunk) {
+      buffered += String(chunk);
+      const lines = buffered.split("\n");
+      buffered = lines.pop() ?? "";
+      for (const line of lines) readLine(line);
+    },
+  };
+}
+
+/**
+ * The production spawn, with both directions of stdio copied out.
+ *
+ * A tap rather than a substitute: the child is the one the adapter would have
+ * started, and the adapter's own `CodexChildProcess` is handed back with two
+ * members wrapped. The gate reads the transcript afterwards to learn the root
+ * thread id and the Turn ids, which are provider identities the adapter is
+ * right not to publish — and which the release proof cannot be written
+ * without.
+ */
+const recordingSpawn = (request) => {
+  const child = spawnCodexAppServer(request);
+  const trace = { outbound: [], inbound: [] };
+  appServers.push({ request, pid: child.pid, trace });
+  const outbound = createFrameReader(trace.outbound, "client stdio");
+  const inbound = createFrameReader(trace.inbound, "server stdio");
+  return {
+    ...child,
+    write: (line) => {
+      outbound.push(line);
+      return child.write(line);
+    },
+    onStdout: (listener) =>
+      child.onStdout((chunk) => {
+        inbound.push(chunk);
+        listener(chunk);
+      }),
+  };
+};
+
+/* ---------------------------------------------------------------- */
+/* The second App Server                                             */
+/* ---------------------------------------------------------------- */
+
+const INSPECTOR_CLOSE_MS = 15_000;
+
+/**
+ * A plain JSON-RPC client over a second `codex app-server`.
+ *
+ * Deliberately not the adapter's transport. What is being tested is what an
+ * *unrelated* client can discover about our root, so the client has to be
+ * unrelated: an inspector built from the adapter would inherit whatever the
+ * adapter does about ephemeral threads, and would be proving something about
+ * our own code rather than about Codex's storage.
+ */
+function createInspector(request) {
+  const child = nodeSpawn(request.command, [...request.args], {
+    shell: false,
+    stdio: ["pipe", "pipe", "pipe"],
+    cwd: request.cwd,
+    env: { ...request.env },
+  });
+  const pending = new Map();
+  let nextId = 1;
+  let buffered = "";
+  let stderr = "";
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  const rejectPending = (error) => {
+    for (const waiter of pending.values()) waiter.reject(error);
+    pending.clear();
+  };
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    buffered += chunk;
+    const lines = buffered.split("\n");
+    buffered = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const waiter = pending.get(message.id);
+      if (!waiter) continue;
+      pending.delete(message.id);
+      if ("error" in message) {
+        const error = new Error(
+          message.error?.message ?? "inspector JSON-RPC request failed",
+        );
+        error.rpcError = message.error;
+        waiter.reject(error);
+      } else waiter.resolve(message.result);
+    }
+  });
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    stderr = `${stderr}${chunk}`.slice(-2_000);
+  });
+  child.once("error", rejectPending);
+  child.once("close", () =>
+    rejectPending(
+      new Error(`inspector App Server closed unexpectedly: ${stderr.trim()}`),
+    ),
+  );
+  return {
+    child,
+    request: (method, params) =>
+      new Promise((resolve, reject) => {
+        const id = nextId++;
+        pending.set(id, { resolve, reject });
+        child.stdin.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`,
+        );
+      }),
+    notify(method, params) {
+      child.stdin.write(
+        `${JSON.stringify({ method, ...(params ? { params } : {}) })}\n`,
+      );
+    },
+    async close() {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.stdin.end();
+      }
+      await withTimeout(closed, INSPECTOR_CLOSE_MS, "inspector shutdown");
+      if (pidAlive(child.pid)) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+    },
+  };
+}
+
+/** One local bound, named so it cannot be confused with the gate's own. */
+function withTimeout(promise, milliseconds, label) {
+  let bound;
+  const expiry = new Promise((_unused, reject) => {
+    bound = setTimeout(
+      () => reject(new Error(`${label} timed out after ${milliseconds}ms`)),
+      milliseconds,
+    );
+    bound.unref?.();
+  });
+  return Promise.race([promise, expiry]).finally(() => clearTimeout(bound));
+}
+
+/** Ask a second App Server whether it can see the retained root. */
+async function inspectStoredThreads(root, request) {
+  const inspector = createInspector(request);
+  try {
+    const initialized = await Promise.race([
+      inspector.request("initialize", {
+        clientInfo: {
+          name: "pi-subagent-release-inspector",
+          title: "pi-subagent release inspector",
+          version: "2.0.0",
+        },
+        capabilities: null,
+      }),
+      interruption,
+    ]);
+    inspector.notify("initialized");
+
+    const listedThreadIds = [];
+    let cursor = null;
+    for (let page = 0; page < 100; page += 1) {
+      const listed = await Promise.race([
+        inspector.request("thread/list", {
+          cursor,
+          limit: 100,
+          sortKey: "created_at",
+          sortDirection: "desc",
+        }),
+        interruption,
+      ]);
+      for (const thread of listed?.data ?? []) {
+        if (typeof thread?.id === "string") listedThreadIds.push(thread.id);
+      }
+      cursor = listed?.nextCursor ?? null;
+      if (cursor === null) break;
+      if (page === 99) {
+        throw new Error("inspector thread/list pagination did not terminate");
+      }
+    }
+
+    const controlThreadId = listedThreadIds.find((id) => id !== root.threadId);
+    if (!controlThreadId) {
+      throw new Error(
+        "no stored thread was available for the positive control; nondiscoverability is inconclusive. Complete one ordinary Codex conversation in the configured Codex home first.",
+      );
+    }
+    const read = (threadId) =>
+      Promise.race([
+        inspector.request("thread/read", { threadId, includeTurns: false }),
+        interruption,
+      ]);
+    const control = await read(controlThreadId);
+
+    let readError;
+    try {
+      await read(root.threadId);
+    } catch (error) {
+      readError = error;
+    }
+    assertStoredThreadInspection({
+      privateThreadId: root.threadId,
+      listedThreadIds,
+      controlThreadId,
+      controlReadThreadId: control?.thread?.id,
+      privateReadRejected: readError?.rpcError !== undefined,
+    });
+    return { codexHome: initialized?.codexHome };
+  } finally {
+    try {
+      await inspector.close();
+    } catch (error) {
+      failures.push(
+        `inspector cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+}
+
+/**
+ * Read every transcript, then ask a second App Server about the resumed root.
+ *
+ * Both halves in one place because they are one claim: the root the adapter
+ * retained across two Turns is the root nobody else can find. Failures are
+ * returned rather than thrown so the drive reaches its probes — a
+ * nondiscoverability proof that fell over should cost one check, not the
+ * leak evidence too.
+ */
+async function readRetainedRoot() {
+  const servers = [...appServers];
+  try {
+    // In transcript order, so a root and the App Server that owns it stay
+    // paired: the inspector has to be started from *that* server's
+    // invocation, or it would be asking a different Codex home.
+    const roots = readRetainedRoots(servers.map((server) => server.trace));
+    const resumedIndex = roots.findIndex((root) => root.turnIds.length >= 2);
+    const retainedRoot = roots[resumedIndex];
+    const stored = await inspectStoredThreads(
+      retainedRoot,
+      servers[resumedIndex].request,
+    );
+    return { roots, retainedRoot, stored };
+  } catch (error) {
+    return {
+      roots: [],
+      failure: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* The Desktop coexistence checkpoints                               */
+/* ---------------------------------------------------------------- */
+
+const DESKTOP_PROBE_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * Pause so an operator can exercise Codex Desktop, if they asked to be paused.
+ *
+ * The gate cannot assert Desktop usability, and it does not pretend to: the
+ * operator's recorded observation is the release authority and this only
+ * supplies the timing. Human wait time is not charged against the gate's own
+ * bound, because a coexistence run is minutes of somebody's attention and a
+ * gate that timed out during it would be a gate that punished being careful.
+ */
+async function desktopCoexistenceCheckpoint(phase, instruction) {
+  if (process.env.CODEX_DESKTOP_COEXISTENCE_PROBE !== "1") return;
+  const pausedAt = Date.now();
+  clearTimeout(timer);
+  const terminal = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  try {
+    console.log(`\nDesktop ${phase} probe: ${instruction} (10 minute limit).`);
+    await withTimeout(
+      Promise.race([
+        terminal.question(
+          `Press Enter only after recording the ${phase} Desktop result: `,
+        ),
+        interruption,
+      ]),
+      DESKTOP_PROBE_TIMEOUT_MS,
+      `Desktop ${phase} coexistence prompt`,
+    );
+  } finally {
+    terminal.close();
+    rearmTimeout(Date.now() - pausedAt);
   }
 }
 
@@ -189,7 +652,9 @@ const untilTerminal = (repository, runId) =>
 
 /** Run one Session over a fresh production set, and report every probe. */
 async function inSession(policy, body) {
-  const held = createProductionBackendSet();
+  const held = createProductionBackendSet({
+    codex: { spawn: recordingSpawn },
+  });
   const counters = createRuntimeCounters();
   const program = Effect.scoped(
     Effect.gen(function* () {
@@ -270,6 +735,18 @@ async function driveMainSession() {
       yield* untilTerminal(rig.repository, first.runId);
       const firstResult = yield* rig.supervisor.result(first.runId);
 
+      // The root is retained and idle. Sample the tree, then let an operator
+      // exercise Codex Desktop against the same Codex home if they asked to.
+      yield* Effect.sync(() =>
+        rememberDescendants("idle after retained Turn 1"),
+      );
+      yield* Effect.promise(() =>
+        desktopCoexistenceCheckpoint(
+          "retained-idle",
+          "the retained App Server is idle; verify Codex Desktop can complete work now",
+        ),
+      );
+
       /* ---- resume, on the same retained root ---- */
       const resumed = started(
         yield* rig.supervisor.resume({
@@ -280,8 +757,20 @@ async function driveMainSession() {
         }),
         "resume",
       );
+      // Turn 2 has been admitted and is in flight. Overlap with an active Turn
+      // is the coexistence question that idle cannot answer, so the checkpoint
+      // is here rather than after the Run settles.
+      yield* Effect.promise(() =>
+        desktopCoexistenceCheckpoint(
+          "active-Turn-2",
+          "Turn 2 is in flight; immediately exercise Codex Desktop and record whether usable overlap was actually observed",
+        ),
+      );
       yield* untilTerminal(rig.repository, resumed.runId);
       const resumedResult = yield* rig.supervisor.result(resumed.runId);
+      yield* Effect.sync(() =>
+        rememberDescendants("idle after retained Turn 2"),
+      );
 
       /* ---- steer ---- */
       const steerText = `Before you finish, also include the exact marker ${steered}.`;
@@ -347,16 +836,29 @@ async function driveMainSession() {
         afterCancelResult = yield* rig.supervisor.result(afterCancel.runId);
       }
 
+      /* ---- the retained root is undiscoverable to anyone else ---- */
+      // Before shutdown, because after it there is no root left to fail to
+      // find, and "we could not see a thread that no longer exists" is not
+      // evidence of anything.
+      // Recorded rather than thrown. A retained-root proof that failed would
+      // otherwise abort the drive before the probes were read, and "did the
+      // Session leak" is the evidence hardest to get any other way.
+      const rootProof = yield* Effect.promise(() => readRetainedRoot());
+
       /* ---- shutdown ---- */
       // Delivery is initiated in a fork rather than awaited, so give the forks
       // a turn before shutting down: a Session that closes with a notice still
       // in flight drops it, which is correct behaviour and would make the
       // count below say something other than what it means.
       yield* quiesce;
+      yield* Effect.sync(() =>
+        rememberDescendants("immediately before Session shutdown"),
+      );
       yield* rig.supervisor.shutdown();
       const afterShutdown = yield* rig.supervisor.start(request({}));
 
       return {
+        rootProof,
         whileRunning,
         firstResult,
         resumedResult,
@@ -443,6 +945,45 @@ async function driveMainSession() {
       JSON.stringify(notifications),
     ),
   );
+
+  /* ---- what the transcript proves about the retained root ---- */
+  const { roots, retainedRoot, stored, failure } = value.rootProof;
+  check(
+    `every Subagent is one App Server with one ephemeral pathless root, and one resumed (${failure ?? `${roots.length} roots, ${retainedRoot?.turnIds.length ?? 0} Turns on the resumed one`})`,
+    failure === undefined,
+  );
+  check(
+    `the retained root is neither listed nor readable by a second App Server, whose Codex home is the same one (${stored?.codexHome ?? "not inspected"})`,
+    typeof stored?.codexHome === "string" &&
+      stored.codexHome === retainedRoot?.codexHome,
+  );
+
+  /* ---- provider identities stay out of every public record ---- */
+  const publicRecords = JSON.stringify({
+    settledRunIds: value.settledRunIds,
+    results: [
+      value.firstResult,
+      value.resumedResult,
+      value.steeredResult,
+      value.cancelledResult,
+      value.afterCancelResult,
+    ],
+    notifications,
+  });
+  check(
+    "no public record names a provider identity field",
+    !containsProviderIdentityFieldName(publicRecords),
+  );
+  const leaked = roots.flatMap((root) =>
+    [...root.providerIdentities].filter((identity) =>
+      publicRecords.includes(identity),
+    ),
+  );
+  check(
+    `no provider identity value reached a public record (${leaked.length === 0 ? "none" : leaked.join(", ")})`,
+    leaked.length === 0,
+  );
+
   check(
     `the runtime probe is clear after closure (${JSON.stringify(probe)})`,
     probeIsClear(probe),
@@ -455,6 +996,33 @@ async function driveMainSession() {
   check(
     `no App Server child remains after closure (${JSON.stringify(remaining)})`,
     Array.isArray(remaining) && remaining.length === 0,
+  );
+  checkProcessTreeIsGone("closure");
+}
+
+/**
+ * Every descendant ever observed alive is gone, and say so either way.
+ *
+ * A gate that observed no descendant has not exercised descendant cleanup, and
+ * printing "ok" for a check that never ran would be the worst outcome here.
+ * The note is what the release record copies.
+ */
+function checkProcessTreeIsGone(occasion) {
+  if (knownDescendants.size === 0) {
+    console.log(
+      `  note — no persistent App Server descendants were observed before ${occasion}; descendant cleanup was not exercised`,
+    );
+    return;
+  }
+  const evidence = [...descendantEvidence].map(
+    ([pid, seen]) =>
+      `${pid} ${seen.executable} [${[...seen.phases].join(", ")}]`,
+  );
+  console.log(`  evidence — observed descendants: ${evidence.join("; ")}`);
+  const alive = [...knownDescendants].filter(pidAlive);
+  check(
+    `all observed App Server descendants are gone after ${occasion} (${alive.length === 0 ? "none alive" : alive.join(", ")})`,
+    alive.length === 0,
   );
 }
 
@@ -475,6 +1043,9 @@ async function driveTimeoutSession() {
             }),
           ),
           "start for the timeout",
+        );
+        yield* Effect.sync(() =>
+          rememberDescendants("the timeout Session's Run in flight"),
         );
         yield* untilTerminal(rig.repository, timed.runId);
         return yield* rig.supervisor.result(timed.runId);
@@ -502,6 +1073,7 @@ async function driveTimeoutSession() {
     `no App Server child remains after the timeout Session (${JSON.stringify(remaining)})`,
     Array.isArray(remaining) && remaining.length === 0,
   );
+  checkProcessTreeIsGone("the timeout Session");
 }
 
 try {
@@ -514,6 +1086,20 @@ try {
   failures.push(error instanceof Error ? error.message : String(error));
 } finally {
   clearTimeout(timer);
+  // Nothing this gate started may outlive it, whatever failed. The Session
+  // Scope is what should have done it; this is the backstop that makes a
+  // failing gate safe to run twice.
+  for (const pid of [
+    ...[...knownDescendants].reverse(),
+    ...appServers.map((server) => server.pid),
+  ]) {
+    if (!pidAlive(pid)) continue;
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
   process.removeListener("SIGINT", onSignal);
   process.removeListener("SIGTERM", onSignal);
   rmSync(cwd, { recursive: true, force: true });
