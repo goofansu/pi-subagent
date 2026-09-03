@@ -95,7 +95,45 @@ The exit gate requires **no open severity-1 or severity-2 defect**.
 
 | Found | Severity | What happens | Status |
 | --- | --- | --- | --- |
-| _none yet_ | | | |
+| 2026-09-03 | 3 | The widget drops a Run's row the moment the Run settles, where v1 keeps it until the Run's completion notification lands. For anything but a long Run the widget appears and disappears before it is read, so v2 reads as having no widget at all. | Open — see below |
+
+### The widget's row lifetime (2026-09-03, severity 3)
+
+**What happens.** v1's widget lists every *tracked* Run, and a Run stays tracked
+until `release(id)` — "drop a run whose notification has reached the model". So
+a v1 row is visible from `agent_start` until the answer arrives in the
+conversation. v2's widget lists Runs that are *not terminal*, so the row goes
+the instant the Run settles, which is typically well before the notification
+lands and often within the same turn.
+
+**Verified, not inferred.** Driven against a real Pi host with the tool handler
+called directly so no orchestrating model was involved:
+
+```
+change size=1 live=1
+install rows=1            # the widget installs with one live row
+change size=1 live=1      # redraws while the Run runs
+change size=1 live=0      # the Run settles
+uninstall installed=true  # the row goes at once
+```
+
+So the machinery is sound and the *policy* is what differs.
+
+**Why it is here rather than fixed.** It is a deliberate M3 decision, recorded
+in `host/widget.ts`: "A terminal Run leaves the widget at publication, which is
+a deliberate difference from v1 — v1 kept a settled row until its notification
+landed, and the row's job here is to show what is *live*." The reasoning still
+holds on its own terms; what it did not account for is that a row nobody sees
+is not showing anything. The compatibility matrix's Active widget row says the
+widget is "removed when none are left" and cites v1's tests for it, so v2
+diverges from a promised behaviour without a **[v2 change]** marker — which
+makes this a parity break rather than a taste question.
+
+**The fix, when it is wanted.** Keep a terminal Run's row until its notification
+has landed, which is a fact the Session push sink already tracks. That means
+handing the widget a "has this Run's notice landed" predicate alongside the
+repository, and widening `liveRows`. It is host wiring plus one predicate, and
+it restores v1's behaviour exactly.
 
 ## What to watch for
 

@@ -90,6 +90,23 @@ session still accepts a prompt, exactly as the SDK does`
 — because a politer double would make the adapter's guard untestable: the test
 would pass because the double refused, not because the adapter did.
 
+The inert-in-child guard was also confirmed **live**, in a real Pi child, on
+2026-09-03. Driving `agent_start` directly in a real Pi host (no orchestrating
+model) and logging the guard's inputs at extension load produced two loads: the
+parent's, and then the child's when the Pi backend opened its session.
+
+```
+install guard: childLoad=false depth=0
+registered six tools          # the parent registers everything
+...
+install guard: childLoad=true depth=0
+                              # the child registers nothing at all
+```
+
+That is the child-load discriminator doing the job the extensions filter cannot
+do on its own — Pi initializes an extension's factory while the loader is still
+discovering resources, and the filter is applied only afterwards.
+
 Child isolation and the depth environment are proven against fixture paths in
 [`backend/pi/options.test.ts`](../../extensions/subagent-v2/backend/pi/options.test.ts):
 `both of this package's extension directories are filtered from a child`, `the
