@@ -308,9 +308,22 @@ retained Claude Conversation identity, and the retained Codex App Server process
 plus its ephemeral root, described separately.
 
 **SubagentId** — the stable logical specialist the product exposes. v1 calls it
-the Subagent id.
+the Subagent id. Minted as `subagent-<nonce>-<n>`.
 
 **RunId** — one public `start` or `resume` operation. v1 calls it the Run id.
+Minted as `run-<nonce>-<n>`, numbered from one independently of SubagentId's
+sequence.
+
+**Session nonce** — four random characters minted once per Session runtime and
+carried by every SubagentId and RunId that runtime hands out. It is what makes
+an identifier mean one thing rather than one thing per Session: identity sets
+are forgotten at the Session boundary, but the conversation transcript is not,
+so without it a Run id written before a reload would resolve to whichever Run
+had since taken that number. With it, a stale identifier is reported as
+unknown. Two Sessions draw the same nonce about once in 1.7 million, and share
+every identifier when they do — a weaker guarantee than v1's, which needed no
+such term because it drew a random id per Run.
+[Operation semantics §5](docs/v2/operation-semantics.md).
 
 **Attempt** — adapter-internal vocabulary for native execution details and
 retries. In v2 this is explicitly *not* a core product type and never appears in

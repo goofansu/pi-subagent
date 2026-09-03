@@ -247,8 +247,18 @@ times, across distinct days — and the severity scale for what turns up.
 
 ## 11. No known severity-1 or severity-2 lifecycle defect remains ⏳
 
-**Open with the soak.** None are known today, and none was found while building
-M4, but a soak that has not happened cannot be evidence that nothing is there.
+**Open with the soak.** None was found while building M4. One severity-1 defect
+was found on 2026-09-03 by using the extension by hand, and has since been
+fixed: identifiers restarted at one when a session was reloaded while the
+conversation transcript kept the old ones, so a Run id written before the reload
+could silently resolve to a *different* Run afterwards. Every identifier now
+carries a nonce minted once per Session runtime, so a stale id is reported as
+unknown — see [the findings](m4-live-findings.md#3-ids-restart-at-1-on-a-session-reload-and-the-transcript-does-not)
+and [the soak record](soak.md).
+
+Nothing else is known. But a soak that has not happened cannot be evidence that
+nothing is there, and the one defect that was found came from exactly the
+hand-driving the soak asks for.
 
 ## 12. The generic runtime contract is marked stable ✅
 

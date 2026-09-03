@@ -31,7 +31,8 @@ When admission fails:
   Run id, and nothing appears in `/agents` or the active widget.
 - **No identifier is ever reused.** Identifiers that were allocated and then
   released stay spent for the life of the Session. A caller holding a Run id
-  or Subagent id can always trust that it means one thing.
+  or Subagent id can always trust that it means one thing — including across a
+  reload of the conversation, which section 5 explains.
 - **Everything reserved is released.** The Run Scope, the global capacity
   reservation, the one-active-Run claim on the Subagent, and any retained
   native resource opened during preparation are all released before the
@@ -188,6 +189,24 @@ not landed, clears the Result store, and forgets every local Subagent and Run
 identity. The next Session's model did not start these Runs and has no context
 in which to act on their answers, so their Results do not survive.
 
+### Identifiers do not outlive the Session that minted them
+
+Forgetting the identity sets is not on its own enough, because the Session is
+not the longest-lived thing a caller reads. Reloading a conversation starts a
+new process and a new Session runtime, but the **transcript survives**. A model
+that scrolls back to a completion notice written before the reload — a notice
+this extension itself writes, telling it to retrieve the answer by Run id — is
+holding an identifier whose Session no longer exists.
+
+Every identifier therefore carries a short random nonce minted once per Session
+runtime: `run-<nonce>-<n>` and `subagent-<nonce>-<n>`. Numbering stays
+sequential and independent per kind *within* a Session, so ids remain short
+enough to read and type, while an identifier from an earlier Session is
+reported as **unknown** instead of silently resolving to whichever Run has
+since taken that number. An unknown identifier is a caller's problem to
+recover from; a wrong Run returned as the right one is not something a caller
+can even detect.
+
 **Difference from v1.** v1 rejects new work at shutdown, but by a different
 mechanism and slightly later: `subagents.shutdown()` marks records closed
 synchronously, which makes `resume` return `unknown subagent`, and
@@ -195,6 +214,16 @@ synchronously, which makes `resume` return `unknown subagent`, and
 `unknown run`. v2 makes shutting-down its own typed outcome rather than
 reporting it as an unknown identifier. Everything else — cancel, drop unlanded
 Notifications, clear the store, forget identities — v1 already does.
+
+The Session nonce is the same guarantee in kind, and a weaker one in degree.
+v1 minted `run-<eight random characters>` for every Run, so a stale identifier
+was reported unknown there too — and independently per Run, from a keyspace
+billions wide. v2 draws four characters once per Session and shares them across
+that Session's identifiers, which is what lets those identifiers be numbered at
+all. Two Sessions therefore collide about once in 1.7 million, and when they do
+they collide on *every* id at once rather than one at a time. That is the price
+of a readable id, and it is paid deliberately: see
+[the M4 findings](m4-live-findings.md#3-ids-restart-at-1-on-a-session-reload-and-the-transcript-does-not).
 
 ---
 

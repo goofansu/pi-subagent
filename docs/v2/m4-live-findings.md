@@ -11,6 +11,9 @@ The short version: the adapter and the runtime behaved. Every defect was in the
 parts *around* them — id allocation and a widget policy — and none was reachable
 by the tests that exist, for reasons worth recording.
 
+**Since written:** both id findings (1 and 3) are fixed. The widget's row
+lifetime (2) is open by decision.
+
 ---
 
 ## 1. The first Run of every Session was `run-2`
@@ -43,8 +46,10 @@ keeps its **own** spent set, so the design clearly intended two independent
 sequences; and nothing is disambiguated by the shared counter, because the
 `run-` and `subagent-` prefixes already do that.
 
-**Fix.** One sequence per kind. The first Run of a Session is now `run-1`,
-confirmed both by a unit test and against a real Pi host.
+**Fix.** One sequence per kind. The first Run of a Session is now number one,
+confirmed both by a unit test and against a real Pi host. (It reads as
+`run-<nonce>-1` rather than `run-1` since finding 3 below was fixed; the
+numbering is what this finding is about.)
 
 **Why no test caught it.** Every test that touched the numbering had the
 off-by-one written into it — five of them asserted `run-2` for a Session's
@@ -86,7 +91,7 @@ sink already tracks.
 
 ## 3. Ids restart at 1 on a session reload, and the transcript does not
 
-**Severity 1 — a wrong answer presented as right. Open, needs a decision.**
+**Severity 1 — a wrong answer presented as right. Fixed.**
 
 Resuming a Pi session starts a new process, a new Session runtime, and a new
 `RunRepository` — so Run and Subagent ids begin again at 1. **That much is
@@ -129,15 +134,62 @@ silently wrong. v2's sequential ids made the collision certain rather than
 impossible — readable ids bought at the cost of a correctness property nobody
 noticed was there.
 
-**The fix, and the trade-off.** Give each Session runtime a short random nonce
-and mint `run-<nonce>-1`, `run-<nonce>-2`. Sequence and readability survive
-within a Session; collisions across a reload do not. The change is contained in
-the allocator. The cost is that ids stop being as short and as pleasant to type
-as `run-1`, which is a real loss for a single-user tool where the hazard needs
-a model to re-read an old part of the transcript.
+**The fix, and the trade-off.** Each Session runtime now mints a short random
+nonce and every identifier carries it: `run-<nonce>-1`, `run-<nonce>-2`,
+`subagent-<nonce>-1`. Sequence and readability survive within a Session;
+collisions across a reload do not. The change is contained in the allocator,
+which is the only thing in the tree that mints an id.
 
-Left open deliberately: unlike the shared-counter defect above, this is a
-trade-off rather than a mistake, and the id format is read constantly.
+What it reads like, three Session runtimes in one process:
+
+```
+session 1: subagent-xc5w-1  run-xc5w-1  run-xc5w-2
+session 2: subagent-1axo-1  run-1axo-1  run-1axo-2
+session 3: subagent-lr2m-1  run-lr2m-1  run-lr2m-2
+```
+
+One nonce per Session, shared by both kinds, so a Session's identifiers still
+read as a set. Four characters from a 36-character alphabet is 1,679,616
+nonces, so two given Sessions draw the same one about once in 1.7 million.
+Pairs are the right unit: a stale identifier only misleads when the Session
+that minted it and the Session being asked collide *with each other*, and two
+Sessions that never share a transcript cannot confuse anyone. The hazard also
+needs a model to reach back into a stale part of the transcript before it
+bites at all.
+
+**The cost, and what it buys.** Ids are five characters longer and no longer as
+pleasant to type as `run-1`. That is a real loss for a single-user tool, and it
+was a genuine trade rather than an obvious call — the alternative was to accept
+the hazard. What decided it is the asymmetry in the two failure modes: an id
+reported as unknown is a mistake a caller can see and recover from, and a
+wrong Run returned as though it were the right one is not. **Reverting is
+cheap** if the readability is worth more: drop the nonce from the one template
+string in `runtime/repository.ts` that builds an id.
+
+**What the tests say now.** The property, not the output: *an identifier minted
+in one Session is never minted in another*, checked by allocating from two
+independent Session runtimes and asserting the two sets are disjoint. Alongside
+it, *ids are sequential within a Session and numbered independently per kind*,
+which parses the sequence number out rather than comparing against `run-1`. The
+seven tests elsewhere that pinned a literal id now assert what they were
+always about: five compare against the id the call under test actually
+returned, and two — where the caller never receives the id in question —
+read the sequence number off it instead. That is the same lesson finding 1
+records: where a value has a rule behind it, the test should say the rule.
+
+The two tests that compare one Session's identifiers against another's pin the
+random draw with a seed. They are about whether two Sessions share an identity
+space at all, and an unseeded draw would have them pass by luck and fail once
+in every 1.7 million runs for a reason unconnected to the code. The
+cross-Session guarantee is probabilistic in the product; that is a property of
+the format's size, recorded above, not something a test can assert away.
+
+`forget()`, which ends a Session's identity sets at shutdown, re-mints the
+nonce too, so the guarantee holds however the repository is wired: a runtime
+reused after a shutdown starts a new identity space rather than handing out the
+ids the ended Session already put in the transcript. Its sequence counters keep
+counting rather than restarting, which leaves uniqueness *within* a process a
+certainty rather than something resting on two nonces differing.
 
 ---
 
