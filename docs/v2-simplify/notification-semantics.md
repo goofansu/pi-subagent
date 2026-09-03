@@ -55,9 +55,12 @@ widget (host)                  landed or not; exhausted or not — nothing finer
 ResultStore (runtime)          knows nothing about notification state
 ```
 
-**Fenced.** A boundary rule forbids the word *landed* and its inflections in
-`runtime/delivery.ts`. The rule has a negative-case fixture like every other
-rule in `boundaries.test.ts`. The delivery module's API becomes:
+**Fenced.** Boundary rule 19 forbids the word *landed* and its inflections in
+`runtime/delivery.ts` **and in its test**, because the reading a maintainer
+takes away is as much in a comment as in a name. It has the negative-case
+fixture every rule in `boundaries.test.ts` has, and a positive one proving it
+does not fire on the vocabulary that replaced the banned word. The delivery
+module's API becomes:
 
 | Today | Becomes |
 | --- | --- |
@@ -225,8 +228,17 @@ Run whose only usage was a cache read produces no line. Order and grammar are
 the existing `formatNotificationAccounting`, fed from `NotificationAccounting`:
 
 ```text
-3 turns · 12.3k in / 4.5k out · $0.0421 · claude-opus-4-1
+cost $0.1242 · 12.3k in / 4.5k out · 3 turns · claude-opus-4-1
 ```
+
+**Corrected at the Phase A gate.** The draft of this document illustrated the
+line as `3 turns · 12.3k in / 4.5k out · $0.0421 · claude-opus-4-1`, which
+contradicts the sentence above it: the order and grammar are the *existing*
+`formatNotificationAccounting`, and the existing one puts the cost first.
+[Ledger row N-9](presentation-ledger.md#n-9--accounting-line) and user story 9
+— "the accounting line unchanged in content and grammar, so that a habit
+learned on the release candidate still holds" — both require the existing
+order, so the illustration was the defect and the code is right.
 
 A line reading only a model name is never produced; a model identifies
 accounting and is not accounting.
@@ -245,7 +257,7 @@ Preview from the subagent:
 
 Full result is available. Call agent_result with {"id":"run-k3f9-2"}.
 
-3 turns · 12.3k in / 4.5k out · $0.0421
+cost $0.0421 · 12.3k in / 4.5k out · 3 turns
 ```
 
 ```text
@@ -261,7 +273,7 @@ Partial result is available. Call agent_result with {"id":"run-k3f9-4"}.
 ```
 
 ```text
-Subagent "inspect the build graph" was cancelled in 60.0s (timeout).
+Subagent "inspect the build graph" was cancelled in 1m 0s (timeout).
 
 Agent: explore
 Run: run-k3f9-5
@@ -269,8 +281,12 @@ Subagent: subagent-k3f9-4
 
 Partial result is available. Call agent_result with {"id":"run-k3f9-5"}.
 
-2 turns · 8.1k in / 1.2k out · $0.0130
+cost $0.0130 · 8.1k in / 1.2k out · 2 turns
 ```
+
+The third example's duration reads `1m 0s` and not `60.0s`: `formatDuration`
+switches to minutes at exactly sixty seconds, and every surface here uses that
+one formatter rather than a second one.
 
 ---
 

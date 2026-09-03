@@ -249,6 +249,15 @@ of fixture values rather than code**, and the ledger says which:
   notice uses the shared formatter rather than a second one, which was the
   decision; the sketch was written without checking it.
 
+**And one contradiction inside the semantics document, resolved rather than
+split.** Its worked examples illustrated the accounting line turns-first —
+`3 turns · 12.3k in / 4.5k out · $0.0421` — while its own sentence says the
+order and grammar are the *existing* `formatNotificationAccounting`, which is
+cost-first, and user story 9 asks for the line unchanged so a habit learned on
+the release candidate still holds. Unchanged wins. The illustrations were the
+defect and are corrected in the document; the golden and the ledger's N-9 row
+agree, and the line a model reads did not move.
+
 **Status:** PASS.
 
 ### 10. The compatibility matrix cites this phase

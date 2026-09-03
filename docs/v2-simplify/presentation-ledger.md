@@ -174,7 +174,18 @@ the notice, so the test proves a property the type also guarantees.
 **After** — unchanged text, fed from `NotificationAccounting` rather than
 `UsageSnapshot`. The golden does not move.
 
-**Why** — semantics §2 and §5. A model-only line is still never produced.
+**Why** — semantics §2 and §5. A model-only line is still never produced, and
+now cannot be: a notice only carries an accounting value when at least one
+figure is non-zero, so the formatter has no input that yields a model alone.
+
+**A contradiction in the source documents, resolved here.** The semantics
+document's worked examples illustrated the line as
+`3 turns · 12.3k in / 4.5k out · $0.0421`, turns first. Its own sentence says
+the order and grammar are the *existing* `formatNotificationAccounting`, which
+puts the cost first, and user story 9 asks for the line "unchanged in content
+and grammar, so that a habit learned on the release candidate still holds".
+Unchanged wins; the illustrations were the defect and have been corrected in
+[semantics §5](notification-semantics.md#accounting).
 
 ## Collapsed transcript summary (human-facing)
 
