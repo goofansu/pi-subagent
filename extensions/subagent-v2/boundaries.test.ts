@@ -13,25 +13,33 @@ import {
 } from "../../tools/import-specifiers.ts";
 
 /**
- * The v2 import boundary.
+ * The extension's import boundary: what may name what, enforced.
  *
- * v2 is a rewrite, not a fork: it must not inherit v1 lifecycle machinery by
- * accident, v1 must stay free of Effect and of any dependency on v2, and the
- * legacy profile field name must never appear in the v2 tree. This file is the
- * only place in v2 that spells that legacy name, and it excludes itself from
- * the scan for exactly that reason.
+ * Every rule below guards a property somebody can otherwise take away with one
+ * `import` line. That is the test for whether a rule belongs here: not "is
+ * this tidy" but "what breaks if this edge exists".
  *
- * Later v2 import rules (adapter confinement) belong here too. M0 added the v1
- * and Effect edges; M1 added the rules that keep provider SDKs out of the tree
- * entirely; M2 replaces the domain's "no package specifiers at all" rule with
- * the named-import check ADR-0029 asks for, which is stricter because it
- * checks the properties the rule is *for* rather than a proxy for them.
+ * M7 removed three rules with v1. The v1-import rule, the transitive v1 walk,
+ * and the rule keeping Effect and v2 out of v1 all guarded the same thing — a
+ * rewrite must not inherit the machinery it is replacing — and there is no v1
+ * left to inherit from. Nothing that survived is about the migration; each
+ * survivor is about the product.
+ *
+ * The **legacy profile field name** rule survives deliberately, and its job
+ * changed. It used to keep v1's word out of v2; now it keeps the product's
+ * vocabulary singular, which is why it is expressed as a scan of every file in
+ * the tree whatever its extension rather than as an import check.
+ * [ADR-0022](../../docs/adr/0022-v2-terminology-and-backend-field.md) reserves
+ * the one compound that legitimately contains it. This file is the only place
+ * in the tree that spells the legacy name, and it excludes itself from the
+ * scan for exactly that reason.
  */
 
 /**
- * The frontmatter field v1 profiles use to name `pi`, `claude`, or `codex`.
- * v2 understands only `backend`; a profile still using this name fails v2
- * validation as an unrecognized field. See
+ * The frontmatter field 1.x Profiles used to name `pi`, `claude`, or `codex`.
+ *
+ * The product understands only `backend`; a Profile still using this name
+ * fails validation as an unrecognised field. See
  * `docs/v2/profile-backend-field-migration.md`.
  */
 const LEGACY_BACKEND_FIELD = "harness";
@@ -55,11 +63,9 @@ function describe(file: string): string {
 }
 
 export interface V2BoundaryGraph {
-  /** Root of the frozen v1 extension tree. */
-  readonly v1Root: string;
-  /** Root of the v2 extension tree. */
+  /** Root of the extension tree. */
   readonly v2Root: string;
-  /** The v2 extension entry point the transitive walk starts from. */
+  /** The extension entry point the transitive walk starts from. */
   readonly v2Entry: string;
   /** The plain-TypeScript domain module, which may import only itself. */
   readonly domainRoot: string;
@@ -96,7 +102,6 @@ export interface V2BoundaryGraph {
 }
 
 const productionGraph: V2BoundaryGraph = {
-  v1Root: path.join(repositoryRoot, "extensions", "subagent"),
   v2Root: path.join(repositoryRoot, "extensions", "subagent-v2"),
   v2Entry: path.join(repositoryRoot, "extensions", "subagent-v2", "index.ts"),
   domainRoot: path.join(repositoryRoot, "extensions", "subagent-v2", "domain"),
@@ -704,18 +709,17 @@ function specifiersOf(file: string): string[] {
 export function findV2BoundaryViolations(
   graph: V2BoundaryGraph = productionGraph,
 ): string[] {
-  const { v1Root, v2Root, v2Entry } = graph;
+  const { v2Root, v2Entry } = graph;
   const violations = new Set<string>();
 
-  const recordV1Import = (importer: string, target: string): void => {
-    violations.add(
-      `${describe(importer)} imports forbidden v1 module ${describe(target)}`,
-    );
-  };
-
-  // 1. The v2 runtime graph. Walking from the entry point catches a v1 module
-  //    reached through a chain of modules outside both trees, which a flat
-  //    per-file scan of v2 alone would miss.
+  // 1. The production graph, reachable from the entry point.
+  //
+  //    Walking from the entry rather than scanning files flat is what catches
+  //    an edge reached through a chain of modules outside the tree, and it is
+  //    also what makes "reachable from production" a thing the rules below can
+  //    be about. The v1-import rules it used to carry went with v1: there is no
+  //    frozen tree left to inherit machinery from, and a rule about a directory
+  //    that does not exist is a rule that can never fail.
   const visited = new Set<string>();
   const visit = (file: string): void => {
     if (visited.has(file)) return;
@@ -723,28 +727,16 @@ export function findV2BoundaryViolations(
     for (const specifier of specifiersOf(file)) {
       const target = resolveRelativeSource(file, specifier);
       if (!target) continue;
-      if (isInside(target, v1Root)) {
-        recordV1Import(file, target);
-        continue;
-      }
       visit(target);
     }
   };
   if (fs.existsSync(v2Entry)) visit(v2Entry);
 
-  // 2. Every v2 TypeScript source, tests and all. A v2 test is not reachable
-  //    from the entry point but is still v2 code, and still must not reach
-  //    into v1.
-  for (const file of listSourceFiles(v2Root, { includeTests: true })) {
-    for (const specifier of specifiersOf(file)) {
-      const target = resolveRelativeSource(file, specifier);
-      if (target && isInside(target, v1Root)) recordV1Import(file, target);
-    }
-  }
-
-  // 3. Every file in the v2 tree, whatever its extension, for the legacy
-  //    field name. "Nowhere in the v2 tree" has to mean a Markdown note or a
-  //    JSON fixture too, not only the TypeScript the import rules care about.
+  // 2. Every file in the tree, whatever its extension, for the legacy field
+  //    name. "Nowhere in the tree" has to mean a Markdown note or a JSON
+  //    fixture too, not only the TypeScript the import rules care about — and
+  //    the rule's job since M7 is keeping the product's vocabulary singular
+  //    rather than keeping a deleted implementation's word out.
   for (const file of listTreeFiles(v2Root)) {
     if (file === graph.checkerFile) continue;
     const source = fs
@@ -757,7 +749,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 4. The domain module holds meaning, not machinery. A production domain
+  // 3. The domain module holds meaning, not machinery. A production domain
   //    file may name another domain file and, from `effect`, only the `Schema`
   //    binding — checked at the named-import level, so `Effect`, `Layer`, and
   //    the rest are violations of the same import. Every other package
@@ -801,7 +793,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 5. Runtime mechanism vocabulary stays out of the neutral core and out of
+  // 4. Runtime mechanism vocabulary stays out of the neutral core and out of
   //    the Session runtime, and the runtime primitives stay out of the domain
   //    specifically — the contract names `Scope` on purpose, because lifetime
   //    is what it is about.
@@ -828,7 +820,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 6. `Layer` is confined to the composition module and the service
+  // 5. `Layer` is confined to the composition module and the service
   //    definitions it wires. A Layer per Subagent, BackendAgent, or Run is the
   //    thing ADR-0023 forbids, and a runtime file that cannot import `Layer`
   //    cannot make one by accident.
@@ -846,7 +838,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 7. A provider SDK is named inside its own adapter directory and nowhere
+  // 6. A provider SDK is named inside its own adapter directory and nowhere
   //    else. The Claude adapter names the Claude SDK; every other v2 file,
   //    tests and test doubles included, names none.
   for (const file of listSourceFiles(v2Root, { includeTests: true })) {
@@ -859,26 +851,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 8. The freeze runs in both directions: v1 gains neither Effect nor a
-  //    dependency on the tree that is replacing it.
-  for (const file of listSourceFiles(v1Root, { includeTests: true })) {
-    for (const specifier of specifiersOf(file)) {
-      if (isEffectPackage(specifier)) {
-        violations.add(
-          `${describe(file)} imports forbidden package ${specifier}`,
-        );
-        continue;
-      }
-      const target = resolveRelativeSource(file, specifier);
-      if (target && isInside(target, v2Root)) {
-        violations.add(
-          `${describe(file)} imports forbidden v2 module ${describe(target)}`,
-        );
-      }
-    }
-  }
-
-  // 9. Presentation is prose, and prose has no dependencies. A presentation
+  // 7. Presentation is prose, and prose has no dependencies. A presentation
   //    file may name another presentation file, the domain, and Pi's own
   //    packages — which is where the row measuring and the theme come from —
   //    and nothing else. Not the runtime, not a backend, not a fake, not even
@@ -913,7 +886,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 10. The application module is the façade: it maps decoded input to
+  // 8. The application module is the façade: it maps decoded input to
   //     supervisor requests and outcomes to prose. So it may name the domain,
   //     the runtime's services, presentation, and Effect — and no Pi package,
   //     because a façade that knew the host would be the host.
@@ -946,7 +919,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 11. The host does not reach around the runtime. Every backend a Session
+  // 9. The host does not reach around the runtime. Every backend a Session
   //     has is named by the composition root and handed to the runtime; a
   //     host handler that could import a `Backend` could open one, and then
   //     two things would own BackendAgent lifetime.
@@ -969,7 +942,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 12. The runtime does not know the host exists. `CompletionDelivery`
+  // 10. The runtime does not know the host exists. `CompletionDelivery`
   //     reaches its Session through the `NotificationSink` interface and
   //     nothing else, which is what let M3 supply the real Session push
   //     without changing delivery — and a runtime file that could import the
@@ -993,7 +966,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 13. One schema library. v2 declares every schema with Effect Schema, and
+  // 11. One schema library. v2 declares every schema with Effect Schema, and
   //     the dependency v1 still needs must not creep back in through a tool
   //     parameter document or a custom message payload.
   for (const file of listSourceFiles(v2Root, { includeTests: true })) {
@@ -1009,7 +982,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 14. Pi's SDK session vocabulary lives in the Pi adapter and nowhere else.
+  // 12. Pi's SDK session vocabulary lives in the Pi adapter and nowhere else.
   //     Pi's *host* API is a different thing that happens to ship in the same
   //     package, so the rule is by binding rather than by package: naming
   //     `createAgentSession` outside the adapter is a violation and naming
@@ -1027,7 +1000,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 15. The adapter stays behind the contract in both directions. Only the
+  // 13. The adapter stays behind the contract in both directions. Only the
   //     composition root and the adapter's own tests may reach into it, and it
   //     may not reach the runtime, the host, presentation, or the façade —
   //     which is what keeps "a backend change is an adapter-local change" a
@@ -1063,7 +1036,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 16. The same two directions for the Claude adapter. The sibling edge —
+  // 14. The same two directions for the Claude adapter. The sibling edge —
   //     one adapter naming the other — needs no rule of its own: rule 15's
   //     importer list does not admit the Claude adapter, so a Claude module
   //     reaching for Pi is already rejected there, and the reverse is rejected
@@ -1099,7 +1072,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 17. The same two directions for the Codex adapter.
+  // 15. The same two directions for the Codex adapter.
   for (const file of listSourceFiles(v2Root, { includeTests: true })) {
     if (mayImportCodexAdapter(file, graph)) continue;
     for (const specifier of specifiersOf(file)) {
@@ -1131,7 +1104,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 18. A child process is spawned in one directory of v2 and nowhere else.
+  // 16. A child process is spawned in one directory of v2 and nowhere else.
   //     The Codex adapter owns one per Subagent; a second module able to spawn
   //     one would be a second owner of a process nothing else can kill.
   for (const file of listSourceFiles(v2Root, { includeTests: true })) {
@@ -1144,7 +1117,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 19. The App Server's own vocabulary — the transport, the reader's routing
+  // 17. The App Server's own vocabulary — the transport, the reader's routing
   //     table, the protocol shapes, and the child-process types — stays inside
   //     the adapter and its test doubles. The composition root may name the
   //     factory, the id, the options, and the probe, and nothing else: a
@@ -1169,7 +1142,7 @@ export function findV2BoundaryViolations(
     }
   }
 
-  // 20. The widget observes; it does not deliver. A settled Run's row lasts
+  // 18. The widget observes; it does not deliver. A settled Run's row lasts
   //     until its completion notice lands, which is the push sink's fact — so
   //     the widget is handed two functions for it and may not name the sink or
   //     delivery itself. A widget that could import either could push a
@@ -1204,7 +1177,6 @@ function fixtureGraph(
   );
   t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
   const graph: V2BoundaryGraph = {
-    v1Root: path.join(fixtureRoot, "extensions", "subagent"),
     v2Root: path.join(fixtureRoot, "extensions", "subagent-v2"),
     v2Entry: path.join(fixtureRoot, "extensions", "subagent-v2", "index.ts"),
     domainRoot: path.join(fixtureRoot, "extensions", "subagent-v2", "domain"),
@@ -1292,65 +1264,6 @@ function fixtureGraph(
   };
 }
 
-test("a v2 module importing a v1 module is rejected, naming the edge", (t) => {
-  const { graph, write } = fixtureGraph(t, "v2-to-v1");
-  write("extensions/subagent-v2/index.ts", 'import "../subagent/runner.ts";\n');
-  write("extensions/subagent/runner.ts", "export {};\n");
-
-  assert.deepEqual(findV2BoundaryViolations(graph), [
-    `${describe(graph.v2Entry)} imports forbidden v1 module ${describe(path.join(graph.v1Root, "runner.ts"))}`,
-  ]);
-});
-
-test("a v1 module reached transitively from the v2 entry is rejected", (t) => {
-  const { graph, write } = fixtureGraph(t, "v2-transitive");
-  write("extensions/subagent-v2/index.ts", 'import "./supervisor.ts";\n');
-  write(
-    "extensions/subagent-v2/supervisor.ts",
-    'import "../subagent/subagents.ts";\n',
-  );
-  write("extensions/subagent/subagents.ts", "export {};\n");
-
-  assert.deepEqual(findV2BoundaryViolations(graph), [
-    `${describe(path.join(graph.v2Root, "supervisor.ts"))} imports forbidden v1 module ${describe(path.join(graph.v1Root, "subagents.ts"))}`,
-  ]);
-});
-
-test("a v2 test file importing a v1 module is rejected even though the entry cannot reach it", (t) => {
-  const { graph, write } = fixtureGraph(t, "v2-test-to-v1");
-  write("extensions/subagent-v2/index.ts", "export {};\n");
-  write(
-    "extensions/subagent-v2/supervisor.test.ts",
-    'import "../subagent/runs.ts";\n',
-  );
-  write("extensions/subagent/runs.ts", "export {};\n");
-
-  assert.deepEqual(findV2BoundaryViolations(graph), [
-    `${describe(path.join(graph.v2Root, "supervisor.test.ts"))} imports forbidden v1 module ${describe(path.join(graph.v1Root, "runs.ts"))}`,
-  ]);
-});
-
-test("a v1 module importing effect or an Effect ecosystem package is rejected", (t) => {
-  const { graph, write } = fixtureGraph(t, "v1-to-effect");
-  write("extensions/subagent-v2/index.ts", "export {};\n");
-  write("extensions/subagent/runner.ts", 'import { Effect } from "effect";\n');
-  write(
-    "extensions/subagent/runs.ts",
-    'import { TestClock } from "effect/testing";\n',
-  );
-  // The roadmap forbids the ecosystem packages too, not only the core one.
-  write(
-    "extensions/subagent/delivery.ts",
-    'import { HttpClient } from "@effect/platform";\n',
-  );
-
-  assert.deepEqual(findV2BoundaryViolations(graph), [
-    `${describe(path.join(graph.v1Root, "delivery.ts"))} imports forbidden package @effect/platform`,
-    `${describe(path.join(graph.v1Root, "runner.ts"))} imports forbidden package effect`,
-    `${describe(path.join(graph.v1Root, "runs.ts"))} imports forbidden package effect/testing`,
-  ]);
-});
-
 test("the legacy field name is rejected in a v2 file of any kind, not only TypeScript", (t) => {
   const { graph, write } = fixtureGraph(t, "legacy-field-any-file");
   write("extensions/subagent-v2/index.ts", "export {};\n");
@@ -1366,16 +1279,6 @@ test("the legacy field name is rejected in a v2 file of any kind, not only TypeS
   assert.deepEqual(findV2BoundaryViolations(graph), [
     `${describe(path.join(graph.v2Root, "NOTES.md"))} contains the legacy profile backend field name "${LEGACY_BACKEND_FIELD}"`,
     `${describe(path.join(graph.v2Root, "fixtures", "profile.json"))} contains the legacy profile backend field name "${LEGACY_BACKEND_FIELD}"`,
-  ]);
-});
-
-test("a v1 module importing the v2 tree is rejected", (t) => {
-  const { graph, write } = fixtureGraph(t, "v1-to-v2");
-  write("extensions/subagent-v2/index.ts", "export {};\n");
-  write("extensions/subagent/runner.ts", 'import "../subagent-v2/index.ts";\n');
-
-  assert.deepEqual(findV2BoundaryViolations(graph), [
-    `${describe(path.join(graph.v1Root, "runner.ts"))} imports forbidden v2 module ${describe(graph.v2Entry)}`,
   ]);
 });
 
@@ -1418,34 +1321,44 @@ test("the reserved Pi abstraction name is allowed, the legacy field name is not"
   ]);
 });
 
-test("comments and string literals in v2 are not import edges", (t) => {
+test("comments and string literals are not import edges", (t) => {
+  // The false-positive half of the parser's contract. A checker that flagged a
+  // path mentioned in a comment would be a checker people learned to ignore.
   const { graph, write } = fixtureGraph(t, "syntax-only");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write("extensions/subagent-v2/runtime/repository.ts", "export {};\n");
   write(
-    "extensions/subagent-v2/index.ts",
+    "extensions/subagent-v2/presentation/rows.ts",
     [
-      '// import "../subagent/runner.ts";',
-      'const path = "../subagent/runner.ts";',
-      "void path;",
+      '// import "../runtime/repository.ts";',
+      'const forbidden = "../runtime/repository.ts";',
+      "void forbidden;",
     ].join("\n"),
   );
-  write("extensions/subagent/runner.ts", "export {};\n");
 
   assert.deepEqual(findV2BoundaryViolations(graph), []);
 });
 
-test("dynamic and require edges out of v2 are checked like static imports", (t) => {
+test("dynamic and require edges are checked like static imports", (t) => {
+  // The parser's own property, and it needs a rule to demonstrate against:
+  // a forbidden edge written as `await import` or `module.require` is still a
+  // forbidden edge, and one that was only checked when spelled `import … from`
+  // would be one line away from being uncheckable. Presentation reaching the
+  // runtime is the rule used here because it is the one where the temptation
+  // is real — a renderer that wanted one more figure.
   const { graph, write } = fixtureGraph(t, "dynamic");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write("extensions/subagent-v2/runtime/repository.ts", "export {};\n");
   write(
-    "extensions/subagent-v2/index.ts",
+    "extensions/subagent-v2/presentation/rows.ts",
     [
-      'await import("../subagent/runner.ts");',
-      'module.require("../subagent/runner.ts");',
+      'await import("../runtime/repository.ts");',
+      'module.require("../runtime/repository.ts");',
     ].join("\n"),
   );
-  write("extensions/subagent/runner.ts", "export {};\n");
 
   assert.deepEqual(findV2BoundaryViolations(graph), [
-    `${describe(graph.v2Entry)} imports forbidden v1 module ${describe(path.join(graph.v1Root, "runner.ts"))}`,
+    `${describe(path.join(graph.presentationRoot, "rows.ts"))} imports ${describe(path.join(graph.runtimeRoot, "repository.ts"))}, and a presentation file may name only the domain and Pi`,
   ]);
 });
 
@@ -2347,6 +2260,6 @@ test("App Server protocol and transport vocabulary stays inside the Codex adapte
   ]);
 });
 
-test("the real v1 and v2 trees hold the boundary", () => {
+test("the real tree holds every rule", () => {
   assert.deepEqual(findV2BoundaryViolations(), []);
 });

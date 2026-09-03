@@ -163,43 +163,50 @@ test("the resource load runs inside the child-load discriminator", async (t) => 
 
 // ── Filtering this package out of a child's extensions ───────────────────────
 
-/** A package tree with both extension directories in it, like this one. */
+/**
+ * A package tree with an extension directory in it, like this one.
+ *
+ * Two directories are written rather than one, deliberately: the filter works
+ * by *package identity* rather than by path, so a package that grew a second
+ * extension directory must have both filtered — and a fixture with one could
+ * not tell path matching from identity matching apart.
+ */
 function fixturePackage(
   t: { after(fn: () => void): void },
   name: string,
 ): { readonly root: string; readonly resolve: (relative: string) => string } {
   const root = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), `pi-subagent-v2-package-${name}-`)),
+    fs.mkdtempSync(path.join(os.tmpdir(), `pi-subagent-package-${name}-`)),
   );
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name }));
-  for (const directory of ["extensions/subagent", "extensions/subagent-v2"]) {
+  for (const directory of ["extensions/subagent-v2", "extensions/other"]) {
     fs.mkdirSync(path.join(root, directory), { recursive: true });
     fs.writeFileSync(path.join(root, directory, "index.ts"), "export {};\n");
   }
   return { root, resolve: (relative) => path.join(root, relative) };
 }
 
-test("both of this package's extension directories are filtered from a child", (t) => {
+test("every extension directory of this package is filtered from a child", (t) => {
   const own = fixturePackage(t, "pi-subagent");
   const other = fixturePackage(t, "somebody-elses-extension");
 
   const filtered = filterChildExtensions(
     {
       extensions: [
-        { resolvedPath: own.resolve("extensions/subagent/index.ts") },
         { resolvedPath: own.resolve("extensions/subagent-v2/index.ts") },
-        { resolvedPath: other.resolve("extensions/subagent/index.ts") },
+        { resolvedPath: own.resolve("extensions/other/index.ts") },
+        { resolvedPath: other.resolve("extensions/subagent-v2/index.ts") },
       ],
     } as never,
     "pi-subagent",
   );
 
-  // Filtering by package identity is what covers both directories at once —
-  // and what keeps covering them if either is renamed.
+  // By package identity, which is what covers every directory at once — and
+  // what keeps covering them through a rename.
   assert.deepEqual(
     filtered.extensions.map((extension) => extension.resolvedPath),
-    [other.resolve("extensions/subagent/index.ts")],
+    [other.resolve("extensions/subagent-v2/index.ts")],
   );
 });
 
@@ -222,7 +229,7 @@ test("everything the loader kept is left exactly as it was", (t) => {
   const other = fixturePackage(t, "somebody-elses-extension");
   const base = {
     extensions: [
-      { resolvedPath: other.resolve("extensions/subagent/index.ts") },
+      { resolvedPath: other.resolve("extensions/subagent-v2/index.ts") },
     ],
     diagnostics: ["something the loader said"],
   } as never;

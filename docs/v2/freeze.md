@@ -1,7 +1,10 @@
 # v1 freeze policy
 
-**Status:** In force from the commit recorded below until v1 is deleted at
-milestone M7.
+**Status: CLOSED.** In force from the commit recorded below until v1 was
+deleted at milestone M7. The deletion commit is recorded at the end of this
+document. Nothing here applies to a tree that no longer exists; it is kept as
+the record of what the freeze permitted and what it therefore cannot be blamed
+for.
 **Applies to:** `extensions/subagent/` — the v1 extension tree — and the
 repository scripts that exist to gate it.
 **Reason:** [the v2 roadmap](roadmap.md). The execution architecture is being
@@ -106,6 +109,42 @@ unchanged by the freeze. See the README's release-verification section.
 
 ## When the freeze lifts
 
-It does not lift. v1 is deleted at milestone M7, once v2 reaches full parity
-against [the compatibility matrix](compatibility-matrix.md) and passes the
-cutover, soak, and release gates.
+It did not lift. v1 was **deleted** at milestone M7, after v2 reached full
+parity against [the compatibility matrix](compatibility-matrix.md) and passed
+the cutover gate.
+
+## The deletion
+
+**Deleted at:** `PENDING` (`chore: delete v1, its lanes, its scripts, its
+dependency, and the fallback switch`)
+
+That commit removed the v1 extension tree, its four live smoke scripts and their
+two contract modules, its npm scripts and lanes, its Makefile targets, the
+fallback switch, the second schema library dependency, and the v1 test setup.
+The hash is written in by the commit that immediately follows it, because a
+commit cannot contain its own hash — the same reason the baseline above is
+recorded that way.
+
+What survived the deletion, and why:
+
+- **the pinned protocol check** (`npm run codex:protocol:check`) — it is about
+  the installed `codex` CLI rather than about either implementation;
+- **the retained-release check** (`npm run codex:retained-release:check`) — the
+  same, re-pointed at the v2 gate's marker and evidence during M7 ticket 02;
+- **the neutral import tooling** (`tools/import-specifiers.ts`) — repository
+  tooling that belonged to neither tree, which is why M0 moved it there;
+- **the boundary test's fifteen surviving rules**, and the vocabulary ban on the
+  extension tree, whose job changed from keeping v1's word out of v2 to keeping
+  the product's vocabulary singular.
+
+Three boundary rules went with v1, because each guarded the same thing — a
+rewrite must not inherit the machinery it is replacing — and there is nothing
+left to inherit from: the v1-import rule, the transitive v1 walk, and the rule
+keeping Effect and v2 out of v1.
+
+**A regression after the deletion is not attributable to the freeze.** The
+freeze's whole claim was that v1 did not drift out from under the compatibility
+matrix while v2 was built, and the record above is what supports it. With v1
+gone, the matrix cites v2's own tests and [the presentation
+ledger](presentation-ledger.md) is the last comparison anyone will be able to
+make between the two.
