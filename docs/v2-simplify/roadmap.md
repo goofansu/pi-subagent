@@ -338,7 +338,9 @@ untouched.
 
 ### Phase B — Supervisor decomposition by mechanism
 
-**Why.** `runtime/supervisor.ts` is 994 lines and owns admission and
+**Why.** `runtime/supervisor.ts` is 1,030 lines at the Phase A close (994
+when this roadmap was written; the label's admission path added the rest) and
+owns admission and
 capacity, Subagent records and their mutation, run forking, resume, cancel,
 steer, wait and waiter bookkeeping, result lookup, default timeout, cleanup
 escalation, shutdown, and delivery initiation. It is a legitimate
@@ -353,59 +355,160 @@ constructs. Each extraction is behaviour-preserving and lands as its own
 commit with the existing supervisor, lifecycle, race, and stress tests
 unchanged.
 
-#### B1. Extract admission
+**Planned** (2026-09-03), after Phase A closed. The spec and its six tickets
+are under the local tracker at `.scratch/v2-simplify-b-supervisor-decomposition/`,
+as every milestone's have been; the gate is
+[`phase-b-exit-gate.md`](phase-b-exit-gate.md).
+Two lessons from the Phase A gate are built in: **the ADR is written first**
+(ADR-0034, proposed in the first ticket and accepted at the gate), because the
+contributor rules require one for a new generic runtime abstraction and the
+architecture challenge gate's three questions are easier to answer before the
+code than after; and **every commit answers the challenge gate** in its
+message, since Phase A satisfied it across the phase rather than commit by
+commit and said so.
 
-`claim`, `releaseClaim`, `reserveResult`, the `AdmissionState` ref, and the
-compensation when a reservation fails after a claim move to
-`runtime/admission.ts`. The public shape:
+**What the supervisor owns today, by mechanism.** Reading the 1,030-line file
+at the Phase A close:
+
+| Mechanism | Where it lives now | Lines, roughly |
+| --- | --- | ---: |
+| Admission: the `AdmissionState` ref, `claim`, `releaseClaim`, `reserveResult`, the late running-set add after a successful open, and the shutdown flag | scattered through `start`, `resume`, `steer`, `forkRun`'s finalizer, and `shutdown` | 140 |
+| Subagent records: the `Map`, seven direct field mutations (`phase` ×3, `run` ×2, `runFiber`, `conversationLost`), and the linear `recordOf` scan | `start`, `resume`, `forkRun`, `closeUnderCleanupBudget`, `closeSubagent`, `shutdown`, `recordOf` | 60 |
+| Waiter bookkeeping: the `waiters` map, `releaseWaiterPinIfIdle`, `terminalStatusOf` | `wait` | 100 |
+| Run mechanics: `forkRun`, `settled`, `closeUnderCleanupBudget`, `armDefaultTimeout`, `openSubagent` | their own functions | 300 |
+| The six operations and shutdown | their own functions | 350 |
+
+The first two are mechanisms with their own invariants (invariant 12 for
+admission, invariant 2 for records) that the supervisor currently enforces at
+each call site. They leave. The third is decided at B3. The last two are
+orchestration and stay.
+
+#### B1. Extract admission, as a lease
+
+The admission state and every operation on it move to `runtime/admission.ts`.
+The public shape:
 
 ```ts
 interface RunAdmission {
+  /** One atomic step: shutting down, already running, or capacity. */
   acquire(subagentId?: SubagentId): Effect<AdmissionLease | AdmissionRejection>;
+  isShuttingDown(): Effect<boolean>;
+  /** True for the first caller only. */
+  beginShutdown(): Effect<boolean>;
 }
 interface AdmissionLease {
+  /** A start binds its Subagent once the open has succeeded and the id exists. */
+  bind(subagentId: SubagentId): Effect<void>;
+  /** The result reservation; a refusal releases the lease and says so. */
+  reserveResult(runId: RunId): Effect<boolean>;
+  /** Returns capacity and any reservation still held. Idempotent. */
   release(): Effect<void>;
 }
 ```
 
-The lease is the point: today the supervisor remembers "claim, maybe reserve,
-release on reserve failure, release when the fiber exits". With a lease the
-release-exactly-once property becomes scope-shaped rather than procedural
-(see Phase C1 for the finalizer form).
+What this removes, which is what an ADR for a new runtime abstraction must
+name: the counter clamped at zero "in case anything ever released twice"
+(a lease releases once by construction); the three separate release sites
+(reserve failure, open failure, fiber exit) that each had to remember what
+was held; and the `Ref.update` in `start` that adds the Subagent to the
+running set after the open, which today is admission state mutated outside
+admission. The result-store's reservation removal is already idempotent, so
+a lease releasing at fiber exit after a committed result is a no-op on every
+path that exists.
 
-#### B2. Extract the Subagent registry
+The release stays a call in this phase. Making it a Run Scope finalizer is
+Phase C1, and it is a one-line change once the lease exists.
 
-The `Map<SubagentId, SubagentRecord>` and every direct mutation of
-`record.phase`, `record.run`, `record.runFiber`, and
-`record.conversationLost` move to `runtime/subagent-registry.ts` with a small
-API: `get`, `insert`, `markRunning`, `markIdle`, `markConversationLost`,
-`close`, `closeAll`. One place then defines what a Subagent's state is, and
-invariant 2 (one active Run per Subagent) is asserted there rather than at
-each call site.
+#### B2. Extract the Subagent records
 
-#### B3. Waiter bookkeeping
+The `Map<SubagentId, SubagentRecord>` and every mutation of a record move to
+`runtime/subagent-records.ts`. **Not "registry"**: the glossary lists
+*Registry* as a retired 1.x term for `SubagentRuns`, replaced by the
+RunRepository, and reviving it for a new thing would be exactly the naming
+bug the vocabulary rule describes. The glossary already calls these "the
+supervisor's records".
 
-The `waiters` map, `releaseWaiterPinIfIdle`, and the wait-count-to-pin
-coupling either move to `runtime/run-control.ts` or stay, depending on
-whether B1 and B2 already leave `start`, `resume`, and `shutdown` each fitting
-on one screen. Decide after B2; do not pre-commit.
+```ts
+interface SubagentRecords {
+  insert(record: SubagentRecord): void;
+  get(id: SubagentId): SubagentRecord | undefined;
+  /** The Subagent whose Run this is, if that Run is in flight. */
+  byRun(runId: RunId): SubagentRecord | undefined;
+  attachRun(id: SubagentId, handle: RunHandle): void;
+  attachFiber(id: SubagentId, fiber: Fiber<unknown, never>): void;
+  /** The Run is over: idle, unless the Subagent was closed meanwhile. */
+  detachRun(id: SubagentId): void;
+  markConversationLost(id: SubagentId): void;
+  /** True for the first caller only; a closed Subagent admits nothing. */
+  markClosed(id: SubagentId): boolean;
+  all(): readonly SubagentRecord[];
+  clear(): void;
+}
+```
+
+What it removes: seven field assignments at six call sites, and the linear
+scan in `recordOf` (an index from Run id to Subagent id, maintained by
+`attachRun` and `detachRun`, gives the same answer for the same reason: only
+an in-flight Run has an owner). Invariant 2 is asserted in `attachRun`: a
+second Run attached to a Subagent that has one is a defect, not a silent
+overwrite. The assertion never fires today, which is the point of stating it
+where it can be read.
+
+#### B3. Waiter bookkeeping, decided by the one-screen test
+
+After B1 and B2, measure `wait`. If `waitOne` with its ledger fits on one
+screen (about sixty lines) and reads as steps, the `waiters` map and
+`releaseWaiterPinIfIdle` stay and the gate records why. If not, they move to
+`runtime/waiters.ts` as a ledger with `register(runId)` returning its own
+release, and `releaseIfIdle(runId)` for settlement. Either outcome passes;
+not deciding does not.
+
+#### B4. Fence it
+
+A boundary rule: `runtime/supervisor.ts` holds no state of its own — no
+`Ref.make`, no `new Map`, no `new Set`. The contributor rules name "maps,
+flags, `Promise.race`, or `AbortController` turning up in generic runtime
+code" as the early signal of the old architecture returning; this rule makes
+the first of those a failing test for the one file where it would hide best.
+Negative fixture as every rule has. The `stages` trace array the conformance
+suite reads is a test hook and is not covered.
+
+#### B5. Settle the Phase A findings before measuring
+
+Three findings came out of [the change-surface baseline](change-surface.md#findings)
+and Phase B settles them before it measures its own row:
+
+1. **R3's target rises to `0 / ≤ 3`.** `backend/profile-fields.ts` is a
+   parameterisation point — the one `try` per field that turns a bad value
+   into a Profile diagnostic — and not a place backend knowledge accumulates.
+   A hook there is the honest cost of a backend-owned option.
+2. **R7 is added: "add a bound enforced at admission", target `≤ 2 / ≤ 5`.**
+   Phase A's label bound is the baseline at `2 / 5`. Phase B does not aim to
+   lower it; a bound applied where input becomes a request has to be
+   declared, applied, carried, and recorded, and that is four places by
+   nature.
+3. The two safe-direction estimate errors need no action; the estimated
+   column is already marked superseded.
 
 #### Phase B exit gate
 
 Verified item by item in [`phase-b-exit-gate.md`](phase-b-exit-gate.md).
 
+- ADR-0034 proposed before the first extraction and accepted at the gate.
 - Every test in `runtime/*.test.ts` passes without modification. A test that
   has to change is a behaviour change, which this phase forbids.
 - `start`, `resume`, `cancel`, `wait`, and `shutdown` in `supervisor.ts` each
-  read as a sequence of named steps (validate, admit, allocate identities,
-  open backend agent, register, publish, start) with no inline state
-  manipulation.
-- Change-surface table re-measured; the "backend-specific Profile option"
-  row must not have moved.
+  read as a sequence of named steps with no inline state manipulation, and
+  the gate records each one's line count.
+- Boundary rule for a stateless supervisor present, with its fixture.
+- Change-surface findings settled, then the Phase B row measured; R3 must not
+  have moved.
 
-Expected files: `runtime/supervisor.ts`, new `runtime/admission.ts`,
-new `runtime/subagent-registry.ts`, possibly `runtime/run-control.ts`, unit
-tests for the new modules. Must not change: anything outside `runtime/`.
+Expected files: `runtime/supervisor.ts`, new `runtime/admission.ts`, new
+`runtime/subagent-records.ts`, possibly `runtime/waiters.ts`, unit tests for
+the new modules, `boundaries.test.ts` for the fence, one ADR, the glossary,
+and this directory's documents. Must not change: any production file outside
+`runtime/`, and any existing test under `runtime/`.
 
 ### Phase C — Resource lifetime polish
 
