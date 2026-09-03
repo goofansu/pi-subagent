@@ -213,9 +213,13 @@ The transcript's collapsed line reads agent, label, verb with duration, and
 cost when non-zero; it carries no id and no character count. The expanded text
 carries both ids.
 
+**Met, less the cost — and the cost's removal is the finding.** See correction
+5 below: cost is not backend-independent, so it is not on the line.
+
 **Evidence.** `presentation/renderers.test.ts`: `S-1: a collapsed notice names
-the agent, the task, the outcome, and the cost` asserts `reviewer · audit auth
-redirects · completed in 41.2s · $0.042` plus the hint; `S-2: a failed and a
+the agent, the task, and the outcome` asserts `reviewer · audit auth
+redirects · completed in 41.2s` plus the hint; `S-1: the collapsed line reads
+the same whichever backend ran the Run` asserts no currency symbol; `S-2: a failed and a
 cancelled summary read the same way, with the verb changed` asserts both with
 the cost omitted; `a collapsed notice carries no id and no character count`
 asserts the absences directly; `the whole collapsed line is fitted to its
@@ -331,6 +335,23 @@ in the decided text three times out of four.
    60s`; the shared `formatDuration` produces `41.2s` and `1m 0s`. Corrected
    in the document, since a second formatter for one line would be a second
    answer to the same question.
+5. **The cost on the collapsed line, removed.** §6 appended ` · $<cost>` when
+   non-zero, and user story 12 asked the line to name "the agent, the task,
+   the outcome, the duration, and the cost". **Cost is not
+   backend-independent.** `codexUsageDelta` in
+   `backend/codex/translate.ts` carries input, output, and the two cache
+   counters and has no `cost` field at all: the Codex App Server reports
+   tokens and no money. So the line showed a cost for every Pi and Claude Run
+   and never for a Codex one — the reader learned the backend rather than the
+   spend, with no way to tell a free Run from an unreported one — and the
+   compatibility matrix's "Same." for all three backends was false on the one
+   cell claiming it. The cost is gone from the line and from the host payload,
+   since a payload field no renderer reads is the mistake the notice made when
+   it carried a backend id. What a Run spent stays on the notice's accounting
+   line, where an absent cost is one absent figure among four rather than the
+   difference between two shapes of line. **This is a deliberate departure
+   from user story 12**, not an oversight, and it is the only one in the
+   phase.
 
 **Status:** PASS.
 

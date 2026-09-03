@@ -246,7 +246,7 @@ special case is a rule the parent model has to remember.
 Target shapes, collapsed and expanded:
 
 ```text
-reviewer · audit auth redirects · completed in 41s · $0.042
+reviewer · audit auth redirects · completed in 41.2s
 ```
 
 ```text

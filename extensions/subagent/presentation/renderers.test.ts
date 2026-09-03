@@ -276,7 +276,7 @@ test("a rejected resume falls back to the collected renderer", () => {
 
 // -- The notification summary line -------------------------------------------
 
-test("S-1: a collapsed notice names the agent, the task, the outcome, and the cost", () => {
+test("S-1: a collapsed notice names the agent, the task, and the outcome", () => {
   assert.equal(
     formatNotificationSummary(
       {
@@ -284,13 +284,33 @@ test("S-1: a collapsed notice names the agent, the task, the outcome, and the co
         label: "audit auth redirects",
         status: "completed",
         durationMillis: 41_200,
-        cost: 0.0421,
       },
       theme,
       false,
       keyHintStub,
     ),
-    "reviewer · audit auth redirects · completed in 41.2s · $0.042 (ctrl+o to expand)",
+    "reviewer · audit auth redirects · completed in 41.2s (ctrl+o to expand)",
+  );
+});
+
+test("S-1: the collapsed line reads the same whichever backend ran the Run", () => {
+  // It carries no cost, and that is why. The Codex App Server reports token
+  // counts and no money, so a cost here would appear for every Pi and Claude
+  // Run and never for a Codex one — the reader would learn the backend rather
+  // than the spend. What a Run spent is on the notice's accounting line.
+  assert.doesNotMatch(
+    formatNotificationSummary(
+      {
+        agent: "reviewer",
+        label: "audit auth redirects",
+        status: "completed",
+        durationMillis: 41_200,
+      },
+      theme,
+      false,
+      keyHintStub,
+    ),
+    /\$/,
   );
 });
 
@@ -302,7 +322,6 @@ test("S-2: a failed and a cancelled summary read the same way, with the verb cha
         label: "fix flaky cache test",
         status: "failed",
         durationMillis: 19_400,
-        cost: 0,
       },
       theme,
       false,
@@ -317,7 +336,6 @@ test("S-2: a failed and a cancelled summary read the same way, with the verb cha
         label: "inspect the build graph",
         status: "cancelled",
         durationMillis: 60_000,
-        cost: 0,
       },
       theme,
       false,
@@ -334,7 +352,6 @@ test("a collapsed notice carries no id and no character count", () => {
       label: "look around",
       status: "completed",
       durationMillis: 1_000,
-      cost: 0,
     },
     theme,
     false,
@@ -356,7 +373,6 @@ test("the whole collapsed line is fitted to its width, and the label is what giv
           label: "a".repeat(200),
           status: "completed",
           durationMillis: 1_000,
-          cost: 0.5,
         },
         theme,
         false,
@@ -372,7 +388,7 @@ test("the whole collapsed line is fitted to its width, and the label is what giv
     assert.equal(line.includes("\n"), false);
     // Everything but the label survives at every width.
     assert.match(line, /^explore · /);
-    assert.match(line, /completed in 1\.0s · \$0\.500 \(ctrl\+o to expand\)$/);
+    assert.match(line, /completed in 1\.0s \(ctrl\+o to expand\)$/);
   }
 });
 
@@ -387,7 +403,6 @@ test("a line too narrow for any label drops the label whole, not into a gap", ()
         label: "audit auth redirects",
         status: "failed",
         durationMillis: 1_000,
-        cost: 0,
       },
       theme,
       false,
@@ -410,7 +425,6 @@ test("a label is capped even when the line has room to spare", () => {
         label: "a".repeat(200),
         status: "completed",
         durationMillis: 1_000,
-        cost: 0,
       },
       theme,
       false,
@@ -433,7 +447,6 @@ test("an expanded notice's hint offers to collapse, because one key does both", 
         label: "look around",
         status: "completed",
         durationMillis: 1_000,
-        cost: 0,
       },
       theme,
       true,

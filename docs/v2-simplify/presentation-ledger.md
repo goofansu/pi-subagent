@@ -194,9 +194,17 @@ Unchanged wins; the illustrations were the defect and have been corrected in
 **Before** — `explore (subagent subagent-1, run run-1) completed · 1.2k chars`
 plus the expand hint.
 
-**After** — `reviewer · audit auth redirects · completed in 41.2s · $0.042`
-plus the expand hint; cost omitted when zero. The duration comes from the
-shared `formatDuration`, so it reads `41.2s` rather than `41s`.
+**After** — `reviewer · audit auth redirects · completed in 41.2s` plus the
+expand hint. The duration comes from the shared `formatDuration`, so it reads
+`41.2s` rather than `41s`.
+
+**No cost, and this row is where the decision is recorded.** The draft
+appended ` · $<cost>` when non-zero. Cost is not backend-independent — the
+Codex App Server reports token counts and no money — so the line would have
+shown a cost for every Pi and Claude Run and never for a Codex one, teaching
+the reader the backend rather than the spend. What a Run spent stays on the
+notice's accounting line. See
+[semantics §6](notification-semantics.md#6-what-the-human-sees).
 
 **Why** — semantics §6. The ids are in the expanded text; the character count
 told the reader nothing they could act on.
@@ -296,7 +304,7 @@ after column, by test name and file.
 | N-7 | `N-7: a cancelled notice names its reason and points at the partial result`; `a cancelled Run with nothing to show says so and still points at the record` | `presentation/notification-text.test.ts` | confirmed |
 | N-8 | `N-8: the notice is identical whichever backend ran the Run` | `presentation/notification-text.test.ts` | confirmed — now structural: the notices are one value, and the shape has no `backendId` |
 | N-9 | `N-9: a Run with nothing to account for carries no accounting at all`; `N-9: the accounting a notice carries is only what the line prints`; `N-9: an accounting line can never read as nothing but a model name`; `accounting abbreviates usage and names the model last` | `presentation/notification-text.test.ts` | confirmed — the text did not move |
-| S-1 | `S-1: a collapsed notice names the agent, the task, the outcome, and the cost`; `a collapsed notice carries no id and no character count` | `presentation/renderers.test.ts` | confirmed |
+| S-1 | `S-1: a collapsed notice names the agent, the task, and the outcome`; `S-1: the collapsed line reads the same whichever backend ran the Run`; `a collapsed notice carries no id and no character count` | `presentation/renderers.test.ts` | confirmed |
 | S-1 (ids) | `S-1: the ids are in the expanded text, where a tool call needs them` | `host/notification-message.test.ts` | confirmed |
 | S-2 | `S-2: a failed and a cancelled summary read the same way, with the verb changed` | `presentation/renderers.test.ts` | confirmed |
 | C-1 | `C-1: bare /subagent prints the shallow status and no counters`; `C-1: the status names every Profile with the backend it names`; `C-1: the status counts Runs in the shared phase vocabulary` | `host/diagnostics-command.test.ts` | confirmed |

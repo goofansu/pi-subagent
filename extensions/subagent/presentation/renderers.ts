@@ -286,14 +286,20 @@ export const MAX_NOTICE_LABEL_WIDTH = 48;
 /**
  * The one line a collapsed completion notice shows.
  *
- * `<agent> · <label> · <verb> in <duration>[ · $<cost>]`. It answers the four
- * questions a human following a fan-out actually has — which specialist,
- * which task, how it ended, what it cost — and carries no id and no character
+ * `<agent> · <label> · <verb> in <duration>`. It answers the three questions
+ * a human following a fan-out actually has — which specialist, which task,
+ * how it ended and how long it took — and carries no id and no character
  * count. The ids are in the expanded text, where a model reading them is
  * about to make a tool call; the character count told the reader nothing they
  * could act on.
  *
- * Cost is omitted when zero, because a zero is not a fact about spending.
+ * **No cost.** Cost is not backend-independent: the Codex App Server reports
+ * token counts and no money, so a cost on this line would appear for every Pi
+ * and Claude Run and never for a Codex one — a reader would learn the backend
+ * rather than the spend, and would have no way to tell a free Run from an
+ * unreported one. What the Run spent stays on the notice's accounting line,
+ * where the four figures sit together and an absent cost is one absent figure
+ * among four rather than the difference between two shapes of line.
  *
  * **The whole line is fitted, not just the label.** The label takes whatever
  * `width` leaves after the agent, the outcome, the cost, and the hint — those
@@ -314,7 +320,6 @@ export function formatNotificationSummary(
     readonly label: string;
     readonly status: TerminalRunPhase;
     readonly durationMillis: number;
-    readonly cost: number;
   },
   theme: RenderableTheme,
   expanded = false,
@@ -326,8 +331,6 @@ export function formatNotificationSummary(
     runPhaseTone(details.status),
     `${runPhaseVerb(details.status)} in ${formatDuration(details.durationMillis)}`,
   );
-  const cost =
-    details.cost === 0 ? "" : theme.fg("dim", ` · $${details.cost.toFixed(3)}`);
   const hint = formatParentheticalKeyHint(
     theme,
     "app.tools.expand",
@@ -336,9 +339,9 @@ export function formatNotificationSummary(
   );
 
   const render = (label: string): string =>
-    `${agent}${theme.fg("dim", ` · ${label} · `)}${outcome}${cost} ${hint}`;
+    `${agent}${theme.fg("dim", ` · ${label} · `)}${outcome} ${hint}`;
   /** The label section gone entirely, rather than left as an empty gap. */
-  const withoutLabel = `${agent}${theme.fg("dim", " · ")}${outcome}${cost} ${hint}`;
+  const withoutLabel = `${agent}${theme.fg("dim", " · ")}${outcome} ${hint}`;
 
   // What the line costs with an empty label, which is what the label's budget
   // is subtracted from. Rendered and measured rather than counted: every part

@@ -72,7 +72,6 @@ test("build then parse round-trips every terminal status", () => {
       label: notice.label,
       status: notice.status,
       durationMillis: notice.durationMillis,
-      cost: notice.accounting?.cost ?? 0,
     });
   }
 });
@@ -84,7 +83,6 @@ test("the details carry the collapsed line and the ids, never the text", () => {
 
   assert.deepEqual(Object.keys(message.details).sort(), [
     "agent",
-    "cost",
     "durationMillis",
     "label",
     "runId",
@@ -97,7 +95,7 @@ test("the details carry the collapsed line and the ids, never the text", () => {
 test("a message missing a field the collapsed line needs is rejected", () => {
   const message = buildNotificationMessage(fixtureNotification({}));
 
-  for (const field of ["label", "durationMillis", "cost"] as const) {
+  for (const field of ["label", "durationMillis"] as const) {
     const { [field]: _dropped, ...rest } = message.details;
     assert.equal(
       parseNotificationMessage({ ...landed(message), details: rest }),

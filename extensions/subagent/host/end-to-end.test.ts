@@ -209,7 +209,6 @@ test("a settled Run sends exactly one follow-up notice that triggers a turn", as
       label: "look around",
       status: "completed",
       durationMillis: 0,
-      cost: 0,
     },
   );
 });

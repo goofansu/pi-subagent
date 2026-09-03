@@ -17,11 +17,13 @@
  *
  * The details carry what the collapsed line needs and nothing the text
  * already says. Identity — Run id, Subagent id — because that is what a
- * later tool call and the landing key are addressed by; agent, label, status,
- * duration, and cost because those are the collapsed line, and a renderer
- * that had to parse them back out of the content would be a second reader of
+ * later tool call and the landing key are addressed by; agent, label, status
+ * and duration because those *are* the collapsed line, and a renderer that
+ * had to parse them back out of the content would be a second reader of
  * prose. The text itself is not in the details: it is the message's content,
- * and a copy of it here could disagree with it.
+ * and a copy of it here could disagree with it. Nor is the cost: the line
+ * does not show one, and a payload field nothing reads is the same mistake
+ * the notice made when it carried a backend id.
  *
  * The payload is **host-shaped**. The notice's own fields can be renamed or
  * regrouped without touching the renderer, because the renderer reads this
@@ -62,13 +64,6 @@ export const NotificationDetails = Schema.Struct({
   label: Schema.String,
   status: TerminalRunPhase,
   durationMillis: Schema.Number,
-  /**
-   * What the Run cost, or zero when it reported nothing to account for.
-   *
-   * Zero rather than absent: the line omits a zero cost, and a required
-   * number means the renderer has one rule for that rather than two.
-   */
-  cost: Schema.Number,
 });
 
 export type NotificationDetails = typeof NotificationDetails.Type;
@@ -100,7 +95,6 @@ export function buildNotificationMessage(
       label: notice.label,
       status: notice.status,
       durationMillis: notice.durationMillis,
-      cost: notice.accounting?.cost ?? 0,
     },
   };
 }

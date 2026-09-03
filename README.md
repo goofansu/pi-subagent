@@ -20,11 +20,20 @@ Upgrading from 1.x? One line per Profile changes — see
 
 ## Commands and tools
 
-`/agents` lists loaded Profiles, shows their prompts, and hands one a task.
-With none configured, it prints the directory to add one to.
+`/subagent` is the one place to start. On its own it prints a short status:
+how many Profiles are loaded, how many Runs are running and how they ended,
+whether the runtime has noticed anything and how much it is holding, one line
+per Profile with the backend it names, and the two ways deeper.
 
-`/subagent` reports what the live Session's runtime is counting and holding —
-see [Diagnostics](#diagnostics).
+`/subagent profiles` lists loaded Profiles, shows their prompts, and hands one
+a task. With none configured, it prints the directory to add one to.
+`/subagent diagnostics` reports what the live Session's runtime is counting
+and holding — see [Diagnostics](#diagnostics).
+
+`/agents` is `/subagent profiles` under the name it has always had. It opens
+the same flow rather than a copy of it, and it keeps working through 2.0; the
+[compatibility matrix](docs/v2/compatibility-matrix.md) says when the alias
+goes.
 
 Delegation uses six tools. `agent_start` creates a stable, Session-scoped
 Subagent and immediately starts its first **Run**. The Run is detached from the
@@ -190,7 +199,9 @@ widget, so Runs are stopped with `agent_cancel`.
 
 ## Diagnostics
 
-`/subagent` reports two kinds of block for the live Session:
+`/subagent diagnostics` reports two kinds of block for the live Session. Bare
+`/subagent` deliberately reports neither: a first screen that printed every
+counter would be the command this one replaced.
 
 - **counters** — things that happened and nobody had to be told about at the
   time: duplicate settlement attempts, late events, queue overflows, cleanup
@@ -253,7 +264,9 @@ list allows, and cannot delegate further.
 **Version 2.0.0 is a rewrite of the execution architecture, and it is what
 `pi install` gives you.** The behaviour it presents is the same: the same six
 tools, the same `/agents` command, the same Profile files in the same
-directory, the same widget rows, the same completion notices.
+directory, the same widget rows. The completion notices say more: each one now
+opens with the task you delegated rather than two identifiers, and every one
+of them points at `agent_result` with the exact argument shape.
 
 **One thing breaks, and it is a one-line edit per Profile.** A Profile names
 its backend with `backend:` where 1.x used `harness:`. The values are unchanged
@@ -269,7 +282,7 @@ pins nothing needs no edit at all:
 ```
 
 A Profile still using `harness:` fails validation as an unrecognised field, is
-reported at Session start, and does not appear in `/agents` — so the failure is
+reported at Session start, and does not appear in the Profile list — so the failure is
 visible rather than silent. There is no alias and there will not be one:
 [docs/v2/profile-backend-field-migration.md](docs/v2/profile-backend-field-migration.md)
 is the migration note and

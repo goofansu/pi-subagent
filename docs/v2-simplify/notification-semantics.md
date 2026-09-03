@@ -308,20 +308,35 @@ text. The ids are useful for tool calls and useless for recognising which task
 finished; the character count is useless for both. It becomes:
 
 ```text
-<agent> · <label> · <verb>[ in <duration>][ · $<cost>]
+<agent> · <label> · <verb> in <duration>
 ```
 
 ```text
-reviewer · audit auth redirects · completed in 41.2s · $0.042
+reviewer · audit auth redirects · completed in 41.2s
 implementer · fix flaky cache test · failed in 19.4s
 explore · inspect the build graph · cancelled in 1m 0s
 ```
 
-Cost appears when non-zero, rounded to three places. Duration appears always,
-through the same `formatDuration` every other surface uses — which is why the
-third line reads `1m 0s`: the formatter switches to minutes at exactly sixty
-seconds, and a second formatter for this one line would be a second answer to
-the same question.
+Duration appears always, through the same `formatDuration` every other surface
+uses — which is why the third line reads `1m 0s`: the formatter switches to
+minutes at exactly sixty seconds, and a second formatter for this one line
+would be a second answer to the same question.
+
+**No cost, decided at the Phase A gate.** The draft appended
+` · $<cost>` when the cost was non-zero. Cost is **not
+backend-independent**: the Codex App Server reports token counts and no money,
+so `codexUsageDelta` carries input, output, and the two cache counters and no
+`cost` field at all. A cost on this line would therefore appear for every Pi
+and Claude Run and never for a Codex one — which teaches the reader the
+backend rather than the spend, and leaves them unable to tell a free Run from
+an unreported one. It would also have made the compatibility matrix's "Same."
+for all three backends false on the one cell that claims it.
+
+Nothing is lost. What a Run spent is on the notice's accounting line, where
+the four figures sit together and an absent cost is one absent figure among
+four rather than the difference between two shapes of line. The host payload
+drops the field too: a payload carrying something no renderer reads is the
+mistake the notice made when it carried a backend id.
 
 **The whole line is fitted, not just the label**, and the label is what gives:
 it takes whatever the agent, the outcome, the cost, and the hint leave, capped
@@ -339,7 +354,7 @@ is one call site to change. The expand hint is unchanged. The ids are in the
 expanded text.
 
 The message payload the host sends carries what this line needs — agent,
-label, status, duration, cost — alongside `runId` and `subagentId`, so the
+label, status, duration — alongside `runId` and `subagentId`, so the
 renderer reads the payload and not the notice. The payload is host-shaped and
 its schema is the host's; the notice's shape can change without touching it.
 
