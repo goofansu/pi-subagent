@@ -85,6 +85,15 @@ export interface BoundaryGraph {
   readonly codexTestingRoot: string;
   /** The Session runtime, where the supervisor and its services live. */
   readonly runtimeRoot: string;
+  /**
+   * The supervisor, which sequences lifecycles and holds no state of its own.
+   *
+   * The one file where a state holder would hide best: it is the module every
+   * lifecycle change passes through, so a map added there looks local to
+   * whatever was being changed. Naming it here makes "the supervisor is
+   * stateless" a check rather than a review comment.
+   */
+  readonly supervisorFile: string;
   /** Pure prose and row formatting, which may name only the domain and Pi. */
   readonly presentationRoot: string;
   /** The `Subagents` façade, between presentation and the host. */
@@ -168,6 +177,13 @@ const productionGraph: BoundaryGraph = {
     "codex",
   ),
   runtimeRoot: path.join(repositoryRoot, "extensions", "subagent", "runtime"),
+  supervisorFile: path.join(
+    repositoryRoot,
+    "extensions",
+    "subagent",
+    "runtime",
+    "supervisor.ts",
+  ),
   presentationRoot: path.join(
     repositoryRoot,
     "extensions",
@@ -436,6 +452,32 @@ const SECOND_SCHEMA_LIBRARY = "typebox";
  * assert the same thing the sink alone can assert.
  */
 const LANDING_VOCABULARY = /\b(un)?land(ed|ing|ings|s)?\b/i;
+
+/**
+ * The state constructions the supervisor may not contain.
+ *
+ * Phase B moved admission, the Subagent records, and the waiter ledger out of
+ * `runtime/supervisor.ts`, each into a module that owns the invariant its
+ * state carries. What that leaves is orchestration, and the way it comes back
+ * is gradually: one more map, one more flag, each reasonable beside the
+ * operation that needed it, until a question about capacity has five places
+ * to be answered again. The contributor rules name "maps, flags,
+ * `Promise.race`, or `AbortController` turning up in generic runtime code" as
+ * the early signal of the old architecture returning, and this makes the
+ * first of those a failing test for the one file where it would hide best.
+ *
+ * A content scan rather than an import check, for the same reason the delivery
+ * vocabulary rule is one: nothing is imported to construct a `Map`, and the
+ * thing being prevented is a state holder appearing rather than a dependency
+ * being added.
+ *
+ * The `stages` trace array is **not** covered and is the documented
+ * exception. It is a test hook the conformance suite reads instead of the
+ * deleted driver's log — an append-only list of stage names that no operation
+ * reads and no decision depends on. A rule that covered every array would
+ * have to cover that one, and would then be a rule about tidiness.
+ */
+const STATE_CONSTRUCTIONS = ["Ref.make", "new Map", "new Set"] as const;
 
 /**
  * The only files that may name a backend or a fake.
@@ -1247,6 +1289,23 @@ export function findBoundaryViolations(
     }
   }
 
+  // 21. The supervisor holds no state of its own. Admission, the Subagent
+  //     records, and the waiter ledger each own the state whose invariant they
+  //     carry, and what is left in the supervisor is the order the operations
+  //     happen in. A reference, a map, or a set constructed there would be a
+  //     fourth owner with no invariant and no test, and it would read as local
+  //     to whichever operation added it. The `stages` trace array is the
+  //     documented exception: it is a test hook nothing reads back.
+  if (fs.existsSync(graph.supervisorFile)) {
+    const source = fs.readFileSync(graph.supervisorFile, "utf8");
+    for (const construction of STATE_CONSTRUCTIONS) {
+      if (!source.includes(construction)) continue;
+      violations.add(
+        `${describe(graph.supervisorFile)} constructs ${construction}, and the supervisor holds no state of its own`,
+      );
+    }
+  }
+
   return [...violations].sort();
 }
 
@@ -1310,6 +1369,13 @@ function fixtureGraph(
       "codex",
     ),
     runtimeRoot: path.join(fixtureRoot, "extensions", "subagent", "runtime"),
+    supervisorFile: path.join(
+      fixtureRoot,
+      "extensions",
+      "subagent",
+      "runtime",
+      "supervisor.ts",
+    ),
     presentationRoot: path.join(
       fixtureRoot,
       "extensions",
@@ -2433,6 +2499,54 @@ test("App Server protocol and transport vocabulary stays inside the Codex adapte
       path.join(graph.codexAdapterRoot, "index.ts"),
     )}, and Codex App Server vocabulary stays inside the Codex adapter`,
   ]);
+});
+
+test("a supervisor constructing a reference, a map, or a set is rejected", (t) => {
+  const { graph, write } = fixtureGraph(t, "stateless-supervisor");
+  write("extensions/subagent/index.ts", "export const entry = 1;\n");
+  write(
+    "extensions/subagent/runtime/supervisor.ts",
+    [
+      'import { Ref } from "effect";',
+      "export const admission = Ref.make({ activeRuns: 0 });",
+      "export const subagents = new Map();",
+      "export const running = new Set();",
+      "",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findBoundaryViolations(graph), [
+    `${describe(path.join(graph.runtimeRoot, "supervisor.ts"))} constructs Ref.make, and the supervisor holds no state of its own`,
+    `${describe(path.join(graph.runtimeRoot, "supervisor.ts"))} constructs new Map, and the supervisor holds no state of its own`,
+    `${describe(path.join(graph.runtimeRoot, "supervisor.ts"))} constructs new Set, and the supervisor holds no state of its own`,
+  ]);
+});
+
+test("the supervisor's trace array is the documented exception, and another runtime module may hold state", (t) => {
+  const { graph, write } = fixtureGraph(t, "stateless-supervisor-exception");
+  write("extensions/subagent/index.ts", "export const entry = 1;\n");
+  write(
+    "extensions/subagent/runtime/supervisor.ts",
+    [
+      "/** Hooks the conformance suite reads instead of the deleted driver's log. */",
+      "export const stages: string[] = [];",
+      "export const trace = (stage: string) => stages.push(stage);",
+      "",
+    ].join("\n"),
+  );
+  // The rule is about one file, because the point is not that state is bad —
+  // it is that the state each module owns should be owned by the module whose
+  // invariant it carries, and those modules are where the maps belong.
+  write(
+    "extensions/subagent/runtime/admission.ts",
+    [
+      'import { Ref } from "effect";',
+      "export const state = Ref.make({ running: new Set() });",
+      "",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findBoundaryViolations(graph), []);
 });
 
 test("the real tree holds every rule", () => {

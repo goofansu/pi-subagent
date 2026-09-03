@@ -92,12 +92,33 @@ retired.
 
 ### 5. Waiter bookkeeping was decided, not deferred
 
-Either the `waiters` map and `releaseWaiterPinIfIdle` moved to
-`runtime/waiters.ts` with a unit test, or this gate records the line count of
-`waitOne` after B1 and B2 and why it stayed. The `wait` row of item 6 is the
-measurement.
+**Decided: it moved.** `runtime/waiters.ts` (92 lines) owns the count of
+waiters registered per Run and the store's `waiters` pin held on their behalf,
+with `register(runId)` returning the release for that one waiter and
+`releaseIfIdle(runId)` for settlement.
 
-**Status:** OPEN.
+The one-screen measurement did not decide it; **boundary rule 21 did**. The
+`waiters` map is a `new Map` in `runtime/supervisor.ts`, and the fence in item
+9 forbids exactly that — so either the ledger left or the fence would have had
+to carve out an exception for the one file it exists to cover. Two things
+happened to `wait` as a result, and both were the point: its bookkeeping is a
+`register`/release pair rather than eleven lines of increment-and-decrement
+inside an `ensuring`, and the release is idempotent for the same reason the
+admission lease's is — a place given up twice would free another waiter's and
+take the pin with it while somebody was still entitled to read.
+
+`terminalStatusOf` did **not** go with it. It is not waiter bookkeeping: it is
+the derivation of a `WaitOutcome` from a stored Result and a snapshot, it
+depends on nothing the supervisor holds, and it moved to a module-level
+function in the same file — which is what the four other dependency-free
+helpers there already are.
+
+**Evidence to name:** `runtime/waiters.test.ts` — six cases, each asking when
+the pin goes for a different ending of a wait: settlement with no waiters, one
+waiter still holding, the last of three letting go, a release run three times,
+two Runs' places kept apart, and the `unresolvedWaiters` probe back at zero.
+
+**Status:** PASS.
 
 ### 6. The supervisor reads like orchestration
 
@@ -107,18 +128,48 @@ named steps with no inline state manipulation, and each fits on one screen
 
 | Operation | Before | After | One screen? |
 | --- | ---: | ---: | --- |
-| `start` | 105 | | |
-| `resume` | 70 | | |
-| `cancel` (with `cancelOne`) | 37 | | |
-| `wait` (with `waitOne`, `terminalStatusOf`) | 100 | | |
-| `shutdown` (with `closeSubagent`) | 40 | | |
-| whole file | 1,030 | | |
+| `start` | 105 | 72 | at 72, over the guide |
+| `resume` | 70 | 50 | yes |
+| `cancel` (with `cancelOne`) | 37 | 38 | yes |
+| `wait` (with `waitOne`, and before with the ledger and `terminalStatusOf`) | 112 | 46 | yes |
+| `shutdown` (with `closeSubagent`) | 48 | 45 | yes |
+| `makeSupervisor`'s whole body | 805 | 701 | — |
+| whole file | 1,030 | 1,037 | — |
 
-`start` is the one that may need a named validation step (Profile, backend,
-depth) extracted to fit; if so, that step is a pure function in the
-supervisor, not a new module.
+Counted from each operation's own `const` (or the first line of its doc
+comment where it has one) to the line that closes it, comments and blanks
+included. Two of the planned "before" figures were re-measured by that
+convention and corrected upward: `wait`'s group is 112 lines rather than 100
+and `shutdown`'s is 48 rather than 45, both at `2fdabe3`. The planned figures
+were read rather than counted, and the correction is recorded here rather than
+quietly applied. Two named steps were extracted, both closures inside the supervisor
+and neither a module, as the roadmap allows: `resolveStart` (39 lines) is
+every rejection a start can earn before it costs anything — unknown agent,
+invalid Profile, unknown backend, delegation depth — and `resolveResume` (33)
+is the same for a resume, including the two Conversation checks. Four
+dependency-free helpers moved to module level beside `openFailure`, which was
+already there: `subagentContextFor`, `runIdentityFor`, `terminalStatusOf`, and
+the `ForkedRun` value the fork takes.
 
-**Status:** OPEN.
+**`start` is 72 lines and the guide says about sixty.** It is nine named steps
+— refuse if shutting down, resolve, acquire, spend identifiers, reserve, open,
+insert and bind, publish, fork — with no state manipulated inline, and
+eighteen of those seventy-two lines are the comments that say why the order is
+the order. Splitting it further was tried on paper and rejected: the two
+candidate halves are "everything that can refuse" and "everything that
+commits", and the order across that seam is precisely what this phase exists
+to make readable, so hiding half of it behind a name would cost the thing the
+item is asking for. The line count is recorded rather than met, per the
+spec's own note that it is a proxy.
+
+**The whole file grew by seven lines**, and that is the honest number.
+`makeSupervisor`'s body — the orchestration — lost 104 lines to the three new
+modules; the module-level declarations above it gained about as many, in the
+two resolved-request types, the four helpers, and the header that now says
+where admission lives. The phase's criterion was never that the file be
+shorter.
+
+**Status:** PASS, with `start`'s line count recorded as over the guide.
 
 ### 7. No new Effect Layer
 
@@ -136,11 +187,24 @@ and `boundaries.test.ts`.
 
 ### 9. The supervisor holds no state of its own, and it is fenced
 
-Boundary rule 21: `runtime/supervisor.ts` contains no `Ref.make`, `new Map`,
-or `new Set`. Negative fixture present and failing the checker on purpose.
-The `stages` trace array is documented as the exception and is not covered.
+Boundary rule 21 is in `boundaries.test.ts`: `runtime/supervisor.ts` contains
+no `Ref.make`, `new Map`, or `new Set`. A content scan rather than an import
+check, for the same reason rule 19 is one — nothing is imported to construct a
+`Map`, and the thing prevented is a state holder appearing rather than a
+dependency being added.
 
-**Status:** OPEN.
+**Evidence to name:** `a supervisor constructing a reference, a map, or a set
+is rejected` writes all three into a fixture supervisor and requires all three
+violations; `the supervisor's trace array is the documented exception, and
+another runtime module may hold state` requires none, from a fixture holding
+the `stages` array and an `admission.ts` with a reference and a set in it —
+which is the second half of the rule's meaning: the state is not forbidden,
+it belongs to the module whose invariant it carries. `the real tree holds
+every rule` covers the working tree. The one construction left in the
+supervisor is `const stages: string[] = []`, documented in the rule's own
+comment as the exception and as a test hook nothing reads back.
+
+**Status:** PASS.
 
 ### 10. The race and stress lanes are the detector, and they are green
 

@@ -336,11 +336,12 @@ wrong and repairing it comes first.
 
 ## 10. The boundary rules
 
-Twenty rules in `boundaries.test.ts`, each guarding a property somebody could
-otherwise remove with one `import` line — or, for two of them, with one word.
-That is the test for whether a rule belongs there: not "is this tidy" but
-"what breaks if this edge exists". The table below has eighteen rows because
-the three adapter-confinement rules say the same thing about three adapters.
+Twenty-one rules in `boundaries.test.ts`, each guarding a property somebody
+could otherwise remove with one `import` line — or, for three of them, with a
+line that imports nothing at all. That is the test for whether a rule belongs
+there: not "is this tidy" but "what breaks if this edge exists". The table
+below has nineteen rows because the three adapter-confinement rules say the
+same thing about three adapters.
 
 | Rule | What it guards |
 | --- | --- |
@@ -362,6 +363,7 @@ the three adapter-confinement rules say the same thing about three adapters.
 | The widget imports neither the push sink nor delivery | a widget that could push would make two deciders of what the model is told |
 | No inflection of *land* appears in `runtime/delivery.ts` or its test | delivery knows pending, handed off, and exhausted; only the push sink sees `message_start`, so only the sink may say a notice landed |
 | `presentation/notification-text.ts` names only the domain and presentation | narrower than the presentation rule above, which admits Pi's packages: a notice is prose a model reads, so changing what it says provably touches no runtime module |
+| No `Ref.make`, `new Map`, or `new Set` in `runtime/supervisor.ts` | the supervisor sequences lifecycles and owns no state; admission, the Subagent records, and the waiter ledger each own the state whose invariant they carry, and a fourth holder in the file every lifecycle change passes through would read as local to whatever was being changed. The `stages` trace array is the documented exception |
 
 Two more lanes belong beside them: the **timing lint**, which forbids timers
 everywhere and sleeps in tests that have no test clock, and the **import

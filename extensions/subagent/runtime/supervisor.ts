@@ -79,6 +79,7 @@ import {
   makeSubagentRecords,
   type SubagentRecord,
 } from "./subagent-records.ts";
+import { makeWaiterLedger } from "./waiters.ts";
 
 /** What an adapter that died rather than failing says instead. */
 const OPEN_FAILED_MESSAGE = "the backend could not be opened";
@@ -178,6 +179,135 @@ function openFailure(
   return failure.value.diagnostic;
 }
 
+/**
+ * What resolving a start request answers.
+ *
+ * The three rejections a start can earn before it costs anything, or the
+ * Profile and backend the request named. Written as the domain's own outcome
+ * members rather than a parallel vocabulary, so the resolved rejection is
+ * returned to the caller unchanged.
+ */
+type StartRejection = Extract<
+  StartOutcome,
+  {
+    readonly outcome:
+      | "unknown agent"
+      | "invalid profile"
+      | "delegation-depth exceeded";
+  }
+>;
+
+type ResolvedStart =
+  | {
+      readonly outcome: "resolved";
+      readonly profile: Profile;
+      readonly backend: Backend;
+    }
+  | StartRejection;
+
+/** The same, for a resume: the four rejections it can earn, or its record. */
+type ResumeRejection = Extract<
+  ResumeOutcome,
+  {
+    readonly outcome:
+      | "unknown Subagent"
+      | "Subagent already running"
+      | "resume unsupported"
+      | "conversation lost";
+  }
+>;
+
+type ResolvedResume =
+  | { readonly outcome: "resolved"; readonly record: SubagentRecord }
+  | ResumeRejection;
+
+/**
+ * What one Subagent is opened with: the caller's fixed facts plus its id.
+ *
+ * A function rather than a literal inside `start` because it depends on
+ * nothing else — no catalog, no policy, no clock — and saying so is what
+ * makes it obvious that a Subagent's context never changes after this.
+ */
+function subagentContextFor(
+  request: StartRequest,
+  subagentId: SubagentId,
+): SubagentContext {
+  return {
+    subagentId,
+    cwd: request.cwd,
+    childDepth: request.childDepth,
+    projectTrusted: request.projectTrusted,
+    ...(request.parentModel === undefined
+      ? {}
+      : { parentModel: request.parentModel }),
+  };
+}
+
+/**
+ * The five facts that name one Run for its whole life.
+ *
+ * Built here for both start and resume, because they build the same value
+ * from the same Profile and there is no reason for adding a field to
+ * `RunIdentity` to be a change in two places. The backend id comes from the
+ * Profile rather than from the resolved `Backend`, and they are the same
+ * value: the catalog keys every backend by its own id, so the backend a
+ * Profile resolves to is the one whose id the Profile names.
+ */
+function runIdentityFor(
+  runId: RunId,
+  subagentId: SubagentId,
+  profile: Profile,
+  description: string,
+): RunIdentity {
+  return {
+    runId,
+    subagentId,
+    backendId: profile.backend,
+    agent: profile.name,
+    description,
+  };
+}
+
+/**
+ * What a waiter answers about a Run it has seen settle.
+ *
+ * The status comes from the **store**, so a waiter and `agent_result` cannot
+ * disagree about one Run: they read the same value, and a Run whose output was
+ * evicted still carries its status in the entry that stayed. The repository's
+ * snapshot is the fallback for the moment between publication and a store that
+ * has not been asked yet.
+ */
+function terminalStatusOf(
+  store: ResultStore["Service"],
+  runId: RunId,
+  snapshot: RunSnapshot,
+): Effect.Effect<WaitOutcome> {
+  return Effect.map(store.read(runId), (stored) => {
+    const status =
+      stored.outcome === "result"
+        ? stored.result.status
+        : stored.outcome === "ResultExpired"
+          ? stored.status
+          : (snapshot.terminalStatus ?? "failed");
+    // The reason comes from the stored Result where there is one and from
+    // the snapshot's recorded request otherwise, so an evicted Run still
+    // says why it stopped. A Run that was not cancelled has no reason, and
+    // reporting one would be inventing it.
+    const reason =
+      stored.outcome === "result"
+        ? stored.result.cancellationReason
+        : snapshot.cancellation?.reason;
+    return {
+      outcome: "terminal",
+      runId,
+      status,
+      ...(status === "cancelled" && reason !== undefined
+        ? { cancellationReason: reason }
+        : {}),
+    } as const;
+  });
+}
+
 const makeSupervisor = (settings: SessionSettings) =>
   Effect.gen(function* () {
     const backends = yield* BackendCatalog;
@@ -208,6 +338,17 @@ const makeSupervisor = (settings: SessionSettings) =>
     const admission = yield* makeAdmission(policy.maxActiveRuns, store);
     /** What this supervisor knows about each Subagent it owns. */
     const records = makeSubagentRecords();
+    /**
+     * The waiters' ledger, holding the store's `waiters` pin on their behalf.
+     *
+     * The holder is named here rather than inside the ledger so that all three
+     * of the store's named pin holders stay findable from the code that
+     * releases them, which is what the freeze asks of them.
+     */
+    const waiters = makeWaiterLedger(
+      { release: (runId) => store.releasePin(runId, "waiters") },
+      counters,
+    );
     /** Hooks the conformance suite reads instead of the deleted driver's log. */
     const stages: string[] = [];
 
@@ -302,7 +443,7 @@ const makeSupervisor = (settings: SessionSettings) =>
      */
     const settled = (runId: RunId): Effect.Effect<void> =>
       Effect.gen(function* () {
-        yield* releaseWaiterPinIfIdle(runId);
+        yield* waiters.releaseIfIdle(runId);
         yield* Effect.forkIn(
           Effect.gen(function* () {
             yield* delivery.deliver(runId);
@@ -380,39 +521,55 @@ const makeSupervisor = (settings: SessionSettings) =>
     /* start                                                         */
     /* ------------------------------------------------------------ */
 
+    /**
+     * Everything a start can be refused for without provider I/O, decided
+     * before any of it costs anything.
+     *
+     * A named step rather than three inline branches because it is the whole
+     * of what a start *validates*, as opposed to what a start *does*: no
+     * identifier is spent by any answer here, and none of it can change while
+     * the rest of the operation runs.
+     */
+    const resolveStart = (request: StartRequest): ResolvedStart => {
+      const profile = profiles.get(request.agent);
+      if (!profile) {
+        const diagnostics = profiles.diagnosticsFor(request.agent);
+        // A Profile that exists but does not work is a different mistake
+        // from one that does not exist, and gets a different answer.
+        return diagnostics.length > 0
+          ? { outcome: "invalid profile", diagnostics }
+          : { outcome: "unknown agent", agent: request.agent };
+      }
+      const backend = backends.get(profile.backend);
+      if (!backend) {
+        return {
+          outcome: "invalid profile",
+          diagnostics: [
+            {
+              filePath: profile.name,
+              reason: `unknown backend '${profile.backend}'`,
+            },
+          ],
+        };
+      }
+      if (request.childDepth > settings.maxDelegationDepth) {
+        return {
+          outcome: "delegation-depth exceeded",
+          depth: request.childDepth,
+        };
+      }
+      return { outcome: "resolved", profile, backend };
+    };
+
     const start = (request: StartRequest): Effect.Effect<StartOutcome> =>
       Effect.gen(function* () {
         if (yield* admission.isShuttingDown()) {
           return { outcome: "shutting down" } as const;
         }
 
-        const profile = profiles.get(request.agent);
-        if (!profile) {
-          const diagnostics = profiles.diagnosticsFor(request.agent);
-          // A Profile that exists but does not work is a different mistake
-          // from one that does not exist, and gets a different answer.
-          return diagnostics.length > 0
-            ? ({ outcome: "invalid profile", diagnostics } as const)
-            : ({ outcome: "unknown agent", agent: request.agent } as const);
-        }
-        const backend = backends.get(profile.backend);
-        if (!backend) {
-          return {
-            outcome: "invalid profile",
-            diagnostics: [
-              {
-                filePath: profile.name,
-                reason: `unknown backend '${profile.backend}'`,
-              },
-            ],
-          } as const;
-        }
-        if (request.childDepth > settings.maxDelegationDepth) {
-          return {
-            outcome: "delegation-depth exceeded",
-            depth: request.childDepth,
-          } as const;
-        }
+        const resolved = resolveStart(request);
+        if (resolved.outcome !== "resolved") return resolved;
+        const { profile, backend } = resolved;
 
         // No Subagent id yet, so nothing to claim for one: a start's Subagent
         // is bound to the lease after the open, below.
@@ -434,16 +591,7 @@ const makeSupervisor = (settings: SessionSettings) =>
         const reserved = yield* lease.reserveResult(runId);
         if (!reserved) return { outcome: "at capacity" } as const;
 
-        const context: SubagentContext = {
-          subagentId,
-          cwd: request.cwd,
-          childDepth: request.childDepth,
-          projectTrusted: request.projectTrusted,
-          ...(request.parentModel === undefined
-            ? {}
-            : { parentModel: request.parentModel }),
-        };
-
+        const context = subagentContextFor(request, subagentId);
         const opened = yield* openSubagent(backend, profile, context);
         if (opened.outcome !== "opened") {
           // Everything the lease holds is released before the rejection
@@ -462,18 +610,16 @@ const makeSupervisor = (settings: SessionSettings) =>
           agent: opened.agent,
           scope: opened.scope,
         });
-
-        const identity: RunIdentity = {
-          runId,
-          subagentId,
-          backendId: backend.id,
-          agent: profile.name,
-          description: request.description,
-        };
         // The Subagent's active-Run claim is taken now rather than at
         // admission, because until the open succeeded there was no Subagent.
         yield* lease.bind(subagentId);
 
+        const identity = runIdentityFor(
+          runId,
+          subagentId,
+          profile,
+          request.description,
+        );
         const startedAt = yield* now;
         yield* repository.publish(identity, startedAt);
         yield* forkRun({
@@ -533,40 +679,49 @@ const makeSupervisor = (settings: SessionSettings) =>
     /* resume                                                        */
     /* ------------------------------------------------------------ */
 
+    /**
+     * Everything a resume can be refused for without provider I/O.
+     *
+     * Synchronous throughout, so a rejected resume costs no provider quota and
+     * cannot block the caller's turn — which is the reason the two
+     * conversation checks live here rather than being discovered at the
+     * provider. The core's own view comes first: a cleanup escalation closed
+     * this BackendAgent, and the adapter may not have noticed.
+     */
+    const resolveResume = (request: ResumeRequest): ResolvedResume => {
+      const record = records.get(request.subagentId);
+      if (!record || record.phase === "closed") {
+        return {
+          outcome: "unknown Subagent",
+          subagentId: request.subagentId,
+        };
+      }
+      if (record.phase === "running") {
+        return {
+          outcome: "Subagent already running",
+          subagentId: request.subagentId,
+        };
+      }
+      if (record.conversationLost && record.agent.capabilities.resume) {
+        return { outcome: "conversation lost" };
+      }
+      const admitted = record.agent.admitResume();
+      if (admitted === "unsupported") return { outcome: "resume unsupported" };
+      if (admitted === "conversation lost") {
+        return { outcome: "conversation lost" };
+      }
+      return { outcome: "resolved", record };
+    };
+
     const resume = (request: ResumeRequest): Effect.Effect<ResumeOutcome> =>
       Effect.gen(function* () {
         if (yield* admission.isShuttingDown()) {
           return { outcome: "shutting down" } as const;
         }
 
-        const record = records.get(request.subagentId);
-        if (!record || record.phase === "closed") {
-          return {
-            outcome: "unknown Subagent",
-            subagentId: request.subagentId,
-          } as const;
-        }
-        if (record.phase === "running") {
-          return {
-            outcome: "Subagent already running",
-            subagentId: request.subagentId,
-          } as const;
-        }
-
-        // Synchronous and free of provider I/O, so a rejected resume costs no
-        // provider quota and cannot block the caller's turn. The core's own
-        // view comes first: a cleanup escalation closed this BackendAgent, and
-        // the adapter may not have noticed.
-        if (record.conversationLost && record.agent.capabilities.resume) {
-          return { outcome: "conversation lost" } as const;
-        }
-        const admitted = record.agent.admitResume();
-        if (admitted === "unsupported") {
-          return { outcome: "resume unsupported" } as const;
-        }
-        if (admitted === "conversation lost") {
-          return { outcome: "conversation lost" } as const;
-        }
+        const resolved = resolveResume(request);
+        if (resolved.outcome !== "resolved") return resolved;
+        const { record } = resolved;
 
         // The Subagent id is known, so its one-active-Run claim is taken in
         // the same atomic step as capacity rather than bound afterwards.
@@ -589,13 +744,12 @@ const makeSupervisor = (settings: SessionSettings) =>
         // is the same rule a start follows. Until then a second resume is
         // refused by the Subagent's active-Run claim, which this acquire
         // already took, and answers the same `Subagent already running`.
-        const identity: RunIdentity = {
+        const identity = runIdentityFor(
           runId,
-          subagentId: record.id,
-          backendId: record.profile.backend,
-          agent: record.profile.name,
-          description: request.description,
-        };
+          record.id,
+          record.profile,
+          request.description,
+        );
         const startedAt = yield* now;
         yield* repository.publish(identity, startedAt);
         yield* forkRun({
@@ -706,61 +860,6 @@ const makeSupervisor = (settings: SessionSettings) =>
     /* wait                                                          */
     /* ------------------------------------------------------------ */
 
-    /** How many waiters registered at settlement have yet to read. */
-    const waiters = new Map<RunId, number>();
-
-    /**
-     * Let go of the waiters' pin once nobody is holding it.
-     *
-     * Settlement calls this too, so a Run nobody waited on releases its pin
-     * immediately rather than holding a result open for a reader who never
-     * arrives.
-     */
-    const releaseWaiterPinIfIdle = (runId: RunId): Effect.Effect<void> =>
-      Effect.suspend(() =>
-        (waiters.get(runId) ?? 0) > 0
-          ? Effect.void
-          : store.releasePin(runId, "waiters"),
-      );
-
-    /**
-     * What a waiter answers about a Run it has seen settle.
-     *
-     * The status comes from the **store**, so a waiter and `agent_result`
-     * cannot disagree about one Run: they read the same value, and a Run whose
-     * output was evicted still carries its status in the entry that stayed.
-     * The repository's snapshot is the fallback for the moment between
-     * publication and a store that has not been asked yet.
-     */
-    const terminalStatusOf = (
-      runId: RunId,
-      snapshot: RunSnapshot,
-    ): Effect.Effect<WaitOutcome> =>
-      Effect.map(store.read(runId), (stored) => {
-        const status =
-          stored.outcome === "result"
-            ? stored.result.status
-            : stored.outcome === "ResultExpired"
-              ? stored.status
-              : (snapshot.terminalStatus ?? "failed");
-        // The reason comes from the stored Result where there is one and from
-        // the snapshot's recorded request otherwise, so an evicted Run still
-        // says why it stopped. A Run that was not cancelled has no reason,
-        // and reporting one would be inventing it.
-        const reason =
-          stored.outcome === "result"
-            ? stored.result.cancellationReason
-            : snapshot.cancellation?.reason;
-        return {
-          outcome: "terminal",
-          runId,
-          status,
-          ...(status === "cancelled" && reason !== undefined
-            ? { cancellationReason: reason }
-            : {}),
-        } as const;
-      });
-
     const waitOne = (
       runId: RunId,
       timeoutMillis?: number,
@@ -771,38 +870,27 @@ const makeSupervisor = (settings: SessionSettings) =>
           return { outcome: "unknown Run", runId } as const;
         }
         if (known.state === "terminal") {
-          return yield* terminalStatusOf(runId, known.snapshot);
+          return yield* terminalStatusOf(store, runId, known.snapshot);
         }
         const handle = handleOf(runId);
         if (!handle) return { outcome: "still running", runId } as const;
 
-        waiters.set(runId, (waiters.get(runId) ?? 0) + 1);
-        counters.acquired("unresolvedWaiters");
+        // Registered before the wait begins and released however it ends.
+        // Aborting or timing out a wait stops only that waiter: the Run
+        // continues, still settles exactly once, and still stores its result.
+        const releaseWaiter = waiters.register(runId);
         const finished = yield* Effect.exit(
           timeoutMillis === undefined
             ? Deferred.await(handle.completion)
             : Effect.timeout(Deferred.await(handle.completion), timeoutMillis),
-        ).pipe(
-          // Aborting or timing out a wait stops only that waiter. The Run
-          // continues, still settles exactly once, and still stores its
-          // result — so the bookkeeping has to be released either way.
-          Effect.ensuring(
-            Effect.suspend(() => {
-              counters.released("unresolvedWaiters");
-              const left = (waiters.get(runId) ?? 1) - 1;
-              if (left <= 0) waiters.delete(runId);
-              else waiters.set(runId, left);
-              return releaseWaiterPinIfIdle(runId);
-            }),
-          ),
-        );
+        ).pipe(Effect.ensuring(releaseWaiter));
 
         if (Exit.isFailure(finished)) {
           return { outcome: "still running", runId } as const;
         }
         const settled = yield* repository.lookup(runId);
         return settled.state === "terminal"
-          ? yield* terminalStatusOf(runId, settled.snapshot)
+          ? yield* terminalStatusOf(store, runId, settled.snapshot)
           : ({ outcome: "still running", runId } as const);
       });
 
