@@ -1,6 +1,39 @@
 # pi-subagent v2 roadmap
 
-**Status:** Accepted. **M6 is complete** (2026-09-03), including both credentialed live gates. One environment item is carried rather than closed: the `codex` CLI on the verification machine moved past the pinned protocol version mid-milestone, which the byte-for-byte protocol check correctly detected — the drift is additive, the live gate passed against the newer release, and bumping the pin is the separate `codex-upgrade` procedure. M4 remains complete apart from its daily-driver soak, which neither M5 nor M6 did close and which was never theirs to close; M7 is next.  
+**Status: the programme is delivered and the gate is not closed.** Every
+milestone's deliverables have landed, M0 through M7, and the repository carries
+one implementation: `extensions/subagent/`, published by the manifest, version
+`2.0.0-rc.2`. Eleven of the definition of done's thirteen items pass. Three
+things are outstanding and none of them is code:
+
+1. **The six live gates have not been run on the cutover build.** All six
+   passed at M6 and nothing since touched a backend adapter's behaviour, but
+   the Codex runtime gate gained three proofs at M7 whose live half is
+   unexercised.
+2. **The Codex Desktop coexistence record does not exist for any CLI version**,
+   so `npm run codex:retained-release:check` is red. It was red before M6 too.
+   It is human-only and has no deterministic substitute.
+3. **The release-candidate soak is open**, with an empty log — and because the
+   deletion was taken before it rather than after, its rollback window is a
+   release rollback rather than a Session-level switch.
+
+One item is **not met** rather than outstanding: the definition of done's last
+clause asked for less lifecycle machinery than v1, and the codebase is larger
+by every count that can be constructed honestly. The measurement, and what is
+true instead, are in [the deletion ledger](deletion-ledger.md).
+
+[The M7 exit gate](m7-exit-gate.md) verifies every item one at a time and is
+the record. **This roadmap is now history**: the plan it describes was
+followed, and the documents that describe the product are
+[the architecture note](../architecture.md), [the glossary](../../CONTEXT.md),
+[the compatibility matrix](compatibility-matrix.md), and
+[the contributor rules](../contributing.md).
+
+Milestone documents written before M7 name `extensions/subagent-v2/`, which is
+now `extensions/subagent/`; their links were repointed, their prose was not,
+because each describes the tree as it stood.
+
+
 **Strategy:** Rewrite the execution architecture inside the existing `pi-subagent` product  
 **Delivery model:** Gate-driven milestones, not a date-driven big-bang rewrite
 
@@ -93,7 +126,7 @@ flowchart TD
 | M4 ⏳     | Native Pi backend and product dogfood              | Pi passes conformance and v2 is usable as the daily driver — everything **passed** except the soak, see [the M4 exit gate](m4-exit-gate.md) and [the soak record](soak.md) |
 | M5 ✅     | Claude adapter                                      | Claude fits without generic lifecycle changes — **passed**, see [the M5 exit gate](m5-exit-gate.md) |
 | M6 ✅     | Codex adapter                                      | Codex fits without generic lifecycle changes — **passed**, both live gates included, see [the M6 exit gate](m6-exit-gate.md) |
-| M7        | v2 becomes the sole implementation                 | Compatibility, soak, release, and deletion gates pass            |
+| M7 ⏳     | v2 becomes the sole implementation                 | Deliverables complete; the soak and the two credentialed gates are outstanding — see [the M7 exit gate](m7-exit-gate.md) |
 
 ## 5. Milestone details
 

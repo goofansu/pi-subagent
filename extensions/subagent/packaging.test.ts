@@ -42,8 +42,14 @@ test("the package manifest exposes this extension and nothing else", () => {
 });
 
 test("the package version is the 2.0.0 release candidate", () => {
-  // A release-candidate marker until the soak closes, because the soak is the
-  // rollback window and a plain 2.0.0 would say it had shut.
+  // The marker stays until three things have happened: the six live gates run
+  // on the build being released, the Codex Desktop coexistence record exists
+  // for the pinned CLI, and the release-candidate soak closes. None of the
+  // three can be established by writing code, so none can be established by
+  // this test — what it can do is stop the marker being dropped by accident,
+  // because a plain 2.0.0 asserts all three.
+  //
+  // `docs/v2/m7-exit-gate.md` is the record of which of them are outstanding.
   const manifest = readPackageManifest();
 
   assert.match(manifest.version ?? "", /^2\.0\.0-rc\.\d+$/);

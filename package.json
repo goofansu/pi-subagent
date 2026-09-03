@@ -1,6 +1,6 @@
 {
   "name": "pi-subagent",
-  "version": "2.0.0-rc.1",
+  "version": "2.0.0-rc.2",
   "description": "Delegate tasks to specialized Pi subagents with isolated context. Any run can be cancelled.",
   "type": "module",
   "keywords": [

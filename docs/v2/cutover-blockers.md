@@ -267,7 +267,7 @@ this list:
 1. **The live gates have not been re-run on the cutover build.** Every gate
    passed at M6 and nothing in M7's changes touches a backend adapter, but a
    cutover build's live gates are the release gate's business and are recorded
-   in the milestone's final exit gate rather than here.
+   in [the M7 exit gate](m7-exit-gate.md) rather than here.
 2. **The Codex Desktop coexistence evidence does not exist for any CLI
    version**, so `npm run codex:retained-release:check` is red. That gate was
    red before M6 as well; it is a human-only procedure and its state is recorded
