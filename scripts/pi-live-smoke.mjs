@@ -1,4 +1,4 @@
-// The v2 runtime-level live gate for the Pi backend.
+// The runtime-level live gate for the Pi backend.
 //
 // Usage: node --import tsx scripts/pi-live-smoke.mjs
 //
@@ -67,14 +67,14 @@ timer.unref();
 
 /** A Profile directory holding one specialist, for this run only. */
 function profileDirectory() {
-  const root = mkdtempSync(path.join(tmpdir(), "v2-pi-live-smoke-"));
+  const root = mkdtempSync(path.join(tmpdir(), "pi-live-smoke-"));
   const agents = path.join(root, "agents");
   mkdirSync(agents, { recursive: true });
   writeFileSync(
     path.join(agents, "live-smoke.md"),
     [
       "---",
-      "description: A specialist that answers briefly for the v2 live gate.",
+      "description: A specialist that answers briefly for the Pi live gate.",
       ...(model ? [`model: ${model}`] : []),
       "---",
       "You answer in as few words as possible and you never ask questions.",
@@ -84,7 +84,7 @@ function profileDirectory() {
   return root;
 }
 
-const cwd = mkdtempSync(path.join(tmpdir(), "v2-pi-live-smoke-cwd-"));
+const cwd = mkdtempSync(path.join(tmpdir(), "pi-live-smoke-cwd-"));
 const agentDir = profileDirectory();
 
 const notifications = [];
@@ -362,7 +362,7 @@ async function driveTimeoutSession() {
 }
 
 try {
-  console.log("v2 Pi runtime live gate");
+  console.log("Pi runtime live gate");
   await driveMainSession();
   await driveTimeoutSession();
 } catch (error) {

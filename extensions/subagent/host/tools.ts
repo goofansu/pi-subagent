@@ -52,8 +52,8 @@ import {
   WaitInputSchema,
 } from "./tool-schemas.ts";
 
-/** Every tool name v2 registers, in registration order. */
-export const V2_TOOL_NAMES = [
+/** Every tool name this extension registers, in registration order. */
+export const SUBAGENT_TOOL_NAMES = [
   START_COPY.name,
   RESUME_COPY.name,
   WAIT_COPY.name,

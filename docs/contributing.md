@@ -97,16 +97,25 @@ the seam had stopped being a seam.
 Sleep-based timing is not proof of race correctness. A test that waits 50ms and
 hopes passes on a fast machine, fails in CI, and teaches nothing when it does.
 
-- **Timers are forbidden everywhere** — `setTimeout`, `setInterval`,
-  `setImmediate`, `node:timers`. A timer is the one thing no clock can replace.
+- **Timers are forbidden in `extensions/subagent/`** — `setTimeout`,
+  `setInterval`, `setImmediate`, `node:timers`. A timer is the one thing no
+  clock can replace, so a timer there is a delay a test could never control.
 - **A test that sleeps must supply `TestClock`.** Production code may sleep
   against the runtime `Clock`, which is exactly the thing a test replaces;
   forbidding that would push the delay somewhere a test clock could not reach.
 - **Wait on a `Deferred` the test completes**, a counter, or a bounded spin —
   not on a duration.
 
-`timing.test.ts` is the lint. It fails on a timer anywhere and on a sleeping
-test with no test clock.
+`timing.test.ts` is the lint, and it scans the extension tree.
+
+**`scripts/` is outside it, and that is deliberate rather than an oversight.**
+The credentialed live gates drive real processes against real providers with no
+clock to substitute: a `codex app-server` that wedges, a provider that never
+answers, and an operator who has walked away from a coexistence prompt are all
+bounded by wall-clock time or not at all. Those bounds are `setTimeout`, they
+are the gates' outermost guarantee, and a gate with no deadline is a gate that
+hangs CI. What is *not* allowed there either is a sleep used as proof — a live
+gate waits on a marker, an exit code, or a probe, never on "long enough".
 
 ## Tests
 
@@ -154,9 +163,10 @@ contract, and any relaxation of a boundary rule.
 
 ## The architecture challenge gate
 
-**A standing rule, not a migration one.** Before a change that touches generic
-runtime code — the supervisor, the repository, the store, delivery, the
-contract, the domain — answer three questions in the commit message or the ADR:
+**A standing rule, not a migration one.** It applies to a change that **adds an
+abstraction to, or changes a decision in**, generic runtime code — the
+supervisor, the repository, the store, delivery, the contract, the domain.
+Answer three questions, in the commit message or in an ADR:
 
 1. **What does this delete?** A new abstraction that removes nothing is an
    addition, and additions accumulate.
@@ -167,6 +177,15 @@ contract, the domain — answer three questions in the commit message or the ADR
 
 A change that cannot answer them is a change to an adapter, to presentation, or
 to the host — which is where most changes belong.
+
+**What the gate is not for.** A fix that restores behaviour the compatibility
+matrix already promises is not a decision, and three questions about it would
+be three answers of "nothing, yes, it is already broken". Such a fix owes
+something else instead, and it is not lighter: **name the matrix cell it
+restores, or the presentation-ledger entry that classified it, and add the test
+that holds it.** A fix with no cell and no entry is not a fix — it is a change
+of behaviour wearing a fix's clothes, and it needs the three questions after
+all.
 
 ## Vocabulary
 

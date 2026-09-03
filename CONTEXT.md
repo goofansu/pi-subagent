@@ -287,9 +287,15 @@ is honest, and settlement continuing with the observations it has. A hung
 finalizer must not leave a Run in `finalizing` forever.
 
 **Reservation** — the room a Run takes in the Result store at admission, before
-it starts. A Run that cannot reserve one is rejected `at capacity`, so a
-reservation is a guarantee that the result can be stored rather than an
-estimate. Released by a failed open.
+it starts, so that "the result can be stored" is a guarantee rather than an
+estimate discovered at settlement. Released by a failed open.
+
+A reservation that does not fit **evicts the oldest unpinned stored output**
+until one does, and only refuses `at capacity` when there is nothing evictable
+left. That is a reversal of the original decision, which refused rather than
+evicting: nothing else in a Session ever frees a stored result, so refusing
+made a Session's own history able to wedge it permanently.
+[ADR-0032](docs/adr/0032-reservations-evict-rather-than-refuse.md).
 
 **Pin** — a hold on a stored result that stops eviction reaching it. Set at
 commit for three named holders, and released when terminal publication is done,

@@ -20,7 +20,7 @@ import {
   MINIMUM_USEFUL_RESULT_BYTES,
   type RuntimePolicy,
 } from "../runtime/policy.ts";
-import type { SessionRig } from "./session-rig.ts";
+import { type SessionRig, until } from "./session-rig.ts";
 
 /**
  * The smallest legal policy.
@@ -56,11 +56,24 @@ export const STEER = "also look left";
 /**
  * The counters a healthy Session must never register at all.
  *
- * Each of these is a defect rather than a bound being reached: a Run settled
+ * Each of these is a *defect* rather than a bound being reached: a Run settled
  * twice, a result committed twice or committed differently, a stored result
  * that would not read back, an observation that did not decode at the seam, an
  * observation dropped because a non-blocking bridge could not hand it over, or
- * a terminal reconciliation that disagreed with what was streamed.
+ * a late observation that reached the reducer after the projection was already
+ * terminal.
+ *
+ * `lateObservations` is here and `lateEvents` is not, and the difference is the
+ * point: an emit the *sealed intake* dropped is normal — an adapter emitting
+ * from its own finalizer does it on every Run — while one that got as far as
+ * the reducer means sealing did not happen when it should have.
+ *
+ * `reconciliationDifferences` is deliberately **not** here. A terminal
+ * reconciliation that changes something streamed is reconciliation doing its
+ * job, which is what `docs/debugging.md` classifies it as; a Session with
+ * thousands of them has a backend whose streaming and terminal snapshot
+ * disagree systematically, and that is a rate to read rather than a zero to
+ * assert.
  */
 const MUST_STAY_ZERO = [
   "duplicateSettlements",
@@ -69,7 +82,7 @@ const MUST_STAY_ZERO = [
   "unreadableResults",
   "seamDecodeFailures",
   "queueOverflows",
-  "reconciliationDifferences",
+  "lateObservations",
 ] as const satisfies readonly (keyof SupervisorCounters)[];
 
 export function assertNothingWentWrong(counters: SupervisorCounters): void {
@@ -85,20 +98,19 @@ export function assertNothingWentWrong(counters: SupervisorCounters): void {
  * Wait until the backend has begun its nth execution, counted from the start
  * of the Session.
  *
- * `untilUnderWay` in the Session rig takes an index into the same cumulative
+ * `untilUnderWay` in the Session rig takes an *index* into the same cumulative
  * count, which reads naturally for a test with two or three Runs and not at
  * all for one with nine hundred. This takes the total, so a caller keeps its
- * own tally and the wait says what it is waiting for.
+ * own tally — and it spins with the rig's own bounded `until`, so there is one
+ * place that decides how long a wait may go on and what it says when it gives
+ * up.
  */
 export function untilExecutions(
   rig: SessionRig,
   total: number,
 ): Effect.Effect<void> {
-  return Effect.gen(function* () {
-    for (let step = 0; step < 200_000; step += 1) {
-      if (rig.backend.counters().executionsStarted >= total) return;
-      yield* Effect.yieldNow;
-    }
-    throw new Error(`gave up waiting for execution ${total} to begin`);
-  });
+  return until(
+    `execution ${total} to begin`,
+    Effect.sync(() => rig.backend.counters().executionsStarted >= total),
+  );
 }

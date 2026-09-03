@@ -86,8 +86,10 @@ Two candidates looked like losses and were not:
 
 ## The ledger
 
-One section per compatibility-matrix row. Every difference is either
-**intentional** with its reference, or **fixed** with its test.
+One section per compatibility-matrix command section — eleven of them, matching
+the matrix's eleven commands and surfaces. Every difference is either
+**intentional** with its reference, or **fixed** with its test. Two sections
+have nothing to compare and say why rather than being left out.
 
 ### `agent_start`
 
@@ -173,6 +175,21 @@ v1's — including the accounting line's field order and separators, the
 | A `finalizing` row, which v1 cannot render | **Intentional.** v2 has five Run phases where v1 has four: `finalizing` is the window between a backend's execution ending and the Run settling, and it exists so no surface shows a Run as terminal while its cleanup is still running (invariant 12, [ADR-0025](../adr/0025-v2-terminal-settlement.md)). |
 | Row *lifetime* | **Fixed in ticket 01**, not here: v2 now keeps a settled Run's row until its completion notice lands, as v1 did. Recorded in [the soak record](soak.md#the-widgets-row-lifetime-2026-09-03-severity-3). |
 
+### Subagent close
+
+**No presentation surface of its own, so nothing to compare.** Closing happens
+through Session shutdown, which is a host event rather than a tool: there is no
+prose either implementation prints for it. What a *user* sees when a Session
+closes is the cancellation notices its active Runs send, and those are the
+Completion Notification section above — where `cancelled (shutdown)` and
+`cancelled (requested)` are both byte-identical to 1.x's.
+
+The one thing that changed here is not prose: 1.x marked every Subagent closed
+and then hand-ordered the teardown, where closing the Session Scope now releases
+everything beneath it. That is [the deletion
+ledger](deletion-ledger.md#session-lifecycle--scope-nesting)'s business, not
+this one's.
+
 ### `/agents`
 
 | Difference | Classification |
@@ -191,6 +208,13 @@ unrecognised field. That is the matrix's **Backend field name** cell, marked
 **[v2 change]** and pointing at [the migration note](profile-backend-field-migration.md).
 
 ## What this ledger does not cover
+
+- **The matrix's `Cross-cutting properties` section**, which did not exist when
+  this comparison was run — it was created during M7's documentation rewrite by
+  folding the per-backend proof appendices in, and it collects properties that
+  belong to no one command. Every one of them is behaviour rather than prose:
+  environment inheritance, trust posture, usage accounting, transport loss,
+  routing, protocol drift. None has words of its own to compare.
 
 - **Colour and emphasis.** Every comparison ran against a theme that paints
   nothing, so the ledger is about words. Tone selection is shared vocabulary

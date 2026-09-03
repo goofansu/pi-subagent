@@ -5,10 +5,10 @@ whether one retained, ephemeral App Server can remain usable beside Codex
 Desktop while idle and while its second Turn is active, without a shared
 rollout-writer conflict.
 
-The gate it accompanies is the **v2 Codex runtime gate**, driving the v2
-adapter through the v2 supervisor. That is deliberate and it is the whole
-change from the v1 form of this document: the release being cleared is the
-release that ships, and after M7's cutover what ships is v2.
+The gate it accompanies is the **Codex runtime gate** — the adapter that
+ships, driven through the supervisor that ships. That was the whole change from
+the 1.x form of this document: the release being cleared has to be the release
+that goes out.
 
 Release status: **OPEN** for codex-cli 0.153.0. Deterministic checks and the
 procedure are implemented, but no authenticated/Desktop evidence record exists
@@ -71,7 +71,7 @@ explicit release action; it is not part of `npm run check`.
 ## What the gate's log must carry
 
 `npm run codex:retained-release:check` reads the log the record names and
-requires the v2 runtime gate's own evidence in it:
+requires the runtime gate's own evidence in it:
 
 - `CODEX_LIVE_SMOKE_PASS`;
 - `the retained root is neither listed nor readable by a second App Server` —
@@ -106,7 +106,7 @@ add a later passing record rather than rewriting history.
 
 ## Evidence records
 
-No Desktop coexistence run has been recorded against the v2 adapter for
-codex-cli 0.153.0 yet. The v1 form of this gate never accumulated a record
-either, so nothing is lost by the change of procedure: the outstanding work is
-the same run it always was, now taken against the adapter that ships.
+No Desktop coexistence run has been recorded for codex-cli 0.153.0. The 1.x
+form of this gate never accumulated one either, so nothing was lost by the
+change of procedure: the outstanding work is the same run it always was, now
+taken against the adapter that ships.

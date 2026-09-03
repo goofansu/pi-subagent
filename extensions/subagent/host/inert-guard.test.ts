@@ -6,7 +6,7 @@ import { hostRig, startedIds } from "../testing/host-rig.ts";
 import { piRigRequest, withPiSession } from "../testing/pi/pi-rig.ts";
 import { createStandInHost } from "../testing/stand-in-host.ts";
 import { createPiBackendSet } from "./pi-backends.ts";
-import { V2_TOOL_NAMES } from "./tools.ts";
+import { SUBAGENT_TOOL_NAMES } from "./tools.ts";
 
 /**
  * Inert inside a child, and honest about how deep it is.
@@ -80,7 +80,7 @@ test("a parent process registers everything", () => {
 
   assert.deepEqual(
     host.tools().map((tool) => tool.name),
-    [...V2_TOOL_NAMES],
+    [...SUBAGENT_TOOL_NAMES],
   );
 });
 

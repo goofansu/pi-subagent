@@ -213,7 +213,7 @@ export function startedRun(outcome: StartOutcome | ResumeOutcome): {
  * Bounded deliberately: a test whose fixture deadlocks should fail with the
  * name of what it was waiting for, not hang the lane.
  */
-function until(
+export function until(
   what: string,
   ready: Effect.Effect<boolean>,
 ): Effect.Effect<void> {

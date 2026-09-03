@@ -274,4 +274,8 @@ this list:
    in [the coexistence document](../codex-desktop-coexistence-release.md).
 
 The soak that follows is the rollback window. Any blocker that turns out to be
-reproducible during it stops the cutover, and the fallback switch is how.
+reproducible during it stops the release — and because the deletion was taken
+before the soak rather than after, stopping it is a release rollback to
+`v1.0.0` rather than the Session-level switch this document was written
+expecting. [The M7 exit gate](m7-exit-gate.md) records that inversion and what
+it costs.

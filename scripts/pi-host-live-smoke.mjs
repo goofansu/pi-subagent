@@ -1,8 +1,8 @@
-// The v2 host-level live gate, for one backend at a time.
+// The host-level live gate, for one backend at a time.
 //
 // Usage: node --import tsx scripts/pi-host-live-smoke.mjs [pi|claude|codex]
 //
-// Launches Pi in RPC mode with **only** the v2 entry point loaded, asks the
+// Launches Pi in RPC mode with **only** this extension loaded, asks the
 // model to delegate to a Profile naming the given backend, and reads the
 // answer back through `agent_result`. The runtime gates next to this one
 // prove the lifecycle; this proves the other half — that the whole thing is
@@ -78,10 +78,10 @@ function check(name, condition) {
  */
 const marker = `HOST-${randomUUID().slice(0, 8)}`;
 const agentsDir = path.join(getAgentDir(), "agents");
-const profilePath = path.join(agentsDir, "v2-live-smoke.md");
+const profilePath = path.join(agentsDir, "host-live-smoke.md");
 let wroteProfile = false;
 
-const cwd = mkdtempSync(path.join(tmpdir(), "v2-pi-host-live-smoke-"));
+const cwd = mkdtempSync(path.join(tmpdir(), "pi-host-live-smoke-"));
 
 function writeProfile() {
   if (existsSync(profilePath)) {
@@ -93,7 +93,7 @@ function writeProfile() {
     profilePath,
     [
       "---",
-      "description: A specialist that echoes a marker, for the v2 host live gate.",
+      "description: A specialist that echoes a marker, for the host live gate.",
       // Omitted for Pi, whose Profiles name no backend by default; written for
       // every other backend, because that line is the whole selection
       // mechanism a user has.
@@ -116,8 +116,8 @@ function runPi(prompt) {
         "-np",
         "-nc",
         "-ns",
-        // Every other extension disabled, and only the v2 entry loaded: a
-        // failure here is v2's, and v1 is not in the process to help.
+        // Every other extension disabled, and only this entry point loaded,
+        // so a failure here is this extension's and nothing else's.
         "-ne",
         "-e",
         entry,
@@ -167,11 +167,11 @@ process.once("SIGINT", onSignal);
 process.once("SIGTERM", onSignal);
 
 try {
-  console.log(`v2 host live gate (${backend})`);
+  console.log(`host live gate (${backend})`);
   writeProfile();
 
   const prompt = [
-    'Use agent_start with agent "v2-live-smoke", a one-line description, and',
+    'Use agent_start with agent "host-live-smoke", a one-line description, and',
     `the prompt: Reply with exactly the word ${marker} and nothing else.`,
     "Then use agent_wait with the run id it returned, then agent_result with",
     "the same run id, and finally tell me the word the subagent replied with.",

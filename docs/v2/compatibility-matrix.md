@@ -43,15 +43,16 @@ row — an explicit statement about that backend rather than a deferral.
 
 ## What the **[v2 change]** markers mean
 
-Five cells are marked, and only those: places where the current behaviour
-deliberately differs from 1.x's. Each names its decision, so a difference is
-either recorded here with a reference or it is a regression.
+**Six cells are marked, and only those** — five rows' worth, because
+`agent_steer` has two renamed outcomes. Each names its decision, so a
+difference is either recorded here with a reference or it is a regression.
 
 | Row | What changed | Where it was decided |
 | --- | --- | --- |
 | `agent_start` — at capacity | A global capacity limit that rejects immediately, where 1.x had no limit at all | [ADR-0001](../adr/0001-unbounded-subagent-concurrency.md) is 1.x's decision; [operation semantics §2](operation-semantics.md#2-start-and-resume-admission-are-atomic) is this one |
 | `agent_resume` — during shutdown | A distinct shutting-down outcome instead of `unknown subagent` | [operation semantics §5](operation-semantics.md#5-shutdown-rejects-new-work-as-soon-as-it-begins) |
-| `agent_steer` — mailbox full, mailbox closed | `queue full` → `mailbox full`; `not steerable` → `mailbox closed` | [operation semantics §7](operation-semantics.md#7-a-full-control-mailbox-returns-an-immediate-typed-outcome) |
+| `agent_steer` — mailbox full | `queue full` → `mailbox full` | [operation semantics §7](operation-semantics.md#7-a-full-control-mailbox-returns-an-immediate-typed-outcome) |
+| `agent_steer` — cancelling or closed | `not steerable` → `mailbox closed` | [operation semantics §7](operation-semantics.md#7-a-full-control-mailbox-returns-an-immediate-typed-outcome) |
 | `agent_result` — evicted output | A typed `ResultExpired` outcome instead of prose | [operation semantics §8](operation-semantics.md#8-an-evicted-result-returns-a-distinct-typed-outcome) |
 | Profile loading — backend field name | The frontmatter field renamed, with no alias | [ADR-0022](../adr/0022-v2-terminology-and-backend-field.md), [the migration note](profile-backend-field-migration.md) |
 
@@ -99,7 +100,7 @@ Conversation context. Returns the new Run id immediately.
 | **Unknown Subagent id** | Rejected with `unknown subagent`; a Run id passed here is reported as the wrong kind of identifier. | Same. | Same. |
 | **`unsupported`** | Not reachable: Pi declares resume. The outcome is reachable through a backend that declares none. | Not reachable: Claude declares resume. | Not reachable: Codex declares resume. |
 | **Conversation loss** | Reported when the retained session can no longer be resumed; no Run and no provider work start. | Reported when continuation attachment fails; the adapter never falls back to a fresh conversation. | Reported when the App Server process or transport is terminally lost, without exposing provider identity. |
-| **During shutdown** | Rejected; shutdown wins admission synchronously and late settlement cannot reopen the Subagent.. **[v2 change]** v1 reports this as `unknown subagent`; v2 reports a distinct shutting-down outcome — [operation semantics §5](operation-semantics.md#5-shutdown-rejects-new-work-as-soon-as-it-begins). | Same. | Same. |
+| **During shutdown** | Rejected; shutdown wins admission synchronously and late settlement cannot reopen the Subagent. **[v2 change]** v1 reports this as `unknown subagent`; v2 reports a distinct shutting-down outcome — [operation semantics §5](operation-semantics.md#5-shutdown-rejects-new-work-as-soon-as-it-begins). | Same. | Same. |
 
 
 **Proven by.** A property only one backend has shows a dash for the others;
@@ -123,7 +124,7 @@ Offers one guidance message to an active Run's bounded local mailbox.
 | **Expected outcome** | `accepted` when the complete text enters the Run's bounded mailbox. Delivered as native session steering, serialized by the SDK. Only authoritative provider evidence becomes a user Fact. | `accepted` on local admission. Delivered as streamed user input on the Run's Query; one user Fact only when a provider Result correlates the client's message id. | `accepted` on local admission. Delivered as native `turn/steer` against the active Turn, ordered with provider events in one adapter reducer. |
 | **`unsupported`** | Not reachable: every Pi Run declares `steer`. The outcome itself is reachable through a backend that declares none. | Not reachable: Claude declares `steer`. | Not reachable: Codex declares `steer`. |
 | **Mailbox full** | `queue full` at 16 pending admissions, 16 KiB per message, or 64 KiB pending. Returned immediately; the caller's turn never blocks. **[v2 change]** v2 renames this outcome `mailbox full` — [operation semantics §7](operation-semantics.md#7-a-full-control-mailbox-returns-an-immediate-typed-outcome). | Same. | Same. |
-| **Cancelling or closed** | `not steerable`; cancellation closes admission before the abort reaches the executor.. **[v2 change]** v2 renames this `mailbox closed` — [operation semantics §7](operation-semantics.md#7-a-full-control-mailbox-returns-an-immediate-typed-outcome). | Same. | Same. plus |
+| **Cancelling or closed** | `not steerable`; cancellation closes admission before the Run is interrupted. **[v2 change]** v2 renames this `mailbox closed` — [operation semantics §7](operation-semantics.md#7-a-full-control-mailbox-returns-an-immediate-typed-outcome). | Same. | Same. plus |
 | **Terminal Run** | `already completed` / `already failed` / `already cancelled`, kept classifiable until Session shutdown. | Same. | Same. |
 | **Invalid text** | `invalid` for empty, whitespace-only, or over-16-KiB text — decided before the Run id is looked up. | Same. | Same. |
 | **Unknown Run id** | `unknown run`. | Same. | Same. |
@@ -282,7 +283,7 @@ The session widget listing live Runs.
 | **Expected outcome** | One row per live Run carrying agent, backend name, turn count, status, and current activity — nothing else fixed, and no id or model. The row for a Pi Run reads `explore pi 3 turns running · …`. | Identical apart from the backend name: `explore claude 3 turns running · …`. | Identical apart from the backend name: `explore codex 3 turns running · …`. |
 | **Observation only** | The widget never determines lifecycle state. | Same. | Same. |
 | **Lifecycle** | Appears with the first Run and is removed when none are left; a change redraws rather than reinstalls. | Same. | Same. |
-| **Row lifetime** | A Run's row lasts from `agent_start` until its completion notice reaches the conversation, not until the Run settles — v1 releases a tracked Run on `notificationLanded`. Proven in v2 by `a terminal Run keeps its row until its completion notice lands, and the landing takes it away` and, and at the unit level by `the widget lists Runs that are not terminal and terminal ones whose notice has not landed`. | Same. : the row's lifetime is backend-independent. | Same. |
+| **Row lifetime** | A Run's row lasts from `agent_start` until its completion notice reaches the conversation, not until the Run settles. | Same — the row's lifetime is backend-independent. | Same. |
 
 
 **Proven by.** A property only one backend has shows a dash for the others;

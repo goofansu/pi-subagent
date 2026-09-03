@@ -1,4 +1,4 @@
-// The v2 runtime-level live gate for the Claude backend.
+// The runtime-level live gate for the Claude backend.
 //
 // Usage: node --import tsx scripts/claude-live-smoke.mjs
 //
@@ -83,14 +83,14 @@ timer.unref();
 
 /** A Profile directory holding one Claude specialist, for this run only. */
 function profileDirectory() {
-  const root = mkdtempSync(path.join(tmpdir(), "v2-claude-live-smoke-"));
+  const root = mkdtempSync(path.join(tmpdir(), "claude-live-smoke-"));
   const agents = path.join(root, "agents");
   mkdirSync(agents, { recursive: true });
   writeFileSync(
     path.join(agents, "live-smoke.md"),
     [
       "---",
-      "description: A specialist that answers briefly for the v2 Claude live gate.",
+      "description: A specialist that answers briefly for the Claude live gate.",
       "backend: claude",
       `model: ${model}`,
       "tools: Read",
@@ -102,7 +102,7 @@ function profileDirectory() {
   return root;
 }
 
-const cwd = mkdtempSync(path.join(tmpdir(), "v2-claude-live-smoke-cwd-"));
+const cwd = mkdtempSync(path.join(tmpdir(), "claude-live-smoke-cwd-"));
 const agentDir = profileDirectory();
 
 const notifications = [];
@@ -447,7 +447,7 @@ async function driveTimeoutSession() {
 }
 
 try {
-  console.log(`v2 Claude runtime live gate (model family: ${model})`);
+  console.log(`Claude runtime live gate (model family: ${model})`);
   await driveMainSession();
   await driveTimeoutSession();
 } catch (error) {

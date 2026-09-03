@@ -1,16 +1,16 @@
-// The deterministic half of the v2 Codex live gate.
+// The deterministic half of the Codex live gate.
 //
 // Everything here is a pure assertion over evidence the live gate collected:
 // the JSON-RPC transcript its recording spawn captured, and what a second App
 // Server answered when asked about the retained root. It launches nothing,
-// spends no quota, and is exercised by `v2-codex-smoke-contract.test.mjs` in
+// spends no quota, and is exercised by `codex-smoke-contract.test.mjs` in
 // the ordinary lane — which is the point. A release proof whose reasoning
 // lives inside a 500-line credentialed script is a proof nobody can check
 // without spending money on it.
 //
 // The v1 resume smoke carried the same assertions against v1's manager. This
-// is their v2 home; the reasoning is unchanged, and where the shape differs it
-// is because the v2 gate drives more than two Turns and more than one root.
+// is their home now; the reasoning is unchanged, and where the shape differs
+// it is because this gate drives more than two Turns and more than one root.
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -119,7 +119,7 @@ export function assertStoredThreadInspection(observation) {
 /**
  * Read one App Server's captured transcript as a retained-root lifecycle.
  *
- * The v2 gate drives several Subagents through one Session, and each Subagent
+ * The gate drives several Subagents through one Session, and each Subagent
  * is one App Server with one root thread — so the shape asserted here is *per
  * transcript*: exactly one `initialize`, exactly one `thread/start`, that
  * thread ephemeral and pathless, no `thread/resume` ever, and every

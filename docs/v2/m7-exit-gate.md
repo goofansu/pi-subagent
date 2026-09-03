@@ -1,11 +1,11 @@
 # M7 exit gate — cutover, hardening, and v1 deletion
 
 **Verified:** 2026-09-03. **Version:** `2.0.0-rc.2`.
-**Result: the deliverables are complete; the gate is not closed.** Eleven of
-the thirteen definition-of-done items pass. One is **open** — the
-release-candidate soak, which is days of real usage and nobody's to fake. One
-is **not met**, measured and reported rather than argued away. Two live-gate
-items **passed at M6 and have not been re-run on this build**.
+**Result: the deliverables are complete; the gate is not closed.** The roadmap's
+definition of done has **twelve** items. Nine **pass**. One is **carried** — the
+live smoke tests, green at M6 and not re-run on this build. One is **open** —
+the release-candidate soak, which is days of real usage and nobody's to fake.
+One is **not met**, measured and reported rather than argued away.
 
 That is why the version still carries a release-candidate marker. Dropping it
 would assert a soak that has not happened.
@@ -77,7 +77,7 @@ the per-backend proof tables were folded into each command's section.
 Checked mechanically rather than by reading: every backtick citation in the
 matrix was matched against the set of `test(...)` names in the tree and the
 conformance scenario ids. Three were stale and were fixed; the rest resolve.
-Five cells carry a **[v2 change]** marker with its decision, and every *other*
+Six cells carry a **[v2 change]** marker with its decision, and every *other*
 wording difference between the two implementations is classified in
 [the presentation ledger](presentation-ledger.md) — 65 pairs, 33 identical, 32
 different, each intentional with a reference or fixed.

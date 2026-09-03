@@ -18,6 +18,7 @@ import {
   type FakeStep,
 } from "../testing/fakes/script.ts";
 import {
+  quiesce,
   rigRequest as request,
   type SessionRig,
   startedRun,
@@ -443,7 +444,7 @@ test("a store full of unread results evicts the oldest rather than refusing the 
           yield* untilTerminal(rig, started.runId);
           // Let delivery push and release its pin, which is what makes the
           // result evictable.
-          for (let turn = 0; turn < 12; turn += 1) yield* Effect.yieldNow;
+          yield* quiesce();
           yield* rig.supervisor.closeSubagentById(started.subagentId);
         }
         for (const runId of runs) {

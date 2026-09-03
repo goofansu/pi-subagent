@@ -271,7 +271,7 @@ test("public-record identity fields match the Codex adapter's redactor vocabular
       field,
     );
 
-  // A v2 public record: Run and Subagent ids are the product's own, and no
+  // A public record: Run and Subagent ids are the product's own, and no
   // neutral `*Id` key is mistaken for a provider one.
   assert.equal(
     containsProviderIdentityFieldName(

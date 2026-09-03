@@ -2,9 +2,9 @@
  * The success marker of the gate this evidence is about.
  *
  * Named here rather than spelled inline because it is the one field that says
- * *which* gate an operator ran, and after M7 there is one: the v2 Codex
- * runtime gate. A record carrying v1's marker is evidence about an adapter
- * that no longer exists, and this constant is what makes the check say so.
+ * *which* gate an operator ran, and there is one: the Codex runtime gate. A
+ * record carrying the 1.x marker is evidence about an adapter that no longer
+ * exists, and this constant is what makes the check say so.
  */
 const RUNTIME_GATE_MARKER = "CODEX_LIVE_SMOKE_PASS";
 

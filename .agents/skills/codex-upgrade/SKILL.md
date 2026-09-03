@@ -8,11 +8,9 @@ description: Verify the Codex App Server protocol contract after the codex CLI i
 The Codex adapter's protocol contract is pinned to a verified codex-cli
 version. After the CLI moves, run this procedure end to end.
 
-Every gate below is a **v2** gate: the v2 Codex adapter under
-`extensions/subagent/backend/codex/` is the one that ships after M7's
-cutover, so it is the one whose contract a CLI bump has to be verified
-against. v1's own Codex smokes are not part of this procedure and are deleted
-with v1.
+Every gate below is a gate on the adapter that ships: the Codex adapter under
+`extensions/subagent/backend/codex/`. There is one, and the 1.x Codex smokes
+this procedure used to name were deleted with the implementation they tested.
 
 ## Steps
 
@@ -82,11 +80,11 @@ with v1.
    and Desktop versions plus the operator and date.
 
 6. **Update the pinned version.** Replace the codex-cli version in
-   `docs/codex-protocol/README.md` and in the protocol-fidelity item of
-   `docs/harness-definition-of-done.md` — the two files the protocol check
-   requires the version to appear in. Commit the schema diff, both stamps, and the coexistence
-   evidence together, so the snapshot always names the release that produced
-   and passed it.
+   `docs/codex-protocol/README.md` and in the protocol-fidelity paragraph of
+   `docs/architecture.md` — the two files the protocol check requires the
+   version to appear in, and it fails naming whichever one is stale. Commit the
+   schema diff, both stamps, and the coexistence evidence together, so the
+   snapshot always names the release that produced and passed it.
 
 7. **Close the recorded-evidence gate.** `npm run codex:retained-release:check`
    must print `CODEX_RETAINED_RELEASE_CHECK_PASS`. It verifies the installed

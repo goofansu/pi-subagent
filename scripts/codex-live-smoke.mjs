@@ -1,4 +1,4 @@
-// The v2 runtime-level live gate for the Codex backend.
+// The runtime-level live gate for the Codex backend.
 //
 // Usage: node --import tsx scripts/codex-live-smoke.mjs
 //
@@ -272,26 +272,38 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Split a stdio stream into JSON frames, tolerating partial chunks. */
-function createFrameReader(target, label) {
+/**
+ * Split a stream of chunks into whole lines, holding the partial tail.
+ *
+ * The App Server frames one JSON object per line, and a chunk boundary falls
+ * wherever the operating system puts it — so the last element of a split is a
+ * fragment until the next chunk arrives, and the two readers below both need
+ * exactly this and nothing more.
+ */
+function createLineSplitter(onLine) {
   let buffered = "";
-  const readLine = (line) => {
-    if (!line.trim()) return;
-    try {
-      const value = JSON.parse(line);
-      if (isRecord(value)) target.push(value);
-      else failures.push(`${label} emitted a non-object JSON frame`);
-    } catch {
-      failures.push(`${label} emitted malformed JSON`);
+  return (chunk) => {
+    buffered += String(chunk);
+    const lines = buffered.split("\n");
+    buffered = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.trim()) onLine(line);
     }
   };
+}
+
+/** Record every frame one direction of a stdio stream carried. */
+function createFrameReader(target, label) {
   return {
-    push(chunk) {
-      buffered += String(chunk);
-      const lines = buffered.split("\n");
-      buffered = lines.pop() ?? "";
-      for (const line of lines) readLine(line);
-    },
+    push: createLineSplitter((line) => {
+      try {
+        const value = JSON.parse(line);
+        if (isRecord(value)) target.push(value);
+        else failures.push(`${label} emitted a non-object JSON frame`);
+      } catch {
+        failures.push(`${label} emitted malformed JSON`);
+      }
+    }),
   };
 }
 
@@ -349,7 +361,6 @@ function createInspector(request) {
   });
   const pending = new Map();
   let nextId = 1;
-  let buffered = "";
   let stderr = "";
   const closed = new Promise((resolve) => child.once("close", resolve));
   const rejectPending = (error) => {
@@ -357,20 +368,20 @@ function createInspector(request) {
     pending.clear();
   };
   child.stdout.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => {
-    buffered += chunk;
-    const lines = buffered.split("\n");
-    buffered = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.trim()) continue;
+  child.stdout.on(
+    "data",
+    createLineSplitter((line) => {
       let message;
       try {
         message = JSON.parse(line);
       } catch {
-        continue;
+        // The inspector reads only its own responses. A frame it cannot parse
+        // is not its business, and it is not judging the server's framing —
+        // that is the recording reader's job on the *retained* App Server.
+        return;
       }
       const waiter = pending.get(message.id);
-      if (!waiter) continue;
+      if (!waiter) return;
       pending.delete(message.id);
       if ("error" in message) {
         const error = new Error(
@@ -379,8 +390,8 @@ function createInspector(request) {
         error.rpcError = message.error;
         waiter.reject(error);
       } else waiter.resolve(message.result);
-    }
-  });
+    }),
+  );
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => {
     stderr = `${stderr}${chunk}`.slice(-2_000);
@@ -586,14 +597,14 @@ async function desktopCoexistenceCheckpoint(phase, instruction) {
 
 /** A Profile directory holding one Codex specialist, for this run only. */
 function profileDirectory() {
-  const root = mkdtempSync(path.join(tmpdir(), "v2-codex-live-smoke-"));
+  const root = mkdtempSync(path.join(tmpdir(), "codex-live-smoke-"));
   const agents = path.join(root, "agents");
   mkdirSync(agents, { recursive: true });
   writeFileSync(
     path.join(agents, "live-smoke.md"),
     [
       "---",
-      "description: A specialist that answers briefly for the v2 Codex live gate.",
+      "description: A specialist that answers briefly for the Codex live gate.",
       "backend: codex",
       // No `tools` line: Codex recognizes `model` and `effort` and nothing
       // else, and a Profile naming a field it cannot honour is a diagnostic.
@@ -606,7 +617,7 @@ function profileDirectory() {
   return root;
 }
 
-const cwd = mkdtempSync(path.join(tmpdir(), "v2-codex-live-smoke-cwd-"));
+const cwd = mkdtempSync(path.join(tmpdir(), "codex-live-smoke-cwd-"));
 const agentDir = profileDirectory();
 
 const notifications = [];
@@ -1078,7 +1089,7 @@ async function driveTimeoutSession() {
 
 try {
   console.log(
-    `v2 Codex runtime live gate (model: ${model ?? "the App Server's default"})`,
+    `Codex runtime live gate (model: ${model ?? "the App Server's default"})`,
   );
   await driveMainSession();
   await driveTimeoutSession();

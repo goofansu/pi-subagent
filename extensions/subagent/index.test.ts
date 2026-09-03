@@ -10,7 +10,7 @@ import {
 } from "./host/demo-backends.ts";
 import { DIAGNOSTICS_COMMAND_NAME } from "./host/diagnostics-command.ts";
 import { NOTIFICATION_MESSAGE_TYPE } from "./host/notification-message.ts";
-import { V2_TOOL_NAMES } from "./host/tools.ts";
+import { SUBAGENT_TOOL_NAMES } from "./host/tools.ts";
 import subagentV2Extension, { installSubagentV2 } from "./index.ts";
 import { hostRig, startedIds } from "./testing/host-rig.ts";
 import { createStandInHost, resultText } from "./testing/stand-in-host.ts";
@@ -34,7 +34,7 @@ test("the entry point registers the six tools, both commands, and the notificati
 
   assert.deepEqual(
     host.tools().map((tool) => tool.name),
-    [...V2_TOOL_NAMES],
+    [...SUBAGENT_TOOL_NAMES],
   );
   assert.deepEqual(
     host.commands().map((command) => command.name),
@@ -67,7 +67,7 @@ test("the default export installs the same surface against the machine's agent d
 
   assert.deepEqual(
     host.tools().map((tool) => tool.name),
-    [...V2_TOOL_NAMES],
+    [...SUBAGENT_TOOL_NAMES],
   );
   assert.deepEqual(host.renderers(), [NOTIFICATION_MESSAGE_TYPE]);
 });

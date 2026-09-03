@@ -25,7 +25,7 @@ const smokeLogPath = path.isAbsolute(record.smokeLog)
   ? record.smokeLog
   : path.join(repository, record.smokeLog);
 const smokeLog = readFileSync(smokeLogPath, "utf8");
-// The v2 runtime gate's own lines, verbatim. A log that does not carry them
+// The Codex runtime gate's own lines, verbatim. A log that does not carry them
 // is a log of some other run, and the point of reading the log at all is that
 // a record's `PASS` is a human's summary of it.
 for (const required of [

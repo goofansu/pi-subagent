@@ -10,6 +10,7 @@ import {
   type FakeStep,
 } from "../testing/fakes/script.ts";
 import {
+  quiesce,
   rigRequest as request,
   type SessionRig,
   startedRun,
@@ -196,7 +197,7 @@ for (const resumable of [true, false]) {
             // Delivery is forked from settlement, so let the forks finish
             // before reading: a notice still in flight holds a store pin, and
             // a pin in flight is not a leak.
-            for (let turn = 0; turn < 12; turn += 1) yield* Effect.yieldNow;
+            yield* quiesce();
 
             const probe = rig.supervisor.probe();
             if (!probeIsClear(probe) && dirtyCycle === undefined) {
