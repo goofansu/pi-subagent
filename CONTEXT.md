@@ -534,7 +534,7 @@ provider and nothing else, while Pi's package is also the host API — and it
 admits the SDK nowhere outside the directory, not even in the adapter's own
 test doubles, which take the SDK's types through the aliases the adapter
 re-exports. The adapter does not know the runtime, the host, presentation, or
-the *other adapter* exist.
+the *other two adapters* exist.
 
 **Codex adapter** — everything v2 knows about Codex, in `backend/codex/`. The
 child process, the App Server's JSON-RPC framing, its request and notification
@@ -590,8 +590,15 @@ nor rejected.
 **Signal ladder** — the bounded SIGTERM-then-SIGKILL escalation a Codex
 adapter falls back on: after `turn/interrupt`, if the Turn does not report
 itself interrupted within the rung's bound, and again before the process is
-killed outright. It stands down the moment the Turn reports interrupted or the
-child exits, which is why an ordinary cancel sends no signal at all.
+killed outright. It stands down the moment the child exits or *the Turn it was
+armed for* reports itself interrupted, which is why an ordinary cancel sends no
+signal at all. Armed **per Turn, by turn id, before the interrupt is written**,
+and the stand-down is noticed by the transport as the frame is parsed. All
+three details are load-bearing: a stand-down kept per BackendAgent would be set
+by the first cancelled Run and disarm every later one; a Run watching for its
+own confirmation would miss it, because by then the Run has settled and given
+up its routing entry; and arming after writing the interrupt would miss a
+server that answers before the arming exists.
 
 **Client message id** — the id the Codex adapter attaches to a `turn/steer`,
 and the only thing that can later confirm the guidance was read: a `user`

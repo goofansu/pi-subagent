@@ -486,8 +486,9 @@ Deliverables:
 **no skips**, and the generic runtime, domain, presentation, the façade, and the
 backend contract are byte-identical to M5 — no file under `runtime/`, `domain/`,
 `presentation/`, or `application/` changed at all, and the shared conformance
-suite was not touched. Two provider-neutral changes were made outside
-`backend/codex/` and both are test-side; each is classified in
+suite was not touched. Three changes were made outside `backend/codex/` — the
+composition root, one missing provider-neutral semantic in the shared Profile
+field module, and a test helper — and each is classified in
 [the M6 exit gate](m6-exit-gate.md), section 11. The two live gates —
 `npm run v2:codex:smoke` and `npm run v2:codex:host-smoke` — are written,
 registered in the release gate, and awaiting a credentialed run.

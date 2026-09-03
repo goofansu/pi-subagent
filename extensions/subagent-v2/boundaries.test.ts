@@ -625,7 +625,11 @@ function isChildProcessPackage(specifier: string): boolean {
  * probe, and the display name.
  */
 const CODEX_CONFINED_SYMBOLS = new Set([
-  // The transport and its frames.
+  // The transport, its frames, and the bounds it keeps.
+  "CODEX_ESCALATION_MILLIS",
+  "CODEX_MAX_LINE_LENGTH",
+  "CODEX_METHOD_NOT_SUPPORTED",
+  "CODEX_REQUEST_BUDGET_MILLIS",
   "CodexTransport",
   "CodexTransportOptions",
   "CodexTransportStart",
@@ -647,6 +651,7 @@ const CODEX_CONFINED_SYMBOLS = new Set([
   "CodexThreadParameters",
   "CodexTokenBreakdown",
   "CodexTurnStatus",
+  "codexEchoedText",
   "decodeCodexItem",
   "initializeParams",
   "isCodexInitializeResult",

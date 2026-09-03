@@ -50,20 +50,6 @@ const OptionalNumber = Schema.optionalKey(Schema.NullOr(Schema.Finite));
 /* Items                                                           */
 /* ============================================================== */
 
-/** The item kinds this adapter reads. Every other kind is dropped. */
-export const CODEX_ITEM_TYPES = [
-  "userMessage",
-  "agentMessage",
-  "plan",
-  "reasoning",
-  "commandExecution",
-  "fileChange",
-  "mcpToolCall",
-  "webSearch",
-] as const;
-
-export type CodexItemType = (typeof CODEX_ITEM_TYPES)[number];
-
 /**
  * The phases an agent message can be in.
  *
@@ -168,6 +154,34 @@ export type CodexCommandItem = Extract<
 >;
 
 const decodeItem = Schema.decodeUnknownResult(CodexItem);
+
+/**
+ * One text block of a message's content.
+ *
+ * Declared rather than hand-narrowed at the call site: `content` is a wire
+ * array this adapter reads the text out of, and reading a wire payload by
+ * declaration is the whole of ADR-0029's rule at this boundary. A block that
+ * is not text — an image, an attachment, something added later — produces
+ * nothing rather than a cast that happens to work.
+ */
+const TextBlock = Schema.Struct({
+  type: Schema.Literal("text"),
+  text: Schema.String,
+});
+
+const decodeTextBlock = Schema.decodeUnknownResult(TextBlock);
+
+/** The text a user-message item echoed back, in order. */
+export function codexEchoedText(
+  item: Extract<CodexItem, { readonly type: "userMessage" }>,
+): readonly string[] {
+  const texts: string[] = [];
+  for (const block of item.content ?? []) {
+    const decoded = decodeTextBlock(block);
+    if (decoded._tag === "Success") texts.push(decoded.success.text);
+  }
+  return texts;
+}
 
 /** One item, or nothing when it is a variant this adapter does not read. */
 export function decodeCodexItem(value: unknown): CodexItem | undefined {

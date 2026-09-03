@@ -3,6 +3,13 @@
 **Status:** Passing except items 4 and 12, which are the two credentialed live
 gates: both scripts exist, both are in the release gate, and neither has been
 run yet.
+**Reviewed:** a two-axis review of the whole change ran before this record was
+finalized. It found one real bug — a signal-escalation stand-down kept per
+BackendAgent rather than per Turn, which would have disarmed the ladder for
+every Run after the first cancelled one — plus a forked copy of the shared
+Profile validator, a hand-narrowed wire payload, a gap in the new confinement
+rule, and two missing proofs. All are fixed or recorded; sections 5, 11, and 13
+say where.
 **Date:** 2026-09-03
 **Verified against:** [the v2 roadmap](roadmap.md), milestone M6.
 
@@ -22,13 +29,15 @@ The roadmap is explicit about what M6 is really asking:
 > conformance fixtures, the seam is healthy. If each backend changes the Run
 > lifecycle, pause the port and repair the abstraction before continuing.
 
-**The seam is healthy, and this time nothing generic moved at all.** Not one
-file under `runtime/`, `domain/`, `presentation/`, or `application/` changed.
-The backend contract is unchanged: not one member added, removed, or re-typed.
-**The shared conformance suite is unchanged** — M4 and M5 each loosened one
-check in it, and M6 loosened none. Section 11 below enumerates everything M6
-touched outside `extensions/subagent-v2/backend/codex/` and classifies each
-entry; there are two, and both are test-side.
+**The seam is healthy.** Not one file under `runtime/`, `domain/`,
+`presentation/`, or `application/` changed. The backend contract is unchanged:
+not one member added, removed, or re-typed. **The shared conformance suite is
+unchanged** — M4 and M5 each loosened one check in it, and M6 loosened none.
+Section 11 below enumerates everything M6 touched outside
+`extensions/subagent-v2/backend/codex/` and classifies each entry; there are
+three, and exactly one of them is a product semantic: the shared Profile field
+module learned that a backend can support a *subset* of the shared four
+fields.
 
 ---
 
@@ -44,12 +53,12 @@ entry; there are two, and both are test-side.
 | `npm run test:conformance` | 164 tests, 163 pass, 1 skipped |
 | `npm run test:managed-conformance` | 6 tests, 6 pass |
 | `npm test` (v1 suite, repository scripts, `tools/`) | 540 tests, 539 pass, 1 skipped |
-| `npm run test:v2` | 1,147 tests, 1,139 pass, 8 skipped |
+| `npm run test:v2` | 1,148 tests, 1,140 pass, 8 skipped |
 | `npm run test:v2:conformance` | 191 tests, 183 pass, 8 skipped |
 | `npm run codex:protocol:check` | `CODEX_PROTOCOL_CHECK_PASS — codex-cli 0.150.1` |
 
 The three v1 lanes are byte-identical to M5's: **M6 changed no v1 file.** The
-v2 lane grew from 979 tests to 1,147, and the conformance lane from 153 to 191
+v2 lane grew from 979 tests to 1,148, and the conformance lane from 153 to 191
 — the 38 new ones being the Codex rig's, which is the shared suite plus its own
 no-skips assertion.
 
@@ -127,6 +136,8 @@ and
 | A background command awaited | `a result is unavailable while a background command the Run started is running` |
 | An over-long line | `a line past the framing bound fails the Run rather than being truncated`; `a line past the framing bound is transport loss, not a silent truncation` |
 | Stderr confined | `the child's stderr is one bounded diagnostic with its identities removed`; `provider identities are stripped from text on its way across` |
+| An escalation armed for one Turn does not disarm the next | `an interrupt one Turn honoured does not disarm the ladder for the next` |
+| A background terminal past the cleanup budget | `a background command past the cleanup budget escalates, and the Run still settles` |
 
 The late-frame pair is the one worth naming, because it is the only place the
 first spike exception is checked. Both tests assert **positively in both
@@ -181,10 +192,26 @@ marked lost — which kills the process and thereby ends the terminal. The
 user-visible consequence is exactly the roadmap's wording: a result is
 unavailable while a background terminal the Run started is still running.
 
-Proven by `a result is unavailable while a background command the Run started
-is running`: the Turn's completion frame arrives, the Run reaches
-`finalizing`, `agent_result` answers `RunNotTerminal`, and only once the
-command's completion frame arrives does the Run settle and the result appear.
+Both halves are proven. `a result is unavailable while a background command
+the Run started is running`: the Turn's completion frame arrives, the Run
+reaches `finalizing`, `agent_result` answers `RunNotTerminal`, and only once
+the command's completion frame arrives does the Run settle and the result
+appear. And `a background command past the cleanup budget escalates, and the
+Run still settles`: with the budget lowered and a command that never completes,
+advancing the clock past it settles the Run with a `cleanup-escalation`
+diagnostic, ends the process the terminal belonged to, and makes the next
+resume answer `conversation lost`.
+
+**One exemption, and it is deliberate: a cancelled Turn does not wait.**
+`execution.ts` guards the wait on the Turn having finished on its own
+(`completed` or `failed`). A cancelled Run is one the caller asked to stop, and
+making it wait would make cancellation as slow as the command and then — past
+the budget — destroy the conversation, which contradicts both the spike's
+finding that `turn/interrupt` stops only the Turn and the matrix row that says
+the Subagent stays resumable. A cancelled Run's result is explicitly partial
+and says so; it never claims to be a complete account. The specification's
+wording for user story 25 is unconditional, so this is recorded as a departure
+in section 13 rather than left to the code comment that explains it.
 
 The two finalizers are registered in the order their release order requires.
 Scope finalizers run in reverse, so the **routing entry is acquired first** and
@@ -293,10 +320,10 @@ methods the spike saw and this adapter does not read.
 
 ## 11. Every change M6 made outside the Codex adapter directory ⚠️
 
-Two changes to v2 code outside `backend/codex/` and `testing/codex/`, and both
-are **test-side**. Neither is a missing product semantic and neither is
-leakage; they are the composition root doing its job and a test helper gaining
-an option.
+Three changes to v2 code outside `backend/codex/` and `testing/codex/`. One is
+the composition root doing its job, one is a genuinely missing
+provider-neutral semantic, and one is test infrastructure. **None is
+leakage** — nothing Codex-shaped left the adapter.
 
 ### (a) The composition root gains the backend — expected, not a finding
 
@@ -312,7 +339,29 @@ Its tests changed with it: `host/production-backends.test.ts` (three backends
 rather than two, plus a Codex end-to-end Run through the production set) and
 `host/diagnostics-command.test.ts` (a third probe block in the fixture).
 
-### (b) `testing/backend-session.ts` gains a `testClock` option — test infrastructure
+### (b) `backend/profile-fields.ts` gains `sharedFields` — a missing provider-neutral semantic
+
+Codex recognizes `model` and `effort` and **not** `tools` or
+`appendSystemPrompt`: a Codex thread carries its own tool set, and the
+Profile's prompt is composed into the first Turn's input rather than
+configured. It is the first backend to support a *subset* of the shared four,
+and the shared module had no way to say so.
+
+The first attempt reimplemented the shared validator inside the adapter, which
+was a fork of the one module whose stated job is to be "the one place that
+catches, so validation stays deterministic and total" — and it broke that
+module's other promise, that "adding a fifth shared field is a change to this
+module and nothing else". The review caught it. What is there now is a
+`sharedFields` option: the backend names the shared fields it can express, the
+others earn the ordinary unrecognized diagnostic, and — the part worth having
+in one place — they are *not also validated*, so a Profile with an unsupported
+`tools` hears one diagnostic rather than two.
+
+This is category (a): what it means for a shared field to be unsupported is the
+same wherever it happens. Proven through all three adapters' Profile tests,
+which are unchanged for Pi and Claude because the default is still all four.
+
+### (c) `testing/backend-session.ts` gains a `testClock` option — test infrastructure
 
 The shared per-adapter Session helper could not provide a test clock, and Codex
 is the first adapter whose *own* bounds live on the runtime clock: a per-request
@@ -364,11 +413,18 @@ scope** and is an M7 cutover question: it is only worth spending a human's
 attention on once v2 is the implementation that ships. M7's own gate should
 either re-run it against v2 or record why the v1 evidence carries over.
 
-## 13. Recorded v2 differences from v1
+## 13. Recorded departures — from the M6 specification, and from v1
 
-Three, all deliberate, all narrower or more honest than v1 rather than wider.
+Read this section if you are checking compliance. It has two halves, and the
+first is the one a reader is likely to want: the three places this
+implementation knowingly does something other than what the M6 specification
+text says.
 
-**The context gauge is `tokenUsage.last`, not the cumulative total.** The M6
+### From the specification
+
+**The context gauge is `tokenUsage.last`, not the cumulative total.**
+
+The M6
 specification text asks twice for "the cumulative total as the context gauge",
 and this adapter does not do that. The two numbers measure different things:
 `total.totalTokens` is what the whole thread has been billed for and grows
@@ -379,16 +435,34 @@ exceed its own denominator after two Turns, and the domain describes a
 right now" with `window` as its denominator. v1 chose `last` for exactly this
 reason and said so in a comment; the port keeps it, and
 `the context gauge is the last request's total, and its window when there is
-one` states it as an assertion. **This is the one place M6 knowingly departs
-from its own specification, and it is recorded here rather than buried.**
+one` states it as an assertion.
 
-**Tool progress is reported for tool-shaped items only.** Command execution,
-file change, MCP tool call, and web search produce a `tool_call` part and the
-`tool_progress` updates that join to it. A plan or a reasoning summary produces
-activity instead: reporting progress for one would create an entry in the Run's
-tool list with no name, because a progress update creates an entry when it can
-join nothing — and a Run whose tool list held its own thinking would read as a
-Run that had called a tool nobody can name.
+**Tool progress is reported for tool-shaped items only.** User story 17 reads
+"item start and completion translated to `tool_progress` by item id, with
+command execution, file change, MCP tool call, and web search items *also*
+producing a tool-call message part", which taken literally asks for progress on
+every item kind. Only those four get it. A plan or a reasoning summary produces
+activity instead, because `mergeToolEntry` in the domain *creates* a tool entry
+for a `callId` it cannot join — so progress on a reasoning item would put a
+nameless entry in the Run's tool list, and a Run whose tool list held its own
+thinking would read as a Run that had called a tool nobody can name.
+
+**A cancelled Turn does not wait for its background terminals.** User story 25
+is unconditional; the implementation exempts cancellation. Section 5 has the
+reasoning.
+
+**`turn/interrupt` carries no request bound.** User story 13 asks that "every
+JSON-RPC request to carry a bound", and the interrupt is written through
+`transport.send`, which allocates an id and registers no pending entry and no
+timer. The story's purpose is met — its "so that" is "a wedged-but-alive
+process cannot hold a Run open", and nothing waits on this request, so it
+cannot hold anything open — and the bound it has instead is a better one: if
+the interrupt is not honoured within a rung, SIGTERM follows. Routing it
+through the bounded `request` path would mean either awaiting it inside an
+interrupt handler, which would hold `agent_cancel`'s answer for as long as the
+server took, or forking from that handler, which is what the ladder already is.
+
+### From v1
 
 **Stderr is one diagnostic per Run, with provider identities removed.** v1
 reported every chunk. The first thing a child says on stderr is the one that
@@ -409,6 +483,13 @@ behind.
 - **M5's five Claude gaps are still Claude's.** M6 touched no Claude code, so
   every entry in [the M5 exit gate](m5-exit-gate.md), section 13, carries
   forward unchanged.
+- **The signal ladder has no test for a *server-initiated* interrupt.** The
+  ladder stands down when the Turn it was armed for reports itself interrupted,
+  and `an interrupt one Turn honoured does not disarm the ladder for the next`
+  covers the case where this adapter asked for it. A Turn the *server* decides
+  to interrupt with no cancel outstanding arms no ladder at all, so there is
+  nothing to stand down — correct by construction, and untested because there
+  is no observable difference to assert on.
 - **`AbortController` and `AbortSignal` stayed a Claude-only admission.** The
   M6 specification allowed the Codex adapter to name them under the same
   directory admission M5 established. It does not need to: cancellation is

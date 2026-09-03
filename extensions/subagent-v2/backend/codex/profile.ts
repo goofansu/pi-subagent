@@ -30,7 +30,7 @@ import {
   EFFORTS,
   effortField,
   stringField,
-  unrecognizedFields,
+  validateCommonProfileFields,
 } from "../profile-fields.ts";
 
 /** How diagnostics name this backend. Not its `BackendId`. */
@@ -58,35 +58,22 @@ export function codexEffort(effort: string | undefined): string | undefined {
   return effort === "off" ? CODEX_EFFORT_NONE : effort;
 }
 
-/** Every diagnostic this Profile earns, deterministically. */
+/**
+ * Every diagnostic this Profile earns, deterministically.
+ *
+ * Through the shared field module, which is where field knowledge lives — the
+ * only Codex-specific part is *which* of the shared four this backend can
+ * express, and there is no model rule to supply because Codex checks a model
+ * name itself.
+ */
 export function validateCodexProfile(
   profile: Profile,
   filePath: string,
 ): readonly ProfileDiagnostic[] {
-  const diagnostics: ProfileDiagnostic[] = unrecognizedFields(
-    profile,
-    CODEX_PROFILE_FIELDS,
-  ).map((field) => ({
-    filePath,
-    reason: `${CODEX_DISPLAY_NAME} backend does not recognize field '${field}'`,
-  }));
-
-  // One `try` per field rather than one around both, so a Profile with a bad
-  // `model` *and* a bad `effort` hears about both. The shared field module
-  // made the same choice for the same reason.
-  const check = (read: () => void): void => {
-    try {
-      read();
-    } catch (error) {
-      diagnostics.push({
-        filePath,
-        reason: error instanceof Error ? error.message : String(error),
-      });
-    }
-  };
-  check(() => void stringField(profile, "model"));
-  check(() => void effortField(profile, EFFORTS));
-  return diagnostics;
+  return validateCommonProfileFields(profile, filePath, {
+    displayName: CODEX_DISPLAY_NAME,
+    sharedFields: CODEX_PROFILE_FIELDS,
+  });
 }
 
 /** The model and effort one Subagent's threads are started with. */

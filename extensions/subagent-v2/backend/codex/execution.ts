@@ -51,6 +51,7 @@ import {
   type CodexNotification,
   type CodexTokenBreakdown,
   type CodexTurnStatus,
+  codexEchoedText,
   readCodexTurnId,
   turnInterruptParams,
   turnStartParams,
@@ -106,6 +107,29 @@ export const CODEX_MALFORMED_FRAME_CATEGORY =
 /** How much of the child's stderr one diagnostic carries. */
 const STDERR_DIAGNOSTIC_LIMIT = 1024;
 
+/**
+ * The retained conversation, as the execution is allowed to see it.
+ *
+ * One object rather than six members on the context, because these six are one
+ * thing: the root thread a Subagent holds, what it has spent, whether it is
+ * still there, and how a Turn's input is composed on it. The Claude adapter
+ * draws the same line for the same reason.
+ */
+export interface CodexConversation {
+  /** The retained root thread, or nothing once it is lost. */
+  readonly root: () => string | undefined;
+  /** Mark the conversation lost. Monotonic: nothing moves back. */
+  readonly lose: () => void;
+  /** Whether the BackendAgent has been closed. */
+  readonly isClosed: () => boolean;
+  /** This Turn's input text, with the Profile prompt composed on the first. */
+  readonly turnText: (prompt: string) => string;
+  /** The conversation-cumulative usage total this Turn starts from. */
+  readonly usageBaseline: () => CodexTokenBreakdown | undefined;
+  /** Told each newer cumulative total, so the next Run's baseline is right. */
+  readonly recordCumulative: (total: CodexTokenBreakdown) => void;
+}
+
 /** What the execution is allowed to know about its BackendAgent. */
 export interface CodexExecutionContext {
   readonly transport: CodexTransport;
@@ -116,17 +140,7 @@ export interface CodexExecutionContext {
   readonly tally: CodexTallyCounters;
   /** The Subagent's working directory, for relative paths in activity. */
   readonly cwd: string;
-  /** The retained root thread, or nothing once it is lost. */
-  readonly root: () => string | undefined;
-  /** Mark the conversation lost. Monotonic: nothing moves back. */
-  readonly loseRoot: () => void;
-  readonly isClosed: () => boolean;
-  /** This Turn's input text, with the Profile prompt composed on the first. */
-  readonly turnText: (prompt: string) => string;
-  /** The conversation-cumulative usage total this Turn starts from. */
-  readonly usageBaseline: () => CodexTokenBreakdown | undefined;
-  /** Told each newer cumulative total, so the next Run's baseline is right. */
-  readonly recordCumulative: (total: CodexTokenBreakdown) => void;
+  readonly conversation: CodexConversation;
 }
 
 /** One steer that has been written and not yet answered by an item. */
@@ -147,28 +161,6 @@ function userMessageItem(
   return notification.item.type === "userMessage"
     ? notification.item
     : undefined;
-}
-
-/** The text blocks a user-message item echoed, in order. */
-function echoedParts(
-  item: Extract<CodexItem, { readonly type: "userMessage" }>,
-): MessagePart[] {
-  const parts: MessagePart[] = [];
-  for (const block of item.content ?? []) {
-    if (
-      typeof block === "object" &&
-      block !== null &&
-      !Array.isArray(block) &&
-      (block as Record<string, unknown>).type === "text" &&
-      typeof (block as Record<string, unknown>).text === "string"
-    ) {
-      parts.push({
-        kind: "text",
-        text: (block as Record<string, unknown>).text as string,
-      });
-    }
-  }
-  return parts;
 }
 
 /** Every provider identity a frame mentions, for stderr redaction. */
@@ -197,27 +189,26 @@ export function runCodexExecution(
   io: ExecutionIO,
 ): Effect.Effect<TerminalBundle, never, Scope.Scope> {
   return Effect.gen(function* () {
-    const { transport, router, probe, tally } = context;
+    const { transport, router, probe, tally, conversation } = context;
 
-    if (context.isClosed()) {
+    if (conversation.isClosed()) {
       return { ending: failedEnding(CLOSED_BEFORE_EXECUTION_MESSAGE) };
     }
-    const root = context.root();
+    const root = conversation.root();
     if (root === undefined || transport.isLost()) {
       // The conversation is already gone. Admission normally catches this;
       // losing it between admission and here is a race, not a special case.
-      context.loseRoot();
+      conversation.lose();
       const diagnostic = confinedLoss(CODEX_TRANSPORT_LOST_CATEGORY);
       yield* io.emit({ kind: "diagnostic", diagnostic });
       return { ending: failedEnding(diagnostic.message) };
     }
 
+    const baseline = conversation.usageBaseline();
     const translator = createCodexTranslator({
       cwd: context.cwd,
-      ...(context.usageBaseline() === undefined
-        ? {}
-        : { baseline: context.usageBaseline() as CodexTokenBreakdown }),
-      onCumulative: context.recordCumulative,
+      ...(baseline === undefined ? {} : { baseline }),
+      onCumulative: conversation.recordCumulative,
     });
 
     /* ---- Run-local state, all of it written on one fiber at a time ---- */
@@ -274,7 +265,9 @@ export function runCodexExecution(
         if (correlation === undefined || confirmed.has(clientId)) return;
         confirmed.add(clientId);
         correlations.delete(clientId);
-        const echoed = echoedParts(item);
+        const echoed = codexEchoedText(item).map(
+          (text): MessagePart => ({ kind: "text", text }),
+        );
         yield* io.emit({
           kind: "message",
           role: "user",
@@ -328,11 +321,6 @@ export function runCodexExecution(
         if (notification.method === "turn/completed") {
           status = notification.status;
           accepting = false;
-          if (notification.status === "interrupted") {
-            // The Turn stopped when asked, so the signal ladder stands down
-            // and the process, the root, and the Subagent all survive.
-            transport.interruptionConfirmed();
-          }
           Deferred.doneUnsafe(settled, Effect.succeed("completed"));
         }
         settleCommandsIfIdle();
@@ -445,7 +433,7 @@ export function runCodexExecution(
 
     const started = yield* transport.request(
       "turn/start",
-      turnStartParams(root, context.turnText(input.prompt)),
+      turnStartParams(root, conversation.turnText(input.prompt)),
       // Synchronously, on the stream callback: the server may write this
       // Turn's first notifications in the very next line, and a routing key
       // set on the fiber that resumes later would leave them unattributed.
@@ -455,7 +443,7 @@ export function runCodexExecution(
       },
     );
     if (started.outcome !== "result") {
-      if (started.outcome === "lost") context.loseRoot();
+      if (started.outcome === "lost") conversation.lose();
       const diagnostic =
         started.outcome === "lost"
           ? confinedLoss(CODEX_TRANSPORT_LOST_CATEGORY)
@@ -493,7 +481,7 @@ export function runCodexExecution(
       for (;;) {
         const control = yield* io.controls.take;
         if (control === undefined) return;
-        if (!accepting || status !== undefined || context.isClosed()) {
+        if (!accepting || status !== undefined || conversation.isClosed()) {
           // The Run is settling. A Control taken now produces nothing at all:
           // admission already told the caller it was accepted, and nothing
           // else about it is true.
@@ -596,7 +584,7 @@ export function runCodexExecution(
         // Process exit, an expired request, or a frame past the framing
         // bound. None of them is on the wire, and all of them mean the same
         // thing: this Run's partial output is all there will ever be.
-        context.loseRoot();
+        conversation.lose();
         const diagnostic = confinedLoss(CODEX_TRANSPORT_LOST_CATEGORY);
         yield* io.emit({ kind: "diagnostic", diagnostic });
         return {
@@ -622,8 +610,13 @@ export function runCodexExecution(
      */
     const announceOnInterrupt = Effect.gen(function* () {
       accepting = false;
+      // Armed *before* the interrupt is written, not after. A cooperative
+      // server answers by reporting the Turn interrupted, and that frame can
+      // be parsed before this fiber runs again — so an arming added
+      // afterwards would find the stand-down it was waiting for had already
+      // gone past, and would signal a Turn that had done as it was asked.
+      yield* transport.escalate(named);
       yield* transport.send("turn/interrupt", turnInterruptParams(root, named));
-      yield* transport.escalate();
       if (!translator.sawFinalAnswer()) return;
       yield* io.emit({ kind: "reconciliation", reconciliation: reconcile() });
       yield* io.emit({ kind: "ending", ending: answeredEnding() });

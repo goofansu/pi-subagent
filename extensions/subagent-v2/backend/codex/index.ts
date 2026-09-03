@@ -66,7 +66,6 @@ export {
   CODEX_CLIENT_INFO,
   CODEX_COMMAND_STATUSES,
   CODEX_COMMENTARY_PHASE,
-  CODEX_ITEM_TYPES,
   CODEX_NOTIFICATION_METHODS,
   CODEX_SANDBOX,
   CODEX_TURN_STATUSES,
@@ -76,6 +75,7 @@ export {
   type CodexParams,
   type CodexTokenBreakdown,
   type CodexTurnStatus,
+  codexEchoedText,
   decodeCodexItem,
   initializeParams,
   isCodexInitializeResult,
@@ -116,7 +116,6 @@ export {
   confinedControl,
   confinedLoss,
   createCodexTranslator,
-  latestToolCall,
   redactCodexIdentities,
   ZERO_CODEX_USAGE,
 } from "./translate.ts";

@@ -7,6 +7,14 @@
  * parsed and validated in one place. Everything else in a Profile's fields is
  * the named backend's own vocabulary.
  *
+ * A backend may support a **subset** of the four, and that is still shared
+ * vocabulary rather than a private rule: what it means for `tools` to be
+ * unsupported is the same wherever it happens, so
+ * {@link CommonProfileFieldOptions.sharedFields} lets a backend narrow the set
+ * and the field then earns the ordinary unrecognized diagnostic instead of
+ * being validated. ADR-0009's rule is that nothing a Profile asks for is
+ * silently ignored, and one diagnostic — not two — is what says so.
+ *
  * This is the field knowledge from v1's backend-seam contract module, ported:
  * the same seven-value effort scale, the same comma-separated tools syntax, the
  * same "append unless explicitly opted out" rule, and the same
@@ -130,8 +138,18 @@ export function unrecognizedFields(
 export interface CommonProfileFieldOptions {
   /** How diagnostics name the backend. Not necessarily its `BackendId`. */
   readonly displayName: string;
-  /** Every field this backend understands beyond the shared four. */
+  /** Every field this backend understands beyond the shared ones. */
   readonly ownFields?: readonly string[];
+  /**
+   * Which of the shared four this backend can actually express.
+   *
+   * All of them unless a backend says otherwise. A backend that cannot honour
+   * one lists the rest: the omitted field is then unrecognized, and it is not
+   * *also* validated — a Profile with an unsupported `tools` should hear that
+   * the backend does not recognize it, not that plus a complaint about its
+   * syntax.
+   */
+  readonly sharedFields?: readonly string[];
   /**
    * The backend's own model rule. Model validation is genuinely
    * provider-specific — one backend checks a loaded catalogue, another a
@@ -152,7 +170,8 @@ export function validateCommonProfileFields(
   filePath: string,
   options: CommonProfileFieldOptions,
 ): ProfileDiagnostic[] {
-  const recognized = [...COMMON_PROFILE_FIELDS, ...(options.ownFields ?? [])];
+  const shared = options.sharedFields ?? COMMON_PROFILE_FIELDS;
+  const recognized = [...shared, ...(options.ownFields ?? [])];
   const diagnostics: ProfileDiagnostic[] = unrecognizedFields(
     profile,
     recognized,
@@ -177,13 +196,20 @@ export function validateCommonProfileFields(
   };
 
   // These calls validate field types and values; execution reads them again.
-  check(() => void effortField(profile));
-  check(() => void parseTools(profile));
-  check(() => void shouldAppendSystemPrompt(profile));
-  check(() => {
-    const model = stringField(profile, "model");
-    const modelProblem = options.validateModel?.(model);
-    if (modelProblem) diagnostics.push({ filePath, reason: modelProblem });
-  });
+  // Each is skipped for a backend that does not express the field, because
+  // that field has already been reported as unrecognized above.
+  const supports = (field: string): boolean => shared.includes(field);
+  if (supports("effort")) check(() => void effortField(profile));
+  if (supports("tools")) check(() => void parseTools(profile));
+  if (supports("appendSystemPrompt")) {
+    check(() => void shouldAppendSystemPrompt(profile));
+  }
+  if (supports("model")) {
+    check(() => {
+      const model = stringField(profile, "model");
+      const modelProblem = options.validateModel?.(model);
+      if (modelProblem) diagnostics.push({ filePath, reason: modelProblem });
+    });
+  }
   return diagnostics;
 }

@@ -230,8 +230,16 @@ export interface CodexStandInOptions {
   readonly steerPolicies?: readonly CodexSteerPolicy[];
   /** Echo an accepted steer back as a user-message item carrying its id. */
   readonly echoSteer?: boolean;
-  /** What `turn/interrupt` does. */
+  /** What `turn/interrupt` does, for every Turn. */
   readonly onInterrupt?: "complete" | "ignore";
+  /**
+   * What `turn/interrupt` does, one Turn at a time, consumed in order.
+   *
+   * Overrides {@link CodexStandInOptions.onInterrupt} while it lasts, and the
+   * last entry repeats. A server that honours one interrupt and ignores the
+   * next is the shape that catches an escalation armed once and never re-armed.
+   */
+  readonly interruptPolicies?: readonly ("complete" | "ignore")[];
   /** Stay alive through SIGTERM, so only SIGKILL ends it. */
   readonly ignoreSigterm?: boolean;
   /** Stay alive when stdin ends, so close has to escalate. */
@@ -362,6 +370,7 @@ export function createStandInAppServer(
   let exit: CodexProcessExit | undefined;
   let activeRun: RunId | undefined;
   let steerIndex = 0;
+  let interruptIndex = 0;
   let nextServerRequestId = 9000;
 
   let turnStarts = 0;
@@ -553,6 +562,17 @@ export function createStandInAppServer(
     drainScript();
   };
 
+  const nextInterruptPolicy = (): "complete" | "ignore" => {
+    const scripted = options.interruptPolicies;
+    if (scripted === undefined || scripted.length === 0) {
+      return options.onInterrupt ?? "complete";
+    }
+    const chosen =
+      scripted[Math.min(interruptIndex, scripted.length - 1)] ?? "complete";
+    interruptIndex += 1;
+    return chosen;
+  };
+
   const nextSteerPolicy = (): CodexSteerPolicy => {
     if (steerPolicies.length === 0) return "accept";
     const chosen =
@@ -703,7 +723,7 @@ export function createStandInAppServer(
         return;
       case "turn/interrupt":
         respond(id, {});
-        if (options.onInterrupt === "ignore") return;
+        if (nextInterruptPolicy() === "ignore") return;
         writeFrame({ frame: "completed", status: "interrupted" });
         return;
       default:

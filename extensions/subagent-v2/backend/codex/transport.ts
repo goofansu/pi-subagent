@@ -184,13 +184,28 @@ export interface CodexTransport {
   /**
    * Start the SIGTERM-then-SIGKILL ladder, without waiting for it.
    *
-   * Called from an interrupt handler, which must return promptly: `agent_cancel`
-   * awaits the interruption of the execution fiber, so a handler that slept
-   * would hold the caller's answer for as long as the ladder took.
+   * Called from an interrupt handler, which must return promptly:
+   * `agent_cancel` awaits the interruption of the execution fiber, so a handler
+   * that slept would hold the caller's answer for as long as the ladder took.
+   *
+   * `turnId` is what the ladder stands down for: the arming is cancelled the
+   * moment *that* Turn reports itself interrupted. Two things about it are
+   * load-bearing.
+   *
+   * It is **per arming** rather than a flag on this transport, because a flag
+   * would be set by the first cancelled Run and never cleared — quietly
+   * disarming the ladder for every later Run on the same App Server, which is
+   * exactly the case the ladder exists for.
+   *
+   * And the stand-down is noticed **here**, as the frame is parsed, rather
+   * than by the Run that asked for it. By the time an interrupted Turn's
+   * completion frame arrives, the Run's routing entry is usually already gone
+   * — its scope closed when it settled — so a Run watching for its own
+   * confirmation would miss it and signal a Turn that had cooperated.
+   * Omitting the id arms a ladder that never stands down, which is what an
+   * expired request and a corrupt stream both want.
    */
-  readonly escalate: () => Effect.Effect<void>;
-  /** The Turn reported itself interrupted, so the ladder can stand down. */
-  readonly interruptionConfirmed: () => void;
+  readonly escalate: (turnId?: string) => Effect.Effect<void>;
   /** End stdin, await exit within a bound, then escalate. Idempotent. */
   readonly close: () => Effect.Effect<void>;
 }
@@ -216,6 +231,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * One request to climb the ladder, and whether it has been called off.
+ *
+ * Mutable, and read by the ladder fiber rather than by whoever armed it — see
+ * {@link CodexTransport.escalate} for why the stand-down cannot belong to the
+ * Run that asked for the escalation.
+ */
+interface LadderArming {
+  /** The Turn whose own interruption calls this off, if there is one. */
+  readonly turnId: string | undefined;
+  standDown: boolean;
+}
+
+/**
  * Build the transport into the caller's Scope, which is the Subagent's.
  *
  * The escalation ladder is forked here rather than by the caller, because it
@@ -236,7 +264,8 @@ export function startCodexTransport(
     const frames = yield* Queue.unbounded<CodexFrame, Cause.Done>();
     const lost = yield* Deferred.make<void>();
     const exited = yield* Deferred.make<CodexProcessExit>();
-    const ladder = yield* Queue.unbounded<void>();
+    /** Escalations asked for, each carrying the Turn it stands down for. */
+    const ladder = yield* Queue.unbounded<LadderArming>();
 
     interface Pending {
       readonly waiter: Deferred.Deferred<CodexRequestOutcome>;
@@ -247,8 +276,9 @@ export function startCodexTransport(
     let nextRequestId = 1;
     let terminal = false;
     let processGone = false;
-    let interruptConfirmed = false;
     let buffer = "";
+    /** Escalations armed and not yet climbed. Emptied as each is consumed. */
+    const armed = new Set<LadderArming>();
     let paused = false;
     let closing: Deferred.Deferred<void> | undefined;
 
@@ -314,11 +344,10 @@ export function startCodexTransport(
 
     /* ---- reading one line ---- */
 
-    const answerServerRequest = (id: unknown, method: string): void => {
+    const answerServerRequest = (id: unknown): void => {
       // Answered whether or not a Run is active. The spike found that a
       // server-to-client request the client ignores stalls the server.
       write({ jsonrpc: "2.0", id, error: { ...CODEX_METHOD_NOT_SUPPORTED } });
-      void method;
     };
 
     const resolveResponse = (value: Record<string, unknown>): void => {
@@ -350,7 +379,7 @@ export function startCodexTransport(
         return;
       }
       if ("id" in value) {
-        answerServerRequest(value.id, method);
+        answerServerRequest(value.id);
         return;
       }
       const reading = readCodexNotification(method, value.params);
@@ -360,7 +389,45 @@ export function startCodexTransport(
         offerFrame({ kind: "malformed", method: reading.method });
         return;
       }
-      offerFrame({ kind: "notification", notification: reading.notification });
+      const notification = reading.notification;
+      if (
+        notification.method === "turn/completed" &&
+        notification.status === "interrupted"
+      ) {
+        // The Turn stopped when asked, so whatever asked it to can stand down
+        // and the process, the root, and the Subagent all survive. Noticed as
+        // the frame is parsed rather than where it is routed, because the Run
+        // that asked has usually settled by now.
+        for (const arming of armed) {
+          if (arming.turnId === notification.turnId) arming.standDown = true;
+        }
+      }
+      offerFrame({ kind: "notification", notification });
+    };
+
+    /**
+     * An arming with no Turn to stand down for.
+     *
+     * What an expired request and a corrupt stream both want: there is no peer
+     * left to cooperate, so nothing can call the escalation off.
+     */
+    const unconditional = (): LadderArming => ({
+      turnId: undefined,
+      standDown: false,
+    });
+
+    /**
+     * A frame past the bound: nothing is dropped quietly.
+     *
+     * The stream can no longer be parsed, so the BackendAgent says so — and
+     * the child is terminated rather than left running with nobody willing to
+     * read it. An expired request does the same thing for the same reason;
+     * process exit does not, because the child is already gone.
+     */
+    const loseToOversizedLine = (): void => {
+      tally.count("oversizedLines");
+      markLost();
+      Queue.offerUnsafe(ladder, unconditional());
     };
 
     const readChunk = (chunk: string): void => {
@@ -370,18 +437,14 @@ export function startCodexTransport(
         const newline = buffer.indexOf("\n");
         if (newline < 0) {
           if (buffer.length <= maxLineLength) return;
-          // Nothing is dropped quietly. A frame past the bound means the
-          // stream can no longer be parsed, and the BackendAgent says so.
           buffer = "";
-          tally.count("oversizedLines");
-          markLost();
+          loseToOversizedLine();
           return;
         }
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
         if (line.length > maxLineLength) {
-          tally.count("oversizedLines");
-          markLost();
+          loseToOversizedLine();
           return;
         }
         readLine(line);
@@ -440,26 +503,38 @@ export function startCodexTransport(
 
     /**
      * One pass of SIGTERM then SIGKILL, standing down if the child goes or the
-     * Turn reports itself interrupted.
+     * arming has been called off.
      *
-     * The interrupt check is only meaningful on the first rung: once SIGTERM
-     * has been sent there is nothing to stand down from.
+     * The stand-down check is only meaningful before SIGTERM: once the signal
+     * has been sent there is nothing left to stand down from.
+     *
+     * Shared by the ladder fiber and by `close`, because they climb the same
+     * rungs for the same reason and two copies would be two places for the
+     * escalation policy to drift.
      */
-    const climb = Effect.gen(function* () {
-      if (processGone) return;
-      if (yield* rung()) return;
-      if (interruptConfirmed) return;
-      kill("SIGTERM");
-      if (yield* rung()) return;
-      kill("SIGKILL");
-    });
+    const climb = (arming: LadderArming): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (processGone) return;
+        if (yield* rung()) return;
+        if (arming.standDown) return;
+        kill("SIGTERM");
+        if (yield* rung()) return;
+        kill("SIGKILL");
+        // The last rung is waited for too, so a caller that closes and then
+        // reads the probe sees a released process rather than a pending one.
+        yield* rung();
+      });
 
     yield* Effect.forkScoped(
       Effect.gen(function* () {
         for (;;) {
           const next = yield* Effect.exit(Queue.take(ladder));
           if (Exit.isFailure(next)) return;
-          yield* climb;
+          const arming = next.value;
+          yield* Effect.ensuring(
+            climb(arming),
+            Effect.sync(() => armed.delete(arming)),
+          );
         }
       }),
     );
@@ -498,7 +573,7 @@ export function startCodexTransport(
           // say so, so the adapter says it and terminates the child.
           settleOne(id, { outcome: "lost" });
           markLost();
-          Queue.offerUnsafe(ladder, undefined);
+          Queue.offerUnsafe(ladder, unconditional());
           return { outcome: "lost" } as const;
         }).pipe(
           // An interrupted request must not leave its entry behind, or the
@@ -528,14 +603,11 @@ export function startCodexTransport(
         return Effect.gen(function* () {
           markLost();
           if (processGone) return;
+          // Ending stdin is the graceful path: the spike measured a 13 ms
+          // exit with code 0. The ladder is the backstop for a child that
+          // does not take the hint, and there is nothing to stand down for.
           child?.endStdin();
-          if (yield* rung()) return;
-          kill("SIGTERM");
-          if (yield* rung()) return;
-          kill("SIGKILL");
-          // The last rung is waited for too, so a caller that closes and then
-          // reads the probe sees a released process rather than a pending one.
-          yield* rung();
+          yield* climb(unconditional());
         }).pipe(
           Effect.ensuring(Effect.asVoid(Deferred.succeed(finished, undefined))),
         );
@@ -558,11 +630,12 @@ export function startCodexTransport(
         }),
       wake: () =>
         Effect.sync(() => void Queue.offerUnsafe(frames, { kind: "wake" })),
-      escalate: () =>
-        Effect.sync(() => void Queue.offerUnsafe(ladder, undefined)),
-      interruptionConfirmed: () => {
-        interruptConfirmed = true;
-      },
+      escalate: (turnId) =>
+        Effect.sync(() => {
+          const arming: LadderArming = { turnId, standDown: false };
+          armed.add(arming);
+          Queue.offerUnsafe(ladder, arming);
+        }),
       close,
     };
 

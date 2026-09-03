@@ -45,7 +45,6 @@
 import path from "node:path";
 import {
   type ContextGauge,
-  type MessagePart,
   type RunDiagnostic,
   type RunObservation,
   runDiagnostic,
@@ -61,6 +60,12 @@ import {
 
 /** What a confined provider diagnostic says instead of provider text. */
 export const CODEX_DIAGNOSTIC_REDACTED = "[redacted]";
+
+/** What a provider error notification reports. */
+export const CODEX_PROVIDER_ERROR_CATEGORY = "Codex reported an error";
+
+/** What a completion frame carrying an error reports. */
+export const CODEX_TURN_ERROR_CATEGORY = "the Codex Turn reported an error";
 
 /**
  * Report that something Codex authored went wrong, without keeping what it
@@ -579,23 +584,6 @@ export function createCodexTranslator(
       }
     },
   };
-}
-
-/** What a provider error notification reports. */
-export const CODEX_PROVIDER_ERROR_CATEGORY = "Codex reported an error";
-
-/** What a completion frame carrying an error reports. */
-export const CODEX_TURN_ERROR_CATEGORY = "the Codex Turn reported an error";
-
-/** The latest tool call in a list of parts, for the widget. */
-export function latestToolCall(
-  parts: readonly MessagePart[],
-): string | undefined {
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    const part = parts[index];
-    if (part?.kind === "tool_call") return part.name;
-  }
-  return undefined;
 }
 
 /* ============================================================== */

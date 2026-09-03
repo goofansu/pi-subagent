@@ -1455,3 +1455,167 @@ test("closing the Session ends stdin once and leaves nothing held", async () => 
   assert.equal(codexProbeIsClear(outcome.nativeProbeAfterClose), true);
   assert.equal(outcome.noLeaks, true);
 });
+
+test("an interrupt one Turn honoured does not disarm the ladder for the next", async () => {
+  // The regression this exists for: a stand-down reason kept on the transport
+  // rather than on the Run is set by the first cancelled Turn and never
+  // cleared, so every later Run's escalation quietly stands down and a wedged
+  // App Server survives. The first Turn here cooperates and the second
+  // ignores its interrupt, which is the only shape that tells the two apart.
+  const outcome = await withCodexSession(
+    {
+      testClock: true,
+      escalationMillis: 5_000,
+      interruptPolicies: ["complete", "ignore"],
+      ignoreSigterm: true,
+      ignoreStdinEnd: true,
+      scripts: [
+        { frames: [{ frame: "hold" }] },
+        { frames: [{ frame: "hold" }] },
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        /** Let every armed rung expire, however many the ladder has left. */
+        const letTheLadderRun = Effect.gen(function* () {
+          for (let step = 0; step < 8; step += 1) {
+            if (!rig.standIn.alive()) return;
+            yield* TestClock.adjust(5_001);
+            yield* quiesce();
+          }
+        });
+
+        const first = startedRun(
+          yield* rig.supervisor.start(codexRigRequest()),
+        );
+        yield* untilTurnStarted(rig);
+        yield* rig.supervisor.cancel([first.runId]);
+        yield* untilTerminal(rig, first.runId);
+        yield* letTheLadderRun;
+        // The Turn reported itself interrupted, so its ladder stood down: no
+        // signal, and a live process with a live root behind it.
+        const cooperativeSignals = [...rig.standIn.record().signals];
+        const stillAlive = rig.standIn.alive();
+
+        const second = startedRun(
+          yield* rig.supervisor.resume({
+            subagentId: first.subagentId,
+            description: "again",
+            prompt: "again",
+          }),
+        );
+        yield* untilTurnStarted(rig, 1);
+        yield* rig.supervisor.cancel([second.runId]);
+        yield* untilWrote(rig, "turn/interrupt", 2);
+        yield* letTheLadderRun;
+        yield* untilTerminal(rig, second.runId);
+        yield* quiesce();
+        const lost = yield* rig.supervisor.resume({
+          subagentId: first.subagentId,
+          description: "again",
+          prompt: "again",
+        });
+        return {
+          cooperativeSignals,
+          stillAlive,
+          signals: rig.standIn.record().signals,
+          exit: rig.standIn.record().exit,
+          lost: lost.outcome,
+        };
+      }),
+  );
+
+  // The Turn that reported itself interrupted was never signalled, and the
+  // App Server it was running on survived.
+  assert.deepEqual(outcome.value.cooperativeSignals, []);
+  assert.equal(outcome.value.stillAlive, true);
+  // The Turn that ignored its interrupt was signalled anyway — which is the
+  // whole point: the first Turn's cooperation disarmed nothing.
+  assert.deepEqual(outcome.value.signals, ["SIGTERM", "SIGKILL"]);
+  assert.deepEqual(outcome.value.exit, { code: null, signal: "SIGKILL" });
+  assert.equal(outcome.value.lost, "conversation lost");
+});
+
+test("a background command past the cleanup budget escalates, and the Run still settles", async () => {
+  // The other half of the background-terminal rule. The wait is a scope
+  // finalizer precisely so the runtime's cleanup budget bounds it: a terminal
+  // that never reports completion must not leave a Run in `finalizing`
+  // forever. Past the budget the core takes over — it records a
+  // `cleanup-escalation` diagnostic, closes the BackendAgent, and marks the
+  // conversation lost — and closing the BackendAgent is what ends the
+  // terminal, because it kills the process the terminal belongs to.
+  const outcome = await withCodexSession(
+    {
+      testClock: true,
+      policy: { ...DEFAULT_RUNTIME_POLICY, cleanupBudgetMillis: 1_000 },
+      scripts: [
+        {
+          frames: [
+            {
+              frame: "item-started",
+              item: { kind: "command", id: "bg", command: "npm run dev" },
+            },
+            {
+              frame: "item-completed",
+              item: {
+                kind: "agentMessage",
+                id: "m1",
+                text: "started the server",
+                phase: "final_answer",
+              },
+            },
+            { frame: "completed" },
+            // The command never completes, and nothing releases the hold.
+            { frame: "hold" },
+          ],
+        },
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(
+          yield* rig.supervisor.start(codexRigRequest()),
+        );
+        yield* until(
+          "the Run to reach finalizing",
+          Effect.map(rig.repository.lookup(started.runId), (known) =>
+            known.state === "active"
+              ? known.snapshot.phase === "finalizing"
+              : true,
+          ),
+        );
+        yield* quiesce();
+        const beforeTheBudget = yield* rig.supervisor.result(started.runId);
+
+        yield* TestClock.adjust(1_001);
+        yield* untilTerminal(rig, started.runId);
+        yield* quiesce();
+        const lost = yield* rig.supervisor.resume({
+          subagentId: started.subagentId,
+          description: "again",
+          prompt: "again",
+        });
+        return {
+          beforeTheBudget: beforeTheBudget.outcome,
+          result: resultOf(yield* rig.store.read(started.runId)),
+          lost: lost.outcome,
+          alive: rig.standIn.alive(),
+        };
+      }),
+  );
+
+  // Held while the terminal was running, and settled once the budget ran out.
+  assert.equal(outcome.value.beforeTheBudget, "RunNotTerminal");
+  assert.equal(outcome.value.result.status, "completed");
+  assert.ok(
+    outcome.value.result.diagnostics.some(
+      (diagnostic) => diagnostic.category === "cleanup-escalation",
+    ),
+    `no cleanup escalation was recorded: ${JSON.stringify(outcome.value.result.diagnostics)}`,
+  );
+  // The BackendAgent was closed, which ended the process the terminal belonged
+  // to, and the conversation went with it.
+  assert.equal(outcome.value.alive, false);
+  assert.equal(outcome.value.lost, "conversation lost");
+  assert.equal(codexProbeIsClear(outcome.nativeProbeAfterClose), true);
+});

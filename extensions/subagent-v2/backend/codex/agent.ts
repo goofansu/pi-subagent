@@ -45,7 +45,7 @@ import type {
   RunInput,
   TerminalBundle,
 } from "../contract.ts";
-import { runCodexExecution } from "./execution.ts";
+import { type CodexConversation, runCodexExecution } from "./execution.ts";
 import type { CodexProbeCounters, CodexTallyCounters } from "./probe.ts";
 import {
   type CodexSpawn,
@@ -60,7 +60,7 @@ import {
   readCodexThreadId,
   threadStartParams,
 } from "./protocol.ts";
-import { createCodexReader } from "./reader.ts";
+import { type CodexReader, createCodexReader } from "./reader.ts";
 import { type CodexTransport, startCodexTransport } from "./transport.ts";
 
 /**
@@ -109,7 +109,7 @@ function createCodexBackendAgent(
   subagent: SubagentContext,
   probe: CodexProbeCounters,
   tally: CodexTallyCounters,
-  reader: ReturnType<typeof createCodexReader>,
+  reader: CodexReader,
 ): BackendAgent {
   let root: RootState = { state: "live", id: rootId };
   let closed = false;
@@ -129,6 +129,25 @@ function createCodexBackendAgent(
       ? "conversation lost"
       : "admitted";
 
+  const conversation: CodexConversation = {
+    root: () => (root.state === "live" ? root.id : undefined),
+    lose: loseRoot,
+    isClosed: () => closed,
+    turnText: (prompt) => {
+      const text = codexTurnInput(profile, prompt, firstTurn);
+      // Flipped once the text has been composed for a Turn that is about to
+      // be written. The conversation is initialized once, and a later Turn
+      // sends the task prompt alone — repeating the Profile's instructions
+      // would read to the model as their having changed.
+      firstTurn = false;
+      return text;
+    },
+    usageBaseline: () => cumulative,
+    recordCumulative: (total) => {
+      cumulative = total;
+    },
+  };
+
   const execute = (
     input: RunInput,
     io: ExecutionIO,
@@ -141,22 +160,7 @@ function createCodexBackendAgent(
         probe,
         tally,
         cwd: subagent.cwd,
-        root: () => (root.state === "live" ? root.id : undefined),
-        loseRoot,
-        isClosed: () => closed,
-        turnText: (prompt) => {
-          const text = codexTurnInput(profile, prompt, firstTurn);
-          // Flipped once the text has been composed for a Turn that is about
-          // to be written. The conversation is initialized once, and a later
-          // Turn sends the task prompt alone — repeating the Profile's
-          // instructions would read to the model as their having changed.
-          firstTurn = false;
-          return text;
-        },
-        usageBaseline: () => cumulative,
-        recordCumulative: (total) => {
-          cumulative = total;
-        },
+        conversation,
       },
       input,
       io,

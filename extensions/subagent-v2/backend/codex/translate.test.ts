@@ -20,7 +20,6 @@ import {
   codexUsageDelta,
   codexUsageReset,
   createCodexTranslator,
-  latestToolCall,
   ZERO_CODEX_USAGE,
 } from "./translate.ts";
 
@@ -656,16 +655,4 @@ test("a completion frame carrying an error reports it confined, before the count
     ["diagnostic", "usage", "activity"],
   );
   assert.ok(translation.errorMessage?.endsWith("[redacted]"));
-});
-
-test("the widget's tool name is the last tool call in a list of parts", () => {
-  assert.equal(
-    latestToolCall([
-      { kind: "tool_call", name: "first" },
-      { kind: "text", text: "x" },
-      { kind: "tool_call", name: "second" },
-    ]),
-    "second",
-  );
-  assert.equal(latestToolCall([{ kind: "text", text: "x" }]), undefined);
 });
