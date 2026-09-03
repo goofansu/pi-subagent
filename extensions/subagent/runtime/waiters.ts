@@ -36,57 +36,75 @@ export interface WaiterPin {
   readonly release: (runId: RunId) => Effect.Effect<void>;
 }
 
+/**
+ * One waiter's registration, and the only thing it can do with it.
+ *
+ * A value rather than a bare `Effect<void>` because the two would be
+ * indistinguishable at the call site and mean opposite things: registering is
+ * what the *call* does, and the Effect that comes back is the *release*. A
+ * `register` typed as `(runId) => Effect<void>` would make
+ * `yield* register(runId)` register a waiter and immediately let it go, which
+ * reads like the obvious thing to write.
+ */
+export interface WaiterRegistration {
+  /**
+   * Give up this waiter's registration. Run it once, however the wait ended.
+   *
+   * Idempotent: running it again does nothing.
+   */
+  readonly release: Effect.Effect<void>;
+}
+
 export interface WaiterLedger {
   /**
-   * Take a place in the ledger for one waiter, and hand back its release.
+   * Register one waiter, and hand back the release for that waiter alone.
    *
-   * Registering is synchronous — a count and a counter — because it happens
-   * between deciding to wait and starting to wait, and nothing may interleave
-   * there. What comes back is the release for *this* waiter alone, to be run
-   * once when its wait ends however it ends. Running it again does nothing.
+   * Synchronous — a count and a counter — because it happens between deciding
+   * to wait and starting to wait, and nothing may interleave there.
    */
-  readonly register: (runId: RunId) => Effect.Effect<void>;
+  readonly register: (runId: RunId) => WaiterRegistration;
   /**
-   * Let go of the waiters' pin if nobody is holding a place.
+   * Let go of the waiters' pin if no waiter is registered.
    *
    * Settlement calls this, which is how a Run nobody waited on releases its
    * pin at once rather than at a read that never comes.
    */
   readonly releaseIfIdle: (runId: RunId) => Effect.Effect<void>;
-  /** Places currently held for this Run. */
-  readonly waiting: (runId: RunId) => number;
 }
 
 export function makeWaiterLedger(
   pin: WaiterPin,
   counters: RuntimeCounters,
 ): WaiterLedger {
-  const places = new Map<RunId, number>();
+  /** How many waiters are registered for each Run. */
+  const registered = new Map<RunId, number>();
 
   const releaseIfIdle = (runId: RunId): Effect.Effect<void> =>
     Effect.suspend(() =>
-      (places.get(runId) ?? 0) > 0 ? Effect.void : pin.release(runId),
+      (registered.get(runId) ?? 0) > 0 ? Effect.void : pin.release(runId),
     );
 
   return {
     register: (runId) => {
-      places.set(runId, (places.get(runId) ?? 0) + 1);
+      registered.set(runId, (registered.get(runId) ?? 0) + 1);
       counters.acquired("unresolvedWaiters");
       let released = false;
-      return Effect.suspend(() => {
-        // Idempotent for the same reason the admission lease is: a place given
-        // up twice would free another waiter's, and the pin would go with it
-        // while somebody was still entitled to read.
-        if (released) return Effect.void;
-        released = true;
-        counters.released("unresolvedWaiters");
-        const left = (places.get(runId) ?? 1) - 1;
-        if (left <= 0) places.delete(runId);
-        else places.set(runId, left);
-        return releaseIfIdle(runId);
-      });
+      return {
+        release: Effect.suspend(() => {
+          // Idempotent for the same reason the admission lease is: a
+          // registration given up twice would give up another waiter's, and
+          // the pin would go with it while somebody was still entitled to
+          // read.
+          if (released) return Effect.void;
+          released = true;
+          counters.released("unresolvedWaiters");
+          const left = (registered.get(runId) ?? 1) - 1;
+          if (left <= 0) registered.delete(runId);
+          else registered.set(runId, left);
+          return releaseIfIdle(runId);
+        }),
+      };
     },
     releaseIfIdle,
-    waiting: (runId) => places.get(runId) ?? 0,
   };
 }

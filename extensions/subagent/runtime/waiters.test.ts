@@ -24,7 +24,7 @@ function withLedger<A>(
     ledger: WaiterLedger,
     released: RunId[],
     counters: RuntimeCounters,
-  ) => Effect.Effect<A>,
+  ) => Effect.Effect<A, never, never>,
 ): Promise<A> {
   const released: RunId[] = [];
   const counters = createRuntimeCounters();
@@ -53,13 +53,13 @@ test("a Run nobody waited on releases its pin at settlement", async () => {
   assert.deepEqual(released, [oneRun]);
 });
 
-test("settlement does not release the pin while a waiter holds a place", async () => {
+test("settlement does not release the pin while a waiter is registered", async () => {
   const outcome = await withLedger((ledger, released) =>
     Effect.gen(function* () {
-      const release = ledger.register(oneRun);
+      const registration = ledger.register(oneRun);
       yield* ledger.releaseIfIdle(oneRun);
       const duringWait = [...released];
-      yield* release;
+      yield* registration.release;
       return { duringWait, afterWait: [...released] };
     }),
   );
@@ -68,16 +68,16 @@ test("settlement does not release the pin while a waiter holds a place", async (
 });
 
 test("the pin goes when the last of several waiters lets go, not the first", async () => {
-  const outcome = await withLedger((ledger, released) =>
+  const outcome = await withLedger((ledger, released, counters) =>
     Effect.gen(function* () {
       const first = ledger.register(oneRun);
       const second = ledger.register(oneRun);
       const third = ledger.register(oneRun);
-      yield* first;
-      yield* second;
+      yield* first.release;
+      yield* second.release;
       const afterTwo = [...released];
-      const stillWaiting = ledger.waiting(oneRun);
-      yield* third;
+      const stillWaiting = counters.probe().unresolvedWaiters;
+      yield* third.release;
       return { afterTwo, stillWaiting, afterThree: [...released] };
     }),
   );
@@ -89,20 +89,20 @@ test("the pin goes when the last of several waiters lets go, not the first", asy
   });
 });
 
-test("a release run twice does not give up another waiter's place", async () => {
-  const outcome = await withLedger((ledger, released) =>
+test("a release run twice does not give up another waiter's registration", async () => {
+  const outcome = await withLedger((ledger, released, counters) =>
     Effect.gen(function* () {
       const first = ledger.register(oneRun);
       const second = ledger.register(oneRun);
-      yield* first;
-      yield* first;
-      yield* first;
-      // Two places were taken and one was given up, so the pin is still held
-      // — which is only true if a repeated release is a no-op rather than a
+      yield* first.release;
+      yield* first.release;
+      yield* first.release;
+      // Two waiters registered and one gave up, so the pin is still held —
+      // which is only true if a repeated release is a no-op rather than a
       // second decrement.
       const afterRepeats = [...released];
-      const stillWaiting = ledger.waiting(oneRun);
-      yield* second;
+      const stillWaiting = counters.probe().unresolvedWaiters;
+      yield* second.release;
       return { afterRepeats, stillWaiting, afterSecond: [...released] };
     }),
   );
@@ -114,36 +114,35 @@ test("a release run twice does not give up another waiter's place", async () => 
   });
 });
 
-test("each Run's places are its own", async () => {
+test("each Run's registrations are its own", async () => {
   const outcome = await withLedger((ledger, released) =>
     Effect.gen(function* () {
       const one = ledger.register(oneRun);
       ledger.register(otherRun);
-      yield* one;
-      return {
-        released: [...released],
-        oneRun: ledger.waiting(oneRun),
-        otherRun: ledger.waiting(otherRun),
-      };
+      yield* one.release;
+      // One Run's last waiter leaving releases that Run's pin and says
+      // nothing about the other's, which is still held.
+      yield* ledger.releaseIfIdle(otherRun);
+      return [...released];
     }),
   );
 
-  assert.deepEqual(outcome, { released: [oneRun], oneRun: 0, otherRun: 1 });
+  assert.deepEqual(outcome, [oneRun]);
 });
 
 test("the unresolved-waiter counter rises on register and falls on release", async () => {
   const outcome = await withLedger((ledger, _released, counters) =>
     Effect.gen(function* () {
-      const release = ledger.register(oneRun);
+      const registration = ledger.register(oneRun);
       const duringWait = counters.probe().unresolvedWaiters;
-      yield* release;
-      yield* release;
+      yield* registration.release;
+      yield* registration.release;
       return { duringWait, afterWait: counters.probe().unresolvedWaiters };
     }),
   );
 
   // The probe is what the stress lane requires to end at zero, so a release
-  // that ran twice must not take it negative any more than it may free a
-  // place twice.
+  // that ran twice must not take it negative any more than it may give up a
+  // second waiter's registration.
   assert.deepEqual(outcome, { duringWait: 1, afterWait: 0 });
 });

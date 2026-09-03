@@ -13,8 +13,18 @@ green.
 
 The third module named at the gate, `runtime/waiters.ts`, is the waiter
 decision this ADR deliberately left to a measurement, and the gate's item 5
-records what decided it. Nothing in this document was rewritten between the
-two entries; everything from *Context* down is the text that was proposed.
+records what decided it.
+
+**Amended by the phase's code review, in the same commit.** The records module
+has an eleventh operation, `markRunning`, because a Subagent's phase moves when
+its Run is admitted and attaching that Run's Scope is a later instant; the
+sketch below lists ten. The gate's *Corrections* section records that and five
+other findings, two of which are places the gate itself had described the old
+code wrongly.
+
+Everything from *Context* down is the text that was proposed, unchanged. The
+sketches in it are what was decided, not an API reference; the gate is where
+the shipped API is recorded.
 
 **Proposed** in `96d210a`, written before `runtime/admission.ts` existed,
 which is [the roadmap's](../v2-simplify/roadmap.md) Phase B discipline and the

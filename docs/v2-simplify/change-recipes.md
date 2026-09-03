@@ -281,13 +281,17 @@ how it leaves.
 - `runtime/supervisor.ts` — the mechanism leaves; a call to the new module
   replaces it
 - the new module under `runtime/`, with its own unit test
+- `boundaries.test.ts` — only when the extraction adds or widens a fence, as
+  rule 21 did. [The freeze](freeze.md) permits a new check; this is the one
+  file outside `runtime/` an extraction may touch, and it is a test
+- one ADR, [the glossary](../../CONTEXT.md), and this document
 - nothing else
 
 **Must not change**
 
 - every existing test under `runtime/` — they pass unmodified, or the
   extraction changed behaviour and goes back
-- anything outside `runtime/`
+- any *production* file outside `runtime/`
 
 **Tests** — `npm run check`; `runtime/races.test.ts` and
 `runtime/stress.test.ts` are the detector for ordering changes under

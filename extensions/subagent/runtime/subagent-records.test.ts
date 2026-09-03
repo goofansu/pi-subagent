@@ -164,9 +164,10 @@ test("attaching a second Run to a Subagent that has one is a defect", async () =
 
 test("a Subagent whose Run detaches goes idle, and one that was closed stays closed", async () => {
   const { records } = await withRecords([oneSubagent, otherSubagent]);
+  const fiber = standInFiber();
   records.attachRun(oneSubagent, standInHandle(oneRun));
   records.attachRun(otherSubagent, standInHandle(otherRun));
-  records.attachFiber(oneSubagent, standInFiber());
+  records.attachFiber(oneSubagent, fiber);
 
   records.detachRun(oneSubagent);
   // Closed first, then the Run ends: the ordering `closeSubagent` depends on,
@@ -176,7 +177,11 @@ test("a Subagent whose Run detaches goes idle, and one that was closed stays clo
 
   assert.equal(records.get(oneSubagent)?.phase, "idle");
   assert.equal(records.get(oneSubagent)?.run, undefined);
-  assert.equal(records.get(oneSubagent)?.runFiber, undefined);
+  // The fiber handle stays, and that is deliberate: `closeSubagent` reads it
+  // to join the Run fiber, and it reads it after reading the Run — so a
+  // detach that cleared it would make the join depend on which side of the
+  // detach the close arrived on. Joining a finished fiber costs nothing.
+  assert.equal(records.get(oneSubagent)?.runFiber, fiber);
   assert.equal(records.get(otherSubagent)?.phase, "closed");
 });
 
@@ -185,11 +190,34 @@ test("a detached Subagent can take another Run, which is what resume does", asyn
 
   records.attachRun(oneSubagent, standInHandle(oneRun));
   records.detachRun(oneSubagent);
+  records.markRunning(oneSubagent);
   records.attachRun(oneSubagent, standInHandle(otherRun));
 
   assert.equal(records.get(oneSubagent)?.phase, "running");
   assert.equal(records.byRun(otherRun)?.id, oneSubagent);
   assert.equal(records.byRun(oneRun), undefined);
+});
+
+test("a resumed Subagent is running from the moment its Run is admitted, before its Run Scope exists", async () => {
+  const { records } = await withRecords([oneSubagent]);
+  records.attachRun(oneSubagent, standInHandle(oneRun));
+  records.detachRun(oneSubagent);
+
+  const idle = records.get(oneSubagent)?.phase;
+  records.markRunning(oneSubagent);
+
+  // This is the instant a concurrent resume has to see. It is why the phase
+  // is a separate call from `attachRun`: a Run is certain once its result is
+  // reserved, which is before it is published and well before there is a Run
+  // Scope to attach — and until the phase moves, a second resume would get
+  // past the phase check and ask the adapter a question about a Subagent that
+  // is already running.
+  assert.equal(idle, "idle");
+  assert.equal(records.get(oneSubagent)?.phase, "running");
+  assert.equal(records.get(oneSubagent)?.run, undefined);
+  // And it is not the same as having a Run: nothing is findable by Run id
+  // until the Run Scope is attached.
+  assert.equal(records.byRun(otherRun), undefined);
 });
 
 test("markClosed is true for the first caller only", async () => {
@@ -239,6 +267,7 @@ test("a Run detaching after the records were cleared changes nothing", async () 
   // unknown Subagent is quiet rather than a defect.
   records.detachRun(oneSubagent);
   records.markConversationLost(oneSubagent);
+  records.markRunning(oneSubagent);
 
   assert.equal(records.byRun(oneRun), undefined);
   assert.equal(records.get(oneSubagent), undefined);

@@ -77,13 +77,26 @@ export interface SubagentRecords {
    * Take a Subagent's fixed facts and start its record.
    *
    * A Subagent exists because a start was admitted for it, so the record
-   * begins `running`; nothing here creates an idle Subagent.
+   * begins `running`; nothing here creates an idle Subagent. A later Run on
+   * the same Subagent goes through `markRunning`.
    */
   readonly insert: (facts: SubagentFacts) => SubagentRecord;
   readonly get: (id: SubagentId) => SubagentRecord | undefined;
   /** The Subagent whose Run this is, if that Run is in flight right now. */
   readonly byRun: (runId: RunId) => SubagentRecord | undefined;
-  /** The Subagent is running this Run. A second one is a defect. */
+  /**
+   * A Run has been admitted for this Subagent, so it is running.
+   *
+   * Separate from `attachRun` because the two happen at different instants
+   * and the earlier one is what a concurrent resume has to see. A Run becomes
+   * certain when its result is reserved, which is before it is published and
+   * well before its Run Scope exists — so the phase moves then, and the Run
+   * Scope is attached when there is one. A start needs no call: `insert`
+   * happens at the same point in its own sequence and starts the record
+   * running.
+   */
+  readonly markRunning: (id: SubagentId) => void;
+  /** The Subagent's Run Scope now exists. A second one is a defect. */
   readonly attachRun: (id: SubagentId, handle: RunHandle) => void;
   readonly attachFiber: (
     id: SubagentId,
@@ -132,6 +145,10 @@ export function makeSubagentRecords(): SubagentRecords {
       return record;
     },
     get: (id) => records.get(id),
+    markRunning: (id) => {
+      const record = records.get(id);
+      if (record) record.phase = "running";
+    },
     byRun: (runId) => {
       const owner = owners.get(runId);
       return owner === undefined ? undefined : records.get(owner);
@@ -148,7 +165,6 @@ export function makeSubagentRecords(): SubagentRecords {
         );
       }
       record.run = handle;
-      record.phase = "running";
       owners.set(handle.identity.runId, id);
     },
     attachFiber: (id, fiber) => {
@@ -161,7 +177,13 @@ export function makeSubagentRecords(): SubagentRecords {
       const runId = record.run?.identity.runId;
       if (runId !== undefined) owners.delete(runId);
       record.run = undefined;
-      record.runFiber = undefined;
+      // The fiber handle deliberately stays. `closeSubagent` reads it to join
+      // the Run fiber before it closes the Subagent Scope, and it reads it
+      // *after* reading the Run — so clearing it here would make that join
+      // depend on which side of this call the close arrived on. Joining a
+      // fiber that has already finished costs nothing; skipping a join that
+      // was needed does not. The next Run's `attachFiber` replaces it.
+      //
       // A Subagent closed while its Run was settling stays closed. From the
       // instant it was marked it admits no new Run, and a late settlement
       // must not be able to hand it back.

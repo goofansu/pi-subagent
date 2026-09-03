@@ -2,10 +2,21 @@
  * `SubagentSupervisor`: the six public operations, in order.
  *
  * This module sequences a lifecycle; it does not own the state that lifecycle
- * moves through. Admission — the shutting-down flag, capacity, the running
- * Subagents, and the Result-store reservation — belongs to
- * [`admission.ts`](admission.ts), which hands out a lease
- * ([ADR-0034](../../../docs/adr/0034-supervisor-mechanisms-admission-lease-and-subagent-records.md)).
+ * moves through. Three modules do, each carrying one invariant
+ * ([ADR-0034](../../../docs/adr/0034-supervisor-mechanisms-admission-lease-and-subagent-records.md)):
+ *
+ * - [`admission.ts`](admission.ts) — the shutting-down flag, capacity, the
+ *   running Subagents, and the Result-store reservation, handed out as a
+ *   lease. Invariant 12.
+ * - [`subagent-records.ts`](subagent-records.ts) — what is known about each
+ *   Subagent, and the only writer of it. Invariant 2.
+ * - [`waiters.ts`](waiters.ts) — how many callers registered at a settlement
+ *   have yet to read it, and the pin held for them. Invariant 13.
+ *
+ * What is left here is the order things happen in, and boundary rule 21 keeps
+ * it that way: no reference, map, or set is constructed in this file, so a
+ * fourth mechanism cannot quietly move in. The `stages` trace array is the
+ * documented exception, and it is a test hook nothing reads back.
  *
  * Start is three steps, and the middle one is the only one that talks to a
  * provider:
@@ -151,7 +162,8 @@ interface ForkedRun {
   readonly identity: RunIdentity;
   readonly prompt: string;
   readonly startedAt: number;
-  readonly diagnostics: AdmissionDiagnostics;
+  /** Absent when the caller's request carried none. */
+  readonly diagnostics?: AdmissionDiagnostics;
 }
 
 /**
@@ -364,7 +376,7 @@ const makeSupervisor = (settings: SessionSettings) =>
       identity,
       prompt,
       startedAt,
-      diagnostics: admissionDiagnostics,
+      diagnostics: admissionDiagnostics = [],
     }: ForkedRun): Effect.Effect<void> =>
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
@@ -628,7 +640,7 @@ const makeSupervisor = (settings: SessionSettings) =>
           identity,
           prompt: request.prompt,
           startedAt,
-          diagnostics: request.diagnostics ?? [],
+          diagnostics: request.diagnostics,
         });
 
         return { outcome: "started", runId, subagentId } as const;
@@ -740,10 +752,12 @@ const makeSupervisor = (settings: SessionSettings) =>
         const reserved = yield* lease.reserveResult(runId);
         if (!reserved) return { outcome: "at capacity" } as const;
 
-        // The phase moves to `running` when the fork attaches the Run, which
-        // is the same rule a start follows. Until then a second resume is
-        // refused by the Subagent's active-Run claim, which this acquire
-        // already took, and answers the same `Subagent already running`.
+        // The Run is certain from here, so the Subagent is running from here
+        // — before it is published, and well before its Run Scope exists. A
+        // concurrent resume has to see that, because the phase check is what
+        // answers it `Subagent already running` without asking its adapter
+        // anything.
+        records.markRunning(record.id);
         const identity = runIdentityFor(
           runId,
           record.id,
@@ -758,7 +772,7 @@ const makeSupervisor = (settings: SessionSettings) =>
           identity,
           prompt: request.prompt,
           startedAt,
-          diagnostics: request.diagnostics ?? [],
+          diagnostics: request.diagnostics,
         });
 
         return { outcome: "started", runId, subagentId: record.id } as const;
@@ -878,12 +892,12 @@ const makeSupervisor = (settings: SessionSettings) =>
         // Registered before the wait begins and released however it ends.
         // Aborting or timing out a wait stops only that waiter: the Run
         // continues, still settles exactly once, and still stores its result.
-        const releaseWaiter = waiters.register(runId);
+        const registration = waiters.register(runId);
         const finished = yield* Effect.exit(
           timeoutMillis === undefined
             ? Deferred.await(handle.completion)
             : Effect.timeout(Deferred.await(handle.completion), timeoutMillis),
-        ).pipe(Effect.ensuring(releaseWaiter));
+        ).pipe(Effect.ensuring(registration.release));
 
         if (Exit.isFailure(finished)) {
           return { outcome: "still running", runId } as const;

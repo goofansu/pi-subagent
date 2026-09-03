@@ -87,14 +87,17 @@ Every conformance scenario passes on all five rigs (191 tests, 8 skipped by
 declared capability, 0 failures).
 
 This is the item the phase is judged by, and it is the only mechanical answer
-to "did the behaviour change". Two orderings inside the phase *were* changed
-and both are argued in their commits rather than hidden: the Run fiber's
-finalizer detaches the Run before releasing the lease, which is what makes the
-records' one-active-Run assertion unreachable; and a resumed Subagent's phase
-becomes `running` when the fork attaches its Run rather than a few steps
-earlier, in which window a second resume is refused by the Subagent's
-active-Run claim instead of by the phase check and answers the identical
-outcome with the identical Subagent id.
+to "did the behaviour change". Passing tests are not the whole answer, though,
+because a window narrow enough that no test reaches it is still a window — so
+every ordering the phase touched is listed in **Corrections** below with what
+was done about it. Of the three, one was reverted after the phase's code review
+found it could change an outcome, one was reverted because this document had
+described the old code wrongly, and one is unobservable and stands.
+
+The ordering that remains load-bearing and deliberate: the Run fiber's
+finalizer detaches the Run *before* releasing the lease, which is what makes
+the records' one-active-Run assertion unreachable, because the lease is what a
+resume has to acquire.
 
 **Status:** PASS.
 
@@ -135,6 +138,11 @@ record's phase, current Run, Run fiber, and conversation-lost flag, plus the
 Run-id-to-Subagent index that replaces the linear scan. Invariant 2 is
 asserted in `attachRun`. The supervisor reads records through it and assigns
 no record field directly.
+
+The API is the ten operations the roadmap named plus an eleventh,
+`markRunning`, which correction 1 below explains: a Subagent's phase moves
+when its Run is admitted, and attaching that Run's Scope is a later and
+separate instant.
 
 **Evidence to name:** `runtime/subagent-records.test.ts`, nine cases —
 including `attaching a second Run to a Subagent that has one is a defect`,
@@ -404,10 +412,120 @@ says the lease releases one that a commit has not consumed, and the historical
 
 **Status:** PASS.
 
+## Corrections
+
+Found by the phase's own code review, run against the spec and the
+repository's standards after the six tickets landed. Recorded here rather than
+folded silently into the commits, because two of them are places where this
+document said something that was not true.
+
+### 1. The resumed-Subagent phase window was reverted, because it could change an outcome
+
+The records extraction moved a resume's `phase = "running"` from just after its
+result reservation to `attachRun`, inside the forked Run fiber, and this gate
+claimed a concurrent second resume would "answer the identical outcome".
+**That claim was wrong.**
+
+The old window, between a resume's `acquire` and its phase assignment, spans
+two synchronous `Ref` operations and no suspension point, so nothing could
+interleave. The new window spanned `repository.publish` and the fork's
+`Deferred.await(started)` — a real suspension. A second resume arriving there
+would find the phase `idle`, get past the phase check, and reach
+`record.agent.admitResume()`, which the old code never called on a Subagent
+whose Run was already admitted. An adapter answering `conversation lost` — a
+Codex transport that had dropped, say — would make that resume return
+`conversation lost` where it used to return `Subagent already running`. It also
+breaks the spec's *Out of Scope*: "Any change to what a backend adapter is
+asked or told."
+
+**Fixed** by giving the records module an eleventh operation, `markRunning`,
+and calling it exactly where the old assignment was: after the result
+reservation, before the publication. `attachRun` no longer touches the phase,
+which makes the two instants explicit rather than conflated — a Run is certain
+when its result is reserved, and its Run Scope exists later. `insert` still
+starts a new Subagent running, because for a start the two instants coincide.
+
+The records unit test gained `a resumed Subagent is running from the moment its
+Run is admitted, before its Run Scope exists`, which asserts the phase has
+moved while `run` is still absent and nothing is findable by Run id.
+
+### 2. `detachRun` no longer clears the Run fiber, because the old finalizer did not
+
+The spec says `detachRun` "clears the Run and the fiber ... which is the rule
+the supervisor's fiber finalizer applies today". **The spec is wrong about
+today:** the old finalizer cleared `record.run` and the phase and left
+`record.runFiber` set. The first implementation followed the spec's words.
+
+That matters because `closeSubagent` reads `runFiber` to `Fiber.join` the Run
+fiber before closing the Subagent Scope, and it reads it *after* reading the
+Run — so clearing it made the join depend on which side of the detach a
+concurrent close arrived on. The argument that it was safe does hold: by the
+time a detach runs, `runToSettlement` has returned, so cleanup is finished and
+only `lease.release()` is left. But "safe on the argument" is not what this
+phase promised.
+
+**Fixed** by leaving the fiber handle where it was, with the reason written at
+the call site: joining a finished fiber costs nothing, and skipping a join that
+was needed does not. The next Run's `attachFiber` replaces it, exactly as
+before.
+
+### 3. `lease.bind` moved before the publication, and this document under-reported it
+
+A start's Subagent joins the running set before `repository.publish` rather
+than after. This is what the spec's own reading of `start` asks for — "insert
+the record and bind the lease; publish; fork" — and `bind` is not among the
+orderings its *deliberately unchanged* list freezes. It is unobservable either
+way: between the insert and the bind the record's phase is already `running`,
+so a concurrent resume is refused by the phase check rather than by the running
+set, with the same outcome and the same Subagent id. Recorded because item 2
+named two ordering changes and there were three.
+
+### 4. Two API shapes deviate from the roadmap's sketch, deliberately
+
+`RunAdmission.acquire` returns a tagged union —
+`{ outcome: "admitted"; lease } | { outcome: AdmissionRejection }` — rather
+than the roadmap's `AdmissionLease | AdmissionRejection`. A bare union of an
+object and a string would be discriminated by `typeof`, where every other
+outcome in this codebase is discriminated by an `outcome` field. Matching the
+house shape is worth the deviation.
+
+`SubagentRecords.insert` returns the record it inserted rather than `void`. The
+module holds the mutable record and hands out a `readonly` view of it, so a
+caller that built its own literal and passed it in would hold a different
+object from the one in the map and read stale fields. Returning the inserted
+record is what makes "the values handed out are the live records" true.
+
+### 5. The waiter ledger's `register` returns a registration, not a bare Effect
+
+Both review axes flagged the same footgun. `register: (runId) => Effect<void>`
+reads as "an Effect that registers", but the call registered eagerly and the
+Effect it returned was the *release* — so `yield* waiters.register(runId)`, the
+obvious thing to write, would register a waiter and immediately give it up.
+`register` now returns `WaiterRegistration`, whose one member is `release`, and
+the type says what the call site does.
+
+`WaiterLedger.waiting()` was removed. Only its own test called it, and the
+tests that used it now assert the property that matters — when the pin is
+released — through the pin and the `unresolvedWaiters` probe instead. The
+module's internal count is named for waiters rather than for "places", which
+was a new word for something the glossary already names.
+
+### 6. Two documents were repaired
+
+The *Extract a mechanism from the supervisor* recipe said "nothing else" and
+"anything outside `runtime/`" must not change, which this phase's own rule 21
+contradicts — the fence is a test outside `runtime/`. The recipe now names
+`boundaries.test.ts`, the ADR, the glossary, and itself as expected, and
+confines the prohibition to *production* files outside `runtime/`.
+[The glossary](../../CONTEXT.md) gained a *Waiter ledger* entry, which it was
+missing while its two siblings had one.
+
 ## Verdict
 
 **The gate is closed.** Thirteen items, all PASS, and `npm run check` green on
-the closing commit.
+the closing commit: **1,245 tests, 0 failures** in the main lane and 191
+conformance scenarios across five rigs. The six corrections above landed after
+the six tickets and before the close.
 
 What the phase changed: three mechanisms left `runtime/supervisor.ts` for
 modules that own the invariant each carries — admission as a lease

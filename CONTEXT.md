@@ -329,6 +329,16 @@ shutting-down flag and the first-caller-wins `beginShutdown`, so "once
 shutdown begins, new work is rejected" is one module's promise.
 [ADR-0034](docs/adr/0034-supervisor-mechanisms-admission-lease-and-subagent-records.md).
 
+**Waiter ledger** — how many callers registered at a Run's settlement have
+yet to read it, and the Result store's `waiters` pin held on their behalf.
+`register` takes one waiter's registration and hands back the release for that
+waiter alone, which goes into the wait's own finalizer so that resolving,
+timing out, and being interrupted all pass through it — aborting a waiter stops
+only that waiter. The pin belongs to the ledger rather than to any one waiter,
+so it is let go at exactly two moments: when the last waiter releases, and
+when settlement finds there were none.
+[ADR-0034](docs/adr/0034-supervisor-mechanisms-admission-lease-and-subagent-records.md).
+
 **Reservation** — the room a Run takes in the Result store at admission, before
 it starts, so that "the result can be stored" is a guarantee rather than an
 estimate discovered at settlement. Released by a failed open, and by the
