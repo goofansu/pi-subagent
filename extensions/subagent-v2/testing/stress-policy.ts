@@ -1,0 +1,104 @@
+/**
+ * What the stress and bounds lanes share.
+ *
+ * Two test files drive the same policy and ask the same question of the same
+ * counters — `stress.test.ts` repeats the lifecycle hundreds of times, and
+ * `bounds.test.ts` walks past one bound at a time — and a second copy of the
+ * lowered policy would be a second thing to keep in step with the defaults.
+ *
+ * A plain module rather than a test file: it declares no tests. It lives here
+ * rather than beside the lanes in `runtime/` because it names the Session rig,
+ * and the boundary test is right to reject a runtime module that reaches into
+ * the testing tree — a production module able to name a rig is a production
+ * module one edit away from depending on one.
+ */
+
+import { Effect } from "effect";
+import type { SupervisorCounters } from "../runtime/counters.ts";
+import {
+  DEFAULT_RUNTIME_POLICY,
+  MINIMUM_USEFUL_RESULT_BYTES,
+  type RuntimePolicy,
+} from "../runtime/policy.ts";
+import type { SessionRig } from "./session-rig.ts";
+
+/**
+ * The smallest legal policy.
+ *
+ * `maxResultBytes` sits at the floor below which a result could not carry even
+ * one diagnostic explaining why it is empty, and the store budget is exactly a
+ * full house of reservations — so a stored result has to be evicted before the
+ * next Run can reserve, on nearly every cycle.
+ */
+export const STRESS_POLICY: RuntimePolicy = {
+  ...DEFAULT_RUNTIME_POLICY,
+  maxActiveRuns: 2,
+  controls: { maxPending: 1, maxMessageBytes: 64, maxPendingBytes: 64 },
+  projection: {
+    maxTranscriptItems: 2,
+    maxToolEntries: 1,
+    maxDiagnostics: 1,
+    maxLinks: 1,
+    maxTextPartBytes: 32,
+    maxFinalOutputBytes: 32,
+  },
+  maxResultBytes: MINIMUM_USEFUL_RESULT_BYTES,
+  resultStoreBytes: 2 * MINIMUM_USEFUL_RESULT_BYTES,
+  observationQueueBound: 1,
+  // One attempt, no delay: the retry budget is the one thing in the runtime
+  // that sleeps, and these lanes must not reach it.
+  deliveryRetryBudget: { attempts: 1, delayMillis: 0 },
+};
+
+/** A steer short enough to fit the lowered mailbox. */
+export const STEER = "also look left";
+
+/**
+ * The counters a healthy Session must never register at all.
+ *
+ * Each of these is a defect rather than a bound being reached: a Run settled
+ * twice, a result committed twice or committed differently, a stored result
+ * that would not read back, an observation that did not decode at the seam, an
+ * observation dropped because a non-blocking bridge could not hand it over, or
+ * a terminal reconciliation that disagreed with what was streamed.
+ */
+const MUST_STAY_ZERO = [
+  "duplicateSettlements",
+  "duplicateCommits",
+  "conflictingCommits",
+  "unreadableResults",
+  "seamDecodeFailures",
+  "queueOverflows",
+  "reconciliationDifferences",
+] as const satisfies readonly (keyof SupervisorCounters)[];
+
+export function assertNothingWentWrong(counters: SupervisorCounters): void {
+  const wrong = MUST_STAY_ZERO.filter((counter) => counters[counter] !== 0).map(
+    (counter) => `${counter}=${counters[counter]}`,
+  );
+  if (wrong.length > 0) {
+    throw new Error(`counters that must stay zero rose: ${wrong.join(", ")}`);
+  }
+}
+
+/**
+ * Wait until the backend has begun its nth execution, counted from the start
+ * of the Session.
+ *
+ * `untilUnderWay` in the Session rig takes an index into the same cumulative
+ * count, which reads naturally for a test with two or three Runs and not at
+ * all for one with nine hundred. This takes the total, so a caller keeps its
+ * own tally and the wait says what it is waiting for.
+ */
+export function untilExecutions(
+  rig: SessionRig,
+  total: number,
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    for (let step = 0; step < 200_000; step += 1) {
+      if (rig.backend.counters().executionsStarted >= total) return;
+      yield* Effect.yieldNow;
+    }
+    throw new Error(`gave up waiting for execution ${total} to begin`);
+  });
+}

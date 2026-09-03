@@ -22,6 +22,7 @@ import { TestClock } from "effect/testing";
 import {
   DEFAULT_BACKEND_ID,
   type Profile,
+  type ResumeOutcome,
   type RunId,
   type StartOutcome,
   type SubagentId,
@@ -186,13 +187,17 @@ export function withSession<A>(
 }
 
 /**
- * Narrow a start to the one outcome most tests are about.
+ * Narrow a start or a resume to the one outcome most tests are about.
  *
  * A throw rather than an early return, so a test body always has one return
  * type: an `Effect.gen` that returns `undefined` down one branch infers a
  * union that every assertion below then has to unwrap.
+ *
+ * Both outcomes, because the two unions agree on the shape of `started` and
+ * every caller wants the same two ids out of either. A separate `resumedRun`
+ * would be the same function under a second name.
  */
-export function startedRun(outcome: StartOutcome): {
+export function startedRun(outcome: StartOutcome | ResumeOutcome): {
   readonly runId: RunId;
   readonly subagentId: SubagentId;
 } {

@@ -170,17 +170,38 @@ const makeStore = (policy: RuntimePolicy, counters: RuntimeCounters) =>
       Ref.modify(state, (current) => {
         if (current.reservations.has(runId)) return [true, current];
         const wanted = policy.maxResultBytes;
-        const headroom = policy.resultStoreBytes - committedBytes(current);
-        if (headroom >= wanted) {
-          const reservations = new Map(current.reservations);
+        const take = (state: StoreState): [boolean, StoreState] => {
+          const reservations = new Map(state.reservations);
           reservations.set(runId, wanted);
-          return [true, { ...current, reservations }];
+          return [true, { ...state, reservations }];
+        };
+        if (policy.resultStoreBytes - committedBytes(current) >= wanted) {
+          return take(current);
         }
-        // Nothing is evicted to make room for a *reservation*: an unpinned
-        // stored result is a result somebody may still ask for, and throwing
-        // it away to admit a Run that has not started is the wrong trade.
-        // Only a commit evicts.
-        return [false, current];
+        // Not enough room, so make some: evict the oldest *unpinned* stored
+        // output until one reservation fits.
+        //
+        // The alternative was to refuse, on the grounds that a stored result
+        // is one somebody may still ask for. That reasoning does not survive
+        // being run for long: nothing else in a Session ever frees a stored
+        // result, so a Session whose history grew to just inside the budget
+        // would answer `at capacity` to every later start, permanently, with
+        // unpinned results sitting there that nobody was going to read. A
+        // capacity answer is about how much is happening *now*; a Session's
+        // own history is not a reason to refuse the next Run, and an evicted
+        // result already has an honest public outcome of its own.
+        //
+        // Pins are still absolute, and that is what keeps this from being a
+        // way around the budget: a result being delivered or read is not
+        // evictable, so a store whose every entry is pinned still refuses.
+        const freed = evict(
+          current,
+          policy.resultStoreBytes - wanted,
+          counters,
+        );
+        return policy.resultStoreBytes - committedBytes(freed) >= wanted
+          ? take(freed)
+          : [false, freed];
       });
 
     const release = (runId: RunId): Effect.Effect<void> =>

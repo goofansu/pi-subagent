@@ -100,7 +100,39 @@ which records how each of these was established and the testing gap they sat in.
 | --- | --- | --- | --- |
 | 2026-09-03 | 3 | The first Run of every Session was `run-2`: one sequence counter was shared by the Run and Subagent allocators, so `start` gave the Subagent 1 and its Run 2. Fixed — each kind is numbered from one. | Fixed |
 | 2026-09-03 | 1 | Ids restart at 1 when a session is reloaded, but the transcript keeps the old ones — so a pre-reload `run-1` silently resolves to a different Run once a new one takes the id. Our own completion notice invites exactly that. v1's random ids could not collide. Fixed — every identifier now carries a per-Session nonce (`run-<nonce>-1`), so a stale id is reported unknown as it was in v1. | Fixed |
+| 2026-09-03 | 2 | The Result store could wedge a Session permanently. Nothing evicted to make room for a *reservation*, and eviction only ran when the budget was already exceeded — so a Session whose stored results grew to just inside the budget answered `at capacity` to every later `start`, for ever, with unpinned results sitting there that nobody was going to read. Found by the M7 stress lane on its fifth cycle. Fixed — a reservation now evicts the oldest unpinned output, and still refuses when every entry is pinned. | Fixed |
 | 2026-09-03 | 3 | The widget drops a Run's row the moment the Run settles, where v1 keeps it until the Run's completion notification lands. For anything but a long Run the widget appears and disappears before it is read, so v2 reads as having no widget at all. Fixed in M7 — a settled Run's row now lasts until its notice lands. | Fixed |
+
+### The Result store's permanent capacity stall (2026-09-03, severity 2)
+
+**What happened.** `ResultStore.reserve` took `maxResultBytes` of headroom or
+refused, and `evict` only ran from `commit` and `releasePin`, and only while
+the budget was already exceeded. Nothing else in a Session ever frees a stored
+result. So the steady state of a long Session was: stored results accumulate to
+just inside `resultStoreBytes`, the next reservation does not fit, and
+`agent_start` answers `at capacity` — permanently, with nothing running and
+with unpinned results the store was entitled to evict.
+
+**How it was found.** Not by reasoning about the code. The M7 stress lane
+lowered every bound and ran the lifecycle in a loop; the fifth cycle's `start`
+came back `at capacity` and the sixth never happened. At the default bounds it
+would take on the order of a thousand stored results in one Session to reach,
+which is why nothing before this had noticed — and why "several hundred cycles
+with every bound lowered" is a different test from "one cycle".
+
+**The fix.** A reservation that does not fit now evicts the oldest *unpinned*
+stored output until one fits. Pins stay absolute, so this is not a way around
+the budget: a store whose every entry is still being delivered or read refuses
+as before. An evicted result already had an honest public outcome —
+`ResultExpired`, which operation semantics distinguishes from an unknown Run —
+so the loss is one the surface can already describe, while a permanent capacity
+stall is not.
+
+Proven by `a reservation evicts old unpinned output rather than wedging the
+Session` and `a reservation still refuses when nothing can be freed`
+(`runtime/result-store.test.ts`), and under load by `a store full of unread
+results evicts the oldest rather than refusing the next Run`
+(`runtime/bounds.test.ts`).
 
 ### The widget's row lifetime (2026-09-03, severity 3)
 

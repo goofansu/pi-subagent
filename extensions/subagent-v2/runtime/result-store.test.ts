@@ -112,6 +112,94 @@ test("a reservation is granted while the budget has room and refused after", asy
   });
 });
 
+test("a reservation evicts old unpinned output rather than wedging the Session", async () => {
+  // The stall this closes: nothing used to evict for a *reservation*, and
+  // eviction only ran when the budget was already exceeded. So a Session
+  // whose stored results grew to just inside the budget could never reserve
+  // again — every later `start` answered `at capacity`, permanently, with
+  // unpinned results sitting there that nobody was going to ask for. A
+  // capacity answer is about how much is happening now; a Session's own
+  // history is not a reason to refuse the next Run.
+  const policy: RuntimePolicy = {
+    ...DEFAULT_RUNTIME_POLICY,
+    maxResultBytes: 1_000,
+    resultStoreBytes: 2_500,
+  };
+
+  const outcome = await withStore(policy, (store, counters) =>
+    Effect.gen(function* () {
+      // Fill the store with delivered results: each is small, none is pinned,
+      // and together they leave less than one reservation of headroom.
+      const stored: RunId[] = [];
+      for (let index = 1; index <= 4; index += 1) {
+        const run = makeRunId(`old-${index}`);
+        yield* store.reserve(run);
+        yield* store.commit(resultOf(`old-${index}`, `answer ${index}`));
+        yield* unpin(store, run);
+        stored.push(run);
+      }
+      const filled = yield* store.accountedBytes();
+
+      const admitted = yield* store.reserve(makeRunId("next"));
+      const readable = yield* Effect.forEach(stored, (run) =>
+        Effect.map(store.read(run), (read) => read.outcome),
+      );
+      return {
+        filled,
+        admitted,
+        readable,
+        evictions: counters.counters().evictions,
+        accounted: yield* store.accountedBytes(),
+      };
+    }),
+  );
+
+  // The store really was too full to reserve without freeing something.
+  assert.ok(
+    outcome.filled > policy.resultStoreBytes - policy.maxResultBytes,
+    `${outcome.filled} bytes left room for a reservation, so nothing was under pressure`,
+  );
+  assert.equal(outcome.admitted, true);
+  assert.ok(outcome.evictions > 0);
+  assert.ok(outcome.accounted <= policy.resultStoreBytes);
+  // The oldest went first and the newest is still there: a Run whose answer
+  // the model has not read yet is the one worth keeping.
+  assert.equal(outcome.readable[0], "ResultExpired");
+  assert.equal(outcome.readable[outcome.readable.length - 1], "result");
+});
+
+test("a reservation still refuses when nothing can be freed", async () => {
+  // Eviction is not a way around the budget. When every stored result is
+  // pinned — still being delivered, still being read — there is nothing to
+  // give up, and `at capacity` is the honest answer.
+  const policy: RuntimePolicy = {
+    ...DEFAULT_RUNTIME_POLICY,
+    maxResultBytes: 1_000,
+    resultStoreBytes: 2_500,
+  };
+
+  const outcome = await withStore(policy, (store) =>
+    Effect.gen(function* () {
+      for (let index = 1; index <= 4; index += 1) {
+        const run = makeRunId(`pinned-${index}`);
+        yield* store.reserve(run);
+        // Committed and left pinned, which is a result whose notification has
+        // not been delivered yet.
+        yield* store.commit(resultOf(`pinned-${index}`, `answer ${index}`));
+      }
+      return {
+        admitted: yield* store.reserve(makeRunId("next")),
+        readable: yield* Effect.map(
+          store.read(makeRunId("pinned-1")),
+          (read) => read.outcome,
+        ),
+      };
+    }),
+  );
+
+  assert.deepEqual(outcome, { admitted: false, readable: "result" });
+});
+
 test("reserving the same Run twice takes the room once", async () => {
   const accounted = await withStore(DEFAULT_RUNTIME_POLICY, (store) =>
     Effect.gen(function* () {
