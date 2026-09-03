@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { createClaudeProbeCounters } from "../backend/claude/index.ts";
 import { createPiProbeCounters } from "../backend/pi/index.ts";
 import { createRuntimeCounters } from "../runtime/counters.ts";
 import { hostRig } from "../testing/host-rig.ts";
@@ -64,15 +65,20 @@ test("between Sessions the command says there is nothing to report", async (t) =
   assert.equal(text, NO_LIVE_SESSION);
 });
 
-test("a backend probe is reported beside the runtime's own", () => {
-  const held = createPiProbeCounters();
-  held.acquired("openSessions");
-  held.acquired("liveSubscriptions");
+test("every backend's probe is reported beside the runtime's own, one block each", () => {
+  // One block per backend rather than a merged total: "which adapter is still
+  // holding something" is the only question a probe exists to answer, and a
+  // sum cannot answer it.
+  const pi = createPiProbeCounters();
+  pi.acquired("openSessions");
+  pi.acquired("liveSubscriptions");
+  const claude = createClaudeProbeCounters();
+  claude.acquired("retainedIdentities");
 
   const text = formatSessionDiagnostics({
     counters: { lateEvents: 2 },
     probe: { liveRunFibers: 0 },
-    adapterProbe: { ...held.read() },
+    adapterProbe: { pi: { ...pi.read() }, claude: { ...claude.read() } },
   });
 
   assert.equal(
@@ -82,10 +88,14 @@ test("a backend probe is reported beside the runtime's own", () => {
       "  lateEvents: 2",
       "Runtime probe:",
       "  liveRunFibers: 0",
-      "Backend probe:",
+      "Backend probe (pi):",
       "  openSessions: 1",
       "  liveSubscriptions: 1",
       "  pendingCleanups: 0",
+      "Backend probe (claude):",
+      "  liveQueries: 0",
+      "  openInputs: 0",
+      "  retainedIdentities: 1",
     ].join("\n"),
   );
 });
@@ -93,6 +103,10 @@ test("a backend probe is reported beside the runtime's own", () => {
 test("a set with no probe of its own reports the two runtime blocks alone", () => {
   assert.equal(
     formatSessionDiagnostics({ counters: {}, probe: {} }),
+    ["Runtime counters:", "  (none)", "Runtime probe:", "  (none)"].join("\n"),
+  );
+  assert.equal(
+    formatSessionDiagnostics({ counters: {}, probe: {}, adapterProbe: {} }),
     ["Runtime counters:", "  (none)", "Runtime probe:", "  (none)"].join("\n"),
   );
 });

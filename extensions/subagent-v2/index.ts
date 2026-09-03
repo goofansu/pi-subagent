@@ -10,8 +10,8 @@ import {
   NOTIFICATION_MESSAGE_TYPE,
   renderNotificationMessage,
 } from "./host/notification-message.ts";
-import type { PiBackendSet } from "./host/pi-backends.ts";
-import { createPiBackendSet } from "./host/pi-backends.ts";
+import type { ProductionBackendSet } from "./host/production-backends.ts";
+import { createProductionBackendSet } from "./host/production-backends.ts";
 import type { SessionPushSink } from "./host/push-sink.ts";
 import { createSessionPushSink } from "./host/push-sink.ts";
 import { shutdownSession, startSession } from "./host/session.ts";
@@ -47,14 +47,14 @@ export interface SubagentV2Options {
   /** Reads the wall clock. Supplied by a test so widget durations are fixed. */
   readonly now?: () => number;
   /**
-   * What the live backend adapter is still holding, for the diagnostics
-   * command.
+   * What the live backend adapters are still holding, one block per backend,
+   * for the diagnostics command.
    *
    * Outside the backend contract on purpose: a probe on the contract would be
    * a number the core could start believing. It is reported beside the
    * runtime's own counters because dogfood needs both in one place — the
-   * runtime's probe says whether the core leaked, and this one says whether
-   * the adapter did.
+   * runtime's probe says whether the core leaked, and these say whether an
+   * adapter did, and which one.
    */
   readonly probe?: () => AdapterProbe | undefined;
 }
@@ -188,26 +188,27 @@ export function installSubagentV2(
 /**
  * The v2 extension.
  *
- * The backend set is the **Pi set**: one real backend, no built-in Profiles,
- * and the two host facts that make this process inert inside a child. The demo
- * set stays in the tree because a host test needs a deterministic backend, but
- * nothing ships it.
+ * The backend set is the **production set**: Pi and Claude, no built-in
+ * Profiles, and the two host facts that make this process inert inside a
+ * child. The demo set and the Pi-only set stay in the tree because a host test
+ * and Pi's own live lane need them, but nothing ships either.
  *
- * The set is built once here rather than per Session so that the probe the
- * diagnostics command reports is the live adapter's. Each Session still gets
- * its own backend, because `createPiBackendSet` is called for each one.
+ * The set is built once here rather than per Session so that the probes the
+ * diagnostics command reports are the live adapters'. Each Session still gets
+ * its own backends, because `createProductionBackendSet` is called for each
+ * one.
  */
 export default function subagentV2Extension(pi: ExtensionAPI): void {
-  let live: PiBackendSet | undefined;
+  let live: ProductionBackendSet | undefined;
   installSubagentV2(pi, {
     agentDir: getAgentDir(),
     backendSet: () => {
-      live = createPiBackendSet();
+      live = createProductionBackendSet();
       return live.set;
     },
-    // Spread into a plain block of counts: the command reports whatever the
-    // adapter is counting, and naming Pi's fields here would put provider
-    // vocabulary in the entry point.
-    probe: () => (live === undefined ? undefined : { ...live.probe() }),
+    // Handed on as the set reported it: the command prints whatever each
+    // adapter is counting, and naming a provider's own fields here would put
+    // provider vocabulary in the entry point.
+    probe: () => live?.probe(),
   });
 }

@@ -469,13 +469,14 @@ const PI_SESSION_SYMBOLS = new Set([
  * exception: a presentation test that imported it would pass, and the next
  * person to need a Pi fact in presentation would find a precedent for it.
  *
- * Both entries are host tests that are *about* the Pi facts — the inert-in-
- * child guard and the adapter probe the diagnostics command reports — and
- * neither has anywhere else to get them.
+ * Every entry is a host test that is *about* the adapter facts — the
+ * inert-in-child guard, the probes the diagnostics command reports, and the
+ * production set's own contents — and none has anywhere else to get them.
  */
 const PI_ADAPTER_TEST_IMPORTERS = new Set([
   "host/inert-guard.test.ts",
   "host/diagnostics-command.test.ts",
+  "host/production-backends.test.ts",
 ]);
 
 /**
@@ -501,12 +502,14 @@ function mayImportPiAdapter(file: string, graph: V2BoundaryGraph): boolean {
 /**
  * The tests outside the Claude adapter's own directories that may name it.
  *
- * Named one by one, exactly as the Pi list is. The one entry is the
- * diagnostics command's test, which is *about* the two adapter probes the
- * command reports and has nowhere else to get them.
+ * Named one by one, exactly as the Pi list is. Both entries are host tests
+ * that are *about* the adapter — the two probes the diagnostics command
+ * reports, and what the production set actually holds — and neither has
+ * anywhere else to get them.
  */
 const CLAUDE_ADAPTER_TEST_IMPORTERS = new Set([
   "host/diagnostics-command.test.ts",
+  "host/production-backends.test.ts",
 ]);
 
 /**

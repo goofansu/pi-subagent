@@ -7,14 +7,19 @@
  * the counters the runtime already keeps rather than to invent a second set of
  * numbers that could disagree with them.
  *
- * Two blocks, and the split is the point. The **counters** are things that
- * happened and nobody had to be told about at the time; a Session with
+ * Two kinds of block, and the split is the point. The **counters** are things
+ * that happened and nobody had to be told about at the time; a Session with
  * thousands of duplicate settlements is a Session with a bug, and this is
  * where a maintainer sees that. The **probes** are what is still alive: the
  * runtime's own, which says whether the core leaked a fiber or a queue, and
- * the adapter's, which says whether a native session or an event subscription
- * is still attached. Neither is visible anywhere else, and after a Session
- * closes both must read zero.
+ * one per backend adapter, which says whether that provider's own handles are
+ * still held. None is visible anywhere else, and after a Session closes every
+ * one of them must read zero.
+ *
+ * There is a probe block **per backend** rather than one, because a Session is
+ * built from a set and a set holds as many backends as it likes. Merging them
+ * would make "which adapter is still holding something" unanswerable, which is
+ * the only question the block exists to answer.
  *
  * Every field is printed, including the zeroes. A diagnostics command that
  * hid its zeroes would make "is this counter even wired up" unanswerable.
@@ -38,8 +43,13 @@ export const DIAGNOSTICS_COMMAND_NAME = "subagent-v2";
  */
 export type CountBlock = Readonly<Record<string, number>>;
 
-/** What a backend adapter is still holding, as name-and-count pairs. */
-export type AdapterProbe = CountBlock;
+/**
+ * What the backend adapters are still holding, one named block each.
+ *
+ * The key is the backend's own name, so the report says which adapter a
+ * count belongs to. An empty record is what a set with no probes supplies.
+ */
+export type AdapterProbe = Readonly<Record<string, CountBlock>>;
 
 /** What one Session's diagnostics read, gathered before they are formatted. */
 export interface SessionDiagnostics {
@@ -65,9 +75,9 @@ export function formatSessionDiagnostics(
   return [
     block("Runtime counters", diagnostics.counters),
     block("Runtime probe", diagnostics.probe),
-    ...(diagnostics.adapterProbe === undefined
-      ? []
-      : [block("Backend probe", diagnostics.adapterProbe)]),
+    ...Object.entries(diagnostics.adapterProbe ?? {}).map(([name, held]) =>
+      block(`Backend probe (${name})`, held),
+    ),
   ].join("\n");
 }
 
