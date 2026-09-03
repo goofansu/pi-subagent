@@ -9,7 +9,7 @@ import {
   RIG_RESUMABLE_PROFILE,
   startedIds,
 } from "../testing/host-rig.ts";
-import { liveRows, WIDGET_KEY } from "./widget.ts";
+import { WIDGET_KEY, widgetRows } from "./widget.ts";
 
 /**
  * The active widget, driven through the Session that installs it.
@@ -104,19 +104,62 @@ test("the widget redraws on a change instead of reinstalling", async (t) => {
   assert.ok(rig.host.renderRequests() > 0);
 });
 
-test("a terminal Run leaves the widget at publication, and the last one takes it away", async (t) => {
+test("a terminal Run keeps its row until its completion notice lands, and the landing takes it away", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
 
   const started = await heldRun(rig);
   await rig.text("agent_wait", { ids: [started.runId] });
+  await rig.pump();
 
-  // v1 kept a settled row until its notification landed. v2's row shows what
-  // is live, so it goes when the Run does.
+  // The row's job is to be read, and a Run shorter than the turn that started
+  // it settles before anyone has looked. So a settled row stays until its
+  // answer is in the conversation, which is what v1 did and what the matrix
+  // promises.
+  assert.equal(rig.host.hasWidget(), true);
+  assert.match(rig.host.widgetLines(60)[1], /completed in /);
+  assert.deepEqual(rig.installation.sink.unlanded(), [started.runId]);
+
+  await rig.host.messageStart({
+    role: "custom",
+    ...rig.host.sent()[0].message,
+  });
+  await rig.pump();
+
+  assert.deepEqual(rig.installation.sink.landed(), [started.runId]);
   assert.equal(rig.host.hasWidget(), false);
   assert.ok(rig.host.widgetClears() >= 1);
   assert.deepEqual(rig.host.widgetLines(), []);
+});
+
+test("a notice lost to an interrupt keeps its row until the re-push lands", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const started = await heldRun(rig);
+  await rig.text("agent_wait", { ids: [started.runId] });
+  await rig.pump();
+  assert.equal(rig.host.hasWidget(), true);
+
+  // An interrupted turn discards what was queued, so the notice never reached
+  // the conversation and the row has to still be there when it is pushed
+  // again.
+  await rig.host.turnEnd({ stopReason: "aborted" });
+  await rig.host.agentSettled();
+  await rig.pump();
+
+  assert.equal(rig.host.sent().length, 2);
+  assert.equal(rig.host.hasWidget(), true);
+
+  await rig.host.messageStart({
+    role: "custom",
+    ...rig.host.sent()[1].message,
+  });
+  await rig.pump();
+
+  assert.equal(rig.host.hasWidget(), false);
 });
 
 test("the widget is cleared when the Session shuts down", async (t) => {
@@ -229,7 +272,7 @@ test("a slow subscriber still renders the latest state after the burst", async (
   assert.match(rig.host.widgetLines(80)[1], / · last$/);
 });
 
-test("the widget lists only Runs that are not terminal", () => {
+test("the widget lists Runs that are not terminal and terminal ones whose notice has not landed", () => {
   const snapshot = (id: string, phase: RunSnapshot["phase"]): RunSnapshot => ({
     identity: {
       runId: runId(id),
@@ -252,11 +295,14 @@ test("the widget lists only Runs that are not terminal", () => {
     [runId("run-1"), snapshot("run-1", "running")],
     [runId("run-2"), snapshot("run-2", "finalizing")],
     [runId("run-3"), snapshot("run-3", "completed")],
+    [runId("run-4"), snapshot("run-4", "completed")],
   ]);
 
   assert.deepEqual(
-    liveRows(index).map((row) => row.identity.runId),
-    ["run-1", "run-2"],
+    widgetRows(index, (id) => id === runId("run-4")).map(
+      (row) => row.identity.runId,
+    ),
+    ["run-1", "run-2", "run-3"],
   );
 });
 

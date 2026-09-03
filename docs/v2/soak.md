@@ -100,7 +100,7 @@ which records how each of these was established and the testing gap they sat in.
 | --- | --- | --- | --- |
 | 2026-09-03 | 3 | The first Run of every Session was `run-2`: one sequence counter was shared by the Run and Subagent allocators, so `start` gave the Subagent 1 and its Run 2. Fixed — each kind is numbered from one. | Fixed |
 | 2026-09-03 | 1 | Ids restart at 1 when a session is reloaded, but the transcript keeps the old ones — so a pre-reload `run-1` silently resolves to a different Run once a new one takes the id. Our own completion notice invites exactly that. v1's random ids could not collide. Fixed — every identifier now carries a per-Session nonce (`run-<nonce>-1`), so a stale id is reported unknown as it was in v1. | Fixed |
-| 2026-09-03 | 3 | The widget drops a Run's row the moment the Run settles, where v1 keeps it until the Run's completion notification lands. For anything but a long Run the widget appears and disappears before it is read, so v2 reads as having no widget at all. | Open — see below |
+| 2026-09-03 | 3 | The widget drops a Run's row the moment the Run settles, where v1 keeps it until the Run's completion notification lands. For anything but a long Run the widget appears and disappears before it is read, so v2 reads as having no widget at all. Fixed in M7 — a settled Run's row now lasts until its notice lands. | Fixed |
 
 ### The widget's row lifetime (2026-09-03, severity 3)
 
@@ -134,11 +134,20 @@ widget is "removed when none are left" and cites v1's tests for it, so v2
 diverges from a promised behaviour without a **[v2 change]** marker — which
 makes this a parity break rather than a taste question.
 
-**The fix, when it is wanted.** Keep a terminal Run's row until its notification
-has landed, which is a fact the Session push sink already tracks. That means
-handing the widget a "has this Run's notice landed" predicate alongside the
-repository, and widening `liveRows`. It is host wiring plus one predicate, and
-it restores v1's behaviour exactly.
+**Fixed in M7 (ticket 01).** A terminal Run's row now lasts until its
+notification has landed, which is a fact the Session push sink already tracked.
+The sink gained two functions — `hasLanded(runId)` and `onLanding(listener)` —
+the widget is handed both beside the repository, and `liveRows` became
+`widgetRows`, which keeps a terminal Run whose notice has not landed. Landing is
+a host event rather than an index change, so the listener is what redraws; both
+the predicate and the listener are read-only from the widget's side, and a
+boundary rule now rejects a widget that imports the sink or delivery at all.
+
+Proven by `a terminal Run keeps its row until its completion notice lands, and
+the landing takes it away` and `a notice lost to an interrupt keeps its row
+until the re-push lands` in `host/widget.test.ts`, both driven through the
+stand-in host. The compatibility matrix gained an **Active widget — row
+lifetime** row citing them.
 
 ## What to watch for
 

@@ -79,6 +79,30 @@ export interface SessionPushSink extends NotificationSink {
   readonly unlanded: () => readonly RunId[];
   /** Run ids whose notice has landed, in landing order. */
   readonly landed: () => readonly RunId[];
+  /**
+   * Whether this Run's completion notice has reached the conversation.
+   *
+   * The predicate the active widget reads to decide how long to keep a settled
+   * Run's row. Everything else here answers a question about the *sink*; this
+   * answers one about a Run, which is why it is a lookup rather than a list —
+   * a caller asking about one Run should not have to walk every landing.
+   *
+   * A Run this sink has never heard of answers `false`, which is the answer a
+   * row wants: a Run that settled a moment ago and whose notice delivery is
+   * still in flight has not landed either, and the two are indistinguishable
+   * from here.
+   */
+  readonly hasLanded: (runId: RunId) => boolean;
+  /**
+   * Watch for landings. Returns an unsubscribe.
+   *
+   * Landing is a host event rather than a Run state change, so nothing the
+   * repository publishes marks it. A consumer whose display depends on
+   * {@link hasLanded} therefore has to be told, and this is the telling.
+   * Listeners are display-only and a throwing one is ignored, because a throw
+   * out of a Pi host event handler takes the process with it.
+   */
+  readonly onLanding: (listener: () => void) => () => void;
 }
 
 /** What the sink keeps about a notice that has not landed. */
@@ -91,7 +115,27 @@ interface Unlanded {
 export function createSessionPushSink(): SessionPushSink {
   let send: SendNotification | undefined;
   const unlanded = new Map<RunId, Unlanded>();
-  const landed: RunId[] = [];
+  /**
+   * The Run ids whose notice landed, in landing order.
+   *
+   * A `Set` rather than an array so that asking about one Run is a lookup
+   * rather than a scan, and insertion order still gives {@link landed} the
+   * sequence it reports. Bounded by the number of Runs one Session settles,
+   * which is what the repository's own index is bounded by.
+   */
+  const landed = new Set<RunId>();
+  const landingListeners = new Set<() => void>();
+
+  const announceLanding = (): void => {
+    for (const listener of [...landingListeners]) {
+      try {
+        listener();
+      } catch {
+        // Display-only subscribers, and a throw out of a Pi host event handler
+        // ends the process. There is nowhere useful to report this.
+      }
+    }
+  };
 
   /**
    * Hand one notice to the Session, recording it as unlanded *first*.
@@ -146,7 +190,9 @@ export function createSessionPushSink(): SessionPushSink {
     messageStarted: (message) => {
       const details = parseNotificationMessage(message);
       if (!details) return;
-      if (unlanded.delete(details.runId)) landed.push(details.runId);
+      if (!unlanded.delete(details.runId)) return;
+      landed.add(details.runId);
+      announceLanding();
     },
 
     turnEnded: (evidence) => {
@@ -173,5 +219,10 @@ export function createSessionPushSink(): SessionPushSink {
 
     unlanded: () => [...unlanded.keys()],
     landed: () => [...landed],
+    hasLanded: (runId) => landed.has(runId),
+    onLanding: (listener) => {
+      landingListeners.add(listener);
+      return () => landingListeners.delete(listener);
+    },
   };
 }

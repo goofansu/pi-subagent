@@ -140,9 +140,16 @@ test("when the widget stops listing a Run, agent_result returns its result", asy
   const ids = await started(rig, RIG_RESUMABLE_PROFILE);
   await rig.text("agent_wait", { ids: [ids.runId] });
   await rig.pump();
+  // A row lasts until its notice lands, so landing the notice is what takes
+  // the Run off the widget.
+  await rig.host.messageStart({
+    role: "custom",
+    ...rig.host.sent()[0].message,
+  });
+  await rig.pump();
 
-  // The widget lists live Runs, so a Run that has left it is terminal at the
-  // surface — and a Run that is terminal at the surface has a result.
+  // A Run that has left the widget has been announced, and a Run that has been
+  // announced was stored before the notice was built — so it has a result.
   assert.deepEqual(rig.host.widgetLines(), []);
   const result = await rig.text("agent_result", { id: ids.runId });
   assert.doesNotMatch(result, /has not finished yet/);

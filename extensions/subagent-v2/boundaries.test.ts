@@ -85,6 +85,10 @@ export interface V2BoundaryGraph {
   readonly applicationRoot: string;
   /** The Pi host boundary: the one place that runs an Effect. */
   readonly hostRoot: string;
+  /** The active widget, which observes and never delivers. */
+  readonly widgetFile: string;
+  /** The Session push sink, which owns notification delivery and landing. */
+  readonly pushSinkFile: string;
   /** Test helpers, which are a test boundary and may run Effects. */
   readonly testingRoot: string;
   /** The checker itself, excluded from the legacy-name scan. */
@@ -163,6 +167,20 @@ const productionGraph: V2BoundaryGraph = {
     "application",
   ),
   hostRoot: path.join(repositoryRoot, "extensions", "subagent-v2", "host"),
+  widgetFile: path.join(
+    repositoryRoot,
+    "extensions",
+    "subagent-v2",
+    "host",
+    "widget.ts",
+  ),
+  pushSinkFile: path.join(
+    repositoryRoot,
+    "extensions",
+    "subagent-v2",
+    "host",
+    "push-sink.ts",
+  ),
   testingRoot: path.join(
     repositoryRoot,
     "extensions",
@@ -1151,6 +1169,25 @@ export function findV2BoundaryViolations(
     }
   }
 
+  // 20. The widget observes; it does not deliver. A settled Run's row lasts
+  //     until its completion notice lands, which is the push sink's fact — so
+  //     the widget is handed two functions for it and may not name the sink or
+  //     delivery itself. A widget that could import either could push a
+  //     notification, and then two things would decide what the model is told.
+  if (fs.existsSync(graph.widgetFile)) {
+    const forbidden = new Set([
+      graph.pushSinkFile,
+      path.join(graph.runtimeRoot, "delivery.ts"),
+    ]);
+    for (const specifier of specifiersOf(graph.widgetFile)) {
+      const target = resolveRelativeSource(graph.widgetFile, specifier);
+      if (!target || !forbidden.has(target)) continue;
+      violations.add(
+        `${describe(graph.widgetFile)} imports ${describe(target)}, and the widget reads landing facts rather than owning delivery`,
+      );
+    }
+  }
+
   return [...violations].sort();
 }
 
@@ -1233,6 +1270,20 @@ function fixtureGraph(
       "application",
     ),
     hostRoot: path.join(fixtureRoot, "extensions", "subagent-v2", "host"),
+    widgetFile: path.join(
+      fixtureRoot,
+      "extensions",
+      "subagent-v2",
+      "host",
+      "widget.ts",
+    ),
+    pushSinkFile: path.join(
+      fixtureRoot,
+      "extensions",
+      "subagent-v2",
+      "host",
+      "push-sink.ts",
+    ),
     testingRoot: path.join(fixtureRoot, "extensions", "subagent-v2", "testing"),
   };
   return {
@@ -1818,6 +1869,30 @@ test("a host file importing a backend or a fake is rejected unless it is the com
   assert.deepEqual(findV2BoundaryViolations(graph), [
     `${describe(path.join(graph.hostRoot, "session.ts"))} imports ${describe(path.join(graph.contractRoot, "contract.ts"))}, which only the composition root may name`,
     `${describe(graph.v2Entry)} imports ${describe(path.join(graph.testingRoot, "fakes", "backend.ts"))}, which only the composition root may name`,
+  ]);
+});
+
+test("the widget importing the push sink or delivery is rejected", (t) => {
+  const { graph, write } = fixtureGraph(t, "widget-delivery");
+  write("extensions/subagent-v2/index.ts", "export const entry = 1;\n");
+  write(
+    "extensions/subagent-v2/host/push-sink.ts",
+    "export const createSessionPushSink = () => ({});\n",
+  );
+  write("extensions/subagent-v2/runtime/delivery.ts", "export const d = 1;\n");
+  write(
+    "extensions/subagent-v2/host/widget.ts",
+    [
+      'import { createSessionPushSink } from "./push-sink.ts";',
+      'import { d } from "../runtime/delivery.ts";',
+      "export const widget = [createSessionPushSink, d];",
+      "",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.hostRoot, "widget.ts"))} imports ${describe(path.join(graph.hostRoot, "push-sink.ts"))}, and the widget reads landing facts rather than owning delivery`,
+    `${describe(path.join(graph.hostRoot, "widget.ts"))} imports ${describe(path.join(graph.runtimeRoot, "delivery.ts"))}, and the widget reads landing facts rather than owning delivery`,
   ]);
 });
 

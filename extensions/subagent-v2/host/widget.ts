@@ -35,14 +35,21 @@
  * `setWidget` is called when the widget appears and when it goes away, and
  * never in between: the component reads the reference when it renders rather
  * than closing over a snapshot, so a change is a redraw request rather than a
- * teardown and rebuild. A terminal Run leaves the widget at publication, which
- * is a deliberate difference from v1 — v1 kept a settled row until its
- * notification landed, and the row's job here is to show what is *live*.
+ * teardown and rebuild.
+ *
+ * A Run's row lasts from `agent_start` until its **completion notice lands**,
+ * not until the Run settles. A Run shorter than the turn that started it
+ * settles before anybody has looked at the widget, so a row that went at
+ * settlement would be a row nobody ever read — and the compatibility matrix
+ * promises v1's lifetime, which was exactly this. Landing is the push sink's
+ * fact, so the widget is handed a predicate for it and a way to be told when
+ * one happens. It reads the predicate and never writes it: whether a notice
+ * landed is not the widget's business to decide.
  */
 
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { Effect, type Scope, Stream } from "effect";
-import { isTerminalRunPhase } from "../domain/index.ts";
+import { isTerminalRunPhase, type RunId } from "../domain/index.ts";
 import {
   type RenderableTheme,
   type RunRowView,
@@ -63,11 +70,33 @@ export interface WidgetHost {
   ): void;
 }
 
-/** What the widget shows: the Runs that are not terminal, in index order. */
-export function liveRows(index: RunIndex): readonly RunRowView[] {
+/**
+ * What the widget shows, in index order: every Run that is not terminal, plus
+ * every terminal Run whose completion notice has not landed yet.
+ */
+export function widgetRows(
+  index: RunIndex,
+  hasLanded: (runId: RunId) => boolean,
+): readonly RunRowView[] {
   return [...index.values()].filter(
-    (snapshot: RunSnapshot) => !isTerminalRunPhase(snapshot.phase),
+    (snapshot: RunSnapshot) =>
+      !isTerminalRunPhase(snapshot.phase) ||
+      !hasLanded(snapshot.identity.runId),
   );
+}
+
+/**
+ * The landing facts the widget reads, which the Session push sink supplies.
+ *
+ * Named here rather than importing the sink's own type, because the widget
+ * needs two functions and the sink is a whole delivery surface. This is the
+ * boundary: a widget that could name the sink could push a notification.
+ */
+export interface NoticeLandings {
+  /** Whether this Run's completion notice reached the conversation. */
+  readonly hasLanded: (runId: RunId) => boolean;
+  /** Called on every landing. Returns an unsubscribe. */
+  readonly onLanding: (listener: () => void) => () => void;
 }
 
 /** What a test counts to measure coalescing. */
@@ -97,18 +126,24 @@ export interface ActiveWidget {
 export function installActiveWidget(
   host: WidgetHost,
   now: () => number,
+  landings: NoticeLandings,
 ): Effect.Effect<ActiveWidget, never, RunRepository | Scope.Scope> {
   return Effect.gen(function* () {
     const repository = yield* RunRepository;
     /**
-     * The latest rows, as a plain variable.
+     * The latest index and the rows it produced, as plain variables.
      *
-     * Not a `Ref`: this is a cache of something the repository already owns,
-     * read only from the render callback, which is Pi's thread of control
-     * rather than a fiber. A `Ref` would make reading it an Effect the
+     * Not a `Ref`: this is a cache of things the repository and the sink
+     * already own, read only from the render callback, which is Pi's thread of
+     * control rather than a fiber. A `Ref` would make reading it an Effect the
      * renderer had to run, which is machinery in the one place that should
      * have none.
+     *
+     * The index is kept beside the rows because a landing changes which rows
+     * the *same* index produces, and recomputing from the index is what keeps
+     * this a cache: throwing both away and re-reading gives the same answer.
      */
+    let index: RunIndex = new Map();
     let latest: readonly RunRowView[] = [];
     let changes = 0;
     let renderRequests = 0;
@@ -169,17 +204,30 @@ export function installActiveWidget(
       requestRender?.();
     };
 
+    /** Re-read both sources and put the host in step with them. */
+    const refresh = (): void => {
+      latest = widgetRows(index, landings.hasLanded);
+      reconcile(latest);
+    };
+
     // The uninstall is registered before the subscription starts, so a Session
     // Scope that closes mid-change still clears the widget.
     yield* Effect.addFinalizer(() => Effect.sync(uninstall));
 
+    // A landing is a host event rather than an index change, so it arrives
+    // here rather than on the stream. The unsubscribe is a finalizer for the
+    // same reason the uninstall is: the listener must not outlive the Session
+    // whose rows it redraws.
+    const stopWatchingLandings = landings.onLanding(refresh);
+    yield* Effect.addFinalizer(() => Effect.sync(stopWatchingLandings));
+
     const changesStream = yield* repository.subscribe();
     yield* Effect.forkScoped(
-      Stream.runForEach(changesStream, (index: RunIndex) =>
+      Stream.runForEach(changesStream, (published: RunIndex) =>
         Effect.sync(() => {
           changes += 1;
-          latest = liveRows(index);
-          reconcile(latest);
+          index = published;
+          refresh();
         }),
       ),
     );

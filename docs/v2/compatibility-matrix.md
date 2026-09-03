@@ -161,6 +161,7 @@ The session widget listing live Runs.
 | **Proof** | `a run line names each harness the same way` (`widget.test.ts`, added in M0); `a run line carries agent, harness, turns and status, and nothing else fixed` (`widget.test.ts`) | `a run line names each harness the same way` (`widget.test.ts`, added in M0) | `a run line names each harness the same way` (`widget.test.ts`, added in M0) |
 | **Observation only** | The widget never determines lifecycle state. `INV-10: the widget observes runtime state without determining it` (`widget.test.ts`); `INV-10 boundary: widget and result presentation never determine state` (`index.test.ts`) | Same. Same proof. | Same. Same proof. |
 | **Lifecycle** | Appears with the first Run and is removed when none are left; a change redraws rather than reinstalls. `the widget appears with a run and is removed when none are left`; `a change redraws the widget instead of reinstalling it` (`widget.test.ts`) | Same. Same proof. | Same. Same proof. |
+| **Row lifetime** | A Run's row lasts from `agent_start` until its completion notice reaches the conversation, not until the Run settles — v1 releases a tracked Run on `notificationLanded`. Proven in v2 by `a terminal Run keeps its row until its completion notice lands, and the landing takes it away` and `a notice lost to an interrupt keeps its row until the re-push lands` (`host/widget.test.ts`), and at the unit level by `the widget lists Runs that are not terminal and terminal ones whose notice has not landed`. | Same. Same proof: the row's lifetime is backend-independent. | Same. Same proof. |
 
 ## Completion Notification messages
 
@@ -275,6 +276,7 @@ there is that the Pi backend is what the Session was actually running.
 | Subagent close — identity cleanup | `the widget is cleared when the Session shuts down` (`host/widget.test.ts`); `PiBackend conformance: close-releases-every-resource` |
 | `/agents` — every row | Backend-independent: `the list holds one item per Profile, by name and description` and `the list is identical whatever backend a Profile names` (`host/agents-command.test.ts`). The Pi set supplies no Profiles of its own: `the Pi set supplies one backend and no Profiles of its own` (`host/inert-guard.test.ts`) |
 | Active widget — every row | Backend-independent: `the widget appears with the first live Run and its row reads as the matrix says` and its siblings (`host/widget.test.ts`); `PiBackend conformance: only-the-repository-writes-snapshots` |
+| Active widget — row lifetime | Backend-independent: `a terminal Run keeps its row until its completion notice lands, and the landing takes it away`; `a notice lost to an interrupt keeps its row until the re-push lands` (`host/widget.test.ts`) |
 | Completion Notification — every row | Backend-independent: `PiBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; the landing rows in `host/push-sink.test.ts`; live (`v2:pi:smoke`, one notification per settled Run) |
 | Profile loading — generic parsing | the `parseProfile` tests in `domain/profile.test.ts` |
 | Profile loading — unknown backend name | `PiBackend conformance: validation-is-deterministic`; `a Profile naming an unknown backend is one diagnostic, not an exception` (`backend/contract.test.ts`) |
@@ -355,6 +357,7 @@ was actually running.
 | Subagent close — identity cleanup | `nothing is left iterating or open once a Run has settled` (`testing/claude/claude-backend.test.ts`); `ClaudeBackend conformance: close-releases-every-resource` |
 | `/agents` — every row | Backend-independent: `the list is identical whatever backend a Profile names` (`host/agents-command.test.ts`). The production set supplies no Profiles of its own: `the production set offers both backends and no Profiles of its own` (`host/production-backends.test.ts`) |
 | Active widget — every row | Backend-independent: the widget rows in `host/widget.test.ts`; `ClaudeBackend conformance: only-the-repository-writes-snapshots` |
+| Active widget — row lifetime | Backend-independent: the row-lifetime tests in `host/widget.test.ts` |
 | Completion Notification — every row | Backend-independent: `ClaudeBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; live (`v2:claude:smoke`, one notification per settled Run and no provider identity in any of them) |
 | Profile loading — generic parsing | the `parseProfile` tests in `domain/profile.test.ts` |
 | Profile loading — unknown backend name | `a Profile naming a backend the set does not hold is a diagnostic, not a crash` (`host/production-backends.test.ts`) |
@@ -446,6 +449,7 @@ backend is what the Session was actually running.
 | Subagent close — process cleanup | `closing the Session ends stdin once and leaves nothing held` (`testing/codex/codex-backend.test.ts`); live (`v2:codex:smoke`, "no App Server child remains after closure", read from `ps` rather than from the adapter) |
 | `/agents` — every row | Backend-independent: `the list is identical whatever backend a Profile names` (`host/agents-command.test.ts`). The production set supplies no Profiles of its own: `the production set offers all three backends and no Profiles of its own` (`host/production-backends.test.ts`) |
 | Active widget — every row | Backend-independent: the widget rows in `host/widget.test.ts`; `CodexBackend conformance: only-the-repository-writes-snapshots` |
+| Active widget — row lifetime | Backend-independent: the row-lifetime tests in `host/widget.test.ts` |
 | Completion Notification — every row | Backend-independent: `CodexBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; live (`v2:codex:smoke`, one notification per settled Run and no provider identity in any of them) |
 | Profile loading — generic parsing | the `parseProfile` tests in `domain/profile.test.ts` |
 | Profile loading — unknown backend name | `a Profile naming a backend the set does not hold is a diagnostic, not a crash` (`host/production-backends.test.ts`) |

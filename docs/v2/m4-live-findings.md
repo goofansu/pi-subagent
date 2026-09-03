@@ -65,7 +65,7 @@ should say the rule.
 
 ## 2. The widget disappears the moment a Run settles
 
-**Severity 3 — a parity break, open by decision.**
+**Severity 3 — a parity break, open by decision at M4; fixed in M7.**
 
 v1's widget lists every *tracked* Run, and a Run stays tracked until its
 completion notification reaches the model — so a v1 row is on screen from
@@ -84,10 +84,13 @@ none are left" and cites v1's tests for it, so v2 diverges from a promised
 behaviour with no **[v2 change]** marker — which makes it a parity break rather
 than a matter of taste.
 
-Left open deliberately, with the fix described in
+Left open deliberately at M4, with the fix described in
 [the soak record](soak.md#the-widgets-row-lifetime-2026-09-03-severity-3): keep
 a terminal Run's row until its notification has landed, which the Session push
 sink already tracks.
+
+**Closed in M7**, before the cutover, by exactly that fix. See the soak
+record's entry for what changed and which tests hold it.
 
 ## 3. Ids restart at 1 on a session reload, and the transcript does not
 
