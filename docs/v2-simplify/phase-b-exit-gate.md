@@ -1,7 +1,8 @@
 # Phase B exit gate — supervisor decomposition by mechanism
 
-**Status: not started.** Planned 2026-09-03 against the tree at the Phase A
-close (`2fdabe3`), where `runtime/supervisor.ts` is 1,030 lines.
+**Status: closed.** Planned 2026-09-03 against the tree at the Phase A
+close (`2fdabe3`), where `runtime/supervisor.ts` was 1,030 lines; verified
+2026-09-04 on the commit carrying this verdict. Thirteen items, all PASS.
 **Verified against:** [the roadmap](roadmap.md), Phase B;
 [the freeze](freeze.md); the recipe *Extract a mechanism from the supervisor*
 in [change-recipes.md](change-recipes.md); the Phase B spec and its six
@@ -25,7 +26,19 @@ is how behaviour is observed. New test files for new modules are expected.
 npm run check   →  exit 0
 ```
 
-**Status:** OPEN.
+Re-run on the commit that closes this gate: **1,244 tests, 0 failures, 8
+skipped** in the main lane, and **191 tests, 0 failures, 8 skipped** in the
+conformance lane across all five rigs. `typecheck`, `lint`, and the Codex
+protocol check are green. No live gate is required: no backend, host, or
+model-facing text changed in this phase.
+
+The phase added 25 tests to the main lane: eight for the admission lease, nine
+for the Subagent records, six for the waiter ledger, and two boundary fixtures
+for rule 21. `3454da5`'s message says 1,242, which understates by two — the
+figure was taken before that commit's own two fixtures were written. The count
+here is the one on the closing tree.
+
+**Status:** PASS.
 
 ## The items
 
@@ -40,9 +53,17 @@ it costs (two more files to know about). It answers the architecture challenge
 gate's three questions. Its status was *proposed* in the commit before
 `runtime/admission.ts` existed and *accepted* in the gate's closing commit.
 
-**Evidence to name:** the ADR's two status entries and their commits.
+**Evidence to name:** the ADR's two status entries. *Proposed* in `96d210a`,
+which is a documents-only commit landing before `runtime/admission.ts` existed
+— the commit that created the module is `b70b946`, two commits later.
+*Accepted* in the commit carrying this verdict, with the ADR's own note that
+nothing from *Context* down was rewritten between the two.
 
-**Status:** OPEN.
+One thing the ADR named and left open is now settled and is named there too:
+the waiter ledger, `runtime/waiters.ts`, which the ADR deliberately refused to
+decide in advance. See item 5.
+
+**Status:** PASS.
 
 ### 2. Every existing runtime test passes without modification
 
@@ -50,10 +71,32 @@ gate's three questions. Its status was *proposed* in the commit before
 git diff --name-only <phase-a-close>..<phase-b-close> -- 'extensions/subagent/runtime/*.test.ts'
 ```
 
-returns only files that did not exist at the Phase A close. Every conformance
-scenario passes on all five rigs.
+returns only files that did not exist at the Phase A close:
 
-**Status:** OPEN.
+```
+extensions/subagent/runtime/admission.test.ts
+extensions/subagent/runtime/subagent-records.test.ts
+extensions/subagent/runtime/waiters.test.ts
+```
+
+Nothing else under `extensions/subagent/runtime/*.test.ts` was touched, so the
+supervisor, lifecycle, races, stress, faults, bounds, backpressure, delivery,
+repository, result-store, mailbox, arbitration, policy, and composition lanes
+all observe the same behaviour they observed before the phase and all pass.
+Every conformance scenario passes on all five rigs (191 tests, 8 skipped by
+declared capability, 0 failures).
+
+This is the item the phase is judged by, and it is the only mechanical answer
+to "did the behaviour change". Two orderings inside the phase *were* changed
+and both are argued in their commits rather than hidden: the Run fiber's
+finalizer detaches the Run before releasing the lease, which is what makes the
+records' one-active-Run assertion unreachable; and a resumed Subagent's phase
+becomes `running` when the fork attaches its Run rather than a few steps
+earlier, in which window a second resume is refused by the Subagent's
+active-Run claim instead of by the phase check and answers the identical
+outcome with the identical Subagent id.
+
+**Status:** PASS.
 
 ### 3. Admission is its own module with lease semantics
 
@@ -66,13 +109,24 @@ and the compensation when a reservation is refused after a claim. Its API is
 arithmetic; the `Ref.update` that added a Subagent to the running set after a
 successful open is gone, replaced by `lease.bind`.
 
-**Evidence to name:** the new module's unit test — two concurrent acquires
-against a capacity of one produce one lease; a refused reservation releases
-the lease; a second release is a no-op; `beginShutdown` is true once; an
-acquire after it is `shutting down` — and a grep showing `Ref` is no longer
-imported by the supervisor.
+**Evidence to name:** `runtime/admission.test.ts`, eight cases at the module's
+own API — two concurrent acquires against a capacity of one yield exactly one
+lease; a resume acquire on a running Subagent is refused and spends no
+capacity; shutting down is answered before already-running and before capacity;
+a refused reservation releases the lease so its slot comes back, and releases
+nothing in the store because a refused reservation is not one; a lease releases
+the reservation it holds exactly once; a **second release cannot raise the
+effective capacity**, which is the property the clamp was defending and the
+one a "is it quiet" test would have missed; a bound Subagent leaves the running
+set when its lease is released; `beginShutdown` is true for the first caller
+only and every later acquire is refused.
 
-**Status:** OPEN.
+`grep -n 'Ref' extensions/subagent/runtime/supervisor.ts` returns nothing: not
+the import, not a call, not a mention. The `Ref.update` that added a Subagent
+to the running set after a successful open is `lease.bind`, called between the
+insert and the publish.
+
+**Status:** PASS.
 
 ### 4. The Subagent records are their own module, and it is not called a registry
 
@@ -82,13 +136,29 @@ Run-id-to-Subagent index that replaces the linear scan. Invariant 2 is
 asserted in `attachRun`. The supervisor reads records through it and assigns
 no record field directly.
 
-**Evidence to name:** the new module's unit test, including the assertion
-firing on a second attach and `detachRun` leaving a closed Subagent closed;
-a grep showing no `record.<field> =` assignment in the supervisor; the
-glossary's *Subagent records* entry and its note that *Registry* stays
-retired.
+**Evidence to name:** `runtime/subagent-records.test.ts`, nine cases —
+including `attaching a second Run to a Subagent that has one is a defect`,
+which asserts the throw and then asserts that the first Run's handle is still
+the one `byRun` answers with, and `a Subagent whose Run detaches goes idle, and
+one that was closed stays closed`. Also: `byRun` answering nothing for a
+settled or unknown Run, `markClosed` true for the first caller only, `all` in
+insertion order, and a detach after `clear()` changing nothing — which is the
+case that says why a mutation of an unknown Subagent is quiet rather than a
+defect, since shutdown clears the records while a Run fiber's finalizer may
+still be in flight.
 
-**Status:** OPEN.
+`grep -nE 'record\.[a-zA-Z]+ = ' extensions/subagent/runtime/supervisor.ts`
+returns nothing. The stronger fence is the type rather than the grep: the
+public `SubagentRecord` makes `phase`, `conversationLost`, `run`, and
+`runFiber` `readonly`, so a supervisor that assigned one would fail to
+compile. The values handed out are the live records, so reads stay current.
+
+The glossary has a *Subagent records* entry, and the historical *Registry*
+entry now says in as many words that the word stays retired and why: the
+section exists so an old plan can still be read, and naming a new thing
+"registry" would make it say something untrue.
+
+**Status:** PASS.
 
 ### 5. Waiter bookkeeping was decided, not deferred
 
@@ -173,17 +243,35 @@ shorter.
 
 ### 7. No new Effect Layer
 
-The extracted modules are plain objects constructed inside `makeSupervisor`.
-`runtime/composition.ts` did not change and registers no new service.
+All three extracted modules are plain objects constructed inside
+`makeSupervisor`: `makeAdmission` returns `Effect<RunAdmission>` because it
+holds a `Ref`, and `makeSubagentRecords` and `makeWaiterLedger` are plain
+functions. None imports `Layer`, and boundary rule 5 would reject it if one
+tried — `LAYER_MODULES` names the composition module and the six services it
+wires, and none of the three is on that list.
 
-**Status:** OPEN.
+**Evidence to name:** `git diff --stat 2fdabe3..HEAD --
+extensions/subagent/runtime/composition.ts` is empty.
+`runtime/composition.test.ts` is unmodified and green.
+
+**Status:** PASS.
 
 ### 8. Nothing outside `runtime/` changed in production code
 
-`git diff --name-only` under `extensions/subagent/` shows only `runtime/*`
-and `boundaries.test.ts`.
+`git diff --name-only 2fdabe3..HEAD -- 'extensions/**'` shows seven files:
+`runtime/admission.ts`, `runtime/admission.test.ts`,
+`runtime/subagent-records.ts`, `runtime/subagent-records.test.ts`,
+`runtime/waiters.ts`, `runtime/waiters.test.ts`, `runtime/supervisor.ts`, and
+`boundaries.test.ts`. Filtering out tests leaves four production modules, all
+under `runtime/`.
 
-**Status:** OPEN.
+Documents changed as the tickets required: this gate, the roadmap,
+[the change surface](change-surface.md), [the recipes](change-recipes.md),
+[the architecture note](../architecture.md),
+[the contributor rules](../contributing.md) (the boundary-rule count),
+[the glossary](../../CONTEXT.md), and ADR-0034.
+
+**Status:** PASS.
 
 ### 9. The supervisor holds no state of its own, and it is fenced
 
@@ -208,11 +296,21 @@ comment as the exception and as a test hook nothing reads back.
 
 ### 10. The race and stress lanes are the detector, and they are green
 
-`runtime/races.test.ts` and `runtime/stress.test.ts` pass unmodified; the
-stress lane's leak probes end at zero after its cycles, including rejected
-starts, failed opens, and refused reservations.
+`runtime/races.test.ts` and `runtime/stress.test.ts` are byte-identical to
+their Phase A versions (item 2's diff is empty for both) and pass. The stress
+lane's leak probes end at zero after its cycles, which is what would catch a
+leaked lease: its cycles include rejected starts, failed opens, and refused
+reservations, and those are exactly the three paths where a lease is released
+by a call rather than by a Run ending.
 
-**Status:** OPEN.
+**Evidence to name:** the lanes were re-run repeatedly rather than once,
+because an ordering change under contention is not reliably a first-run
+failure. `races`, `stress`, `faults`, `lifecycle`, `backpressure`, and
+`bounds` were run five times over after the admission extraction, five times
+after the records extraction, and three times after the ledger extraction —
+65 tests, 0 failures, every time.
+
+**Status:** PASS.
 
 ### 11. The Phase A findings are settled, then the Phase B row is measured
 
@@ -259,24 +357,119 @@ branch was deleted. R5, R6, and R7 are written module lists.
 
 ### 12. Every commit that added an abstraction answers the challenge gate
 
-Each of the two extraction commits states, in its message, what the
-abstraction is, what it removes, and what would have to be true for it to be
-wrong — the three questions in
+Each extraction commit states, in its message, what the abstraction is, what
+it deletes, whether it is provider-neutral, and what breaks if it is wrong —
+the three questions in
 [contributing.md](../contributing.md#the-architecture-challenge-gate). Phase A
 answered them once, in the ADR, and recorded that a phase which decides its
 ADR first should also answer them commit by commit.
 
-**Status:** OPEN.
+**Three** commits rather than two, because the waiter decision came out as an
+extraction:
+
+| Commit | Abstraction |
+| --- | --- |
+| `b70b946` | `refactor(v2-simplify-b): admission is a lease, and the supervisor holds none of it` |
+| `73a1181` | `refactor(v2-simplify-b): the Subagent records own every mutation` |
+| `3454da5` | `refactor(v2-simplify-b): the supervisor reads like orchestration, and is fenced` |
+
+Each names its deletions concretely rather than as "simplification", answers
+neutrality with the conformance suite on all five rigs, and answers "what
+breaks" with the test that holds it. ADR-0034 answers the same three questions
+for the phase.
+
+**Status:** PASS.
 
 ### 13. The recipes, the architecture note, and the glossary name the new modules
 
-The *Extract a mechanism* recipe names admission and records as done and
-points at the waiter decision; architecture §1 and §4 say the supervisor
-delegates admission and records; the glossary has *Admission lease* and
-*Subagent records* entries, each added in the same commit as its code.
+The *Extract a mechanism from the supervisor* recipe now opens with a table of
+the three mechanisms that left, the invariant each carries, and its unit test;
+it records the waiter decision and points here for what decided it; and it says
+that a fourth extraction is no longer a judgement call, because boundary rule
+21 means a mechanism needing state cannot be added to the supervisor at all.
+The recipes' status line reads *Current as of Phase B*.
 
-**Status:** OPEN.
+Architecture §1 gains **"The supervisor owns the order things happen in, and no
+state"**, naming all three modules, what each owns, and rule 21, under the
+Layer rule it depends on. §4 extends the Control-admission argument to Run
+admission: one atomic step, nothing queued, nothing allocated by a rejection,
+and a lease holding all three claims. Both point at ADR-0034. §10's boundary
+table gains rule 21's row, and its count reads twenty-one rules in nineteen
+rows.
+
+The glossary has *Admission lease* and *Subagent records*, each added in the
+same commit as its code (`b70b946` and `73a1181`), the *Reservation* entry now
+says the lease releases one that a commit has not consumed, and the historical
+*Registry* entry says the word stays retired.
+
+**Status:** PASS.
 
 ## Verdict
 
-To be written when verified.
+**The gate is closed.** Thirteen items, all PASS, and `npm run check` green on
+the closing commit.
+
+What the phase changed: three mechanisms left `runtime/supervisor.ts` for
+modules that own the invariant each carries — admission as a lease
+(invariant 12), the Subagent records (invariant 2), and the waiter ledger
+(invariant 13) — each a plain object with the supervisor's lifetime, each with
+a unit test at its own API, each landing as its own behaviour-preserving
+commit that answers the architecture challenge gate. Boundary rule 21 makes
+the outcome permanent.
+
+What it did not change: any outcome of any public operation, in any edge case.
+The evidence is item 2, and it is mechanical — every runtime test that existed
+before the phase passes with no edits, and the conformance suite passes on all
+five rigs.
+
+**Two things are worth carrying rather than declaring finished.**
+
+*`start` is 72 lines against a sixty-line guide.* It reads as nine named steps
+with no state manipulated inline, which is the substantive criterion, and item
+6 records why splitting it further was rejected: the seam would fall between
+"everything that can refuse" and "everything that commits", and the order
+across that seam is what the phase exists to make readable. A later phase that
+finds a better decomposition should take it; a later phase that adds a tenth
+step to `start` should look here first.
+
+*The file grew by seven lines.* `makeSupervisor`'s body lost 104 to the three
+modules and the module-level declarations above it gained about as many. The
+phase's criterion was never that the file be shorter, and the honest number is
+recorded rather than framed.
+
+## What Phase C inherits
+
+**C1's finalizer conversion is ready, and it is the one-line change it was
+promised to be.** The lease exists, its `release` is idempotent, and the Run
+fiber's release is a single call inside `Effect.ensuring`. Converting it to
+`Effect.acquireRelease(admission.acquire(...), (lease) => lease.release())` is
+the whole of C1 — with one thing to preserve that this phase discovered:
+**the release must stay ordered after `records.detachRun`.** The Subagent's
+active-Run claim is what stops a resume being admitted, so a release that
+happened first would let the next Run reach `attachRun` while this one still
+looked in flight, and the records' invariant-2 assertion would fire on a path
+that is legal today. Whatever C1 does with the scope, that order is load
+bearing.
+
+**C2's audit of the remaining acquire/release pairs** has one fewer pair to
+consider: `claim`/`releaseClaim` is gone, replaced by the lease. Two new pairs
+arrived and both already pass C2's own test — a release with exactly one
+correct moment — without being scopes: the lease's, whose moment is the Run
+fiber's exit, and the waiter ledger's, whose moment is a wait ending however
+it ends. The ledger's release is *handed to* its holder rather than paired
+with a second call, which is the shape C2 is looking for expressed without a
+scope.
+
+**The change-surface baseline for Phase C** is the Phase B row, measured from
+`3454da5` by the method recorded in
+[change-surface.md](change-surface.md#method-so-this-can-be-repeated), with
+seven cells and no findings. The tree holds 106 production modules, 26 of them
+generic. R3's target is settled at `0 / ≤ 3` and R7 exists at `≤ 2 / ≤ 5`, so
+Phase C measures against decided targets rather than inherited ones. C3 will
+move R1 and R4's rows, because it changes the widget and adds a notice-state
+projection; R6 is the row to watch again if C4's `RunCompletionView` lands, and
+it should *fall*.
+
+**No live gate was owed by this phase** and none is owed by it now: no
+backend, host, or model-facing text changed. Phase C3 changes the widget and
+will owe `pi:host-smoke`.

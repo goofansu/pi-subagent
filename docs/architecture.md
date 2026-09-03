@@ -119,6 +119,23 @@ BackendAgent, a Run, a Query, a Turn, or a subscription is not. The boundary
 test enforces it by confining `Layer` to the composition module and the service
 modules it wires.
 
+**The supervisor owns the order things happen in, and no state.** What it used
+to hold, three modules now own, each carrying one invariant and each a plain
+object the supervisor constructs with its own lifetime — no Layer, for the
+reason above. The **admission lease** (`runtime/admission.ts`) owns the
+shutting-down flag, the active-Run count, and the running Subagents, and hands
+one atomic `acquire` either a typed refusal or a lease that releases
+everything it holds exactly once. The **Subagent records**
+(`runtime/subagent-records.ts`) own every Subagent's phase, current Run, Run
+fiber, and conversation-lost flag, and assert that one Subagent owns at most
+one active Run where the record lives. The **waiter ledger**
+(`runtime/waiters.ts`) owns how many callers registered at a settlement have
+yet to read it, and the Result-store pin held on their behalf. Boundary rule
+21 keeps the supervisor stateless: no `Ref.make`, `new Map`, or `new Set` in
+that file, so a fourth mechanism cannot quietly live there.
+
+→ [ADR-0034](adr/0034-supervisor-mechanisms-admission-lease-and-subagent-records.md)
+
 The native execution scope nests *inside* the Run Scope but can close
 independently, because a provider turn may end without ending the Run.
 
@@ -218,7 +235,19 @@ bounded three ways — pending count, bytes per message, total pending bytes —
 and closed by the Run Scope, so a pending Control cannot leak into the next
 Run.
 
-→ [ADR-0026](adr/0026-v2-control-admission.md)
+Admitting a *Run* follows the same rule for the same reason, and one module
+owns it. `runtime/admission.ts` decides shutting down, already running, and at
+capacity in one atomic step, answers immediately with nothing queued, and
+returns a lease holding the capacity slot, the Subagent's one-active-Run
+claim, and the Result-store reservation. Nothing waits, and nothing is
+allocated by a rejection: everything decidable without provider I/O is decided
+before an identifier is spent. A resume's Subagent is claimed inside the
+acquire because its id is known; a start's is bound once its backend has
+opened. Which Subagent is running, and whether its Conversation is still
+there, is the **Subagent records**' answer rather than the supervisor's.
+
+→ [ADR-0026](adr/0026-v2-control-admission.md),
+[ADR-0034](adr/0034-supervisor-mechanisms-admission-lease-and-subagent-records.md)
 
 ## 5. Usage is Run-local, and context is a gauge
 

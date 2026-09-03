@@ -1,8 +1,10 @@
 # Simplification roadmap: fewer concepts, better completion notices
 
-**Status: Phase A closed; B, C, and D proposed.**
+**Status: Phases A and B closed; C and D proposed.**
 [The Phase A gate](phase-a-exit-gate.md) is closed, with item 14 carried and
-three change-surface findings for Phase B to settle. This is the plan that
+three change-surface findings that
+[the Phase B gate](phase-b-exit-gate.md) settled; the Phase B gate is closed,
+with all thirteen items PASS. This is the plan that
 follows
 [the v2 roadmap](../v2/roadmap.md), which delivered the rewrite and is now
 history. It answers the one definition-of-done clause the rewrite did not meet
@@ -106,10 +108,11 @@ counting, then keep the table in this document current.
 | ---------------------------------------------- | --------------------------------: | -------------------------------: |
 | Change completion-notice wording               |                                 0 |                              ≤ 2 |
 | Add a field to the completion notice           |                                 1 (`domain/notification.ts`) |          ≤ 4 |
-| Add a backend-specific Profile option          |                                 0 |                              ≤ 2 |
+| Add a backend-specific Profile option          |                                 0 |                              ≤ 3 |
 | Add a display-only widget column               |                                 0 |                              ≤ 2 |
 | Add a fourth backend                           |                                 0 |                  backend tree + composition |
 | Change terminal lifecycle                      |            allowed to be expensive |                allowed to be expensive |
+| Add a bound enforced at admission              |                               ≤ 2 |                              ≤ 5 |
 
 A pull request that adds a Claude-only Profile option and touches
 `supervisor.ts`, `repository.ts`, `result-store.ts`, and `delivery.ts` is
@@ -355,10 +358,17 @@ constructs. Each extraction is behaviour-preserving and lands as its own
 commit with the existing supervisor, lifecycle, race, and stress tests
 unchanged.
 
-**Planned** (2026-09-03), after Phase A closed. The spec and its six tickets
-are under the local tracker at `.scratch/v2-simplify-b-supervisor-decomposition/`,
-as every milestone's have been; the gate is
-[`phase-b-exit-gate.md`](phase-b-exit-gate.md).
+**Closed** (2026-09-04). [The exit gate](phase-b-exit-gate.md) records every
+item's status and its evidence, and
+[ADR-0034](../adr/0034-supervisor-mechanisms-admission-lease-and-subagent-records.md)
+is the decision record. Three mechanisms left the supervisor rather than the
+two planned: admission as a lease, the Subagent records, and — B3's deferred
+decision, made — the waiter ledger. Every runtime test that existed before the
+phase passes with no edits.
+
+The spec and its six tickets are under the local tracker at
+`.scratch/v2-simplify-b-supervisor-decomposition/`, as every milestone's have
+been.
 Two lessons from the Phase A gate are built in: **the ADR is written first**
 ([ADR-0034](../adr/0034-supervisor-mechanisms-admission-lease-and-subagent-records.md),
 proposed in the first ticket and accepted at the gate), because the
@@ -463,6 +473,12 @@ screen (about sixty lines) and reads as steps, the `waiters` map and
 `runtime/waiters.ts` as a ledger with `register(runId)` returning its own
 release, and `releaseIfIdle(runId)` for settlement. Either outcome passes;
 not deciding does not.
+
+**Decided: they moved**, and B4 rather than the measurement is what decided
+it — the `waiters` map is a `new Map` in `runtime/supervisor.ts`, which B4's
+rule forbids, so the alternative was a carve-out in the one file the rule
+exists to cover. `runtime/waiters.ts` has the shape above.
+[The gate's item 5](phase-b-exit-gate.md) records it.
 
 #### B4. Fence it
 
@@ -607,8 +623,8 @@ its own ADR when picked up.
 | Phase | When                                     | Relationship to 2.0                                                                 |
 | ----- | ---------------------------------------- | ----------------------------------------------------------------------------------- |
 | A     | Before 2.0 stable                        | Changes model-facing text; do it before the matrix freezes it. Blocks stable.       |
-| B     | First minor after 2.0                    | Behaviour-preserving; no reason to hold the release for it.                         |
-| C     | After B                                  | C1 depends on B1. C3 and C4 are independent and can interleave with B.              |
+| B     | Closed 2026-09-04                        | Behaviour-preserving; held no release. Every pre-existing runtime test passes unmodified. |
+| C     | Next                                     | C1 depends on B1 and is ready: the lease exists and its release is one call. C3 and C4 are independent. |
 | D     | When the soak or usage shows a need      | Not scheduled.                                                                      |
 
 The three outstanding release items from [the v2 roadmap](../v2/roadmap.md)

@@ -1,6 +1,6 @@
 # Change recipes
 
-**Status:** Current as of Phase A. Every phase of
+**Status:** Current as of Phase B. Every phase of
 [the simplification roadmap](roadmap.md) updates the recipes it affects, and a
 recipe that names a file that no longer exists is a bug in this document.
 
@@ -252,7 +252,29 @@ is a simplification only if its test diff is empty apart from itself.
 
 ## Extract a mechanism from the supervisor
 
-Phase B's recipe.
+Phase B's recipe. **Phase B is done**, and the three mechanisms it named have
+left:
+
+| Mechanism | Module | Invariant it carries | Unit test |
+| --- | --- | --- | --- |
+| Admission, as a lease | `runtime/admission.ts` | 12 — once shutdown begins, new work is rejected | `runtime/admission.test.ts` |
+| The Subagent records | `runtime/subagent-records.ts` | 2 — one Subagent owns at most one active Run | `runtime/subagent-records.test.ts` |
+| The waiter ledger | `runtime/waiters.ts` | 13 — aborting a waiter stops only that waiter | `runtime/waiters.test.ts` |
+
+The waiter decision the roadmap deferred to B3 is recorded in
+[the Phase B gate](phase-b-exit-gate.md), item 5: the ledger **moved**, and
+boundary rule 21 rather than the one-screen measurement is what decided it —
+the `waiters` map is a `new Map` in `runtime/supervisor.ts`, which the fence
+forbids. `terminalStatusOf` did not go with it, because it derives a
+`WaitOutcome` from a stored Result and a snapshot and is not waiter
+bookkeeping.
+
+What is left in the supervisor is orchestration, and **boundary rule 21** is
+what keeps it that way: no `Ref.make`, `new Map`, or `new Set` in
+`runtime/supervisor.ts`, with the `stages` trace array as the documented
+exception. So a fourth extraction is no longer a judgement call — a mechanism
+that needs state cannot be added to the supervisor at all, and this recipe is
+how it leaves.
 
 **Expected to change**
 
@@ -269,10 +291,13 @@ Phase B's recipe.
 
 **Tests** — `npm run check`; `runtime/races.test.ts` and
 `runtime/stress.test.ts` are the detector for ordering changes under
-contention.
+contention, and the stress lane's leak probes must end at zero.
 
-**Invariants** — F2, F3, and whichever the mechanism carries (invariant 2 for
-the registry, invariant 12 for admission). No new Effect Layer.
+**Invariants** — F2, F3, and whichever the mechanism carries. No new Effect
+Layer: an extracted mechanism is a plain object the supervisor constructs, with
+the supervisor's lifetime. An ADR first, because the contributor rules require
+one for a new generic runtime abstraction, and the architecture challenge
+gate's three questions in the extraction commit's own message.
 
 ---
 

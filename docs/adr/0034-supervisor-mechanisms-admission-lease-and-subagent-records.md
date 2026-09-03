@@ -4,16 +4,22 @@ Date: 2026-09-04
 
 ## Status
 
-Proposed. Written before `runtime/admission.ts` exists, which is
-[the roadmap's](../v2-simplify/roadmap.md) Phase B discipline and the lesson
-[the Phase A gate](../v2-simplify/phase-a-exit-gate.md) recorded: a programme
-whose premise is deciding before coding should write its ADR first.
+**Accepted** in the commit that closes
+[the Phase B gate](../v2-simplify/phase-b-exit-gate.md) — the commit carrying
+this entry. The acceptance criterion stated below is met: every test under
+`extensions/subagent/runtime/` that existed before the phase passes with no
+edits, and the conformance suite passes on all five rigs. `npm run check` is
+green.
 
-To be **accepted** in the closing commit of
-[the Phase B gate](../v2-simplify/phase-b-exit-gate.md), with a status entry
-naming that commit and this text left unchanged. The acceptance criterion is
-stated below and is mechanical: every existing test under
-`extensions/subagent/runtime/` passes unmodified after both extractions.
+The third module named at the gate, `runtime/waiters.ts`, is the waiter
+decision this ADR deliberately left to a measurement, and the gate's item 5
+records what decided it. Nothing in this document was rewritten between the
+two entries; everything from *Context* down is the text that was proposed.
+
+**Proposed** in `96d210a`, written before `runtime/admission.ts` existed,
+which is [the roadmap's](../v2-simplify/roadmap.md) Phase B discipline and the
+lesson [the Phase A gate](../v2-simplify/phase-a-exit-gate.md) recorded: a
+programme whose premise is deciding before coding should write its ADR first.
 
 Supersedes nothing, and changes nothing any earlier decision decided.
 
