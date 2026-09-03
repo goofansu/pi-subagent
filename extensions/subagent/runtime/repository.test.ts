@@ -13,12 +13,14 @@ import {
   backendId,
   createRunProjection,
   runId as makeRunId,
+  type RunId,
   type RunIdentity,
   reduceRun,
   type SubagentId,
   subagentId,
 } from "../domain/index.ts";
 import { parseAllocatedId } from "../testing/identifiers.ts";
+import type { Equals, Expect } from "../testing/type-level.ts";
 import { createRuntimeCounters } from "./counters.ts";
 import { RunRepository } from "./repository.ts";
 
@@ -30,6 +32,28 @@ import { RunRepository } from "./repository.ts";
  * subscriber sees, what happens to an illegal transition, and whether a spent
  * id can come back are all decidable from method calls.
  */
+
+/** Argument lists `transition` accepts, as a type the compiler decides. */
+type TransitionAccepts<A extends readonly unknown[]> =
+  A extends Parameters<RunRepository["Service"]["transition"]> ? true : false;
+
+/**
+ * A settlement cannot be recorded without the instant it happened at.
+ *
+ * `transition`'s own comment claims this; here it is as a checked fact, which
+ * the test below constructs so the proof reads as a passing assertion. A
+ * settled row's duration is only frozen because the instant is on the row, so
+ * a call that omitted it would quietly put that number back on a display clock
+ * — the defect, and one nothing about the call site would look wrong. Moving
+ * to `finalizing` needs no instant, because no surface gives that phase a
+ * duration.
+ */
+type SettlementCarriesItsInstant = [
+  Expect<TransitionAccepts<[RunId, "execution-ended"]>>,
+  Expect<TransitionAccepts<[RunId, "settled-answered", number]>>,
+  Expect<Equals<TransitionAccepts<[RunId, "settled-answered"]>, false>>,
+  Expect<Equals<TransitionAccepts<[RunId, "execution-ended", number]>, false>>,
+];
 
 const identityOf = (subagent: SubagentId, run: string): RunIdentity => ({
   runId: makeRunId(run),
@@ -66,6 +90,12 @@ const withRepository = <A>(
     seed === undefined ? program : program.pipe(Random.withSeed(seed)),
   );
 };
+
+test("a settlement is recorded with its instant, and only a settlement is", () => {
+  const proofs: SettlementCarriesItsInstant = [true, true, true, true];
+
+  assert.equal(proofs.length, 4);
+});
 
 test("an allocated identifier is spent the moment it is handed out", async () => {
   const spent = await withRepository((repository) =>
@@ -226,7 +256,7 @@ test("a published Run is active, and a settled one is terminal", async () => {
       const activeWhileRunning = yield* repository.activeCount();
       yield* repository.transition(identity.runId, "execution-ended");
       const finalizing = yield* repository.get(identity.runId);
-      yield* repository.transition(identity.runId, "settled-answered");
+      yield* repository.transition(identity.runId, "settled-answered", 3_400);
       const settled = yield* repository.lookup(identity.runId);
       const activeAfter = yield* repository.activeCount();
 
@@ -266,6 +296,7 @@ test("an illegal transition is reported, never thrown, and changes nothing", asy
       const skipped = yield* repository.transition(
         identity.runId,
         "settled-answered",
+        1_000,
       );
       const unchanged = yield* repository.get(identity.runId);
       const stranger = yield* repository.transition(
@@ -355,7 +386,7 @@ test("a settled Run is quiet: settlement clears the activity on the row", async 
         }).projection,
       );
       yield* repository.transition(identity.runId, "execution-ended");
-      yield* repository.transition(identity.runId, "settled-cancelled");
+      yield* repository.transition(identity.runId, "settled-cancelled", 2_000);
       const snapshot = yield* repository.get(identity.runId);
       return snapshot?.activity;
     }),
@@ -382,7 +413,7 @@ test("recording a cancellation keeps the first reason and leaves the phase alone
       const stillRunning = yield* repository.get(identity.runId);
 
       yield* repository.transition(identity.runId, "execution-ended");
-      yield* repository.transition(identity.runId, "settled-cancelled");
+      yield* repository.transition(identity.runId, "settled-cancelled", 2_000);
       const afterSettlement = yield* repository.recordCancellation(
         identity.runId,
         "requested",
@@ -424,7 +455,11 @@ test("one Subagent's active Run is findable, and it has at most one", async () =
 
       const beforeSettling = yield* repository.activeRunOf(first);
       yield* repository.transition(makeRunId("run-1"), "execution-ended");
-      yield* repository.transition(makeRunId("run-1"), "settled-answered");
+      yield* repository.transition(
+        makeRunId("run-1"),
+        "settled-answered",
+        2_000,
+      );
       const afterSettling = yield* repository.activeRunOf(first);
       const other = yield* repository.activeRunOf(second);
 

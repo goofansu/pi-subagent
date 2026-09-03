@@ -396,9 +396,12 @@ export function runToSettlement(
 
     // 10. Publish the terminal snapshot — only now, so a terminal snapshot
     //     implies a retrievable result.
+    // The row's settled instant is the Result's own, so the row and the
+    // RunCard built from that Result quote one figure.
     yield* repository.transition(
       identity.runId,
       settlementEventForEnding(decided.ending),
+      settledAt,
     );
     yield* store.releasePin(identity.runId, "publication");
     context.trace(RUN_STAGES.terminalPublished);

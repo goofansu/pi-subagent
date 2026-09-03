@@ -13,7 +13,7 @@
 import { Schema } from "effect";
 import {
   CancellationReason,
-  type RunEvent,
+  type SettlementEvent,
   type TerminalRunPhase,
 } from "./phases.ts";
 import { boundOneLine } from "./text.ts";
@@ -74,7 +74,7 @@ export function cancelledEnding(reason: CancellationReason): RunEnding {
 export const ENDING_CONSEQUENCES: {
   readonly [K in RunEndingKind]: {
     readonly phase: TerminalRunPhase;
-    readonly event: RunEvent;
+    readonly event: SettlementEvent;
     readonly unfinishedTool: ToolEntryStatus;
   };
 } = {
@@ -101,7 +101,7 @@ export function terminalPhaseForEnding(ending: RunEnding): TerminalRunPhase {
 }
 
 /** The settlement event that reaches that phase from `finalizing`. */
-export function settlementEventForEnding(ending: RunEnding): RunEvent {
+export function settlementEventForEnding(ending: RunEnding): SettlementEvent {
   return ENDING_CONSEQUENCES[ending.ending].event;
 }
 

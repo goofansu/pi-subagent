@@ -133,6 +133,34 @@ test("a terminal Run keeps its row until its completion notice lands, and the la
   assert.deepEqual(rig.host.widgetLines(), []);
 });
 
+test("a settled row says what the Run cost, and the number does not move", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const started = await heldRun(rig);
+  await rig.text("agent_wait", { ids: [started.runId] });
+  await rig.pump();
+
+  // The Run has settled and is waiting for its notice to land, which is the
+  // whole window in which a moving number is visible to anybody.
+  assert.deepEqual(rig.installation.sink.unlanded(), [started.runId]);
+  const settled = rig.host.widgetLines(60);
+  assert.match(settled[1], /completed in /);
+
+  // Both instants are far past the Run's own, so a row measured against the
+  // draw's clock would report a second and then a minute where it had reported
+  // a moment. The row's figure is the Run's, so it reads the same every time.
+  rig.renderAt(Date.now() + 1_000);
+  assert.deepEqual(rig.host.widgetLines(60), settled);
+  rig.renderAt(Date.now() + 61_000);
+  assert.deepEqual(rig.host.widgetLines(60), settled);
+
+  // And what it says is a cost, not an age: a fake Run takes milliseconds, so
+  // the figure is a sub-minute one however late the row is drawn.
+  assert.match(settled[1], /completed in \d+\.\ds/);
+});
+
 test("a notice lost to an interrupt keeps its row until the re-push lands", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();

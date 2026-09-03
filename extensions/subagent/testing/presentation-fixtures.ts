@@ -97,8 +97,12 @@ export function fixtureRow(
     usage: fixtureUsage({ turns: 3 }),
     tools: 0,
     startedAt: FIXTURE_STARTED_AT,
+    // A terminal fixture carries the instant it settled at, as a published
+    // terminal row does. Defaulting it to the fixture's `now` keeps every
+    // golden's duration exactly what it was, while making the settled path —
+    // rather than the live one — the path a terminal fixture exercises.
     ...(phase === "completed" || phase === "failed" || phase === "cancelled"
-      ? { terminalStatus: phase }
+      ? { terminalStatus: phase, settledAt: FIXTURE_NOW }
       : {}),
     ...rest,
   };

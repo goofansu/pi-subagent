@@ -45,13 +45,13 @@ import {
   EMPTY_USAGE_SNAPSHOT,
   ILLEGAL_TRANSITION,
   isTerminalRunPhase,
-  type RunEvent,
   type RunId,
   type RunIdentity,
   RunId as RunIdSchema,
   type RunPhase,
   type RunProjection,
   recordCancellation,
+  type SettlementEvent,
   type SubagentId,
   SubagentId as SubagentIdSchema,
   type TerminalRunPhase,
@@ -82,6 +82,21 @@ export interface RunSnapshot {
   readonly startedAt: number;
   /** Present exactly when the phase is terminal. */
   readonly terminalStatus?: TerminalRunPhase;
+  /**
+   * When the Run settled. Present exactly when the phase is terminal.
+   *
+   * Here because a settled row has to say what the Run *cost*, and a reader is
+   * still looking at that row after settlement: it lasts until the Run's
+   * completion notice lands. Without this instant a display can only subtract
+   * the start from its own idea of now, which keeps climbing while the row
+   * waits — reporting how long ago the Run started rather than what it cost.
+   *
+   * It is the caller's instant, not a reading of a clock here, and the caller
+   * hands over the very one the stored Result records. The row and the RunCard
+   * are two renderings of one fact, and a second reading a few milliseconds
+   * later would let them print different tenths of a second for it.
+   */
+  readonly settledAt?: number;
 }
 
 /** The current Run index: every Run this Session has published, by id. */
@@ -315,9 +330,21 @@ const make = (counters: RuntimeCounters) =>
           }),
         ),
 
+      /**
+       * Move a Run to its next phase, and stamp a settlement with its instant.
+       *
+       * The parameters are one tuple with two shapes rather than an optional
+       * third argument, so a settlement recorded without its instant fails to
+       * compile: a terminal row that had lost the instant would silently go
+       * back to reading a display clock, which is the defect this shape
+       * exists to prevent. `execution-ended` reaches `finalizing`, which names
+       * no duration and so needs no instant.
+       */
       transition: (
         runId: RunId,
-        event: RunEvent,
+        ...[event, settledAt]:
+          | [event: "execution-ended"]
+          | [event: SettlementEvent, settledAt: number]
       ): Effect.Effect<TransitionOutcome> =>
         SubscriptionRef.modify(index, (current) => {
           const snapshot = current.get(runId);
@@ -338,7 +365,11 @@ const make = (counters: RuntimeCounters) =>
           const moved: RunSnapshot = {
             ...snapshot,
             phase,
-            ...(isTerminalRunPhase(phase) ? { terminalStatus: phase } : {}),
+            // The instant travels with the terminal status, because they are
+            // one fact: a row is settled and says what it cost, or neither.
+            ...(isTerminalRunPhase(phase)
+              ? { terminalStatus: phase, settledAt }
+              : {}),
           };
           // A settled Run is quiet: the activity a backend last reported is
           // not what it is doing, because it is not doing anything.

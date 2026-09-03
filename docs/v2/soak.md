@@ -174,6 +174,7 @@ the wording differences between v1 and v2 were classified.
 | 2026-09-03 | 2 | any | The Result store could wedge a Session permanently. Nothing evicted to make room for a *reservation*, and eviction only ran when the budget was already exceeded — so a Session whose stored results grew to just inside the budget answered `at capacity` to every later `start`, for ever, with unpinned results sitting there that nobody was going to read. Found by the M7 stress lane on its fifth cycle. Fixed — a reservation now evicts the oldest unpinned output, and still refuses when every entry is pinned. | Fixed |
 | 2026-09-03 | 3 | any | The widget drops a Run's row the moment the Run settles, where v1 keeps it until the Run's completion notification lands. For anything but a long Run the widget appears and disappears before it is read, so v2 reads as having no widget at all. Fixed in M7 — a settled Run's row now lasts until its notice lands. | Fixed |
 | 2026-09-03 | 3 | any | `agent_wait` reported a cancelled Run as plain `cancelled` where v1 reported `cancelled (requested)` or `cancelled (shutdown)`. At shutdown every Run is cancelled without anyone asking, so a model reading the v2 answer would conclude its own cancel had taken effect. Found by the M7 presentation ledger. Fixed — the terminal wait outcome carries the reason and the prose renders it. | Fixed |
+| 2026-09-03 | 3 | any | A settled Run's row kept counting upwards. The published row carried the instant a Run started and none for when it settled, so `completed in …` was recomputed against the render clock on every redraw — reporting how long ago the Run started rather than what it cost, and disagreeing with the figure the Run's own RunCard quotes from its stored Result. Visible for as long as the row waited for its notice to land, which M7 had just extended. Found by watching four Subagents finish. Fixed — the row carries the instant the Run settled, and a terminal row is measured against it. | Fixed |
 
 ### The Result store's permanent capacity stall (2026-09-03, severity 2)
 
@@ -252,6 +253,61 @@ the landing takes it away` and `a notice lost to an interrupt keeps its row
 until the re-push lands` in `host/widget.test.ts`, both driven through the
 stand-in host. The compatibility matrix gained an **Active widget — row
 lifetime** row citing them.
+
+### The settled row's climbing duration (2026-09-03, severity 3)
+
+**What happened.** Four Subagents finished and their rows sat in the widget
+waiting for their notices to land. All four durations were climbing, in step —
+`completed in 11.5s`, `11.6s`, and rising together by a tenth at a time about
+Runs that had stopped doing anything. The lockstep is the tell: four Runs that
+finished at four different moments cannot all cost the same and then all gain a
+tenth of a second together. None of the four figures was the Run's cost; each
+was its age at the moment the row happened to be drawn.
+
+**Why.** The published index carries the instant a Run *started* and, until this
+fix, no instant for when it settled. Presentation reads no clock of its own — a
+row's text is a function of a snapshot and an instant it is handed — so the row
+formatter could only subtract the start from *now*. For a live Run that is
+right. For a settled one there was nothing else to use, so the figure measured
+the age of the Run rather than its cost, and it moved on every redraw. v1 did
+not have this: its row projection used the live clock while a run was running
+and the run's own recorded finish time once it had settled, so the number
+stopped when the run did.
+
+**Why nothing caught it.** Every test of a row supplied one fixed instant, and
+so did the disposable script behind [the presentation ledger](presentation-ledger.md),
+which is why that document recorded all twelve widget row fixtures as identical
+to v1 while its own preamble noted that v1's row view carries an elapsed figure
+where v2 derives one from a start and a supplied `now`. A duration that has
+stopped and a duration that is still climbing are the same string when you look
+once. Proving the difference takes two looks, and nothing in the tree could take
+one: the host rig rendered its widget at a constant instant.
+
+It is also worth saying what made it visible rather than what made it wrong. The
+arithmetic had been wrong since M3. What changed at M7 is that a settled row
+stopped vanishing at settlement and started waiting for its notice to land —
+which gave the moving number somewhere to be seen.
+
+**Fixed.** The published row carries the instant the Run settled, present
+exactly when its phase is terminal, beside the terminal status. It is supplied by
+the Run Scope on the settling transition rather than read from a clock inside the
+repository, and it is the very instant the immutable Result records — so the row
+and the RunCard built from that Result quote one figure to the tenth of a second
+they both print. The shared elapsed-time helper prefers the row's instant over the
+one it is handed, which fixes the widget row and the RunCard's live branch
+together, and leaves presentation with no clock. A settlement recorded without
+its instant now fails to compile.
+
+Proven by `a settled row says what the Run cost, and the number does not move`
+in `host/widget.test.ts`, which settles a Run, advances the display's instant a
+second and then a minute past the Run's own, and requires the rendered lines to
+be identical at all three readings — with the row still present, since the freeze
+only matters while the row is waiting. The formatter's own goldens are pinned by
+`a settled row's duration is the Run's cost, so a later draw reads the same` in
+`presentation/rows.test.ts`. The host rig's render instant is now movable
+(`renderAt`), which is what made the host-seam test expressible at all. The
+compatibility matrix gained an **Active widget — settled duration** row citing
+both.
 
 ## What to watch for
 

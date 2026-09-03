@@ -137,6 +137,17 @@ export const RUN_EVENTS = [
 
 export type RunEvent = (typeof RUN_EVENTS)[number];
 
+/**
+ * The three events that settle a Run.
+ *
+ * Named apart from the other one because a settlement is the only event that
+ * happens at an instant anybody displays: the row a reader sees says what the
+ * Run cost, and that figure is `settledAt` minus `startedAt`. A caller that
+ * records a settlement therefore has to say when, and the type is what makes
+ * that so rather than a comment asking nicely.
+ */
+export type SettlementEvent = Exclude<RunEvent, "execution-ended">;
+
 export type RunTransitionTable = {
   readonly [P in RunPhase]: {
     readonly [E in RunEvent]: RunPhase | IllegalTransition;

@@ -284,6 +284,7 @@ The session widget listing live Runs.
 | **Observation only** | The widget never determines lifecycle state. | Same. | Same. |
 | **Lifecycle** | Appears with the first Run and is removed when none are left; a change redraws rather than reinstalls. | Same. | Same. |
 | **Row lifetime** | A Run's row lasts from `agent_start` until its completion notice reaches the conversation, not until the Run settles. | Same — the row's lifetime is backend-independent. | Same. |
+| **Settled duration** | A settled row states what the Run cost, and the figure stops moving when the Run does: it is the instant the Run settled less the instant it started, published on the row and taken from the same reading of the clock the stored Result records, so the row and the RunCard built from that Result print one number and a redraw never changes it. A live row names no duration at all. | Same — the figure is the Run's, not the draw's, whichever backend ran it. | Same. |
 
 
 **Proven by.** A property only one backend has shows a dash for the others;
@@ -293,6 +294,7 @@ the row label says which property it is.
 | --- | --- | --- | --- |
 | **every row** | Backend-independent: `the widget appears with the first live Run and its row reads as the matrix says` and its siblings (`host/widget.test.ts`); `PiBackend conformance: only-the-repository-writes-snapshots` | Backend-independent: the widget rows in `host/widget.test.ts`; `ClaudeBackend conformance: only-the-repository-writes-snapshots` | Backend-independent: the widget rows in `host/widget.test.ts`; `CodexBackend conformance: only-the-repository-writes-snapshots` |
 | **row lifetime** | Backend-independent: `a terminal Run keeps its row until its completion notice lands, and the landing takes it away`; `a notice lost to an interrupt keeps its row until the re-push lands` (`host/widget.test.ts`) | Backend-independent: the row-lifetime tests in `host/widget.test.ts` | Backend-independent: the row-lifetime tests in `host/widget.test.ts` |
+| **settled duration** | Backend-independent: `a settled row says what the Run cost, and the number does not move` (`host/widget.test.ts`), which advances the display's instant past the Run's own and requires the rendered lines to be identical; `a settled row's duration is the Run's cost, so a later draw reads the same` (`presentation/rows.test.ts`) | Backend-independent: the settled-duration tests in `host/widget.test.ts` and `presentation/rows.test.ts` | Backend-independent: the settled-duration tests in `host/widget.test.ts` and `presentation/rows.test.ts` |
 
 ## Completion Notification messages
 

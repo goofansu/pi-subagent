@@ -31,6 +31,13 @@ function row(width: number, overrides = {}): string {
   ).trimEnd();
 }
 
+/** The same row drawn at a chosen instant, which is what a redraw is. */
+function rowAt(now: number, overrides = {}): string {
+  return stripVTControlCharacters(
+    formatRunRow(fixtureRow(overrides), theme, 120, now),
+  ).trimEnd();
+}
+
 test("a row carries agent, backend, turn count, status, and activity, and nothing else fixed", () => {
   const line = row(120);
 
@@ -56,6 +63,26 @@ test("a row names each backend the same way", () => {
       "explore  claude  3 turns  running · look around",
       "explore  codex  3 turns  running · look around",
     ],
+  );
+});
+
+test("a settled row's duration is the Run's cost, so a later draw reads the same", () => {
+  // A settled row stays on screen until the Run's completion notice lands, so
+  // being drawn later is the ordinary case rather than a corner of one. The
+  // figure is what the Run cost, and a cost does not depend on when it is
+  // read: the row a minute later is the row, character for character.
+  const later = FIXTURE_NOW + 60_000;
+  for (const phase of ["completed", "failed", "cancelled"] as const) {
+    assert.equal(rowAt(later, { phase }), rowAt(FIXTURE_NOW, { phase }));
+  }
+  assert.match(rowAt(later, { phase: "completed" }), /completed in 12\.4s/);
+
+  // A live row is measured against the moment and names no duration, so a
+  // later draw reads the same for the opposite reason.
+  assert.equal(rowAt(later), "explore  pi  3 turns  running · look around");
+  assert.equal(
+    rowAt(later, { phase: "finalizing" }),
+    rowAt(FIXTURE_NOW, { phase: "finalizing" }),
   );
 });
 

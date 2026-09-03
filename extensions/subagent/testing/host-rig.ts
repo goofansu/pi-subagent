@@ -67,7 +67,14 @@ export const RIG_ANSWER = "the rig answered";
 /** What a rig Run reports it is doing, so a widget row has a tail. */
 export const RIG_ACTIVITY = "looking around";
 
-/** The instant a rig's widget renders at, so a row's duration is fixed. */
+/**
+ * The instant a rig's widget renders at, so a row's duration is fixed.
+ *
+ * The default rather than the only one: `renderAt` moves it, which is what
+ * lets a test ask what a row says *later*. A surface whose job is to change
+ * over time cannot be judged from a single reading — a number that has stopped
+ * and a number that is still climbing look identical if you only look once.
+ */
 export const RIG_NOW = 1_000_000;
 
 /** One Run that reports activity, answers, and completes. */
@@ -164,6 +171,16 @@ export interface HostRig {
    * with no clock involved.
    */
   readonly pump: (turns?: number) => Promise<void>;
+
+  /**
+   * Draw the widget as though it were now this instant.
+   *
+   * Moves the *display's* clock only; the Session runtime goes on taking its
+   * own instants from the ambient clock. That asymmetry is the real one — a
+   * terminal redraws a row long after the Run it describes ended — and it is
+   * what lets a test ask whether a number that should have stopped has.
+   */
+  readonly renderAt: (instant: number) => void;
 
   /** A gate the fakes can wait on, created on first mention. */
   readonly gate: (name: string) => Deferred.Deferred<void>;
@@ -288,10 +305,12 @@ export function hostRig(
   });
 
   const host = createStandInHost(options);
+  /** The instant the widget renders at. See {@link HostRig.renderAt}. */
+  let renderInstant = RIG_NOW;
   const installation = installSubagentV2(host.pi, {
     agentDir: root,
     backendSet,
-    now: () => RIG_NOW,
+    now: () => renderInstant,
     policy: options.policy ?? RIG_POLICY,
     ...(options.adapterProbe === undefined
       ? {}
@@ -339,6 +358,9 @@ export function hostRig(
         undefined,
       ),
     gate,
+    renderAt: (instant: number) => {
+      renderInstant = instant;
+    },
     release: (name) =>
       Effect.runPromise(Effect.asVoid(Deferred.succeed(gate(name), undefined))),
     probe,
