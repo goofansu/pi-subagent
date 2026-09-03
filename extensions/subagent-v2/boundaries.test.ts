@@ -389,19 +389,39 @@ const PI_SESSION_SYMBOLS = new Set([
 ]);
 
 /**
+ * The tests outside the adapter's own directories that may name it.
+ *
+ * Named one by one, the way the composition root is, rather than admitted as a
+ * class. "Any test may import the adapter" would be a hole rather than an
+ * exception: a presentation test that imported it would pass, and the next
+ * person to need a Pi fact in presentation would find a precedent for it.
+ *
+ * Both entries are host tests that are *about* the Pi facts — the inert-in-
+ * child guard and the adapter probe the diagnostics command reports — and
+ * neither has anywhere else to get them.
+ */
+const PI_ADAPTER_TEST_IMPORTERS = new Set([
+  "host/inert-guard.test.ts",
+  "host/diagnostics-command.test.ts",
+]);
+
+/**
  * Who may reach into the Pi adapter.
  *
- * The composition root wires the backend set, and the adapter's own tests and
- * test doubles name its types. Nothing else: a runtime, presentation,
- * application, or host module that could import the adapter would be a module
- * that could open a native session, and then two things would own the handle.
+ * The composition root wires the backend set, and the adapter's own code, its
+ * test doubles, and the named tests above may name its types. Nothing else: a
+ * runtime, presentation, application, or host module that could import the
+ * adapter would be a module that could open a native session, and then two
+ * things would own the handle.
  */
 function mayImportPiAdapter(file: string, graph: V2BoundaryGraph): boolean {
   return (
     isCompositionRoot(file, graph) ||
     isInside(file, graph.piAdapterRoot) ||
     isInside(file, graph.piTestingRoot) ||
-    isTestFile(file)
+    PI_ADAPTER_TEST_IMPORTERS.has(
+      path.relative(graph.v2Root, file).split(path.sep).join("/"),
+    )
   );
 }
 
@@ -1553,6 +1573,11 @@ test("only the composition root may import the Pi adapter", (t) => {
     "extensions/subagent-v2/host/pi-backends.ts",
     'import { pi } from "../backend/pi/index.ts";\nexport const set = pi;\n',
   );
+  // Allowed: the adapter's own test doubles.
+  write(
+    "extensions/subagent-v2/testing/pi/stand-in-session.ts",
+    'import { pi } from "../../backend/pi/index.ts";\nexport const held = pi;\n',
+  );
   // Rejected: the runtime reaching around the contract.
   write(
     "extensions/subagent-v2/runtime/repository.ts",
@@ -1564,6 +1589,27 @@ test("only the composition root may import the Pi adapter", (t) => {
       path.join(graph.piAdapterRoot, "index.ts"),
     )}, and only the composition root may name the Pi adapter`,
   ]);
+});
+
+test("being a test is not on its own permission to import the Pi adapter", (t) => {
+  const { graph, write } = fixtureGraph(t, "pi-adapter-test-importers");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write("extensions/subagent-v2/backend/pi/index.ts", "export const pi = 1;\n");
+  // A test *about* the adapter, in a module that has no business knowing it
+  // exists. The rule names the two host tests that may; this is not one.
+  write(
+    "extensions/subagent-v2/presentation/rows.test.ts",
+    'import { pi } from "../backend/pi/index.ts";\nexport const row = pi;\n',
+  );
+
+  const violations = findV2BoundaryViolations(graph);
+
+  assert.ok(
+    violations.some((violation) =>
+      violation.endsWith("only the composition root may name the Pi adapter"),
+    ),
+    `a presentation test reached the adapter unchallenged: ${JSON.stringify(violations)}`,
+  );
 });
 
 test("the Pi adapter may not import the runtime, the host, or presentation", (t) => {

@@ -44,7 +44,11 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { Profile, SubagentContext } from "../../domain/index.ts";
-import { parseTools, shouldAppendSystemPrompt } from "../profile-fields.ts";
+import {
+  EFFORTS,
+  parseTools,
+  shouldAppendSystemPrompt,
+} from "../profile-fields.ts";
 import { withChildResourceLoad } from "./child-load.ts";
 import { DEPTH_ENV_KEY } from "./depth.ts";
 import type { PiSessionOptions } from "./session.ts";
@@ -58,6 +62,24 @@ export const PI_ORCHESTRATION_TOOLS = [
   "agent_cancel",
   "agent_steer",
 ] as const;
+
+/**
+ * The thinking level, when the resolved effort is one Pi understands.
+ *
+ * The shared effort scale and Pi's thinking levels are the same seven words,
+ * and this is the one place that coupling is relied on — so it is checked
+ * rather than asserted. A value outside the scale is omitted instead of cast
+ * through: an unrecognized level reaching the SDK would be a wrong setting
+ * chosen silently, and omitting it leaves the session's own default.
+ */
+function thinkingLevel(effort: string | undefined): {
+  thinkingLevel?: PiSessionOptions["thinkingLevel"];
+} {
+  if (effort === undefined) return {};
+  const known: readonly string[] = EFFORTS;
+  if (!known.includes(effort)) return {};
+  return { thinkingLevel: effort as PiSessionOptions["thinkingLevel"] };
+}
 
 /** What a missing pinned model says, before the diagnostic is redacted. */
 export function unknownModelMessage(model: string): string {
@@ -219,7 +241,7 @@ export async function createPiSessionOptions(
     resourceLoader,
     sessionManager: SessionManager.inMemory(subagent.cwd),
     model,
-    thinkingLevel: input.thinking as PiSessionOptions["thinkingLevel"],
+    ...thinkingLevel(input.thinking),
     ...(tools === undefined ? {} : { tools }),
     excludeTools: [...PI_ORCHESTRATION_TOOLS],
     // The same local Bash implementation Pi would have used, plus a per-spawn

@@ -183,7 +183,8 @@ function recentTranscript(
     .map(formatTranscriptItem);
 }
 
-function present<T>(values: readonly T[]): readonly T[] | undefined {
+/** A section's lines, or nothing at all when the Run had none to show. */
+function omitWhenEmpty<T>(values: readonly T[]): readonly T[] | undefined {
   return values.length > 0 ? values : undefined;
 }
 
@@ -210,10 +211,12 @@ export function runCard(source: RunCardSource): RunCard {
   const { result } = source;
   const accounting = formatNotificationAccounting(result.usage, result.model);
   const context = formatContextGauge(result.usage.context);
-  const transcript = present(recentTranscript(result.transcript));
-  const tools = present(result.tools.map(formatToolEntry));
-  const diagnostics = present(result.diagnostics.map(formatDiagnosticLine));
-  const links = present(result.links.map(formatResultLinkLine));
+  const transcript = omitWhenEmpty(recentTranscript(result.transcript));
+  const tools = omitWhenEmpty(result.tools.map(formatToolEntry));
+  const diagnostics = omitWhenEmpty(
+    result.diagnostics.map(formatDiagnosticLine),
+  );
+  const links = omitWhenEmpty(result.links.map(formatResultLinkLine));
   const truncation = formatTruncation(result);
   return {
     runId: result.runId,

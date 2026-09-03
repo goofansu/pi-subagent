@@ -409,6 +409,52 @@ test("a native steer that rejects is a control diagnostic and no user message", 
   assert.deepEqual(value.transcript, ["under way", "the answer"]);
 });
 
+test("a steer the session never takes does not stop the Run from settling", async () => {
+  // The consumer is parked inside a native call the session will never
+  // consume, and the prompt finishes anyway. v1 would have waited for the
+  // delivery; ADR-0025 says waiting indefinitely is not a settlement policy,
+  // so the Run settles and reports that the guidance did not arrive.
+  const { value } = await withPiSession(
+    {
+      scripts: [
+        [
+          { step: "await-gate", gate: "finish" },
+          { step: "assistant", text: "the answer" },
+          { step: "terminal" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* untilPrompted(rig);
+        yield* rig.supervisor.steer(started.runId, {
+          type: "steer",
+          text: "guidance the session never takes",
+        });
+        // Wait until the consumer is actually inside the native call, so the
+        // Run finishing is the thing under test rather than a race with it.
+        yield* untilSteered(rig);
+        rig.standIn.gate("finish").release();
+        yield* untilTerminal(rig, started.runId);
+        const result = yield* rig.supervisor.result(started.runId);
+        return result.outcome === "result"
+          ? {
+              status: result.result.status,
+              output: result.result.finalOutput,
+              categories: result.result.diagnostics.map(
+                (diagnostic) => diagnostic.category,
+              ),
+            }
+          : { status: result.outcome, output: "", categories: [] };
+      }),
+  );
+
+  assert.equal(value.status, "completed");
+  assert.equal(value.output, "the answer");
+  assert.deepEqual(value.categories, ["control"]);
+});
+
 test("a Run that ends with no terminal event fails with a fixed message", async () => {
   const { value } = await withPiSession(
     { scripts: [[{ step: "assistant", text: "something" }]] },

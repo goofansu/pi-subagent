@@ -42,10 +42,9 @@ import {
   confinedControl,
   currentRunMessages,
   isPiUserText,
-  piActivity,
   piMessageObservations,
   piTerminalSnapshot,
-  piToolProgress,
+  readPiEvent,
   withoutInitialGoal,
 } from "./translate.ts";
 
@@ -63,24 +62,15 @@ export const PROMPT_REJECTED_CATEGORY = "Pi prompt failed";
 /** What a rejected native steer says. */
 export const STEER_REJECTED_CATEGORY = "Pi steering was not delivered";
 
+/** What a steer the session never took says, once the Run is otherwise done. */
+export const STEER_ABANDONED_MESSAGE =
+  "the Pi session finished without taking guidance that was still being delivered";
+
 export interface PiExecutionContext {
   readonly session: PiSession;
   /** The adapter's own closed flag. The SDK does not defend a disposed session. */
   readonly isClosed: () => boolean;
   readonly probe: PiProbeCounters;
-}
-
-/** What a non-retrying terminal event said about this Run. */
-type TerminalSnapshot = ReturnType<typeof piTerminalSnapshot>;
-
-function reconciliationOf(snapshot: TerminalSnapshot): TerminalReconciliation {
-  return {
-    transcript: snapshot.transcript,
-    usage: snapshot.usage,
-    turns: snapshot.turns,
-    ...(snapshot.context === undefined ? {} : { context: snapshot.context }),
-    ...(snapshot.model === undefined ? {} : { model: snapshot.model }),
-  };
 }
 
 /** Run one prompt on the retained session and report everything it produced. */
@@ -98,7 +88,7 @@ export function runPiExecution(
     const bridge = createCallbackBridge();
     // Everything the listener writes and the drain loop reads. Plain mutable
     // state, because a callback cannot yield and a `Ref` it could not write.
-    let terminal: TerminalSnapshot | undefined;
+    let terminal: TerminalReconciliation | undefined;
     let goalOmitted = false;
     let completed = false;
     const baseline = [...session.messages];
@@ -108,45 +98,42 @@ export function runPiExecution(
 
     const listen = (event: PiSessionEvent): void => {
       if (!bridge.accepting()) return;
-      const wire = event as unknown as Record<string, unknown>;
-      if (wire.type === "message_end" && wire.message !== undefined) {
-        const message = wire.message;
-        if (!goalOmitted && isPiUserText(message, input.prompt)) {
-          goalOmitted = true;
+      const read = readPiEvent(event);
+      switch (read.kind) {
+        case "message": {
+          // Two Run-state decisions the translator cannot make for us: Pi
+          // echoes the brief back as the Run's first user message, and the
+          // same message object can arrive twice. Identity, not content —
+          // two consumed Controls can carry the same text.
+          const { message } = read;
+          if (!goalOmitted && isPiUserText(message, input.prompt)) {
+            goalOmitted = true;
+            return;
+          }
+          if (typeof message === "object" && message !== null) {
+            if (seen.has(message)) return;
+            seen.add(message);
+          }
+          for (const observation of piMessageObservations(message)) {
+            bridge.push(observation);
+          }
           return;
         }
-        if (typeof message === "object" && message !== null) {
-          if (seen.has(message)) return;
-          seen.add(message);
+        case "tool": {
+          for (const observation of read.observations) bridge.push(observation);
+          return;
         }
-        for (const observation of piMessageObservations(message)) {
-          bridge.push(observation);
+        case "terminal": {
+          terminal = piTerminalSnapshot(
+            withoutInitialGoal(
+              currentRunMessages(read.messages, baseline),
+              input.prompt,
+            ),
+          );
+          return;
         }
-        return;
-      }
-      if (
-        wire.type === "tool_execution_start" ||
-        wire.type === "tool_execution_end"
-      ) {
-        const activity = piActivity(wire);
-        if (activity) bridge.push(activity);
-        const progress = piToolProgress(wire);
-        if (progress) bridge.push(progress);
-        return;
-      }
-      if (
-        wire.type === "agent_end" &&
-        wire.willRetry !== true &&
-        Array.isArray(wire.messages)
-      ) {
-        // A retrying terminal frame is not terminal: the session is about to
-        // try again, and its messages are not the Run's last word.
-        terminal = piTerminalSnapshot(
-          withoutInitialGoal(
-            currentRunMessages(wire.messages, baseline),
-            input.prompt,
-          ),
-        );
+        case "other":
+          return;
       }
     };
 
@@ -204,19 +191,20 @@ export function runPiExecution(
       if (snapshot === undefined) return;
       // The work finished before the cancel reached it. Announcing the
       // snapshot and its ending is what makes arbitration prefer the answer.
-      yield* io.emit({
-        kind: "reconciliation",
-        reconciliation: reconciliationOf(snapshot),
-      });
+      yield* io.emit({ kind: "reconciliation", reconciliation: snapshot });
       yield* io.emit({ kind: "ending", ending: answeredEnding() });
     });
 
     // Deliveries begun and not yet finished. The drain loop will not call a
     // Run finished while one is outstanding: a Control that was admitted and
-    // is being delivered belongs to this Run, and a Run that returned while it
-    // was in flight would settle before its own guidance had been reported.
-    // A delivery that never finishes is v1's behaviour too — the session is
-    // stuck, and cancellation is what ends the Run.
+    // is being delivered belongs to this Run, and a Run that returned while
+    // it was in flight would settle before its own guidance was reported.
+    //
+    // What it must *not* do is wait forever. v1 did, and got away with it
+    // because a stalled steer was tracked as pending state; ADR-0025 is
+    // explicit that waiting indefinitely is not a settlement policy. So the
+    // wait has a bound of its own, below: the session going idle with the
+    // prompt already settled.
     let deliveries = 0;
 
     const steerLoop = Effect.gen(function* () {
@@ -242,7 +230,21 @@ export function runPiExecution(
       for (;;) {
         const seenVersion = bridge.version();
         yield* drain;
-        if (native.settled() && bridge.size() === 0 && deliveries === 0) break;
+        if (native.settled() && bridge.size() === 0) {
+          if (deliveries === 0) break;
+          // The prompt has settled and the session is quiet, so a delivery
+          // still in flight is one the session is never going to take. Say so
+          // and stop waiting: a Run that waited on it would not settle at
+          // all, and admission already told the caller the Control was
+          // accepted — only the delivery failed.
+          if (session.isIdle) {
+            yield* io.emit({
+              kind: "diagnostic",
+              diagnostic: confinedControl(STEER_REJECTED_CATEGORY),
+            });
+            break;
+          }
+        }
         yield* bridge.waitPast(seenVersion);
       }
       yield* Fiber.interrupt(steering);
@@ -291,15 +293,12 @@ function deliverSteer(
 /** What the Run ended as, once the native work has stopped talking. */
 function bundleFor(
   promptError: unknown,
-  terminal: TerminalSnapshot | undefined,
+  terminal: TerminalReconciliation | undefined,
   io: ExecutionIO,
 ): Effect.Effect<TerminalBundle> {
   return Effect.gen(function* () {
     if (terminal !== undefined) {
-      return {
-        ending: answeredEnding(),
-        reconciliation: reconciliationOf(terminal),
-      };
+      return { ending: answeredEnding(), reconciliation: terminal };
     }
     if (promptError !== undefined) {
       const diagnostic = confined(PROMPT_REJECTED_CATEGORY);

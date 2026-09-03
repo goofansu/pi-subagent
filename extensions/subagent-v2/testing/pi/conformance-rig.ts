@@ -28,14 +28,6 @@
  * suite is relaxed for Pi: every scenario runs, and none is skipped.
  */
 
-import { Effect, type Scope } from "effect";
-import type {
-  Backend,
-  BackendAgent,
-  ExecutionIO,
-  RunInput,
-  TerminalBundle,
-} from "../../backend/contract.ts";
 import {
   createPiBackend,
   PI_DISPLAY_NAME,
@@ -56,11 +48,8 @@ import type {
   BackendConformanceScenario,
 } from "../conformance.ts";
 import type { ResourceCountersSnapshot } from "../fakes/counters.ts";
-import {
-  createStandInPiSession,
-  type PiScript,
-  type StandInPiSession,
-} from "./stand-in-session.ts";
+import { correlateRuns } from "./correlate.ts";
+import { createStandInPiSession, type PiScript } from "./stand-in-session.ts";
 
 /** The Profile every Pi fixture starts from: no fields, so nothing is pinned. */
 const PROFILE: Profile = {
@@ -102,52 +91,6 @@ interface PiFixtureParts
   readonly profileFields?: Readonly<Record<string, unknown>>;
 }
 
-/**
- * Wrap the real backend so an execution is counted in and out of its scope.
- *
- * `Effect.acquireRelease` rather than a pair of calls, because "live
- * executions returned to zero" has to be true of a Run that was interrupted
- * as well as one that answered — and the scope is the only thing that knows
- * about both.
- */
-function counting(
-  backend: Backend,
-  standIn: StandInPiSession,
-  live: { count: number },
-): Backend {
-  return {
-    id: backend.id,
-    validateProfile: backend.validateProfile,
-    open: (profile, subagent) =>
-      Effect.map(
-        backend.open(profile, subagent),
-        (agent): BackendAgent => ({
-          capabilities: agent.capabilities,
-          admitResume: agent.admitResume,
-          close: agent.close,
-          execute: (
-            input: RunInput,
-            io: ExecutionIO,
-          ): Effect.Effect<TerminalBundle, never, Scope.Scope> =>
-            Effect.gen(function* () {
-              yield* Effect.acquireRelease(
-                Effect.sync(() => {
-                  live.count += 1;
-                  standIn.beginRun(input.runId);
-                }),
-                () =>
-                  Effect.sync(() => {
-                    live.count -= 1;
-                    standIn.endRun();
-                  }),
-              );
-              return yield* agent.execute(input, io);
-            }),
-        }),
-      ),
-  };
-}
-
 function piFixture(parts: PiFixtureParts): BackendConformanceFixture {
   const { scripts, openFails, profileFields, ...rest } = parts;
   const standIn = createStandInPiSession({ scripts });
@@ -186,7 +129,14 @@ function piFixture(parts: PiFixtureParts): BackendConformanceFixture {
   };
 
   return {
-    backend: counting(handle.backend, standIn, live),
+    backend: correlateRuns(handle.backend, standIn, {
+      began: () => {
+        live.count += 1;
+      },
+      ended: () => {
+        live.count -= 1;
+      },
+    }),
     profile: {
       ...PROFILE,
       ...(profileFields === undefined ? {} : { fields: profileFields }),

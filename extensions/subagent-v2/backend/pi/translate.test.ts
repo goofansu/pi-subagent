@@ -378,7 +378,7 @@ test("the terminal snapshot recomputes the transcript, usage, turns, and gauge",
   assert.deepEqual(snapshot.context, { tokens: 500 });
   assert.equal(snapshot.model, "openai-codex/gpt-5.4-mini");
   assert.deepEqual(
-    snapshot.transcript.map((item) => item.role),
+    snapshot.transcript?.map((item) => item.role),
     ["user", "assistant", "tool", "assistant"],
   );
 });

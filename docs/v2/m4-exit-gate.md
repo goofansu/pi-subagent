@@ -28,12 +28,12 @@ and is logged in [`soak.md`](soak.md).
 | `npm run test:conformance` | 164 tests, 163 pass, 1 skipped |
 | `npm run test:managed-conformance` | 6 tests, 6 pass |
 | `npm test` (v1 suite, repository scripts, `tools/`) | 540 tests, 539 pass, 1 skipped |
-| `npm run test:v2` | 805 tests, 797 pass, 8 skipped |
+| `npm run test:v2` | 807 tests, 799 pass, 8 skipped |
 | `npm run test:v2:conformance` | 115 tests, 107 pass, 8 skipped |
 | `npm run codex:protocol:check` | `CODEX_PROTOCOL_CHECK_PASS — codex-cli 0.150.1` |
 
 The v1 lane's numbers are byte-identical to M3's: **M4 changed no v1 file.** The
-v2 lane grew from 658 tests to 805, and the conformance lane from 77 to 115 —
+v2 lane grew from 658 tests to 807, and the conformance lane from 77 to 115 —
 the 38 new ones being the Pi rig's, which is the shared suite plus its own
 no-skips assertion.
 
@@ -82,6 +82,7 @@ duplicate of a shared scenario and deleted:
 | A model missing from the catalogue is a rejection, not a failed Run | `a model the Session's catalogue does not hold is a rejection, not a Run` |
 | A Control reaches the Run it was admitted to and no other | `a Control admitted to one Run is delivered only to that Run` |
 | Native delivery failure is diagnostic-only | `a native steer that rejects is a control diagnostic and no user message` |
+| A steer the session never takes must not stop the Run settling | `a steer the session never takes does not stop the Run from settling` |
 
 The stand-in reproduces the SDK's disposal behaviour deliberately — `a disposed
 session still accepts a prompt, exactly as the SDK does`
@@ -307,12 +308,27 @@ neither is a leak.
 *Fake-backend proof:* both fakes still pass the scenario unchanged, by the
 `lateObservations` half.
 
+Ticket 05 offered two ways to satisfy its rule — no change to the shared suite,
+or a change that is a provider-neutral scenario both fakes also pass — and this
+is strictly neither: it is a **loosened existing check**, made because Pi's last
+event arrives during native cleanup rather than while the reducer is still
+draining. It is recorded here as a loosening rather than dressed up as a new
+scenario. What justifies it is that the original assertion encoded an assumption
+the property never had: the scenario is "a late report changes nothing", and
+`lateObservations` alone additionally required that the report arrive early
+enough to reach the reducer, which is a fact about settlement's progress and not
+about the backend. A reviewer who disagrees should reach for a separate
+`late-events-are-counted-at-the-seam` scenario rather than restore the narrower
+assertion, because the narrower one is not satisfiable by an adapter whose
+provider speaks last during cleanup.
+
 ### Changes that are not semantics at all
 
 For completeness, the rest of what M4 touched outside `backend/pi/`:
 
 | File | What changed |
 | --- | --- |
+| `host/demo-backends.ts` | The demo set answers the two new host facts: never a child, depth zero. |
 | `host/pi-backends.ts` | New. The Pi backend set, in the composition root beside the demo set. |
 | `host/diagnostics-command.ts` | New. `/subagent-v2` reports the runtime counters and both probes. |
 | `host/tools.ts` | `sessionFactsOf` reads the child depth from the set instead of returning zero. |
@@ -352,14 +368,36 @@ record a `cleanup-escalation` diagnostic, and mark the conversation lost. The Pi
 adapter is therefore simpler than its ancestor on purpose, and the cleanup path
 is one scope finalizer rather than a state machine.
 
-One further difference worth naming because a reader of the ticket may expect
-otherwise: **an open failure's diagnostic is redacted**, and the bounded
-catalogue summary lives in the *Profile diagnostic* rather than in it. Those are
-two different rejections. A pinned model the Session's own catalogue does not
-hold is caught at Profile validation, where the diagnostic names what the
-catalogue does hold; a model the agent directory's files cannot resolve is
-caught at `open`, where — per ADR-0030 and the spec's own implementation
-decision — nothing provider-authored crosses.
+### A divergence from ticket 03, stated plainly
+
+Ticket 03's acceptance line reads: *"A pinned model absent from the catalogue
+makes `agent_start` return `backend unavailable` whose diagnostic includes the
+bounded catalogue summary."* **That is not what happens, and it is not what the
+spec's own Implementation Decisions ask for.** The two disagree, and this is the
+reading that was implemented.
+
+There are two different rejections here, with two different outcome words:
+
+- A model **the Session's catalogue does not hold** is caught at *Profile
+  validation*, which is where the spec puts the bounded catalogue summary
+  ("model validation accepting an exact catalogue id or a provider-qualified
+  id, with the bounded catalogue summary (512 characters) in the diagnostic").
+  `agent_start` answers `invalid profile`, and the diagnostic names what the
+  catalogue does hold. Proven by `a model the Session's catalogue does not hold
+  is a rejection, not a Run`.
+- A model **the agent directory's own files cannot resolve** is caught at
+  `open`, which is where the spec says "failing open with a redacted
+  `backend-failure` diagnostic if absent". `agent_start` answers `backend
+  unavailable` with nothing provider-authored in it, as ADR-0030 requires.
+  Proven by `a failed open carries a redacted diagnostic and no provider text`.
+
+Both paths exist, both are reachable — the Session's model registry and the
+agent directory's `models.json` can disagree — and both are tested. What the
+ticket asked for is the second outcome word carrying the first diagnostic, and
+that combination is the one thing ADR-0030 forbids: it is provider-adjacent
+detail crossing an open failure. The user is also better served by the
+implemented behaviour, because `invalid profile` naming the catalogue says more
+than `backend unavailable` saying `[redacted]`.
 
 ---
 
@@ -386,7 +424,16 @@ count, and anything else summarises to nothing. That is enough to be useful and
 it is not a contract; a provider whose tool results are shaped differently would
 show blank summaries rather than wrong ones.
 
-**5. The bridge buffer is a number nobody has pushed.** The adapter buffers up
+**5. A steer the session is genuinely working on is still unbounded.** The
+drain loop stops waiting on a delivery once the prompt has settled *and* the
+session reports idle, so a Control the session will never take cannot hold a
+Run open. A Control the session took and is still working on is a different
+case: the Run waits, exactly as it waits for any provider turn, and
+cancellation or the Session's default run timeout is what ends it. That is the
+same bound every other provider turn has, but it is a bound outside the
+adapter rather than inside it.
+
+**6. The bridge buffer is a number nobody has pushed.** The adapter buffers up
 to 4,096 observations between Pi's synchronous callback and the intake, and
 overflows into the bridge policy's two observations rather than dropping. No
 test drives it to the bound, and no real Run has come close.

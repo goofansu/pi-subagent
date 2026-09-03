@@ -18,13 +18,6 @@ import os from "node:os";
 import path from "node:path";
 import type { Scope } from "effect";
 import { Effect } from "effect";
-import type {
-  Backend,
-  BackendAgent,
-  ExecutionIO,
-  RunInput,
-  TerminalBundle,
-} from "../../backend/contract.ts";
 import {
   createPiBackend,
   type PiNativeProbe,
@@ -49,6 +42,7 @@ import {
   createFakeNotificationSink,
   type FakeNotificationSink,
 } from "../fake-sink.ts";
+import { correlateRuns } from "./correlate.ts";
 import {
   createStandInPiSession,
   type PiScript,
@@ -174,37 +168,7 @@ export function withPiSession<A>(
     sessionOptionsFactory: async () => ({}) as PiSessionOptions,
   });
 
-  /**
-   * Tell the stand-in which Run each execution belongs to.
-   *
-   * A native session has no idea, and it should not: the adapter is what knows
-   * about Runs. Correlating here is what makes "a Control reached this Run and
-   * not that one" a real assertion rather than a count.
-   */
-  const correlated: Backend = {
-    id: handle.backend.id,
-    validateProfile: handle.backend.validateProfile,
-    open: (profile, subagent) =>
-      Effect.map(
-        handle.backend.open(profile, subagent),
-        (agent): BackendAgent => ({
-          capabilities: agent.capabilities,
-          admitResume: agent.admitResume,
-          close: agent.close,
-          execute: (
-            input: RunInput,
-            io: ExecutionIO,
-          ): Effect.Effect<TerminalBundle, never, Scope.Scope> =>
-            Effect.gen(function* () {
-              yield* Effect.acquireRelease(
-                Effect.sync(() => standIn.beginRun(input.runId)),
-                () => Effect.sync(() => standIn.endRun()),
-              );
-              return yield* agent.execute(input, io);
-            }),
-        }),
-      ),
-  };
+  const correlated = correlateRuns(handle.backend, standIn);
 
   const agentDir = profileDirectoryFor(options);
 

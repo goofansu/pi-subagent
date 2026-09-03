@@ -33,9 +33,9 @@ import {
   type RunDiagnostic,
   type RunObservation,
   runDiagnostic,
+  type TerminalReconciliation,
   type TranscriptItem,
   type UsageDelta,
-  type UsageTotalsPatch,
 } from "../../domain/index.ts";
 
 /** What a confined provider diagnostic says instead of provider text. */
@@ -61,7 +61,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function count(value: unknown): number | undefined {
+/** One of the domain's counters: a whole, nonnegative number, or nothing. */
+function readCounter(value: unknown): number | undefined {
   return typeof value === "number" &&
     Number.isFinite(value) &&
     Number.isInteger(value) &&
@@ -70,10 +71,25 @@ function count(value: unknown): number | undefined {
     : undefined;
 }
 
-function amount(value: unknown): number | undefined {
+/** A real-valued amount, which cost is and no counter is. */
+function readCost(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? value
     : undefined;
+}
+
+/**
+ * One optional field, present only when the value survived reading.
+ *
+ * A spread of nothing where a field is absent, so an omitted key stays omitted
+ * rather than becoming an explicit `undefined` the exact-key decoder would
+ * reject.
+ */
+function field<K extends string>(
+  key: K,
+  value: number | undefined,
+): { [P in K]?: number } {
+  return (value === undefined ? {} : { [key]: value }) as { [P in K]?: number };
 }
 
 /** One content block, as a message part. Anything else is not a part. */
@@ -142,24 +158,14 @@ export function piMessageFacts(message: unknown): PiMessageFacts | undefined {
     rawUsage && isRecord(rawUsage.cost) ? rawUsage.cost : undefined;
   const delta: UsageDelta | undefined = rawUsage
     ? {
-        ...(count(rawUsage.input) === undefined
-          ? {}
-          : { input: count(rawUsage.input) as number }),
-        ...(count(rawUsage.output) === undefined
-          ? {}
-          : { output: count(rawUsage.output) as number }),
-        ...(count(rawUsage.cacheRead) === undefined
-          ? {}
-          : { cacheRead: count(rawUsage.cacheRead) as number }),
-        ...(count(rawUsage.cacheWrite) === undefined
-          ? {}
-          : { cacheWrite: count(rawUsage.cacheWrite) as number }),
-        ...(rawCost === undefined || amount(rawCost.total) === undefined
-          ? {}
-          : { cost: amount(rawCost.total) as number }),
+        ...field("input", readCounter(rawUsage.input)),
+        ...field("output", readCounter(rawUsage.output)),
+        ...field("cacheRead", readCounter(rawUsage.cacheRead)),
+        ...field("cacheWrite", readCounter(rawUsage.cacheWrite)),
+        ...field("cost", readCost(rawCost?.total)),
       }
     : undefined;
-  const occupancy = rawUsage ? count(rawUsage.totalTokens) : undefined;
+  const occupancy = rawUsage ? readCounter(rawUsage.totalTokens) : undefined;
 
   return {
     role,
@@ -223,6 +229,58 @@ export function piTranscriptItem(message: unknown): TranscriptItem | undefined {
     parts: facts.parts,
     ...(facts.model === undefined ? {} : { model: facts.model }),
   };
+}
+
+/**
+ * One native session event, read once, into something with no wire in it.
+ *
+ * This function and {@link piMessageFacts} are the **only** consumers of Pi's
+ * wire shape in the whole tree — the definition-of-done's rule for the v1
+ * adapter, kept for v2's. Everything downstream branches on `kind`, so an
+ * event Pi renames or re-shapes changes this file and nothing else.
+ *
+ * A message is handed on unread because what to do with it depends on Run
+ * state the translator does not have: whether the brief has already been
+ * echoed back, and whether this exact event object has been seen before.
+ */
+export type PiEventReading =
+  /** A message the session emitted. The caller decides whether to keep it. */
+  | { readonly kind: "message"; readonly message: unknown }
+  /** A tool call starting or finishing, already translated. */
+  | { readonly kind: "tool"; readonly observations: readonly RunObservation[] }
+  /** The non-retrying terminal frame, with the messages it carried. */
+  | { readonly kind: "terminal"; readonly messages: readonly unknown[] }
+  /** Anything else Pi emits, which this adapter has no use for. */
+  | { readonly kind: "other" };
+
+const IGNORED: PiEventReading = { kind: "other" };
+
+export function readPiEvent(event: unknown): PiEventReading {
+  if (!isRecord(event)) return IGNORED;
+  if (event.type === "message_end" && event.message !== undefined) {
+    return { kind: "message", message: event.message };
+  }
+  if (
+    event.type === "tool_execution_start" ||
+    event.type === "tool_execution_end"
+  ) {
+    const observations: RunObservation[] = [];
+    const activity = piActivity(event);
+    if (activity) observations.push(activity);
+    const progress = piToolProgress(event);
+    if (progress) observations.push(progress);
+    return { kind: "tool", observations };
+  }
+  // A retrying terminal frame is not terminal: the session is about to try
+  // again, and its messages are not the Run's last word.
+  if (
+    event.type === "agent_end" &&
+    event.willRetry !== true &&
+    Array.isArray(event.messages)
+  ) {
+    return { kind: "terminal", messages: event.messages };
+  }
+  return IGNORED;
 }
 
 /** What a tool execution event says about the call it names. */
@@ -346,14 +404,18 @@ export function withoutInitialGoal(
   });
 }
 
-/** Everything a terminal snapshot replaces, recomputed from its own messages. */
-export function piTerminalSnapshot(messages: readonly unknown[]): {
-  readonly transcript: readonly TranscriptItem[];
-  readonly usage: UsageTotalsPatch;
-  readonly turns: number;
-  readonly context?: ContextGauge;
-  readonly model?: string;
-} {
+/**
+ * Everything a terminal snapshot replaces, recomputed from its own messages.
+ *
+ * A {@link TerminalReconciliation} rather than a shape of its own, because
+ * that is exactly what it is: every field present replaces what was streamed,
+ * and every field absent retains it. Returning the domain type means the
+ * execution hands the snapshot straight to the bundle instead of copying it
+ * field by field into the type it was already.
+ */
+export function piTerminalSnapshot(
+  messages: readonly unknown[],
+): TerminalReconciliation {
   const transcript: TranscriptItem[] = [];
   const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
   let turns = 0;

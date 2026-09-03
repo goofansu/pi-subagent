@@ -93,24 +93,33 @@ function disposeSession(
     probe.acquired("pendingCleanups");
     yield* Effect.exit(
       Effect.timeout(
-        Effect.promise(() =>
-          Promise.resolve()
-            .then(() =>
-              session.extensionRunner.emit({
-                type: "session_shutdown",
-                reason: "quit",
-              }),
-            )
-            .then(
-              () => undefined,
-              () => undefined,
-            ),
-        ),
+        Effect.promise(() => emitChildShutdown(session)),
         CHILD_SHUTDOWN_BUDGET_MILLIS,
       ),
     );
     releaseSession(session, probe);
   });
+}
+
+/**
+ * Tell a child's extensions the session is over. Never rejects.
+ *
+ * One expression rather than two, because the two disposal paths differ only
+ * in what they do with the promise: an ordinary close bounds it and waits, and
+ * a failed open fires it and does not.
+ */
+function emitChildShutdown(session: PiSession): Promise<void> {
+  return Promise.resolve()
+    .then(() =>
+      session.extensionRunner.emit({
+        type: "session_shutdown",
+        reason: "quit",
+      }),
+    )
+    .then(
+      () => undefined,
+      () => undefined,
+    );
 }
 
 /**
@@ -134,27 +143,14 @@ function releaseSession(session: PiSession, probe: PiProbeCounters): void {
 
 function discardSession(session: PiSession, probe: PiProbeCounters): void {
   probe.acquired("pendingCleanups");
-  void Promise.resolve()
-    .then(() =>
-      session.extensionRunner.emit({
-        type: "session_shutdown",
-        reason: "quit",
-      }),
-    )
-    .catch(() => undefined);
+  void emitChildShutdown(session);
   releaseSession(session, probe);
-}
-
-/** The BackendAgent, plus the one thing the contract has no place for. */
-export interface PiBackendAgent extends BackendAgent {
-  /** The native session this agent retains. For Pi's own tests only. */
-  readonly session: () => PiSession | undefined;
 }
 
 function createPiBackendAgent(
   session: PiSession,
   probe: PiProbeCounters,
-): PiBackendAgent {
+): BackendAgent {
   let closed = false;
   let closing: Deferred.Deferred<void> | undefined;
 
@@ -171,7 +167,6 @@ function createPiBackendAgent(
     capabilities: PI_CAPABILITIES,
     admitResume,
     execute,
-    session: () => (closed ? undefined : session),
     close: () =>
       // `Effect.suspend` so the check and the claim happen in one synchronous
       // step: two concurrent closes must not both decide they are the first,
@@ -223,7 +218,7 @@ export function openPiBackendAgent(
       abandoned: boolean;
       disposed: boolean;
       session?: PiSession;
-      agent?: PiBackendAgent;
+      agent?: BackendAgent;
     } = { abandoned: false, disposed: false };
 
     /** Release the session exactly once, whichever side gets there first. */

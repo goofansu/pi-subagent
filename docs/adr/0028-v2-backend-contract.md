@@ -10,11 +10,21 @@ would implement a decided contract rather than negotiate one.
 
 Marking it stable is the roadmap's program-level health signal, and it is a
 measurement rather than a decision: the first real backend was ported without
-changing the contract at all. Not one member of `Backend`, `BackendAgent`,
+changing this contract. Not one member of `Backend`, `BackendAgent`,
 `BackendCapabilities`, `RunInput`, `ExecutionIO`, `ControlFeed`, or
-`TerminalBundle` was added, removed, or re-typed to accommodate Pi, and the
-shape test that lists the members is unchanged. The four changes M4 did make
-outside the Pi adapter are enumerated and classified in
+`TerminalBundle` was added, removed, or re-typed, and `contract.ts` and the
+shape test that lists its members are byte-identical to what M1 wrote.
+
+One thing that flows *through* the contract did widen, and it is worth naming
+rather than hiding behind the sentence above: the domain's `MessageRole` gained
+`tool`, so the `message` observation and the `TranscriptItem` that `emit` and
+`TerminalBundle` carry can now hold one more role than they could. That is a
+domain change, not a contract change — no declaration here mentions it, and no
+adapter has to do anything differently for it — but a reader checking "did
+anything an adapter sees change" deserves to be told yes, this.
+
+The four changes M4 made outside the Pi adapter are enumerated and classified
+in
 [the M4 exit gate](../v2/m4-exit-gate.md#13-every-change-m4-made-outside-the-pi-adapter-directory);
 all four are missing provider-neutral semantics with fake-backend proofs, and
 none is provider leakage.
