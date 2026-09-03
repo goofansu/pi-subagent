@@ -18,9 +18,9 @@ reader can re-check rather than something they have to take on trust.
   by test and file, or by conformance scenario. A conformance scenario named
   here runs against **all five** rigs: both fakes and all three real adapters,
   with no skips.
-- **live** — a credentialed gate. `v2:pi:smoke`, `v2:claude:smoke`, and
-  `v2:codex:smoke` are the runtime gates over each adapter;
-  `v2:*:host-smoke` are the same backends through the surface a user has. These
+- **live** — a credentialed gate. `pi:smoke`, `claude:smoke`, and
+  `codex:smoke` are the runtime gates over each adapter;
+  `*:host-smoke` are the same backends through the surface a user has. These
   spend provider quota and are not in `check`.
 - **structural** — a fact about the tree that a check enforces, rather than a
   behaviour a test drives.
@@ -167,7 +167,7 @@ Run and assert the resumed Run recalls *that* marker. For Codex the claim is
 stronger and is checked on the wire: exactly one `initialize`, exactly one
 `thread/start`, no `thread/resume` ever, and every `turn/start` on the one root
 thread — read from the captured JSON-RPC transcript by
-`scripts/v2-codex-smoke-contract.mjs`, whose reasoning has its own deterministic
+`scripts/codex-smoke-contract.mjs`, whose reasoning has its own deterministic
 test.
 
 **Residual risk.** None identified.

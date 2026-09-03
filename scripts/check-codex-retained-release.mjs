@@ -29,7 +29,7 @@ const smokeLog = readFileSync(smokeLogPath, "utf8");
 // is a log of some other run, and the point of reading the log at all is that
 // a record's `PASS` is a human's summary of it.
 for (const required of [
-  "V2_CODEX_LIVE_SMOKE_PASS",
+  "CODEX_LIVE_SMOKE_PASS",
   "the retained root is neither listed nor readable by a second App Server",
   "no App Server child remains after closure",
 ]) {

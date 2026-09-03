@@ -10,7 +10,7 @@ The two complete protocol unions the Codex adapter consumes are vendored:
 
 - `ServerNotification.json` — every notification the transport may receive.
   The envelope requires only `method` + `params`; the reader in
-  `extensions/subagent-v2/backend/codex/protocol.ts` demands only
+  `extensions/subagent/backend/codex/protocol.ts` demands only
   schema-required fields from the notifications it consumes, and the methods
   it consumes are exported as `CODEX_NOTIFICATION_METHODS` so the drift check
   and the reader cannot disagree about the list.
@@ -42,7 +42,7 @@ thread path, Turn identities, stored-thread inspection methods, and every
 notification method consumed by the retained transport. The adapter's own
 deterministic tests — schema-minimum frames, repeated Turns, interruption,
 stdio shutdown, and steer correlation — verify the behavioural contract
-against the stand-in App Server. The authenticated `npm run v2:codex:smoke`
+against the stand-in App Server. The authenticated `npm run codex:smoke`
 then proves one pathless root thread across two Turns, its nondiscoverability
 from a second App Server, and that the whole process tree is gone after the
 Session Scope closes.

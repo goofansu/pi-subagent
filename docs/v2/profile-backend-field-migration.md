@@ -62,10 +62,10 @@ v1 and v2 are never loaded into the same Pi process:
   and only the v2 entry point loaded:
 
   ```bash
-  pi --offline -np -nc -ns -ne -e extensions/subagent-v2/index.ts
+  pi --offline -np -nc -ns -ne -e extensions/subagent/index.ts
   ```
 
-  or `make dev-v2` from a checkout.
+  or `make dev` from a checkout.
 
 If you are switching between the two, keep the field the process you are
 launching expects. Once v2 becomes the only implementation (milestone M7), only

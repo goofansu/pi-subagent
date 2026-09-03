@@ -289,7 +289,7 @@ model never started these Runs and has no context to act on their answers.
 
 Everything above describes v1, which is frozen (see
 [`docs/v2/freeze.md`](docs/v2/freeze.md)). The rewrite in
-`extensions/subagent-v2/` uses the vocabulary below from its first line of code.
+`extensions/subagent/` uses the vocabulary below from its first line of code.
 Where a v2 term replaces a v1 one, the v1 term stays valid for v1 and is deleted
 with it at milestone M7. The decision is
 [ADR-0022](docs/adr/0022-v2-terminology-and-backend-field.md).
@@ -700,7 +700,7 @@ for Codex, live App Server processes, reader fibers, pending JSON-RPC requests,
 retained root threads, and in-flight steers.
 Deliberately outside the backend contract — a probe on the contract would be a
 field every adapter had to invent something for, and a number the core could
-start believing. `/subagent-v2` prints one block per backend beside the
+start believing. `/subagent` prints one block per backend beside the
 runtime's own, because "which adapter is still holding something" is the only
 question a probe exists to answer and a merged total cannot answer it. Every
 block must read zero once a Session has closed.

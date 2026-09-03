@@ -230,13 +230,13 @@ measured rather than a thing that was intended.
 Three kinds of citation appear, and the difference matters:
 
 - **conformance** — `PiBackend conformance: <scenario>`, registered by
-  [`testing/conformance-pi.test.ts`](../../extensions/subagent-v2/testing/conformance-pi.test.ts).
+  [`testing/conformance-pi.test.ts`](../../extensions/subagent/testing/conformance-pi.test.ts).
   These run the *shared* suite against the real adapter with a scriptable
   stand-in session behind it, so a pass means the seam behaves, not that a
   Pi-shaped test was written to agree with a Pi-shaped adapter.
 - **a named v2 test**, with the file it lives in.
-- **live**, meaning one of the two opt-in gates: `npm run v2:pi:smoke` for the
-  runtime lane and `npm run v2:pi:host-smoke` for the host lane.
+- **live**, meaning one of the two opt-in gates: `npm run pi:smoke` for the
+  runtime lane and `npm run pi:host-smoke` for the host lane.
 
 Rows already proven at M3 cite those tests, because a backend-independent
 behaviour proven against the fakes at M3 is proven for Pi too — what M4 adds
@@ -244,17 +244,17 @@ there is that the Pi backend is what the Session was actually running.
 
 | Row | v2 proof for Pi |
 | --- | --- |
-| `agent_start` — expected outcome | `PiBackend conformance: open-creates-no-run`; `agent_start returns a Subagent id and a first Run id a model can act on` (`host/tools.test.ts`); live (`v2:pi:smoke`, `v2:pi:host-smoke`) |
+| `agent_start` — expected outcome | `PiBackend conformance: open-creates-no-run`; `agent_start returns a Subagent id and a first Run id a model can act on` (`host/tools.test.ts`); live (`pi:smoke`, `pi:host-smoke`) |
 | `agent_start` — unknown agent | `agent_start refuses an unknown agent and names the ones that exist` (`host/tools.test.ts`) |
 | `agent_start` — nested delegation | `a start already at the maximum depth is refused by admission`; `a process the backend set reports as nested registers nothing at all`; `a process the backend set calls a child registers nothing at all` (`host/inert-guard.test.ts`) |
 | `agent_start` — at capacity | `PiBackend conformance: capacity-rejection-is-immediate` |
-| `agent_resume` — expected outcome | `PiBackend conformance: resume-or-honest-refusal`; `a cancelled Run leaves the session resumable on the same conversation` (`testing/pi/pi-backend.test.ts`); live (`v2:pi:smoke`) |
+| `agent_resume` — expected outcome | `PiBackend conformance: resume-or-honest-refusal`; `a cancelled Run leaves the session resumable on the same conversation` (`testing/pi/pi-backend.test.ts`); live (`pi:smoke`) |
 | `agent_resume` — already running | `PiBackend conformance: one-active-run-per-subagent` |
 | `agent_resume` — unknown Subagent id | `agent_resume tells an unknown Subagent from a Run id` (`host/tools.test.ts`) |
 | `agent_resume` — `unsupported` | Not reachable for Pi, which declares resume: `a Profile with no backend field runs on Pi, which declares all three capabilities` (`testing/pi/pi-backend.test.ts`). The outcome itself is proven by the one-shot fake: `the one-shot backend proves resume unsupported at the surface` (`host/tools.test.ts`) |
 | `agent_resume` — Conversation loss | `admitResume answers from the adapter's own state, with no native call`; `a disposed Pi session is refused by the adapter, not by the SDK` (`testing/pi/pi-backend.test.ts`) |
-| `agent_resume` — during shutdown | `PiBackend conformance: shutdown-rejects-new-work`; live (`v2:pi:smoke`, "shutdown refuses new work") |
-| `agent_steer` — expected outcome | `PiBackend conformance: steering-admission-follows-the-declared-capability`, `controls-are-delivered-serially-in-order`, `a-user-observation-appears-only-on-confirmation`; live (`v2:pi:smoke`, "steering reaches the answer") |
+| `agent_resume` — during shutdown | `PiBackend conformance: shutdown-rejects-new-work`; live (`pi:smoke`, "shutdown refuses new work") |
+| `agent_steer` — expected outcome | `PiBackend conformance: steering-admission-follows-the-declared-capability`, `controls-are-delivered-serially-in-order`, `a-user-observation-appears-only-on-confirmation`; live (`pi:smoke`, "steering reaches the answer") |
 | `agent_steer` — `unsupported` | Not reachable for Pi. Proven by the one-shot fake: `the one-shot backend proves unsupported steering at the surface` (`host/tools.test.ts`) |
 | `agent_steer` — mailbox full | `PiBackend conformance: a-full-mailbox-answers-immediately` |
 | `agent_steer` — mailbox closed | `PiBackend conformance: a-closed-mailbox-refuses-after-cancel` |
@@ -262,19 +262,19 @@ there is that the Pi backend is what the Session was actually running.
 | `agent_steer` — invalid text | `agent_steer rejects empty guidance before it looks the Run up` (`host/tools.test.ts`) |
 | `agent_steer` — unknown Run id | `agent_steer names a terminal Run's status rather than calling it unknown` (`host/tools.test.ts`) |
 | `agent_steer` — delivery failure is diagnostic-only | `a native steer that rejects is a control diagnostic and no user message` (`testing/pi/pi-backend.test.ts`) |
-| `agent_cancel` — expected outcome | `PiBackend conformance: cancellation-terminates-with-partial-output`; `a stalled native steer does not delay a cancel` (`testing/pi/pi-backend.test.ts`); live (`v2:pi:smoke`) |
+| `agent_cancel` — expected outcome | `PiBackend conformance: cancellation-terminates-with-partial-output`; `a stalled native steer does not delay a cancel` (`testing/pi/pi-backend.test.ts`); live (`pi:smoke`) |
 | `agent_cancel` — terminal answer then abort | `PiBackend conformance: exactly-one-ending-wins`; `a terminal answer observed before the abort settles answered` (`testing/pi/pi-backend.test.ts`) |
 | `agent_cancel` — repeated cancel | `a repeated agent_cancel is idempotent and the first request stands` (`host/tools.test.ts`) |
 | `agent_cancel` — already terminal / unknown Run id | `agent_cancel tells a finished Run from an id that never existed` (`host/tools.test.ts`) |
 | `agent_cancel` — request vs. terminal | `agent_cancel reports request admission, not terminal cancellation` (`host/tools.test.ts`) |
 | `agent_wait` — every row | Backend-independent, as the matrix says: `PiBackend conformance: wait-and-result-observe-the-same-value`, `a-late-waiter-reads-the-stored-result`, plus `agent_wait names each terminal Run by agent and status`, `agent_wait reports an unknown id rather than blocking on it`, `aborting the turn ends only the wait: the Run settles and its result stands` (`host/tools.test.ts`) |
-| `agent_result` — expected outcome | `PiBackend conformance: wait-and-result-observe-the-same-value`; `agent_result returns the full stored output with its Run identity` (`host/tools.test.ts`); live (`v2:pi:host-smoke`) |
+| `agent_result` — expected outcome | `PiBackend conformance: wait-and-result-observe-the-same-value`; `agent_result returns the full stored output with its Run identity` (`host/tools.test.ts`); live (`pi:host-smoke`) |
 | `agent_result` — not yet terminal | `agent_result on a live Run says it has not finished, distinctly from unknown` (`host/tools.test.ts`) |
 | `agent_result` — evicted output | `PiBackend conformance: an-evicted-result-answers-expired` |
 | `agent_result` — unknown Run id | `agent_result on a live Run says it has not finished, distinctly from unknown` (`host/tools.test.ts`) |
 | `agent_result` — after a failed Notification | `PiBackend conformance: a-notification-retry-cannot-duplicate-or-alter-settlement` |
 | `agent_result` — after Session shutdown | `PiBackend conformance: shutdown-rejects-new-work`; `a tool call after shutdown returns the not-ready sentence` (`host/tools.test.ts`) |
-| Subagent close — expected outcome | `PiBackend conformance: close-releases-every-resource`; `closing twice emits one child shutdown and disposes once` (`testing/pi/pi-backend.test.ts`); live (`v2:pi:smoke`, both probes clear) |
+| Subagent close — expected outcome | `PiBackend conformance: close-releases-every-resource`; `closing twice emits one child shutdown and disposes once` (`testing/pi/pi-backend.test.ts`); live (`pi:smoke`, both probes clear) |
 | Subagent close — bounded child shutdown | `closing twice emits one child shutdown and disposes once` (`testing/pi/pi-backend.test.ts`) |
 | Subagent close — late settlement | `PiBackend conformance: late-events-cannot-mutate-a-terminal-run` |
 | Subagent close — idempotence | `PiBackend conformance: close-is-idempotent` |
@@ -282,7 +282,7 @@ there is that the Pi backend is what the Session was actually running.
 | `/agents` — every row | Backend-independent: `the list holds one item per Profile, by name and description` and `the list is identical whatever backend a Profile names` (`host/agents-command.test.ts`). The Pi set supplies no Profiles of its own: `the Pi set supplies one backend and no Profiles of its own` (`host/inert-guard.test.ts`) |
 | Active widget — every row | Backend-independent: `the widget appears with the first live Run and its row reads as the matrix says` and its siblings (`host/widget.test.ts`); `PiBackend conformance: only-the-repository-writes-snapshots` |
 | Active widget — row lifetime | Backend-independent: `a terminal Run keeps its row until its completion notice lands, and the landing takes it away`; `a notice lost to an interrupt keeps its row until the re-push lands` (`host/widget.test.ts`) |
-| Completion Notification — every row | Backend-independent: `PiBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; the landing rows in `host/push-sink.test.ts`; live (`v2:pi:smoke`, one notification per settled Run) |
+| Completion Notification — every row | Backend-independent: `PiBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; the landing rows in `host/push-sink.test.ts`; live (`pi:smoke`, one notification per settled Run) |
 | Profile loading — generic parsing | the `parseProfile` tests in `domain/profile.test.ts` |
 | Profile loading — unknown backend name | `PiBackend conformance: validation-is-deterministic`; `a Profile naming an unknown backend is one diagnostic, not an exception` (`backend/contract.test.ts`) |
 | Profile loading — unrecognized field | `a field Pi has never heard of is a diagnostic, not a silent pass` (`backend/pi/profile.test.ts`) |
@@ -306,15 +306,15 @@ thing that has been measured rather than a thing that was intended.
 Three kinds of citation appear, and the difference matters:
 
 - **conformance** — `ClaudeBackend conformance: <scenario>`, registered by
-  [`testing/conformance-claude.test.ts`](../../extensions/subagent-v2/testing/conformance-claude.test.ts).
+  [`testing/conformance-claude.test.ts`](../../extensions/subagent/testing/conformance-claude.test.ts).
   These run the *shared* suite against the real adapter with a scriptable
   stand-in Query behind it, so a pass means the seam behaves, not that a
   Claude-shaped test was written to agree with a Claude-shaped adapter.
   **Claude skips none of the thirty-seven**, and a test asserts the empty skip
   list.
 - **a named v2 test**, with the file it lives in.
-- **live**, meaning one of the two opt-in gates: `npm run v2:claude:smoke` for
-  the runtime lane and `npm run v2:claude:host-smoke` for the host lane.
+- **live**, meaning one of the two opt-in gates: `npm run claude:smoke` for
+  the runtime lane and `npm run claude:host-smoke` for the host lane.
 
 Rows the matrix marks backend-independent cite the same tests the Pi table
 does, because a behaviour proven against the fakes and against Pi is proven for
@@ -323,17 +323,17 @@ was actually running.
 
 | Row | v2 proof for Claude |
 | --- | --- |
-| `agent_start` — expected outcome | `ClaudeBackend conformance: open-creates-no-run`; `opening loads the SDK and starts no Query, because there is nothing else to open`, `a BackendAgent that has never run holds no conversation to resume` (`testing/claude/claude-backend.test.ts`); live (`v2:claude:smoke`, `v2:claude:host-smoke`) |
+| `agent_start` — expected outcome | `ClaudeBackend conformance: open-creates-no-run`; `opening loads the SDK and starts no Query, because there is nothing else to open`, `a BackendAgent that has never run holds no conversation to resume` (`testing/claude/claude-backend.test.ts`); live (`claude:smoke`, `claude:host-smoke`) |
 | `agent_start` — unknown agent | Backend-independent: `agent_start refuses an unknown agent and names the ones that exist` (`host/tools.test.ts`) |
 | `agent_start` — nested delegation | `the host facts come from Pi, which is the only backend that has them` (`host/production-backends.test.ts`); `a start already at the maximum depth is refused by admission` (`host/inert-guard.test.ts`). The depth *variable* is shared: `the child environment is the operator's, plus the depth key` (`backend/claude/options.test.ts`) |
 | `agent_start` — at capacity | `ClaudeBackend conformance: capacity-rejection-is-immediate` |
-| `agent_resume` — expected outcome | `ClaudeBackend conformance: resume-or-honest-refusal`; `the first Run's identity frame is what makes a later Run resumable` (`testing/claude/claude-backend.test.ts`); live (`v2:claude:smoke`, "resume answers from the first Run's retained conversation") |
+| `agent_resume` — expected outcome | `ClaudeBackend conformance: resume-or-honest-refusal`; `the first Run's identity frame is what makes a later Run resumable` (`testing/claude/claude-backend.test.ts`); live (`claude:smoke`, "resume answers from the first Run's retained conversation") |
 | `agent_resume` — already running | `ClaudeBackend conformance: one-active-run-per-subagent` |
 | `agent_resume` — unknown Subagent id | Backend-independent: `agent_resume tells an unknown Subagent from a Run id` (`host/tools.test.ts`) |
 | `agent_resume` — `unsupported` | Not reachable for Claude, which declares resume: `Claude declares resume and steering, and no terminal transcript snapshot` (`testing/claude/claude-backend.test.ts`). The outcome itself is proven by the one-shot fake: `the one-shot backend proves resume unsupported at the surface` (`host/tools.test.ts`) |
 | `agent_resume` — Conversation loss | `a BackendAgent that has never run holds no conversation to resume`, `closing drops the identity, and it stays dropped`, `an identity that differs from the retained one fails without falling back`, `a boundary frame with a malformed identity fails the Run` (`testing/claude/claude-backend.test.ts`) |
-| `agent_resume` — during shutdown | `ClaudeBackend conformance: shutdown-rejects-new-work`; live (`v2:claude:smoke`, "shutdown refuses new work") |
-| `agent_steer` — expected outcome | `ClaudeBackend conformance: steering-admission-follows-the-declared-capability`, `controls-are-delivered-serially-in-order`, `a-user-observation-appears-only-on-confirmation`; `guidance becomes a user observation only when the provider echoes it`, `only one Control is provider-visible at a time` (`testing/claude/claude-backend.test.ts`); live (`v2:claude:smoke`, "a confirmed steer produced exactly one user observation") |
+| `agent_resume` — during shutdown | `ClaudeBackend conformance: shutdown-rejects-new-work`; live (`claude:smoke`, "shutdown refuses new work") |
+| `agent_steer` — expected outcome | `ClaudeBackend conformance: steering-admission-follows-the-declared-capability`, `controls-are-delivered-serially-in-order`, `a-user-observation-appears-only-on-confirmation`; `guidance becomes a user observation only when the provider echoes it`, `only one Control is provider-visible at a time` (`testing/claude/claude-backend.test.ts`); live (`claude:smoke`, "a confirmed steer produced exactly one user observation") |
 | `agent_steer` — `unsupported` | Not reachable for Claude. Proven by the one-shot fake: `the one-shot backend proves unsupported steering at the surface` (`host/tools.test.ts`) |
 | `agent_steer` — mailbox full | `ClaudeBackend conformance: a-full-mailbox-answers-immediately`. Claude's consumer is not eager, so the bound genuinely binds: guidance the provider is not ready for stays in the mailbox |
 | `agent_steer` — mailbox closed | `ClaudeBackend conformance: a-closed-mailbox-refuses-after-cancel` |
@@ -342,28 +342,28 @@ was actually running.
 | `agent_steer` — unknown Run id | Backend-independent: `agent_steer names a terminal Run's status rather than calling it unknown` (`host/tools.test.ts`) |
 | `agent_steer` — one user Fact only on correlation | `guidance the provider never acknowledges is delivered and never claimed`, `a result frame with guidance still outstanding is a Turn boundary, not settlement` (`testing/claude/claude-backend.test.ts`) |
 | `agent_steer` — delivery failure is diagnostic-only | `guidance the input stream will not take is a control diagnostic and nothing else` (`testing/claude/claude-backend.test.ts`) |
-| `agent_cancel` — expected outcome | `ClaudeBackend conformance: cancellation-terminates-with-partial-output`; `a Run cancelled before any frame settles cancelled with nothing at all` (`testing/claude/claude-backend.test.ts`); live (`v2:claude:smoke`) |
+| `agent_cancel` — expected outcome | `ClaudeBackend conformance: cancellation-terminates-with-partial-output`; `a Run cancelled before any frame settles cancelled with nothing at all` (`testing/claude/claude-backend.test.ts`); live (`claude:smoke`) |
 | `agent_cancel` — a Run with no output is a valid outcome | `ClaudeBackend conformance: a-run-may-settle-with-no-observations`; `a Run cancelled before any frame settles cancelled with nothing at all` (`testing/claude/claude-backend.test.ts`) |
-| `agent_cancel` — the retained identity survives | live (`v2:claude:smoke`, "a cancelled Query leaves the conversation resumable") |
+| `agent_cancel` — the retained identity survives | live (`claude:smoke`, "a cancelled Query leaves the conversation resumable") |
 | `agent_cancel` — terminal answer then abort | `ClaudeBackend conformance: exactly-one-ending-wins`; `a successful result already observed survives a later cancel` (`testing/claude/claude-backend.test.ts`) |
 | `agent_cancel` — repeated cancel | Backend-independent: `a repeated agent_cancel is idempotent and the first request stands` (`host/tools.test.ts`) |
 | `agent_cancel` — already terminal / unknown Run id | Backend-independent: `agent_cancel tells a finished Run from an id that never existed` (`host/tools.test.ts`) |
 | `agent_cancel` — request vs. terminal | Backend-independent: `agent_cancel reports request admission, not terminal cancellation` (`host/tools.test.ts`) |
 | `agent_wait` — every row | Backend-independent, as the matrix says: `ClaudeBackend conformance: wait-and-result-observe-the-same-value`, `a-late-waiter-reads-the-stored-result`, plus the `agent_wait` rows in `host/tools.test.ts` |
-| `agent_result` — expected outcome | `ClaudeBackend conformance: wait-and-result-observe-the-same-value`; `a Profile naming claude runs end to end through the production set` (`host/production-backends.test.ts`); live (`v2:claude:host-smoke`) |
+| `agent_result` — expected outcome | `ClaudeBackend conformance: wait-and-result-observe-the-same-value`; `a Profile naming claude runs end to end through the production set` (`host/production-backends.test.ts`); live (`claude:host-smoke`) |
 | `agent_result` — not yet terminal | Backend-independent: `agent_result on a live Run says it has not finished, distinctly from unknown` (`host/tools.test.ts`) |
 | `agent_result` — evicted output | `ClaudeBackend conformance: an-evicted-result-answers-expired` |
 | `agent_result` — unknown Run id | Backend-independent: `agent_result on a live Run says it has not finished, distinctly from unknown` (`host/tools.test.ts`) |
 | `agent_result` — after a failed Notification | `ClaudeBackend conformance: a-notification-retry-cannot-duplicate-or-alter-settlement` |
 | `agent_result` — after Session shutdown | `ClaudeBackend conformance: shutdown-rejects-new-work`; `a tool call after shutdown returns the not-ready sentence` (`host/tools.test.ts`) |
-| Subagent close — expected outcome | `ClaudeBackend conformance: close-releases-every-resource`; `closing drops the identity, and it stays dropped` (`testing/claude/claude-backend.test.ts`); live (`v2:claude:smoke`, both probes clear) |
+| Subagent close — expected outcome | `ClaudeBackend conformance: close-releases-every-resource`; `closing drops the identity, and it stays dropped` (`testing/claude/claude-backend.test.ts`); live (`claude:smoke`, both probes clear) |
 | Subagent close — idempotence | `ClaudeBackend conformance: close-is-idempotent`; `closing drops the identity, and it stays dropped` (`testing/claude/claude-backend.test.ts`). Claude has no SDK close call, so the adapter's own tally is what makes one effective close a number rather than a claim |
 | Subagent close — late settlement | `ClaudeBackend conformance: late-events-cannot-mutate-a-terminal-run` |
 | Subagent close — identity cleanup | `nothing is left iterating or open once a Run has settled` (`testing/claude/claude-backend.test.ts`); `ClaudeBackend conformance: close-releases-every-resource` |
 | `/agents` — every row | Backend-independent: `the list is identical whatever backend a Profile names` (`host/agents-command.test.ts`). The production set supplies no Profiles of its own: `the production set offers both backends and no Profiles of its own` (`host/production-backends.test.ts`) |
 | Active widget — every row | Backend-independent: the widget rows in `host/widget.test.ts`; `ClaudeBackend conformance: only-the-repository-writes-snapshots` |
 | Active widget — row lifetime | Backend-independent: the row-lifetime tests in `host/widget.test.ts` |
-| Completion Notification — every row | Backend-independent: `ClaudeBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; live (`v2:claude:smoke`, one notification per settled Run and no provider identity in any of them) |
+| Completion Notification — every row | Backend-independent: `ClaudeBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; live (`claude:smoke`, one notification per settled Run and no provider identity in any of them) |
 | Profile loading — generic parsing | the `parseProfile` tests in `domain/profile.test.ts` |
 | Profile loading — unknown backend name | `a Profile naming a backend the set does not hold is a diagnostic, not a crash` (`host/production-backends.test.ts`) |
 | Profile loading — unrecognized field | `a field Claude has never heard of is a diagnostic, not a silent pass` (`backend/claude/profile.test.ts`); `ClaudeBackend conformance: validation-is-deterministic` |
@@ -393,7 +393,7 @@ that has been measured rather than a thing that was intended.
 Three kinds of citation appear, and the difference matters:
 
 - **conformance** — `CodexBackend conformance: <scenario>`, registered by
-  [`testing/conformance-codex.test.ts`](../../extensions/subagent-v2/testing/conformance-codex.test.ts).
+  [`testing/conformance-codex.test.ts`](../../extensions/subagent/testing/conformance-codex.test.ts).
   These run the *shared* suite against the real adapter with a scriptable
   stand-in App Server behind it, speaking JSON-RPC lines over the same spawn
   option production fills — so a pass means the seam behaves, not that a
@@ -401,8 +401,8 @@ Three kinds of citation appear, and the difference matters:
   **Codex skips none of the thirty-seven**, and a test asserts the empty skip
   list.
 - **a named v2 test**, with the file it lives in.
-- **live**, meaning one of the two opt-in gates: `npm run v2:codex:smoke` for
-  the runtime lane and `npm run v2:codex:host-smoke` for the host lane.
+- **live**, meaning one of the two opt-in gates: `npm run codex:smoke` for
+  the runtime lane and `npm run codex:host-smoke` for the host lane.
 
 Rows the matrix marks backend-independent cite the same tests the Pi and Claude
 tables do, because a behaviour proven against the fakes and against two real
@@ -411,17 +411,17 @@ backend is what the Session was actually running.
 
 | Row | v2 proof for Codex |
 | --- | --- |
-| `agent_start` — expected outcome | `CodexBackend conformance: open-creates-no-run`; `opening spawns the App Server, initializes, and starts the ephemeral root` (`testing/codex/codex-backend.test.ts`); live (`v2:codex:smoke`, `v2:codex:host-smoke`) |
+| `agent_start` — expected outcome | `CodexBackend conformance: open-creates-no-run`; `opening spawns the App Server, initializes, and starts the ephemeral root` (`testing/codex/codex-backend.test.ts`); live (`codex:smoke`, `codex:host-smoke`) |
 | `agent_start` — unknown agent | Backend-independent: `agent_start refuses an unknown agent and names the ones that exist` (`host/tools.test.ts`) |
 | `agent_start` — nested delegation | `the host facts come from Pi, which is the only backend that has them` (`host/production-backends.test.ts`); `a start already at the maximum depth is refused by admission` (`host/inert-guard.test.ts`). The depth *variable* is shared: `the child is spawned with the operator's environment plus the depth key` (`testing/codex/codex-backend.test.ts`), `the child environment is the operator's, plus the depth key` (`backend/codex/protocol.test.ts`) |
 | `agent_start` — at capacity | `CodexBackend conformance: capacity-rejection-is-immediate` |
-| `agent_resume` — expected outcome | `CodexBackend conformance: resume-or-honest-refusal`; `a resumed Turn runs on the same retained root`, `the first Turn carries the Profile prompt, and a resumed Turn does not` (`testing/codex/codex-backend.test.ts`); live (`v2:codex:smoke`, "resume answers from the first Turn's retained root") |
+| `agent_resume` — expected outcome | `CodexBackend conformance: resume-or-honest-refusal`; `a resumed Turn runs on the same retained root`, `the first Turn carries the Profile prompt, and a resumed Turn does not` (`testing/codex/codex-backend.test.ts`); live (`codex:smoke`, "resume answers from the first Turn's retained root") |
 | `agent_resume` — already running | `CodexBackend conformance: one-active-run-per-subagent` |
 | `agent_resume` — unknown Subagent id | Backend-independent: `agent_resume tells an unknown Subagent from a Run id` (`host/tools.test.ts`) |
 | `agent_resume` — `unsupported` | Not reachable for Codex, which declares resume: `Codex declares resume and steering, and no terminal transcript snapshot` (`testing/codex/codex-backend.test.ts`). The outcome itself is proven by the one-shot fake: `the one-shot backend proves resume unsupported at the surface` (`host/tools.test.ts`) |
 | `agent_resume` — Conversation loss | `resume is admitted while the root is live and lost once the process has gone`, `a process that dies mid-Turn fails the Run with its partial output`, `a Turn that ignores its interrupt is escalated to SIGTERM and then SIGKILL` (`testing/codex/codex-backend.test.ts`) — and no provider identity crosses in any of them |
-| `agent_resume` — during shutdown | `CodexBackend conformance: shutdown-rejects-new-work`; live (`v2:codex:smoke`, "shutdown refuses new work") |
-| `agent_steer` — expected outcome | `CodexBackend conformance: steering-admission-follows-the-declared-capability`, `controls-are-delivered-serially-in-order`, `a-user-observation-appears-only-on-confirmation`; `guidance becomes a user observation only when the server echoes its id`, `only one steer is in flight at a time` (`testing/codex/codex-backend.test.ts`); `a Turn is started, steered, and interrupted with the ids it needs` (`backend/codex/protocol.test.ts`); live (`v2:codex:smoke`, "a steer confirmed by client id produced exactly one user observation") |
+| `agent_resume` — during shutdown | `CodexBackend conformance: shutdown-rejects-new-work`; live (`codex:smoke`, "shutdown refuses new work") |
+| `agent_steer` — expected outcome | `CodexBackend conformance: steering-admission-follows-the-declared-capability`, `controls-are-delivered-serially-in-order`, `a-user-observation-appears-only-on-confirmation`; `guidance becomes a user observation only when the server echoes its id`, `only one steer is in flight at a time` (`testing/codex/codex-backend.test.ts`); `a Turn is started, steered, and interrupted with the ids it needs` (`backend/codex/protocol.test.ts`); live (`codex:smoke`, "a steer confirmed by client id produced exactly one user observation") |
 | `agent_steer` — `unsupported` | Not reachable for Codex. Proven by the one-shot fake: `the one-shot backend proves unsupported steering at the surface` (`host/tools.test.ts`) |
 | `agent_steer` — mailbox full | `CodexBackend conformance: a-full-mailbox-answers-immediately`. Codex's consumer awaits each `turn/steer`, so the bound genuinely binds: guidance the server has not answered stays in the mailbox |
 | `agent_steer` — mailbox closed | `CodexBackend conformance: a-closed-mailbox-refuses-after-cancel` |
@@ -431,31 +431,31 @@ backend is what the Session was actually running.
 | `agent_steer` — one user Fact only on correlation | `guidance the server never echoes is delivered and never claimed`, `a steer sent before a cancel still confirms afterwards` (`testing/codex/codex-backend.test.ts`) |
 | `agent_steer` — delivery failure is diagnostic-only | `guidance the server refuses is a control diagnostic and nothing else` (`testing/codex/codex-backend.test.ts`) |
 | `agent_steer` — the wrong Turn is refused by the protocol | `a Turn is started, steered, and interrupted with the ids it needs` (`backend/codex/protocol.test.ts`); `guidance becomes a user observation only when the server echoes its id` asserts the `expectedTurnId` each steer named (`testing/codex/codex-backend.test.ts`) |
-| `agent_cancel` — expected outcome | `CodexBackend conformance: cancellation-terminates-with-partial-output`; `cancelling an active Turn interrupts it and leaves the root resumable` (`testing/codex/codex-backend.test.ts`); live (`v2:codex:smoke`) |
+| `agent_cancel` — expected outcome | `CodexBackend conformance: cancellation-terminates-with-partial-output`; `cancelling an active Turn interrupts it and leaves the root resumable` (`testing/codex/codex-backend.test.ts`); live (`codex:smoke`) |
 | `agent_cancel` — bounded SIGTERM/SIGKILL escalation | `a Turn that ignores its interrupt is escalated to SIGTERM and then SIGKILL` (`testing/codex/codex-backend.test.ts`); `an ignored SIGTERM is followed by SIGKILL, with no real time passing`, `a request the server never answers expires and escalates` (`backend/codex/transport.test.ts`) |
 | `agent_cancel` — a Run with no output is a valid outcome | `CodexBackend conformance: a-run-may-settle-with-no-observations` |
-| `agent_cancel` — the process and root survive | `cancelling an active Turn interrupts it and leaves the root resumable` (`testing/codex/codex-backend.test.ts`); live (`v2:codex:smoke`, "an interrupted Turn leaves the process, the root, and the Subagent alive") |
+| `agent_cancel` — the process and root survive | `cancelling an active Turn interrupts it and leaves the root resumable` (`testing/codex/codex-backend.test.ts`); live (`codex:smoke`, "an interrupted Turn leaves the process, the root, and the Subagent alive") |
 | `agent_cancel` — terminal answer then abort | `CodexBackend conformance: exactly-one-ending-wins`; `a final answer already observed survives a later cancel` (`testing/codex/codex-backend.test.ts`) |
 | `agent_cancel` — repeated cancel | Backend-independent: `a repeated agent_cancel is idempotent and the first request stands` (`host/tools.test.ts`) |
 | `agent_cancel` — already terminal / unknown Run id | Backend-independent: `agent_cancel tells a finished Run from an id that never existed` (`host/tools.test.ts`) |
 | `agent_cancel` — request vs. terminal | Backend-independent: `agent_cancel reports request admission, not terminal cancellation` (`host/tools.test.ts`) |
 | `agent_wait` — every row | Backend-independent, as the matrix says: `CodexBackend conformance: wait-and-result-observe-the-same-value`, `a-late-waiter-reads-the-stored-result`, plus the `agent_wait` rows in `host/tools.test.ts` |
-| `agent_result` — expected outcome | `CodexBackend conformance: wait-and-result-observe-the-same-value`; `a Profile naming codex runs end to end through the production set` (`host/production-backends.test.ts`); live (`v2:codex:host-smoke`) |
+| `agent_result` — expected outcome | `CodexBackend conformance: wait-and-result-observe-the-same-value`; `a Profile naming codex runs end to end through the production set` (`host/production-backends.test.ts`); live (`codex:host-smoke`) |
 | `agent_result` — unavailable until background terminals close | `a result is unavailable while a background command the Run started is running` (`testing/codex/codex-backend.test.ts`) |
 | `agent_result` — not yet terminal | Backend-independent: `agent_result on a live Run says it has not finished, distinctly from unknown` (`host/tools.test.ts`) |
 | `agent_result` — evicted output | `CodexBackend conformance: an-evicted-result-answers-expired` |
 | `agent_result` — unknown Run id | Backend-independent: `agent_result on a live Run says it has not finished, distinctly from unknown` (`host/tools.test.ts`) |
 | `agent_result` — after a failed Notification | `CodexBackend conformance: a-notification-retry-cannot-duplicate-or-alter-settlement` |
 | `agent_result` — after Session shutdown | `CodexBackend conformance: shutdown-rejects-new-work`; `a tool call after shutdown returns the not-ready sentence` (`host/tools.test.ts`) |
-| Subagent close — expected outcome | `CodexBackend conformance: close-releases-every-resource`; `closing the Session ends stdin once and leaves nothing held` (`testing/codex/codex-backend.test.ts`); live (`v2:codex:smoke`, all three probes clear and no App Server child left) |
+| Subagent close — expected outcome | `CodexBackend conformance: close-releases-every-resource`; `closing the Session ends stdin once and leaves nothing held` (`testing/codex/codex-backend.test.ts`); live (`codex:smoke`, all three probes clear and no App Server child left) |
 | Subagent close — idempotence | `CodexBackend conformance: close-is-idempotent`; `closing the Session ends stdin once and leaves nothing held` (`testing/codex/codex-backend.test.ts`); `close after the child is already gone returns at once, and twice is once` (`backend/codex/transport.test.ts`) |
 | Subagent close — the graceful path | `close ends stdin, and a child that goes needs no signal at all` (`backend/codex/transport.test.ts`), which is the spike's 13 ms exit-code-0 path |
 | Subagent close — late settlement | `CodexBackend conformance: late-events-cannot-mutate-a-terminal-run` |
-| Subagent close — process cleanup | `closing the Session ends stdin once and leaves nothing held` (`testing/codex/codex-backend.test.ts`); live (`v2:codex:smoke`, "no App Server child remains after closure", read from `ps` rather than from the adapter) |
+| Subagent close — process cleanup | `closing the Session ends stdin once and leaves nothing held` (`testing/codex/codex-backend.test.ts`); live (`codex:smoke`, "no App Server child remains after closure", read from `ps` rather than from the adapter) |
 | `/agents` — every row | Backend-independent: `the list is identical whatever backend a Profile names` (`host/agents-command.test.ts`). The production set supplies no Profiles of its own: `the production set offers all three backends and no Profiles of its own` (`host/production-backends.test.ts`) |
 | Active widget — every row | Backend-independent: the widget rows in `host/widget.test.ts`; `CodexBackend conformance: only-the-repository-writes-snapshots` |
 | Active widget — row lifetime | Backend-independent: the row-lifetime tests in `host/widget.test.ts` |
-| Completion Notification — every row | Backend-independent: `CodexBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; live (`v2:codex:smoke`, one notification per settled Run and no provider identity in any of them) |
+| Completion Notification — every row | Backend-independent: `CodexBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; live (`codex:smoke`, one notification per settled Run and no provider identity in any of them) |
 | Profile loading — generic parsing | the `parseProfile` tests in `domain/profile.test.ts` |
 | Profile loading — unknown backend name | `a Profile naming a backend the set does not hold is a diagnostic, not a crash` (`host/production-backends.test.ts`) |
 | Profile loading — unrecognized field | `a field Codex has never heard of is a diagnostic, not a silent pass`, `tools and appendSystemPrompt are shared vocabulary Codex refuses` (`backend/codex/profile.test.ts`); `CodexBackend conformance: validation-is-deterministic` |

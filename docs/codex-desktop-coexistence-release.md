@@ -1,6 +1,6 @@
 # Codex Desktop coexistence release check
 
-This is the human-only companion to `npm run v2:codex:smoke`. It records
+This is the human-only companion to `npm run codex:smoke`. It records
 whether one retained, ephemeral App Server can remain usable beside Codex
 Desktop while idle and while its second Turn is active, without a shared
 rollout-writer conflict.
@@ -32,7 +32,7 @@ checkpoint. It never fabricates or infers human evidence.
 4. From this repository run:
 
    ```sh
-   CODEX_DESKTOP_COEXISTENCE_PROBE=1 npm run v2:codex:smoke
+   CODEX_DESKTOP_COEXISTENCE_PROBE=1 npm run codex:smoke
    ```
 
 5. At the `retained-idle` prompt, return to Desktop. Open or continue a
@@ -45,7 +45,7 @@ checkpoint. It never fabricates or infers human evidence.
    observed, then return to the terminal and press Enter. If the Turn completed
    before the overlap could be observed, record this check as `UNPROVEN` and
    rerun the release procedure; an idle-only observation is not a substitute.
-7. Require `V2_CODEX_LIVE_SMOKE_PASS`. After the gate exits, complete one more
+7. Require `CODEX_LIVE_SMOKE_PASS`. After the gate exits, complete one more
    Desktop prompt and record the result.
 8. Record whether Desktop remained responsive, whether any rollout-writer or
    thread-storage conflict appeared, and a link or path to the gate's log. A
@@ -73,7 +73,7 @@ explicit release action; it is not part of `npm run check`.
 `npm run codex:retained-release:check` reads the log the record names and
 requires the v2 runtime gate's own evidence in it:
 
-- `V2_CODEX_LIVE_SMOKE_PASS`;
+- `CODEX_LIVE_SMOKE_PASS`;
 - `the retained root is neither listed nor readable by a second App Server` —
   the nondiscoverability proof, with its positive control;
 - `no App Server child remains after closure` — the child this process
@@ -97,7 +97,7 @@ add a later passing record rather than rewriting history.
 - Desktop before smoke: PASS/FAIL — evidence
 - Desktop during retained-idle prompt: PASS/FAIL — evidence
 - Desktop during active Turn 2: PASS/FAIL/UNPROVEN — overlap evidence
-- `V2_CODEX_LIVE_SMOKE_PASS`: PASS/FAIL — evidence
+- `CODEX_LIVE_SMOKE_PASS`: PASS/FAIL — evidence
 - Descendant cleanup: observed process evidence / no persistent descendants observed
 - Desktop after Session cleanup: PASS/FAIL — evidence
 - Rollout-writer/storage conflict observed: YES/NO — evidence

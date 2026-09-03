@@ -5,7 +5,7 @@ Date: 2026-09-02
 ## Status
 
 Accepted for the v2 tree. This ADR supersedes no earlier decision. It is
-vocabulary and configuration for `extensions/subagent-v2/` only; v1 is frozen
+vocabulary and configuration for `extensions/subagent/` only; v1 is frozen
 and keeps every name it has.
 
 It carries forward the consequences of:
@@ -78,7 +78,7 @@ The migration is a **documented configuration rename**, not a deprecated alias:
   v2 never special-cases it, and never spells it.
 - The old field name appears **nowhere** in the v2 tree: not in code, not in
   tests, not in a documentation string. This is enforced from M0 by
-  `extensions/subagent-v2/boundaries.test.ts`, which is the only file in v2
+  `extensions/subagent/boundaries.test.ts`, which is the only file in v2
   permitted to spell it and which excludes itself from its own scan. The
   check removes the reserved `AgentHarness` identifier before scanning, so
   reserving that name and banning the field name do not contradict each

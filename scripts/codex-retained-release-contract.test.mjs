@@ -12,7 +12,7 @@ const passingRecord = `
 - Desktop before smoke: PASS — prompt completed
 - Desktop during retained-idle prompt: PASS — prompt completed
 - Desktop during active Turn 2: PASS — overlap observed
-- \`V2_CODEX_LIVE_SMOKE_PASS\`: PASS — marker in smoke log
+- \`CODEX_LIVE_SMOKE_PASS\`: PASS — marker in smoke log
 - Descendant cleanup: process tree captured; all observed PIDs exited
 - Desktop after Session cleanup: PASS — prompt completed
 - Rollout-writer/storage conflict observed: NO — no conflict
@@ -39,7 +39,7 @@ test("a record naming v1's smoke marker is not a record for this procedure", () 
   // different adapter, driven by a different lifecycle, deleted in M7. The
   // release conclusion is only as good as the run it names.
   const v1Record = passingRecord.replace(
-    "V2_CODEX_LIVE_SMOKE_PASS",
+    "CODEX_LIVE_SMOKE_PASS",
     "CODEX_RESUME_LIVE_SMOKE_PASS",
   );
   assert.throws(
@@ -59,7 +59,7 @@ test("failed, missing, and unproven operator evidence keep the gate open", () =>
       "Desktop during active Turn 2: PASS",
       "Desktop during active Turn 2: UNPROVEN",
     ],
-    ["`V2_CODEX_LIVE_SMOKE_PASS`: PASS", "`V2_CODEX_LIVE_SMOKE_PASS`: FAIL"],
+    ["`CODEX_LIVE_SMOKE_PASS`: PASS", "`CODEX_LIVE_SMOKE_PASS`: FAIL"],
     [
       "Desktop after Session cleanup: PASS",
       "Desktop after Session cleanup: FAIL",

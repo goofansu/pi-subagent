@@ -128,7 +128,7 @@ tally is per backend and a line that does not say which one cannot be counted.
 - **Codex** `agent_start` × 1, `agent_cancel` × 1 — `implementer` on a change
   that turned out to be wrong. Settled `cancelled (requested)` with the partial
   output retained, and the Subagent stayed resumable.
-- Session shutdown × 2 — `/subagent-v2` read zero on the runtime probe and on
+- Session shutdown × 2 — `/subagent` read zero on the runtime probe and on
   all three adapter probes each time.
 - Session switch × 1 — reloaded mid-afternoon; the new Session's ids started
   again and the old ones reported unknown, as they should.

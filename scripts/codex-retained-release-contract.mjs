@@ -6,7 +6,7 @@
  * runtime gate. A record carrying v1's marker is evidence about an adapter
  * that no longer exists, and this constant is what makes the check say so.
  */
-const RUNTIME_GATE_MARKER = "V2_CODEX_LIVE_SMOKE_PASS";
+const RUNTIME_GATE_MARKER = "CODEX_LIVE_SMOKE_PASS";
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

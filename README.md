@@ -288,7 +288,7 @@ A subagent reads files, writes files, and runs commands as far as its `tools` li
 ## Upgrading from 1.x
 
 **Version 2.0.0 is the rewrite, and it is what `pi install` now gives you.** The
-manifest names one extension, `extensions/subagent-v2/index.ts`, and the frozen
+manifest names one extension, `extensions/subagent/index.ts`, and the frozen
 1.x implementation is no longer loaded unless you ask for it.
 
 **One thing breaks, and it is a one-line edit per Profile.** A Profile names its
@@ -306,34 +306,19 @@ Nothing else about a Profile changes: the file layout, the frontmatter fields
 each backend understands, the prompt body, and the `agents/` directory they are
 read from are all as they were.
 
-### Falling back to 1.x
+### Rolling back
 
-During the release-candidate soak the frozen implementation is still in the tree
-and one command puts it back:
+**1.x is gone.** It was deleted with the rest of the migration, so rolling back
+is an ordinary release rollback to the last 1.x version rather than a switch
+inside a Pi session:
 
 ```bash
-make fallback-v1     # 1.x becomes what plain `pi` loads
-make fallback-v2     # and back, which is the default
-make fallback-status # which one is live right now
+pi install https://github.com/goofansu/pi-subagent#v1.0.0
 ```
 
-Two edits to Pi's own `settings.json` make the switch, and both are reversible:
-this package's entry in `packages` gains an empty `extensions` list, which
-disables **this package's** extension and nothing else, and the absolute path of
-the 1.x entry point is added to `extensions` so plain `pi` loads it. Every other
-extension you have installed stays exactly as it was — a fallback that turned
-everything else off would not be one anybody could work in. `make fallback-v2`
-restores the settings file to what it was.
-
-The two can never both be loaded, and that is deliberate: they register the same
-six tool names, and a Pi process with both would offer the model each tool
-twice. `make fallback-status` reports both halves of the switch, so a
-half-applied one is visible.
-
-Select the implementation **once per Pi session**; nothing migrates between
-them. No in-memory Subagent, BackendAgent, or Run crosses over, and a Run id
-from one is unknown to the other. This switch is removed when 1.x is deleted at
-the end of the soak, after which rolling back is an ordinary release rollback.
+Nothing migrates between the two in either direction, and nothing ever did: no
+in-memory Subagent, BackendAgent, or Run crosses over, and a Run id from one is
+unknown to the other. Select the implementation once per Pi session.
 
 ### What v2 offers
 
@@ -351,7 +336,7 @@ composed into the first Turn's input. One Codex Subagent owns one
 `codex app-server` process and one ephemeral root thread for its life, and each
 Run is one Turn on that thread.
 
-`/subagent-v2` reports the live Session's runtime counters and every cleanup
+`/subagent` reports the live Session's runtime counters and every cleanup
 probe — the runtime's, which says whether the core is holding a fiber or a
 queue, and one per backend adapter, which says whether that provider's own
 handles are still held: for Pi, native sessions and event subscriptions; for
@@ -360,18 +345,15 @@ for Codex, live App Server processes, reader fibers, pending JSON-RPC requests,
 retained root threads, and in-flight steers. Every one reads zero for a Session
 that has nothing in flight.
 
-`make dev-v2` runs the rewrite with every other extension disabled, for
-checking the surface in isolation rather than for using it. `make dev-v1` does
-the same for the frozen implementation, for as long as it exists.
+`make dev` runs the extension with every other extension disabled, for
+checking the surface in isolation rather than for using it.
 
 ## Release verification
 
-The rewrite in `extensions/subagent-v2/` is what the package publishes. v1 is
-frozen and remains in the tree only as the soak's fallback: only critical fixes
-and testability changes that add proof for a compatibility-matrix row land in
-`extensions/subagent/`, and the policy, with the commit at which its quality
-gate was recorded green, is in [`docs/v2/freeze.md`](docs/v2/freeze.md). It is
-deleted when the soak closes.
+There is one implementation, in `extensions/subagent/`, and it is what the
+package publishes. The frozen 1.x tree was deleted at the cutover; [the freeze
+policy](docs/v2/freeze.md) records what it permitted while it stood and the
+commit that removed it.
 
 > **Note:** `npm run codex:protocol:check` compares the *installed* `codex`
 > CLI's generated schema byte-for-byte against the vendored snapshot in
@@ -385,7 +367,7 @@ deleted when the soak closes.
 Harness Conformance, repeated managed Subagent conformance for the controlled
 harness and every production adapter, the full test suite, the v2 lane (v2 tests
 plus the v1/v2 import boundary), the shared v2 backend conformance suite against
-both fake backends and all three real adapters (`npm run test:v2:conformance`,
+both fake backends and all three real adapters (`npm run test:conformance`,
 also runnable on its own), and a byte-for-byte generated Codex
 protocol check (`npm run codex:protocol:check`). `npm run release:check` adds all six
 authenticated provider gates and the retained-Codex evidence gate. It remains
@@ -401,13 +383,13 @@ cleanup before printing `CODEX_RESUME_LIVE_SMOKE_PASS`. Pi uses
 `CLAUDE_STEERING_LIVE_SMOKE_PASS` and `CLAUDE_RESUME_LIVE_SMOKE_PASS`.
 
 The v2 lane adds six gates of its own, all opt-in and all in `release:check`.
-Three are runtime gates, one per real backend: `npm run v2:pi:smoke`,
-`npm run v2:claude:smoke`, and `npm run v2:codex:smoke` each build a real
+Three are runtime gates, one per real backend: `npm run pi:smoke`,
+`npm run claude:smoke`, and `npm run codex:smoke` each build a real
 Session runtime over that adapter and drive start, resume, steer, cancel,
 timeout, and shutdown against a real model, then read the runtime probe and
 every adapter probe after the Session Scope has closed. They print
-`V2_PI_LIVE_SMOKE_PASS`, `V2_CLAUDE_LIVE_SMOKE_PASS`, and
-`V2_CODEX_LIVE_SMOKE_PASS`. The Claude gate additionally proves what only a
+`PI_LIVE_SMOKE_PASS`, `CLAUDE_LIVE_SMOKE_PASS`, and
+`CODEX_LIVE_SMOKE_PASS`. The Claude gate additionally proves what only a
 live model can: that the resumed Run answers from the first Run's context, that
 a confirmed steer produces exactly one user message in the transcript, and that
 a cancelled Query leaves the conversation resumable. The Codex gate proves the
@@ -419,16 +401,16 @@ asks the operating system whether the `codex app-server` child is gone.
 
 The other three are host gates — one script, taking the backend as an argument,
 because what it exercises is the host and the host is the same whichever
-backend a Profile names. `npm run v2:pi:host-smoke`,
-`npm run v2:claude:host-smoke`, and `npm run v2:codex:host-smoke` launch Pi in
+backend a Profile names. `npm run pi:host-smoke`,
+`npm run claude:host-smoke`, and `npm run codex:host-smoke` launch Pi in
 RPC mode with only the v2 entry point, ask the model to delegate to a Profile
 naming that backend, read the answer back through `agent_result`, and print
-`V2_PI_HOST_LIVE_SMOKE_PASS`, `V2_CLAUDE_HOST_LIVE_SMOKE_PASS`, or
-`V2_CODEX_HOST_LIVE_SMOKE_PASS`.
+`PI_HOST_LIVE_SMOKE_PASS`, `CLAUDE_HOST_LIVE_SMOKE_PASS`, or
+`CODEX_HOST_LIVE_SMOKE_PASS`.
 
-All six honour `V2_PI_LIVE_TIMEOUT_MS`, `V2_CLAUDE_LIVE_TIMEOUT_MS`, or
-`V2_CODEX_LIVE_TIMEOUT_MS`, and `V2_PI_LIVE_MODEL` / `V2_CLAUDE_LIVE_MODEL` /
-`V2_CODEX_LIVE_MODEL` pin the model they use — a catalogue reference for Pi, a
+All six honour `PI_LIVE_TIMEOUT_MS`, `CLAUDE_LIVE_TIMEOUT_MS`, or
+`CODEX_LIVE_TIMEOUT_MS`, and `PI_LIVE_MODEL` / `CLAUDE_LIVE_MODEL` /
+`CODEX_LIVE_MODEL` pin the model they use — a catalogue reference for Pi, a
 family alias for Claude defaulting to `haiku`, and for Codex a name the App
 Server resolves itself, left unset so its own default is used.
 

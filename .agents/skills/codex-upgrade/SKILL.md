@@ -9,7 +9,7 @@ The Codex adapter's protocol contract is pinned to a verified codex-cli
 version. After the CLI moves, run this procedure end to end.
 
 Every gate below is a **v2** gate: the v2 Codex adapter under
-`extensions/subagent-v2/backend/codex/` is the one that ships after M7's
+`extensions/subagent/backend/codex/` is the one that ships after M7's
 cutover, so it is the one whose contract a CLI bump has to be verified
 against. v1's own Codex smokes are not part of this procedure and are deleted
 with v1.
@@ -58,19 +58,19 @@ with v1.
 4. **Run both authenticated Codex gates.**
 
    ```sh
-   npm run v2:codex:smoke
-   npm run v2:codex:host-smoke
+   npm run codex:smoke
+   npm run codex:host-smoke
    ```
 
-   These spend quota and require an authenticated CLI. `v2:codex:smoke` is the
-   runtime gate over the adapter: it must print `V2_CODEX_LIVE_SMOKE_PASS` only
+   These spend quota and require an authenticated CLI. `codex:smoke` is the
+   runtime gate over the adapter: it must print `CODEX_LIVE_SMOKE_PASS` only
    after proving start, resume on the retained root, a steer confirmed by
    client id producing exactly one user observation, cancellation that leaves
    the process and root alive, a Run cancelled at its timeout, that a second
    App Server can neither list nor read the ephemeral root, that no provider
    identity reached a public record, that every probe reads zero after the
    Session Scope closed, and that no App Server child and no observed
-   descendant survives it. `v2:codex:host-smoke` is the same backend through
+   descendant survives it. `codex:host-smoke` is the same backend through
    the surface a user has. A usage-limit error means wait for reset. Done means
    both exact success markers appear and no cleanup assertion fails.
 
