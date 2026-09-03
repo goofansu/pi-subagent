@@ -275,22 +275,97 @@ test("a rejected resume falls back to the collected renderer", () => {
 
 // -- The notification summary line -------------------------------------------
 
-test("a collapsed notice names the Run, its status, and its size", () => {
+test("S-1: a collapsed notice names the agent, the task, the outcome, and the cost", () => {
   assert.equal(
     formatNotificationSummary(
       {
-        agent: "explore",
-        subagentId: "subagent-1",
-        runId: "run-1",
-        status: "failed",
+        agent: "reviewer",
+        label: "audit auth redirects",
+        status: "completed",
+        durationMillis: 41_200,
+        cost: 0.0421,
       },
-      412,
       theme,
       false,
       keyHintStub,
     ),
-    "explore (subagent subagent-1, run run-1) failed · 412 characters (ctrl+o to expand)",
+    "reviewer · audit auth redirects · completed in 41.2s · $0.042 (ctrl+o to expand)",
   );
+});
+
+test("S-2: a failed and a cancelled summary read the same way, with the verb changed", () => {
+  assert.equal(
+    formatNotificationSummary(
+      {
+        agent: "implementer",
+        label: "fix flaky cache test",
+        status: "failed",
+        durationMillis: 19_400,
+        cost: 0,
+      },
+      theme,
+      false,
+      keyHintStub,
+    ),
+    "implementer · fix flaky cache test · failed in 19.4s (ctrl+o to expand)",
+  );
+  assert.equal(
+    formatNotificationSummary(
+      {
+        agent: "explore",
+        label: "inspect the build graph",
+        status: "cancelled",
+        durationMillis: 60_000,
+        cost: 0,
+      },
+      theme,
+      false,
+      keyHintStub,
+    ),
+    "explore · inspect the build graph · cancelled in 1m 0s (ctrl+o to expand)",
+  );
+});
+
+test("a collapsed notice carries no id and no character count", () => {
+  const line = formatNotificationSummary(
+    {
+      agent: "explore",
+      label: "look around",
+      status: "completed",
+      durationMillis: 1_000,
+      cost: 0,
+    },
+    theme,
+    false,
+    keyHintStub,
+  );
+
+  assert.doesNotMatch(line, /run-|subagent-/);
+  assert.doesNotMatch(line, /character/);
+});
+
+test("a long label is truncated to the width it is given rather than wrapped", () => {
+  const line = formatNotificationSummary(
+    {
+      agent: "explore",
+      label: "a".repeat(120),
+      status: "completed",
+      durationMillis: 1_000,
+      cost: 0,
+    },
+    theme,
+    false,
+    keyHintStub,
+    12,
+  );
+
+  // The width helper paints its own ellipsis, so the escapes are stripped to
+  // read the text rather than the colouring.
+  assert.equal(
+    stripVTControlCharacters(line),
+    "explore · aaaaaaaaaaa… · completed in 1.0s (ctrl+o to expand)",
+  );
+  assert.equal(line.includes("\n"), false);
 });
 
 test("an expanded notice's hint offers to collapse, because one key does both", () => {
@@ -298,11 +373,11 @@ test("an expanded notice's hint offers to collapse, because one key does both", 
     formatNotificationSummary(
       {
         agent: "explore",
-        subagentId: "subagent-1",
-        runId: "run-1",
+        label: "look around",
         status: "completed",
+        durationMillis: 1_000,
+        cost: 0,
       },
-      10,
       theme,
       true,
       keyHintStub,

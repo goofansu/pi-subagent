@@ -15,9 +15,17 @@
  * to the renderer registered for its `customType`, which is what makes that
  * possible.
  *
- * The details carry identity only — Run id, Subagent id, agent, and terminal
- * status. Not the text: the text is the message's content, and details that
- * repeated it would be a second copy that could disagree.
+ * The details carry what the collapsed line needs and nothing the text
+ * already says. Identity — Run id, Subagent id — because that is what a
+ * later tool call and the landing key are addressed by; agent, label, status,
+ * duration, and cost because those are the collapsed line, and a renderer
+ * that had to parse them back out of the content would be a second reader of
+ * prose. The text itself is not in the details: it is the message's content,
+ * and a copy of it here could disagree with it.
+ *
+ * The payload is **host-shaped**. The notice's own fields can be renamed or
+ * regrouped without touching the renderer, because the renderer reads this
+ * schema and not `RunNotification`.
  */
 
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
@@ -41,16 +49,26 @@ import {
 export const NOTIFICATION_MESSAGE_TYPE = "subagent-notification";
 
 /**
- * What a landed notice can be identified by.
+ * What a landed notice can be identified by, and what its one line says.
  *
- * `runId` is the landing key and the key of every Run-scoped operation;
- * the rest is orientation for the collapsed summary line.
+ * `runId` is the landing key and the key of every Run-scoped operation; the
+ * rest is the collapsed summary line, field by field.
  */
 export const NotificationDetails = Schema.Struct({
   runId: RunId,
   subagentId: SubagentId,
   agent: Schema.String,
+  /** The Run's bounded label, which is what a human recognises it by. */
+  label: Schema.String,
   status: TerminalRunPhase,
+  durationMillis: Schema.Number,
+  /**
+   * What the Run cost, or zero when it reported nothing to account for.
+   *
+   * Zero rather than absent: the line omits a zero cost, and a required
+   * number means the renderer has one rule for that rather than two.
+   */
+  cost: Schema.Number,
 });
 
 export type NotificationDetails = typeof NotificationDetails.Type;
@@ -79,7 +97,10 @@ export function buildNotificationMessage(
       runId: notice.runId,
       subagentId: notice.subagentId,
       agent: notice.agent,
+      label: notice.label,
       status: notice.status,
+      durationMillis: notice.durationMillis,
+      cost: notice.accounting?.cost ?? 0,
     },
   };
 }
@@ -143,11 +164,7 @@ export function renderNotificationMessage(
     theme.bg("customMessageBg", line),
   );
   box.addChild(
-    new Text(
-      formatNotificationSummary(details, text.length, theme, options.expanded),
-      0,
-      0,
-    ),
+    new Text(formatNotificationSummary(details, theme, options.expanded), 0, 0),
   );
   if (options.expanded) {
     box.addChild(new Spacer(1));

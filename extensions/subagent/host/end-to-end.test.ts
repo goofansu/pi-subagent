@@ -193,13 +193,23 @@ test("a settled Run sends exactly one follow-up notice that triggers a turn", as
   // Built from the stored Result, so the notice and `agent_result` cannot
   // disagree about what the Run said.
   assert.match(String(sent[0].message.content), new RegExp(RIG_ANSWER));
+  const parsed = parseNotificationMessage({
+    role: "custom",
+    ...sent[0].message,
+  });
+  // The duration is wall-clock and therefore the one field a golden cannot
+  // name; everything else the collapsed line reads is exact.
+  assert.ok((parsed?.durationMillis ?? -1) >= 0);
   assert.deepEqual(
-    parseNotificationMessage({ role: "custom", ...sent[0].message }),
+    { ...parsed, durationMillis: 0 },
     {
       runId: ids.runId,
       subagentId: ids.subagentId,
       agent: RIG_RESUMABLE_PROFILE,
+      label: "look around",
       status: "completed",
+      durationMillis: 0,
+      cost: 0,
     },
   );
 });
@@ -338,7 +348,9 @@ test("the message the sink sends is the one the renderer can parse", async (t) =
     status: "completed",
     resultAvailability: "full",
     preview: RIG_ANSWER,
-    durationMillis: 0,
+    // The Run's real duration, which is wall-clock: the round trip is about
+    // the two shapes agreeing, not about what the clock said.
+    durationMillis: (sent.details as { durationMillis: number }).durationMillis,
     accounting: { inputTokens: 12, outputTokens: 8, cost: 0, turns: 1 },
     retrieveWith: "agent_result",
   });

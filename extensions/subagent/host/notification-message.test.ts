@@ -69,22 +69,42 @@ test("build then parse round-trips every terminal status", () => {
       runId: notice.runId,
       subagentId: notice.subagentId,
       agent: notice.agent,
+      label: notice.label,
       status: notice.status,
+      durationMillis: notice.durationMillis,
+      cost: notice.accounting?.cost ?? 0,
     });
   }
 });
 
-test("the details carry identity only, never the text", () => {
+test("the details carry the collapsed line and the ids, never the text", () => {
   const message = buildNotificationMessage(
     fixtureNotification({ finalOutput: "the whole answer" }),
   );
 
   assert.deepEqual(Object.keys(message.details).sort(), [
     "agent",
+    "cost",
+    "durationMillis",
+    "label",
     "runId",
     "status",
     "subagentId",
   ]);
+  assert.doesNotMatch(JSON.stringify(message.details), /the whole answer/);
+});
+
+test("a message missing a field the collapsed line needs is rejected", () => {
+  const message = buildNotificationMessage(fixtureNotification({}));
+
+  for (const field of ["label", "durationMillis", "cost"] as const) {
+    const { [field]: _dropped, ...rest } = message.details;
+    assert.equal(
+      parseNotificationMessage({ ...landed(message), details: rest }),
+      undefined,
+      `accepted details without ${field}`,
+    );
+  }
 });
 
 test("a message of another custom type parses to nothing", () => {
@@ -148,10 +168,7 @@ test("a collapsed notice is one summary line", () => {
   // One line of content inside Pi's own custom-message frame, which supplies
   // the padding around it.
   assert.deepEqual(rendered.length, 1);
-  assert.match(
-    rendered[0],
-    /explore \(subagent subagent-1, run run-1\) completed · \d+ characters/,
-  );
+  assert.match(rendered[0], /explore · look around · completed in 12\.4s /);
 });
 
 test("an expanded notice shows the bounded text below the summary", () => {
@@ -169,6 +186,23 @@ test("an expanded notice shows the bounded text below the summary", () => {
     rendered?.join("\n") ?? "",
     /Full result is available\. Call agent_result with \{"id":"run-1"\}\./,
   );
+});
+
+test("S-1: the ids are in the expanded text, where a tool call needs them", () => {
+  const message = buildNotificationMessage(
+    fixtureNotification({ finalOutput: "done" }),
+  );
+
+  const collapsed = (
+    lines(renderNotificationMessage(message, { expanded: false }, theme)) ?? []
+  ).join("\n");
+  const expanded = (
+    lines(renderNotificationMessage(message, { expanded: true }, theme)) ?? []
+  ).join("\n");
+
+  assert.doesNotMatch(collapsed, /run-1|subagent-1/);
+  assert.match(expanded, /Run: run-1/);
+  assert.match(expanded, /Subagent: subagent-1/);
 });
 
 test("a message this extension did not shape is left to the host", () => {

@@ -26,7 +26,7 @@
 
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { Markdown, Text } from "@earendil-works/pi-tui";
+import { Markdown, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import type { TerminalRunPhase } from "../domain/index.ts";
 import {
   type CollectedRuns,
@@ -35,7 +35,12 @@ import {
   type ResumedRun,
 } from "./details.ts";
 import type { RenderableTheme } from "./rows.ts";
-import { formatCharacterCount, runPhaseTone, runPhaseVerb } from "./status.ts";
+import {
+  formatCharacterCount,
+  formatDuration,
+  runPhaseTone,
+  runPhaseVerb,
+} from "./status.ts";
 
 /** What `agent_start` was asked, as the renderer receives it. */
 export interface StartCallArguments {
@@ -247,7 +252,28 @@ export function renderResumeResult(
 }
 
 /**
+ * How much room the label may take on a collapsed notice line.
+ *
+ * A cap rather than a share of the terminal, for the same reason the widget
+ * caps its agent column: a Profile or a description that ran long must not
+ * push the outcome and the cost off the line, and those are what the reader
+ * came for.
+ */
+export const MAX_NOTICE_LABEL_WIDTH = 48;
+
+/**
  * The one line a collapsed completion notice shows.
+ *
+ * `<agent> · <label> · <verb> in <duration>[ · $<cost>]`. It answers the four
+ * questions a human following a fan-out actually has — which specialist,
+ * which task, how it ended, what it cost — and carries no id and no character
+ * count. The ids are in the expanded text, where a model reading them is
+ * about to make a tool call; the character count told the reader nothing they
+ * could act on.
+ *
+ * Cost is omitted when zero, because a zero is not a fact about spending. The
+ * label is truncated to the width it is given and never wraps: a collapsed
+ * line that became two lines would defeat the collapsing.
  *
  * No status glyph: lifecycle state is written as a word, painted in the
  * phase's tone so a failure still stands out. The hint names the direction the
@@ -257,23 +283,27 @@ export function renderResumeResult(
 export function formatNotificationSummary(
   details: {
     readonly agent: string;
-    readonly subagentId: string;
-    readonly runId: string;
+    readonly label: string;
     readonly status: TerminalRunPhase;
+    readonly durationMillis: number;
+    readonly cost: number;
   },
-  characters: number,
   theme: RenderableTheme,
   expanded = false,
   renderKeyHint?: KeyHintRenderer,
+  labelWidth: number = MAX_NOTICE_LABEL_WIDTH,
 ): string {
+  const label = truncateToWidth(details.label, labelWidth, "…");
   const line =
     theme.fg("toolTitle", theme.bold(details.agent)) +
+    theme.fg("dim", ` · ${label} · `) +
     theme.fg(
-      "dim",
-      ` (subagent ${details.subagentId}, run ${details.runId}) `,
+      runPhaseTone(details.status),
+      `${runPhaseVerb(details.status)} in ${formatDuration(details.durationMillis)}`,
     ) +
-    theme.fg(runPhaseTone(details.status), runPhaseVerb(details.status)) +
-    theme.fg("dim", ` · ${formatCharacterCount(characters)}`);
+    (details.cost === 0
+      ? ""
+      : theme.fg("dim", ` · $${details.cost.toFixed(3)}`));
   const hint = formatParentheticalKeyHint(
     theme,
     "app.tools.expand",
