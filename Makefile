@@ -4,10 +4,10 @@ dev:
 	pi --offline -np -nc -ns -ne -e extensions/subagent --tools agent_start,agent_wait,agent_cancel,agent_steer,agent_result
 
 # v2 in isolation: every extension disabled, only the v2 entry point loaded.
-# Since M4 the backend behind it is the real Pi adapter, so this runs real
-# work against whatever Profiles the agent directory holds. Offline, because
-# this target is for checking that the surface is there rather than for using
-# it; `dev-v2-alongside` is the daily driver.
+# Since M4 the backend behind it is the real Pi adapter, so this runs real work
+# against whatever Profiles the agent directory holds. `--offline` disables
+# Pi's startup network calls, not inference, so Runs still reach a model.
+# For using v2 rather than checking it, `dogfood-v2` is the daily driver.
 dev-v2:
 	pi --offline -np -nc -ns -ne -e extensions/subagent-v2/index.ts --tools agent_start,agent_resume,agent_wait,agent_result,agent_cancel,agent_steer
 
