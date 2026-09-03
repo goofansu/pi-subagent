@@ -207,12 +207,12 @@ named steps with no inline state manipulation, and each fits on one screen
 | Operation | Before | After | One screen? |
 | --- | ---: | ---: | --- |
 | `start` | 105 | 72 | at 72, over the guide |
-| `resume` | 70 | 50 | yes |
-| `cancel` (with `cancelOne`) | 37 | 38 | yes |
-| `wait` (with `waitOne`, and before with the ledger and `terminalStatusOf`) | 112 | 46 | yes |
+| `resume` | 70 | 52 | yes |
+| `cancel` (with `cancelOne`) | 37 | 37 | yes |
+| `wait` (with `waitOne`, and before with the ledger and `terminalStatusOf`) | 112 | 47 | yes |
 | `shutdown` (with `closeSubagent`) | 48 | 45 | yes |
-| `makeSupervisor`'s whole body | 805 | 701 | — |
-| whole file | 1,030 | 1,037 | — |
+| `makeSupervisor`'s whole body | 805 | 703 | — |
+| whole file | 1,030 | 1,051 | — |
 
 Counted from each operation's own `const` (or the first line of its doc
 comment where it has one) to the line that closes it, comments and blanks
@@ -240,12 +240,17 @@ to make readable, so hiding half of it behind a name would cost the thing the
 item is asking for. The line count is recorded rather than met, per the
 spec's own note that it is a proxy.
 
-**The whole file grew by seven lines**, and that is the honest number.
-`makeSupervisor`'s body — the orchestration — lost 104 lines to the three new
-modules; the module-level declarations above it gained about as many, in the
-two resolved-request types, the four helpers, and the header that now says
-where admission lives. The phase's criterion was never that the file be
-shorter.
+**The whole file grew by twenty-one lines**, and that is the honest number.
+`makeSupervisor`'s body — the orchestration — lost 102 lines to the three new
+modules; the module-level declarations above it gained more than that, in the
+two resolved-request types, the four dependency-free helpers, and a header
+that now says which module owns which invariant and why the file holds no
+state. The phase's criterion was never that the file be shorter, and trading
+those declarations back for a shorter file would trade a reader's map for a
+number.
+
+Measured on the closing commit, after the corrections below. The figures the
+`3454da5` commit reported were taken before them.
 
 **Status:** PASS, with `start`'s line count recorded as over the guide.
 
