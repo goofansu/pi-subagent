@@ -131,12 +131,27 @@ function withRun(
   return next;
 }
 
+/** The two kinds of identity a Session hands out, and their id prefixes. */
+type IdentityKind = "run" | "subagent";
+
 const make = (counters: RuntimeCounters) =>
   Effect.gen(function* () {
     const index = yield* SubscriptionRef.make<RunIndex>(new Map());
     const spentRunIds = yield* Ref.make<ReadonlySet<string>>(new Set());
     const spentSubagentIds = yield* Ref.make<ReadonlySet<string>>(new Set());
-    let sequence = 0;
+    /**
+     * One sequence per kind of identity, not one shared between them.
+     *
+     * They were shared, and the consequence was visible to anyone who used the
+     * product: `start` allocates the Subagent id and then the Run id, so the
+     * first Run of every Session was `run-2` and the numbering had a hole in
+     * it wherever a Subagent had been created. Nothing was ambiguous — the
+     * prefixes already tell the two kinds apart, and each kind keeps its own
+     * spent set — but an id sequence that skips is an id sequence a reader
+     * stops trusting, and the first question it prompts is what happened to
+     * run 1.
+     */
+    const sequences: Record<IdentityKind, number> = { run: 0, subagent: 0 };
 
     /**
      * Allocate an id and spend it in the same step.
@@ -147,12 +162,12 @@ const make = (counters: RuntimeCounters) =>
      */
     const allocate = <T extends string>(
       spent: Ref.Ref<ReadonlySet<string>>,
-      prefix: string,
+      kind: IdentityKind,
       brand: (value: string) => T,
     ): Effect.Effect<T> =>
       Ref.modify(spent, (ids) => {
-        sequence += 1;
-        const value = `${prefix}-${sequence}`;
+        sequences[kind] += 1;
+        const value = `${kind}-${sequences[kind]}`;
         return [brand(value), new Set(ids).add(value)];
       });
 

@@ -510,7 +510,7 @@ test("a wait returns the terminal status, and a repeated wait returns the same o
   );
 
   assert.deepEqual(value?.first, [
-    { outcome: "terminal", runId: "run-2", status: "completed" },
+    { outcome: "terminal", runId: "run-1", status: "completed" },
   ]);
   assert.deepEqual(value?.second, value?.first);
 });
@@ -544,10 +544,10 @@ test("a wait that times out reports still running, and the Run carries on", asyn
   );
 
   assert.deepEqual(value?.gaveUp, [
-    { outcome: "still running", runId: "run-2" },
+    { outcome: "still running", runId: "run-1" },
   ]);
   assert.deepEqual(value?.settled, [
-    { outcome: "terminal", runId: "run-2", status: "completed" },
+    { outcome: "terminal", runId: "run-1", status: "completed" },
   ]);
   assert.equal(value?.result, "result");
 });

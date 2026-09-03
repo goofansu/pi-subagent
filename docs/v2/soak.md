@@ -93,8 +93,12 @@ Severity is about the product, not about how annoying it was:
 
 The exit gate requires **no open severity-1 or severity-2 defect**.
 
+See also [what driving M4 against a real Pi host turned up](m4-live-findings.md),
+which records how each of these was established and the testing gap they sat in.
+
 | Found | Severity | What happens | Status |
 | --- | --- | --- | --- |
+| 2026-09-03 | 3 | The first Run of every Session was `run-2`: one sequence counter was shared by the Run and Subagent allocators, so `start` gave the Subagent 1 and its Run 2. Fixed — each kind is numbered from one. | Fixed |
 | 2026-09-03 | 3 | The widget drops a Run's row the moment the Run settles, where v1 keeps it until the Run's completion notification lands. For anything but a long Run the widget appears and disappears before it is read, so v2 reads as having no widget at all. | Open — see below |
 
 ### The widget's row lifetime (2026-09-03, severity 3)

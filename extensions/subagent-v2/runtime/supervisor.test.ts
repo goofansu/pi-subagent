@@ -209,14 +209,14 @@ test("identifiers spent by a start that failed at open never come back", async (
     (rig) =>
       Effect.gen(function* () {
         yield* rig.supervisor.start(request());
-        // The first start spent subagent-1 and run-2; the next allocation
-        // must be past them.
+        // The first start spent subagent-1 and run-1 before it failed; the
+        // next allocation of each kind must be past them.
         const nextSubagent = yield* rig.repository.allocateSubagentId();
         const nextRun = yield* rig.repository.allocateRunId();
         return {
           nextSubagent,
           nextRun,
-          firstRunSpent: yield* rig.repository.isSpent("run-2"),
+          firstRunSpent: yield* rig.repository.isSpent("run-1"),
           firstSubagentSpent: yield* rig.repository.isSpent("subagent-1"),
         };
       }),
@@ -225,7 +225,7 @@ test("identifiers spent by a start that failed at open never come back", async (
   assert.equal(value?.firstSubagentSpent, true);
   assert.equal(value?.firstRunSpent, true);
   assert.notEqual(value?.nextSubagent, "subagent-1");
-  assert.notEqual(value?.nextRun, "run-2");
+  assert.notEqual(value?.nextRun, "run-1");
 });
 
 test("an unknown agent and an invalid Profile are different answers", async () => {

@@ -78,6 +78,32 @@ test("an allocated identifier is spent the moment it is handed out", async () =>
   });
 });
 
+test("each kind of identity is numbered from one, independently of the other", async () => {
+  const ids = await withRepository((repository) =>
+    Effect.gen(function* () {
+      // The order `start` allocates in: the Subagent first, then its Run.
+      const subagent = yield* repository.allocateSubagentId();
+      const first = yield* repository.allocateRunId();
+      // A resume allocates a Run and no Subagent.
+      const second = yield* repository.allocateRunId();
+      const nextSubagent = yield* repository.allocateSubagentId();
+      const third = yield* repository.allocateRunId();
+      return { subagent, first, second, nextSubagent, third };
+    }),
+  );
+
+  // One shared counter would make the first Run `run-2` and leave holes
+  // wherever a Subagent was created — which is what a user sees, and the
+  // first thing they ask about.
+  assert.deepEqual(ids, {
+    subagent: "subagent-1",
+    first: "run-1",
+    second: "run-2",
+    nextSubagent: "subagent-2",
+    third: "run-3",
+  });
+});
+
 test("an identifier allocated for a Run that was never published stays spent", async () => {
   // This is the failed-open case: the ids exist, nothing was published, and
   // the ids must never come back.

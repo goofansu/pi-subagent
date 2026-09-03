@@ -53,7 +53,7 @@ test("a settled Run produces exactly one notification, built from the stored res
   assert.equal(outcome.received.length, 1);
   assert.equal(outcome.attempts, 1);
   const [notification] = outcome.received;
-  assert.equal(notification.runId, "run-2");
+  assert.equal(notification.runId, "run-1");
   assert.equal(notification.subagentId, outcome.subagentId);
   assert.equal(notification.status, "completed");
   assert.equal(notification.agent, "explore");
@@ -149,7 +149,7 @@ test("a sink that always fails exhausts its budget, releases the pin, and leaves
 
   assert.equal(outcome.received, 0);
   assert.equal(outcome.attempts, 3);
-  assert.deepEqual(outcome.exhausted, ["run-2"]);
+  assert.deepEqual(outcome.exhausted, ["run-1"]);
   // The pin goes even when the notification never lands, or the result would
   // be one nothing could ever evict.
   assert.ok(!outcome.pins.includes("delivery"));
