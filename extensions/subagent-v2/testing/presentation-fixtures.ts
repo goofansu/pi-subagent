@@ -21,6 +21,8 @@ import {
   type CancellationReason,
   type ContextGauge,
   createRunProjection,
+  EMPTY_TRUNCATION_RECORD,
+  type ResultLink,
   type RunDiagnostic,
   type RunEnding,
   type RunIdentity,
@@ -29,6 +31,9 @@ import {
   type RunResult,
   runId,
   subagentId,
+  type ToolEntry,
+  type TranscriptItem,
+  type TruncationRecord,
   toRunNotification,
   toRunResult,
   type UsageSnapshot,
@@ -107,6 +112,12 @@ export interface FixtureResultOptions {
   readonly diagnostics?: readonly RunDiagnostic[];
   readonly identity?: Partial<RunIdentity>;
   readonly settledAt?: number;
+  /** What the Run said, for the expanded card's transcript section. */
+  readonly transcript?: readonly TranscriptItem[];
+  readonly tools?: readonly ToolEntry[];
+  readonly links?: readonly ResultLink[];
+  /** What bounding dropped, so the card's truncation record has something. */
+  readonly truncation?: Partial<TruncationRecord>;
 }
 
 /** One immutable stored Result, built the way settlement builds it. */
@@ -118,6 +129,13 @@ export function fixtureResult(options: FixtureResultOptions = {}): RunResult {
       finalOutput: options.finalOutput ?? "",
       usage: options.usage ?? NO_USAGE,
       diagnostics: options.diagnostics ?? [],
+      transcript: options.transcript ?? [],
+      tools: options.tools ?? [],
+      links: options.links ?? [],
+      truncation: {
+        ...EMPTY_TRUNCATION_RECORD,
+        ...(options.truncation ?? {}),
+      },
       ...(options.model === undefined ? {} : { model: options.model }),
     },
     ending: options.ending ?? answeredEnding(),

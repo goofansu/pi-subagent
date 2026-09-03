@@ -439,9 +439,20 @@ test("agent_result returns the full stored output with its Run identity", async 
   const started = await startedRun(rig);
   await rig.text("agent_wait", { ids: [started.runId] });
 
+  // The expanded body: identity, how it went and what it spent, the recent
+  // transcript, and then the answer.
   assert.equal(
     await rig.text("agent_result", { id: started.runId }),
-    `explore (subagent ${started.subagentId}), run ${started.runId}:\n\n${RIG_ANSWER}`,
+    [
+      `explore (subagent ${started.subagentId}), run ${started.runId}:`,
+      `look around · pi · completed in 0.0s`,
+      `12 in / 8 out · 1 turn`,
+      "",
+      "Recent transcript:",
+      `  assistant: ${RIG_ANSWER}`,
+      "",
+      RIG_ANSWER,
+    ].join("\n"),
   );
 });
 

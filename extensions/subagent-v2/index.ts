@@ -4,11 +4,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Profile } from "./domain/index.ts";
 import { registerAgentsCommand } from "./host/agents-command.ts";
-import { createDemoBackendSet } from "./host/demo-backends.ts";
+import type { AdapterProbe } from "./host/diagnostics-command.ts";
+import { registerDiagnosticsCommand } from "./host/diagnostics-command.ts";
 import {
   NOTIFICATION_MESSAGE_TYPE,
   renderNotificationMessage,
 } from "./host/notification-message.ts";
+import type { PiBackendSet } from "./host/pi-backends.ts";
+import { createPiBackendSet } from "./host/pi-backends.ts";
 import type { SessionPushSink } from "./host/push-sink.ts";
 import { createSessionPushSink } from "./host/push-sink.ts";
 import { shutdownSession, startSession } from "./host/session.ts";
@@ -43,6 +46,17 @@ export interface SubagentV2Options {
   readonly policy?: RuntimePolicy;
   /** Reads the wall clock. Supplied by a test so widget durations are fixed. */
   readonly now?: () => number;
+  /**
+   * What the live backend adapter is still holding, for the diagnostics
+   * command.
+   *
+   * Outside the backend contract on purpose: a probe on the contract would be
+   * a number the core could start believing. It is reported beside the
+   * runtime's own counters because dogfood needs both in one place — the
+   * runtime's probe says whether the core leaked, and this one says whether
+   * the adapter did.
+   */
+  readonly probe?: () => AdapterProbe | undefined;
 }
 
 /**
@@ -95,6 +109,24 @@ export function installSubagentV2(
 ): SubagentV2Installation {
   const handle = createSessionHandle();
   const sink = createSessionPushSink();
+  // The two host facts the backend set answers, read once, before anything is
+  // registered. A set is cheap to build and performs no provider work, so
+  // asking one and discarding it costs nothing; each Session gets its own.
+  const hostFacts = options.backendSet();
+  if (hostFacts.isChildLoad() || hostFacts.childDepth() > 0) {
+    // Inert inside a child. Registering the delegation tools there would show
+    // a model six tools it is not allowed to use, and it would try: the depth
+    // check in admission is the backstop, not the answer. Nothing is
+    // registered and no Session event is subscribed to, so this process
+    // behaves as though the extension were not installed at all.
+    return {
+      handle,
+      sink,
+      profiles: () => [],
+      agentGuidelines: () => [],
+      widget: () => undefined,
+    };
+  }
   /** Rewritten in place per Session; see `SessionWiring.agentGuidelines`. */
   const agentGuidelines: string[] = [];
   /** The live Session's Profiles, for `/agents` to list. */
@@ -115,8 +147,9 @@ export function installSubagentV2(
     now: options.now ?? (() => Date.now()),
   };
 
-  registerSubagentTools(pi, handle, agentGuidelines);
+  registerSubagentTools(pi, handle, agentGuidelines, hostFacts.childDepth);
   registerAgentsCommand(pi, () => profiles, profilesDir(options.agentDir));
+  registerDiagnosticsCommand(pi, handle, () => options.probe?.());
   pi.registerMessageRenderer(
     NOTIFICATION_MESSAGE_TYPE,
     renderNotificationMessage,
@@ -155,15 +188,26 @@ export function installSubagentV2(
 /**
  * The v2 extension.
  *
- * The backend set is the demo set, which is the point of M3: launching Pi with
- * only this entry point gives a working subagent extension backed by two demo
- * backends and two built-in demo Profiles, with nothing to configure. M4
- * replaces the set with one containing the real Pi backend, and the demo
- * Profiles go with it.
+ * The backend set is the **Pi set**: one real backend, no built-in Profiles,
+ * and the two host facts that make this process inert inside a child. The demo
+ * set stays in the tree because a host test needs a deterministic backend, but
+ * nothing ships it.
+ *
+ * The set is built once here rather than per Session so that the probe the
+ * diagnostics command reports is the live adapter's. Each Session still gets
+ * its own backend, because `createPiBackendSet` is called for each one.
  */
 export default function subagentV2Extension(pi: ExtensionAPI): void {
+  let live: PiBackendSet | undefined;
   installSubagentV2(pi, {
     agentDir: getAgentDir(),
-    backendSet: createDemoBackendSet,
+    backendSet: () => {
+      live = createPiBackendSet();
+      return live.set;
+    },
+    // Spread into a plain block of counts: the command reports whatever the
+    // adapter is counting, and naming Pi's fields here would put provider
+    // vocabulary in the entry point.
+    probe: () => (live === undefined ? undefined : { ...live.probe() }),
   });
 }

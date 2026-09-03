@@ -1,12 +1,13 @@
 /**
  * `RunCard`: one Run, presented, from a snapshot or from a stored Result.
  *
- * The card is where Run presentation grows. Today it carries identity, status,
- * duration, accounting, and the final output; M4 adds the recent transcript,
- * the tool list, diagnostics, and native links. Having one place for that
- * means the tool-result renderer, the notification renderer, and whatever the
- * Pi adapter milestone adds all read the same card rather than each assembling
- * their own lines from the same fields in slightly different orders.
+ * The card is where Run presentation grows, and M4 is where it grew: identity,
+ * status, duration, and accounting were M3's, and the recent transcript, the
+ * tools with their statuses, the context gauge, the diagnostics, the links,
+ * and the final output are this milestone's. Having one place for all of it
+ * means the tool-result renderer, the notification renderer, and anything a
+ * later adapter adds read the same card rather than each assembling their own
+ * lines from the same fields in slightly different orders.
  *
  * There are exactly two sources, and the distinction is the point. A **live**
  * card comes from the published Run index and knows nothing about output,
@@ -15,13 +16,44 @@
  * source: a card built from a projection, a backend event, or a half-folded
  * observation would be presentation folding state, which is the thing the
  * layer is forbidden to do.
+ *
+ * Every expanded section is **omitted when it is empty** rather than printed
+ * as a heading with nothing under it. A Run that used no tools did not use
+ * zero tools; it has nothing to say about tools, and a reader scanning a card
+ * should see only what happened.
  */
 
-import type { RunResult } from "../domain/index.ts";
+import type {
+  ResultLink,
+  RunDiagnostic,
+  RunResult,
+  ToolEntry,
+  TranscriptItem,
+} from "../domain/index.ts";
+import { transcriptItemText } from "../domain/index.ts";
 import { formatNotificationAccounting } from "./notification-text.ts";
 import { formatResultBody } from "./result-body.ts";
-import { formatRunPhase, runPhaseTone, type Tone } from "./status.ts";
+import {
+  formatRunPhase,
+  formatTokenCount,
+  runPhaseTone,
+  type Tone,
+} from "./status.ts";
 import { elapsedMillis, type RunRowView } from "./views.ts";
+
+/**
+ * How many transcript items the expanded card shows.
+ *
+ * The projection holds up to five hundred, and a card that printed them all
+ * would bury the answer it is supposed to be presenting. The most recent few
+ * are what tell a reader how the Run got where it did; the rest is what
+ * `agent_result`'s output and the Run's own tools already say.
+ *
+ * A presentation number, decided here, because it is about what is readable
+ * rather than about what is bounded — the projection's own bound is the
+ * runtime's business and is a different question.
+ */
+export const RECENT_TRANSCRIPT_ITEMS = 6;
 
 export type RunCardSource =
   /** A Run that is still going, read from the published index. */
@@ -41,6 +73,28 @@ export interface RunCard {
   /** Present when the Run reported anything to account for. */
   readonly accounting?: string;
   /**
+   * How full the conversation's context window was when the Run ended.
+   *
+   * Separate from the accounting line because it is a gauge and the accounting
+   * is a total: the two answer different questions, and a reader who saw them
+   * joined by a middle dot would read the occupancy as something the Run
+   * spent.
+   */
+  readonly context?: string;
+  /**
+   * The last few transcript items, oldest first, present only when there are
+   * any. See {@link RECENT_TRANSCRIPT_ITEMS}.
+   */
+  readonly transcript?: readonly string[];
+  /** One line per tool the Run used, with the status it ended in. */
+  readonly tools?: readonly string[];
+  /** What went wrong that was not the Run's ending, by category. */
+  readonly diagnostics?: readonly string[];
+  /** Pointers a backend produced: a native session file, a log, a URL. */
+  readonly links?: readonly string[];
+  /** What bounding dropped, when it dropped anything. */
+  readonly truncation?: string;
+  /**
    * The Run's answer, present only for a terminal card.
    *
    * A live card has none, and that is not a gap: the published index does not
@@ -48,6 +102,89 @@ export interface RunCard {
    * something it is not allowed to read.
    */
   readonly output?: string;
+}
+
+/** One transcript item as a line: who said it, and what. */
+export function formatTranscriptItem(item: TranscriptItem): string {
+  const text = transcriptItemText(item).trim();
+  const calls = item.parts
+    .filter((part) => part.kind === "tool_call")
+    .map((part) => (part.kind === "tool_call" ? part.name : ""));
+  const said =
+    text || (calls.length > 0 ? `calls ${calls.join(", ")}` : "(no text)");
+  return `${item.role}: ${said}`;
+}
+
+/** One tool entry as a line: what it was, how it went, what it said. */
+export function formatToolEntry(entry: ToolEntry): string {
+  const summary = entry.outputSummary?.trim();
+  return [
+    `${entry.name ?? "(unnamed tool)"} — ${entry.status}`,
+    ...(summary ? [`: ${summary}`] : []),
+  ].join("");
+}
+
+/** One diagnostic as a line: the category, then what it said. */
+export function formatDiagnosticLine(diagnostic: RunDiagnostic): string {
+  return `${diagnostic.category}: ${diagnostic.message}`;
+}
+
+/** One link as a line: what kind of thing it points at, and where. */
+export function formatResultLinkLine(link: ResultLink): string {
+  return `${link.label} (${link.kind}): ${link.target}`;
+}
+
+/** The context gauge, with its window when the backend reported one. */
+export function formatContextGauge(context: {
+  readonly tokens: number;
+  readonly window?: number;
+}): string | undefined {
+  if (context.tokens === 0) return undefined;
+  const used = formatTokenCount(context.tokens);
+  if (context.window === undefined || context.window === 0) {
+    return `context ${used}`;
+  }
+  const percent = Math.round((context.tokens / context.window) * 100);
+  return `context ${used} / ${formatTokenCount(context.window)} (${percent}%)`;
+}
+
+/**
+ * What bounding removed, when it removed anything.
+ *
+ * A bounded projection is honest about being bounded, and this is where that
+ * honesty reaches a reader. Silence means nothing was dropped.
+ */
+export function formatTruncation(result: RunResult): string | undefined {
+  const dropped: string[] = [];
+  const { truncation } = result;
+  if (truncation.droppedTranscriptItems > 0) {
+    dropped.push(`${truncation.droppedTranscriptItems} transcript items`);
+  }
+  if (truncation.droppedToolEntries > 0) {
+    dropped.push(`${truncation.droppedToolEntries} tool entries`);
+  }
+  if (truncation.droppedDiagnostics > 0) {
+    dropped.push(`${truncation.droppedDiagnostics} diagnostics`);
+  }
+  if (truncation.droppedLinks > 0) {
+    dropped.push(`${truncation.droppedLinks} links`);
+  }
+  return dropped.length > 0
+    ? `Dropped to stay within bounds: ${dropped.join(", ")}.`
+    : undefined;
+}
+
+/** The last few transcript items, oldest first. */
+function recentTranscript(
+  transcript: readonly TranscriptItem[],
+): readonly string[] {
+  return transcript
+    .slice(Math.max(0, transcript.length - RECENT_TRANSCRIPT_ITEMS))
+    .map(formatTranscriptItem);
+}
+
+function present<T>(values: readonly T[]): readonly T[] | undefined {
+  return values.length > 0 ? values : undefined;
 }
 
 /** Build the card for one Run. */
@@ -72,6 +209,12 @@ export function runCard(source: RunCardSource): RunCard {
 
   const { result } = source;
   const accounting = formatNotificationAccounting(result.usage, result.model);
+  const context = formatContextGauge(result.usage.context);
+  const transcript = present(recentTranscript(result.transcript));
+  const tools = present(result.tools.map(formatToolEntry));
+  const diagnostics = present(result.diagnostics.map(formatDiagnosticLine));
+  const links = present(result.links.map(formatResultLinkLine));
+  const truncation = formatTruncation(result);
   return {
     runId: result.runId,
     subagentId: result.subagentId,
@@ -84,6 +227,12 @@ export function runCard(source: RunCardSource): RunCard {
     }),
     tone: runPhaseTone(result.status),
     ...(accounting === undefined ? {} : { accounting }),
+    ...(context === undefined ? {} : { context }),
+    ...(transcript === undefined ? {} : { transcript }),
+    ...(tools === undefined ? {} : { tools }),
+    ...(diagnostics === undefined ? {} : { diagnostics }),
+    ...(links === undefined ? {} : { links }),
+    ...(truncation === undefined ? {} : { truncation }),
     output: formatResultBody(result),
   };
 }
@@ -100,34 +249,53 @@ export function runCardIdentity(card: RunCard): string {
   return `${card.agent} (subagent ${card.subagentId}), run ${card.runId}`;
 }
 
-/**
- * The card as plain lines, for an expanded view.
- *
- * One blank line separates the header block from the body, because the body is
- * agent-authored Markdown and two adjacent paragraphs of different voices read
- * as one.
- */
-export function runCardLines(card: RunCard): readonly string[] {
-  const header = [
-    runCardIdentity(card),
-    `${card.description} · ${card.backendId} · ${card.status}`,
-    ...(card.accounting === undefined ? [] : [card.accounting]),
-  ];
-  if (card.output === undefined) return header;
-  return [...header, "", card.output];
+/** One titled block of lines, or nothing when there is nothing to title. */
+function section(
+  title: string,
+  lines: readonly string[] | undefined,
+): readonly string[] {
+  if (lines === undefined || lines.length === 0) return [];
+  return ["", `${title}:`, ...lines.map((line) => `  ${line}`)];
 }
 
 /**
- * The complete `agent_result` text: the Run's identity, then its answer.
+ * The card as plain lines, for an expanded view.
+ *
+ * The order is what a reader wants in the order they want it: who and how it
+ * went, then what it spent, then how it got there, then what went wrong, then
+ * where to look next — and the answer last, because the answer is the part
+ * they will keep reading.
+ *
+ * One blank line separates each block, and the body is separated the same way,
+ * because the body is agent-authored Markdown and two adjacent paragraphs of
+ * different voices read as one.
+ */
+export function runCardLines(card: RunCard): readonly string[] {
+  const lines = [
+    runCardIdentity(card),
+    `${card.description} · ${card.backendId} · ${card.status}`,
+    ...(card.accounting === undefined ? [] : [card.accounting]),
+    ...(card.context === undefined ? [] : [card.context]),
+    ...section("Recent transcript", card.transcript),
+    ...section("Tools", card.tools),
+    ...section("Diagnostics", card.diagnostics),
+    ...section("Links", card.links),
+    ...(card.truncation === undefined ? [] : ["", card.truncation]),
+  ];
+  if (card.output === undefined) return lines;
+  return [...lines, "", card.output];
+}
+
+/**
+ * The complete `agent_result` text: everything the card knows about the Run.
  *
  * Built from the card rather than from the Result directly, which is what
- * makes the card the one place Run presentation grows. M3's text is v1's — the
- * identity line and the body, and nothing else — and the fields M4 adds
- * (recent transcript, tools, diagnostics, native links) arrive by widening
- * this function's view of the card rather than by a second assembly of the
+ * makes the card the one place Run presentation grows. M3's text was v1's —
+ * the identity line and the body, and nothing else — and M4's is the expanded
+ * body, reached by widening the card rather than by a second assembly of the
  * same fields somewhere else.
  */
 export function formatResult(result: RunResult): string {
-  const card = runCard({ from: "result", result });
-  return `${runCardIdentity(card)}:\n\n${card.output ?? ""}`;
+  const [identity, ...rest] = runCardLines(runCard({ from: "result", result }));
+  return [`${identity}:`, ...rest].join("\n");
 }

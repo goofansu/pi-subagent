@@ -136,5 +136,11 @@ export function createDemoBackendSet(): BackendSet {
     name: DEMO_BACKEND_SET_NAME,
     backends: [resumable.backend, oneShot.backend],
     profiles,
+    // A fake spawns nothing, so no process it started can be loading this
+    // extension and no environment it set can report a depth. Saying so is
+    // what keeps the entry point's guard a property of the *set* rather than
+    // a Pi-shaped assumption baked into the host.
+    isChildLoad: () => false,
+    childDepth: () => 0,
   };
 }

@@ -14,7 +14,20 @@
 
 import { Schema } from "effect";
 
-export const MESSAGE_ROLES = ["user", "assistant"] as const;
+/**
+ * Who a transcript item is from.
+ *
+ * `tool` is the result of a native tool call, reported as its own item rather
+ * than folded into the assistant message that asked for it. It is here because
+ * every backend has one — a provider that runs tools produces tool results —
+ * and because the alternatives are worse: attributing a tool's output to the
+ * assistant would make the Run look as though the model said it, and dropping
+ * it would lose the one part of a tool call a reader usually wants.
+ *
+ * Only an `assistant` item is an answer, which is why the final output is
+ * taken from those alone. A `tool` item is evidence, not a reply.
+ */
+export const MESSAGE_ROLES = ["user", "assistant", "tool"] as const;
 
 export const MessageRole = Schema.Literals(MESSAGE_ROLES);
 

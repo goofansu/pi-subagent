@@ -121,6 +121,10 @@ export interface HostRigOptions extends StandInHostOptions {
    * from the live Session reached the backend that needed it.
    */
   readonly diagnose?: FakeBackendOptions["diagnose"];
+  /** Make the set report that this process is loading inside a child. */
+  readonly childLoad?: boolean;
+  /** What depth the set reports, for the nesting guard and for admission. */
+  readonly childDepth?: number;
 }
 
 export interface HostRig {
@@ -267,6 +271,11 @@ export function hostRig(
     name: "rig",
     backends: [resumable.backend, oneShot.backend],
     profiles: options.profiles ?? defaultProfiles(RIG_ONE_SHOT_BACKEND),
+    // A fake spawns no child, so the guard is a test's to control: a rig can
+    // say the process looks like a child, or that it is nested, and assert
+    // that the entry point registers nothing.
+    isChildLoad: () => options.childLoad === true,
+    childDepth: () => options.childDepth ?? 0,
   });
 
   const host = createStandInHost(options);

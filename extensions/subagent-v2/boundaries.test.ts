@@ -65,6 +65,10 @@ export interface V2BoundaryGraph {
   readonly domainRoot: string;
   /** The backend contract module, which is Effect-typed but mechanism-free. */
   readonly contractRoot: string;
+  /** The Pi adapter, where every Pi SDK session symbol is confined. */
+  readonly piAdapterRoot: string;
+  /** Test doubles and rigs for the Pi adapter, which may name its types. */
+  readonly piTestingRoot: string;
   /** The Session runtime, where the supervisor and its services live. */
   readonly runtimeRoot: string;
   /** Pure prose and row formatting, which may name only the domain and Pi. */
@@ -89,6 +93,20 @@ const productionGraph: V2BoundaryGraph = {
     "extensions",
     "subagent-v2",
     "backend",
+  ),
+  piAdapterRoot: path.join(
+    repositoryRoot,
+    "extensions",
+    "subagent-v2",
+    "backend",
+    "pi",
+  ),
+  piTestingRoot: path.join(
+    repositoryRoot,
+    "extensions",
+    "subagent-v2",
+    "testing",
+    "pi",
   ),
   runtimeRoot: path.join(
     repositoryRoot,
@@ -268,6 +286,7 @@ const SECOND_SCHEMA_LIBRARY = "typebox";
 const COMPOSITION_ROOT_FILES = new Set([
   "runtime/composition.ts",
   "host/demo-backends.ts",
+  "host/pi-backends.ts",
 ]);
 
 function isCompositionRoot(file: string, graph: V2BoundaryGraph): boolean {
@@ -325,6 +344,66 @@ const LAYER_MODULES = new Set([
   "supervisor.ts",
   "delivery.ts",
 ]);
+
+/**
+ * Pi's own SDK, as opposed to Pi's host API.
+ *
+ * The distinction is the whole reason this list exists rather than a package
+ * ban. `@earendil-works/pi-coding-agent` is *both*: it exports the extension
+ * API this product is written against — `ExtensionAPI`, `getAgentDir`, the
+ * theme — and the native session machinery the Pi adapter drives. The first is
+ * the host and belongs everywhere; the second is a provider and belongs in one
+ * directory.
+ *
+ * So the rule is by binding, not by specifier: naming any of these outside the
+ * Pi adapter is a violation, and naming `ExtensionAPI` is not. The two sibling
+ * packages are provider-only, so those are banned by specifier.
+ */
+const PI_SESSION_SYMBOLS = new Set([
+  // The native session and how one is made.
+  "AgentSession",
+  "AgentSessionConfig",
+  "AgentSessionEvent",
+  "AgentSessionEventListener",
+  "createAgentSession",
+  "CreateAgentSessionOptions",
+  // What a session is constructed from.
+  "createBashToolDefinition",
+  "DefaultResourceLoader",
+  "LoadExtensionsResult",
+  "ModelRuntime",
+  "ResourceLoader",
+  "SessionManager",
+  "SettingsManager",
+  // Pi's message and event vocabulary, from either sibling package.
+  "Agent",
+  "AgentEvent",
+  "AgentMessage",
+  "AgentState",
+  "AgentTool",
+  "AssistantMessage",
+  "AssistantMessageEvent",
+  "ThinkingLevel",
+  "ToolResultMessage",
+  "UserMessage",
+]);
+
+/**
+ * Who may reach into the Pi adapter.
+ *
+ * The composition root wires the backend set, and the adapter's own tests and
+ * test doubles name its types. Nothing else: a runtime, presentation,
+ * application, or host module that could import the adapter would be a module
+ * that could open a native session, and then two things would own the handle.
+ */
+function mayImportPiAdapter(file: string, graph: V2BoundaryGraph): boolean {
+  return (
+    isCompositionRoot(file, graph) ||
+    isInside(file, graph.piAdapterRoot) ||
+    isInside(file, graph.piTestingRoot) ||
+    isTestFile(file)
+  );
+}
 
 function specifiersOf(file: string): string[] {
   return readImportSpecifiers(fs.readFileSync(file, "utf8"));
@@ -641,6 +720,60 @@ export function findV2BoundaryViolations(
     }
   }
 
+  // 14. Pi's SDK session vocabulary lives in the Pi adapter and nowhere else.
+  //     Pi's *host* API is a different thing that happens to ship in the same
+  //     package, so the rule is by binding rather than by package: naming
+  //     `createAgentSession` outside the adapter is a violation and naming
+  //     `ExtensionAPI` is not.
+  for (const file of listSourceFiles(v2Root, { includeTests: true })) {
+    if (isInside(file, graph.piAdapterRoot)) continue;
+    for (const edge of readNamedImports(fs.readFileSync(file, "utf8"))) {
+      if (!isHostPackage(edge.specifier)) continue;
+      for (const name of edge.names) {
+        if (!PI_SESSION_SYMBOLS.has(name) && name !== "*") continue;
+        violations.add(
+          `${describe(file)} imports ${name} from ${edge.specifier}, and Pi session symbols stay inside the Pi adapter`,
+        );
+      }
+    }
+  }
+
+  // 15. The adapter stays behind the contract in both directions. Only the
+  //     composition root and the adapter's own tests may reach into it, and it
+  //     may not reach the runtime, the host, presentation, or the façade —
+  //     which is what keeps "a backend change is an adapter-local change" a
+  //     checkable claim rather than a hope.
+  for (const file of listSourceFiles(v2Root, { includeTests: true })) {
+    if (mayImportPiAdapter(file, graph)) continue;
+    for (const specifier of specifiersOf(file)) {
+      const target = resolveRelativeSource(file, specifier);
+      if (target && isInside(target, graph.piAdapterRoot)) {
+        violations.add(
+          `${describe(file)} imports ${describe(target)}, and only the composition root may name the Pi adapter`,
+        );
+      }
+    }
+  }
+  for (const file of listSourceFiles(graph.piAdapterRoot, {
+    includeTests: false,
+  })) {
+    for (const specifier of specifiersOf(file)) {
+      const target = resolveRelativeSource(file, specifier);
+      if (!target) continue;
+      if (
+        isInside(target, graph.runtimeRoot) ||
+        isInside(target, graph.hostRoot) ||
+        isInside(target, graph.presentationRoot) ||
+        isInside(target, graph.applicationRoot) ||
+        isInside(target, graph.testingRoot)
+      ) {
+        violations.add(
+          `${describe(file)} imports ${describe(target)}, and the Pi adapter lives behind the backend contract`,
+        );
+      }
+    }
+  }
+
   return [...violations].sort();
 }
 
@@ -666,6 +799,20 @@ function fixtureGraph(
       "extensions",
       "subagent-v2",
       "backend",
+    ),
+    piAdapterRoot: path.join(
+      fixtureRoot,
+      "extensions",
+      "subagent-v2",
+      "backend",
+      "pi",
+    ),
+    piTestingRoot: path.join(
+      fixtureRoot,
+      "extensions",
+      "subagent-v2",
+      "testing",
+      "pi",
     ),
     runtimeRoot: path.join(fixtureRoot, "extensions", "subagent-v2", "runtime"),
     presentationRoot: path.join(
@@ -1356,6 +1503,85 @@ test("the second schema library is rejected anywhere in v2, tests included", (t)
   assert.deepEqual(findV2BoundaryViolations(graph), [
     `${describe(path.join(graph.hostRoot, "tool-schemas.test.ts"))} imports typebox/value, and v2 declares its schemas with Effect Schema alone`,
     `${describe(path.join(graph.hostRoot, "tool-schemas.ts"))} imports typebox, and v2 declares its schemas with Effect Schema alone`,
+  ]);
+});
+
+test("a Pi session symbol outside the adapter is rejected, its host API is not", (t) => {
+  const { graph, write } = fixtureGraph(t, "pi-symbols");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/host/widget.ts",
+    'import { createAgentSession } from "@earendil-works/pi-coding-agent";\n' +
+      "export const made = createAgentSession;\n",
+  );
+  write(
+    "extensions/subagent-v2/host/tools.ts",
+    'import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";\n' +
+      "export type Api = ExtensionAPI;\n",
+  );
+  write(
+    "extensions/subagent-v2/backend/pi/agent.ts",
+    'import { createAgentSession } from "@earendil-works/pi-coding-agent";\n' +
+      "export const open = createAgentSession;\n",
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.hostRoot, "widget.ts"))} imports createAgentSession from @earendil-works/pi-coding-agent, and Pi session symbols stay inside the Pi adapter`,
+  ]);
+});
+
+test("a Pi message type outside the adapter is rejected", (t) => {
+  const { graph, write } = fixtureGraph(t, "pi-message-type");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/runtime/run-scope.ts",
+    'import type { AgentMessage } from "@earendil-works/pi-agent-core";\n' +
+      "export type Message = AgentMessage;\n",
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.runtimeRoot, "run-scope.ts"))} imports AgentMessage from @earendil-works/pi-agent-core, and Pi session symbols stay inside the Pi adapter`,
+  ]);
+});
+
+test("only the composition root may import the Pi adapter", (t) => {
+  const { graph, write } = fixtureGraph(t, "pi-adapter-importers");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write("extensions/subagent-v2/backend/pi/index.ts", "export const pi = 1;\n");
+  // Allowed: the composition root wires the set.
+  write(
+    "extensions/subagent-v2/host/pi-backends.ts",
+    'import { pi } from "../backend/pi/index.ts";\nexport const set = pi;\n',
+  );
+  // Rejected: the runtime reaching around the contract.
+  write(
+    "extensions/subagent-v2/runtime/repository.ts",
+    'import { pi } from "../backend/pi/index.ts";\nexport const held = pi;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.runtimeRoot, "repository.ts"))} imports ${describe(
+      path.join(graph.piAdapterRoot, "index.ts"),
+    )}, and only the composition root may name the Pi adapter`,
+  ]);
+});
+
+test("the Pi adapter may not import the runtime, the host, or presentation", (t) => {
+  const { graph, write } = fixtureGraph(t, "pi-adapter-reach");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/runtime/policy.ts",
+    "export const bound = 1;\n",
+  );
+  write(
+    "extensions/subagent-v2/backend/pi/agent.ts",
+    'import { bound } from "../../runtime/policy.ts";\nexport const used = bound;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.piAdapterRoot, "agent.ts"))} imports ${describe(
+      path.join(graph.runtimeRoot, "policy.ts"),
+    )}, and the Pi adapter lives behind the backend contract`,
   ]);
 });
 

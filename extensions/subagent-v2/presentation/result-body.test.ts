@@ -29,7 +29,12 @@ test("a completed result with no output plainly says so", () => {
 test("the full result text names the agent, the Subagent, and the Run", () => {
   assert.equal(
     formatResult(fixtureResult({ finalOutput: "done" })),
-    "explore (subagent subagent-1), run run-1:\n\ndone",
+    [
+      "explore (subagent subagent-1), run run-1:",
+      "look around · pi · completed in 12.4s",
+      "",
+      "done",
+    ].join("\n"),
   );
 });
 

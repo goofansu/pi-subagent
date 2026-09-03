@@ -583,3 +583,41 @@ test("a scripted late observation is ignored and changes nothing", async () => {
   assert.equal(value.counters.lateEvents, 0);
   assert.ok(value.counters.lateEndings >= 1);
 });
+
+test("a tool result is its own transcript item and is not the Run's answer", async () => {
+  // The `tool` role is the one generic-runtime addition M4 needed, so it is
+  // proven against a fake as well as against Pi: every backend that runs tools
+  // produces tool results, and attributing one to the assistant would make the
+  // Run look as though the model had said it.
+  const { value, noLeaks } = await withSession(
+    {
+      steps: [
+        [
+          emitToolCall("read_file", "c1"),
+          emitToolProgress("c1", "completed", "40 lines"),
+          emitText("40 lines of it", "tool"),
+          emitText("the answer"),
+          { step: "complete" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(rigRequest()));
+        yield* rig.supervisor.wait([started.runId]);
+        const read = yield* rig.supervisor.result(started.runId);
+        yield* quiesce();
+        return read;
+      }),
+  );
+
+  assert.equal(value.outcome, "result");
+  if (value.outcome !== "result") return;
+  assert.deepEqual(
+    value.result.transcript.map((item) => item.role),
+    ["assistant", "tool", "assistant"],
+  );
+  // Only an assistant item is an answer; a tool item is evidence.
+  assert.equal(value.result.finalOutput, "the answer");
+  assert.equal(noLeaks, true);
+});

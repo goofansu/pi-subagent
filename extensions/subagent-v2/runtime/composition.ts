@@ -38,8 +38,20 @@ export type SessionServices =
   | CompletionDelivery
   | SubagentSupervisor;
 
-/** How deeply a Subagent may itself delegate, when nothing says otherwise. */
-export const DEFAULT_MAX_DELEGATION_DEPTH = 2;
+/**
+ * How deeply a Subagent may itself delegate, when nothing says otherwise.
+ *
+ * One, which means delegation is one level deep: a Session at depth zero
+ * starts Runs at depth one, and a Run that somehow reached `agent_start` from
+ * inside a child would arrive at depth two and be refused. That is v1's rule
+ * and the compatibility matrix's `agent_start` row.
+ *
+ * M2 set this to two, which was unobservable then because the host reported a
+ * constant depth of zero and nothing could exceed anything. M4 reads the real
+ * depth from the backend set, so the number became load-bearing and had to be
+ * the one the product actually promises.
+ */
+export const DEFAULT_MAX_DELEGATION_DEPTH = 1;
 
 /**
  * A named set of backends, with the Profiles that ship with it.
@@ -61,6 +73,26 @@ export interface BackendSet {
   readonly backends: readonly Backend[];
   /** Profiles the set supplies, merged under the user's own. */
   readonly profiles: readonly Profile[];
+  /**
+   * Whether this process is loading as a child of one of the set's backends.
+   *
+   * Two host facts live on the set rather than in the host because only a
+   * backend knows them: how a Pi child is recognized while its resources are
+   * being discovered, and which environment variable a Pi child's depth
+   * arrives in. A host that answered them itself would be a host that had to
+   * import an adapter, which is the one thing the boundary forbids.
+   *
+   * `true` means the entry point must register nothing at all: a child that
+   * could see the delegation tools would try to use them.
+   */
+  readonly isChildLoad: () => boolean;
+  /**
+   * How deep in a delegation chain this process is. Zero in a parent.
+   *
+   * Read for every `agent_start`, so admission enforces the depth rather than
+   * a constant standing in for it.
+   */
+  readonly childDepth: () => number;
 }
 
 /**

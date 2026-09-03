@@ -8,6 +8,7 @@ import {
   DEMO_RESUMABLE_PROFILE,
   demoAnswer,
 } from "./host/demo-backends.ts";
+import { DIAGNOSTICS_COMMAND_NAME } from "./host/diagnostics-command.ts";
 import { NOTIFICATION_MESSAGE_TYPE } from "./host/notification-message.ts";
 import { V2_TOOL_NAMES } from "./host/tools.ts";
 import subagentV2Extension, { installSubagentV2 } from "./index.ts";
@@ -23,7 +24,7 @@ import { createStandInHost, resultText } from "./testing/stand-in-host.ts";
  * the host tests' business.
  */
 
-test("the v2 entry registers the six tools, the agents command, and the notification renderer", () => {
+test("the v2 entry registers the six tools, both commands, and the notification renderer", () => {
   const host = createStandInHost();
 
   installSubagentV2(host.pi, {
@@ -37,7 +38,7 @@ test("the v2 entry registers the six tools, the agents command, and the notifica
   );
   assert.deepEqual(
     host.commands().map((command) => command.name),
-    [AGENTS_COMMAND_NAME],
+    [AGENTS_COMMAND_NAME, DIAGNOSTICS_COMMAND_NAME],
   );
   assert.deepEqual(host.renderers(), [NOTIFICATION_MESSAGE_TYPE]);
 });

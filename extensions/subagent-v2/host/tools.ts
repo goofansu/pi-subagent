@@ -83,18 +83,22 @@ function hostResult(response: ToolResponse): HostToolResult {
  * was started. The working directory and the trust posture come from the same
  * context for the same reason.
  *
- * Child depth is zero: nothing runs inside a Subagent in M3, because no
- * adapter exists to spawn one. Real depth and the inert-in-child guard are
- * Pi-adapter knowledge and arrive with it.
+ * Child depth comes from the backend set, because only a backend knows how a
+ * child of *its* processes reports its nesting. Until M4 this was a constant
+ * zero, which made delegation depth a rule nothing enforced; reading it here
+ * is what turns `delegation-depth exceeded` into an outcome admission can
+ * actually reach.
  */
 function sessionFactsOf(
   pi: Pick<ExtensionAPI, "getThinkingLevel">,
   ctx: ExtensionContext,
+  childDepth: () => number,
 ): SessionFacts {
   return {
     cwd: ctx.cwd,
     projectTrusted: ctx.isProjectTrusted(),
-    childDepth: 0,
+    // A Run this Session starts is one level deeper than the Session itself.
+    childDepth: childDepth() + 1,
     ...(ctx.model === undefined
       ? {}
       : {
@@ -150,6 +154,13 @@ export function registerSubagentTools(
    * in place and the tool's guidelines follow, with no re-registration.
    */
   agentGuidelines: string[],
+  /**
+   * How deep this process already is, as the backend set reports it.
+   *
+   * A function rather than a number, because it is read from the environment
+   * and a test changes it between calls.
+   */
+  childDepth: () => number,
 ): void {
   /** What every handler answers with when there is no live runtime. */
   const notReady = (copy: ToolCopy): ToolResponse => ({
@@ -201,7 +212,7 @@ export function registerSubagentTools(
       // detached Run: the point of starting one is that it outlives the turn.
       return hostResult(
         await handle.run(
-          Subagents.start(input.value, sessionFactsOf(pi, ctx)),
+          Subagents.start(input.value, sessionFactsOf(pi, ctx, childDepth)),
           notReady(START_COPY),
         ),
       );

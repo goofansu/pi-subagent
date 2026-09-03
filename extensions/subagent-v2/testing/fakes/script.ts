@@ -131,7 +131,7 @@ export function scripts(
 
 export function emitText(
   text: string,
-  role: "assistant" | "user" = "assistant",
+  role: "assistant" | "user" | "tool" = "assistant",
 ): FakeStep {
   return {
     step: "emit",

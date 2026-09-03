@@ -828,11 +828,19 @@ const SCENARIO_CHECKS: {
     );
   },
   "late-events-cannot-mutate-a-terminal-run": (_fixture, outcome) => {
-    // Something reached the reducer after the ending and changed nothing.
-    // The shared expectations already checked *what* the Run says; this is
-    // that a late observation actually happened, so the check is not vacuous.
+    // Something arrived after the ending and changed nothing. The shared
+    // expectations already checked *what* the Run says; this is that
+    // something late actually happened, so the check is not vacuous.
+    //
+    // Either counter satisfies it, because where a late observation is
+    // stopped depends on how far settlement had got when it arrived, and that
+    // is not a property of the backend. A backend that keeps talking while
+    // the reducer is still draining is caught by the reducer and counted as a
+    // late *observation*; one whose provider says its last word during native
+    // cleanup — after the intake has been sealed — is caught at the seam and
+    // counted as a late *event*. Both are the property; neither is a leak.
     assert.ok(
-      outcome.counters.lateObservations >= 1,
+      outcome.counters.lateObservations + outcome.counters.lateEvents >= 1,
       "the fixture emitted nothing late",
     );
   },
