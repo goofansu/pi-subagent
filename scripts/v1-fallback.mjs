@@ -1,23 +1,39 @@
-// The dogfood switch: run v2 with the Pi backend as the daily driver.
+// The v1 fallback switch: run the frozen v1 extension locally instead of v2.
 //
-// Usage: node scripts/v2-dogfood.mjs on
-//        node scripts/v2-dogfood.mjs off
-//        node scripts/v2-dogfood.mjs status
+// Usage: node scripts/v1-fallback.mjs on
+//        node scripts/v1-fallback.mjs off
+//        node scripts/v1-fallback.mjs status
 //
-// The published manifest keeps exposing only v1, so switching is a local
-// decision rather than a release. Two edits to Pi's own settings make it, and
-// both are reversible:
+// This is the inverse of what it used to be. Before the M7 cutover the
+// published manifest named v1 and this script switched *v2* on; now the
+// manifest names v2, so `pi install` gives everyone the rewrite and this
+// switches back — which is the rollback the migration policy asks for: "before
+// final deletion, rollback means starting a new Pi session on v1."
+//
+// Two edits to Pi's own settings make it, and both are reversible:
 //
 //   1. This package's entry in `packages` is rewritten to Pi's object form
 //      with an empty `extensions` list, which disables *this package's*
-//      extension and nothing else. Every other extension the maintainer has
-//      installed stays exactly as it was, which is the whole point — a switch
-//      that turned everything else off would not be a daily driver.
-//   2. The absolute path of the v2 entry point is added to `extensions`, so
+//      extension — the v2 one the manifest now names — and nothing else.
+//      Every other extension the maintainer has installed stays exactly as it
+//      was, which is the whole point: a switch that turned everything else off
+//      would not be a fallback anyone could work in.
+//   2. The absolute path of the v1 entry point is added to `extensions`, so
 //      plain `pi` loads it.
 //
-// `off` reverses both, exactly. The settings file is read and written whole,
-// so anything Pi adds to it that this script does not know about survives.
+// `off` reverses both, exactly, and is the ordinary state. The settings file
+// is read and written whole, so anything Pi adds to it that this script does
+// not know about survives.
+//
+// **The two are never loaded together.** They register the same six tool
+// names, so a Pi process with both would offer a model each of them twice.
+// Disabling the package's own extension before adding the other entry is what
+// makes that impossible rather than merely unlikely, and `status` reports both
+// halves so a half-applied switch is visible.
+//
+// This script is deleted with v1, and the rollback it offers goes with it. See
+// the deletion ticket and the migration policy's "after final deletion,
+// rollback is a normal release rollback".
 
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -30,12 +46,7 @@ const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
-const v2Entry = path.join(
-  repositoryRoot,
-  "extensions",
-  "subagent-v2",
-  "index.ts",
-);
+const v1Entry = path.join(repositoryRoot, "extensions", "subagent");
 const settingsPath = path.join(getAgentDir(), "settings.json");
 
 const mode = process.argv[2] ?? "status";
@@ -90,12 +101,12 @@ function describe(settings) {
   const extensions = settings.extensions ?? [];
   return {
     installed: own !== undefined,
-    v1Disabled:
+    publishedDisabled:
       own !== undefined &&
       typeof own !== "string" &&
       Array.isArray(own.extensions) &&
       own.extensions.length === 0,
-    v2Loaded: extensions.includes(v2Entry),
+    v1Loaded: extensions.includes(v1Entry),
   };
 }
 
@@ -103,12 +114,14 @@ function report(settings) {
   const state = describe(settings);
   console.log(`settings: ${settingsPath}`);
   console.log(`  ${PACKAGE_NAME} installed as a package: ${state.installed}`);
-  console.log(`  its v1 extension disabled: ${state.v1Disabled}`);
-  console.log(`  the v2 entry point loaded: ${state.v2Loaded}`);
   console.log(
-    state.v1Disabled && state.v2Loaded
-      ? "\nv2 is the daily driver. `node scripts/v2-dogfood.mjs off` reverses it."
-      : "\nv1 is the daily driver. `node scripts/v2-dogfood.mjs on` switches.",
+    `  its published (v2) extension disabled: ${state.publishedDisabled}`,
+  );
+  console.log(`  the v1 entry point loaded: ${state.v1Loaded}`);
+  console.log(
+    state.publishedDisabled && state.v1Loaded
+      ? "\nv1 is the fallback in use. `node scripts/v1-fallback.mjs off` returns to v2."
+      : "\nv2 is in use, which is the default. `node scripts/v1-fallback.mjs on` falls back to v1.",
   );
 }
 
@@ -120,9 +133,9 @@ if (mode === "status") {
   const packages = settings.packages ?? [];
   if (!packages.some(isOwnPackage)) {
     console.error(
-      `${PACKAGE_NAME} is not installed as a package, so there is no v1 ` +
-        "extension to disable. Install it first, or load v2 by hand with " +
-        `\`pi -e ${v2Entry}\`.`,
+      `${PACKAGE_NAME} is not installed as a package, so there is no ` +
+        "published extension to disable. Install it first, or load v1 by hand " +
+        `with \`pi -e ${v1Entry}\`.`,
     );
     process.exitCode = 1;
   } else {
@@ -132,16 +145,16 @@ if (mode === "status") {
       packages: packages.map((entry) =>
         isOwnPackage(entry) ? withoutOwnExtension(entry) : entry,
       ),
-      extensions: extensions.includes(v2Entry)
+      extensions: extensions.includes(v1Entry)
         ? extensions
-        : [...extensions, v2Entry],
+        : [...extensions, v1Entry],
     });
     report(readSettings());
   }
 } else {
   const packages = settings.packages ?? [];
   const extensions = (settings.extensions ?? []).filter(
-    (entry) => entry !== v2Entry,
+    (entry) => entry !== v1Entry,
   );
   const restored = {
     ...settings,

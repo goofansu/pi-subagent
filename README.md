@@ -285,48 +285,64 @@ For the Pi harness, project trust is [pi's](https://pi.dev/docs/latest/security#
 
 A subagent reads files, writes files, and runs commands as far as its `tools` list allows, and cannot delegate further — delegation is one level deep. The neutral `agent_steer` operation is implemented at each adapter's private provider boundary. See [ADR 0020](docs/adr/0020-run-settlement-through-harness-conformance.md) for the current Run-settlement decision.
 
-## Running v2 as the daily driver
+## Upgrading from 1.x
 
-The rewrite in `extensions/subagent-v2/` is not what the package publishes: the
-manifest still exposes only v1, and it will keep doing so until the cutover at
-M7. Since M4 the rewrite is nonetheless a usable product with the real Pi
-backend behind it, and since M5 with Claude beside it, and switching to it
-locally is one command:
+**Version 2.0.0 is the rewrite, and it is what `pi install` now gives you.** The
+manifest names one extension, `extensions/subagent-v2/index.ts`, and the frozen
+1.x implementation is no longer loaded unless you ask for it.
+
+**One thing breaks, and it is a one-line edit per Profile.** A Profile names its
+backend with `backend:` where 1.x used a differently-named field. The values are
+unchanged — `pi`, `claude`, `codex` — and the default is still `pi`, so a
+Profile that pins nothing needs no edit at all. A Profile still using the old
+field name fails validation as an unrecognised field, is reported at Session
+start, and does not appear in `/agents`, so the failure is visible rather than
+silent. There is no alias and there will not be one:
+[`docs/v2/profile-backend-field-migration.md`](docs/v2/profile-backend-field-migration.md)
+is the migration note, and
+[ADR 0022](docs/adr/0022-v2-terminology-and-backend-field.md) is the decision.
+
+Nothing else about a Profile changes: the file layout, the frontmatter fields
+each backend understands, the prompt body, and the `agents/` directory they are
+read from are all as they were.
+
+### Falling back to 1.x
+
+During the release-candidate soak the frozen implementation is still in the tree
+and one command puts it back:
 
 ```bash
-make dogfood-v2     # v2 becomes what plain `pi` loads
-make dogfood-v1     # and back
-make dogfood-status # which one is live right now
+make fallback-v1     # 1.x becomes what plain `pi` loads
+make fallback-v2     # and back, which is the default
+make fallback-status # which one is live right now
 ```
 
 Two edits to Pi's own `settings.json` make the switch, and both are reversible:
 this package's entry in `packages` gains an empty `extensions` list, which
 disables **this package's** extension and nothing else, and the absolute path of
-the v2 entry point is added to `extensions` so plain `pi` loads it. Every other
-extension you have installed stays exactly as it was — a switch that turned
-everything else off would not be a daily driver. `make dogfood-v1` restores the
-settings file to what it was.
+the 1.x entry point is added to `extensions` so plain `pi` loads it. Every other
+extension you have installed stays exactly as it was — a fallback that turned
+everything else off would not be one anybody could work in. `make fallback-v2`
+restores the settings file to what it was.
 
 The two can never both be loaded, and that is deliberate: they register the same
 six tool names, and a Pi process with both would offer the model each tool
-twice.
+twice. `make fallback-status` reports both halves of the switch, so a
+half-applied one is visible.
 
-`make dev-v2` is the other way in — every extension disabled and only the v2
-entry point loaded, for checking the surface in isolation rather than for using
-it.
+Select the implementation **once per Pi session**; nothing migrates between
+them. No in-memory Subagent, BackendAgent, or Run crosses over, and a Run id
+from one is unknown to the other. This switch is removed when 1.x is deleted at
+the end of the soak, after which rolling back is an ordinary release rollback.
 
-Profiles are read from the same `agents/` directory v1 reads, with one
-difference: a v2 Profile names its backend with `backend:` rather than v1's
-field. The values are unchanged and the default is still `pi`, so a Profile that
-pins nothing runs on Pi under both. See
-[`docs/v2/profile-backend-field-migration.md`](docs/v2/profile-backend-field-migration.md).
+### What v2 offers
 
-**v2 offers all three backends from M6 onward.** A v2 Profile may name `pi`,
-`claude`, or `codex`, and each understands exactly what its v1 counterpart did.
-A `claude` Profile reads `model` as a family alias, plus `effort`, `tools`, and
-`appendSystemPrompt`, and the environment inheritance is the same one
+All three backends. A Profile may name `pi`, `claude`, or `codex`, and each
+understands exactly what its 1.x counterpart did. A `claude` Profile reads
+`model` as a family alias, plus `effort`, `tools`, and `appendSystemPrompt`, and
+the environment inheritance is the same one
 [ADR 0008](docs/adr/0008-claude-children-inherit-operator-environment.md)
-decided: a v2 Claude child sees the MCP servers and connectors your Claude Code
+decided: a Claude child sees the MCP servers and connectors your Claude Code
 environment has, unprompted. A `codex` Profile reads `model` — passed through
 unvalidated, because the App Server resolves a model name itself — and `effort`,
 with `off` mapping to `none`; `tools` and `appendSystemPrompt` are diagnostics,
@@ -344,14 +360,18 @@ for Codex, live App Server processes, reader fibers, pending JSON-RPC requests,
 retained root threads, and in-flight steers. Every one reads zero for a Session
 that has nothing in flight.
 
+`make dev-v2` runs the rewrite with every other extension disabled, for
+checking the surface in isolation rather than for using it. `make dev-v1` does
+the same for the frozen implementation, for as long as it exists.
+
 ## Release verification
 
-v1 is frozen. Only critical fixes and testability changes that add proof for a
-compatibility-matrix row land in `extensions/subagent/`; the policy, and the
-commit at which the quality gate was recorded green, are in
-[`docs/v2/freeze.md`](docs/v2/freeze.md). The rewrite lives beside it in
-`extensions/subagent-v2/`; `make dev-v2` opts into it for one Pi process, and
-`make dogfood-v2` makes it the default.
+The rewrite in `extensions/subagent-v2/` is what the package publishes. v1 is
+frozen and remains in the tree only as the soak's fallback: only critical fixes
+and testability changes that add proof for a compatibility-matrix row land in
+`extensions/subagent/`, and the policy, with the commit at which its quality
+gate was recorded green, is in [`docs/v2/freeze.md`](docs/v2/freeze.md). It is
+deleted when the soak closes.
 
 > **Note:** `npm run codex:protocol:check` compares the *installed* `codex`
 > CLI's generated schema byte-for-byte against the vendored snapshot in

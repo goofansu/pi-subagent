@@ -1,6 +1,8 @@
-.PHONY: check dev dev-v2 dogfood-status dogfood-v1 dogfood-v2 protocol-check release-gate smoke-codex smoke-v2-claude smoke-v2-codex smoke-v2-pi test-conformance test-v2-conformance
+.PHONY: check dev-v1 dev-v2 fallback-status fallback-v1 fallback-v2 protocol-check release-gate smoke-codex smoke-v2-claude smoke-v2-codex smoke-v2-pi test-conformance test-v2-conformance
 
-dev:
+# v1 in isolation, for as long as v1 exists. The published extension is v2
+# since the cutover; this is the frozen implementation, run deliberately.
+dev-v1:
 	pi --offline -np -nc -ns -ne -e extensions/subagent --tools agent_start,agent_wait,agent_cancel,agent_steer,agent_result
 
 # v2 in isolation: every extension disabled, only the v2 entry point loaded.
@@ -8,22 +10,25 @@ dev:
 # runs real work against whatever Profiles the agent directory holds, on
 # whichever backend each one names. `--offline` disables Pi's startup network
 # calls, not inference, so Runs still reach a model.
-# For using v2 rather than checking it, `dogfood-v2` is the daily driver.
+# For using v2 rather than checking it, a plain `pi` is enough: the manifest
+# names this entry point, so an installed package loads it.
 dev-v2:
 	pi --offline -np -nc -ns -ne -e extensions/subagent-v2/index.ts --tools agent_start,agent_resume,agent_wait,agent_result,agent_cancel,agent_steer
 
-# The dogfood switch: v2 with the production backend set, beside every other
-# extension, and with this package's v1 extension disabled so the two cannot
-# both register `agent_start`. After `dogfood-v2`, plain `pi` runs v2;
-# `dogfood-v1` puts it back. See the README's "Running v2 as the daily driver".
-dogfood-v2:
-	npm run v2:dogfood:on
+# The v1 fallback switch, which is the rollback the migration policy asks for.
+# Since the cutover the manifest names v2, so plain `pi` already runs it and
+# there is nothing to switch on for the ordinary case. `fallback-v1` disables
+# the published extension and loads the frozen v1 entry point instead;
+# `fallback-v2` reverses it. The two are never loaded together — they register
+# the same six tool names. See the README's "Upgrading from 1.x".
+fallback-v1:
+	npm run fallback:v1:on
 
-dogfood-v1:
-	npm run v2:dogfood:off
+fallback-v2:
+	npm run fallback:v1:off
 
-dogfood-status:
-	npm run v2:dogfood:status
+fallback-status:
+	npm run fallback:v1:status
 
 test-conformance:
 	npm run test:conformance

@@ -1,6 +1,6 @@
 {
   "name": "pi-subagent",
-  "version": "1.0.0",
+  "version": "2.0.0-rc.1",
   "description": "Delegate tasks to specialized Pi subagents with isolated context. Any run can be cancelled.",
   "type": "module",
   "keywords": [
@@ -8,7 +8,7 @@
   ],
   "pi": {
     "extensions": [
-      "./extensions/subagent"
+      "./extensions/subagent-v2/index.ts"
     ]
   },
   "license": "MIT",
@@ -19,9 +19,9 @@
     "codex:resume-smoke": "node --import tsx scripts/codex-resume-live-smoke.mjs",
     "codex:smoke": "node --import tsx scripts/codex-live-smoke.mjs",
     "pi:steering-smoke": "node --import tsx scripts/managed-provider-live-smoke.mjs pi steering",
-    "v2:dogfood:on": "node --import tsx scripts/v2-dogfood.mjs on",
-    "v2:dogfood:off": "node --import tsx scripts/v2-dogfood.mjs off",
-    "v2:dogfood:status": "node --import tsx scripts/v2-dogfood.mjs status",
+    "fallback:v1:on": "node --import tsx scripts/v1-fallback.mjs on",
+    "fallback:v1:off": "node --import tsx scripts/v1-fallback.mjs off",
+    "fallback:v1:status": "node --import tsx scripts/v1-fallback.mjs status",
     "v2:pi:smoke": "node --import tsx scripts/v2-pi-live-smoke.mjs",
     "v2:pi:host-smoke": "node --import tsx scripts/v2-pi-host-live-smoke.mjs pi",
     "v2:claude:smoke": "node --import tsx scripts/v2-claude-live-smoke.mjs",

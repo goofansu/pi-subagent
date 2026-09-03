@@ -10,8 +10,8 @@ import { PINNED_EFFECT_VERSION } from "./effect-version.ts";
  *
  * These assertions change for dependency and packaging reasons rather than
  * for entry-point reasons, so they live apart from `index.test.ts`. They are
- * v2's tests because v2 is what they protect: an installed package must keep
- * loading only v1, and the Effect pin must stay exact.
+ * v2's tests because v2 is what they protect: an installed package must load
+ * v2 and nothing else, and the Effect pin must stay exact.
  */
 
 const repositoryRoot = path.resolve(
@@ -21,6 +21,7 @@ const repositoryRoot = path.resolve(
 );
 
 function readPackageManifest(): {
+  version?: string;
   dependencies?: Record<string, string>;
   pi?: { extensions?: string[] };
 } {
@@ -29,10 +30,51 @@ function readPackageManifest(): {
   );
 }
 
-test("the package manifest exposes only the v1 extension", () => {
+test("the package manifest exposes the v2 extension and nothing else", () => {
+  // The cutover, as one assertion. A fresh `pi install` reads this list and
+  // nothing else, so a manifest naming both entries would offer a model each
+  // of the six tool names twice — and one naming only v1 would mean the
+  // rewrite shipped to nobody.
   const manifest = readPackageManifest();
 
-  assert.deepEqual(manifest.pi?.extensions, ["./extensions/subagent"]);
+  assert.deepEqual(manifest.pi?.extensions, [
+    "./extensions/subagent-v2/index.ts",
+  ]);
+});
+
+test("the package version is the 2.0.0 release candidate", () => {
+  // A release-candidate marker until the soak closes, because the soak is the
+  // rollback window and a plain 2.0.0 would say it had shut.
+  const manifest = readPackageManifest();
+
+  assert.match(manifest.version ?? "", /^2\.0\.0-rc\.\d+$/);
+});
+
+test("the README carries an upgrade notice pointing at the migration note", () => {
+  // The Profile field rename is the only thing a 1.x user has to do by hand,
+  // and a major version that did not say so where a reader first looks would
+  // be a major version that broke their Profiles silently.
+  //
+  // What this asserts is the *notice and the pointer*, not the old field name:
+  // the boundary rule keeps the legacy name out of this tree, and the
+  // migration note — which is outside it — is where the rename is spelled out.
+  const readme = readFileSync(path.join(repositoryRoot, "README.md"), "utf8");
+  const migrationNote = path.join(
+    "docs",
+    "v2",
+    "profile-backend-field-migration.md",
+  );
+
+  assert.match(readme, /^## Upgrading from 1\.x$/m);
+  assert.match(readme, /`backend:`/);
+  assert.ok(
+    readme.includes(migrationNote),
+    `the README does not link ${migrationNote}`,
+  );
+  // And the note it points at exists, so the pointer is not a dead link.
+  assert.ok(
+    readFileSync(path.join(repositoryRoot, migrationNote), "utf8").length > 0,
+  );
 });
 
 test("the pinned Effect version matches the dependency and the installed package", () => {

@@ -2,7 +2,9 @@
 
 **Status:** Open. Started 2026-09-03.
 **What is being soaked:** v2 with the Pi backend, as the maintainer's default
-local subagent extension, switched on with `make dogfood-v2`.
+local subagent extension. Since the M7 cutover it is what an installed
+package loads, so nothing has to be switched on; `make fallback-v1` is the way
+back.
 
 The M4 exit gate does not count the soak by elapsed days. Days are easy to
 accumulate without exercising anything, and a milestone that passed because a
@@ -38,7 +40,7 @@ Measured against this machine's own agents directory on 2026-09-03:
 So the soak is a soak of *Pi delegation*, and three of five specialists are off
 the table for its duration. That is worth deciding about rather than
 discovering: if those three are load-bearing for daily work, the honest options
-are to soak in shorter stretches with `make dogfood-v1` in between, or to hold
+are to soak in shorter stretches with `make fallback-v1` in between, or to hold
 the soak until M5 lands and Claude is available again. What is not an option is
 running both at once — v1 and v2 register the same six tool names, so a Pi
 process with both would offer the model each tool twice.
