@@ -50,7 +50,7 @@ told twice would act twice. `CompletionDelivery` deduplicates by Run id with an
 atomic claim, so a settlement wake-up and a sweep arriving together produce one
 push: `a-notification-retry-cannot-duplicate-or-alter-settlement` (conformance),
 and the stress lane asserts the notification count equals the settlement count
-over 900 Runs.
+across 1,200 Runs — 900 on the resumable fake and 300 on the one-shot.
 
 **Evidence — live.** Each of the three runtime gates asserts that every settled
 Run produced exactly one notification, by comparing the notified ids against the

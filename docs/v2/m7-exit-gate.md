@@ -155,7 +155,7 @@ exactly one place — a pointer to the deletion ledger — and the ledger is whe
 | 3 | Pi, Claude, and Codex use backend-specific adapters and the same core contract | **PASS** — three directories, one contract, confinement enforced in both directions per adapter, and no adapter names another |
 | 4 | All visible Run state is derived through one ordered, bounded projection path | **PASS** — `reduceRun` is the only writer, `RunRepository` the only publisher; every list and text bounded, every truncation recorded |
 | 5 | Controls have bounded and truthful admission/delivery semantics | **PASS** — three mailbox bounds, immediate typed refusal, and four stages kept apart with `accepted` saying so every time |
-| 6 | Results settle exactly once after cleanup and reconciliation | **PASS** — settlement coordinator plus pure arbitration; `duplicateSettlements`, `duplicateCommits`, and `conflictingCommits` all read zero across 1,800 stress-lane Runs |
+| 6 | Results settle exactly once after cleanup and reconciliation | **PASS** — settlement coordinator plus pure arbitration; `duplicateSettlements`, `duplicateCommits`, and `conflictingCommits` all read zero across the stress lane's 1,260 settled Runs (900 resumable, 300 one-shot, 60 in the Session-churn test) |
 | 7 | The public UX matches the agreed compatibility matrix | **PASS** — see gate item 2 |
 | 8 | Deterministic race tests and backend conformance suites are green | **PASS** — `check` exits 0 |
 | 9 | Representative live smoke tests are green | **CARRIED** — all six green at M6, not re-run on this build |
