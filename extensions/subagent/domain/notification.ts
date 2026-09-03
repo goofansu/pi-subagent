@@ -11,6 +11,12 @@
  * bound that lives at one of several call sites is a bound that one of them
  * will forget.
  *
+ * Every terminal notice points at `agent_result`, whatever happened, and says
+ * how much is there — because the alternative is a model that has to remember
+ * which statuses keep output. A cancelled Run's Result may hold half an
+ * answer, and a model that was never told so would either fetch every Result
+ * on the chance or fetch none of them.
+ *
  * A notice is **self-sufficient**: everything the host needs to write the
  * notice a model reads is on this value. That is why the accounting figures
  * and the primary error are here rather than looked up again at the host. A
@@ -38,6 +44,38 @@ export const NOTIFICATION_PREVIEW_MAX_BYTES = 500;
  */
 export const NOTIFICATION_ERROR_MAX_BYTES = 500;
 
+/**
+ * How much of a Result there is, which is what a model needs to decide
+ * whether fetching it is worth a tool call.
+ *
+ * It describes the **stored Result**, not the Run's success: a completed Run
+ * whose output was cut by Result bounding is still `full`, because the Result
+ * is the whole of what was stored and its own truncation record says what
+ * bounding removed.
+ */
+export const ResultAvailability = Schema.Literals([
+  "full",
+  "partial",
+  "metadata-only",
+]);
+
+export type ResultAvailability = typeof ResultAvailability.Type;
+
+/**
+ * Read availability off a stored Result.
+ *
+ * A failed or cancelled Run counts as `partial` on either kind of evidence —
+ * a final output or a transcript — because either is something a model can
+ * read, and a Run that was interrupted mid-answer often has the second
+ * without the first.
+ */
+export function resultAvailabilityOf(result: RunResult): ResultAvailability {
+  if (result.status === "completed") return "full";
+  return result.finalOutput !== "" || result.transcript.length > 0
+    ? "partial"
+    : "metadata-only";
+}
+
 export const RunNotification = Schema.Struct({
   runId: RunId,
   subagentId: SubagentId,
@@ -53,6 +91,8 @@ export const RunNotification = Schema.Struct({
    */
   label: Schema.String,
   status: TerminalRunPhase,
+  /** How much of the Result is there. See {@link resultAvailabilityOf}. */
+  resultAvailability: ResultAvailability,
   /** One line of the final output, or empty when there was none. */
   preview: Schema.String,
   /** The bounded primary error, present only for a failed Run that had one. */
@@ -90,6 +130,7 @@ export function toRunNotification(result: RunResult): RunNotification {
     agent: result.agent,
     label: boundOneLine(result.description, RUN_LABEL_MAX_BYTES),
     status: result.status,
+    resultAvailability: resultAvailabilityOf(result),
     preview: boundOneLine(result.finalOutput, NOTIFICATION_PREVIEW_MAX_BYTES),
     ...(result.errorMessage === undefined
       ? {}

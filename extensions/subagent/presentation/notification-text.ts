@@ -14,21 +14,34 @@
  * label comes first and the ids come after it, rather than the reader having
  * to map two identifiers back to an intention.
  *
- * Each terminal status then says a different thing, and the differences are
- * deliberate:
+ * The text is four sections in a fixed order — **header, status body,
+ * pointer, accounting** — separated by blank lines, and only the body varies
+ * by status. Three structural branches became one, which is what makes the
+ * pointer *universal*: it is a section rather than something each branch
+ * remembers to append, so no status can be the one that forgets it.
  *
- * - **completed** carries the bounded preview, so a model can decide whether
- *   the answer is worth fetching without fetching it.
- * - **failed** carries the primary error and nothing else. Partial output is
- *   not in the notice; it stays behind `agent_result`.
- * - **cancelled** is terse and carries no output at all. A cancelled Run's
- *   partial output is still retrievable, but a notice is not the place for it.
+ * The body is the only place the statuses differ:
  *
- * All three point at `agent_result` by Run id, and all three carry the
- * accounting line when the Run reported anything to account for.
+ * - **completed** carries the bounded preview, labelled and quoted as the
+ *   subagent's, so a model can decide whether the answer is worth fetching
+ *   without fetching it.
+ * - **failed** carries the primary error. Partial output is not in the
+ *   notice; the pointer says it exists and `agent_result` has it.
+ * - **cancelled** has no body: its reason is in the header, and a cancelled
+ *   Run's partial output stays behind `agent_result` too.
+ *
+ * Quoting the preview is **not a security boundary** and does not claim to
+ * be. It keeps delegated output out of the voice of the orchestration
+ * instructions, so a subagent that read hostile repository text does not get
+ * to address the parent as if it were the runtime.
  */
 
-import type { RunId, RunNotification, UsageSnapshot } from "../domain/index.ts";
+import type {
+  ResultAvailability,
+  RunId,
+  RunNotification,
+  UsageSnapshot,
+} from "../domain/index.ts";
 import {
   formatDuration,
   formatTokenCount,
@@ -67,9 +80,33 @@ function formatNotificationIdentity(notice: RunNotification): string {
   ].join("\n");
 }
 
-/** How every notice tells a model where the rest of the answer is. */
-export function formatResultPointer(runId: RunId): string {
-  return `Use agent_result with id ${runId} to retrieve the full result.`;
+/**
+ * How every notice tells a model where the rest of the answer is.
+ *
+ * Two sentences: how much is there, then the exact call that fetches it. The
+ * argument shape is spelled out so the parent copies rather than composes —
+ * a model that has to assemble `{"id": …}` from prose is a model that can
+ * assemble it wrongly.
+ *
+ * Present for every terminal status, `cancelled` included. That is the one
+ * behaviourally observable change of this phase: a cancelled Run keeps the
+ * output it produced before it was stopped, and a timeout or a shutdown
+ * cancels Runs the parent never asked to cancel, so "you already know the id
+ * you cancelled" was never true of every cancellation.
+ */
+export function formatResultPointer(
+  runId: RunId,
+  availability: ResultAvailability,
+): string {
+  const call = `Call agent_result with {"id":"${runId}"}`;
+  switch (availability) {
+    case "full":
+      return `Full result is available. ${call}.`;
+    case "partial":
+      return `Partial result is available. ${call}.`;
+    case "metadata-only":
+      return `No output was produced. ${call} for the Run's record.`;
+  }
 }
 
 /**
@@ -111,31 +148,36 @@ export function formatNotificationAccounting(
   return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
-function withAccounting(body: string, notice: RunNotification): string {
-  const accounting = formatNotificationAccounting(notice.usage, notice.model);
-  return accounting === undefined ? body : `${body}\n\n${accounting}`;
+/**
+ * The one section that varies, and the only place a status is asked about.
+ *
+ * `undefined` rather than an empty string, so an absent body leaves no blank
+ * line behind it: a cancelled notice reads as three sections and not as four
+ * with a hole in the middle.
+ */
+function formatNotificationBody(notice: RunNotification): string | undefined {
+  switch (notice.status) {
+    case "completed":
+      return notice.preview === ""
+        ? "No output was produced."
+        : `Preview from the subagent:\n"${notice.preview}"`;
+    case "failed":
+      return `Reason: ${notice.errorMessage || "none reported."}`;
+    case "cancelled":
+      // The reason is in the header, and a cancelled Run's partial output
+      // stays behind `agent_result`, which the pointer now says.
+      return undefined;
+  }
 }
 
 /** What the model reads when one of its Runs finishes. */
 export function formatNotificationText(notice: RunNotification): string {
-  const opening = `${formatNotificationHeader(notice)}\n\n${formatNotificationIdentity(notice)}`;
-  const pointer = formatResultPointer(notice.runId);
-
-  switch (notice.status) {
-    case "completed": {
-      const preview = notice.preview || "No output was produced.";
-      return withAccounting(`${opening}\n\n${preview}\n\n${pointer}`, notice);
-    }
-    case "failed": {
-      const reason = notice.errorMessage || "none reported.";
-      return withAccounting(
-        `${opening}\n\nReason: ${reason}\n\n${pointer}`,
-        notice,
-      );
-    }
-    case "cancelled":
-      // The reason is in the header, so a cancelled notice has no body of its
-      // own — and no partial output either: it stays behind `agent_result`.
-      return withAccounting(opening, notice);
-  }
+  return [
+    `${formatNotificationHeader(notice)}\n\n${formatNotificationIdentity(notice)}`,
+    formatNotificationBody(notice),
+    formatResultPointer(notice.runId, notice.resultAvailability),
+    formatNotificationAccounting(notice.usage, notice.model),
+  ]
+    .filter((section) => section !== undefined)
+    .join("\n\n");
 }
