@@ -356,6 +356,42 @@ test("agent_wait names terminal ids with status, still-running ids, and unknown 
   );
 });
 
+test("agent_wait says why a cancelled Run was cancelled, and says nothing extra otherwise", () => {
+  // v1 rendered `cancelled (requested)` and `cancelled (shutdown)`, and the
+  // two are different facts: only one of them is something the caller asked
+  // for. A completed Run has no reason and must not grow a parenthesis.
+  assert.equal(
+    formatWaitOutcomes(
+      [
+        {
+          outcome: "terminal",
+          runId: RUN,
+          status: "cancelled",
+          cancellationReason: "requested",
+        },
+        {
+          outcome: "terminal",
+          runId: OTHER_RUN,
+          status: "cancelled",
+          cancellationReason: "shutdown",
+        },
+      ],
+      new Map([
+        [RUN, "explore"],
+        [OTHER_RUN, "librarian"],
+      ]),
+    ),
+    "explore (run-1): cancelled (requested)\n\n" +
+      "librarian (run-2): cancelled (shutdown)",
+  );
+  assert.equal(
+    formatWaitOutcomes([
+      { outcome: "terminal", runId: RUN, status: "completed" },
+    ]),
+    "run-1: completed",
+  );
+});
+
 test("agent_wait covers every outcome and reports an unnamed Run by id", () => {
   const rendered = new Map<string, string>();
   const outcomes: WaitOutcome[] = [

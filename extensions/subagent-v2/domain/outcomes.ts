@@ -16,7 +16,7 @@
 
 import type { RunDiagnostic } from "./diagnostics.ts";
 import type { RunId, SubagentId } from "./ids.ts";
-import type { TerminalRunPhase } from "./phases.ts";
+import type { CancellationReason, TerminalRunPhase } from "./phases.ts";
 import type { ProfileDiagnostic } from "./profile.ts";
 import type { RunResult } from "./result.ts";
 
@@ -124,6 +124,15 @@ export type WaitOutcome =
       readonly outcome: "terminal";
       readonly runId: RunId;
       readonly status: TerminalRunPhase;
+      /**
+       * Why the Run was cancelled, when it was.
+       *
+       * Present only for a cancelled Run, and reported because the difference
+       * matters to a caller: at shutdown every Run is cancelled without
+       * anyone asking for it, and a model told plain `cancelled` would
+       * conclude its own request had taken effect. v1 reported it here too.
+       */
+      readonly cancellationReason?: CancellationReason;
     }
   | { readonly outcome: "still running"; readonly runId: RunId }
   | { readonly outcome: "unknown Run"; readonly runId: RunId };

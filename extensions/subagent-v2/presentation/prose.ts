@@ -361,10 +361,17 @@ export function formatWaitOutcomes(
     switch (outcome.outcome) {
       case "terminal": {
         const agent = agents.get(outcome.runId);
+        // The reason is part of the lifecycle state rather than an extra: a
+        // Run cancelled at shutdown and a Run cancelled on request stopped
+        // for different reasons, and only one of them is the caller's own.
+        const status =
+          outcome.cancellationReason === undefined
+            ? outcome.status
+            : `${outcome.status} (${outcome.cancellationReason})`;
         terminal.push(
           agent === undefined
-            ? `${outcome.runId}: ${outcome.status}`
-            : `${agent} (${outcome.runId}): ${outcome.status}`,
+            ? `${outcome.runId}: ${status}`
+            : `${agent} (${outcome.runId}): ${status}`,
         );
         break;
       }

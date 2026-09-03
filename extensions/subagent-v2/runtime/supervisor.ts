@@ -783,7 +783,22 @@ const makeSupervisor = (settings: SessionSettings) =>
             : stored.outcome === "ResultExpired"
               ? stored.status
               : (snapshot.terminalStatus ?? "failed");
-        return { outcome: "terminal", runId, status } as const;
+        // The reason comes from the stored Result where there is one and from
+        // the snapshot's recorded request otherwise, so an evicted Run still
+        // says why it stopped. A Run that was not cancelled has no reason,
+        // and reporting one would be inventing it.
+        const reason =
+          stored.outcome === "result"
+            ? stored.result.cancellationReason
+            : snapshot.cancellation?.reason;
+        return {
+          outcome: "terminal",
+          runId,
+          status,
+          ...(status === "cancelled" && reason !== undefined
+            ? { cancellationReason: reason }
+            : {}),
+        } as const;
       });
 
     const waitOne = (

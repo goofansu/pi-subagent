@@ -10,6 +10,10 @@ and Profile loading and validation — across the Pi, Claude, and Codex backends
 
 Every cell states the outcome a user should observe, including `unsupported`,
 rejected, and Conversation-loss outcomes, and cites the v1 test that proves it.
+Where v1's and v2's *wording* for one outcome differ, the difference is
+classified in [the presentation ledger](presentation-ledger.md), which compared
+both trees' presentation over equivalent fixtures once, at M7, while both still
+existed.
 Cells marked **[v2 change]** are places where v2 intentionally differs from v1;
 each points at [the operation-semantics document](operation-semantics.md), which
 records the difference. M0 changes no v1 behaviour to match.
@@ -109,6 +113,7 @@ Pi, Claude, and Codex.
 | **Repeated wait** | Returns the same lifecycle state. `INV-5: wait is repeatable for an already-terminal run` (`delivery.test.ts`) | Same. Same proof. | Same. Same proof. |
 | **Unknown Run id** | Reported as unknown rather than blocking. `a wait tells a delivered report apart from an id that never existed` (`delivery.test.ts`) | Same. Same proof. | Same. Same proof. |
 | **Duplicate ids** | One observation per id. `an id named twice produces one wait observation` (`delivery.test.ts`) | Same. Same proof. | Same. Same proof. |
+| **A cancelled Run's reason** | Reported beside the status, as `cancelled (requested)` or `cancelled (shutdown)`, because only one of the two is something the caller asked for. `agent_wait says why a cancelled Run was cancelled` (`host/tools.test.ts`); `agent_wait says why a cancelled Run was cancelled, and says nothing extra otherwise` (`presentation/prose.test.ts`) | Same. Same proof. | Same. Same proof. |
 
 ## `agent_result`
 

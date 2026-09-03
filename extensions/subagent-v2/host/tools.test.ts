@@ -353,6 +353,26 @@ test("agent_wait names each terminal Run by agent and status", async (t) => {
   );
 });
 
+test("agent_wait says why a cancelled Run was cancelled", async (t) => {
+  // v1 reported `cancelled (requested)` and `cancelled (shutdown)`, and the
+  // difference is not decoration: at shutdown every Run is cancelled without
+  // anyone asking, and a model told plain "cancelled" would conclude its own
+  // cancel had taken effect.
+  const rig = hostRig(t, {
+    resumableSteps: [[{ step: "await-gate", gate: "hold" }]],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const started = await startedRun(rig);
+  await rig.text("agent_cancel", { ids: [started.runId] });
+
+  assert.equal(
+    await rig.text("agent_wait", { ids: [started.runId] }),
+    `explore (${started.runId}): cancelled (requested)`,
+  );
+});
+
 test("agent_wait reports an unknown id rather than blocking on it", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
