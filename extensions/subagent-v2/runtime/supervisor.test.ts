@@ -9,6 +9,7 @@ import {
   type FakeBackendHandle,
 } from "../testing/fakes/backend.ts";
 import { emitActivity, emitText, scripts } from "../testing/fakes/script.ts";
+import { idInSameSessionAs, parseAllocatedId } from "../testing/identifiers.ts";
 import {
   RIG_PROFILE,
   rigRequest as request,
@@ -209,23 +210,30 @@ test("identifiers spent by a start that failed at open never come back", async (
     (rig) =>
       Effect.gen(function* () {
         yield* rig.supervisor.start(request());
-        // The first start spent subagent-1 and run-1 before it failed; the
-        // next allocation of each kind must be past them.
+        // The first start spent one identifier of each kind before it failed;
+        // the next allocation of each kind must be past them.
         const nextSubagent = yield* rig.repository.allocateSubagentId();
         const nextRun = yield* rig.repository.allocateRunId();
+        // Nobody ever received the abandoned pair, so the only way to name it
+        // is as the first of each kind in the Session that just minted these.
         return {
           nextSubagent,
           nextRun,
-          firstRunSpent: yield* rig.repository.isSpent("run-1"),
-          firstSubagentSpent: yield* rig.repository.isSpent("subagent-1"),
+          firstRunSpent: yield* rig.repository.isSpent(
+            idInSameSessionAs(nextRun, "run", 1),
+          ),
+          firstSubagentSpent: yield* rig.repository.isSpent(
+            idInSameSessionAs(nextSubagent, "subagent", 1),
+          ),
         };
       }),
   );
 
   assert.equal(value?.firstSubagentSpent, true);
   assert.equal(value?.firstRunSpent, true);
-  assert.notEqual(value?.nextSubagent, "subagent-1");
-  assert.notEqual(value?.nextRun, "run-1");
+  // And second of each kind, not first: what was spent was never handed out.
+  assert.equal(parseAllocatedId(value?.nextSubagent ?? "").sequence, 2);
+  assert.equal(parseAllocatedId(value?.nextRun ?? "").sequence, 2);
 });
 
 test("an unknown agent and an invalid Profile are different answers", async () => {
@@ -265,7 +273,7 @@ test("a start past the delegation depth is refused before anything is allocated"
     depth: 5,
   });
   assert.equal(value?.published, 0);
-  assert.equal(value?.nextRun, "run-1");
+  assert.equal(parseAllocatedId(value?.nextRun ?? "").sequence, 1);
 });
 
 test("a resume on a running Subagent is refused, and on an idle one it starts", async () => {

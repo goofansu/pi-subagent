@@ -4,6 +4,7 @@ import {
   Deferred,
   Effect,
   Fiber,
+  Random,
   type Scope,
   Stream,
   SubscriptionRef,
@@ -17,6 +18,7 @@ import {
   type SubagentId,
   subagentId,
 } from "../domain/index.ts";
+import { parseAllocatedId } from "../testing/identifiers.ts";
 import { createRuntimeCounters } from "./counters.ts";
 import { RunRepository } from "./repository.ts";
 
@@ -37,20 +39,33 @@ const identityOf = (subagent: SubagentId, run: string): RunIdentity => ({
   description: "look around",
 });
 
+/**
+ * One repository, which is one Session's identity space.
+ *
+ * `seed` pins the pseudo-random sequence the Session nonce is drawn from, for
+ * the tests that compare the identifiers of two Sessions. Those tests are
+ * about whether two Sessions share an identity space at all; leaving the draw
+ * unseeded would make them pass by luck rather than by rule, and fail once in
+ * every 36⁴ runs for a reason that has nothing to do with the code. The
+ * remaining tests take the real unseeded draw.
+ */
 const withRepository = <A>(
   body: (
     repository: RunRepository["Service"],
   ) => Effect.Effect<A, never, Scope.Scope>,
-): Promise<A> =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const repository = yield* RunRepository;
-      return yield* body(repository);
-    }).pipe(
-      Effect.provide(RunRepository.layerOf(createRuntimeCounters())),
-      Effect.scoped,
-    ),
+  seed?: string,
+): Promise<A> => {
+  const program = Effect.gen(function* () {
+    const repository = yield* RunRepository;
+    return yield* body(repository);
+  }).pipe(
+    Effect.provide(RunRepository.layerOf(createRuntimeCounters())),
+    Effect.scoped,
   );
+  return Effect.runPromise(
+    seed === undefined ? program : program.pipe(Random.withSeed(seed)),
+  );
+};
 
 test("an allocated identifier is spent the moment it is handed out", async () => {
   const spent = await withRepository((repository) =>
@@ -78,30 +93,108 @@ test("an allocated identifier is spent the moment it is handed out", async () =>
   });
 });
 
-test("each kind of identity is numbered from one, independently of the other", async () => {
-  const ids = await withRepository((repository) =>
-    Effect.gen(function* () {
-      // The order `start` allocates in: the Subagent first, then its Run.
-      const subagent = yield* repository.allocateSubagentId();
-      const first = yield* repository.allocateRunId();
-      // A resume allocates a Run and no Subagent.
-      const second = yield* repository.allocateRunId();
-      const nextSubagent = yield* repository.allocateSubagentId();
-      const third = yield* repository.allocateRunId();
-      return { subagent, first, second, nextSubagent, third };
-    }),
+/** What one Session runtime allocates, in the order `start` and `resume` do. */
+const allocateInOneSession = (
+  seed?: string,
+): Promise<{
+  readonly subagent: string;
+  readonly first: string;
+  readonly second: string;
+  readonly nextSubagent: string;
+  readonly third: string;
+}> =>
+  withRepository(
+    (repository) =>
+      Effect.gen(function* () {
+        // The order `start` allocates in: the Subagent first, then its Run.
+        const subagent = yield* repository.allocateSubagentId();
+        const first = yield* repository.allocateRunId();
+        // A resume allocates a Run and no Subagent.
+        const second = yield* repository.allocateRunId();
+        const nextSubagent = yield* repository.allocateSubagentId();
+        const third = yield* repository.allocateRunId();
+        return { subagent, first, second, nextSubagent, third };
+      }),
+    seed,
   );
 
-  // One shared counter would make the first Run `run-2` and leave holes
-  // wherever a Subagent was created — which is what a user sees, and the
+test("each kind of identity is numbered from one, independently of the other", async () => {
+  const ids = await allocateInOneSession();
+
+  const numbering = (id: string): string => {
+    const { kind, sequence } = parseAllocatedId(id);
+    return `${kind} ${sequence}`;
+  };
+
+  // One shared counter would make the first Run the second number and leave
+  // holes wherever a Subagent was created — which is what a user sees, and the
   // first thing they ask about.
-  assert.deepEqual(ids, {
-    subagent: "subagent-1",
-    first: "run-1",
-    second: "run-2",
-    nextSubagent: "subagent-2",
-    third: "run-3",
-  });
+  assert.deepEqual(
+    {
+      subagent: numbering(ids.subagent),
+      first: numbering(ids.first),
+      second: numbering(ids.second),
+      nextSubagent: numbering(ids.nextSubagent),
+      third: numbering(ids.third),
+    },
+    {
+      subagent: "subagent 1",
+      first: "run 1",
+      second: "run 2",
+      nextSubagent: "subagent 2",
+      third: "run 3",
+    },
+  );
+});
+
+test("one Session mints one nonce, and both kinds of identity carry it", async () => {
+  const ids = await allocateInOneSession();
+  const sessions = Object.values(ids).map((id) => parseAllocatedId(id).session);
+
+  // A Session's ids read as a set: the same nonce on the Subagent and on
+  // every Run it starts, so a reader can tell at a glance which belong
+  // together.
+  assert.equal(new Set(sessions).size, 1);
+});
+
+test("an identifier minted in one Session is never minted in another", async () => {
+  // Two Session runtimes, exactly as a reload produces: the second knows
+  // nothing of the first, and its sequence starts again at one. The transcript
+  // that survives the reload, however, still holds the first Session's ids —
+  // so if the two Sessions minted the same strings, a stale reference would
+  // silently resolve to a different Run instead of being reported as unknown.
+  const before = await allocateInOneSession("a Session");
+  const after = await allocateInOneSession("the Session after a reload");
+
+  const mintedBefore = new Set<string>(Object.values(before));
+  const overlap = Object.values(after).filter((id) => mintedBefore.has(id));
+
+  assert.deepEqual(overlap, []);
+  // And the numbering within each Session is untouched by that: staying
+  // readable is the whole reason for a nonce rather than a random id per Run.
+  assert.equal(parseAllocatedId(after.first).sequence, 1);
+});
+
+test("a forgotten Session's identifiers are never minted again", async () => {
+  // `forget` ends a Session's identity sets at shutdown. The ids that Session
+  // handed out are still in the conversation, so what comes after must not
+  // repeat them — the same hazard as a reload, inside one process.
+  const ids = await withRepository(
+    (repository) =>
+      Effect.gen(function* () {
+        const before = yield* repository.allocateRunId();
+        yield* repository.forget();
+        const after = yield* repository.allocateRunId();
+        return { before, after };
+      }),
+    "a Session and its successor",
+  );
+
+  assert.notEqual(ids.after, ids.before);
+  assert.notEqual(
+    parseAllocatedId(ids.after).session,
+    parseAllocatedId(ids.before).session,
+  );
 });
 
 test("an identifier allocated for a Run that was never published stays spent", async () => {

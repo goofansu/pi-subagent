@@ -111,7 +111,10 @@ test("agent_resume starts a second Run on the same Subagent", async (t) => {
     prompt: "once more",
   });
 
-  assert.match(text, /^Resumed subagent subagent-1:/);
+  assert.ok(
+    text.startsWith(`Resumed subagent ${first.subagentId}:`),
+    `resume named a different Subagent: ${text}`,
+  );
   const resumedRunId = /run id (\S+)/.exec(text)?.[1];
   assert.notEqual(resumedRunId, first.runId);
 });

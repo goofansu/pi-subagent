@@ -505,12 +505,12 @@ test("a wait returns the terminal status, and a repeated wait returns the same o
       const started = startedRun(yield* rig.supervisor.start(request()));
       const first = yield* rig.supervisor.wait([started.runId]);
       const second = yield* rig.supervisor.wait([started.runId]);
-      return { first, second };
+      return { first, second, runId: started.runId };
     }),
   );
 
   assert.deepEqual(value?.first, [
-    { outcome: "terminal", runId: "run-1", status: "completed" },
+    { outcome: "terminal", runId: value?.runId, status: "completed" },
   ]);
   assert.deepEqual(value?.second, value?.first);
 });
@@ -539,15 +539,16 @@ test("a wait that times out reports still running, and the Run carries on", asyn
           gaveUp,
           settled: yield* rig.supervisor.wait([started.runId]),
           result: (yield* rig.supervisor.result(started.runId)).outcome,
+          runId: started.runId,
         };
       }),
   );
 
   assert.deepEqual(value?.gaveUp, [
-    { outcome: "still running", runId: "run-1" },
+    { outcome: "still running", runId: value?.runId },
   ]);
   assert.deepEqual(value?.settled, [
-    { outcome: "terminal", runId: "run-1", status: "completed" },
+    { outcome: "terminal", runId: value?.runId, status: "completed" },
   ]);
   assert.equal(value?.result, "result");
 });

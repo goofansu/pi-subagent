@@ -45,6 +45,7 @@ test("a settled Run produces exactly one notification, built from the stored res
           received: rig.sink.received(),
           attempts: rig.sink.attempts(),
           stored: yield* rig.supervisor.result(started.runId),
+          runId: started.runId,
           subagentId: started.subagentId,
         };
       }),
@@ -53,7 +54,9 @@ test("a settled Run produces exactly one notification, built from the stored res
   assert.equal(outcome.received.length, 1);
   assert.equal(outcome.attempts, 1);
   const [notification] = outcome.received;
-  assert.equal(notification.runId, "run-1");
+  // The notification is about the Run that settled, whichever id that Run
+  // was given.
+  assert.equal(notification.runId, outcome.runId);
   assert.equal(notification.subagentId, outcome.subagentId);
   assert.equal(notification.status, "completed");
   assert.equal(notification.agent, "explore");
@@ -140,6 +143,7 @@ test("a sink that always fails exhausts its budget, releases the pin, and leaves
           received: rig.sink.received().length,
           attempts: rig.sink.attempts(),
           exhausted: yield* rig.delivery.exhausted(),
+          runId: started.runId,
           pins: yield* rig.store.pinsOf(started.runId),
           stored: yield* rig.supervisor.result(started.runId),
           counters: rig.counters.counters(),
@@ -149,7 +153,7 @@ test("a sink that always fails exhausts its budget, releases the pin, and leaves
 
   assert.equal(outcome.received, 0);
   assert.equal(outcome.attempts, 3);
-  assert.deepEqual(outcome.exhausted, ["run-1"]);
+  assert.deepEqual(outcome.exhausted, [outcome.runId]);
   // The pin goes even when the notification never lands, or the result would
   // be one nothing could ever evict.
   assert.ok(!outcome.pins.includes("delivery"));

@@ -33,6 +33,7 @@ import {
   Context,
   Effect,
   Layer,
+  Random,
   Ref,
   type Scope,
   type Stream,
@@ -134,6 +135,40 @@ function withRun(
 /** The two kinds of identity a Session hands out, and their id prefixes. */
 type IdentityKind = "run" | "subagent";
 
+/**
+ * The alphabet and length of a Session's nonce.
+ *
+ * Four characters from a 36-character alphabet is 1,679,616 nonces, so any two
+ * Sessions draw the same one about once in 1.7 million — and it is *pairs*
+ * that matter here, because a stale identifier only misleads if the Session
+ * that minted it and the Session reading it collide with each other. (The
+ * birthday bound over all Sessions ever run is far shorter, around 1,500, but
+ * that is the wrong question: two Sessions that never share a transcript
+ * cannot confuse anybody.) Short enough that `run-k3f9-1` is still an id a
+ * person types, which is the whole reason v2 numbers Runs rather than
+ * inheriting v1's random ones.
+ */
+const NONCE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+const NONCE_LENGTH = 4;
+
+/**
+ * A fresh nonce for one Session's identity space.
+ *
+ * Drawn from Effect's `Random`, not `Math.random`, so a test that needs the
+ * sequence to be reproducible can pin it with `Random.withSeed` without this
+ * module knowing anything about it.
+ */
+const mintSessionNonce: Effect.Effect<string> = Effect.gen(function* () {
+  let nonce = "";
+  for (let index = 0; index < NONCE_LENGTH; index += 1) {
+    const position = yield* Random.nextIntBetween(0, NONCE_ALPHABET.length, {
+      halfOpen: true,
+    });
+    nonce += NONCE_ALPHABET[position];
+  }
+  return nonce;
+});
+
 const make = (counters: RuntimeCounters) =>
   Effect.gen(function* () {
     const index = yield* SubscriptionRef.make<RunIndex>(new Map());
@@ -152,6 +187,22 @@ const make = (counters: RuntimeCounters) =>
      * run 1.
      */
     const sequences: Record<IdentityKind, number> = { run: 0, subagent: 0 };
+    /**
+     * The nonce every identity this Session mints carries.
+     *
+     * Sequence numbers alone are not enough, because a Session is not the
+     * longest-lived thing in the room. Reloading drops this runtime and builds
+     * a new one whose numbering starts again at one, while the conversation
+     * transcript — including this extension's own "use agent_result with id
+     * run-1" notice — survives intact. Without a nonce the second Session's
+     * `run-1` answers a question that was asked about the first Session's, and
+     * nothing in the answer says so: a wrong Run reported as the right one.
+     * v1 minted random ids and so could only ever answer "unknown".
+     *
+     * `let`, not a constant, because {@link forget} ends this identity space
+     * and whatever comes after it must not repeat any of it.
+     */
+    let nonce = yield* mintSessionNonce;
 
     /**
      * Allocate an id and spend it in the same step.
@@ -167,7 +218,7 @@ const make = (counters: RuntimeCounters) =>
     ): Effect.Effect<T> =>
       Ref.modify(spent, (ids) => {
         sequences[kind] += 1;
-        const value = `${kind}-${sequences[kind]}`;
+        const value = `${kind}-${nonce}-${sequences[kind]}`;
         return [brand(value), new Set(ids).add(value)];
       });
 
@@ -370,6 +421,12 @@ const make = (counters: RuntimeCounters) =>
           yield* SubscriptionRef.set(index, new Map());
           yield* Ref.set(spentRunIds, new Set());
           yield* Ref.set(spentSubagentIds, new Set());
+          // A new identity space for anything that comes after, so an id from
+          // the Session just ended cannot be minted a second time. The
+          // sequence deliberately keeps counting rather than restarting: that
+          // makes uniqueness within this process a certainty rather than
+          // something resting on the nonce not repeating.
+          nonce = yield* mintSessionNonce;
         }),
 
       /** Every Run this Session has published, newest last. */
