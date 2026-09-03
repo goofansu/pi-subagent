@@ -156,6 +156,13 @@ export type ClaudeScriptStep =
   | { readonly step: "stderr"; readonly text?: string }
   /** Wait for the test to open a named gate. */
   | { readonly step: "await-gate"; readonly gate: string }
+  /**
+   * Stop reading the client's input stream, as a dying subprocess does.
+   *
+   * The one way an input push can be *refused* rather than merely unanswered,
+   * which is what the adapter's bounded `control` diagnostic is for.
+   */
+  | { readonly step: "abandon-input" }
   /** Hang until the Query is aborted or closed. */
   | { readonly step: "hang" }
   /** Throw from the iterator, which is how a transport dies mid-stream. */
@@ -298,12 +305,16 @@ export function createStandInClaudeQuery(
    */
   const consumeInput = (
     prompt: string | AsyncIterable<ClaudeInputMessage>,
-  ): void => {
-    if (typeof prompt === "string") return;
+  ): (() => void) => {
+    if (typeof prompt === "string") return () => {};
+    const reader = prompt[Symbol.asyncIterator]();
     openInputs += 1;
     void (async () => {
       try {
-        for await (const message of prompt) {
+        for (;;) {
+          const next = await reader.next();
+          if (next.done === true) break;
+          const message = next.value;
           const priority = message.priority;
           const entry: StandInInput = {
             text: textOf(message),
@@ -332,6 +343,9 @@ export function createStandInClaudeQuery(
         wakeInputWaiters();
       }
     })();
+    return () => {
+      void reader.return?.(undefined);
+    };
   };
 
   const query: ClaudeQuery = ({ prompt, options: queryOptions }) => {
@@ -344,7 +358,7 @@ export function createStandInClaudeQuery(
     liveQueries += 1;
     startedOptions.push(queryOptions ?? {});
     resumes.push(queryOptions?.resume);
-    consumeInput(prompt);
+    const abandonInput = consumeInput(prompt);
 
     let stopped = false;
     const stopWaiters: (() => void)[] = [];
@@ -595,6 +609,9 @@ export function createStandInClaudeQuery(
               break;
             case "await-gate":
               if (await orStopped(gate(step.gate).promise)) return;
+              break;
+            case "abandon-input":
+              abandonInput();
               break;
             case "hang":
               await untilStopped();

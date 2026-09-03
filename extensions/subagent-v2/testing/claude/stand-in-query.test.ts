@@ -447,3 +447,28 @@ test("a Control is grouped by the Run whose execution pushed it", async () => {
 
   assert.deepEqual(stand.record().controlsByRun.get(runId), ["some guidance"]);
 });
+
+test("abandoning the input stream closes it, which is how a push can be refused", async () => {
+  const stand = createStandInClaudeQuery({
+    scripts: [[{ step: "abandon-input" }, { step: "hang" }]],
+  });
+  const input = createClaudeInput();
+  const stream = stand.query({ prompt: input });
+  const iterating = (async () => {
+    for await (const _frame of stream) {
+      // The script yields nothing; abandoning the input is the point.
+    }
+  })();
+
+  // One turn for the abandon to reach the client-owned stream.
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(input.isClosed(), true);
+  assert.equal(
+    input.push(claudeInputMessage("refused guidance", "control-uuid", "later")),
+    false,
+  );
+  stream.close();
+  await iterating;
+});
