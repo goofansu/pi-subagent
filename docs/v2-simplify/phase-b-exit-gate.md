@@ -224,7 +224,38 @@ the only row allowed to have grown, and it should not have: the extraction
 adds two generic modules to the tree but a terminal-lifecycle change touches
 neither.
 
-**Status:** OPEN.
+**All three Phase A findings are settled**, each keeping its original text with
+the decision recorded under it. R3's target rose to `0 / ≤ 3` on the
+parameterisation-point argument the finding itself makes, not on a second
+measurement. R7 exists in all three tables at `≤ 2 / ≤ 5`. Finding 3 needed no
+action and says so.
+
+**The Phase B row, measured:**
+
+| R1 | R2 | R3 | R4 | R5 | R6 | R7 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 / 1 | 0 / 2 | 0 / 3 | 0 / 1 | 0 / 8–12 | 9 / 14 | 2 / 5 |
+
+Every cell meets its target, so item 11 records no new finding. **R3 read
+`0 / 3` with the same three modules** — it did not move. **R6 did not grow**,
+and the reason is the reading the gate wanted: adding a terminal Run phase
+touches none of the three new modules, because admission counts Runs and knows
+no phase, the records hold a *Subagent* phase that a terminal *Run* phase does
+not affect, and the ledger counts readers.
+
+The phase's own cost is in the tree rather than in a row: 103 production
+modules became 106, and 23 generic became 26. That is recorded under the
+measured table, because no representative change touches one of the three and
+the metric is about what changes together.
+
+**Evidence to name:** the Phase B row and the seven per-row sections in
+[change-surface.md](change-surface.md); the method block there, which names
+the base commit `3454da5`, the throwaway branch
+`throwaway/phase-b-change-surface`, and the commands. R1 through R4 were each
+made on that branch one at a time with `npx tsc --noEmit` run on each, and the
+branch was deleted. R5, R6, and R7 are written module lists.
+
+**Status:** PASS.
 
 ### 12. Every commit that added an abstraction answers the challenge gate
 

@@ -1,9 +1,11 @@
 # The change-surface measurement
 
 **Status:** method decided; baseline **measured at the Phase A gate** from
-this phase's own diffs and one throwaway branch, and to be re-measured at
-every phase gate. The estimated column below is **superseded** by the measured
-table.
+this phase's own diffs and one throwaway branch, and re-measured at
+[the Phase B gate](phase-b-exit-gate.md). The estimated column below is
+**superseded** by the measured table. R3's target was raised and R7 added at
+the Phase B gate, from Phase A's findings 1 and 2; both findings are settled
+below.
 **Why this document exists:** the v2 definition of done asked for less
 lifecycle machinery than v1 and [the deletion ledger](../v2/deletion-ledger.md)
 found more by every honest count. That count was the wrong instrument. This is
@@ -52,6 +54,7 @@ need, and together they exercise every seam the architecture claims to have.
 | R4 | Add a display-only column to the widget. | Repository read model → rows; the supervisor is not involved. |
 | R5 | Add a fourth backend that supports resume and steering. | The backend contract; zero generic lifecycle change. |
 | R6 | Change terminal lifecycle (say, a new terminal phase). | Allowed to be expensive; this row is the control. |
+| R7 | Add a bound on caller-supplied input, enforced at admission. | Declaration, application, carriage, and record — four places by nature. Added at the Phase B gate from Phase A's finding 2. |
 
 ## Targets
 
@@ -59,10 +62,26 @@ need, and together they exercise every seam the architecture claims to have.
 | --- | ---: | ---: |
 | R1 | 0 | ≤ 2 |
 | R2 | 1 (`domain/notification.ts`) | ≤ 4 |
-| R3 | 0 | ≤ 2 |
+| R3 | 0 | ≤ 3 |
 | R4 | 0 | ≤ 2 |
 | R5 | 0 | backend tree + composition + backend set |
 | R6 | expensive | expensive |
+| R7 | ≤ 2 | ≤ 5 |
+
+**R3's target is `0 / ≤ 3`**, raised from `≤ 2` at the Phase B gate. The third
+module is `backend/profile-fields.ts`, and the reason it is the honest cost
+rather than a leak is that it is a **parameterisation point**: it owns the one
+`try` per field that turns a bad value into a Profile diagnostic naming the
+file, instead of an exception inside an adapter at open time. A backend's own
+option adds a hook there and its vocabulary still never leaves
+`backend/<name>/`. Validating in the adapter instead would give the adapter a
+second diagnostic path, which is worse. See finding 1.
+
+**R7's target is `≤ 2 / ≤ 5`**, with Phase A's own label bound as the baseline
+at `2 / 5`. Phase B does not aim to lower it: a bound applied where caller
+input becomes a request has to be declared in the domain, applied at the
+façade, carried through the supervisor to reach the Run's diagnostics, and
+described in the tool schema. See finding 2.
 
 ## Baseline, estimated — **superseded**
 
@@ -116,20 +135,24 @@ and R2, and their diffs are counted directly.
 Each cell reads `generic / total`. A cell that exceeds its target is a gate
 failure for that phase, not a note.
 
-| Gate | R1 | R2 | R3 | R4 | R5 | R6 | Notes |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Phase A | **0 / 2** | **0 / 3** | **0 / 3** | **0 / 1** | **0 / 8–12** | **9 / 14** | R1, R2 and R4 meet their targets; R3 exceeds by one module. See the module lists and the findings below. |
-| Phase B | — | — | — | — | — | — | |
-| Phase C | — | — | — | — | — | — | |
+| Gate | R1 | R2 | R3 | R4 | R5 | R6 | R7 | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Phase A | **0 / 2** | **0 / 3** | **0 / 3** | **0 / 1** | **0 / 8–12** | **9 / 14** | **2 / 5** | R1, R2 and R4 meet their targets; R3 exceeds by one module against the target as it then stood. R7 is Phase A's label bound, decomposed out of ticket 02 and recorded here as R7's baseline. See the module lists and the findings below. |
+| Phase B | **0 / 1** | **0 / 2** | **0 / 3** | **0 / 1** | **0 / 8–12** | **9 / 14** | **2 / 5** | Every row meets its target. R3 did not move and now meets the target it was measured against. R6 did not grow, which is the reading the gate asked for: the extraction added three generic modules to the tree and a terminal-lifecycle change touches none of them. |
+| Phase C | — | — | — | — | — | — | — | |
 
-The tree at the gate holds **103 production modules**, of which **23 are
-generic lifecycle** — thirteen under `runtime/` and the ten named `domain/`
-files.
+The tree at the Phase A gate held **103 production modules**, of which **23
+were generic lifecycle** — thirteen under `runtime/` and the ten named
+`domain/` files. At the Phase B gate it holds **106**, of which **26 are
+generic**: `runtime/admission.ts`, `runtime/subagent-records.ts`, and
+`runtime/waiters.ts` joined the runtime. That is the cost side of the phase
+stated in this document's own units — three more generic modules in the tree —
+and no representative change touches any of them, which is why no row moved.
 
 ### Method, so this can be repeated
 
-Base commit: `124fd50` (`docs(v2-simplify): the simplification programme,
-decided before code`), the commit before Phase A's first.
+**Phase A.** Base commit: `124fd50` (`docs(v2-simplify): the simplification
+programme, decided before code`), the commit before Phase A's first.
 
 ```sh
 # per-ticket, for R1, R2 and R6's control reading
@@ -142,6 +165,34 @@ git diff --name-only <before>..<after>
 R3 and R4 were made on a throwaway branch off `1991b68`, measured the same
 way, and the branch was deleted. R5 and R6 are written module lists, checked
 against [the recipes](change-recipes.md).
+
+**Phase B.** Base commit `3454da5` (`refactor(v2-simplify-b): the supervisor
+reads like orchestration, and is fenced`), the last commit of the phase's code.
+R1 through R4 were each made on the throwaway branch
+`throwaway/phase-b-change-surface` off that commit, one at a time, each
+reverted before the next, with `npx tsc --noEmit` run on each to keep the
+change honest rather than notional. The branch was deleted.
+
+```sh
+git checkout -b throwaway/phase-b-change-surface 3454da5
+# make one change, then:
+npx tsc --noEmit
+git diff --name-only
+git checkout -- .        # and the next one
+# classify as above; tree counts:
+find extensions/subagent -name '*.ts' -not -name '*.test.ts' \
+  -not -path 'extensions/subagent/testing/*' | wc -l
+```
+
+A test file that had to change was **not** counted, and one did: R2's new
+notice field made `host/end-to-end.test.ts` fail to compile, because that test
+builds a `RunNotification` literal. That is the metric working as written —
+tests are expected to change with every change, and counting them would reward
+writing fewer.
+
+R5, R6, and R7 are written module lists. R5 and R6 are checked against
+[the recipes](change-recipes.md); R7 is checked against Phase A's own
+decomposition of its ticket 02, recorded under R2 above.
 
 ### R1 — change the wording of a completion notice
 
@@ -157,6 +208,10 @@ the pointer needs `resultAvailability`, which is an R2-shaped change riding in
 the same ticket. A pure reword after this phase is **0 / 1**, and boundary
 rule 20 is what keeps it there — `presentation/notification-text.ts` may
 import only from `domain/` and `presentation/`.
+
+**Phase B: 0 / 1.** The prediction above, measured. Rewording the result
+pointer's two availability sentences touched
+`presentation/notification-text.ts` and nothing else.
 
 ### R2 — add a field to the completion notice
 
@@ -184,8 +239,14 @@ modules are both the bound's. Decomposed:
 | the notice fields | `domain/notification.ts`, `presentation/notification-text.ts`, `presentation/status.ts` | 0 |
 | the label bound at admission | `domain/result.ts`, `domain/text.ts`, `application/subagents.ts`, `runtime/supervisor.ts`, `host/tool-schemas.ts` | 2 |
 
-See finding 2 below: "add a bound enforced at admission" is a representative
-change this table does not have a row for, and it is the more expensive half.
+Finding 2 is settled: "add a bound enforced at admission" is now **R7**, with
+the second row of that table as its baseline — `2 / 5`.
+
+**Phase B: 0 / 2.** Measured by adding a `toolCount` field to the notice: it
+is declared and derived in `domain/notification.ts` and printed in
+`presentation/notification-text.ts`. `presentation/run-card.ts` did not move
+this time, because a plain new field does not change how the card reads the
+figures it already prints — which is what pulled it in during Phase A.
 
 ### R3 — add a Profile option that one backend understands
 
@@ -200,6 +261,12 @@ throwaway branch by adding a Claude-only boolean option
 
 The third module is the finding. See finding 1.
 
+**Phase B: 0 / 3, and the target is now `0 / ≤ 3`.** Re-measured the same way,
+with the same three modules and the same `readOwnFields` hook. **R3 did not
+move**, which is what the Phase B gate required of it, and it now meets the
+target rather than exceeding it — because the target was raised on the
+argument in finding 1 rather than because anything about the cost changed.
+
 ### R4 — add a display-only column to the widget
 
 **0 / 1.** Target 0 / ≤ 2. **Meets, and better than target.** Measured on the
@@ -211,6 +278,11 @@ throwaway branch by adding a tool-count column to the widget row.
 the row decides its own columns, and the snapshot already carries `tools`.
 The estimate said two because it assumed the host would have to change; it
 does not, for a column the snapshot carries.
+
+**Phase B: 0 / 1.** Re-measured by adding the same tool-count column: one
+module, `presentation/rows.ts`, which declares the column width, measures it
+across the visible rows, formats the cell, and adds it to the widest of the
+three row layouts.
 
 ### R5 — add a fourth backend that supports resume and steering
 
@@ -240,6 +312,12 @@ module on the list outside the adapter tree.
 Not counted, and expected: a conformance file under `testing/`, a live smoke
 script under `scripts/`, and the matrix's proof tables.
 
+**Phase B: 0 / 8–12, unchanged.** The same written list. Phase B's three new
+generic modules do not appear on it and could not: `runtime/admission.ts`
+counts Runs, `runtime/subagent-records.ts` stores a `BackendAgent` without
+reading anything out of it, and `runtime/waiters.ts` counts readers. None of
+them can name a backend, and the provider-confinement rules are what say so.
+
 ### R6 — change terminal lifecycle
 
 **9 / 14.** The control row: this is *allowed* to be expensive, and the number
@@ -262,11 +340,48 @@ Nine generic modules against R4's zero and R1's zero. That ratio — a
 lifecycle change is expensive and every other representative change is not —
 is the whole point of the metric.
 
+**Phase B: 9 / 14, unchanged, and this is the row the gate watched.** Adding a
+terminal Run phase touches none of the three new modules, and the reason is
+worth stating because it is the test of whether they were drawn along the right
+lines. Admission counts Runs and knows no phase at all. The Subagent records
+hold a `SubagentPhase` — running, idle, closed — which is a statement about a
+*Subagent* and is untouched by a new terminal phase of a *Run*. The waiter
+ledger counts readers. So the extraction added three generic modules to the
+tree and nothing to the most expensive change in the table.
+
+### R7 — add a bound on caller-supplied input, enforced at admission
+
+**2 / 5.** Target `≤ 2 / ≤ 5`. **Meets, at the target.** A written module
+list, taken from Phase A's own label bound (`2d6269f`) and decomposed under R2
+above, and checked against the tree after Phase B.
+
+| Module | Why | Generic |
+| --- | --- | --- |
+| `domain/result.ts` | the bound's constant, beside the value it bounds | yes |
+| `domain/text.ts` | the truncate-and-record helper the bound is applied with | no |
+| `application/subagents.ts` | applied where decoded input becomes a request | no |
+| `runtime/supervisor.ts` | the request carries the diagnostic to the Run's own observation intake, because the bound is applied before a Run exists | yes |
+| `host/tool-schemas.ts` | the parameter document tells the model the limit | no |
+
+Phase B does not lower it and did not aim to. The supervisor is still on the
+list, and after the extraction it is on it for a smaller reason: what the
+supervisor holds for an admission diagnostic is the `AdmissionDiagnostics`
+value it carries from the request into `forkRun`, and the Run's intake emits
+it. Moving that carriage anywhere else would mean either a channel of its own
+— a second path for diagnostics, which invariant 6's ordering argument
+forbids — or applying the bound after a Run exists, which is too late for the
+half of truncate-and-record that has to be recorded.
+
 ## Findings
 
-Recorded rather than softened, per the Phase A gate's item 11.
+Recorded rather than softened, per the Phase A gate's item 11. The three from
+Phase A are each marked with what the Phase B gate did about them, and Phase B
+found none of its own.
 
-**Finding 1 — R3 exceeds its target by one module (`0 / 3` against `0 / ≤ 2`).**
+**Finding 1 — SETTLED at the Phase B gate: R3's target is now `0 / ≤ 3`.**
+The original finding, unedited, and then what was decided.
+
+**Finding 1 (as recorded at the Phase A gate) — R3 exceeds its target by one module (`0 / 3` against `0 / ≤ 2`).**
 A backend-owned Profile option cannot be validated without a hook in
 `backend/profile-fields.ts`, because that module owns the one `try` per field
 that turns a bad value into a Profile diagnostic instead of an exception
@@ -277,8 +392,19 @@ point rather than a place backend knowledge accumulates, and the option's
 vocabulary still never leaves `backend/claude/`. The Phase B gate should
 either raise R3's target to three or record the same finding again.
 
-**Finding 2 — the table has no row for "add a bound enforced at admission",
-and it is more expensive than any row it has.** Phase A's label bound touched
+*Settled:* the target was raised to `0 / ≤ 3`, on the argument the finding
+itself makes rather than on a second measurement. R3 was re-measured at the
+Phase B gate and read `0 / 3` again, with the same three modules, so nothing
+about the cost changed and nothing was hidden — what changed is that the target
+now says what the honest cost is. A reviewer can still use the row: a
+Claude-only option that touches a fourth module, or any generic one, is a
+leak.
+
+**Finding 2 — SETTLED at the Phase B gate: it is R7, target `≤ 2 / ≤ 5`.**
+The original finding, unedited, and then what was decided.
+
+**Finding 2 (as recorded at the Phase A gate) — the table has no row for "add
+a bound enforced at admission", and it is more expensive than any row it has.** Phase A's label bound touched
 five modules, two of them generic, because a bound applied where tool input
 becomes a request has to be declared in the domain, applied in the façade, and
 carried through the supervisor to reach the Run's diagnostics. Every future
@@ -286,8 +412,26 @@ bound on caller-supplied input will cost the same. The Phase B gate should add
 it as R7 with a target, measured from Phase A's own decomposition above as the
 baseline.
 
-**Finding 3 — two estimates were wrong, both in the safe direction.** R2's
+*Settled:* R7 exists in all three tables, with target `≤ 2 / ≤ 5` and Phase
+A's label bound as its baseline at `2 / 5`. Phase B measured it at `2 / 5` and
+did not aim to lower it: four of the five places are what a truncate-and-record
+bound on caller input *is* — declared, applied, carried, described — and the
+fifth is the helper it is applied with. The R7 section above says why the
+supervisor stays on the list after the extraction.
+
+**Finding 3 — SETTLED at the Phase B gate: no action, as the finding itself
+proposed.** The estimated column is marked superseded where it stands, which
+is what keeps the wrong readings visible. The original finding follows.
+
+**Finding 3 (as recorded at the Phase A gate) — two estimates were wrong, both in the safe direction.** R2's
 estimate claimed one generic module and the measurement found none, because
 `domain/notification.ts` is not on the generic-lifecycle list. R4's estimate
 claimed two modules and the measurement found one, because the widget passes
 rows through and does not lay them out. Neither error changed a verdict.
+
+**Phase B found no new findings.** Every row met its target, R3 did not move,
+and R6 did not grow. The cost the phase did add is in the tree rather than in
+any row — three more generic lifecycle modules, from twenty-three to
+twenty-six — and it is recorded under the measured table rather than as a
+finding, because no representative change touches one of them and the metric
+is about what changes together.
