@@ -19,6 +19,82 @@ The vocabulary is in [`CONTEXT.md`](../CONTEXT.md). This document assumes it.
 
 ---
 
+## The map
+
+One picture before the thirteen sections, so that a contributor planning a
+change knows which box it lands in without reading the supervisor first.
+
+```text
+                            ┌──────────────────────────────┐
+   the model's tool calls ──▶│  host/  (the Pi boundary)    │
+   the operator's commands ─▶│  tools · commands · widget   │
+                            │  renderers · push sink       │
+                            └───────────┬──────────────────┘
+                                        │ six functions
+                            ┌───────────▼──────────────────┐
+                            │  application/  Subagents     │
+                            │  the façade; owns no state   │
+                            └───────────┬──────────────────┘
+                                        │ requests / outcomes
+                            ┌───────────▼──────────────────┐
+                            │  runtime/  SubagentSupervisor│
+                            │  admission · Scopes · Runs   │
+                            └──┬─────────────┬─────────────┘
+                               │             │
+              ┌────────────────▼──┐   ┌──────▼───────────────┐
+              │ RunRepository     │   │ ResultStore          │
+              │ the live index    │   │ immutable terminal   │
+              └────────┬──────────┘   └──────┬───────────────┘
+                       │                     │ reads what was stored
+                       │              ┌──────▼───────────────┐
+                       │              │ CompletionDelivery   │
+                       │              │ pending · handed off │
+                       │              │ · exhausted          │
+                       │              └──────┬───────────────┘
+                       │                     │ push
+                       │              ┌──────▼───────────────┐
+                       │              │ SessionPushSink      │
+                       │              │ handed off · lost    │
+                       │              │ after hand-off ·     │
+                       │              │ landed               │
+                       │              └──────┬───────────────┘
+                       │                     ▼
+                       │                the conversation
+                       │
+                       └─▶ presentation/  rows · cards · notices · prose
+                           pure functions over domain projections
+
+              ┌───────────────────────────────────────────────┐
+   beneath    │ backend/  pi · claude · codex                 │
+   the        │ one adapter per provider, behind one contract │
+   supervisor │ provider vocabulary never leaves this tree    │
+              └───────────────────────────────────────────────┘
+
+                 domain/  the meaning everything above shares
+                 ids · phases · observations · projection ·
+                 result · notification · bounds. No machinery.
+```
+
+**Who writes.** The supervisor writes the repository, through the Run's
+reducer, and nothing else does. Settlement writes the store, once per Run.
+Delivery writes neither: it reads the store and releases a pin. The sink
+writes nothing at all — it holds a bounded notice until the notice lands.
+
+**Who reads.** Presentation reads domain projections and never a service.
+The widget reads the repository's published index and the sink's landing
+predicate. `agent_result` reads the store. Delivery reads the store. The
+façade reads the repository for agent names and the supervisor for
+everything else.
+
+**What only the host knows.** Whether a message reached the conversation
+(*landed*), whether a turn was aborted, what the terminal width is, what the
+theme is, and what time it is. Everything below `host/` is told these or does
+without them: the runtime takes a clock, presentation takes a width and a
+theme, and delivery is told nothing about landing at all — which is why it
+has no word for it.
+
+---
+
 ## 1. Ownership is Scope nesting
 
 Four lifetimes, each strictly inside the last:
@@ -260,11 +336,11 @@ wrong and repairing it comes first.
 
 ## 10. The boundary rules
 
-Eighteen rules in `boundaries.test.ts`, each guarding a property somebody could
-otherwise remove with one `import` line. That is the test for whether a rule
-belongs there: not "is this tidy" but "what breaks if this edge exists". The
-table below has sixteen rows because the three adapter-confinement rules say the
-same thing about three adapters.
+Twenty rules in `boundaries.test.ts`, each guarding a property somebody could
+otherwise remove with one `import` line — or, for two of them, with one word.
+That is the test for whether a rule belongs there: not "is this tidy" but
+"what breaks if this edge exists". The table below has eighteen rows because
+the three adapter-confinement rules say the same thing about three adapters.
 
 | Rule | What it guards |
 | --- | --- |
@@ -284,6 +360,8 @@ same thing about three adapters.
 | A child process is spawned in one directory | the one backend that owns an OS process owns all of it |
 | App Server vocabulary stays inside the Codex adapter | the composition root sees a factory, an id, options, and a probe |
 | The widget imports neither the push sink nor delivery | a widget that could push would make two deciders of what the model is told |
+| No inflection of *land* appears in `runtime/delivery.ts` or its test | delivery knows pending, handed off, and exhausted; only the push sink sees `message_start`, so only the sink may say a notice landed |
+| `presentation/notification-text.ts` names only the domain and presentation | narrower than the presentation rule above, which admits Pi's packages: a notice is prose a model reads, so changing what it says provably touches no runtime module |
 
 Two more lanes belong beside them: the **timing lint**, which forbids timers
 everywhere and sleeps in tests that have no test clock, and the **import

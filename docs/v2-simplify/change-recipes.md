@@ -1,6 +1,6 @@
 # Change recipes
 
-**Status:** Current for `2.0.0-rc.2`. Every phase of
+**Status:** Current as of Phase A. Every phase of
 [the simplification roadmap](roadmap.md) updates the recipes it affects, and a
 recipe that names a file that no longer exists is a bug in this document.
 
@@ -31,12 +31,18 @@ what makes them go stale, so each phase gate re-reads them.
 - anything under `runtime/`
 - anything under `backend/`
 - `domain/notification.ts` — wording is not a field
+- `presentation/renderers.ts` — the collapsed summary reads the host payload,
+  field by field, and not the notice's sentence
 
 **Tests** — `npm test` (the goldens); the host smoke lanes if the smoke
 asserts on the text.
 
 **Invariants** — F9 (presentation depends only on projections). The formatter
-takes `RunNotification` and nothing else.
+takes `RunNotification` and nothing else, and since Phase A a boundary rule in
+`boundaries.test.ts` says so: `presentation/notification-text.ts` may import
+only from `domain/` and `presentation/`. So the "must not change" list above is
+enforced rather than advisory — a wording change that reached for a runtime
+module would fail the checker before it failed review.
 
 ---
 
@@ -47,9 +53,10 @@ takes `RunNotification` and nothing else.
 - `domain/notification.ts` — the field and its derivation in
   `toRunNotification`
 - `presentation/notification-text.ts` — if the model reads it
-- `host/notification-message.ts` and `presentation/renderers.ts` — only if
-  the collapsed summary shows it; the summary reads the host payload, not the
-  notice
+- `host/notification-message.ts` — only if the collapsed summary shows it,
+  where the field joins `NotificationDetails`
+- `presentation/renderers.ts` — only then, and only to read the new payload
+  field
 - tests for each
 
 **Must not change**
@@ -59,6 +66,9 @@ takes `RunNotification` and nothing else.
 - `runtime/result-store.ts`, `runtime/supervisor.ts`
 - `domain/result.ts` — unless the field is genuinely new information the
   Result does not hold, in which case this is a different recipe (below)
+- `domain/usage.ts` — the notice carries `NotificationAccounting`, which is
+  the four figures the line prints; a usage figure the line does not print is
+  not a notice field
 
 **Tests** — `npm test`; the notice-shape assertions in
 `presentation/notification-text.test.ts`.
@@ -210,14 +220,19 @@ rows F2 and F3 apply in full. Nothing in this programme does this.
 
 ## Rename a runtime concept
 
-Phase A's `delivered` → `handedOff` is the model.
+Phase A's `delivered` → `handedOff` is the model: the delivery module's state
+set, its accessor, and the local that receives a push result, plus boundary
+rule 20 forbidding any inflection of *land* in `runtime/delivery.ts` and its
+test.
 
 **Expected to change**
 
 - the module that owns the name, and its test
 - `CONTEXT.md`, the glossary entry
 - a boundary rule fencing the old word out of the module, with its negative
-  fixture, when the old word was wrong rather than merely worse
+  fixture, when the old word was wrong rather than merely worse — and a
+  *positive* fixture too, so the rule is shown not to fire on the vocabulary
+  that replaced it
 
 **Must not change**
 
@@ -253,3 +268,35 @@ contention.
 
 **Invariants** — F2, F3, and whichever the mechanism carries (invariant 2 for
 the registry, invariant 12 for admission). No new Effect Layer.
+
+---
+
+## Add or change an operator command
+
+Phase A's `/subagent` namespace is the model.
+
+**Expected to change**
+
+- `host/diagnostics-command.ts` — the `/subagent` namespace root: the shallow
+  status, the subcommand parse, and the report beneath it
+- `host/agents-command.ts` — only if the Profile flow itself changes;
+  `/agents` and `/subagent profiles` both call `openProfilesUi`, so a change
+  to one is a change to both by construction
+- `index.ts` — only when a command is registered or unregistered
+- `docs/v2/compatibility-matrix.md`, the `/agents` section, which is where a
+  command's lifetime is decided
+
+**Must not change**
+
+- `runtime/*` — a command reads the live runtime through `SessionHandle.run`
+  and never installs anything into it
+- `application/*` — a command that called the façade would be a second caller
+  with its own idea of a good brief; `/agents`'s work action sends a *user*
+  message instead
+
+**Tests** — `npm test`; `host/diagnostics-command.test.ts` and
+`host/agents-command.test.ts`.
+
+**Invariants** — F9 for anything the command formats; the rule that a command
+a user knows does not vanish in a release candidate, which is why removals are
+matrix decisions with a named version.

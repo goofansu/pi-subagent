@@ -33,9 +33,32 @@ in `check`, so breaking one is a failing test rather than a review comment.
 12. **Once shutdown begins, new work is rejected**, and shutdown is idempotent.
 13. **Aborting a caller waiting in `agent_wait` stops only that waiter.**
 
+## The simplification rule
+
+**A change is a simplification only if it removes a concept, or a reason for
+unrelated files to change together, without weakening an existing invariant.
+Moving correctness from a test into a comment is not a simplification.**
+
+The rule exists because a simplification is the one kind of change whose
+failure mode is invisible. A feature that breaks an invariant fails a test. A
+simplification that weakens one can pass every test by deleting the test, or
+by moving the property from a check into a comment, and look tidier
+afterwards.
+
+So the reviewer's question on such a change is: **which test enforces this
+property now?** If the answer is a comment, the change is not done. A rename is
+a simplification when its test diff is the rename itself and any new fence; an
+extraction is one when the existing tests pass unmodified, because a test that
+had to change means the behaviour changed.
+
+[The invariant freeze](v2-simplify/freeze.md) is the list of properties this
+applies to and what enforces each today. It is in force for the whole
+simplification programme, and its rows do not lift when the programme ends —
+they are the architecture, and the invariants above carry them.
+
 ## The boundary rules
 
-Eighteen of them, in `extensions/subagent/boundaries.test.ts`. They are listed
+Twenty of them, in `extensions/subagent/boundaries.test.ts`. They are listed
 with what each guards in [the architecture note](architecture.md#10-the-boundary-rules).
 
 **The test for whether a new rule belongs there** is not "is this tidy" but

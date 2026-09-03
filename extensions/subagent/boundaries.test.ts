@@ -1204,7 +1204,24 @@ export function findBoundaryViolations(
     }
   }
 
-  // 19. The notification formatter depends on the domain notice and nothing
+  // 19. Delivery does not say "landed". It knows pending, handed off, and
+  //     exhausted; the Session push sink knows the rest. This is a scan for a
+  //     word rather than an import check because the mistake it prevents is a
+  //     mistake of reading: a `handedOff` set introduced by a comment about
+  //     landing is a set whose next reader treats an accepted push as a notice
+  //     the model has read. The push sink's own `hasLanded`, `landed`,
+  //     `unlanded`, and `onLanding` are correct and are not covered.
+  for (const file of graph.deliveryFiles) {
+    if (!fs.existsSync(file)) continue;
+    const source = fs.readFileSync(file, "utf8");
+    const found = LANDING_VOCABULARY.exec(source);
+    if (!found) continue;
+    violations.add(
+      `${describe(file)} says "${found[0]}", and only the Session push sink may say whether a notice landed`,
+    );
+  }
+
+  // 20. The notification formatter depends on the domain notice and nothing
   //     else. Presentation as a whole may name Pi's packages, because a
   //     widget row has to measure a width and pick a theme colour; the notice
   //     is prose a *model* reads, so it needs neither. Fencing it this
@@ -1228,23 +1245,6 @@ export function findBoundaryViolations(
         `${describe(graph.notificationTextFile)} imports ${target ? describe(target) : specifier}, and notification text depends on the domain notice alone`,
       );
     }
-  }
-
-  // 20. Delivery does not say "landed". It knows pending, handed off, and
-  //     exhausted; the Session push sink knows the rest. This is a scan for a
-  //     word rather than an import check because the mistake it prevents is a
-  //     mistake of reading: a `handedOff` set introduced by a comment about
-  //     landing is a set whose next reader treats an accepted push as a notice
-  //     the model has read. The push sink's own `hasLanded`, `landed`,
-  //     `unlanded`, and `onLanding` are correct and are not covered.
-  for (const file of graph.deliveryFiles) {
-    if (!fs.existsSync(file)) continue;
-    const source = fs.readFileSync(file, "utf8");
-    const found = LANDING_VOCABULARY.exec(source);
-    if (!found) continue;
-    violations.add(
-      `${describe(file)} says "${found[0]}", and only the Session push sink may say whether a notice landed`,
-    );
   }
 
   return [...violations].sort();
