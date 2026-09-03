@@ -8,7 +8,7 @@ import {
   DEMO_RESUMABLE_PROFILE,
   demoAnswer,
 } from "./host/demo-backends.ts";
-import { DIAGNOSTICS_COMMAND_NAME } from "./host/diagnostics-command.ts";
+import { SUBAGENT_COMMAND_NAME } from "./host/diagnostics-command.ts";
 import { NOTIFICATION_MESSAGE_TYPE } from "./host/notification-message.ts";
 import { SUBAGENT_TOOL_NAMES } from "./host/tools.ts";
 import subagentV2Extension, { installSubagentV2 } from "./index.ts";
@@ -38,7 +38,7 @@ test("the entry point registers the six tools, both commands, and the notificati
   );
   assert.deepEqual(
     host.commands().map((command) => command.name),
-    [AGENTS_COMMAND_NAME, DIAGNOSTICS_COMMAND_NAME],
+    [AGENTS_COMMAND_NAME, SUBAGENT_COMMAND_NAME],
   );
   assert.deepEqual(host.renderers(), [NOTIFICATION_MESSAGE_TYPE]);
 });

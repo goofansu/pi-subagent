@@ -259,12 +259,18 @@ the row label says which property it is.
 
 ## `/agents`
 
-Lists loaded Profiles and opens their prompts.
+Lists loaded Profiles and opens their prompts. Since Phase A of the
+simplification programme it is an **alias**: the operator surface is one
+namespace under `/subagent`, and
+[notification semantics §8](../v2-simplify/notification-semantics.md#8-what-this-document-deliberately-does-not-decide)
+records the decision.
 
 | | Pi | Claude | Codex |
 | --- | --- | --- | --- |
 | **Expected outcome** | Lists each Profile by name and description, whatever backend it names; the list carries no backend-specific field. Selecting one shows its prompt and offers the work action. | Identical. | Identical. |
 | **No Profiles** | Says where to add one, naming the agents directory, and opens no selector. | Same. | Same. |
+| **Also reachable as** | `/subagent profiles`, which opens the same flow rather than a copy of it. `/agents` keeps working unchanged through 2.0 and is **removed in the first minor after 2.0**; a command a user knows does not vanish in a release candidate. | Same. | Same. |
+| **`/subagent` itself** | A shallow status — Profile count, Run counts in the shared phase vocabulary, runtime health, one line per Profile with its backend, and the two subcommands. The counters and probes it used to print are `/subagent diagnostics`, unchanged. | Same. | Same. |
 
 
 **Proven by.** A property only one backend has shows a dash for the others;
@@ -272,6 +278,7 @@ the row label says which property it is.
 
 | Property | Pi | Claude | Codex |
 | --- | --- | --- | --- |
+| **the alias and the namespace** | `/subagent profiles opens the same flow /agents opens`, `bare /subagent prints the shallow status and no counters`, `/subagent diagnostics` covered by `the report names every runtime counter and every probe field`, and `an unknown subcommand names the two that exist` (`host/diagnostics-command.test.ts`); `the agents command registers itself once, with a description` (`host/agents-command.test.ts`, unmodified) | Same. | Same. |
 | **every row** | Backend-independent: `the list holds one item per Profile, by name and description` and `the list is identical whatever backend a Profile names` (`host/agents-command.test.ts`). The Pi set supplies no Profiles of its own: `the Pi set supplies one backend and no Profiles of its own` (`host/inert-guard.test.ts`) | Backend-independent: `the list is identical whatever backend a Profile names` (`host/agents-command.test.ts`). The production set supplies no Profiles of its own: `the production set offers all three backends and no Profiles of its own` (`host/production-backends.test.ts`) | Backend-independent: `the list is identical whatever backend a Profile names` (`host/agents-command.test.ts`). The production set supplies no Profiles of its own: `the production set offers all three backends and no Profiles of its own` (`host/production-backends.test.ts`) |
 
 ## Active widget

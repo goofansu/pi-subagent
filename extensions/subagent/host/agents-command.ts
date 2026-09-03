@@ -532,10 +532,98 @@ async function openAgentDetail(
 }
 
 /**
+ * Open the Profile list, or say where to put a Profile when there are none.
+ *
+ * Exported so that `/subagent profiles` and `/agents` are the same flow and
+ * not two copies of it. A second copy is how a user ends up with one entry
+ * point that filters and one that does not.
+ *
+ * `profiles` is read at call time rather than captured, because the commands
+ * register once per process and the catalog belongs to whichever Session is
+ * live.
+ */
+export async function openProfilesUi(
+  pi: Pick<ExtensionAPI, "sendUserMessage">,
+  profiles: () => readonly Profile[],
+  agentsDir: string,
+  ctx: ExtensionCommandContext,
+): Promise<void> {
+  const loaded = profiles();
+  const items = getAgentSelectItems(loaded);
+  if (items.length === 0) {
+    ctx.ui.notify(formatNoAgentsMessage(agentsDir), "info");
+    return;
+  }
+  const byName = new Map(
+    loaded.map((profile) => [profile.name, profile] as const),
+  );
+
+  await ctx.ui.custom<void>((rootTui, theme, keybindings, done) => {
+    interface ActiveComponent {
+      render(width: number): string[];
+      invalidate(): void;
+      handleInput?(data: string): void;
+    }
+
+    let activeComponent: ActiveComponent;
+
+    const setActiveComponent = (component: ActiveComponent): void => {
+      activeComponent = component;
+      rootTui.requestRender();
+    };
+
+    const openActionMenu = (profile: Profile): void => {
+      setActiveComponent(
+        new AgentActionMenuComponent(
+          theme,
+          profile,
+          async (action) => {
+            if (action === "view") {
+              await openAgentDetail(ctx, profile);
+              rootTui.requestRender();
+              return;
+            }
+            const task = await ctx.ui.editor(
+              `What task should ${profile.name} handle?`,
+            );
+            await runAgentWorkFlow(pi, ctx, profile, task, () =>
+              done(undefined),
+            );
+          },
+          () => setActiveComponent(agentList),
+        ),
+      );
+    };
+
+    const agentList = new AgentsListComponent(
+      theme,
+      items,
+      (agentName) => {
+        const profile = byName.get(agentName);
+        if (profile) openActionMenu(profile);
+      },
+      () => done(undefined),
+      keybindings,
+      () => rootTui.requestRender(),
+    );
+
+    activeComponent = agentList;
+
+    return {
+      render: (width: number) => activeComponent.render(width),
+      invalidate: () => activeComponent.invalidate(),
+      handleInput: (data: string) => activeComponent.handleInput?.(data),
+    };
+  });
+}
+
+/**
  * Register `/agents` once per process.
  *
- * `profiles` is read at handler time rather than captured, because the command
- * registers once and the catalog belongs to whichever Session is live.
+ * Kept through 2.0 as an alias for `/subagent profiles`, and it opens the same
+ * flow rather than a copy of it. The compatibility matrix's `/agents` row says
+ * when the alias goes: the first minor after 2.0. A command a user knows does
+ * not vanish in a release candidate.
  */
 export function registerAgentsCommand(
   pi: Pick<ExtensionAPI, "registerCommand" | "sendUserMessage">,
@@ -544,74 +632,6 @@ export function registerAgentsCommand(
 ): void {
   pi.registerCommand(AGENTS_COMMAND_NAME, {
     description: "List loaded subagents and view their prompts.",
-    handler: async (_args, ctx) => {
-      const loaded = profiles();
-      const items = getAgentSelectItems(loaded);
-      if (items.length === 0) {
-        ctx.ui.notify(formatNoAgentsMessage(agentsDir), "info");
-        return;
-      }
-      const byName = new Map(
-        loaded.map((profile) => [profile.name, profile] as const),
-      );
-
-      await ctx.ui.custom<void>((rootTui, theme, keybindings, done) => {
-        interface ActiveComponent {
-          render(width: number): string[];
-          invalidate(): void;
-          handleInput?(data: string): void;
-        }
-
-        let activeComponent: ActiveComponent;
-
-        const setActiveComponent = (component: ActiveComponent): void => {
-          activeComponent = component;
-          rootTui.requestRender();
-        };
-
-        const openActionMenu = (profile: Profile): void => {
-          setActiveComponent(
-            new AgentActionMenuComponent(
-              theme,
-              profile,
-              async (action) => {
-                if (action === "view") {
-                  await openAgentDetail(ctx, profile);
-                  rootTui.requestRender();
-                  return;
-                }
-                const task = await ctx.ui.editor(
-                  `What task should ${profile.name} handle?`,
-                );
-                await runAgentWorkFlow(pi, ctx, profile, task, () =>
-                  done(undefined),
-                );
-              },
-              () => setActiveComponent(agentList),
-            ),
-          );
-        };
-
-        const agentList = new AgentsListComponent(
-          theme,
-          items,
-          (agentName) => {
-            const profile = byName.get(agentName);
-            if (profile) openActionMenu(profile);
-          },
-          () => done(undefined),
-          keybindings,
-          () => rootTui.requestRender(),
-        );
-
-        activeComponent = agentList;
-
-        return {
-          render: (width: number) => activeComponent.render(width),
-          invalidate: () => activeComponent.invalidate(),
-          handleInput: (data: string) => activeComponent.handleInput?.(data),
-        };
-      });
-    },
+    handler: (_args, ctx) => openProfilesUi(pi, profiles, agentsDir, ctx),
   });
 }

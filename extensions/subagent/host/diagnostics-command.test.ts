@@ -2,41 +2,57 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createClaudeProbeCounters } from "../backend/claude/index.ts";
 import { createPiProbeCounters } from "../backend/pi/index.ts";
+import { backendId } from "../domain/index.ts";
 import { createRuntimeCounters } from "../runtime/counters.ts";
 import { hostRig } from "../testing/host-rig.ts";
+import { fixtureRow } from "../testing/presentation-fixtures.ts";
+import { AGENTS_COMMAND_NAME } from "./agents-command.ts";
 import {
-  DIAGNOSTICS_COMMAND_NAME,
+  formatRuntimeHealth,
   formatSessionDiagnostics,
+  formatSubagentStatus,
+  formatUnknownSubcommand,
   NO_LIVE_SESSION,
+  SUBAGENT_COMMAND_NAME,
 } from "./diagnostics-command.ts";
 
 /**
- * The one command dogfood needs.
+ * The operator namespace, and the one report dogfood needs beneath it.
  *
- * What makes it worth having is that it reports *every* field, zeroes
+ * What makes the report worth having is that it names *every* field, zeroes
  * included: a diagnostics command that hid its zeroes would make "is this
  * counter even wired up" unanswerable, which is the question a maintainer
  * actually has when a number they expected to move has not moved.
+ *
+ * What makes bare `/subagent` worth having is the opposite: it is the one
+ * place to start, so it says four things and points deeper.
  */
 
 /** Run the command's handler the way the host would, and read what it said. */
-async function report(
+async function say(
   rig: ReturnType<typeof hostRig>,
+  args = "",
 ): Promise<readonly string[]> {
   const command = rig.host
     .commands()
-    .find((entry) => entry.name === DIAGNOSTICS_COMMAND_NAME);
-  assert.ok(command, "the diagnostics command was not registered");
+    .find((entry) => entry.name === SUBAGENT_COMMAND_NAME);
+  assert.ok(command, "the subagent command was not registered");
   const said: string[] = [];
-  await command.handler("", {
+  await command.handler(args, {
     ui: {
       notify: (message: string) => {
         said.push(message);
       },
+      custom: async () => {},
+      editor: async () => undefined,
     },
+    waitForIdle: async () => {},
   } as never);
   return said;
 }
+
+/** `/subagent diagnostics`: the report bare `/subagent` used to print. */
+const report = (rig: ReturnType<typeof hostRig>) => say(rig, "diagnostics");
 
 test("the report names every runtime counter and every probe field", async (t) => {
   const rig = hostRig(t);
@@ -57,12 +73,183 @@ test("the report names every runtime counter and every probe field", async (t) =
   assert.match(text, /Runtime probe:/);
 });
 
-test("between Sessions the command says there is nothing to report", async (t) => {
+test("between Sessions the report says there is nothing to report", async (t) => {
   const rig = hostRig(t);
 
   const [text] = await report(rig);
 
   assert.equal(text, NO_LIVE_SESSION);
+});
+
+// -- The shallow status ------------------------------------------------------
+
+test("C-1: bare /subagent prints the shallow status and no counters", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const [text] = await say(rig);
+
+  assert.match(text, /^Subagents: \d+ Profiles? · no Runs$/m);
+  assert.match(text, /^Runtime: healthy · \d+ held$/m);
+  assert.match(text, /^\/subagent profiles — /m);
+  assert.match(text, /^\/subagent diagnostics — /m);
+  // The counters are one level down, and a status that printed them would be
+  // the command this one replaced.
+  for (const counter of Object.keys(createRuntimeCounters().counters())) {
+    assert.doesNotMatch(text, new RegExp(`\\b${counter}\\b`), counter);
+  }
+});
+
+test("C-1: the status names every Profile with the backend it names", () => {
+  assert.equal(
+    formatSubagentStatus({
+      session: { runs: [], counters: {}, probe: {} },
+      profiles: [
+        {
+          name: "explore",
+          description: "The explore specialist",
+          backend: backendId("pi"),
+          fields: {},
+          systemPrompt: "Explore.",
+        },
+        {
+          name: "reviewer",
+          description: "The reviewer",
+          backend: backendId("claude"),
+          fields: {},
+          systemPrompt: "Review.",
+        },
+      ],
+      agentsDir: "/agents",
+    }),
+    [
+      "Subagents: 2 Profiles · no Runs",
+      "Runtime: healthy · 0 held",
+      "",
+      "  explore   pi",
+      "  reviewer  claude",
+      "",
+      "/subagent profiles — list Profiles and read their prompts",
+      "/subagent diagnostics — runtime counters and cleanup probes",
+    ].join("\n"),
+  );
+});
+
+test("C-1: the status counts Runs in the shared phase vocabulary", () => {
+  const text = formatSubagentStatus({
+    session: {
+      runs: [
+        fixtureRow({ phase: "running" }),
+        fixtureRow({ phase: "completed" }),
+        fixtureRow({ phase: "completed" }),
+        fixtureRow({ phase: "failed" }),
+      ],
+      counters: {},
+      probe: {},
+    },
+    profiles: [],
+    agentsDir: "/agents",
+  });
+
+  assert.match(text, /1 running, 2 completed, 1 failed/);
+});
+
+test("a Session with no Profiles still says where to put one", () => {
+  assert.match(
+    formatSubagentStatus({
+      session: { runs: [], counters: {}, probe: {} },
+      profiles: [],
+      agentsDir: "/home/someone/.pi/agents",
+    }),
+    /Subagents: no Profiles · no Runs[\s\S]*Add a Profile to \/home\/someone\/\.pi\/agents\./,
+  );
+});
+
+test("a Session with no runtime says so and still says where to put a Profile", async (t) => {
+  const rig = hostRig(t);
+
+  const [text] = await say(rig);
+
+  assert.match(text, /^No subagent Session is running\.$/m);
+  assert.match(text, /Add a Profile to /);
+  assert.match(text, /^\/subagent profiles — /m);
+});
+
+test("health is a verdict on what was noticed and a count of what is held", () => {
+  assert.equal(
+    formatRuntimeHealth({ runs: [], counters: {}, probe: {} }),
+    "Runtime: healthy · 0 held",
+  );
+  // What a live Session holds is held on purpose — a fiber per Run and a
+  // repository subscription for the widget — so it is reported and not judged.
+  assert.equal(
+    formatRuntimeHealth({
+      runs: [fixtureRow({ phase: "running" })],
+      counters: {},
+      probe: { liveRunFibers: 1, repositorySubscriptions: 1 },
+    }),
+    "Runtime: healthy · 2 held",
+  );
+  assert.equal(
+    formatRuntimeHealth({
+      runs: [],
+      counters: { lateEvents: 2, queueOverflows: 1 },
+      probe: { liveRunFibers: 1 },
+    }),
+    "Runtime: 3 counted · 1 held — /subagent diagnostics",
+  );
+});
+
+// -- The namespace ----------------------------------------------------------
+
+test("C-2: /subagent profiles opens the same flow /agents opens", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const commands = rig.host.commands().map((entry) => entry.name);
+  assert.ok(commands.includes(AGENTS_COMMAND_NAME));
+  assert.ok(commands.includes(SUBAGENT_COMMAND_NAME));
+
+  // Both entry points reach the same flow, so both open the Profile selector
+  // rather than one of them notifying and the other opening.
+  let selectors = 0;
+  const notices: string[] = [];
+  const ctx = {
+    ui: {
+      notify: (message: string) => void notices.push(message),
+      custom: async () => {
+        selectors += 1;
+      },
+      editor: async () => undefined,
+    },
+    waitForIdle: async () => {},
+  } as never;
+  for (const [name, args] of [
+    [AGENTS_COMMAND_NAME, ""],
+    [SUBAGENT_COMMAND_NAME, "profiles"],
+  ] as const) {
+    const command = rig.host.commands().find((entry) => entry.name === name);
+    await command?.handler(args, ctx);
+  }
+
+  assert.equal(selectors, 2);
+  assert.deepEqual(notices, []);
+});
+
+test("an unknown subcommand names the two that exist", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  assert.deepEqual(await say(rig, "counters"), [
+    formatUnknownSubcommand("counters"),
+  ]);
+  assert.equal(
+    formatUnknownSubcommand("counters"),
+    '/subagent has no "counters". Try /subagent profiles or /subagent diagnostics.',
+  );
 });
 
 test("every backend's probe is reported beside the runtime's own, one block each", () => {

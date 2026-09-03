@@ -5,7 +5,7 @@ import {
 import type { Profile } from "./domain/index.ts";
 import { registerAgentsCommand } from "./host/agents-command.ts";
 import type { AdapterProbe } from "./host/diagnostics-command.ts";
-import { registerDiagnosticsCommand } from "./host/diagnostics-command.ts";
+import { registerSubagentCommand } from "./host/diagnostics-command.ts";
 import {
   NOTIFICATION_MESSAGE_TYPE,
   renderNotificationMessage,
@@ -147,9 +147,18 @@ export function installSubagentV2(
     now: options.now ?? (() => Date.now()),
   };
 
+  const agentsDir = profilesDir(options.agentDir);
   registerSubagentTools(pi, handle, agentGuidelines, hostFacts.childDepth);
-  registerAgentsCommand(pi, () => profiles, profilesDir(options.agentDir));
-  registerDiagnosticsCommand(pi, handle, () => options.probe?.());
+  // Two entry points, one flow. `/agents` is the alias the compatibility
+  // matrix keeps through 2.0; `/subagent` is the namespace.
+  registerAgentsCommand(pi, () => profiles, agentsDir);
+  registerSubagentCommand(
+    pi,
+    handle,
+    () => options.probe?.(),
+    () => profiles,
+    agentsDir,
+  );
   pi.registerMessageRenderer(
     NOTIFICATION_MESSAGE_TYPE,
     renderNotificationMessage,
