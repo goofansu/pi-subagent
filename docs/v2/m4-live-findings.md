@@ -7,9 +7,9 @@ the extension was switched on as the daily driver and poked at by hand — plus,
 because it turned out to matter more than the findings themselves, how each one
 was actually established.
 
-The short version: the adapter and the runtime behaved. Both defects were in
-the parts *around* them — an id sequence and a widget policy — and neither was
-reachable by the tests that exist, for reasons worth recording.
+The short version: the adapter and the runtime behaved. Every defect was in the
+parts *around* them — id allocation and a widget policy — and none was reachable
+by the tests that exist, for reasons worth recording.
 
 ---
 
@@ -83,6 +83,61 @@ Left open deliberately, with the fix described in
 [the soak record](soak.md#the-widgets-row-lifetime-2026-09-03-severity-3): keep
 a terminal Run's row until its notification has landed, which the Session push
 sink already tracks.
+
+## 3. Ids restart at 1 on a session reload, and the transcript does not
+
+**Severity 1 — a wrong answer presented as right. Open, needs a decision.**
+
+Resuming a Pi session starts a new process, a new Session runtime, and a new
+`RunRepository` — so Run and Subagent ids begin again at 1. **That much is
+intended**, and the compatibility matrix says so twice: *"Local Subagent and Run
+identity sets are forgotten at the Session boundary"* and *"After Session
+shutdown — Nothing is retrievable: Results belong to the Session that asked."*
+The Subagents, their retained Pi sessions, and their stored Results all die with
+the process; ids that outlived them would point at nothing.
+
+What is **not** intended is the consequence. The conversation transcript
+survives the reload and the ids do not, so an id written before the reload can
+be handed to a *different* Run after it. Two cases, and only the first is safe:
+
+- **Before a new Run has taken the id**, a stale reference is reported as
+  unknown. Honest, and observed in a real session: `agent_resume subagent-1`
+  after a reload answered *"Cannot resume subagent subagent-1: unknown
+  Subagent."*
+- **After a new Run has taken the id**, the stale reference silently resolves
+  to the wrong Run. Demonstrated through the host rig, one process, two
+  Sessions:
+
+  ```
+  first run id : run-1        # Session A, brief "one"
+  second run id: run-1        # Session B after the reload, brief "two"
+  stale lookup : explore (subagent subagent-1), run run-1: two · pi · completed
+  ```
+
+  Asking for the first Session's `run-1` returned the second Session's Run —
+  note the brief reads `two`. Nothing in the answer says it is a different Run.
+
+**Why it is likely rather than theoretical.** The completion notice this
+extension writes into the conversation says *"Use agent_result with id run-1 to
+retrieve the full result."* That sentence survives the reload, so the transcript
+actively invites the model to use an id that has since been reassigned. The
+attractor is our own prose.
+
+**It is a v1 regression.** v1 minted `run-${crypto.randomUUID().slice(0, 8)}`,
+random per Run, so a stale id after a reload was always unknown and never
+silently wrong. v2's sequential ids made the collision certain rather than
+impossible — readable ids bought at the cost of a correctness property nobody
+noticed was there.
+
+**The fix, and the trade-off.** Give each Session runtime a short random nonce
+and mint `run-<nonce>-1`, `run-<nonce>-2`. Sequence and readability survive
+within a Session; collisions across a reload do not. The change is contained in
+the allocator. The cost is that ids stop being as short and as pleasant to type
+as `run-1`, which is a real loss for a single-user tool where the hazard needs
+a model to re-read an old part of the transcript.
+
+Left open deliberately: unlike the shared-counter defect above, this is a
+trade-off rather than a mistake, and the id format is read constantly.
 
 ---
 

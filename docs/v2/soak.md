@@ -99,6 +99,7 @@ which records how each of these was established and the testing gap they sat in.
 | Found | Severity | What happens | Status |
 | --- | --- | --- | --- |
 | 2026-09-03 | 3 | The first Run of every Session was `run-2`: one sequence counter was shared by the Run and Subagent allocators, so `start` gave the Subagent 1 and its Run 2. Fixed — each kind is numbered from one. | Fixed |
+| 2026-09-03 | 1 | Ids restart at 1 when a session is reloaded, but the transcript keeps the old ones — so a pre-reload `run-1` silently resolves to a different Run once a new one takes the id. Our own completion notice invites exactly that. v1's random ids could not collide. | Open — trade-off, see [the findings](m4-live-findings.md#3-ids-restart-at-1-on-a-session-reload-and-the-transcript-does-not) |
 | 2026-09-03 | 3 | The widget drops a Run's row the moment the Run settles, where v1 keeps it until the Run's completion notification lands. For anything but a long Run the widget appears and disappears before it is read, so v2 reads as having no widget at all. | Open — see below |
 
 ### The widget's row lifetime (2026-09-03, severity 3)
