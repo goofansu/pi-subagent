@@ -29,9 +29,9 @@ parity target.
 **Everything else is out.** No new features, no new tools or commands, no new
 backends, no performance work, no refactors for their own sake, no dependency
 upgrades that are not part of a critical fix, and no adoption of Effect anywhere
-in v1 — the last of these is enforced by
-`extensions/subagent-v2/boundaries.test.ts`, which fails if any v1 module
-imports `effect`, and equally if any v1 module imports the v2 tree.
+in v1 — the last of these was enforced by two rules in
+`extensions/subagent-v2/boundaries.test.ts`, which failed if any v1 module
+imported `effect` or the v2 tree. Both rules went with v1; see "The deletion".
 
 If you are unsure whether a change qualifies, the test is: *would a user notice
 if this were not made?* If no, it belongs in v2.
@@ -115,7 +115,7 @@ the cutover gate.
 
 ## The deletion
 
-**Deleted at:** `PENDING` (`chore: delete v1, its lanes, its scripts, its
+**Deleted at:** `4e67a2ef6259cd3f5a82efeec7db1350ef0542cb` (`chore: delete v1, its lanes, its scripts, its
 dependency, and the fallback switch`)
 
 That commit removed the v1 extension tree, its four live smoke scripts and their
@@ -133,7 +133,7 @@ What survived the deletion, and why:
   same, re-pointed at the v2 gate's marker and evidence during M7 ticket 02;
 - **the neutral import tooling** (`tools/import-specifiers.ts`) — repository
   tooling that belonged to neither tree, which is why M0 moved it there;
-- **the boundary test's fifteen surviving rules**, and the vocabulary ban on the
+- **the boundary test's eighteen surviving rules**, and the vocabulary ban on the
   extension tree, whose job changed from keeping v1's word out of v2 to keeping
   the product's vocabulary singular.
 
