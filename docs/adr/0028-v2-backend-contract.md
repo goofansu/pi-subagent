@@ -4,9 +4,26 @@ Date: 2026-09-02
 
 ## Status
 
-Accepted for the v2 tree. Written at milestone M1, before any real adapter
-exists, so that the adapters at M4 through M6 implement a decided contract
-rather than negotiating one.
+**Stable** as of milestone M4 (2026-09-03). Accepted for the v2 tree at M1 and
+written before any real adapter existed, so that the adapters at M4 through M6
+would implement a decided contract rather than negotiate one.
+
+Marking it stable is the roadmap's program-level health signal, and it is a
+measurement rather than a decision: the first real backend was ported without
+changing the contract at all. Not one member of `Backend`, `BackendAgent`,
+`BackendCapabilities`, `RunInput`, `ExecutionIO`, `ControlFeed`, or
+`TerminalBundle` was added, removed, or re-typed to accommodate Pi, and the
+shape test that lists the members is unchanged. The four changes M4 did make
+outside the Pi adapter are enumerated and classified in
+[the M4 exit gate](../v2/m4-exit-gate.md#13-every-change-m4-made-outside-the-pi-adapter-directory);
+all four are missing provider-neutral semantics with fake-backend proofs, and
+none is provider leakage.
+
+Stable means a change here is now a decision with a cost rather than a detail.
+If Claude at M5 or Codex at M6 needs one, the roadmap's rule applies: it is an
+exit-gate finding to be classified before it is made, and a contract that
+changes for each backend is the signal to pause the port and repair the
+abstraction.
 
 Carries forward:
 

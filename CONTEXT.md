@@ -334,6 +334,13 @@ ADR-0024's no-provider-vocabulary rule is enforced rather than merely stated:
 an unlisted key at any depth is a rejection, not a silent strip.
 [ADR-0029](docs/adr/0029-v2-effect-schema.md).
 
+**Transcript item role** — `user`, `assistant`, or `tool`. A `tool` item is the
+result of a native tool call, reported as its own item rather than folded into
+the assistant message that asked for it: attributing a tool's output to the
+model would make the Run look as though it had said it. Only an `assistant`
+item is an answer, which is why the final output is taken from those alone.
+Added at M4, because every backend that runs tools produces tool results.
+
 **Projection** — what a Run looks like after its observations have been folded:
 transcript, tools, diagnostics, links, usage, activity, model, final output,
 and a truncation record. Every list and every text in it is bounded. The pure
@@ -458,8 +465,9 @@ could reach one mutable Run record, no single place knew what a Run looked like.
 A Session is built from exactly one. The **demo backend set** is M3's: the two
 fake backends and one **demo Profile** per fake, merged under whatever the user
 directory holds, so launching Pi with only the v2 entry point gives a working
-extension with nothing to configure. M4 replaces the set with one containing
-the real Pi backend, and the demo Profiles go with it.
+extension with nothing to configure. M4 replaced it in the entry point with the
+Pi set; the demo set stays in the tree because a host test needs a
+deterministic backend, and nothing ships it.
 
 **Session push sink** — the `NotificationSink` implementation that pushes a
 completion Notification into a live Pi Session as a follow-up message that
@@ -479,10 +487,58 @@ pin on a successful push.
 **RunCard** — the pure presentation of one Run, built from a published index row
 (live, and therefore carrying no output) or from an immutable stored Result
 (terminal, and therefore carrying everything). It is where Run presentation
-grows: M3 gives it identity, status, duration, accounting, and the final output,
-and M4 adds the recent transcript, tools, diagnostics, and native links. Having
-one place for that is what stops four renderers each assembling the same fields
-in a slightly different order.
+grows: M3 gave it identity, status, duration, accounting, and the final output,
+and M4 added the recent transcript, the tools with their statuses, the context
+gauge, diagnostics, links, and the truncation record. Having one place for that
+is what stops four renderers each assembling the same fields in a slightly
+different order. Every expanded section is omitted when it is empty: a Run that
+used no tools has nothing to say about tools rather than zero of them.
+
+**Pi adapter** — everything v2 knows about Pi, in `backend/pi/`. The SDK's
+session symbols, its message and event shapes, the resource loader, the
+child-load discriminator, and the depth environment variable all stop there,
+and the boundary test enforces it in both directions: nothing outside names a
+Pi session symbol, and nothing outside the composition root imports the
+directory at all. The adapter does not know the runtime, the host, or
+presentation exist.
+
+**Backend set** — the value a Session is built from: a name, the backends that
+exist, the Profiles they ship, and two host facts only a backend can answer —
+whether this process is loading as one of its own children, and how deep in a
+delegation chain it is. The demo set (two fakes, two Profiles, never a child)
+is what host tests use; the Pi set (one backend, no Profiles) is what ships.
+
+**Child-load discriminator** — the `AsyncLocalStorage` flag that says "this
+resource load belongs to a child". Pi initializes an extension's factory while
+the loader discovers resources and applies the extensions filter only
+afterwards, so the filter alone would not stop a child from registering the
+delegation tools; the flag covers that window. Shared with v1 through a global
+symbol, so whichever entry point a child reaches reads a true answer.
+
+**Child depth** — how deep in a delegation chain a process is, carried in the
+`PI_SUBAGENT_DEPTH` environment variable that a Bash spawn's own environment
+gains. Zero in a parent. The entry point registers nothing above zero, and
+admission refuses a Run past `DEFAULT_MAX_DELEGATION_DEPTH`, which is one:
+delegation is one level deep.
+
+**Native probe** — what an adapter is still holding, counted: for Pi, open
+native sessions, live event subscriptions, and native cleanups in flight.
+Deliberately outside the backend contract — a probe on the contract would be a
+field every adapter had to invent something for, and a number the core could
+start believing. It sits beside the runtime's own probe in `/subagent-v2`, and
+both must read zero once a Session has closed.
+
+**Callback bridge** — the buffer between Pi's synchronous event listener, which
+cannot wait, and the observation intake, which applies backpressure. It never
+drops: a buffer that fills fails the Run out loud with the backend module's two
+overflow observations, because a Run that quietly lost half its transcript is
+indistinguishable from one that had nothing more to say.
+
+**Dogfood switch** — the local, reversible change that makes v2 what plain `pi`
+loads: this package's entry in Pi's settings gains an empty `extensions` list,
+disabling its v1 extension alone, and the v2 entry point is added to the
+settings' extension paths. `make dogfood-v2` and `make dogfood-v1`. The
+published manifest still exposes only v1 until M7.
 
 **AgentHarness** — reserved for Pi's own native abstraction. v2 never uses it
 for anything of ours.

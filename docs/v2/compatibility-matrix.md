@@ -209,3 +209,79 @@ deliberately differ from v1:
 | `agent_steer` | `queue full` → `mailbox full`; `not steerable` → `mailbox closed` | [operation semantics §7](operation-semantics.md#7-a-full-control-mailbox-returns-an-immediate-typed-outcome) |
 | `agent_result` | Evicted output becomes a typed `ResultExpired` outcome | [operation semantics §8](operation-semantics.md#8-an-evicted-result-returns-a-distinct-typed-outcome) |
 | Profile loading | `harness:` → `backend:` by documented migration | [ADR-0022](../adr/0022-v2-terminology-and-backend-field.md), [migration note](profile-backend-field-migration.md) |
+
+---
+
+## The Pi column, proven in v2
+
+**Added at M4.** The tables above cite v1 tests, because they were written when
+v1 was the only implementation. This table adds the second half the exit gate
+asks for: one v2 proof per Pi row, so "Pi parity" is a thing that has been
+measured rather than a thing that was intended.
+
+Three kinds of citation appear, and the difference matters:
+
+- **conformance** — `PiBackend conformance: <scenario>`, registered by
+  [`testing/conformance-pi.test.ts`](../../extensions/subagent-v2/testing/conformance-pi.test.ts).
+  These run the *shared* suite against the real adapter with a scriptable
+  stand-in session behind it, so a pass means the seam behaves, not that a
+  Pi-shaped test was written to agree with a Pi-shaped adapter.
+- **a named v2 test**, with the file it lives in.
+- **live**, meaning one of the two opt-in gates: `npm run v2:pi:smoke` for the
+  runtime lane and `npm run v2:pi:host-smoke` for the host lane.
+
+Rows already proven at M3 cite those tests, because a backend-independent
+behaviour proven against the fakes at M3 is proven for Pi too — what M4 adds
+there is that the Pi backend is what the Session was actually running.
+
+| Row | v2 proof for Pi |
+| --- | --- |
+| `agent_start` — expected outcome | `PiBackend conformance: open-creates-no-run`; `agent_start returns a Subagent id and a first Run id a model can act on` (`host/tools.test.ts`); live (`v2:pi:smoke`, `v2:pi:host-smoke`) |
+| `agent_start` — unknown agent | `agent_start refuses an unknown agent and names the ones that exist` (`host/tools.test.ts`) |
+| `agent_start` — nested delegation | `a start already at the maximum depth is refused by admission`; `a process the backend set reports as nested registers nothing at all`; `a process the backend set calls a child registers nothing at all` (`host/inert-guard.test.ts`) |
+| `agent_start` — at capacity | `PiBackend conformance: capacity-rejection-is-immediate` |
+| `agent_resume` — expected outcome | `PiBackend conformance: resume-or-honest-refusal`; `a cancelled Run leaves the session resumable on the same conversation` (`testing/pi/pi-backend.test.ts`); live (`v2:pi:smoke`) |
+| `agent_resume` — already running | `PiBackend conformance: one-active-run-per-subagent` |
+| `agent_resume` — unknown Subagent id | `agent_resume tells an unknown Subagent from a Run id` (`host/tools.test.ts`) |
+| `agent_resume` — `unsupported` | Not reachable for Pi, which declares resume: `a Profile with no backend field runs on Pi, which declares all three capabilities` (`testing/pi/pi-backend.test.ts`). The outcome itself is proven by the one-shot fake: `the one-shot backend proves resume unsupported at the surface` (`host/tools.test.ts`) |
+| `agent_resume` — Conversation loss | `admitResume answers from the adapter's own state, with no native call`; `a disposed Pi session is refused by the adapter, not by the SDK` (`testing/pi/pi-backend.test.ts`) |
+| `agent_resume` — during shutdown | `PiBackend conformance: shutdown-rejects-new-work`; live (`v2:pi:smoke`, "shutdown refuses new work") |
+| `agent_steer` — expected outcome | `PiBackend conformance: steering-admission-follows-the-declared-capability`, `controls-are-delivered-serially-in-order`, `a-user-observation-appears-only-on-confirmation`; live (`v2:pi:smoke`, "steering reaches the answer") |
+| `agent_steer` — `unsupported` | Not reachable for Pi. Proven by the one-shot fake: `the one-shot backend proves unsupported steering at the surface` (`host/tools.test.ts`) |
+| `agent_steer` — mailbox full | `PiBackend conformance: a-full-mailbox-answers-immediately` |
+| `agent_steer` — mailbox closed | `PiBackend conformance: a-closed-mailbox-refuses-after-cancel` |
+| `agent_steer` — terminal Run | `agent_steer names a terminal Run's status rather than calling it unknown` (`host/tools.test.ts`) |
+| `agent_steer` — invalid text | `agent_steer rejects empty guidance before it looks the Run up` (`host/tools.test.ts`) |
+| `agent_steer` — unknown Run id | `agent_steer names a terminal Run's status rather than calling it unknown` (`host/tools.test.ts`) |
+| `agent_steer` — delivery failure is diagnostic-only | `a native steer that rejects is a control diagnostic and no user message` (`testing/pi/pi-backend.test.ts`) |
+| `agent_cancel` — expected outcome | `PiBackend conformance: cancellation-terminates-with-partial-output`; `a stalled native steer does not delay a cancel` (`testing/pi/pi-backend.test.ts`); live (`v2:pi:smoke`) |
+| `agent_cancel` — terminal answer then abort | `PiBackend conformance: exactly-one-ending-wins`; `a terminal answer observed before the abort settles answered` (`testing/pi/pi-backend.test.ts`) |
+| `agent_cancel` — repeated cancel | `a repeated agent_cancel is idempotent and the first request stands` (`host/tools.test.ts`) |
+| `agent_cancel` — already terminal / unknown Run id | `agent_cancel tells a finished Run from an id that never existed` (`host/tools.test.ts`) |
+| `agent_cancel` — request vs. terminal | `agent_cancel reports request admission, not terminal cancellation` (`host/tools.test.ts`) |
+| `agent_wait` — every row | Backend-independent, as the matrix says: `PiBackend conformance: wait-and-result-observe-the-same-value`, `a-late-waiter-reads-the-stored-result`, plus `agent_wait names each terminal Run by agent and status`, `agent_wait reports an unknown id rather than blocking on it`, `aborting the turn ends only the wait: the Run settles and its result stands` (`host/tools.test.ts`) |
+| `agent_result` — expected outcome | `PiBackend conformance: wait-and-result-observe-the-same-value`; `agent_result returns the full stored output with its Run identity` (`host/tools.test.ts`); live (`v2:pi:host-smoke`) |
+| `agent_result` — not yet terminal | `agent_result on a live Run says it has not finished, distinctly from unknown` (`host/tools.test.ts`) |
+| `agent_result` — evicted output | `PiBackend conformance: an-evicted-result-answers-expired` |
+| `agent_result` — unknown Run id | `agent_result on a live Run says it has not finished, distinctly from unknown` (`host/tools.test.ts`) |
+| `agent_result` — after a failed Notification | `PiBackend conformance: a-notification-retry-cannot-duplicate-or-alter-settlement` |
+| `agent_result` — after Session shutdown | `PiBackend conformance: shutdown-rejects-new-work`; `a tool call after shutdown returns the not-ready sentence` (`host/tools.test.ts`) |
+| Subagent close — expected outcome | `PiBackend conformance: close-releases-every-resource`; `closing twice emits one child shutdown and disposes once` (`testing/pi/pi-backend.test.ts`); live (`v2:pi:smoke`, both probes clear) |
+| Subagent close — bounded child shutdown | `closing twice emits one child shutdown and disposes once` (`testing/pi/pi-backend.test.ts`) |
+| Subagent close — late settlement | `PiBackend conformance: late-events-cannot-mutate-a-terminal-run` |
+| Subagent close — idempotence | `PiBackend conformance: close-is-idempotent` |
+| Subagent close — identity cleanup | `the widget is cleared when the Session shuts down` (`host/widget.test.ts`); `PiBackend conformance: close-releases-every-resource` |
+| `/agents` — every row | Backend-independent: `the list holds one item per Profile, by name and description` and `the list is identical whatever backend a Profile names` (`host/agents-command.test.ts`). The Pi set supplies no Profiles of its own: `the Pi set supplies one backend and no Profiles of its own` (`host/inert-guard.test.ts`) |
+| Active widget — every row | Backend-independent: `the widget appears with the first live Run and its row reads as the matrix says` and its siblings (`host/widget.test.ts`); `PiBackend conformance: only-the-repository-writes-snapshots` |
+| Completion Notification — every row | Backend-independent: `PiBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; the landing rows in `host/push-sink.test.ts`; live (`v2:pi:smoke`, one notification per settled Run) |
+| Profile loading — generic parsing | the `parseProfile` tests in `domain/profile.test.ts` |
+| Profile loading — unknown backend name | `PiBackend conformance: validation-is-deterministic`; `a Profile naming an unknown backend is one diagnostic, not an exception` (`backend/contract.test.ts`) |
+| Profile loading — unrecognized field | `a field Pi has never heard of is a diagnostic, not a silent pass` (`backend/pi/profile.test.ts`) |
+| Profile loading — model validation | `a model the catalogue does not hold names what it does hold`; `omitting the catalogue means an empty one, so a pinned model is unknown`; `the catalogue summary is bounded and says how many it left out` (`backend/pi/profile.test.ts`); end to end: `a model the Session's catalogue does not hold is a rejection, not a Run` (`testing/pi/pi-backend.test.ts`) |
+| Profile loading — `tools` and `appendSystemPrompt` | `tools is a comma-separated list, and an empty list is meaningful`; `appendSystemPrompt must be a boolean` (`backend/pi/profile.test.ts`); `a Profile's tools list reaches the session, and no list leaves the defaults` (`backend/pi/options.test.ts`) |
+| Profile loading — `effort` | `an effort outside the shared scale is rejected by name`; `every value on the shared effort scale is accepted`; `a Profile's effort wins over the parent's thinking level` (`backend/pi/profile.test.ts`) |
+| Profile loading — scope | `Profiles are read from the user-scope agents directory only` (`profiles/discovery.test.ts`) |
+| Profile loading — backend field name | `a v2 source containing the legacy backend field name is rejected` (`boundaries.test.ts`) |
+| Model and effort inheritance | `with no Profile model, the parent's is inherited provider-qualified`; `the parent's thinking level is inherited only when no model is pinned` (`backend/pi/profile.test.ts`) |
+| Child isolation | `both of this package's extension directories are filtered from a child`; `the Bash spawn carries the child depth without mutating the environment`; `the resource load runs inside the child-load discriminator` (`backend/pi/options.test.ts`) |
+| No provider type leaks | `a Pi session symbol outside the adapter is rejected, its host API is not`; `a Pi message type outside the adapter is rejected`; `only the composition root may import the Pi adapter`; `the Pi adapter may not import the runtime, the host, or presentation` (`boundaries.test.ts`) |

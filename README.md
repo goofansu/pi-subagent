@@ -285,13 +285,55 @@ For the Pi harness, project trust is [pi's](https://pi.dev/docs/latest/security#
 
 A subagent reads files, writes files, and runs commands as far as its `tools` list allows, and cannot delegate further — delegation is one level deep. The neutral `agent_steer` operation is implemented at each adapter's private provider boundary. See [ADR 0020](docs/adr/0020-run-settlement-through-harness-conformance.md) for the current Run-settlement decision.
 
+## Running v2 as the daily driver
+
+The rewrite in `extensions/subagent-v2/` is not what the package publishes: the
+manifest still exposes only v1, and it will keep doing so until the cutover at
+M7. Since M4 the rewrite is nonetheless a usable product with the real Pi
+backend behind it, and switching to it locally is one command:
+
+```bash
+make dogfood-v2     # v2 becomes what plain `pi` loads
+make dogfood-v1     # and back
+make dogfood-status # which one is live right now
+```
+
+Two edits to Pi's own `settings.json` make the switch, and both are reversible:
+this package's entry in `packages` gains an empty `extensions` list, which
+disables **this package's** extension and nothing else, and the absolute path of
+the v2 entry point is added to `extensions` so plain `pi` loads it. Every other
+extension you have installed stays exactly as it was — a switch that turned
+everything else off would not be a daily driver. `make dogfood-v1` restores the
+settings file to what it was.
+
+The two can never both be loaded, and that is deliberate: they register the same
+six tool names, and a Pi process with both would offer the model each tool
+twice.
+
+`make dev-v2` is the other way in — every extension disabled and only the v2
+entry point loaded, for checking the surface in isolation rather than for using
+it.
+
+Profiles are read from the same `agents/` directory v1 reads, with one
+difference: a v2 Profile names its backend with `backend:` rather than v1's
+field. The values are unchanged and the default is still `pi`, so a Profile that
+pins nothing runs on Pi under both. See
+[`docs/v2/profile-backend-field-migration.md`](docs/v2/profile-backend-field-migration.md).
+
+`/subagent-v2` reports the live Session's runtime counters and both cleanup
+probes — the runtime's, which says whether the core is holding a fiber or a
+queue, and the Pi adapter's, which says whether a native session or an event
+subscription is still attached. Both read zero for a Session that has nothing in
+flight.
+
 ## Release verification
 
 v1 is frozen. Only critical fixes and testability changes that add proof for a
 compatibility-matrix row land in `extensions/subagent/`; the policy, and the
 commit at which the quality gate was recorded green, are in
 [`docs/v2/freeze.md`](docs/v2/freeze.md). The rewrite lives beside it in
-`extensions/subagent-v2/` and is opted into per Pi process with `make dev-v2`.
+`extensions/subagent-v2/`; `make dev-v2` opts into it for one Pi process, and
+`make dogfood-v2` makes it the default.
 
 `npm run check` runs typechecking for both extension trees, lint, per-Run
 Harness Conformance, repeated managed Subagent conformance for the controlled
@@ -311,6 +353,16 @@ cleanup before printing `CODEX_RESUME_LIVE_SMOKE_PASS`. Pi uses
 `PI_STEERING_LIVE_SMOKE_PASS` and `PI_RESUME_LIVE_SMOKE_PASS`. Claude uses
 `npm run claude:steering-smoke` and `npm run claude:resume-smoke`, printing
 `CLAUDE_STEERING_LIVE_SMOKE_PASS` and `CLAUDE_RESUME_LIVE_SMOKE_PASS`.
+
+The v2 lane adds two gates of its own, both opt-in and both in
+`release:check`. `npm run v2:pi:smoke` builds a real Session runtime over the
+real Pi adapter and drives start, resume, steer, cancel, timeout, and shutdown
+against a real model, then reads the runtime probe and the adapter probe after
+the Session Scope has closed; it prints `V2_PI_LIVE_SMOKE_PASS`.
+`npm run v2:pi:host-smoke` launches Pi in RPC mode with only the v2 entry point,
+asks the model to delegate, reads the answer back through `agent_result`, and
+prints `V2_PI_HOST_LIVE_SMOKE_PASS`. Both honour `V2_PI_LIVE_TIMEOUT_MS`, and
+`V2_PI_LIVE_MODEL` pins the model they use.
 
 The human-only Codex Desktop coexistence gate is recorded with
 [`docs/codex-desktop-coexistence-release.md`](docs/codex-desktop-coexistence-release.md).

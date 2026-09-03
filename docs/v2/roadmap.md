@@ -1,6 +1,6 @@
 # pi-subagent v2 roadmap
 
-**Status:** Accepted. **M3 is complete** (2026-09-03); M4 is next.  
+**Status:** Accepted. **M4 is complete apart from its daily-driver soak** (2026-09-03); M5 is next once the soak closes.  
 **Strategy:** Rewrite the execution architecture inside the existing `pi-subagent` product  
 **Delivery model:** Gate-driven milestones, not a date-driven big-bang rewrite
 
@@ -90,7 +90,7 @@ flowchart TD
 | M1 ✅     | Plain domain kernel and two fake backends          | Lifecycle behavior is demonstrable without a provider SDK — **passed**, see [the M1 exit gate](m1-exit-gate.md) |
 | M2 ✅     | Scoped Effect supervisor and central projection    | All lifecycle and race tests pass against fakes — **passed**, see [the M2 exit gate](m2-exit-gate.md) |
 | M3 ✅     | Complete fake-backed product vertical slice        | Actual host handlers, UI, delivery, and shutdown work end to end — **passed**, see [the M3 exit gate](m3-exit-gate.md) |
-| M4        | Native Pi backend and product dogfood              | Pi passes conformance and v2 is usable as the daily driver       |
+| M4 ⏳     | Native Pi backend and product dogfood              | Pi passes conformance and v2 is usable as the daily driver — everything **passed** except the soak, see [the M4 exit gate](m4-exit-gate.md) and [the soak record](soak.md) |
 | M5        | Claude adapter                                     | Claude fits without generic lifecycle changes                    |
 | M6        | Codex adapter                                      | Codex fits without generic lifecycle changes                     |
 | M7        | v2 becomes the sole implementation                 | Compatibility, soak, release, and deletion gates pass            |
@@ -189,6 +189,10 @@ Rewrite rather than reuse:
 | ADR — v2 terminal settlement | [`../adr/0025-v2-terminal-settlement.md`](../adr/0025-v2-terminal-settlement.md) |
 | ADR — v2 control admission | [`../adr/0026-v2-control-admission.md`](../adr/0026-v2-control-admission.md) |
 | ADR — v2 usage normalization | [`../adr/0027-v2-usage-normalization.md`](../adr/0027-v2-usage-normalization.md) |
+| ADR — v2 backend contract | [`../adr/0028-v2-backend-contract.md`](../adr/0028-v2-backend-contract.md) |
+| ADR — v2 backend open failure | [`../adr/0030-v2-backend-open-failure.md`](../adr/0030-v2-backend-open-failure.md) |
+| M4 exit gate | [`m4-exit-gate.md`](m4-exit-gate.md) |
+| v2 Pi soak record | [`soak.md`](soak.md) |
 | v2 glossary section | [`../../CONTEXT.md`](../../CONTEXT.md) |
 
 ### M1 — Domain kernel and fake backends
@@ -374,6 +378,15 @@ Deliverables:
 - Repeated fake sessions start and shut down without retained fibers, queues, subscriptions, or waiters.
 
 ### M4 — Pi backend adapter and dogfood
+
+**Status: every deliverable landed and every exit-gate item passed except the
+daily-driver soak (2026-09-03).** The verification is recorded in
+[the M4 exit gate](m4-exit-gate.md), which enumerates and classifies every
+change made outside the Pi adapter directory — the program-level signal
+section 12 asks for. The backend contract needed none, so
+[ADR-0028](../adr/0028-v2-backend-contract.md) is marked stable. The soak is
+logged in [`soak.md`](soak.md) and is counted by representative usage rather
+than by elapsed days.
 
 **Purpose:** Prove the abstraction against the host-native backend and make v2 useful as a daily driver.
 
