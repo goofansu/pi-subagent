@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_BACKEND_ID, runId, subagentId } from "../domain/index.ts";
+import { runId, subagentId } from "../domain/index.ts";
 import {
   hostRig,
   RIG_ANSWER,
@@ -333,18 +333,13 @@ test("the message the sink sends is the one the renderer can parse", async (t) =
   const rebuilt = buildNotificationMessage({
     runId: runId(ids.runId),
     subagentId: subagentId(ids.subagentId),
-    backendId: DEFAULT_BACKEND_ID,
     agent: RIG_RESUMABLE_PROFILE,
     label: "look around",
     status: "completed",
     resultAvailability: "full",
     preview: RIG_ANSWER,
     durationMillis: 0,
-    usage: {
-      totals: { input: 12, output: 8, cacheRead: 0, cacheWrite: 0, cost: 0 },
-      context: { tokens: 0 },
-      turns: 1,
-    },
+    accounting: { inputTokens: 12, outputTokens: 8, cost: 0, turns: 1 },
     retrieveWith: "agent_result",
   });
 

@@ -23,14 +23,21 @@
  * push that has to re-read the store to say what it is about is a push that
  * can say something different from what was stored, which is the one thing
  * "storage precedes notification" exists to prevent.
+ *
+ * Self-sufficient is not the same as complete. The notice carries **only what
+ * its formatter reads**, which is why it holds a small accounting summary
+ * rather than the Result's whole `UsageSnapshot`, and why it holds no backend
+ * identity at all. The absence is what makes "two backends, one sentence"
+ * structural rather than merely true today: a notice with nowhere to put a
+ * backend id cannot start mentioning one.
  */
 
 import { Schema } from "effect";
-import { BackendId, RunId, SubagentId } from "./ids.ts";
+import { RunId, SubagentId } from "./ids.ts";
 import { CancellationReason, TerminalRunPhase } from "./phases.ts";
 import { RUN_LABEL_MAX_BYTES, type RunResult } from "./result.ts";
 import { boundOneLine } from "./text.ts";
-import { UsageSnapshot } from "./usage.ts";
+import type { UsageSnapshot } from "./usage.ts";
 
 /** Long enough to recognize the answer, short enough not to be it. */
 export const NOTIFICATION_PREVIEW_MAX_BYTES = 500;
@@ -76,10 +83,76 @@ export function resultAvailabilityOf(result: RunResult): ResultAvailability {
     : "metadata-only";
 }
 
+/**
+ * The bound on the model name an accounting line may carry.
+ *
+ * A model string is provider-authored and normally short; nothing upstream
+ * guarantees it. A hundred bytes is more than any real identifier and less
+ * than a paragraph.
+ */
+export const NOTIFICATION_MODEL_MAX_BYTES = 100;
+
+/**
+ * What a Run spent, in the four figures the accounting line prints.
+ *
+ * A presentation-shaped value rather than a copy of the Result's usage: the
+ * line reads tokens, cost, turns, and the model, and knows nothing about cache
+ * figures or the context gauge. Carrying the whole `UsageSnapshot` made the
+ * formatter depend on a schema it read four fields of, so a change to the
+ * gauge was a change that reached the notice.
+ *
+ * The cost is already rounded to the four places the line prints, because the
+ * rounding decides something the domain owns: whether there was anything to
+ * account for at all.
+ */
+export const NotificationAccounting = Schema.Struct({
+  inputTokens: Schema.Number,
+  outputTokens: Schema.Number,
+  cost: Schema.Number,
+  turns: Schema.Number,
+  /** The model the Run reported, when it reported one. */
+  model: Schema.optionalKey(Schema.String),
+});
+
+export type NotificationAccounting = typeof NotificationAccounting.Type;
+
+/**
+ * The accounting for one Run's usage, or nothing to account for.
+ *
+ * `undefined` when every figure the line would print is zero — which is what
+ * keeps the rule that a Run whose only reported usage was a cache read
+ * produces no accounting line, and what makes a line reading nothing but a
+ * model name impossible rather than merely unwanted. A model identifies
+ * accounting and is not accounting.
+ *
+ * Takes a usage snapshot rather than a Result, because the result card shows
+ * the same four figures for a Run that has not settled and has no Result yet.
+ * One place decides whether there is anything to account for; two surfaces
+ * read the answer.
+ */
+export function toNotificationAccounting(
+  usage: UsageSnapshot,
+  model?: string,
+): NotificationAccounting | undefined {
+  const { totals, turns } = usage;
+  const cost = Math.round(totals.cost * 10_000) / 10_000;
+  if (cost === 0 && totals.input === 0 && totals.output === 0 && turns === 0) {
+    return undefined;
+  }
+  return {
+    inputTokens: totals.input,
+    outputTokens: totals.output,
+    cost,
+    turns,
+    ...(model === undefined || model === ""
+      ? {}
+      : { model: boundOneLine(model, NOTIFICATION_MODEL_MAX_BYTES) }),
+  };
+}
+
 export const RunNotification = Schema.Struct({
   runId: RunId,
   subagentId: SubagentId,
-  backendId: BackendId,
   agent: Schema.String,
   /**
    * The Run's label: the bounded one-line description the caller gave.
@@ -106,10 +179,13 @@ export const RunNotification = Schema.Struct({
    * notice, the row, and the card print one number.
    */
   durationMillis: Schema.Number,
-  /** What the Run spent, for the notice's accounting line. */
-  usage: UsageSnapshot,
-  /** The model the Run reported, when it reported one. */
-  model: Schema.optionalKey(Schema.String),
+  /**
+   * What the Run spent, when it reported anything to account for.
+   *
+   * Absent rather than zeroed, so the notice says "nothing to account for"
+   * with its shape instead of leaving the formatter to infer it.
+   */
+  accounting: Schema.optionalKey(NotificationAccounting),
   /**
    * How to get the rest.
    *
@@ -123,10 +199,10 @@ export type RunNotification = typeof RunNotification.Type;
 
 /** Build the notice for one stored result. Nothing is invented. */
 export function toRunNotification(result: RunResult): RunNotification {
+  const accounting = toNotificationAccounting(result.usage, result.model);
   return {
     runId: result.runId,
     subagentId: result.subagentId,
-    backendId: result.backendId,
     agent: result.agent,
     label: boundOneLine(result.description, RUN_LABEL_MAX_BYTES),
     status: result.status,
@@ -144,8 +220,7 @@ export function toRunNotification(result: RunResult): RunNotification {
       ? {}
       : { cancellationReason: result.cancellationReason }),
     durationMillis: Math.max(0, result.settledAt - result.startedAt),
-    usage: result.usage,
-    ...(result.model === undefined ? {} : { model: result.model }),
+    ...(accounting === undefined ? {} : { accounting }),
     retrieveWith: "agent_result",
   };
 }

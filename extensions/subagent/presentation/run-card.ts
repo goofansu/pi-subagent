@@ -30,7 +30,11 @@ import type {
   ToolEntry,
   TranscriptItem,
 } from "../domain/index.ts";
-import { transcriptItemText } from "../domain/index.ts";
+import {
+  type NotificationAccounting,
+  toNotificationAccounting,
+  transcriptItemText,
+} from "../domain/index.ts";
 import { formatNotificationAccounting } from "./notification-text.ts";
 import { formatResultBody } from "./result-body.ts";
 import {
@@ -188,11 +192,26 @@ function omitWhenEmpty<T>(values: readonly T[]): readonly T[] | undefined {
   return values.length > 0 ? values : undefined;
 }
 
+/**
+ * The accounting line, or nothing when there was nothing to account for.
+ *
+ * The card and the notice print the same four figures in the same grammar, so
+ * they share the formatter; the card's absence handling is here because a card
+ * omits a *section* where a notice omits a paragraph.
+ */
+function accountingLine(
+  accounting: NotificationAccounting | undefined,
+): string | undefined {
+  return accounting === undefined
+    ? undefined
+    : formatNotificationAccounting(accounting);
+}
+
 /** Build the card for one Run. */
 export function runCard(source: RunCardSource): RunCard {
   if (source.from === "live") {
     const { row, now } = source;
-    const accounting = formatNotificationAccounting(row.usage, undefined);
+    const accounting = accountingLine(toNotificationAccounting(row.usage));
     return {
       runId: row.identity.runId,
       subagentId: row.identity.subagentId,
@@ -209,7 +228,9 @@ export function runCard(source: RunCardSource): RunCard {
   }
 
   const { result } = source;
-  const accounting = formatNotificationAccounting(result.usage, result.model);
+  const accounting = accountingLine(
+    toNotificationAccounting(result.usage, result.model),
+  );
   const context = formatContextGauge(result.usage.context);
   const transcript = omitWhenEmpty(recentTranscript(result.transcript));
   const tools = omitWhenEmpty(result.tools.map(formatToolEntry));

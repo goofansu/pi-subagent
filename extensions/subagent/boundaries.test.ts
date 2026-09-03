@@ -96,6 +96,15 @@ export interface BoundaryGraph {
   /** The Session push sink, which owns notification delivery and landing. */
   readonly pushSinkFile: string;
   /**
+   * The notification formatter, which depends on the domain notice alone.
+   *
+   * Narrower than the presentation rule above it: a presentation file may
+   * name Pi's own packages for theming and width, and this one may not name
+   * anything outside `domain/` and `presentation/`. That is what makes
+   * "changing what a notice says touches no runtime module" checkable.
+   */
+  readonly notificationTextFile: string;
+  /**
    * The delivery module and its test, which may not say what only the sink
    * knows.
    *
@@ -185,6 +194,13 @@ const productionGraph: BoundaryGraph = {
     "subagent",
     "host",
     "push-sink.ts",
+  ),
+  notificationTextFile: path.join(
+    repositoryRoot,
+    "extensions",
+    "subagent",
+    "presentation",
+    "notification-text.ts",
   ),
   deliveryFiles: [
     path.join(
@@ -1188,7 +1204,33 @@ export function findBoundaryViolations(
     }
   }
 
-  // 19. Delivery does not say "landed". It knows pending, handed off, and
+  // 19. The notification formatter depends on the domain notice and nothing
+  //     else. Presentation as a whole may name Pi's packages, because a
+  //     widget row has to measure a width and pick a theme colour; the notice
+  //     is prose a *model* reads, so it needs neither. Fencing it this
+  //     narrowly is what makes the compatibility matrix's claim checkable: a
+  //     change to what a notice says provably touches no runtime module,
+  //     because the file that says it cannot reach one.
+  if (fs.existsSync(graph.notificationTextFile)) {
+    for (const specifier of specifiersOf(graph.notificationTextFile)) {
+      const target = resolveRelativeSource(
+        graph.notificationTextFile,
+        specifier,
+      );
+      if (
+        target &&
+        (isInside(target, graph.domainRoot) ||
+          isInside(target, graph.presentationRoot))
+      ) {
+        continue;
+      }
+      violations.add(
+        `${describe(graph.notificationTextFile)} imports ${target ? describe(target) : specifier}, and notification text depends on the domain notice alone`,
+      );
+    }
+  }
+
+  // 20. Delivery does not say "landed". It knows pending, handed off, and
   //     exhausted; the Session push sink knows the rest. This is a scan for a
   //     word rather than an import check because the mistake it prevents is a
   //     mistake of reading: a `handedOff` set introduced by a comment about
@@ -1294,6 +1336,13 @@ function fixtureGraph(
       "subagent",
       "host",
       "push-sink.ts",
+    ),
+    notificationTextFile: path.join(
+      fixtureRoot,
+      "extensions",
+      "subagent",
+      "presentation",
+      "notification-text.ts",
     ),
     deliveryFiles: [
       path.join(
@@ -1858,6 +1907,37 @@ test("the widget importing the push sink or delivery is rejected", (t) => {
   assert.deepEqual(findBoundaryViolations(graph), [
     `${describe(path.join(graph.hostRoot, "widget.ts"))} imports ${describe(path.join(graph.hostRoot, "push-sink.ts"))}, and the widget reads landing facts rather than owning delivery`,
     `${describe(path.join(graph.hostRoot, "widget.ts"))} imports ${describe(path.join(graph.runtimeRoot, "delivery.ts"))}, and the widget reads landing facts rather than owning delivery`,
+  ]);
+});
+
+test("the notification formatter naming anything but the domain and presentation is rejected", (t) => {
+  const { graph, write } = fixtureGraph(t, "notification-text-imports");
+  write("extensions/subagent/index.ts", "export const entry = 1;\n");
+  write("extensions/subagent/domain/notification.ts", "export const n = 1;\n");
+  write("extensions/subagent/presentation/status.ts", "export const s = 1;\n");
+  write("extensions/subagent/runtime/repository.ts", "export const r = 1;\n");
+  write(
+    "extensions/subagent/presentation/notification-text.ts",
+    [
+      // The two it may name.
+      'import { n } from "../domain/notification.ts";',
+      'import { s } from "./status.ts";',
+      // A runtime module, and a Pi package the rest of presentation may name.
+      'import { r } from "../runtime/repository.ts";',
+      'import { truncateToWidth } from "@earendil-works/pi-tui";',
+      "export const text = [n, s, r, truncateToWidth];",
+      "",
+    ].join("\n"),
+  );
+
+  const formatter = describe(
+    path.join(graph.presentationRoot, "notification-text.ts"),
+  );
+  const repository = describe(path.join(graph.runtimeRoot, "repository.ts"));
+  assert.deepEqual(findBoundaryViolations(graph), [
+    `${formatter} imports ${repository}, and a presentation file may name only the domain and Pi`,
+    `${formatter} imports ${repository}, and notification text depends on the domain notice alone`,
+    `${formatter} imports @earendil-works/pi-tui, and notification text depends on the domain notice alone`,
   ]);
 });
 

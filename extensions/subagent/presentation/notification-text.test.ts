@@ -6,8 +6,10 @@ import {
   cancelledEnding,
   failedEnding,
   NOTIFICATION_ERROR_MAX_BYTES,
+  NOTIFICATION_MODEL_MAX_BYTES,
   NOTIFICATION_PREVIEW_MAX_BYTES,
   redactedDiagnostic,
+  toNotificationAccounting,
 } from "../domain/index.ts";
 import {
   fixtureNotification,
@@ -36,15 +38,19 @@ test("N-8: the notice is identical whichever backend ran the Run", () => {
   // the neutral Result alone, so only the model string — which the Profile
   // chooses — differs between backends.
   // See docs/v2/compatibility-matrix.md.
-  const texts = ["pi", "claude", "codex"].map((backend) =>
-    formatNotificationText(
-      fixtureNotification({
-        finalOutput: "done",
-        identity: { backendId: backendId(backend) },
-      }),
-    ),
+  const notices = ["pi", "claude", "codex"].map((backend) =>
+    fixtureNotification({
+      finalOutput: "done",
+      identity: { backendId: backendId(backend) },
+    }),
   );
+  const texts = notices.map(formatNotificationText);
 
+  // Structural as well as textual: the notice has no field a backend identity
+  // could travel in, so three Results from three backends produce three
+  // identical values and not merely three identical sentences.
+  assert.deepEqual(new Set(notices.map((n) => JSON.stringify(n))).size, 1);
+  assert.equal("backendId" in notices[0], false);
   assert.deepEqual(new Set(texts).size, 1);
   assert.equal(
     texts[0],
@@ -304,10 +310,65 @@ test("completed, failed, and cancelled notices all carry accounting", () => {
   }
 });
 
-test("accounting is absent when the Run reported nothing to account for", () => {
+test("N-9: a Run with nothing to account for carries no accounting at all", () => {
+  // The absence is on the notice rather than in the formatter, so a surface
+  // that forgot to check could not print a line of zeroes.
+  assert.equal(fixtureNotification({}).accounting, undefined);
   assert.equal(
-    formatNotificationAccounting(fixtureNotification({}).usage, undefined),
+    toNotificationAccounting(fixtureUsage({ cacheRead: 40_000 }), "a-model"),
     undefined,
+  );
+});
+
+test("N-9: the accounting a notice carries is only what the line prints", () => {
+  const notice = fixtureNotification({
+    finalOutput: "done",
+    usage: fixtureUsage({
+      input: 12_300,
+      output: 4_500,
+      cacheRead: 40_000,
+      cost: 0.1242,
+      turns: 3,
+      context: { tokens: 90_000 },
+    }),
+    model: "claude-sonnet-4-6",
+  });
+
+  assert.deepEqual(notice.accounting, {
+    inputTokens: 12_300,
+    outputTokens: 4_500,
+    cost: 0.1242,
+    turns: 3,
+    model: "claude-sonnet-4-6",
+  });
+});
+
+test("N-9: an accounting line can never read as nothing but a model name", () => {
+  // Structural rather than guarded: a notice only has an accounting value
+  // when at least one figure is non-zero, so the formatter has no input that
+  // produces a model on its own.
+  assert.equal(
+    formatNotificationAccounting({
+      inputTokens: 0,
+      outputTokens: 0,
+      cost: 0,
+      turns: 1,
+      model: "baseline-model",
+    }),
+    "1 turn · baseline-model",
+  );
+});
+
+test("a pathological model name is bounded where the accounting is built", () => {
+  const notice = fixtureNotification({
+    finalOutput: "done",
+    usage: fixtureUsage({ turns: 1 }),
+    model: "m".repeat(NOTIFICATION_MODEL_MAX_BYTES + 500),
+  });
+
+  assert.equal(
+    byteLength(notice.accounting?.model ?? ""),
+    NOTIFICATION_MODEL_MAX_BYTES,
   );
 });
 

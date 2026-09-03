@@ -37,10 +37,10 @@
  */
 
 import type {
+  NotificationAccounting,
   ResultAvailability,
   RunId,
   RunNotification,
-  UsageSnapshot,
 } from "../domain/index.ts";
 import {
   formatDuration,
@@ -110,42 +110,39 @@ export function formatResultPointer(
 }
 
 /**
- * The trailing accounting line, when the Run reported usage.
+ * The trailing accounting line, from the notice's accounting value.
  *
- * Cost, tokens, turns, then the model. A model identifies reported accounting
- * and is not accounting by itself, so it appears only alongside something
- * else — a line reading just the model name would say nothing about what the
- * Run spent.
+ * Cost, tokens, turns, then the model. Whether there was anything to account
+ * for is decided where the notice is derived — the notice simply has no
+ * accounting when there was not — so this function has one job, which is how
+ * the four figures read.
  *
- * Cache figures and the context gauge are deliberately absent: they are not
- * fields of this line, and a Run whose only reported usage was a cache read
- * must not produce an accounting line at all.
+ * Cache figures and the context gauge are absent because they are not fields
+ * of this line and are not on the value it is given. A model identifies
+ * accounting and is not accounting by itself; it cannot appear alone here,
+ * because a notice with an accounting value has at least one non-zero figure.
  */
 export function formatNotificationAccounting(
-  usage: UsageSnapshot,
-  model: string | undefined,
-): string | undefined {
+  accounting: NotificationAccounting,
+): string {
   const parts: string[] = [];
-  const roundedCost = Math.round(usage.totals.cost * 10_000) / 10_000;
-  if (roundedCost !== 0) parts.push(`cost $${roundedCost.toFixed(4)}`);
-  if (usage.totals.input !== 0 || usage.totals.output !== 0) {
+  if (accounting.cost !== 0) parts.push(`cost $${accounting.cost.toFixed(4)}`);
+  if (accounting.inputTokens !== 0 || accounting.outputTokens !== 0) {
     const tokens: string[] = [];
-    if (usage.totals.input !== 0) {
-      tokens.push(`${formatTokenCount(usage.totals.input)} in`);
+    if (accounting.inputTokens !== 0) {
+      tokens.push(`${formatTokenCount(accounting.inputTokens)} in`);
     }
-    if (usage.totals.output !== 0) {
-      tokens.push(`${formatTokenCount(usage.totals.output)} out`);
+    if (accounting.outputTokens !== 0) {
+      tokens.push(`${formatTokenCount(accounting.outputTokens)} out`);
     }
     parts.push(tokens.join(" / "));
   }
   // `formatTurns` is the one place turn grammar is decided, and it renders a
   // zero as a dash — which is right for a widget column and wrong here, so the
   // guard is what keeps both readings honest rather than a second format.
-  if (usage.turns !== 0) parts.push(formatTurns(usage.turns));
-  if (parts.length > 0 && model !== undefined && model !== "") {
-    parts.push(model);
-  }
-  return parts.length > 0 ? parts.join(" · ") : undefined;
+  if (accounting.turns !== 0) parts.push(formatTurns(accounting.turns));
+  if (accounting.model !== undefined) parts.push(accounting.model);
+  return parts.join(" · ");
 }
 
 /**
@@ -176,7 +173,9 @@ export function formatNotificationText(notice: RunNotification): string {
     `${formatNotificationHeader(notice)}\n\n${formatNotificationIdentity(notice)}`,
     formatNotificationBody(notice),
     formatResultPointer(notice.runId, notice.resultAvailability),
-    formatNotificationAccounting(notice.usage, notice.model),
+    notice.accounting === undefined
+      ? undefined
+      : formatNotificationAccounting(notice.accounting),
   ]
     .filter((section) => section !== undefined)
     .join("\n\n");
