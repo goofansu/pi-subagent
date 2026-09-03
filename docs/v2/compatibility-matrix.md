@@ -1,7 +1,8 @@
 # Public compatibility matrix
 
-**Status:** Complete for M0, with the Pi column proven in v2 at M4 and the
-Claude column at M5. This is v2's definition of behavioural parity.
+**Status:** Complete for M0, with the Pi column proven in v2 at M4, the Claude
+column at M5, and the Codex column at M6. This is v2's definition of
+behavioural parity.
 **Date:** 2026-09-02, last extended 2026-09-03
 **Scope:** every public command, Subagent close through the existing host and
 session surface, `/agents`, the active widget, completion Notification messages,
@@ -372,3 +373,103 @@ was actually running.
 | Failure endings | `a result the provider marked as an error fails with a confined diagnostic`, `a Query that ends without a result fails with a fixed message`, `SDK stderr becomes one bounded diagnostic and keeps not a word of itself` (`testing/claude/claude-backend.test.ts`); `ClaudeBackend conformance: a-failing-sink-cannot-strand-the-execution` |
 | Open failure | `an SDK that will not load is backend unavailable with no provider text`, `an SDK loader that never returns is backend unavailable and leaves nothing open` (`testing/claude/claude-backend.test.ts`); `ClaudeBackend conformance: a-failed-open-leaves-nothing-behind` |
 | No provider type leaks | `the Claude SDK is rejected outside the Claude adapter, and admitted inside it`, `only the composition root may import the Claude adapter`, `the two adapters are siblings and neither may name the other`, `the provider's cancellation primitive is admitted in the Claude adapter and nowhere else` (`boundaries.test.ts`) |
+
+---
+
+## The Codex column, proven in v2
+
+**Added at M6.** The same second half [the Pi table above](#the-pi-column-proven-in-v2)
+supplies, for Codex: one v2 proof per Codex row, so "Codex parity" is a thing
+that has been measured rather than a thing that was intended.
+
+Three kinds of citation appear, and the difference matters:
+
+- **conformance** — `CodexBackend conformance: <scenario>`, registered by
+  [`testing/conformance-codex.test.ts`](../../extensions/subagent-v2/testing/conformance-codex.test.ts).
+  These run the *shared* suite against the real adapter with a scriptable
+  stand-in App Server behind it, speaking JSON-RPC lines over the same spawn
+  option production fills — so a pass means the seam behaves, not that a
+  Codex-shaped test was written to agree with a Codex-shaped adapter.
+  **Codex skips none of the thirty-seven**, and a test asserts the empty skip
+  list.
+- **a named v2 test**, with the file it lives in.
+- **live**, meaning one of the two opt-in gates: `npm run v2:codex:smoke` for
+  the runtime lane and `npm run v2:codex:host-smoke` for the host lane.
+
+Rows the matrix marks backend-independent cite the same tests the Pi and Claude
+tables do, because a behaviour proven against the fakes and against two real
+providers is proven for the third too — what M6 adds there is that the Codex
+backend is what the Session was actually running.
+
+| Row | v2 proof for Codex |
+| --- | --- |
+| `agent_start` — expected outcome | `CodexBackend conformance: open-creates-no-run`; `opening spawns the App Server, initializes, and starts the ephemeral root` (`testing/codex/codex-backend.test.ts`); live (`v2:codex:smoke`, `v2:codex:host-smoke`) |
+| `agent_start` — unknown agent | Backend-independent: `agent_start refuses an unknown agent and names the ones that exist` (`host/tools.test.ts`) |
+| `agent_start` — nested delegation | `the host facts come from Pi, which is the only backend that has them` (`host/production-backends.test.ts`); `a start already at the maximum depth is refused by admission` (`host/inert-guard.test.ts`). The depth *variable* is shared: `the child is spawned with the operator's environment plus the depth key` (`testing/codex/codex-backend.test.ts`), `the child environment is the operator's, plus the depth key` (`backend/codex/protocol.test.ts`) |
+| `agent_start` — at capacity | `CodexBackend conformance: capacity-rejection-is-immediate` |
+| `agent_resume` — expected outcome | `CodexBackend conformance: resume-or-honest-refusal`; `a resumed Turn runs on the same retained root`, `the first Turn carries the Profile prompt, and a resumed Turn does not` (`testing/codex/codex-backend.test.ts`); live (`v2:codex:smoke`, "resume answers from the first Turn's retained root") |
+| `agent_resume` — already running | `CodexBackend conformance: one-active-run-per-subagent` |
+| `agent_resume` — unknown Subagent id | Backend-independent: `agent_resume tells an unknown Subagent from a Run id` (`host/tools.test.ts`) |
+| `agent_resume` — `unsupported` | Not reachable for Codex, which declares resume: `Codex declares resume and steering, and no terminal transcript snapshot` (`testing/codex/codex-backend.test.ts`). The outcome itself is proven by the one-shot fake: `the one-shot backend proves resume unsupported at the surface` (`host/tools.test.ts`) |
+| `agent_resume` — Conversation loss | `resume is admitted while the root is live and lost once the process has gone`, `a process that dies mid-Turn fails the Run with its partial output`, `a Turn that ignores its interrupt is escalated to SIGTERM and then SIGKILL` (`testing/codex/codex-backend.test.ts`) — and no provider identity crosses in any of them |
+| `agent_resume` — during shutdown | `CodexBackend conformance: shutdown-rejects-new-work`; live (`v2:codex:smoke`, "shutdown refuses new work") |
+| `agent_steer` — expected outcome | `CodexBackend conformance: steering-admission-follows-the-declared-capability`, `controls-are-delivered-serially-in-order`, `a-user-observation-appears-only-on-confirmation`; `guidance becomes a user observation only when the server echoes its id`, `only one steer is in flight at a time` (`testing/codex/codex-backend.test.ts`); `a Turn is started, steered, and interrupted with the ids it needs` (`backend/codex/protocol.test.ts`); live (`v2:codex:smoke`, "a steer confirmed by client id produced exactly one user observation") |
+| `agent_steer` — `unsupported` | Not reachable for Codex. Proven by the one-shot fake: `the one-shot backend proves unsupported steering at the surface` (`host/tools.test.ts`) |
+| `agent_steer` — mailbox full | `CodexBackend conformance: a-full-mailbox-answers-immediately`. Codex's consumer awaits each `turn/steer`, so the bound genuinely binds: guidance the server has not answered stays in the mailbox |
+| `agent_steer` — mailbox closed | `CodexBackend conformance: a-closed-mailbox-refuses-after-cancel` |
+| `agent_steer` — terminal Run | Backend-independent: `agent_steer names a terminal Run's status rather than calling it unknown` (`host/tools.test.ts`) |
+| `agent_steer` — invalid text | Backend-independent: `agent_steer rejects empty guidance before it looks the Run up` (`host/tools.test.ts`) |
+| `agent_steer` — unknown Run id | Backend-independent: `agent_steer names a terminal Run's status rather than calling it unknown` (`host/tools.test.ts`) |
+| `agent_steer` — one user Fact only on correlation | `guidance the server never echoes is delivered and never claimed`, `a steer sent before a cancel still confirms afterwards` (`testing/codex/codex-backend.test.ts`) |
+| `agent_steer` — delivery failure is diagnostic-only | `guidance the server refuses is a control diagnostic and nothing else` (`testing/codex/codex-backend.test.ts`) |
+| `agent_steer` — the wrong Turn is refused by the protocol | `a Turn is started, steered, and interrupted with the ids it needs` (`backend/codex/protocol.test.ts`); `guidance becomes a user observation only when the server echoes its id` asserts the `expectedTurnId` each steer named (`testing/codex/codex-backend.test.ts`) |
+| `agent_cancel` — expected outcome | `CodexBackend conformance: cancellation-terminates-with-partial-output`; `cancelling an active Turn interrupts it and leaves the root resumable` (`testing/codex/codex-backend.test.ts`); live (`v2:codex:smoke`) |
+| `agent_cancel` — bounded SIGTERM/SIGKILL escalation | `a Turn that ignores its interrupt is escalated to SIGTERM and then SIGKILL` (`testing/codex/codex-backend.test.ts`); `an ignored SIGTERM is followed by SIGKILL, with no real time passing`, `a request the server never answers expires and escalates` (`backend/codex/transport.test.ts`) |
+| `agent_cancel` — a Run with no output is a valid outcome | `CodexBackend conformance: a-run-may-settle-with-no-observations` |
+| `agent_cancel` — the process and root survive | `cancelling an active Turn interrupts it and leaves the root resumable` (`testing/codex/codex-backend.test.ts`); live (`v2:codex:smoke`, "an interrupted Turn leaves the process, the root, and the Subagent alive") |
+| `agent_cancel` — terminal answer then abort | `CodexBackend conformance: exactly-one-ending-wins`; `a final answer already observed survives a later cancel` (`testing/codex/codex-backend.test.ts`) |
+| `agent_cancel` — repeated cancel | Backend-independent: `a repeated agent_cancel is idempotent and the first request stands` (`host/tools.test.ts`) |
+| `agent_cancel` — already terminal / unknown Run id | Backend-independent: `agent_cancel tells a finished Run from an id that never existed` (`host/tools.test.ts`) |
+| `agent_cancel` — request vs. terminal | Backend-independent: `agent_cancel reports request admission, not terminal cancellation` (`host/tools.test.ts`) |
+| `agent_wait` — every row | Backend-independent, as the matrix says: `CodexBackend conformance: wait-and-result-observe-the-same-value`, `a-late-waiter-reads-the-stored-result`, plus the `agent_wait` rows in `host/tools.test.ts` |
+| `agent_result` — expected outcome | `CodexBackend conformance: wait-and-result-observe-the-same-value`; `a Profile naming codex runs end to end through the production set` (`host/production-backends.test.ts`); live (`v2:codex:host-smoke`) |
+| `agent_result` — unavailable until background terminals close | `a result is unavailable while a background command the Run started is running` (`testing/codex/codex-backend.test.ts`) |
+| `agent_result` — not yet terminal | Backend-independent: `agent_result on a live Run says it has not finished, distinctly from unknown` (`host/tools.test.ts`) |
+| `agent_result` — evicted output | `CodexBackend conformance: an-evicted-result-answers-expired` |
+| `agent_result` — unknown Run id | Backend-independent: `agent_result on a live Run says it has not finished, distinctly from unknown` (`host/tools.test.ts`) |
+| `agent_result` — after a failed Notification | `CodexBackend conformance: a-notification-retry-cannot-duplicate-or-alter-settlement` |
+| `agent_result` — after Session shutdown | `CodexBackend conformance: shutdown-rejects-new-work`; `a tool call after shutdown returns the not-ready sentence` (`host/tools.test.ts`) |
+| Subagent close — expected outcome | `CodexBackend conformance: close-releases-every-resource`; `closing the Session ends stdin once and leaves nothing held` (`testing/codex/codex-backend.test.ts`); live (`v2:codex:smoke`, all three probes clear and no App Server child left) |
+| Subagent close — idempotence | `CodexBackend conformance: close-is-idempotent`; `closing the Session ends stdin once and leaves nothing held` (`testing/codex/codex-backend.test.ts`); `close after the child is already gone returns at once, and twice is once` (`backend/codex/transport.test.ts`) |
+| Subagent close — the graceful path | `close ends stdin, and a child that goes needs no signal at all` (`backend/codex/transport.test.ts`), which is the spike's 13 ms exit-code-0 path |
+| Subagent close — late settlement | `CodexBackend conformance: late-events-cannot-mutate-a-terminal-run` |
+| Subagent close — process cleanup | `closing the Session ends stdin once and leaves nothing held` (`testing/codex/codex-backend.test.ts`); live (`v2:codex:smoke`, "no App Server child remains after closure", read from `ps` rather than from the adapter) |
+| `/agents` — every row | Backend-independent: `the list is identical whatever backend a Profile names` (`host/agents-command.test.ts`). The production set supplies no Profiles of its own: `the production set offers all three backends and no Profiles of its own` (`host/production-backends.test.ts`) |
+| Active widget — every row | Backend-independent: the widget rows in `host/widget.test.ts`; `CodexBackend conformance: only-the-repository-writes-snapshots` |
+| Completion Notification — every row | Backend-independent: `CodexBackend conformance: a-notification-follows-storage`, `a-notification-retry-cannot-duplicate-or-alter-settlement`; live (`v2:codex:smoke`, one notification per settled Run and no provider identity in any of them) |
+| Profile loading — generic parsing | the `parseProfile` tests in `domain/profile.test.ts` |
+| Profile loading — unknown backend name | `a Profile naming a backend the set does not hold is a diagnostic, not a crash` (`host/production-backends.test.ts`) |
+| Profile loading — unrecognized field | `a field Codex has never heard of is a diagnostic, not a silent pass`, `tools and appendSystemPrompt are shared vocabulary Codex refuses` (`backend/codex/profile.test.ts`); `CodexBackend conformance: validation-is-deterministic` |
+| Profile loading — model passthrough | `a model is passed through for Codex to check, whatever it says`, `a model that is not a string is a diagnostic` (`backend/codex/profile.test.ts`); `a pinned model and a mapped effort reach the thread parameters` (`backend/codex/protocol.test.ts`) |
+| Profile loading — `effort` | `every value on the shared effort scale is accepted`, `an effort outside the shared scale is rejected by name`, `effort off becomes none, and every other value passes through` (`backend/codex/profile.test.ts`) |
+| Profile loading — scope | Backend-independent: `Profiles are read from the user-scope agents directory only` (`profiles/discovery.test.ts`) |
+| Profile loading — backend field name | `a v2 source containing the legacy backend field name is rejected` (`boundaries.test.ts`) |
+| Profile prompt composition | `the first Turn carries the Profile prompt and the task; later Turns do not`, `a Profile with an empty prompt body composes nothing onto the task` (`backend/codex/profile.test.ts`); `the first Turn carries the Profile prompt, and a resumed Turn does not` (`testing/codex/codex-backend.test.ts`) |
+| Environment inheritance (ADR-0008) | `the child environment is the operator's, plus the depth key`, `building the spawn request does not mutate the process environment` (`backend/codex/protocol.test.ts`) |
+| Trust posture (ADR-0009) | `a thread starts ephemeral, never-approving, and fully sandboxed` (`backend/codex/protocol.test.ts`); `opening spawns the App Server, initializes, and starts the ephemeral root` asserts the posture reached the wire regardless of the forwarded trust value (`testing/codex/codex-backend.test.ts`) |
+| Usage — Run-local against a Turn baseline | `CodexBackend conformance: usage-deltas-are-run-local`, `a-resumed-run-excludes-prior-usage`, `a-replayed-transcript-adds-no-usage`; `a resumed Run is charged for its own work only` (`testing/codex/codex-backend.test.ts`); `a usage frame emits the increment since the Turn's baseline`, `two usage frames in one Turn are differenced, not summed twice`, `a resumed Run's baseline excludes the Run before it`, `a provider reset on the Turn's first frame charges the new reading` (`backend/codex/translate.test.ts`) |
+| Usage — the context gauge | `CodexBackend conformance: context-occupancy-is-a-gauge`; `the context gauge is the last request's total, and its window when there is one` (`backend/codex/translate.test.ts`) |
+| Usage — turn counting | `a completed Turn counts one turn and clears the activity` (`backend/codex/translate.test.ts`); `one Turn is one Run, and its items read like any other backend's` (`testing/codex/codex-backend.test.ts`) |
+| Usage — no terminal reconciliation surface | `CodexBackend conformance: reconciliation-does-not-double-count`. The spike found `turn/completed` carries no usage, so the last usage frame before it stands and the snapshot carries turns alone |
+| Item translation | `the four tool-shaped items each produce a tool call and its progress`, `an item that is not a tool call reports no progress, only activity`, `a completed command reports its status and a bounded output summary`, `a command that failed or was declined reports as failed` (`backend/codex/translate.test.ts`) |
+| Commentary versus the final answer | `a completed agent message whose phase is not commentary is the answer`, `a commentary message is a message and not the answer`, `commentary followed by a final answer leaves the Run answered` (`backend/codex/translate.test.ts`); `a Turn that completes with no final answer fails with a fixed message` (`testing/codex/codex-backend.test.ts`) |
+| Bounded activity | `a message delta previews the tail's last sentence`, `activity is bounded however much the provider streams`, `a command's output delta shows the command and its latest line`, `a reasoning summary shows its headline` (`backend/codex/translate.test.ts`) |
+| Failure endings | `a Turn the server reports as failed fails with a confined diagnostic`, `a declared method whose payload does not fit is one diagnostic, not a crash`, `the child's stderr is one bounded diagnostic with its identities removed` (`testing/codex/codex-backend.test.ts`); `CodexBackend conformance: a-failing-sink-cannot-strand-the-execution` |
+| Transport loss — process exit | `a process that dies mid-Turn fails the Run with its partial output` (`testing/codex/codex-backend.test.ts`); `a spontaneous exit settles every pending request and completes the loss signal` (`backend/codex/transport.test.ts`) |
+| Transport loss — an expired request bound | `a request the server never answers cannot hold a Run open` (`testing/codex/codex-backend.test.ts`); `a request the server never answers expires and escalates` (`backend/codex/transport.test.ts`) |
+| Transport loss — a frame past the framing bound | `a line past the framing bound fails the Run rather than being truncated` (`testing/codex/codex-backend.test.ts`); `a line past the framing bound is transport loss, not a silent truncation` (`backend/codex/transport.test.ts`) |
+| Routing — late frames reach no Run | `a frame for a settled Turn reaches no Run and is counted`, `a frame for a turn nobody ever listened to reaches no Run` (`testing/codex/codex-backend.test.ts`). Both assert positively in each direction: the current Turn's frames arrive and the stale one is counted |
+| Client-bound requests are always answered | `the reader answers a client-bound request that arrives between Runs` (`testing/codex/codex-backend.test.ts`); `every client-bound request is answered with a JSON-RPC error` (`backend/codex/transport.test.ts`) |
+| Protocol drift | `npm run codex:protocol:check` (`CODEX_PROTOCOL_CHECK_PASS — codex-cli 0.150.1`), in `check`; `the declared method list is what the drift check has to cover`, `an undeclared method is ignored rather than rejected` (`backend/codex/protocol.test.ts`) |
+| Open failure | `a missing binary is backend unavailable with no Run and nothing held`, `an initialize the adapter cannot read is backend unavailable, and the child is killed`, `a refused thread start is backend unavailable`, `a thread start that never answers is backend unavailable once the budget expires` (`testing/codex/codex-backend.test.ts`); `CodexBackend conformance: a-failed-open-leaves-nothing-behind` |
+| No provider type leaks | `a child process is spawned in the Codex adapter and nowhere else`, `App Server protocol and transport vocabulary stays inside the Codex adapter`, `only the composition root may import the Codex adapter`, `the Codex adapter may not import the runtime, the host, or presentation` (`boundaries.test.ts`) |

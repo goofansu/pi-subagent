@@ -536,6 +536,79 @@ test doubles, which take the SDK's types through the aliases the adapter
 re-exports. The adapter does not know the runtime, the host, presentation, or
 the *other adapter* exist.
 
+**Codex adapter** — everything v2 knows about Codex, in `backend/codex/`. The
+child process, the App Server's JSON-RPC framing, its request and notification
+shapes, the root thread and turn identities, the Subagent-scoped reader, and
+the steering correlation all stop there. The boundary test enforces it three
+ways: `node:child_process` is admitted in that directory and nowhere else in
+v2, nothing outside the composition root imports the directory at all, and the
+App Server's own vocabulary — the transport, the routing table, the protocol
+shapes, the child-process types — may not be *named* even by the composition
+root, which sees only the factory, the id, the options, and the probe. The
+adapter does not know the runtime, the host, presentation, or the other two
+adapters exist.
+
+**App Server** — `codex app-server`, the Codex CLI's headless JSON-RPC mode,
+spoken over a child process's stdin and stdout one line per frame. One Codex
+Subagent owns one of them for its life.
+
+**Root thread** — the ephemeral Codex thread a Codex BackendAgent starts at
+`open` and retains for its Subagent's life. It is the whole of what "resume"
+means for Codex: there is no `thread/resume` and no stored rollout, so a later
+Run is another Turn on the same root.
+[ADR-0021](docs/adr/0021-retained-ephemeral-codex-conversation.md).
+
+**Turn** — one unit of Codex work on a thread, named by a turn id that
+`turn/start` returns before the model does anything. One Run is exactly one
+Turn, and the turn id is the routing key every frame of that Run carries.
+
+**Subagent-scoped reader** — the one fiber that owns a Codex BackendAgent's
+stdout for its whole life, because the stream outlives every Run and the server
+issues client-bound requests between Turns that stall it if nobody answers.
+It demultiplexes frames by turn id into the active Run's intake, with a frame
+for an unknown or settled Turn reaching no Run at all. That is ADR-0023's first
+exception: for Pi and Claude "a late event cannot reach a settled Run" is true
+because the event source is gone, and for Codex it is a **routing** decision
+the adapter has to make.
+[ADR-0023](docs/adr/0023-v2-scope-ownership.md),
+[ADR-0024](docs/adr/0024-v2-observation-ordering.md).
+
+**Late frame** — a frame the reader routed nowhere, counted rather than
+dropped silently. It is what makes a Codex routing bug visible: such a bug does
+not crash, it either applies a stale frame to a live Run or loses a live one,
+so the tests assert the counter in both directions.
+
+**Loss signal** — how a Codex Run learns its conversation is over, given that
+the protocol will never say so. There are exactly two, and neither is on the
+wire: **process exit**, watched by the client that owns the child, and an
+**expired request bound** on the runtime clock, which is what a
+wedged-but-alive process produces. The M0 spike killed an App Server mid-Turn
+and found no terminal frame ever arrived and a later request neither resolved
+nor rejected.
+[ADR-0025](docs/adr/0025-v2-terminal-settlement.md).
+
+**Signal ladder** — the bounded SIGTERM-then-SIGKILL escalation a Codex
+adapter falls back on: after `turn/interrupt`, if the Turn does not report
+itself interrupted within the rung's bound, and again before the process is
+killed outright. It stands down the moment the Turn reports interrupted or the
+child exits, which is why an ordinary cancel sends no signal at all.
+
+**Client message id** — the id the Codex adapter attaches to a `turn/steer`,
+and the only thing that can later confirm the guidance was read: a `user`
+observation appears when — and only when — a user-message item comes back
+carrying it. A steer already sent keeps its correlation live through
+cancellation, because the model really did read it.
+[ADR-0012](docs/adr/0012-ordered-codex-steering.md).
+
+**Conversation-cumulative usage** — Codex's `tokenUsage.total`, which is the
+running total for the whole thread rather than for the Run reporting it. A
+Run-local delta is the difference against the total the Turn started from, and
+the context gauge is `tokenUsage.last` — the last request's own occupancy —
+because the cumulative figure grows without bound and would exceed its own
+window. `turn/completed` carries no usage at all, so the last usage frame
+before it stands and nothing waits for one that will never come.
+[ADR-0027](docs/adr/0027-v2-usage-normalization.md).
+
 **Conversation identity** — the single opaque string a Claude BackendAgent
 retains for its Subagent's life. It is the whole of what "resume" means for
 Claude, and ADR-0024 forbids it from crossing the seam, so it never appears in
@@ -615,7 +688,9 @@ delegation is one level deep.
 
 **Native probe** — what an adapter is still holding, counted: for Pi, open
 native sessions, live event subscriptions, and native cleanups in flight; for
-Claude, live Queries, open input streams, and retained conversation identities.
+Claude, live Queries, open input streams, and retained conversation identities;
+for Codex, live App Server processes, reader fibers, pending JSON-RPC requests,
+retained root threads, and in-flight steers.
 Deliberately outside the backend contract — a probe on the contract would be a
 field every adapter had to invent something for, and a number the core could
 start believing. `/subagent-v2` prints one block per backend beside the

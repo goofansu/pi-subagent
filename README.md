@@ -321,22 +321,28 @@ field. The values are unchanged and the default is still `pi`, so a Profile that
 pins nothing runs on Pi under both. See
 [`docs/v2/profile-backend-field-migration.md`](docs/v2/profile-backend-field-migration.md).
 
-**Which backends v2 offers is a shorter list than v1's, and shrinking to it is
-the point of the milestones.** A v2 Profile may name `pi` or `claude`; `codex`
-arrives at M6 and until then a Profile naming it is a start-up diagnostic
-saying so. Everything a `claude` Profile can say is what v1's understood —
-`model` as a family alias, `effort`, `tools`, `appendSystemPrompt` — and the
-environment inheritance is the same one
+**v2 offers all three backends from M6 onward.** A v2 Profile may name `pi`,
+`claude`, or `codex`, and each understands exactly what its v1 counterpart did.
+A `claude` Profile reads `model` as a family alias, plus `effort`, `tools`, and
+`appendSystemPrompt`, and the environment inheritance is the same one
 [ADR 0008](docs/adr/0008-claude-children-inherit-operator-environment.md)
 decided: a v2 Claude child sees the MCP servers and connectors your Claude Code
-environment has, unprompted.
+environment has, unprompted. A `codex` Profile reads `model` — passed through
+unvalidated, because the App Server resolves a model name itself — and `effort`,
+with `off` mapping to `none`; `tools` and `appendSystemPrompt` are diagnostics,
+because a Codex thread carries its own tool set and the Profile's prompt is
+composed into the first Turn's input. One Codex Subagent owns one
+`codex app-server` process and one ephemeral root thread for its life, and each
+Run is one Turn on that thread.
 
 `/subagent-v2` reports the live Session's runtime counters and every cleanup
 probe — the runtime's, which says whether the core is holding a fiber or a
 queue, and one per backend adapter, which says whether that provider's own
 handles are still held: for Pi, native sessions and event subscriptions; for
-Claude, live Queries, open input streams, and retained conversation identities.
-Every one reads zero for a Session that has nothing in flight.
+Claude, live Queries, open input streams, and retained conversation identities;
+for Codex, live App Server processes, reader fibers, pending JSON-RPC requests,
+retained root threads, and in-flight steers. Every one reads zero for a Session
+that has nothing in flight.
 
 ## Release verification
 
@@ -351,8 +357,8 @@ commit at which the quality gate was recorded green, are in
 Harness Conformance, repeated managed Subagent conformance for the controlled
 harness and every production adapter, the full test suite, the v2 lane (v2 tests
 plus the v1/v2 import boundary), the shared v2 backend conformance suite against
-both fake backends and both real adapters (`npm run test:v2:conformance`, also
-runnable on its own), and a byte-for-byte generated Codex
+both fake backends and all three real adapters (`npm run test:v2:conformance`,
+also runnable on its own), and a byte-for-byte generated Codex
 protocol check (`npm run codex:protocol:check`). `npm run release:check` adds all six
 authenticated provider gates and the retained-Codex evidence gate. It remains
 red until the pinned authenticated smoke and human Desktop record both exist.
@@ -366,28 +372,37 @@ cleanup before printing `CODEX_RESUME_LIVE_SMOKE_PASS`. Pi uses
 `npm run claude:steering-smoke` and `npm run claude:resume-smoke`, printing
 `CLAUDE_STEERING_LIVE_SMOKE_PASS` and `CLAUDE_RESUME_LIVE_SMOKE_PASS`.
 
-The v2 lane adds four gates of its own, all opt-in and all in `release:check`.
-Two are runtime gates, one per real backend: `npm run v2:pi:smoke` and
-`npm run v2:claude:smoke` each build a real Session runtime over that adapter
-and drive start, resume, steer, cancel, timeout, and shutdown against a real
-model, then read the runtime probe and every adapter probe after the Session
-Scope has closed. They print `V2_PI_LIVE_SMOKE_PASS` and
-`V2_CLAUDE_LIVE_SMOKE_PASS`. The Claude gate additionally proves what only a
+The v2 lane adds six gates of its own, all opt-in and all in `release:check`.
+Three are runtime gates, one per real backend: `npm run v2:pi:smoke`,
+`npm run v2:claude:smoke`, and `npm run v2:codex:smoke` each build a real
+Session runtime over that adapter and drive start, resume, steer, cancel,
+timeout, and shutdown against a real model, then read the runtime probe and
+every adapter probe after the Session Scope has closed. They print
+`V2_PI_LIVE_SMOKE_PASS`, `V2_CLAUDE_LIVE_SMOKE_PASS`, and
+`V2_CODEX_LIVE_SMOKE_PASS`. The Claude gate additionally proves what only a
 live model can: that the resumed Run answers from the first Run's context, that
 a confirmed steer produces exactly one user message in the transcript, and that
-a cancelled Query leaves the conversation resumable.
+a cancelled Query leaves the conversation resumable. The Codex gate proves the
+same three for a retained root thread — the resumed Turn answers from the first
+Turn's context, one steer confirmed by client message id produces exactly one
+user message, and an interrupted Turn leaves the process, the root, and the
+Subagent alive — and adds the one claim no adapter can make about itself: it
+asks the operating system whether the `codex app-server` child is gone.
 
-The other two are host gates — one script, taking the backend as an argument,
+The other three are host gates — one script, taking the backend as an argument,
 because what it exercises is the host and the host is the same whichever
-backend a Profile names. `npm run v2:pi:host-smoke` and
-`npm run v2:claude:host-smoke` launch Pi in RPC mode with only the v2 entry
-point, ask the model to delegate to a Profile naming that backend, read the
-answer back through `agent_result`, and print
-`V2_PI_HOST_LIVE_SMOKE_PASS` / `V2_CLAUDE_HOST_LIVE_SMOKE_PASS`.
+backend a Profile names. `npm run v2:pi:host-smoke`,
+`npm run v2:claude:host-smoke`, and `npm run v2:codex:host-smoke` launch Pi in
+RPC mode with only the v2 entry point, ask the model to delegate to a Profile
+naming that backend, read the answer back through `agent_result`, and print
+`V2_PI_HOST_LIVE_SMOKE_PASS`, `V2_CLAUDE_HOST_LIVE_SMOKE_PASS`, or
+`V2_CODEX_HOST_LIVE_SMOKE_PASS`.
 
-All four honour `V2_PI_LIVE_TIMEOUT_MS` or `V2_CLAUDE_LIVE_TIMEOUT_MS`, and
-`V2_PI_LIVE_MODEL` / `V2_CLAUDE_LIVE_MODEL` pin the model they use — a
-catalogue reference for Pi, a family alias for Claude, defaulting to `haiku`.
+All six honour `V2_PI_LIVE_TIMEOUT_MS`, `V2_CLAUDE_LIVE_TIMEOUT_MS`, or
+`V2_CODEX_LIVE_TIMEOUT_MS`, and `V2_PI_LIVE_MODEL` / `V2_CLAUDE_LIVE_MODEL` /
+`V2_CODEX_LIVE_MODEL` pin the model they use — a catalogue reference for Pi, a
+family alias for Claude defaulting to `haiku`, and for Codex a name the App
+Server resolves itself, left unset so its own default is used.
 
 The human-only Codex Desktop coexistence gate is recorded with
 [`docs/codex-desktop-coexistence-release.md`](docs/codex-desktop-coexistence-release.md).

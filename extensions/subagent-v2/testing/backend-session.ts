@@ -26,6 +26,7 @@
 
 import type { Scope } from "effect";
 import { Effect } from "effect";
+import { TestClock } from "effect/testing";
 import type { Backend } from "../backend/contract.ts";
 import type { Profile } from "../domain/index.ts";
 import { sessionRuntimeLayer } from "../runtime/composition.ts";
@@ -64,6 +65,15 @@ export interface BackendSessionOptions {
     readonly provider: string;
     readonly id: string;
   }[];
+  /**
+   * Provide a test clock, for the tests where time has to pass.
+   *
+   * Needed by any adapter whose own bounds are on the runtime clock — a
+   * request budget, a signal-escalation ladder — because the only honest way
+   * to prove those is to advance a clock the test controls. The lane forbids
+   * real sleeping outright.
+   */
+  readonly testClock?: boolean;
 }
 
 /** The three services an adapter's own tests drive the Session through. */
@@ -115,7 +125,11 @@ export function withBackendSession<A>(
     readonly readProbe: () => RuntimeProbe;
   }> = Effect.scoped(built);
 
-  return Effect.runPromise(program).then(({ value, readProbe }) => {
+  return Effect.runPromise(
+    options.testClock
+      ? program.pipe(Effect.provide(TestClock.layer()))
+      : program,
+  ).then(({ value, readProbe }) => {
     const probeAfterClose = readProbe();
     return {
       value,

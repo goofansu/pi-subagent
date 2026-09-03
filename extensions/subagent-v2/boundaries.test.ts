@@ -73,6 +73,10 @@ export interface V2BoundaryGraph {
   readonly claudeAdapterRoot: string;
   /** Test doubles and rigs for the Claude adapter, which may name its types. */
   readonly claudeTestingRoot: string;
+  /** The Codex adapter, where the App Server process and protocol are confined. */
+  readonly codexAdapterRoot: string;
+  /** Test doubles and rigs for the Codex adapter, which may name its types. */
+  readonly codexTestingRoot: string;
   /** The Session runtime, where the supervisor and its services live. */
   readonly runtimeRoot: string;
   /** Pure prose and row formatting, which may name only the domain and Pi. */
@@ -125,6 +129,20 @@ const productionGraph: V2BoundaryGraph = {
     "subagent-v2",
     "testing",
     "claude",
+  ),
+  codexAdapterRoot: path.join(
+    repositoryRoot,
+    "extensions",
+    "subagent-v2",
+    "backend",
+    "codex",
+  ),
+  codexTestingRoot: path.join(
+    repositoryRoot,
+    "extensions",
+    "subagent-v2",
+    "testing",
+    "codex",
   ),
   runtimeRoot: path.join(
     repositoryRoot,
@@ -537,6 +555,119 @@ function mayImportClaudeAdapter(file: string, graph: V2BoundaryGraph): boolean {
   );
 }
 
+/**
+ * The tests outside the Codex adapter's own directories that may name it.
+ *
+ * Named one by one, exactly as the Pi and Claude lists are, and for the same
+ * reason: "any test may import the adapter" would be a hole rather than an
+ * exception. Both entries are host tests that are *about* the adapter — the
+ * three probes the diagnostics command reports, and what the production set
+ * actually holds — and neither has anywhere else to get them.
+ */
+const CODEX_ADAPTER_TEST_IMPORTERS = new Set([
+  "host/diagnostics-command.test.ts",
+  "host/production-backends.test.ts",
+]);
+
+/**
+ * Who may reach into the Codex adapter.
+ *
+ * The same rule as Pi's and Claude's, for the same reason: a runtime,
+ * presentation, application, or host module that could import the adapter
+ * would be a module that could spawn an App Server, and then two things would
+ * own a child process.
+ */
+function mayImportCodexAdapter(file: string, graph: V2BoundaryGraph): boolean {
+  return (
+    isCompositionRoot(file, graph) ||
+    isInside(file, graph.codexAdapterRoot) ||
+    isInside(file, graph.codexTestingRoot) ||
+    CODEX_ADAPTER_TEST_IMPORTERS.has(
+      path.relative(graph.v2Root, file).split(path.sep).join("/"),
+    )
+  );
+}
+
+/**
+ * The child-process package, which one directory of v2 may name.
+ *
+ * Confined by specifier rather than by binding, because — unlike Pi's package
+ * — `node:child_process` is nothing but a process API. There is no host half
+ * of it that belongs elsewhere, so the rule needs no exceptions: a v2 module
+ * outside the Codex adapter that could spawn a process would be a module that
+ * could own one.
+ */
+const CHILD_PROCESS_PACKAGE = "node:child_process";
+
+function isChildProcessPackage(specifier: string): boolean {
+  return (
+    specifier === CHILD_PROCESS_PACKAGE ||
+    specifier.startsWith(`${CHILD_PROCESS_PACKAGE}/`)
+  );
+}
+
+/**
+ * The Codex vocabulary that stays inside the adapter, even from the
+ * composition root.
+ *
+ * "Only the composition root may import the adapter" is not enough on its own
+ * here. The composition root legitimately names `createCodexBackend` and the
+ * adapter's probe, and if it could *also* name a transport, a JSON-RPC frame,
+ * a notification, or a child process, then retained process state would have a
+ * path into the module that wires the Session — which is exactly what the
+ * roadmap's "retained process/thread state never enters generic repositories"
+ * exit-gate item is about.
+ *
+ * So the confinement is by binding: these names may be imported inside
+ * `backend/codex/` and by the adapter's own test doubles, which drive the real
+ * wire, and nowhere else. What is deliberately *not* on the list is the small
+ * public surface a backend set needs: the factory, the id, its options, the
+ * probe, and the display name.
+ */
+const CODEX_CONFINED_SYMBOLS = new Set([
+  // The transport and its frames.
+  "CodexTransport",
+  "CodexTransportOptions",
+  "CodexTransportStart",
+  "CodexFrame",
+  "CodexRequestOutcome",
+  "startCodexTransport",
+  // The Subagent-scoped reader and its routing table.
+  "CodexReader",
+  "CodexRoute",
+  "CodexRouter",
+  "createCodexReader",
+  "codexFrameTurnId",
+  // The App Server protocol.
+  "CodexItem",
+  "CodexNotification",
+  "CodexNotificationMethod",
+  "CodexNotificationReading",
+  "CodexParams",
+  "CodexThreadParameters",
+  "CodexTokenBreakdown",
+  "CodexTurnStatus",
+  "decodeCodexItem",
+  "initializeParams",
+  "isCodexInitializeResult",
+  "readCodexNotification",
+  "readCodexThreadId",
+  "readCodexTurnId",
+  "threadStartParams",
+  "turnInterruptParams",
+  "turnStartParams",
+  "turnSteerParams",
+  // The child process.
+  "CodexChildProcess",
+  "CodexProcessExit",
+  "CodexSignal",
+  "CodexSpawn",
+  "CodexSpawnRequest",
+  "codexChildEnvironment",
+  "codexSpawnRequest",
+  "spawnCodexAppServer",
+]);
+
 function specifiersOf(file: string): string[] {
   return readImportSpecifiers(fs.readFileSync(file, "utf8"));
 }
@@ -945,6 +1076,76 @@ export function findV2BoundaryViolations(
     }
   }
 
+  // 17. The same two directions for the Codex adapter.
+  for (const file of listSourceFiles(v2Root, { includeTests: true })) {
+    if (mayImportCodexAdapter(file, graph)) continue;
+    for (const specifier of specifiersOf(file)) {
+      const target = resolveRelativeSource(file, specifier);
+      if (target && isInside(target, graph.codexAdapterRoot)) {
+        violations.add(
+          `${describe(file)} imports ${describe(target)}, and only the composition root may name the Codex adapter`,
+        );
+      }
+    }
+  }
+  for (const file of listSourceFiles(graph.codexAdapterRoot, {
+    includeTests: false,
+  })) {
+    for (const specifier of specifiersOf(file)) {
+      const target = resolveRelativeSource(file, specifier);
+      if (!target) continue;
+      if (
+        isInside(target, graph.runtimeRoot) ||
+        isInside(target, graph.hostRoot) ||
+        isInside(target, graph.presentationRoot) ||
+        isInside(target, graph.applicationRoot) ||
+        isInside(target, graph.testingRoot)
+      ) {
+        violations.add(
+          `${describe(file)} imports ${describe(target)}, and the Codex adapter lives behind the backend contract`,
+        );
+      }
+    }
+  }
+
+  // 18. A child process is spawned in one directory of v2 and nowhere else.
+  //     The Codex adapter owns one per Subagent; a second module able to spawn
+  //     one would be a second owner of a process nothing else can kill.
+  for (const file of listSourceFiles(v2Root, { includeTests: true })) {
+    if (isInside(file, graph.codexAdapterRoot)) continue;
+    for (const specifier of specifiersOf(file)) {
+      if (!isChildProcessPackage(specifier)) continue;
+      violations.add(
+        `${describe(file)} imports ${specifier}, and only the Codex adapter may spawn a child process`,
+      );
+    }
+  }
+
+  // 19. The App Server's own vocabulary — the transport, the reader's routing
+  //     table, the protocol shapes, and the child-process types — stays inside
+  //     the adapter and its test doubles. The composition root may name the
+  //     factory, the id, the options, and the probe, and nothing else: a
+  //     composition module that could name a JSON-RPC frame would be one edit
+  //     from putting retained process state somewhere generic.
+  for (const file of listSourceFiles(v2Root, { includeTests: true })) {
+    if (
+      isInside(file, graph.codexAdapterRoot) ||
+      isInside(file, graph.codexTestingRoot)
+    ) {
+      continue;
+    }
+    for (const edge of readNamedImports(fs.readFileSync(file, "utf8"))) {
+      const target = resolveRelativeSource(file, edge.specifier);
+      if (!target || !isInside(target, graph.codexAdapterRoot)) continue;
+      for (const name of edge.names) {
+        if (!CODEX_CONFINED_SYMBOLS.has(name) && name !== "*") continue;
+        violations.add(
+          `${describe(file)} imports ${name} from ${describe(target)}, and Codex App Server vocabulary stays inside the Codex adapter`,
+        );
+      }
+    }
+  }
+
   return [...violations].sort();
 }
 
@@ -998,6 +1199,20 @@ function fixtureGraph(
       "subagent-v2",
       "testing",
       "claude",
+    ),
+    codexAdapterRoot: path.join(
+      fixtureRoot,
+      "extensions",
+      "subagent-v2",
+      "backend",
+      "codex",
+    ),
+    codexTestingRoot: path.join(
+      fixtureRoot,
+      "extensions",
+      "subagent-v2",
+      "testing",
+      "codex",
     ),
     runtimeRoot: path.join(fixtureRoot, "extensions", "subagent-v2", "runtime"),
     presentationRoot: path.join(
@@ -1932,6 +2147,123 @@ test("the provider's cancellation primitive is admitted in the Claude adapter an
     `${describe(
       path.join(graph.runtimeRoot, "repository.ts"),
     )} contains runtime mechanism vocabulary AbortSignal`,
+  ]);
+});
+
+test("only the composition root may import the Codex adapter", (t) => {
+  const { graph, write } = fixtureGraph(t, "codex-adapter-importers");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/backend/codex/index.ts",
+    "export const codex = 1;\n",
+  );
+  // Allowed: the composition root wires the set.
+  write(
+    "extensions/subagent-v2/host/production-backends.ts",
+    'import { codex } from "../backend/codex/index.ts";\nexport const set = codex;\n',
+  );
+  // Allowed: the adapter's own test doubles, which drive the real wire.
+  write(
+    "extensions/subagent-v2/testing/codex/stand-in-app-server.ts",
+    'import { codex } from "../../backend/codex/index.ts";\nexport const held = codex;\n',
+  );
+  // Rejected: the runtime reaching around the contract.
+  write(
+    "extensions/subagent-v2/runtime/supervisor.ts",
+    'import { codex } from "../backend/codex/index.ts";\nexport const held = codex;\n',
+  );
+
+  const violations = findV2BoundaryViolations(graph);
+
+  assert.ok(
+    violations.includes(
+      `${describe(
+        path.join(graph.runtimeRoot, "supervisor.ts"),
+      )} imports ${describe(
+        path.join(graph.codexAdapterRoot, "index.ts"),
+      )}, and only the composition root may name the Codex adapter`,
+    ),
+    `the runtime reached the adapter unchallenged: ${JSON.stringify(violations)}`,
+  );
+});
+
+test("the Codex adapter may not import the runtime, the host, or presentation", (t) => {
+  const { graph, write } = fixtureGraph(t, "codex-adapter-reach");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/runtime/policy.ts",
+    "export const bound = 1;\n",
+  );
+  write(
+    "extensions/subagent-v2/backend/codex/agent.ts",
+    'import { bound } from "../../runtime/policy.ts";\nexport const used = bound;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(path.join(graph.codexAdapterRoot, "agent.ts"))} imports ${describe(
+      path.join(graph.runtimeRoot, "policy.ts"),
+    )}, and the Codex adapter lives behind the backend contract`,
+  ]);
+});
+
+test("a child process is spawned in the Codex adapter and nowhere else", (t) => {
+  const { graph, write } = fixtureGraph(t, "codex-child-process");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  // Allowed: the one directory that owns an App Server.
+  write(
+    "extensions/subagent-v2/backend/codex/process.ts",
+    'import { spawn } from "node:child_process";\nexport const held = spawn;\n',
+  );
+  // Rejected: the host growing a second process owner.
+  write(
+    "extensions/subagent-v2/host/session.ts",
+    'import { spawn } from "node:child_process";\nexport const held = spawn;\n',
+  );
+  // Rejected: a test double is not permission to spawn one either.
+  write(
+    "extensions/subagent-v2/testing/codex/stand-in-app-server.ts",
+    'import { spawn } from "node:child_process";\nexport const held = spawn;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(
+      path.join(graph.hostRoot, "session.ts"),
+    )} imports node:child_process, and only the Codex adapter may spawn a child process`,
+    `${describe(
+      path.join(graph.codexTestingRoot, "stand-in-app-server.ts"),
+    )} imports node:child_process, and only the Codex adapter may spawn a child process`,
+  ]);
+});
+
+test("App Server protocol and transport vocabulary stays inside the Codex adapter", (t) => {
+  const { graph, write } = fixtureGraph(t, "codex-protocol-confinement");
+  write("extensions/subagent-v2/index.ts", "export {};\n");
+  write(
+    "extensions/subagent-v2/backend/codex/index.ts",
+    "export const createCodexBackend = 1;\nexport const CodexTransport = 2;\nexport const turnStartParams = 3;\n",
+  );
+  // Allowed: the composition root names the factory and nothing else.
+  write(
+    "extensions/subagent-v2/host/production-backends.ts",
+    'import { createCodexBackend } from "../backend/codex/index.ts";\nexport const set = createCodexBackend;\n',
+  );
+  // Allowed: the adapter's own test doubles speak the wire.
+  write(
+    "extensions/subagent-v2/testing/codex/stand-in-app-server.ts",
+    'import { turnStartParams } from "../../backend/codex/index.ts";\nexport const held = turnStartParams;\n',
+  );
+  // Rejected: the composition root reaching for the transport itself.
+  write(
+    "extensions/subagent-v2/runtime/composition.ts",
+    'import { CodexTransport } from "../backend/codex/index.ts";\nexport const held = CodexTransport;\n',
+  );
+
+  assert.deepEqual(findV2BoundaryViolations(graph), [
+    `${describe(
+      path.join(graph.runtimeRoot, "composition.ts"),
+    )} imports CodexTransport from ${describe(
+      path.join(graph.codexAdapterRoot, "index.ts"),
+    )}, and Codex App Server vocabulary stays inside the Codex adapter`,
   ]);
 });
 

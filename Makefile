@@ -1,4 +1,4 @@
-.PHONY: check dev dev-v2 dogfood-status dogfood-v1 dogfood-v2 protocol-check release-gate smoke-codex smoke-v2-claude smoke-v2-pi test-conformance test-v2-conformance
+.PHONY: check dev dev-v2 dogfood-status dogfood-v1 dogfood-v2 protocol-check release-gate smoke-codex smoke-v2-claude smoke-v2-codex smoke-v2-pi test-conformance test-v2-conformance
 
 dev:
 	pi --offline -np -nc -ns -ne -e extensions/subagent --tools agent_start,agent_wait,agent_cancel,agent_steer,agent_result
@@ -28,8 +28,8 @@ dogfood-status:
 test-conformance:
 	npm run test:conformance
 
-# The shared v2 backend conformance suite: the two fake backends and both real
-# adapters run exactly the same scenarios. Codex joins at M6.
+# The shared v2 backend conformance suite: the two fake backends and all three
+# real adapters run exactly the same scenarios, and none of them skips one.
 test-v2-conformance:
 	npm run test:v2:conformance
 
@@ -47,6 +47,9 @@ smoke-v2-pi:
 
 smoke-v2-claude:
 	npm run v2:claude:smoke && npm run v2:claude:host-smoke
+
+smoke-v2-codex:
+	npm run v2:codex:smoke && npm run v2:codex:host-smoke
 
 check:
 	npm run check

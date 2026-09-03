@@ -1,6 +1,6 @@
 // The v2 host-level live gate, for one backend at a time.
 //
-// Usage: node --import tsx scripts/v2-pi-host-live-smoke.mjs [pi|claude]
+// Usage: node --import tsx scripts/v2-pi-host-live-smoke.mjs [pi|claude|codex]
 //
 // Launches Pi in RPC mode with **only** the v2 entry point loaded, asks the
 // model to delegate to a Profile naming the given backend, and reads the
@@ -17,9 +17,9 @@
 //
 // Credentials follow the existing live-smoke conventions. Override the Pi
 // executable with V2_PI_LIVE_BIN, the parent model with V2_PI_LIVE_MODEL, the
-// delegate's model with V2_PI_LIVE_MODEL or V2_CLAUDE_LIVE_MODEL, and the
-// overall bound with V2_PI_LIVE_TIMEOUT_MS. This spends provider quota and is
-// not part of `npm run check`.
+// delegate's model with V2_PI_LIVE_MODEL, V2_CLAUDE_LIVE_MODEL, or
+// V2_CODEX_LIVE_MODEL, and the overall bound with V2_PI_LIVE_TIMEOUT_MS. This
+// spends provider quota and is not part of `npm run check`.
 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -29,10 +29,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-const BACKENDS = new Set(["pi", "claude"]);
+const BACKENDS = new Set(["pi", "claude", "codex"]);
 const backend = process.argv[2] ?? "pi";
 if (!BACKENDS.has(backend)) {
-  console.error(`unknown backend '${backend}'; expected pi or claude`);
+  console.error(
+    `unknown backend '${backend}'; expected one of ${[...BACKENDS].join(", ")}`,
+  );
   process.exit(2);
 }
 
@@ -50,12 +52,17 @@ const entry = path.join(
   "index.ts",
 );
 const bin = process.env.V2_PI_LIVE_BIN ?? "pi";
-// The delegate's model. Pi's is a catalogue reference and Claude's is a family
-// alias, so they are different variables and neither default fits the other.
+// The delegate's model. Pi's is a catalogue reference, Claude's is a family
+// alias, and Codex's is a name the App Server resolves itself — three
+// different vocabularies, so three variables and no shared default. Codex's is
+// left unset unless asked for, because the App Server's own default is the
+// right one and this gate is not about model selection.
 const model =
   backend === "claude"
     ? (process.env.V2_CLAUDE_LIVE_MODEL ?? "haiku")
-    : process.env.V2_PI_LIVE_MODEL;
+    : backend === "codex"
+      ? process.env.V2_CODEX_LIVE_MODEL
+      : process.env.V2_PI_LIVE_MODEL;
 const timeoutMs = Number(process.env.V2_PI_LIVE_TIMEOUT_MS ?? 300_000);
 const failures = [];
 let interrupted;
