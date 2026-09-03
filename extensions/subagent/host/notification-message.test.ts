@@ -186,6 +186,37 @@ test("an expanded notice shows the bounded text below the summary", () => {
   );
 });
 
+test("the collapsed line is fitted to the width the terminal actually gave", () => {
+  // The defect this guards was visible in a live Session: the line was
+  // formatted before `render`, so it was fitted to a constant, and a label was
+  // cut on a 94-column pane with fourteen columns to spare. `Component.render`
+  // is handed the live width and `Box` passes on what its padding leaves, so
+  // the same message renders differently at two widths — and a wide terminal
+  // shows a label a narrow one has to cut.
+  const message = buildNotificationMessage(
+    fixtureNotification({
+      finalOutput: "done",
+      identity: { agent: "standards-reviewer" },
+    }),
+  );
+  const component = renderNotificationMessage(
+    message,
+    { expanded: false, outputPad: 1 },
+    theme,
+  );
+  const at = (width: number) =>
+    stripVTControlCharacters(component?.render(width).join("\n") ?? "");
+
+  assert.match(
+    at(120),
+    /standards-reviewer · look around · completed in 12\.4s/,
+  );
+  // Narrow enough that the label cannot survive whole, so the two readings
+  // differ — which is the proof the width reached the formatter at all.
+  assert.doesNotMatch(at(56), /look around/);
+  assert.match(at(56), /completed in 12\.4s/);
+});
+
 test("S-1: the ids are in the expanded text, where a tool call needs them", () => {
   const message = buildNotificationMessage(
     fixtureNotification({ finalOutput: "done" }),

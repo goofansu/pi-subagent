@@ -44,6 +44,15 @@ const dimAware: RenderableTheme = {
 const keyHintStub = (_action: unknown, description: string): string =>
   `ctrl+o ${description}`;
 
+/**
+ * The width the collapsed-line goldens are written for.
+ *
+ * Wide enough that nothing gives way, so each golden reads as the sentence it
+ * is about rather than as an exercise in truncation. The fitting has its own
+ * tests, and each of those states its own width.
+ */
+const GOLDEN_WIDTH = 120;
+
 function lines(component: { render(width: number): string[] }): string[] {
   return component
     .render(80)
@@ -286,6 +295,7 @@ test("S-1: a collapsed notice names the agent, the task, and the outcome", () =>
         durationMillis: 41_200,
       },
       theme,
+      GOLDEN_WIDTH,
       false,
       keyHintStub,
     ),
@@ -307,6 +317,7 @@ test("S-1: the collapsed line reads the same whichever backend ran the Run", () 
         durationMillis: 41_200,
       },
       theme,
+      GOLDEN_WIDTH,
       false,
       keyHintStub,
     ),
@@ -324,6 +335,7 @@ test("S-2: a failed and a cancelled summary read the same way, with the verb cha
         durationMillis: 19_400,
       },
       theme,
+      GOLDEN_WIDTH,
       false,
       keyHintStub,
     ),
@@ -338,6 +350,7 @@ test("S-2: a failed and a cancelled summary read the same way, with the verb cha
         durationMillis: 60_000,
       },
       theme,
+      GOLDEN_WIDTH,
       false,
       keyHintStub,
     ),
@@ -354,6 +367,7 @@ test("a collapsed notice carries no id and no character count", () => {
       durationMillis: 1_000,
     },
     theme,
+    GOLDEN_WIDTH,
     false,
     keyHintStub,
   );
@@ -363,8 +377,8 @@ test("a collapsed notice carries no id and no character count", () => {
 });
 
 test("the whole collapsed line is fitted to its width, and the label is what gives", () => {
-  // The agent, the outcome, the cost, and the hint are what the reader came
-  // for, so the label takes whatever is left and never pushes the line wider.
+  // The agent, the outcome and the hint are what the reader came for, so the
+  // label takes whatever is left and never pushes the line wider.
   for (const width of [120, 100, 80, 70, 60]) {
     const line = stripVTControlCharacters(
       formatNotificationSummary(
@@ -375,9 +389,9 @@ test("the whole collapsed line is fitted to its width, and the label is what giv
           durationMillis: 1_000,
         },
         theme,
+        width,
         false,
         keyHintStub,
-        width,
       ),
     );
 
@@ -405,9 +419,9 @@ test("a line too narrow for any label drops the label whole, not into a gap", ()
         durationMillis: 1_000,
       },
       theme,
+      10,
       false,
       keyHintStub,
-      10,
     ),
   );
 
@@ -427,9 +441,9 @@ test("a label is capped even when the line has room to spare", () => {
         durationMillis: 1_000,
       },
       theme,
+      400,
       false,
       keyHintStub,
-      400,
     ),
   );
 
@@ -449,6 +463,7 @@ test("an expanded notice's hint offers to collapse, because one key does both", 
         durationMillis: 1_000,
       },
       theme,
+      GOLDEN_WIDTH,
       true,
       keyHintStub,
     ),

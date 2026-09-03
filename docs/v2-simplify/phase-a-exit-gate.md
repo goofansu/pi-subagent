@@ -224,9 +224,12 @@ cancelled summary read the same way, with the verb changed` asserts both with
 the cost omitted; `a collapsed notice carries no id and no character count`
 asserts the absences directly; `the whole collapsed line is fitted to its
 width, and the label is what gives` asserts at five widths that the line never
-exceeds the width and never contains a newline while the agent, outcome, cost
-and hint all survive; `a line too narrow for any label drops the label whole,
-not into a gap`; `a label is capped even when the line has room to spare`.
+exceeds the width and never contains a newline while the agent, the outcome
+and the hint all survive; `a line too narrow for any label drops the label
+whole, not into a gap`; `a label is capped even when the line has room to
+spare`; and `the collapsed line is fitted to the width the terminal actually
+gave` (`host/notification-message.test.ts`), which renders one message at two
+widths and requires the readings to differ.
 `host/notification-message.test.ts`: `S-1: the ids are in the expanded text,
 where a tool call needs them` asserts the collapsed line has neither id and
 the expanded text has both. Rows S-1 and S-2 are confirmed in the ledger.
@@ -330,17 +333,30 @@ in the decided text three times out of four.
    since a Run does not cancel itself. `presentation/status.ts` gained a
    second dictionary keyed by the terminal phases alone. This is a concept the
    decided document did not name, which is why it is recorded here.
-3. **"Truncated to the terminal width".** There is no terminal width to
-   truncate to — Pi's `MessageRenderOptions` carries the expansion state and
-   the output padding and nothing else. The collapsed line is fitted to
-   `NOTICE_SUMMARY_WIDTH`, eighty columns, a convention rather than a
-   measurement, and it is a parameter so that the day Pi hands a renderer a
-   width there is one call site to change. What the criterion actually asked
-   for — the line never wraps and the label is what gives — is delivered and
-   asserted at five widths, plus the give-way case where the label goes whole
-   rather than leaving `· ·` behind. **The deviation is that the width is a
-   default and not the terminal's**, and it is a limit of the host API rather
-   than a choice.
+3. **"Truncated to the terminal width" — twice wrong, and the second reading
+   was found in a live Session.** The claim looked unachievable: Pi's
+   `MessageRenderOptions` carry the expansion state and the output padding and
+   no width, so the renderer cannot ask how wide the terminal is. The line was
+   therefore fitted to an eighty-column default. **That was wrong.**
+   `Component.render` is handed the live viewport width on every draw, and
+   `Box` passes each child what its own padding leaves — so the width was
+   available all along, one call later than the renderer was looking.
+
+   The defect was visible rather than theoretical: on a 94-column pane a
+   `standards-reviewer` notice read `Standards reviewer …` with fourteen
+   columns to spare. The summary is now built inside `render`, so it is fitted
+   to the width the terminal actually gave and re-fits itself on a resize, and
+   `formatNotificationSummary` takes the width as a **required parameter with
+   no default** — a default is a guess, and a guessed width is visibly wrong in
+   both directions. `the collapsed line is fitted to the width the terminal
+   actually gave` (`host/notification-message.test.ts`) renders one message at
+   two widths and requires the readings to differ, which is the only way to
+   prove the width reached the formatter at all.
+
+   **What the criterion asked for is now met rather than approximated.** The
+   deviation recorded here at first — that the width was a default and not the
+   terminal's — is withdrawn.
+
 4. **§6's collapsed-line examples** read `completed in 41s` and `cancelled in
    60s`; the shared `formatDuration` produces `41.2s` and `1m 0s`. Corrected
    in the document, since a second formatter for one line would be a second

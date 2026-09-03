@@ -340,19 +340,22 @@ drops the field too: a payload carrying something no renderer reads is the
 mistake the notice made when it carried a backend id.
 
 **The whole line is fitted, not just the label**, and the label is what gives:
-it takes whatever the agent, the outcome, the cost, and the hint leave, capped
-at 48 columns so a long label cannot push the outcome off a wide terminal's
-line. Too narrow for even one column of label and the label gives way whole
-rather than leaving `· ·` behind. The outcome never gives.
+it takes whatever the agent, the outcome and the hint leave, capped at 48
+columns so a long label cannot push the outcome off a wide terminal's line.
+Too narrow for even one column of label and the label gives way whole rather
+than leaving `· ·` behind. The outcome never gives.
 
-**Corrected at the Phase A gate.** The draft said "truncated to the terminal
-width". There is no terminal width to truncate to: Pi's `MessageRenderOptions`
-carries the expansion state and the output padding and no width, so a message
-renderer cannot ask. The line is fitted to `NOTICE_SUMMARY_WIDTH`, eighty
-columns, which is a convention and not a measurement — and it is a *parameter*
-of `formatNotificationSummary`, so the day Pi hands a renderer a width there
-is one call site to change. The expand hint is unchanged. The ids are in the
-expanded text.
+The width is the one the terminal actually gave. Pi's `MessageRenderOptions`
+carry the expansion state and the output padding and no width, so the line
+cannot be built when the renderer is called — but `Component.render` is handed
+the live viewport width on every draw, and `Box` passes each child what its
+own padding leaves. So the summary is built *inside* `render`, which also
+means it re-fits itself when the terminal is resized. `formatNotificationSummary`
+takes the width as a required parameter with no default, because a default is
+a guess and a guessed width is visibly wrong in both directions: too small and
+a label is cut with room to spare, too large and the line wraps.
+
+The expand hint is unchanged. The ids are in the expanded text.
 
 The message payload the host sends carries what this line needs — agent,
 label, status, duration — alongside `runId` and `subagentId`, so the

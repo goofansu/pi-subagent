@@ -32,7 +32,7 @@
 
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { Box, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Box, Markdown, Spacer } from "@earendil-works/pi-tui";
 import { Result, Schema } from "effect";
 import {
   RunId,
@@ -157,9 +157,22 @@ export function renderNotificationMessage(
   const box = new Box(options.outputPad ?? 1, 1, (line: string) =>
     theme.bg("customMessageBg", line),
   );
-  box.addChild(
-    new Text(formatNotificationSummary(details, theme, options.expanded), 0, 0),
-  );
+  // The summary is built inside `render`, not before it, because that is the
+  // only place the width is known. Pi's `MessageRenderOptions` carry the
+  // expansion state and the padding and no width — but `Component.render` is
+  // handed the live viewport width on every draw, and `Box` passes each child
+  // the width left after its own padding. Formatting eagerly meant fitting the
+  // line to a guess, which cut a label on a wide terminal and wrapped one on a
+  // narrow terminal. It also means the line re-fits itself when the terminal
+  // is resized, for free.
+  box.addChild({
+    render: (width: number) => [
+      formatNotificationSummary(details, theme, width, options.expanded),
+    ],
+    // Nothing is cached, so there is nothing to drop. `Box` calls this on
+    // every child when its own cache is invalidated.
+    invalidate: () => {},
+  });
   if (options.expanded) {
     box.addChild(new Spacer(1));
     box.addChild(new Markdown(text, 0, 0, getMarkdownTheme()));

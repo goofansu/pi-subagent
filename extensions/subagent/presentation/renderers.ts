@@ -257,23 +257,6 @@ export function renderResumeResult(
 }
 
 /**
- * The width a collapsed notice line is fitted to when nobody says otherwise.
- *
- * Pi's message-render options carry the expansion state and the output
- * padding and **no width**, so a message renderer cannot ask how wide the
- * terminal is. Eighty columns is the conventional floor rather than a
- * measurement, and it is the one honest default available: fitting to a
- * guess means a narrow terminal can still wrap, and fitting to nothing means
- * every terminal can.
- *
- * It is a parameter on {@link formatNotificationSummary} rather than a
- * constant read inside it, so that the day Pi hands a renderer a width there
- * is one call site to change — and so that "never wraps" can be asserted at a
- * width small enough to read in a golden.
- */
-export const NOTICE_SUMMARY_WIDTH = 80;
-
-/**
  * The most room the label may take, however wide the line is.
  *
  * A cap as well as a share, for the same reason the widget caps its agent
@@ -302,12 +285,16 @@ export const MAX_NOTICE_LABEL_WIDTH = 48;
  * among four rather than the difference between two shapes of line.
  *
  * **The whole line is fitted, not just the label.** The label takes whatever
- * `width` leaves after the agent, the outcome, the cost, and the hint — those
- * are what the reader came for, so they are never the part that gives — and
- * at most {@link MAX_NOTICE_LABEL_WIDTH} beyond that. It never wraps: a
- * collapsed line that became two lines would defeat the collapsing. See
- * {@link NOTICE_SUMMARY_WIDTH} for why the width is a default rather than the
- * terminal's own.
+ * `width` leaves after the agent, the outcome and the hint — those are what
+ * the reader came for, so they are never the part that gives — and at most
+ * {@link MAX_NOTICE_LABEL_WIDTH} beyond that. It never wraps: a collapsed
+ * line that became two lines would defeat the collapsing.
+ *
+ * `width` is **required and has no default**, because a default is a guess and
+ * a guessed width is visibly wrong in both directions: too small and a label
+ * is cut with room to spare, too large and the line wraps. Every caller states
+ * the width it is fitting to, and the host states the one the terminal
+ * actually gave it.
  *
  * No status glyph: lifecycle state is written as a word, painted in the
  * phase's tone so a failure still stands out. The hint names the direction the
@@ -322,9 +309,10 @@ export function formatNotificationSummary(
     readonly durationMillis: number;
   },
   theme: RenderableTheme,
+  /** The columns the line will occupy. See the note above: no default. */
+  width: number,
   expanded = false,
   renderKeyHint?: KeyHintRenderer,
-  width: number = NOTICE_SUMMARY_WIDTH,
 ): string {
   const agent = theme.fg("toolTitle", theme.bold(details.agent));
   const outcome = theme.fg(
