@@ -26,6 +26,7 @@ import {
   DEFAULT_BACKEND_ID,
   type Profile,
 } from "../domain/index.ts";
+import type { AdapterProbe } from "../host/diagnostics-command.ts";
 import { installSubagentV2, type SubagentV2Installation } from "../index.ts";
 import type { BackendSet } from "../runtime/composition.ts";
 import { probeIsClear, type RuntimeProbe } from "../runtime/counters.ts";
@@ -121,6 +122,14 @@ export interface HostRigOptions extends StandInHostOptions {
    * from the live Session reached the backend that needed it.
    */
   readonly diagnose?: FakeBackendOptions["diagnose"];
+  /**
+   * What the backend adapters report as still held, one block per backend.
+   *
+   * Supplied here because the diagnostics command reads it through the entry
+   * point rather than through the runtime, so a test that wants to see both
+   * blocks in the report has nowhere else to put them.
+   */
+  readonly adapterProbe?: () => AdapterProbe;
   /** Make the set report that this process is loading inside a child. */
   readonly childLoad?: boolean;
   /** What depth the set reports, for the nesting guard and for admission. */
@@ -284,6 +293,9 @@ export function hostRig(
     backendSet,
     now: () => RIG_NOW,
     policy: options.policy ?? RIG_POLICY,
+    ...(options.adapterProbe === undefined
+      ? {}
+      : { probe: options.adapterProbe }),
   });
 
   let readProbe: (() => RuntimeProbe) | undefined;

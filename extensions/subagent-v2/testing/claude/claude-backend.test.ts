@@ -234,6 +234,39 @@ test("closing drops the identity, and it stays dropped", async () => {
   assert.ok(claudeProbeIsClear(nativeProbeAfterClose));
 });
 
+test("closing twice aborts the live Query once", async () => {
+  // `AbortController.abort()` is idempotent, and so is the adapter's close —
+  // but they are separate guards and only one of them is the adapter's. A
+  // second close that ran its listeners again would abort a controller the
+  // execution's own finalizer is also about to abort, and the stand-in counts
+  // what the SDK would actually see.
+  //
+  // The record is read through a thunk rather than returned as a value,
+  // because shutdown forgets the Run's identity at the Session boundary — so
+  // there is no terminal row to wait for, and what matters is what the
+  // stand-in saw by the time the Session Scope had closed.
+  const { value, nativeProbeAfterClose, tallyAfterClose } =
+    await withClaudeSession(
+      { scripts: [[{ step: "init" }, { step: "hang" }]] },
+      (rig) =>
+        Effect.gen(function* () {
+          startedRun(yield* rig.supervisor.start(claudeRigRequest()));
+          yield* untilQueried(rig);
+          // Shutdown closes the Subagent while its Run is live; the Session
+          // Scope closes it again on the way out.
+          yield* rig.supervisor.shutdown();
+          yield* quiesce();
+          return () => rig.standIn.record();
+        }),
+    );
+
+  assert.equal(value().aborts, 1);
+  assert.equal(value().closes, 1);
+  assert.equal(tallyAfterClose.opens, 1);
+  assert.equal(tallyAfterClose.closes, 1);
+  assert.ok(claudeProbeIsClear(nativeProbeAfterClose));
+});
+
 /* ============================================================== */
 /* Replay, and the attachment boundary                             */
 /* ============================================================== */

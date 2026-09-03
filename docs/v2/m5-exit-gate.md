@@ -35,12 +35,12 @@ Section 13 below enumerates everything M5 touched outside
 | `npm run test:conformance` | 164 tests, 163 pass, 1 skipped |
 | `npm run test:managed-conformance` | 6 tests, 6 pass |
 | `npm test` (v1 suite, repository scripts, `tools/`) | 540 tests, 539 pass, 1 skipped |
-| `npm run test:v2` | 973 tests, 965 pass, 8 skipped |
+| `npm run test:v2` | 975 tests, 967 pass, 8 skipped |
 | `npm run test:v2:conformance` | 153 tests, 145 pass, 8 skipped |
 | `npm run codex:protocol:check` | `CODEX_PROTOCOL_CHECK_PASS — codex-cli 0.150.1` |
 
 The three v1 lanes are byte-identical to M4's: **M5 changed no v1 file.** The
-v2 lane grew from 807 tests to 973, and the conformance lane from 115 to 153 —
+v2 lane grew from 807 tests to 975, and the conformance lane from 115 to 153 —
 the 38 new ones being the Claude rig's, which is the shared suite plus its own
 no-skips assertion.
 

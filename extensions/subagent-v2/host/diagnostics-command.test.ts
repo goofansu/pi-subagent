@@ -110,3 +110,24 @@ test("a set with no probe of its own reports the two runtime blocks alone", () =
     ["Runtime counters:", "  (none)", "Runtime probe:", "  (none)"].join("\n"),
   );
 });
+
+test("the live report carries one block per backend, straight from the set", async (t) => {
+  // The formatter is proven above; this is the wiring. The command reads the
+  // probes through the entry point rather than through the runtime, so a
+  // report that lost a block would look fine to the formatter's own test.
+  const rig = hostRig(t, {
+    adapterProbe: () => ({
+      pi: { openSessions: 1, liveSubscriptions: 0, pendingCleanups: 0 },
+      claude: { liveQueries: 2, openInputs: 1, retainedIdentities: 1 },
+    }),
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const [text] = await report(rig);
+
+  assert.match(text, /Backend probe \(pi\):\n {2}openSessions: 1/);
+  assert.match(text, /Backend probe \(claude\):\n {2}liveQueries: 2/);
+  assert.match(text, /Runtime counters:/);
+  assert.match(text, /Runtime probe:/);
+});
