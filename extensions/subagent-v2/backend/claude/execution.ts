@@ -134,9 +134,6 @@ interface PendingControl {
   discarded: boolean;
 }
 
-/** What pushing the next Control into the input stream did. */
-type Delivery = "pushed" | "closed" | "idle";
-
 export function runClaudeExecution(
   context: ClaudeExecutionContext,
   input: RunInput,
@@ -152,7 +149,8 @@ export function runClaudeExecution(
     const translator = createClaudeTranslator();
     /** Input uuids this Run owns, so a correlation can be recognized. */
     const owned = new Set<string>();
-    const queued: PendingControl[] = [];
+    /** Woken when the one provider-visible Control slot frees. */
+    const slotWaiters: (() => void)[] = [];
 
     let identity = resumed;
     let attached = resumed === undefined;
@@ -267,41 +265,26 @@ export function runClaudeExecution(
 
     /* ---- steering: one Control provider-visible at a time ---- */
 
-    /** Push the next admitted Control, if one may go now. */
-    const deliverNext = (): Delivery => {
-      if (!accepting || semanticComplete || visible !== undefined)
-        return "idle";
-      const next = queued.shift();
-      if (next === undefined) return "idle";
-      visible = next;
-      // `later` rather than `now`: the provider should finish the turn it is
-      // on and take this as guidance for the next one, which is what ADR-0018
-      // means by ordered.
-      if (!stream.push(claudeInputMessage(next.text, next.uuid, "later"))) {
-        next.discarded = true;
-        visible = undefined;
-        return "closed";
-      }
-      return "pushed";
-    };
-
     const notDelivered: RunObservation = {
       kind: "diagnostic",
       diagnostic: confinedControl(CONTROL_NOT_DELIVERED_CATEGORY),
     };
 
+    /** Free the one provider-visible slot and let a waiting consumer try. */
+    const freeSlot = (): void => {
+      visible = undefined;
+      for (const wake of slotWaiters.splice(0)) wake();
+    };
+
     const discardOutstanding = (): void => {
-      for (const control of queued) control.discarded = true;
-      queued.length = 0;
       if (visible !== undefined && !visible.confirmed) {
         visible.discarded = true;
-        visible = undefined;
+        freeSlot();
       }
     };
 
     const hasOutstanding = (): boolean =>
-      (visible !== undefined && !visible.confirmed && !visible.discarded) ||
-      queued.some((control) => !control.confirmed && !control.discarded);
+      visible !== undefined && !visible.confirmed && !visible.discarded;
 
     /**
      * Take the provider's word that guidance was seen.
@@ -329,12 +312,31 @@ export function runClaudeExecution(
           role: "user",
           parts: [{ kind: "text", text: control.text }],
         });
-        visible = undefined;
-        if (deliverNext() === "closed") yield* io.emit(notDelivered);
+        freeSlot();
       });
 
+    /**
+     * Take one Control at a time, and only when one can actually be pushed.
+     *
+     * The consumer is deliberately **not eager**. It could drain the Control
+     * mailbox into an array of its own and push from there, and that would be
+     * worse in a way that matters: ADR-0026's mailbox is where pending
+     * guidance is bounded and where a caller learns at once that there is no
+     * room, and an adapter that emptied it into an unbounded array would have
+     * moved the queue somewhere with no bound and no answer for the caller. So
+     * a Control the provider is not ready for stays in the mailbox, which is
+     * where the bound is.
+     */
     const steerLoop = Effect.gen(function* () {
       for (;;) {
+        while (visible !== undefined && accepting && !semanticComplete) {
+          yield* Effect.promise(
+            () =>
+              new Promise<void>((resolve) => {
+                slotWaiters.push(resolve);
+              }),
+          );
+        }
         const control = yield* io.controls.take;
         if (control === undefined) return;
         if (!accepting || semanticComplete || conversation.isClosed()) {
@@ -343,13 +345,23 @@ export function runClaudeExecution(
           // caller it was accepted, and nothing else about it is true.
           continue;
         }
-        queued.push({
+        const pending: PendingControl = {
           text: control.text,
           uuid: globalThis.crypto.randomUUID(),
           confirmed: false,
           discarded: false,
-        });
-        if (deliverNext() === "closed") yield* io.emit(notDelivered);
+        };
+        visible = pending;
+        // `later` rather than `now`: the provider should finish the turn it
+        // is on and take this as guidance for the next one, which is what
+        // ADR-0018 means by ordered.
+        if (
+          !stream.push(claudeInputMessage(pending.text, pending.uuid, "later"))
+        ) {
+          pending.discarded = true;
+          freeSlot();
+          yield* io.emit(notDelivered);
+        }
       }
     });
 
@@ -379,6 +391,7 @@ export function runClaudeExecution(
       fatal = { ending: failedEnding(CLAUDE_ATTACHMENT_FAILED_MESSAGE) };
       accepting = false;
       discardOutstanding();
+      freeSlot();
       stream.close();
     };
 
@@ -403,6 +416,14 @@ export function runClaudeExecution(
           }
           break;
         }
+
+        // The Run is semantically over and the input is closed; what is left
+        // is letting the Query wind itself down. Reading to the end is how a
+        // Query shuts down gracefully rather than being aborted from under a
+        // subprocess that was about to finish anyway — and it is what leaves
+        // the window in which a terminal answer already observed survives a
+        // cancel that arrives afterwards.
+        if (semanticComplete) continue;
 
         const reading = readClaudeFrame(step.frame);
         // Replayed history is not this Run's work, whichever Run it belonged
@@ -454,6 +475,7 @@ export function runClaudeExecution(
           fatal = { ending: failedEnding(diagnostic.message) };
           accepting = false;
           discardOutstanding();
+          freeSlot();
           stream.close();
           break;
         }
@@ -471,18 +493,18 @@ export function runClaudeExecution(
         }
         if (hasOutstanding()) {
           // An adapter-local Turn boundary. The Run stays active until the
-          // guidance the provider has already seen has been answered.
-          if (deliverNext() === "closed") yield* io.emit(notDelivered);
+          // guidance the provider has already been given has been answered.
           continue;
         }
         semanticComplete = true;
         accepting = false;
+        freeSlot();
         stream.close();
-        break;
       }
 
-      yield* Fiber.interrupt(steering);
       accepting = false;
+      freeSlot();
+      yield* Fiber.interrupt(steering);
       if (fatal !== undefined) return yield* withStderr(fatal);
       if (successfulResult) {
         return yield* withStderr({

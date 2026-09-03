@@ -832,16 +832,29 @@ const SCENARIO_CHECKS: {
     // expectations already checked *what* the Run says; this is that
     // something late actually happened, so the check is not vacuous.
     //
-    // Either counter satisfies it, because where a late observation is
-    // stopped depends on how far settlement had got when it arrived, and that
-    // is not a property of the backend. A backend that keeps talking while
-    // the reducer is still draining is caught by the reducer and counted as a
-    // late *observation*; one whose provider says its last word during native
-    // cleanup — after the intake has been sealed — is caught at the seam and
-    // counted as a late *event*. Both are the property; neither is a leak.
+    // Any of the three counters satisfies it, because *where* a late report
+    // is stopped depends on the backend's event channel and not on the
+    // property:
+    //
+    // - A backend still talking while the reducer drains is caught by the
+    //   reducer and counted as a late **observation**.
+    // - One whose provider says its last word during native cleanup, after
+    //   the intake has been sealed, is caught at the seam and counted as a
+    //   late **event**.
+    // - One whose event channel is created and destroyed with the Run Scope
+    //   cannot talk late at all. Nothing reaches the seam, and the late thing
+    //   is the *interruption* — arbitrated against an ending the Run already
+    //   had, and counted as a late **ending**.
+    //
+    // All three are the property. The third is Claude's, and it is the
+    // strongest of the three rather than a weaker pass: a channel that dies
+    // with the Run cannot mutate a terminal Run by construction.
     assert.ok(
-      outcome.counters.lateObservations + outcome.counters.lateEvents >= 1,
-      "the fixture emitted nothing late",
+      outcome.counters.lateObservations +
+        outcome.counters.lateEvents +
+        outcome.counters.lateEndings >=
+        1,
+      "the fixture produced nothing late at all",
     );
   },
   "a-failing-sink-cannot-strand-the-execution": (fixture, outcome) => {

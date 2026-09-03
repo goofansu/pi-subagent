@@ -33,7 +33,7 @@
     "release:check": "npm run check && npm run codex:smoke && npm run codex:resume-smoke && npm run pi:steering-smoke && npm run pi:resume-smoke && npm run claude:steering-smoke && npm run claude:resume-smoke && npm run codex:retained-release:check && npm run v2:pi:smoke && npm run v2:pi:host-smoke",
     "test": "node --import tsx --import ./extensions/subagent/suite-setup.ts --test \"extensions/subagent/**/*.test.ts\" \"scripts/**/*.test.mjs\" \"tools/**/*.test.ts\"",
     "test:v2": "node --import tsx --import ./extensions/subagent-v2/suite-setup.ts --test \"extensions/subagent-v2/**/*.test.ts\"",
-    "test:v2:conformance": "node --import tsx --import ./extensions/subagent-v2/suite-setup.ts --test extensions/subagent-v2/testing/conformance-resumable.test.ts extensions/subagent-v2/testing/conformance-one-shot.test.ts extensions/subagent-v2/testing/conformance-pi.test.ts",
+    "test:v2:conformance": "node --import tsx --import ./extensions/subagent-v2/suite-setup.ts --test extensions/subagent-v2/testing/conformance-resumable.test.ts extensions/subagent-v2/testing/conformance-one-shot.test.ts extensions/subagent-v2/testing/conformance-pi.test.ts extensions/subagent-v2/testing/conformance-claude.test.ts",
     "test:conformance": "node --import tsx --import ./extensions/subagent/suite-setup.ts --test extensions/subagent/harnesses/contract.test.ts extensions/subagent/harnesses/pi/agent.test.ts extensions/subagent/harnesses/claude/harness.test.ts extensions/subagent/harnesses/codex/harness.test.ts",
     "test:managed-conformance": "node --import tsx --import ./extensions/subagent/suite-setup.ts --test extensions/subagent/harnesses/managed-conformance.test.ts",
     "typecheck": "tsc --noEmit",
