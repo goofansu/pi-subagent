@@ -2,6 +2,17 @@
 
 Date: 2026-08-31
 
+
+## Status after M7 (2026-09-03)
+
+**Current, and its module is the current adapter.** The retained ephemeral Codex conversation is exactly what `backend/codex/` implements, and this ADR is the one the architecture note cites for it. Noted here only because the surrounding Codex ADRs are historical and a reader working backwards should know this one is not.
+
+See [the deletion ledger](../v2/deletion-ledger.md) for what replaced
+each 1.x abstraction, and [the architecture note](../architecture.md) for
+how the product is built now. Everything else here is kept unedited: the
+reason a decision was made is part of the record even when its subject is
+gone.
+
 ## Status
 
 Accepted. This ADR supersedes only the obsolete Codex process-lifetime,

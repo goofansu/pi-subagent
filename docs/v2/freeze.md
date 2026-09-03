@@ -8,7 +8,7 @@ for.
 **Applies to:** `extensions/subagent/` — the v1 extension tree — and the
 repository scripts that exist to gate it.
 **Reason:** [the v2 roadmap](roadmap.md). The execution architecture is being
-rewritten on Effect in `extensions/subagent-v2/`. Carrying two products forward
+rewritten on Effect in `extensions/subagent/`. Carrying two products forward
 in parallel would split the effort that the rewrite needs, and would leave v1's
 behaviour drifting out from under the compatibility matrix that defines v2's
 parity target.
@@ -30,7 +30,7 @@ parity target.
 backends, no performance work, no refactors for their own sake, no dependency
 upgrades that are not part of a critical fix, and no adoption of Effect anywhere
 in v1 — the last of these was enforced by two rules in
-`extensions/subagent-v2/boundaries.test.ts`, which failed if any v1 module
+`extensions/subagent/boundaries.test.ts`, which failed if any v1 module
 imported `effect` or the v2 tree. Both rules went with v1; see "The deletion".
 
 If you are unsure whether a change qualifies, the test is: *would a user notice

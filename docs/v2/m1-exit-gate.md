@@ -52,13 +52,13 @@ assert their own skip list, so a skip appearing for a new reason fails the lane.
 
 There are no silent skips. Each one is registered by the suite as a skip with a
 reason, which is the behaviour
-[the conformance suite](../../extensions/subagent-v2/testing/conformance.ts)
+[the conformance suite](../../extensions/subagent/testing/conformance.ts)
 exists to guarantee: a rig returning `undefined` for a scenario never passes it.
 
 ## 2. Both fake backends pass the initial backend conformance suite ✅
 
 The suite is
-[`extensions/subagent-v2/testing/conformance.ts`](../../extensions/subagent-v2/testing/conformance.ts):
+[`extensions/subagent/testing/conformance.ts`](../../extensions/subagent/testing/conformance.ts):
 23 scenarios across the four sections of the roadmap's conformance program that
 are meaningful before a supervisor exists.
 
@@ -195,7 +195,7 @@ which is a visible change.
 ## 8. No real time passes in any v2 test ✅
 
 Every wait in the v2 lane is on an Effect `Deferred` the test completes.
-[`extensions/subagent-v2/timing.test.ts`](../../extensions/subagent-v2/timing.test.ts)
+[`extensions/subagent/timing.test.ts`](../../extensions/subagent/timing.test.ts)
 is a lint the lane runs on itself: no v2 source may call `setTimeout`,
 `setInterval`, or `setImmediate` or import `node:timers`, and any file that
 uses `Effect.sleep` must also provide a `TestClock`.
@@ -208,7 +208,7 @@ before cancelling a hanging backend.
 
 The roadmap's six required scenarios all run end to end through the test-only
 scenario driver against `FakeResumableBackend`, in
-[`extensions/subagent-v2/testing/scenarios.test.ts`](../../extensions/subagent-v2/testing/scenarios.test.ts):
+[`extensions/subagent/testing/scenarios.test.ts`](../../extensions/subagent/testing/scenarios.test.ts):
 
 | Scenario | What it proves |
 | --- | --- |

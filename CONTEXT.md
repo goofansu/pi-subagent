@@ -4,315 +4,170 @@ The vocabulary this codebase uses. Terms here are load-bearing: they name the
 seams, and code that uses a different word for the same thing is a bug in the
 naming, not a synonym.
 
-## Core
+There is one implementation and therefore one vocabulary. The 1.x
+implementation this replaced had its own — a Harness rather than a backend, a
+Fact rather than an observation, a manager and a dispatcher rather than scopes
+— and every one of its terms is listed under [Historical
+terms](#historical-terms) with what replaced it, so a plan or a commit message
+written in the old words can still be read. The decision behind the rename is
+[ADR-0022](docs/adr/0022-v2-terminology-and-backend-field.md); the rest of the
+mapping is [the deletion ledger](docs/v2/deletion-ledger.md).
 
-**Agent** — a named role a task can be delegated to, e.g. `explore`. An agent is
-defined by exactly one **profile**.
+## The product
+
+**Agent** — a named role a task can be delegated to, e.g. `explore`. An agent
+is defined by exactly one **Profile**.
 
 **Profile** — the Markdown file that defines an agent: frontmatter configuring
-the run and a body that is the agent's prompt. Generic parsing understands only
-`description`, `harness` (default `pi`), and the body; every other field
+the Run and a body that is the agent's prompt. Generic parsing understands only
+`description`, `backend` (default `pi`), and the body; every other field
 (`model`, `effort`, `tools`, `appendSystemPrompt`) keeps one name across
-harnesses but is validated and interpreted by the named harness, and a field
-the harness does not recognize is a diagnostic, not a silent pass-through.
+backends but is validated and interpreted by the named backend, and a field the
+backend does not recognise is a diagnostic rather than a silent pass-through.
 Named after the agent, so `explore.md` defines `explore`. Read only from user
-scope; see `getAgentsDir`.
+scope; see `getAgentDir`.
 
 **Subagent** — a stable, Session-scoped asynchronous identity created from one
 Profile. A Subagent is **running** with exactly one active Run, **idle** with no
-active Run, or **closed**. Creation moves directly to running with its first Run;
-there is no empty or queued state. The manager owns its Profile association,
-prepared Harness adapter, lifecycle, and active-Run relationship. A terminal
-Run leaves an open Subagent idle, while Session shutdown closes it. A Subagent
-id is local, distinct from every Run id, and never a provider identity. A
-successful `agent_resume` synchronously claims a resumable idle Subagent and
-starts its next Run; an active Subagent rejects resume rather than queueing it.
+active Run, or **closed**. Creation moves directly to running with its first
+Run; there is no empty or queued state. A terminal Run leaves an open Subagent
+idle; Session shutdown closes it. A Subagent id is local, distinct from every
+Run id, and never a provider identity. A successful `agent_resume` claims a
+resumable idle Subagent and starts its next Run; an active Subagent rejects
+resume rather than queueing it.
 
 **Run** — one managed goal cycle of one Subagent's fixed Profile, begun by one
 new prompt and settled exactly once with one immutable terminal Result. A Run
-may span several provider Turns: intermediate provider completion is
-accounting and Conversation evidence, not a second Run and not necessarily
-settlement. A Run has its own local id, lifecycle, transcript, usage, Result,
-and owning Subagent.
-The registry holds live-display Runs, and the widget lists them. Not "job", not
-"task", not "call", and not a provider Turn. Notification delivery state is a
-separate state machine, tracked by the delivery module keyed by Run id — never
-on the Run itself.
+may span several provider Turns: intermediate provider completion is accounting
+and Conversation evidence, not a second Run and not necessarily settlement. A
+Run has its own local id, phase, projection, usage, Result, and owning
+Subagent. Not "job", not "task", not "call", and not a provider Turn.
 
-**Resume** — the asynchronous orchestration operation that accepts a stable
-Subagent id plus the next Run's description and full prompt. It returns the new
-Run id immediately rather than an answer. Resume never rebinds the fixed
-Profile, Harness adapter, working directory, child depth, resolved policy, or
-trust posture, and core never receives a provider continuation token. Pi
-continues its retained SDK session; Codex starts another Turn on its retained
-process-local Conversation; Claude attaches a fresh disposable Attempt through
-native continuation. All continuation remains inside the prepared adapter and
-current Session. Resume reports **Conversation loss** distinctly when a
-previously resumable Subagent has lost that context.
+**Run phase** — where a Run is, as five states: `running`, `finalizing`,
+`completed`, `failed`, `cancelled`. `finalizing` is the window between a
+backend's execution ending and the Run settling, and it exists so that no
+surface ever shows a Run as terminal while its cleanup is still running.
 
-**Conversation** — provider-owned semantic context that may span multiple Runs
+**Resume** — the asynchronous operation that accepts a stable Subagent id plus
+the next Run's description and prompt. It returns the new Run id immediately
+rather than an answer. Resume never rebinds the fixed Profile, backend, working
+directory, child depth, resolved policy, or trust posture, and the core never
+receives a provider continuation token: all continuation stays inside the
+adapter and the current Session. Resume reports **Conversation loss**
+distinctly when a previously resumable Subagent has lost that context.
+
+**Conversation** — provider-owned semantic context that may span several Runs
 of one Subagent. Its continuation identity and accounting baseline stay inside
-the prepared adapter; it is neither a Subagent nor a Run and never crosses the
-Harness seam. A Codex Conversation is process-local and retains its App Server
-until Session shutdown. Losing that process loses the Conversation, leaving the
-Subagent idle but non-resumable; recovery requires a new Subagent rather than a
-replacement Conversation.
+the adapter; it is neither a Subagent nor a Run and never crosses the backend
+contract.
 
-**Conversation loss** — the terminal loss of provider semantic context needed
-to Resume a Subagent, not merely a failed or cancelled Run. Loss known before
-Resume admission starts no Run; loss after admission belongs to that Run, while
-a terminal Result remains immutable. The Subagent then remains idle but
-non-resumable, and a later Resume reports the loss without exposing provider
-identity or mechanism.
+**Conversation loss** — the terminal loss of the provider context needed to
+resume a Subagent, which is not the same as a failed or cancelled Run. Loss
+known before resume admission starts no Run; loss after admission belongs to
+that Run, and a terminal Result stays immutable either way. The Subagent then
+remains idle but non-resumable, and a later resume reports the loss without
+exposing provider identity or mechanism.
 
-**Attempt** — one disposable provider attachment used to execute one Run
-against a Conversation. A prepared Run is not yet an Attempt: the Attempt
-begins when execution starts and ends only after its Run-local provider cleanup
-finishes. Claude owns one fresh streaming Query per Attempt; Codex owns one
-fresh Turn, translator, accounting delta, ordered reducer, and Run-local cleanup
-while its retained App Server remains the Conversation owner. A Codex Attempt
-settles after its matching Turn completion is fully reduced; the retained
-process does not settle the Run. No Attempt remains alive while its Subagent is
-idle. Pi instead retains one idle-capable SDK session while each Attempt owns a
-fresh provider-event subscription and accounting baseline and consumes its
-Run's fresh reporter and Control source.
-
-**Control** — bounded, harness-neutral guidance offered while a Run is active.
+**Control** — bounded, backend-neutral guidance offered while a Run is active.
 The only Control is steering text. `accepted` means the complete text entered
-the Run's bounded local admission and synchronously reached the source's one
-subscriber; it does not claim that a provider accepted it, a model consumed
-it, or it became transcript truth. A prepared Run declares supported Controls,
-and unsupported Runs have no live source. Pi serializes native session
-steering; Claude serializes user input through one ordered Query engine across
-provider Result boundaries; Codex reduces Controls with its App Server events
-and sends native `turn/steer`. Cancellation discards unsent admissions and
-provider queues. Only authoritative provider evidence of the guidance, never
-local admission or request acceptance, becomes a neutral user Fact.
-
-**Ingress order** — the adapter-local order assigned when a complete external
-occurrence enters the executor, before translation, reporting, or Promise
-continuations can delay it. Codex orders provider events, Controls,
-cancellation, process outcomes, and escalation in one Attempt reducer because
-its semantic Turn and native steering share one App Server connection. A
-successful Control offer assigns this order during its synchronous subscriber
-callback, before the offer returns; cancellation-first instead closes the gate
-before abort ingress. Only the reducer may initiate native `turn/steer` or
-`turn/interrupt`. Provider ordering and identity remain adapter-local; neither
-a local Subagent id nor a Run id is a provider thread, Turn, item, request, or
-correlation identity.
+the Run's bounded local mailbox and nothing more: it does not claim a provider
+accepted it, a model consumed it, or it became transcript truth. A backend
+declares whether it supports steering at all, so `unsupported` is answered
+without calling the provider. Cancellation discards unsent admissions. Only
+authoritative provider evidence of the guidance — never local admission —
+becomes a neutral user observation.
 
 **Turn** — one provider model response, folded into a Run's usage and counted
-by the widget. A Turn is provider accounting, not a second Run or a provider
-session that can be resumed. In the retained Codex lifecycle, each Run owns one
-current protocol Turn and a matching completion settles its Turn-scoped Attempt
-only after current ingress is fully reduced; later Turns continue on the same
-Conversation. Claude provisionally counts one unique root assistant message id
-(including aborted frames), treating a missing parent id as root for
-compatibility, deduplicating its block-level
-events, and excluding non-null sidechains. Its terminal total can raise that
-count but never lower it, so cancellation and backend failure preserve already
-observed progress. Missing message ids contribute nothing until a usable
-terminal total can catch up; missing or invalid totals are ignored. Refusal
-fallback retractions cannot retract additive Facts, so their bounded overcount
-is accepted rather than desynchronizing later catch-up.
+by the widget. A Turn is provider accounting, not a second Run and not a
+provider session that can be resumed.
 
-**Detached run** — a run that outlives the turn that started it. Every run
-started by `agent_start` or `agent_resume` is detached from the turn: `Escape` does not stop it.
-It is not detached from the session — a result belongs to the conversation
-that asked for it, so every `session_shutdown` (switch, fork, resume, new,
-reload, quit) cancels whatever is still running.
+**Detached Run** — a Run that outlives the turn that started it. Every Run
+started by `agent_start` or `agent_resume` is detached from the turn: `Escape`
+does not stop it. It is not detached from the *Session* — a Result belongs to
+the conversation that asked for it, so every `session_shutdown` (switch, fork,
+resume, new, reload, quit) cancels whatever is still running.
 
-**Pi session** — the lazy, in-process `AgentSession` owned by one prepared Pi
-adapter. It uses normal resources and memory-only state, is bound headlessly,
-retains provider context while idle, and accepts one prompt plus serial native
-steering for the active Run. Its orchestration tools and this extension are
-excluded from child discovery.
+**Ending** — a backend's honest terminal resolution of one execution:
+**answered**, **failed** (with an optional message), or **cancelled**. It
+carries no exit code and no provider stop vocabulary; the reducer turns it into
+a Run phase and preserves the details the observations carried.
 
-**Fact** — a harness-neutral record of something the child did: usually a
-message with a role and parts (text, tool call) plus usage, model, and stop
-reason in domain units. A metadata fact carries provider run metadata without
-pretending the provider emitted a conversational message; it contributes no
-implicit turn. Facts are the only vocabulary that crosses the executor seam;
-a wire format is translated into facts inside its harness and nowhere else.
-
-**Ending** — the executor's honest terminal resolution of a run: **answered**,
-**failed** (with an optional fallback message), or **cancelled**. It carries no
-exit code or backend stop vocabulary; the fold turns it into lifecycle state
-and preserves fact-derived details.
-
-**Cancel** — request that a run stop. *Cancelled* is the terminal domain status
-of a run stopped intentionally; the model, the operator, and presentation all
+**Cancel** — request that a Run stop. *Cancelled* is the terminal phase of a
+Run stopped intentionally, and the model, the operator, and presentation all
 say cancelled. *Abort* is not a domain word: it is mechanism vocabulary —
-`AbortController`/`AbortSignal`, pi's `stopReason: "aborted"` — normalized to
-cancelled at the executor seam and never shown above it.
+`AbortController`, `AbortSignal`, Pi's `stopReason: "aborted"` — normalised to
+cancelled inside the adapter and never shown above it.
 
-## Delivery
+**Cancellation reason** — `requested` or `shutdown`, reported wherever a
+cancelled Run is named. The difference is not decoration: at shutdown every Run
+is cancelled without anyone asking, and a caller told plain `cancelled` would
+conclude its own request had taken effect.
 
-**Result** — the authoritative immutable terminal output for a managed Run. It
-records the owning Subagent for orientation, is written to the result store
-only when the Run settles, and remains authoritatively retrieved by Run id with
-`agent_result`. A provider's own Result event is adapter-local Turn evidence;
-it is not this domain Result and is not synonymous with Run settlement.
+**Result** — the authoritative immutable terminal output of one Run. It records
+the owning Subagent for orientation, is written to the Result store only when
+the Run settles, and is retrieved by Run id with `agent_result`. A provider's
+own "result" event is adapter-local Turn evidence; it is not this Result and is
+not synonymous with settlement.
 
 **Notification** — a small status-specific completion notice pushed as a
 follow-up message. It identifies both the owning Subagent and the specific Run,
-orients the model, and points to `agent_result` by Run id; it is not the Result
-itself. Pushed is not landed: pi may hold a follow-up while the model
-is mid-turn. If an interrupt discards it, the notification is pushed again
-after the agent settles. One landing per notification is the invariant.
+orients the model, and points at `agent_result` by Run id; it is not the Result
+itself. **Pushed is not landed**: Pi may hold a follow-up while the model is
+mid-turn, and if an interrupt discards it the notice is pushed again once the
+agent settles. One landing per Notification is the invariant.
 
-**Wait** — `agent_wait` observes terminality only. It returns run identity and
-terminal lifecycle state, never output, and does not suppress notifications or
-affect the result store. Repeated waits return the same lifecycle state.
+**Wait** — `agent_wait` observes terminality only. It returns Run identity and
+terminal phase, never output, and neither suppresses Notifications nor touches
+the Result store. Repeated waits return the same phase. Aborting a wait stops
+only that waiter.
 
-**Result store** — the authoritative home of every terminal run's output,
-addressable by id from the moment the run settles. `agent_result` observes a
-stored result without consuming or pinning it. Results are scoped to the
-session that asked: shutdown clears the store. Whole outputs are held only up
-to a character budget; past it the oldest outputs are evicted, and an evicted
-run still answers by id, saying its output is gone. Notification delivery does
-not determine whether a result is stored.
+**Result store** — the authoritative home of every terminal Run's output,
+addressable by id from the moment the Run settles. Reading observes a stored
+Result without consuming it. Results are scoped to the Session that asked, so
+shutdown clears the store. Outputs are held only up to a byte budget; past it
+the oldest unpinned output is evicted, and an evicted Run still answers by id,
+saying its output is gone.
 
-**Session push** — the process-lifetime push target notifications go through
-(`createSessionPush`). A session's own `sendMessage` throws once that session
-is replaced, so each `session_start` re-aims the target. A notification emitted
-with no live session is dropped rather than thrown through the stale API — a
-crash guard for the teardown race, never a cross-session delivery channel.
-
-## Modules
-
-**Subagent manager** (`subagents.ts`) — the Session-scoped owner of Subagent
-records, lifecycle, fixed Profile association, prepared adapter lifetime, and
-active-Run relationship. It creates a Subagent and first Run atomically, retains
-the adapter while idle, synchronously admits at most one resumed Run, marks
-every Subagent closed before shutdown cancellation, and cannot be reopened by
-late settlement.
-
-**Registry** — the module owning the set of live-display Runs and their
-lifetime. Everything that displays or acts on Runs reads it; the dispatcher is
-the only module that adds Runs, and notification delivery is the only module
-that releases them — when the notification actually lands in the conversation,
-nowhere else. Released identities remain spent until Session shutdown resets
-the registry.
-
-**Projection** (`RunView`) — an immutable row derived from a run for display.
-Callers never touch the mutable run record.
-
-**Dispatcher** (`runner.ts`) — the rules that hold for every Run whatever it
-does: lifecycle settlement and sole ownership of the Run record — executors
-report facts, and the fold in `run.ts`, invoked only by the dispatcher, is what
-writes them. The manager supplies a retained prepared adapter; dispatch creates
-a fresh Result, Control gate, reporter, and execution for the Run and does not
-own adapter lifetime.
-
-**Harness** — a named backend (`pi`, `claude`, `codex`) that knows how to run Profiles:
-it validates the harness-owned parts of a profile and prepares one
-Subagent-scoped adapter from the fixed Profile, working directory, child depth,
-project trust, and inherited parent-model policy. A profile names its harness;
-core resolves that name through the harness registry and never interprets
-harness-specific configuration or imports a backend's types. The prepared
-adapter is the only object allowed to retain provider Conversation state. It
-prepares the initial Run, synchronously admits Resume as admitted, unsupported,
-or Conversation loss, prepares independent per-Run executions, and closes
-idempotently; provider continuation never crosses this seam.
-
-**Executor** — the per-Run execution a prepared adapter supplies
-(`harnesses/pi/agent.ts` is the Pi harness's retained-session engine). Each
-execution is prepared from only that
-Run's description and prompt, then receives a fresh reporter, AbortSignal, and
-Control source. The source synchronously presents each accepted admission to
-its one subscriber, which explicitly acknowledges when it takes the Control;
-the admission remains bounded until then. The executor witnesses what the child did: it reports harness-neutral
-facts through the reporter defined in `run.ts` and resolves to an **ending**;
-it never touches the run record. Steering support is declared per prepared Run;
-there is no Harness control method or provider session in core. Wire format
-stops inside the harness — no backend's message shapes cross this seam.
-
-**Conformance** — the capability-aware battery of thirteen required scenarios every
-harness's executor must pass as part of its own tests: `backend-crash`,
-`abort-mid-run`, `terminal-answer-then-abort`, `usage-totals`, `child-depth`,
-`config-immutable`, `no-terminal-answer`, `post-answer-failure`, and
-`terminal-transcript-healing`, `steering-single-consumed`,
-`steering-fifo-consumed`, `steering-intermediate-completion`, and
-`steering-admission-no-fact`. It makes the executor obligations of `run.ts`
-mechanical: backend failures resolve as failed, backend aborts normalize to
-cancellation, a terminal answer survives a later abort, usage deltas fold with
-latest context gauges, child depth reaches the child, and profile configuration
-stays unchanged. Snapshot-capable harnesses heal streamed drift; Codex has no
-transcript snapshot and instead proves its final completed agent message from
-the App Server event stream remains an authoritative streamed fact without
-inventing a replacement. Claude is the only harness with a visible skip for
-this scenario.
-
-**Presentation** (`presentation.ts`) — how a run and its notification read to a
-human: status tones, verbs, phrases, tool-outcome prose, and notification text.
-It is the only module that interprets a lifecycle status for display and the
-only producer of model-facing prose about runs; the delivery module does
-bookkeeping and asks this one what a notification says.
-
-**Session lifecycle** (`session-lifecycle.ts`) — owns Session start and
-shutdown: refilling stable profile/session-fact references, re-aiming pushes,
-replacing the widget, single feature registration, warnings, and ordered
-cleanup. Shutdown unbinds delivery, asks the manager to close Subagents and
-cancel active Runs, then clears delivery and live Run state. The composition
-root only forwards host events to it.
-
-**Activity** — the one-line summary of what a run is doing right now. An
-executor may report ephemeral live activity through the run seam; while it is
-present, the projection prefers it over the dispatcher's fold-derived summary
-of the most recent tool call. Display only: live activity is never transcript
-truth, usage, or final output, and settling clears it so settled runs are quiet.
-
-## Constraints
-
-**Depth** — delegation is one level deep. A subagent cannot start subagents,
-whichever harness runs it. The Dispatcher alone decides a child's depth;
-executors only copy it, and each harness owns enforcement in its children —
-per-spawn `PI_SUBAGENT_DEPTH` for Pi Bash and Codex transport, with
-agent-spawning tools denied for Pi and Claude.
+**Depth** — delegation is one level deep. A Subagent cannot start Subagents,
+whichever backend runs it. Admission decides a child's depth and each adapter
+enforces it in its own children, through a shared environment key for the
+processes that spawn one and by denying the delegation tools where that is
+possible.
 
 **Trust** — Pi's project-trust decision for the working directory, resolved by
-the session and fixed when a Subagent is prepared; the extension never derives
-its own. Applying it is harness policy: Pi applies it to retained SDK settings
-and resource loading; Claude and
-Codex do not consult it yet — their policy is a constant bypass, the forwarded
-value reserved for a future shared posture (ADR-0009).
+the Session and fixed when a Subagent is opened; the extension never derives
+its own. Applying it is each backend's policy: Pi applies it to retained SDK
+settings and resource loading; Claude and Codex do not consult it, and their
+constant bypass with the value forwarded is reserved for a future shared
+posture ([ADR-0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md)).
 
-**Shutdown** — every `session_shutdown` first marks every Subagent closed, then
-forwards cancellation to active Runs, closes idle and active adapters, drops
-every unlanded notification, clears the Result store, releases live display
-state, and forgets local Subagent and Run identities. A late settlement cannot
-move a closed Subagent to idle or notify the next Session. The next Session's
-model never started these Runs and has no context to act on their answers.
+**Shutdown** — closing the Session Scope. It cancels every active Run and
+awaits its cleanup, closes every BackendAgent, drops every unlanded
+Notification, clears the Result store, and forgets every local identity, in
+reverse acquisition order. New starts, resumes, and Controls are rejected from
+the moment it begins, and it is idempotent. A late settlement cannot reopen a
+closed Subagent or notify the next Session, whose model never started these
+Runs and has no context in which to act on their answers.
 
-## v2 vocabulary
-
-Everything above describes v1, which is frozen (see
-[`docs/v2/freeze.md`](docs/v2/freeze.md)). The rewrite in
-`extensions/subagent/` uses the vocabulary below from its first line of code.
-Where a v2 term replaces a v1 one, the v1 term stays valid for v1 and is deleted
-with it at milestone M7. The decision is
-[ADR-0022](docs/adr/0022-v2-terminology-and-backend-field.md).
+## The architecture
 
 **Backend** — the identity of Pi, Claude, or Codex. `BackendId` is its type.
-Replaces v1's **Harness** as the name for a named provider integration.
 
 **Adapter** — the integration boundary that implements one backend. Provider
-wire objects never cross it. v1 already uses this word for the object a Harness
-prepares; v2 uses it for the whole module.
+wire objects never cross it. The word names the whole module, not one object
+inside it.
 
 **BackendAgent** — the adapter-owned retained native conversation, session, or
 process. Owned by exactly one Subagent Scope and alive for that Subagent's whole
-life. v1 has no single word for this: it is the retained Pi SDK session, the
-retained Claude Conversation identity, and the retained Codex App Server process
-plus its ephemeral root, described separately.
+life. One word for three different things: the retained Pi SDK session, the
+retained Claude conversation identity, and the retained Codex App Server
+process with its ephemeral root thread.
 
-**SubagentId** — the stable logical specialist the product exposes. v1 calls it
-the Subagent id. Minted as `subagent-<nonce>-<n>`.
+**SubagentId** — the stable logical specialist the product exposes. Minted as
+`subagent-<nonce>-<n>`.
 
-**RunId** — one public `start` or `resume` operation. v1 calls it the Run id.
-Minted as `run-<nonce>-<n>`, numbered from one independently of SubagentId's
-sequence.
+**RunId** — one public `start` or `resume` operation. Minted as
+`run-<nonce>-<n>`, numbered from one independently of SubagentId's sequence.
 
 **Session nonce** — four random characters minted once per Session runtime and
 carried by every SubagentId and RunId that runtime hands out. It is what makes
@@ -321,21 +176,22 @@ are forgotten at the Session boundary, but the conversation transcript is not,
 so without it a Run id written before a reload would resolve to whichever Run
 had since taken that number. With it, a stale identifier is reported as
 unknown. Two Sessions draw the same nonce about once in 1.7 million, and share
-every identifier when they do — a weaker guarantee than v1's, which needed no
-such term because it drew a random id per Run.
+every identifier when they do — a weaker guarantee than a random id per Run
+would give, and the trade recorded in ADR-0031.
 [Operation semantics §5](docs/v2/operation-semantics.md).
 
 **Attempt** — adapter-internal vocabulary for native execution details and
-retries. In v2 this is explicitly *not* a core product type and never appears in
-a core signature; in v1 it is a documented domain term (see **Attempt** above).
+retries. Explicitly *not* a core product type, and it never appears in a core
+signature. It was a documented domain term in 1.x; see [Historical
+terms](#historical-terms).
 
-**Scope** — an Effect resource lifetime. v2 nests them Session → Subagent → Run
-→ native execution, and closing one releases everything beneath it. This
-replaces v1's hand-ordered shutdown machinery.
+**Scope** — an Effect resource lifetime, nested Session → Subagent → Run →
+native execution. Closing one releases everything beneath it, in reverse
+acquisition order, which is why there is no shutdown order to write by hand.
 [ADR-0023](docs/adr/0023-v2-scope-ownership.md).
 
 **Observation** — the neutral record of something a backend witnessed, ordered
-and lossless within a Run. Replaces v1's **Fact**.
+and lossless within a Run.
 [ADR-0024](docs/adr/0024-v2-observation-ordering.md).
 
 **Observation kinds** — the ten things an observation can be: `message`,
@@ -358,7 +214,7 @@ Added at M4, because every backend that runs tools produces tool results.
 transcript, tools, diagnostics, links, usage, activity, model, final output,
 and a truncation record. Every list and every text in it is bounded. The pure
 `reduceRun` is its only writer — no adapter, host handler, or presentation code
-writes to one. Replaces v1's mutable Run record.
+writes to one — no adapter, host handler, or presentation module can.
 
 **Applied report** — what `reduceRun` says about one observation, alongside the
 next projection: `applied`, `applied-with-truncation`, `ignored-late` (the
@@ -450,7 +306,7 @@ unresolved waiters, and open BackendAgents. Every race, backpressure, fault,
 and leak test asserts it reads zero after the Session Scope closes, which turns
 "nothing leaked" from a hope into an assertion.
 
-**Host boundary** — the v2 `host/` module plus the entry point: the one place
+**Host boundary** — the `host/` module plus the entry point: the one place
 where a Pi callback crosses into Effect. It is the only place
 `Effect.runPromise` and `ManagedRuntime` may appear, and the only place that
 touches Pi's registries, UI context, and message surface. `AbortSignal` and
@@ -474,9 +330,10 @@ arrive between Sessions.
 caller of the supervisor from outside the runtime. Each maps a decoded tool
 input plus the Session facts to a supervisor request and hands the outcome to
 presentation. It has no fields and holds no state; lifecycle stays in the
-runtime and prose stays in presentation. It exists because v1's dispatcher
-talked to lifecycle, presentation, and delivery directly, and once three callers
-could reach one mutable Run record, no single place knew what a Run looked like.
+runtime and prose stays in presentation. It exists because the implementation
+this replaced had one orchestrator talking to lifecycle, presentation, and
+delivery directly, and once three callers could reach one mutable Run record,
+no single place knew what a Run looked like.
 
 **Backend set** — the value a Session is built from: a name, the backends that
 exist, the Profiles they ship, and two host facts only a backend can answer —
@@ -485,8 +342,8 @@ delegation chain it is. A Session is built from exactly one.
 
 Three sets exist, and only one ships. The **demo backend set** is M3's: the two
 fake backends and one **demo Profile** per fake, so launching Pi with only the
-v2 entry point gave a working extension with nothing to configure; it stays in
-the tree because a host test needs a deterministic backend. The **Pi set** is
+entry point gave a working extension with nothing to configure; it stays in the
+tree because a host test needs a deterministic backend. The **Pi set** is
 M4's, and stays for Pi's own live lane and its tests. The **production backend
 set** is M5's and is what the entry point uses: Pi and Claude, no Profiles of
 its own, the host facts from Pi, and one native probe per backend. A Profile's
@@ -517,7 +374,7 @@ is what stops four renderers each assembling the same fields in a slightly
 different order. Every expanded section is omitted when it is empty: a Run that
 used no tools has nothing to say about tools rather than zero of them.
 
-**Pi adapter** — everything v2 knows about Pi, in `backend/pi/`. The SDK's
+**Pi adapter** — everything this codebase knows about Pi, in `backend/pi/`. The SDK's
 session symbols, its message and event shapes, the resource loader, the
 child-load discriminator, and the depth environment variable all stop there,
 and the boundary test enforces it in both directions: nothing outside names a
@@ -525,7 +382,8 @@ Pi session symbol, and nothing outside the composition root imports the
 directory at all. The adapter does not know the runtime, the host, or
 presentation exist.
 
-**Claude adapter** — everything v2 knows about Claude, in `backend/claude/`.
+**Claude adapter** — everything this codebase knows about Claude, in
+`backend/claude/`.
 The SDK's `query` function, its forty-member frame union, its options bag, its
 streamed input message, and the provider's own `AbortController` all stop
 there. The boundary test enforces it by *specifier* rather than by binding —
@@ -536,12 +394,14 @@ test doubles, which take the SDK's types through the aliases the adapter
 re-exports. The adapter does not know the runtime, the host, presentation, or
 the *other two adapters* exist.
 
-**Codex adapter** — everything v2 knows about Codex, in `backend/codex/`. The
+**Codex adapter** — everything this codebase knows about Codex, in
+`backend/codex/`. The
 child process, the App Server's JSON-RPC framing, its request and notification
 shapes, the root thread and turn identities, the Subagent-scoped reader, and
 the steering correlation all stop there. The boundary test enforces it three
 ways: `node:child_process` is admitted in that directory and nowhere else in
-v2, nothing outside the composition root imports the directory at all, and the
+the tree, nothing outside the composition root imports the directory at all,
+and the
 App Server's own vocabulary — the transport, the routing table, the protocol
 shapes, the child-process types — may not be *named* even by the composition
 root, which sees only the factory, the id, the options, and the probe. The
@@ -684,7 +544,7 @@ twice, and "close is idempotent" needs a number rather than a claim.
 resource load belongs to a child". Pi initializes an extension's factory while
 the loader discovers resources and applies the extensions filter only
 afterwards, so the filter alone would not stop a child from registering the
-delegation tools; the flag covers that window. Shared with v1 through a global
+delegation tools; the flag covers that window. Shared through a global
 symbol, so whichever entry point a child reaches reads a true answer.
 
 **Child depth** — how deep in a delegation chain a process is, carried in the
@@ -711,24 +571,84 @@ drops: a buffer that fills fails the Run out loud with the backend module's two
 overflow observations, because a Run that quietly lost half its transcript is
 indistinguishable from one that had nothing more to say.
 
-**Dogfood switch** — the local, reversible change that makes v2 what plain `pi`
-loads: this package's entry in Pi's settings gains an empty `extensions` list,
-disabling its v1 extension alone, and the v2 entry point is added to the
-settings' extension paths. `make dogfood-v2` and `make dogfood-v1`. The
-published manifest still exposes only v1 until M7.
+**AgentHarness** — reserved for Pi's own native abstraction, and the one
+compound the boundary test admits that contains the legacy field name. Nothing
+of ours is called this.
 
-**AgentHarness** — reserved for Pi's own native abstraction. v2 never uses it
-for anything of ours.
+## Historical terms
 
-### v1-only terms, scheduled for deletion at M7
+The 1.x implementation is deleted. Its vocabulary is recorded here so that a
+plan, an ADR, a commit message, or an exit gate written in the old words is
+still readable, and so that "what happened to X?" has an answer that is not
+`git log`. What each abstraction was replaced *by*, and why, is [the deletion
+ledger](docs/v2/deletion-ledger.md).
 
-**Harness**, **Executor**, **Dispatcher**, **Registry**, and **Subagent
-manager** name v1 modules and seams that v2 does not have. They remain correct
-for v1 and must not be used in v2 code, plans, or documents.
+Terms that carried over unchanged — Agent, Profile, Subagent, Run, Resume,
+Conversation, Conversation loss, Control, Turn, Detached Run, Ending, Cancel,
+Result, Notification, Wait, Result store, Depth, Trust, Shutdown — are defined
+above and are not repeated here.
 
-### Configuration
+**Harness** — 1.x's name for a named provider integration. Replaced by
+**Backend**. The word survives in exactly one place: `AgentHarness`, Pi's own
+native abstraction, which ADR-0022 reserves. The frontmatter field `harness:`
+is replaced by `backend:` with no alias — [the migration
+note](docs/v2/profile-backend-field-migration.md).
 
-A v2 Profile names its backend with `backend:`, not v1's field. The values are
-unchanged and the default is still `pi`. The migration is a documented rename
-with no alias and no tool; see
-[`docs/v2/profile-backend-field-migration.md`](docs/v2/profile-backend-field-migration.md).
+**Fact** — 1.x's neutral record of something a child did. Replaced by
+**Observation**, which is ordered and lossless within a Run and carries ten
+kinds rather than two.
+
+**Attempt** — in 1.x a documented domain term: one disposable provider
+attachment executing one Run against a Conversation. It is now explicitly *not*
+a core type and appears in no core signature; adapters may use the word
+internally for native execution details and retries.
+
+**Subagent manager** — 1.x's owner of Subagent identity, Profile association,
+lifecycle, and the active-Run relationship. Replaced by the **Subagent Scope**
+and the supervisor's records: ownership is a Scope rather than a map.
+
+**Registry** — 1.x's `SubagentRuns`, which held live-display Runs and handed
+out write access to them. Replaced by the **RunRepository**, which is the only
+writer of Run snapshots and hands out no write access at all.
+
+**Dispatcher** — 1.x's orchestrator, which talked to lifecycle, presentation,
+and delivery directly. Replaced by the **Façade** for input mapping, the
+**supervisor** for lifecycle, and **presentation** for prose — three seams
+where there was one caller, which is what stopped three callers reaching one
+mutable Run record.
+
+**Executor** — 1.x's per-Run provider driver. Replaced by the **backend
+contract**'s `execute`, which returns a **terminal bundle** and settles
+nothing.
+
+**Control source** — 1.x's per-Run Control lifecycle, with its own gate and
+subscriber. Replaced by the **Control mailbox** in the Run Scope, which is a
+bounded queue closed by the Scope.
+
+**Session lifecycle** — 1.x's hand-ordered shutdown machinery. Replaced by
+**Scope** nesting: closing the Session Scope releases everything beneath it in
+reverse acquisition order, so there is no order to hand-write.
+
+**Session push** — 1.x's process-lifetime push target, re-aimed at each
+`session_start`. Replaced by the **Session push sink**, which does the same
+re-aiming and additionally tracks **landing**.
+
+**Ingress order** — 1.x's adapter-local ordering of provider events, Controls,
+cancellation, process outcomes, and escalation in one reducer. The property
+survives as observation ordering ([ADR-0024](docs/adr/0024-v2-observation-ordering.md));
+the Codex adapter's **Subagent-scoped reader** is where the one-reducer shape
+still lives, because Codex is the backend whose Turn and steering share a
+connection.
+
+**Pi session** — 1.x's name for the retained in-process `AgentSession`. It is
+now one instance of a **BackendAgent**, which is the word for the same thing
+across all three backends.
+
+**Projection** (1.x sense) — 1.x's shared mutable Run record, which four
+modules could reach ([ADR-0004](docs/adr/0004-shared-mutable-run-record.md)).
+The word is kept for the *immutable* value the reducer produces; the mutable
+record is gone.
+
+**Dogfood switch** — the local settings switch that ran the rewrite beside the
+frozen implementation during the migration, and its inverse, the v1 fallback
+switch. Both are deleted: the manifest names the one extension there is.

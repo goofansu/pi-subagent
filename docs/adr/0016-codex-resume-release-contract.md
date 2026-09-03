@@ -13,6 +13,15 @@ ADR's non-ephemeral thread, disposable App Server, native continuation, and
 no-idle-process consequences. One goal, Result, Notification, and fixed
 Subagent policy per Run remain in force.
 
+### Status after M7 (2026-09-03)
+
+**The release contract holds; the module implementing it is gone.** One goal and one Result per Run is what a Run *is*, and settlement enforces it. The 1.x Codex harness this described was deleted at M7; the current adapter is `backend/codex/`.
+
+See [the deletion ledger](../v2/deletion-ledger.md) for what replaced
+each 1.x abstraction, and [the architecture note](../architecture.md) for
+how the product is built now. This ADR is kept unedited above: the reason a
+decision was made is part of the record even when its subject is gone.
+
 ## Context
 
 ADR-0003 rejected resume because a persistent idle child would retain an

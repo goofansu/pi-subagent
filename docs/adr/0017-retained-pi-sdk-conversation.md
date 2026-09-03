@@ -2,6 +2,15 @@
 
 **Status:** Accepted.
 
+## Status after M7 (2026-09-03)
+
+**The retained Pi conversation is now a BackendAgent.** The decision holds exactly: one Pi SDK session per Subagent, retained while idle. What changed is the word and the ownership — it is a **BackendAgent** held by a Subagent Scope, released when that Scope closes, rather than a session a manager remembered to dispose.
+
+See [the deletion ledger](../v2/deletion-ledger.md) for what replaced
+each 1.x abstraction, and [the architecture note](../architecture.md) for
+how the product is built now. Everything below is kept unedited: the reason
+a decision was made is part of the record even when its subject is gone.
+
 ## Context
 
 The one-shot Pi CLI preserved isolation but could not accept guidance after

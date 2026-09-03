@@ -100,7 +100,7 @@ Effect version:
 ```
 $ printf '{"id":"r1","type":"prompt","message":"/subagent-v2"}\n' \
   | pi --offline -np -nc -ns -ne --no-session \
-       -e extensions/subagent-v2/index.ts --mode rpc
+       -e extensions/subagent/index.ts --mode rpc
 
 {"type":"extension_ui_request","method":"notify",
  "message":"pi-subagent v2 skeleton active — Effect 4.0.0-rc.112",
@@ -110,13 +110,13 @@ $ printf '{"id":"r1","type":"prompt","message":"/subagent-v2"}\n' \
 
 `make dev-v2` runs the interactive equivalent.
 
-**Registration.** `extensions/subagent-v2/index.test.ts` asserts against a
+**Registration.** `extensions/subagent/index.test.ts` asserts against a
 stand-in host that the entry registers exactly one slash command and no model
 tools, message renderers, or session event handlers. A widget needs no separate
 assertion: `setWidget` lives on the UI context a session event hands out, so an
 extension with no session event handler cannot install one.
 
-**Import boundary.** `extensions/subagent-v2/boundaries.test.ts` walks the
+**Import boundary.** `extensions/subagent/boundaries.test.ts` walks the
 transitive import graph from the v2 entry point and additionally scans every v2
 source file, and fails when:
 
@@ -136,7 +136,7 @@ stays green. The boundary test runs in the v2 lane of `npm run check`.
 
 **Lanes.** v2 has its own project file (`tsconfig.v2.json`), its own test target
 (`npm run test:v2`) with its own setup module
-(`extensions/subagent-v2/suite-setup.ts`), and both are part of `npm run check`.
+(`extensions/subagent/suite-setup.ts`), and both are part of `npm run check`.
 The repository-wide typecheck still covers both trees.
 
 ## 5. The Effect version is exact-pinned and the primitive set compiles ✅
@@ -145,11 +145,11 @@ The repository-wide typecheck still covers both trees.
 operator, and the lockfile matches. No other Effect ecosystem package was added;
 `TestClock` comes from the core package's own `effect/testing` entry point.
 
-`extensions/subagent-v2/index.test.ts` asserts the pin three ways: against the
+`extensions/subagent/index.test.ts` asserts the pin three ways: against the
 declared dependency, against the installed package's version, and that `effect`
 is the only Effect package in `dependencies`.
 
-`extensions/subagent-v2/effect-primitives.test.ts` exercises the whole initial
+`extensions/subagent/effect-primitives.test.ts` exercises the whole initial
 primitive set — `Scope`, `Deferred`, a bounded `Queue`, `Fiber`,
 `SubscriptionRef`, a `Layer` for one session-long service, and `TestClock` — and
 passes in the v2 lane. `npm run typecheck:v2` passes with the primitive set
@@ -172,7 +172,7 @@ was escalated as an ADR and nothing was worked around silently.
 Pi auto-discovers every directory under an installed package's extensions folder
 *unless* the manifest lists extensions explicitly, so without this the v2
 directory would load for every installed user. `the package manifest exposes
-only the v1 extension` in `extensions/subagent-v2/packaging.test.ts` asserts it,
+only the v1 extension` in `extensions/subagent/packaging.test.ts` asserts it,
 so v2 cannot be exposed from an installed package by accident.
 
 Because a Pi process loads either v1 (installed, or `make dev`) or v2
@@ -251,7 +251,7 @@ tool is written and v1 reads its field unchanged.
 The author-facing note is
 [`profile-backend-field-migration.md`](profile-backend-field-migration.md),
 linked from the README's agent-format section. The check that keeps the old name
-out of the v2 tree is in `extensions/subagent-v2/boundaries.test.ts`, which is
+out of the v2 tree is in `extensions/subagent/boundaries.test.ts`, which is
 the only v2 file permitted to spell it and which excludes itself from its own
 scan.
 

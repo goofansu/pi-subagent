@@ -19,7 +19,7 @@ arbitration, the mailbox, the intake, the repository, the result store,
 delivery, the domain, presentation, and the façade are byte-identical to M4.
 The backend contract is unchanged: not one member added, removed, or re-typed.
 Section 11 below enumerates everything M5 touched outside
-`extensions/subagent-v2/backend/claude/` and classifies each entry.
+`extensions/subagent/backend/claude/` and classifies each entry.
 
 ---
 
@@ -52,7 +52,7 @@ have. **The Claude rig skips nothing**, and a test asserts the empty list.
 
 All 37 shared scenarios pass for the real Claude backend, registered as
 `ClaudeBackend conformance: <scenario>` by
-[`testing/conformance-claude.test.ts`](../../extensions/subagent-v2/testing/conformance-claude.test.ts).
+[`testing/conformance-claude.test.ts`](../../extensions/subagent/testing/conformance-claude.test.ts).
 
 What makes the pass mean something is what is *not* stubbed. The rig builds the
 production `createClaudeBackend` and injects a scriptable stand-in through the
@@ -86,7 +86,7 @@ subscriptions zero, and the runtime probe clear.
 ## 3. Claude-specific tests cover the spike's findings ✅
 
 The M0 spike recorded two exceptions and several behaviours v1 earned the hard
-way. [`testing/claude/claude-backend.test.ts`](../../extensions/subagent-v2/testing/claude/claude-backend.test.ts)
+way. [`testing/claude/claude-backend.test.ts`](../../extensions/subagent/testing/claude/claude-backend.test.ts)
 covers each, named for what it proves so that none can be mistaken for a
 duplicate of a shared scenario and deleted:
 
@@ -108,12 +108,12 @@ duplicate of a shared scenario and deleted:
 
 The stand-in reproduces the SDK's behaviour deliberately rather than politely —
 `a Query aborted before it is iterated produces no frames at all`
-([`stand-in-query.test.ts`](../../extensions/subagent-v2/testing/claude/stand-in-query.test.ts))
+([`stand-in-query.test.ts`](../../extensions/subagent/testing/claude/stand-in-query.test.ts))
 — because a double that always emitted an init frame would make the adapter's
 zero-observation path untestable.
 
 Pure translation is proven separately from recorded frame shapes in
-[`backend/claude/translate.test.ts`](../../extensions/subagent-v2/backend/claude/translate.test.ts):
+[`backend/claude/translate.test.ts`](../../extensions/subagent/backend/claude/translate.test.ts):
 32 tests covering every observation kind produced, tool-use id merging, the
 two-model usage sum, nonnegative differencing across two result frames, the
 derived gauge and its omission, and turn counting with its sidechain and
@@ -203,7 +203,7 @@ against the previous — which makes Run-locality true by construction rather
 than by a baseline the adapter has to remember to subtract. `two result frames
 in one Run are differenced, not summed` and `a provider reset charges the new
 reading rather than a negative delta`
-([`translate.test.ts`](../../extensions/subagent-v2/backend/claude/translate.test.ts))
+([`translate.test.ts`](../../extensions/subagent/backend/claude/translate.test.ts))
 prove the two halves.
 
 Live: `a resumed Run is charged only for its own work` in the runtime gate.
@@ -262,7 +262,7 @@ trees.
 ## 8. A cleanup probe shows no retained Query, input stream, or identity ✅
 
 The Claude adapter keeps its own probe, outside the backend contract, in
-[`backend/claude/probe.ts`](../../extensions/subagent-v2/backend/claude/probe.ts):
+[`backend/claude/probe.ts`](../../extensions/subagent/backend/claude/probe.ts):
 live Queries, open input streams, and retained conversation identities. It is
 asserted zero after the Session Scope closes in three places — all 37
 conformance scenarios, the Claude-specific tests that read
@@ -461,8 +461,8 @@ For completeness, the rest of what M5 touched outside `backend/claude/`:
 | `testing/conformance-claude.test.ts` | New. Registers the suite and asserts the empty skip list. |
 | `testing/conformance.ts` | The one loosened non-vacuity check, above. |
 | `boundaries.test.ts` | The four rules above and their fixtures; the production set added to the composition root; the two host tests that may name the adapters. |
-| `scripts/v2-claude-live-smoke.mjs` | New. The opt-in runtime live lane. |
-| `scripts/v2-pi-host-live-smoke.mjs` | Takes the backend as an argument, so one script serves both host lanes. |
+| `scripts/claude-live-smoke.mjs` | New. The opt-in runtime live lane. |
+| `scripts/pi-host-live-smoke.mjs` | Takes the backend as an argument, so one script serves both host lanes. |
 | `package.json`, `Makefile` | The Claude rig in the conformance lane; the two live gates in the release gate and behind a `make` target. |
 | `README.md` | Which backends v2 offers, and the four v2 live gates. |
 | `docs/v2/compatibility-matrix.md`, `docs/v2/roadmap.md`, `CONTEXT.md`, `docs/adr/0028-v2-backend-contract.md` | The Claude column, the milestone status, the M5 glossary terms, and the record that the contract held a second time. |
@@ -539,7 +539,7 @@ underlying figures are *cumulative across the turns of the Query*, so on a
 steered Run the gauge grows with each turn rather than tracking a true
 occupancy. The live gate did not show it misleading, but nothing yet proves it
 useful either. The decision is in
-[`translate.ts`](../../extensions/subagent-v2/backend/claude/translate.ts) with
+[`translate.ts`](../../extensions/subagent/backend/claude/translate.ts) with
 its reasoning, so it is one documented rule rather than an invention per
 reader.
 

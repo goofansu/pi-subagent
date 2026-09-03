@@ -6,6 +6,15 @@ Date: 2026-08-25
 
 Accepted. Supersedes ADR-0002.
 
+### Status after M7 (2026-09-03)
+
+**The delivery module this describes is gone.** Its three jobs are now three things: `ResultStore` owns storage, reservations, pins, and eviction; `CompletionDelivery` reads what was stored and pushes it; the Session push sink owns landing. The rule that made this ADR worth having — **storage precedes notification, and delivery reads the store** — is unchanged and is why a notification failure is survivable.
+
+See [the deletion ledger](../v2/deletion-ledger.md) for what replaced
+each 1.x abstraction, and [the architecture note](../architecture.md) for
+how the product is built now. This ADR is kept unedited above: the reason a
+decision was made is part of the record even when its subject is gone.
+
 ## Context
 
 Pushing a run's full answer makes every completion consume context whether or

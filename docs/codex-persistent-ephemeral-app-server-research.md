@@ -1,9 +1,17 @@
 # Persistent ephemeral Codex App Server research
 
-Status: implemented by
-[ADR-0021](adr/0021-retained-ephemeral-codex-conversation.md). “Current” code
-descriptions below record the pre-implementation baseline; ADR-0021,
-`CONTEXT.md`, and `runtime-invariants.md` are the normative lifecycle sources.
+**Status: historical.** Implemented by
+[ADR-0021](adr/0021-retained-ephemeral-codex-conversation.md), and every
+"current" code description below records the *pre-implementation* baseline —
+the 1.x Codex harness, which was deleted at M7. The modules it names are gone
+and are left as plain names rather than links, because there is nothing to link
+to; [the deletion ledger](v2/deletion-ledger.md) says what replaced each of
+them.
+
+The normative sources for how Codex works now are ADR-0021,
+[the architecture note](architecture.md), and [the glossary](../CONTEXT.md).
+This document is kept for the research it records: it is where the question was
+answered, and the answer is why the adapter is shaped as it is.
 
 ## Question
 
@@ -108,7 +116,7 @@ shutdown.
 The project already enforces the right admission rule: an active Subagent
 rejects resume instead of queueing it
 ([`CONTEXT.md:26-29`](../CONTEXT.md),
-[`docs/runtime-invariants.md:141-148`](runtime-invariants.md)). Preserve that
+`docs/runtime-invariants.md`, since replaced by [the architecture note](architecture.md)). Preserve that
 rule at the transport layer too.
 
 This is more than defensive programming. In the pinned Codex suite, a second
@@ -125,27 +133,27 @@ break Result identity. Do not rely on App Server rejection; gate on the prior
 
 The Subagent manager creates one adapter, retains it while the Subagent is idle,
 and closes it only on Session shutdown
-([`extensions/subagent/subagents.ts:115-176`](../extensions/subagent/subagents.ts),
-[`extensions/subagent/subagents.ts:223-255`](../extensions/subagent/subagents.ts)).
+(`extensions/subagent/subagents.ts:115-176`,
+`extensions/subagent/subagents.ts:223-255`).
 `HarnessAdapter.close()` is explicitly the release point for adapter-owned
 provider state
-([`extensions/subagent/harnesses/contract.ts:31-44`](../extensions/subagent/harnesses/contract.ts)).
+(`extensions/subagent/harnesses/contract.ts:31-44`).
 No manager-level redesign is needed to retain a Codex process.
 
 ### Pre-implementation Codex transport lifetime was the part that changed
 
 Before ADR-0021, each `prepareRun().execute()` called `runCodexAppServer()`
-([`extensions/subagent/harnesses/codex/harness.ts:408-467`](../extensions/subagent/harnesses/codex/harness.ts)).
+(`extensions/subagent/harnesses/codex/harness.ts:408-467`).
 That function:
 
 - spawns `codex app-server` for the Run
-  ([`app-server.ts:732-758`](../extensions/subagent/harnesses/codex/app-server.ts));
+  (`app-server.ts:732-758`);
 - starts a durable thread with `ephemeral: false`
-  ([`app-server.ts:610-621`](../extensions/subagent/harnesses/codex/app-server.ts));
+  (`app-server.ts:610-621`);
 - uses `thread/resume` on later Runs
-  ([`app-server.ts:1169-1178`](../extensions/subagent/harnesses/codex/app-server.ts));
+  (`app-server.ts:1169-1178`);
 - closes stdin or escalates process signals as that Run settles
-  ([`app-server.ts:910-1002`](../extensions/subagent/harnesses/codex/app-server.ts)).
+  (`app-server.ts:910-1002`).
 
 The adapter retains only the thread ID and cumulative usage baseline between
 Runs (`harness.ts:386-445`). Consequently, changing only `ephemeral: false` to
@@ -308,7 +316,7 @@ ADR-0016 while preserving their one-Conversation, one-Run/one-Result, ordered
 cancellation, and Session-boundary decisions. Update:
 
 - `CONTEXT.md` (`Attempt`, Conversation, and shutdown definitions);
-- `docs/runtime-invariants.md` (Codex lifecycle and persistence sections);
+- `docs/runtime-invariants.md` (Codex lifecycle and persistence sections), since replaced by `docs/architecture.md`;
 - `docs/adr/0015-codex-conversation-across-disposable-attempts.md` and
   `docs/adr/0016-codex-resume-release-contract.md` with supersession links;
 - the Codex upgrade protocol checks/smokes so a CLI bump re-verifies ephemeral

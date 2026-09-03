@@ -108,7 +108,7 @@ every artifact.
 Deliverables:
 
 - Freeze v1 except for critical fixes and testability changes.
-- Create the v2 tree beside v1, defaulting to `extensions/subagent-v2/` until cutover.
+- Create the v2 tree beside v1, defaulting to `extensions/subagent/` until cutover.
 - Give v2 an independent entry point, build target, test target, and CI lane.
 - Add a session-level opt-in switch or alternate extension entry point. Do not switch implementation per Run.
 - Run short, disposable API-risk spikes for Pi, Claude, and Codex covering native open, run, resume, steer, cancel, close, event bridging, and usage surfaces. Record findings; do not turn the spikes into production adapters.
@@ -130,7 +130,7 @@ Deliverables:
   - lifecycle machinery to rewrite;
   - obsolete and removable.
 - Record architecture decisions for terminology, scope ownership, observation ordering, terminal settlement, control admission, and usage normalization.
-- Decide how any existing public/profile `harness` field migrates to `backend`: preserve it as a deprecated boundary alias or make a documented configuration migration. Do not leak the old name into the v2 core. **Decided: a documented configuration migration with no alias** — [ADR-0022](../adr/0022-v2-terminology-and-backend-field.md), [migration note](profile-backend-field-migration.md). The old name is kept out of the v2 tree by a check in `extensions/subagent-v2/boundaries.test.ts`.
+- Decide how any existing public/profile `harness` field migrates to `backend`: preserve it as a deprecated boundary alias or make a documented configuration migration. Do not leak the old name into the v2 core. **Decided: a documented configuration migration with no alias** — [ADR-0022](../adr/0022-v2-terminology-and-backend-field.md), [migration note](profile-backend-field-migration.md). The old name is kept out of the v2 tree by a check in `extensions/subagent/boundaries.test.ts`.
 - Specify public operation semantics before implementation:
   - failed start admission creates no public Run, never reuses allocated IDs, and releases every scope, capacity reservation, and retained native resource;
   - start/resume admission atomically enforces global capacity and one active Run per Subagent;
@@ -167,7 +167,7 @@ Rewrite rather than reuse:
 - ✅ v1 baseline tests are green. [Freeze policy and recorded baseline](freeze.md).
 - ✅ The compatibility matrix has an explicit expected outcome for every command and backend capability. [Compatibility matrix](compatibility-matrix.md), with [public operation semantics](operation-semantics.md).
 - ✅ All three backend spikes confirm that the proposed Subagent-scoped/Run-scoped ownership model is viable, or any exception is captured as an ADR before the core contract is implemented. [Pi](spikes/pi-backend-api-risk.md), [Claude](spikes/claude-backend-api-risk.md), [Codex](spikes/codex-backend-api-risk.md); exceptions carried into [ADR-0023](../adr/0023-v2-scope-ownership.md), [ADR-0024](../adr/0024-v2-observation-ordering.md), and [ADR-0027](../adr/0027-v2-usage-normalization.md).
-- ✅ v2 builds and runs a placeholder extension without importing v1 runtime modules. `extensions/subagent-v2/`, enforced by `extensions/subagent-v2/boundaries.test.ts`.
+- ✅ v2 builds and runs a placeholder extension without importing v1 runtime modules. `extensions/subagent/`, enforced by `extensions/subagent/boundaries.test.ts`.
 - ✅ The selected Effect version is exact-pinned and the initial primitive set compiles. [Effect compatibility spike](effect-compatibility-spike.md).
 
 **M0 artifacts:**

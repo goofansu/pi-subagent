@@ -45,8 +45,8 @@ backend declares it does not have.
 
 Each of the six tools is driven through the `execute` Pi would call, with the
 arguments Pi would pass, against a Session built from both fakes. The seam is
-[`testing/stand-in-host.ts`](../../extensions/subagent-v2/testing/stand-in-host.ts)
-and [`testing/host-rig.ts`](../../extensions/subagent-v2/testing/host-rig.ts);
+[`testing/stand-in-host.ts`](../../extensions/subagent/testing/stand-in-host.ts)
+and [`testing/host-rig.ts`](../../extensions/subagent/testing/host-rig.ts);
 nothing in a host test reaches past the host boundary into the supervisor, the
 repository, or the store.
 
@@ -59,14 +59,14 @@ repository, or the store.
 | `agent_wait` | `agent_wait names each terminal Run by agent and status` | `agent_wait reports an unknown id rather than blocking on it`; `aborting the turn ends only the wait: the Run settles and its result stands` |
 | `agent_result` | `agent_result returns the full stored output with its Run identity` | `agent_result on a live Run says it has not finished, distinctly from unknown` |
 
-All in [`host/tools.test.ts`](../../extensions/subagent-v2/host/tools.test.ts).
+All in [`host/tools.test.ts`](../../extensions/subagent/host/tools.test.ts).
 Both fakes are then swept in one table-driven pass —
 `every public operation answers for the pi backend` and `… for the one-shot
 backend` in
-[`host/end-to-end.test.ts`](../../extensions/subagent-v2/host/end-to-end.test.ts).
+[`host/end-to-end.test.ts`](../../extensions/subagent/host/end-to-end.test.ts).
 
 **Live, in a real Pi process.** `pi --offline -np -nc -ns -ne -e
-extensions/subagent-v2/index.ts` with the six tools allowlisted, against a real
+extensions/subagent/index.ts` with the six tools allowlisted, against a real
 provider. Quoted verbatim from the run:
 
 `agent_start` on a demo Profile, which is the whole of gate item 2 in one
@@ -120,7 +120,7 @@ The working directory, the project-trust decision, and the parent model and
 thinking level are read from the live Session at execute time rather than at
 Session start, because the model and thinking level change during a Session and
 a Run should inherit what was true when it began
-([`host/tools.ts`](../../extensions/subagent-v2/host/tools.ts),
+([`host/tools.ts`](../../extensions/subagent/host/tools.ts),
 `sessionFactsOf`).
 
 The Session's **model catalogue** goes the other way — it is read once at
@@ -134,7 +134,7 @@ backend that validates against the list it is given:
 - `the Session's model catalogue reaches the backend that validates a Profile`
 - `a Profile pinning a model this Session cannot reach is a diagnostic`
 
-Both in [`host/session.test.ts`](../../extensions/subagent-v2/host/session.test.ts).
+Both in [`host/session.test.ts`](../../extensions/subagent/host/session.test.ts).
 The fakes themselves validate nothing, so the *content* of a real backend's
 model validation is M4 to M6; what is proven here is that the catalogue arrives.
 
@@ -148,7 +148,7 @@ result, never `RunNotTerminal`.
 - `when the widget stops listing a Run, agent_result returns its result`
 - `a Run that is still on the widget has no result yet, and says so`
 
-Both in [`host/end-to-end.test.ts`](../../extensions/subagent-v2/host/end-to-end.test.ts).
+Both in [`host/end-to-end.test.ts`](../../extensions/subagent/host/end-to-end.test.ts).
 The M2 gate proves the same invariant at the runtime seam; this proves it has
 survived the trip to the surface.
 
@@ -163,9 +163,9 @@ survived the trip to the surface.
 | Shutdown drops an unlanded notice rather than sending it into the next Session | `shutting down drops an unlanded notice rather than sending it into the next Session` |
 | A cancelled Run still notifies, terse and with no partial output | `a cancelled Run still notifies, and its notice is terse` |
 
-All in [`host/end-to-end.test.ts`](../../extensions/subagent-v2/host/end-to-end.test.ts).
+All in [`host/end-to-end.test.ts`](../../extensions/subagent/host/end-to-end.test.ts).
 The landing state machine itself is exercised event by event in
-[`host/push-sink.test.ts`](../../extensions/subagent-v2/host/push-sink.test.ts) —
+[`host/push-sink.test.ts`](../../extensions/subagent/host/push-sink.test.ts) —
 thirteen tests including `a notice that lands synchronously inside the push is
 not re-pushed later`, which is the ordering bug the sink records a notice
 *before* handing it over in order to avoid.
@@ -174,7 +174,7 @@ not re-pushed later`, which is the ordering bug the sink records a notice
 touching it, which was the point of putting a `NotificationSink` interface there
 in M2. That is now a boundary rule rather than an observation: `a runtime module
 importing the host, presentation, or the façade is rejected` in
-[`boundaries.test.ts`](../../extensions/subagent-v2/boundaries.test.ts), checked
+[`boundaries.test.ts`](../../extensions/subagent/boundaries.test.ts), checked
 against the real tree.
 
 ## 5. The presentation layer folds no backend events and owns no lifecycle state ✅
@@ -190,7 +190,7 @@ not even `effect`:
 A presentation module that cannot name the runtime cannot reach the repository,
 and one that cannot name `effect` cannot run anything. What it reads instead is
 declared in
-[`presentation/views.ts`](../../extensions/subagent-v2/presentation/views.ts) in
+[`presentation/views.ts`](../../extensions/subagent/presentation/views.ts) in
 domain types only, so a `RunSnapshot` is structurally assignable and no mapping
 layer exists to drift.
 
@@ -212,9 +212,9 @@ What is asserted, rather than argued:
   Run leaves the widget at publication, and the last one takes it away` — every
   transition follows from the index it was handed;
 
-both in [`host/widget.test.ts`](../../extensions/subagent-v2/host/widget.test.ts),
+both in [`host/widget.test.ts`](../../extensions/subagent/host/widget.test.ts),
 with the row text itself fixed by
-[`presentation/rows.test.ts`](../../extensions/subagent-v2/presentation/rows.test.ts),
+[`presentation/rows.test.ts`](../../extensions/subagent/presentation/rows.test.ts),
 which runs against a theme that paints nothing and a fixed instant.
 
 ## 6. Repeated fake Sessions start and shut down without retained fibers, queues, subscriptions, or waiters ✅
@@ -226,14 +226,14 @@ which runs against a theme that paints nothing and a fixed instant.
 - `two Session starts in one process leave exactly one runtime alive`
 - `a shutdown with no Session is a no-op rather than an error`
 
-All in [`host/session.test.ts`](../../extensions/subagent-v2/host/session.test.ts).
+All in [`host/session.test.ts`](../../extensions/subagent/host/session.test.ts).
 The probe is read *after* the Session Scope has closed, through a reader
 captured while it was live — a probe read during a Session proves nothing.
 
 ## 7. Tool inputs are declared once as Schema, and the second schema library is gone from v2 ✅
 
 Each of the six inputs is one declaration in
-[`host/tool-schemas.ts`](../../extensions/subagent-v2/host/tool-schemas.ts),
+[`host/tool-schemas.ts`](../../extensions/subagent/host/tool-schemas.ts),
 read three ways: the JSON Schema document Pi validates against, the runtime
 check at `execute`, and the TypeScript type the façade takes.
 
@@ -256,7 +256,7 @@ because v1 uses it.
 
 ## 8. The façade is the only caller of the supervisor from the host ✅
 
-[`application/subagents.ts`](../../extensions/subagent-v2/application/subagents.ts)
+[`application/subagents.ts`](../../extensions/subagent/application/subagents.ts)
 is a frozen object of six functions with no fields. The boundary test fixes both
 of its edges — `an application file importing the host, a backend, or a Pi
 package is rejected` — so it cannot become the host and the host cannot bypass
@@ -324,7 +324,7 @@ The three differences the compatibility matrix already recorded for these rows �
 `mailbox full` and `mailbox closed` replacing `queue full` and `not steerable`,
 `ResultExpired` and `RunNotTerminal` as typed outcomes, and a distinct
 shutting-down outcome — are all implemented and asserted in
-[`presentation/prose.test.ts`](../../extensions/subagent-v2/presentation/prose.test.ts).
+[`presentation/prose.test.ts`](../../extensions/subagent/presentation/prose.test.ts).
 
 ---
 

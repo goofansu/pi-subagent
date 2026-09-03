@@ -2,6 +2,15 @@
 
 **Status:** Accepted.
 
+## Status after M7 (2026-09-03)
+
+**The managed release is the contract's `close`.** Backend-neutral managed release is what `close` on a BackendAgent means, and it is idempotent and releases every retained native resource — a conformance scenario each backend passes. The 1.x modules this described were deleted at M7.
+
+See [the deletion ledger](../v2/deletion-ledger.md) for what replaced
+each 1.x abstraction, and [the architecture note](../architecture.md) for
+how the product is built now. Everything below is kept unedited: the reason
+a decision was made is part of the record even when its subject is gone.
+
 ## Context
 
 Capability flags are correctness claims. Unit support in one adapter, or a

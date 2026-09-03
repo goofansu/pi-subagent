@@ -12,6 +12,15 @@ no-fallback rule, provider-identity confinement, cancellation ordering, and
 Session ownership remain in force. ADR-0017 and ADR-0018 record the different
 Pi and Claude lifetime models.
 
+### Status after M7 (2026-09-03)
+
+**Superseded in substance, and its module is gone.** Codex retains a **process and an ephemeral root thread** rather than a Conversation across disposable Attempts, and `Attempt` is no longer a core type at all. [ADR-0021](0021-retained-ephemeral-codex-conversation.md) is the decision that stands.
+
+See [the deletion ledger](../v2/deletion-ledger.md) for what replaced
+each 1.x abstraction, and [the architecture note](../architecture.md) for
+how the product is built now. This ADR is kept unedited above: the reason a
+decision was made is part of the record even when its subject is gone.
+
 ## Decision
 
 Codex follow-up Runs need semantic continuity, but retaining an idle App Server

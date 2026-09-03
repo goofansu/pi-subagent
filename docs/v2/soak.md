@@ -2,14 +2,20 @@
 
 **Status:** Open. Started 2026-09-03 as the M4 Pi soak; extended to all three
 backends at the M7 cutover.
-**What is being soaked:** `2.0.0-rc.1` — v2 with the production backend set, as
-the maintainer's default subagent extension. Since the cutover it is what an
-installed package loads, so nothing has to be switched on; `make fallback-v1` is
-the way back.
-**What closing it unlocks:** the deletion of v1, its lanes, its scripts, and the
-fallback switch. **The soak period is the rollback window**, and it is the last
-moment at which rolling back is a Session-level switch rather than a release
-rollback.
+**What is being soaked:** `2.0.0-rc.1` — the rewrite with the production
+backend set, as the maintainer's default subagent extension. It is what an
+installed package loads; nothing has to be switched on.
+**What closing it unlocks:** the `2.0.0` release, without the release-candidate
+marker.
+
+**The rollback window is not what it was designed to be, and that is worth
+being plain about.** The plan was for this soak to run *before* 1.x was
+deleted, so that rolling back was a Session-level switch. The deletion was
+taken first, deliberately, so rolling back is now an ordinary release rollback
+— `pi install …#v1.0.0` — and no Subagent, Run, or Result crosses over. That
+raises the cost of a defect found here from "flip a switch" to "reinstall the
+previous version", which is a real cost and is the reason this record is still
+open rather than closed with the deletion.
 
 ## How this is counted
 
@@ -38,6 +44,10 @@ All four, and each is checkable rather than a judgement:
 3. **No open severity-1 or severity-2 defect.**
 4. **Every severity-3 defect is fixed or marked intentional** with its decision
    reference.
+
+A fifth, added because the deletion came first: **any severity-1 or severity-2
+defect found here is a release-rollback decision rather than a switch**, so the
+entry that records one should say what a user would do about it today.
 
 ## Reading the probes at each shutdown
 

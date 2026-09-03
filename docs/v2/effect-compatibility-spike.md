@@ -27,12 +27,12 @@ needed.
 | Repository project  | `tsconfig.json` (both trees plus `tools/`), run by `npm run typecheck`       |
 | Test runner         | `node --test` on Node v24.15.0                                              |
 | Loader              | `tsx@^4.19.3` through `node --import tsx`                                   |
-| Test lane           | `npm run test:v2`, with `extensions/subagent-v2/suite-setup.ts`             |
+| Test lane           | `npm run test:v2`, with `extensions/subagent/suite-setup.ts`             |
 | Dependency kind     | regular `dependencies` entry, because Pi installs package dependencies for extensions |
 
 ## Primitive set
 
-The smoke test is `extensions/subagent-v2/effect-primitives.test.ts`. It covers
+The smoke test is `extensions/subagent/effect-primitives.test.ts`. It covers
 the initial primitive set named by the roadmap, one assertion per primitive:
 
 | Primitive           | Module used                        | What the smoke test proves                                                   |

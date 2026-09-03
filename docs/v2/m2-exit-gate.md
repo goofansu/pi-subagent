@@ -49,7 +49,7 @@ own skip list, so a skip appearing for a new reason fails the lane.
 ## 2. The complete public lifecycle works against both fake backends ✅
 
 All six public operations plus shutdown, driven through
-[`SubagentSupervisor`](../../extensions/subagent-v2/runtime/supervisor.ts):
+[`SubagentSupervisor`](../../extensions/subagent/runtime/supervisor.ts):
 
 | Operation | Where it is exercised end to end |
 | --- | --- |
@@ -61,7 +61,7 @@ All six public operations plus shutdown, driven through
 | `result` | every scenario that settles a Run |
 | `shutdown` | `shutdown-rejects-new-work`; `lifecycle.test.ts`; `scenarios.test.ts` |
 
-The [conformance suite](../../extensions/subagent-v2/testing/conformance.ts)
+The [conformance suite](../../extensions/subagent/testing/conformance.ts)
 runs all of it against both fakes: 37 scenarios in five sections, all 37 of
 which the resumable fake passes, and 29 of which the one-shot fake passes with
 8 visible skips.
@@ -69,7 +69,7 @@ which the resumable fake passes, and 29 of which the one-shot fake passes with
 ## 3. Every race ends with one terminal result and a zero probe ✅
 
 The eleven races the roadmap names are one test each in
-[`races.test.ts`](../../extensions/subagent-v2/runtime/races.test.ts), and each
+[`races.test.ts`](../../extensions/subagent/runtime/races.test.ts), and each
 one ends with the same three assertions: one terminal result per Run, at most
 one notification, and a runtime probe that reads zero once the Session Scope
 has closed.
@@ -95,7 +95,7 @@ than the rule. What is not a disjunction is the part that matters — one status
 one result, one notification, and nothing left running.
 
 No test in the lane lets real time pass. The
-[timing lint](../../extensions/subagent-v2/timing.test.ts) enforces it. Its
+[timing lint](../../extensions/subagent/timing.test.ts) enforces it. Its
 timer rule is unchanged and applies to every v2 file; its **sleep** rule was
 narrowed in M2 to files whose name ends `.test.ts`, which exempts production
 modules *and* test-support modules such as the conformance suite, the session
@@ -112,10 +112,10 @@ Scope, and a Run fiber is forked *into* it. Nothing has to remember them.
 Proven three ways: `close-releases-every-resource` in the conformance suite,
 `a Run that outlives the body is still closed by the Session Scope` in
 `supervisor.test.ts`, and the probe assertion at the end of every test that
-uses [the session rig](../../extensions/subagent-v2/testing/session-rig.ts),
+uses [the session rig](../../extensions/subagent/testing/session-rig.ts),
 which reads it *after* the scope has closed.
 
-The [runtime probe](../../extensions/subagent-v2/runtime/counters.ts) reports
+The [runtime probe](../../extensions/subagent/runtime/counters.ts) reports
 live Run fibers, live reducer fibers, open observation queues, open mailboxes,
 unresolved waiters, repository subscriptions, and open BackendAgents. A
 subscription is counted because a raw `SubscriptionRef.changes` would be
@@ -125,7 +125,7 @@ instead.
 
 ## 5. Notification failures are retryable independently of settlement ✅
 
-[`CompletionDelivery`](../../extensions/subagent-v2/runtime/delivery.ts) reads
+[`CompletionDelivery`](../../extensions/subagent/runtime/delivery.ts) reads
 what settlement stored rather than being handed it, which is what makes a
 failure survivable: a retry re-reads the same immutable result, so it cannot
 announce something different from what `agent_result` returns, and it has
@@ -146,7 +146,7 @@ sweep finding it — once, not twice.
 
 ## 7. The forbidden vocabulary appears nowhere it should not ✅
 
-All enforced by [the boundary test](../../extensions/subagent-v2/boundaries.test.ts)
+All enforced by [the boundary test](../../extensions/subagent/boundaries.test.ts)
 on the real tree, each with a fixture proving the rule fires:
 
 | Rule | Scope |
@@ -167,7 +167,7 @@ not machinery.
 ## 8. No Subagent, BackendAgent, or Run is a Layer ✅
 
 Enforced twice.
-[`composition.test.ts`](../../extensions/subagent-v2/runtime/composition.test.ts)
+[`composition.test.ts`](../../extensions/subagent/runtime/composition.test.ts)
 reads the context keys the runtime actually provided and asserts they are
 exactly the six named services, so a Layer for something shorter-lived than the
 Session shows up as a service nobody named. The boundary test stops a module
@@ -175,12 +175,12 @@ that owns one of those from importing `Layer` at all.
 
 ## 9. The scenario driver is gone ✅
 
-`extensions/subagent-v2/testing/driver.ts` no longer exists and nothing imports
+`extensions/subagent/testing/driver.ts` no longer exists and nothing imports
 it. Its three pieces of product knowledge moved rather than being deleted:
 classifying a defect as failed and first-ending-wins are now the pure
-[`arbitrate`](../../extensions/subagent-v2/runtime/arbitration.ts), and the
+[`arbitrate`](../../extensions/subagent/runtime/arbitration.ts), and the
 running → finalizing → terminal transition is the settlement path in
-[`run-scope.ts`](../../extensions/subagent-v2/runtime/run-scope.ts). Its stage
+[`run-scope.ts`](../../extensions/subagent/runtime/run-scope.ts). Its stage
 trace is replaced by the supervisor's `stages()` hook, which the conformance
 suite uses for ordering assertions.
 

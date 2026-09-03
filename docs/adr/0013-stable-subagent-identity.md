@@ -9,6 +9,15 @@ exists, and refines ADR-0003 without changing its one-shot Run decision.
 [ADR-0014](0014-controlled-agent-resume.md) supersedes this ADR only where it
 deferred the `agent_resume` operation.
 
+### Status after M7 (2026-09-03)
+
+**The one-shot Run premise this refined is gone.** Stable Session-scoped Subagent identity is exactly what the product has, and `SubagentId` is its type. What no longer holds is the frame it sat in: a Run is no longer the whole of a child's life, because a Subagent retains a **BackendAgent** and `resume` starts another Run on the same Conversation. [ADR-0014](0014-controlled-agent-resume.md) began that and [ADR-0021](0021-retained-ephemeral-codex-conversation.md) finished it for Codex.
+
+See [the deletion ledger](../v2/deletion-ledger.md) for what replaced
+each 1.x abstraction, and [the architecture note](../architecture.md) for
+how the product is built now. This ADR is kept unedited above: the reason a
+decision was made is part of the record even when its subject is gone.
+
 ## Context
 
 `agent_start` historically used one Run id for both the delegated worker and

@@ -2,6 +2,15 @@
 
 **Status:** Accepted.
 
+## Status after M7 (2026-09-03)
+
+**The ordered Claude conversation is now a BackendAgent.** Same shape as ADR-0017's: the decision holds and the ownership moved to a Subagent Scope. The 1.x Claude harness and its Attempt orchestration were deleted at M7; the current adapter is `backend/claude/`.
+
+See [the deletion ledger](../v2/deletion-ledger.md) for what replaced
+each 1.x abstraction, and [the architecture note](../architecture.md) for
+how the product is built now. Everything below is kept unedited: the reason
+a decision was made is part of the record even when its subject is gone.
+
 ## Context
 
 Claude streaming input may consume guidance only after a successful provider

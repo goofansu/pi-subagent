@@ -102,9 +102,12 @@ try {
   ])
     requireContract(notificationMethods.has(method), `is missing ${method}`);
 
+  // The two documents that must name the pinned version, so a snapshot and the
+  // prose describing it cannot drift apart. The second used to be the harness
+  // definition-of-done, which the architecture note replaced at M7.
   for (const relativePath of [
     "docs/codex-protocol/README.md",
-    "docs/harness-definition-of-done.md",
+    "docs/architecture.md",
   ]) {
     const contents = readFileSync(path.join(repository, relativePath), "utf8");
     if (!contents.includes(version)) {

@@ -9,6 +9,15 @@ fact-vocabulary consequence (pi-ai's `Message` crossing the seam) is
 superseded by [ADR-0007](0007-harness-seam-with-neutral-facts.md), and the
 executor-resolution consequence by [ADR-0010](0010-run-endings.md).
 
+### Status after M7 (2026-09-03)
+
+**The executor and its `Fact` vocabulary are gone.** `Fact` is replaced by the **observation** union, and the executor seam by the backend contract's `execute`, which emits observations and returns a terminal bundle rather than settling anything. The decision this ADR made — that the provider driver *reports* rather than mutates — is the one that carried forward, and [ADR-0028](0028-v2-backend-contract.md) is where it now lives.
+
+See [the deletion ledger](../v2/deletion-ledger.md) for what replaced
+each 1.x abstraction, and [the architecture note](../architecture.md) for
+how the product is built now. This ADR is kept unedited above: the reason a
+decision was made is part of the record even when its subject is gone.
+
 ## Context
 
 ADR-0004 deferred the single-writer deepening of the run record, with two

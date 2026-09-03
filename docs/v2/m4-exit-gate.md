@@ -46,7 +46,7 @@ than leaving it to be read off the output.
 
 All 37 shared scenarios pass for the real Pi backend, registered as `PiBackend
 conformance: <scenario>` by
-[`testing/conformance-pi.test.ts`](../../extensions/subagent-v2/testing/conformance-pi.test.ts).
+[`testing/conformance-pi.test.ts`](../../extensions/subagent/testing/conformance-pi.test.ts).
 
 What makes the pass mean something is what is *not* stubbed. The rig builds the
 production `createPiBackend` and injects a stand-in session through the factory
@@ -69,7 +69,7 @@ zero, and the runtime probe clear.
 
 The M0 spike found one thing that places a requirement on the adapter, and three
 more behaviours v1 earned the hard way.
-[`testing/pi/pi-backend.test.ts`](../../extensions/subagent-v2/testing/pi/pi-backend.test.ts)
+[`testing/pi/pi-backend.test.ts`](../../extensions/subagent/testing/pi/pi-backend.test.ts)
 covers each, named for what it proves so that none can be mistaken for a
 duplicate of a shared scenario and deleted:
 
@@ -86,7 +86,7 @@ duplicate of a shared scenario and deleted:
 
 The stand-in reproduces the SDK's disposal behaviour deliberately — `a disposed
 session still accepts a prompt, exactly as the SDK does`
-([`stand-in-session.test.ts`](../../extensions/subagent-v2/testing/pi/stand-in-session.test.ts))
+([`stand-in-session.test.ts`](../../extensions/subagent/testing/pi/stand-in-session.test.ts))
 — because a politer double would make the adapter's guard untestable: the test
 would pass because the double refused, not because the adapter did.
 
@@ -108,7 +108,7 @@ do on its own — Pi initializes an extension's factory while the loader is stil
 discovering resources, and the filter is applied only afterwards.
 
 Child isolation and the depth environment are proven against fixture paths in
-[`backend/pi/options.test.ts`](../../extensions/subagent-v2/backend/pi/options.test.ts):
+[`backend/pi/options.test.ts`](../../extensions/subagent/backend/pi/options.test.ts):
 `both of this package's extension directories are filtered from a child`, `the
 Bash spawn carries the child depth without mutating the environment`, and `the
 resource load runs inside the child-load discriminator`.
@@ -167,7 +167,7 @@ from two directions.
 The **runtime probe** counts what the core holds: Run fibers, reducer fibers,
 observation queues, mailboxes, waiters, repository subscriptions, and open
 BackendAgents. The **adapter probe**, which lives outside the backend contract
-in [`backend/pi/probe.ts`](../../extensions/subagent-v2/backend/pi/probe.ts),
+in [`backend/pi/probe.ts`](../../extensions/subagent/backend/pi/probe.ts),
 counts what the adapter holds: open native sessions, live event subscriptions,
 and native cleanups still in flight.
 
@@ -183,7 +183,7 @@ root holds.
 ## 6. No Pi event or session type leaks into the generic runtime or presentation ✅
 
 Four new boundary rules in
-[`boundaries.test.ts`](../../extensions/subagent-v2/boundaries.test.ts), each
+[`boundaries.test.ts`](../../extensions/subagent/boundaries.test.ts), each
 with a fixture test that proves the rule rejects what it is for and admits what
 it is not:
 

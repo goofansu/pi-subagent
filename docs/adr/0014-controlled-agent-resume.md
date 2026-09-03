@@ -8,6 +8,15 @@ Accepted. Supersedes ADR-0003's rejection of follow-up orchestration and
 ADR-0013 only where it deferred `agent_resume`. Every Run remains one-shot.
 ADRs 0015–0019 subsequently enable the production provider implementations.
 
+### Status after M7 (2026-09-03)
+
+**The modules are gone; the operation is the product's.** `agent_resume` is one of the six tools, its outcomes are typed, and `resume` is a declared capability so `unsupported` is answered without calling a provider. The 1.x machinery this ADR described — the manager's synchronous claim, the Attempt it prepared — was deleted at M7.
+
+See [the deletion ledger](../v2/deletion-ledger.md) for what replaced
+each 1.x abstraction, and [the architecture note](../architecture.md) for
+how the product is built now. This ADR is kept unedited above: the reason a
+decision was made is part of the record even when its subject is gone.
+
 ## Context
 
 ADR-0013 introduced a stable Session-scoped Subagent above immutable Runs and

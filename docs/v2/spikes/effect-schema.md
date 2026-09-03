@@ -3,7 +3,7 @@
 **Status:** Complete. **Verdict: adopt.**
 **Date:** 2026-09-02
 **Library under test:** `effect` 4.0.0-rc.112 — the version pinned by
-`extensions/subagent-v2/effect-version.ts` — through the `Schema`,
+`extensions/subagent/effect-version.ts` — through the `Schema`,
 `SchemaRepresentation`, and `JsonSchema` bindings that ship from the package
 root.
 **Spike code:** `.scratch/v2-m2-supervisor-runtime/spikes/`, entry point

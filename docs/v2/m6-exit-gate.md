@@ -37,7 +37,7 @@ The roadmap is explicit about what M6 is really asking:
 not one member added, removed, or re-typed. **The shared conformance suite is
 unchanged** — M4 and M5 each loosened one check in it, and M6 loosened none.
 Section 11 below enumerates everything M6 touched outside
-`extensions/subagent-v2/backend/codex/` and classifies each entry; there are
+`extensions/subagent/backend/codex/` and classifies each entry; there are
 three, and exactly one of them is a product semantic: the shared Profile field
 module learned that a backend can support a *subset* of the shared four
 fields.
@@ -73,7 +73,7 @@ have. **The Codex rig skips nothing**, and a test asserts the empty list.
 
 All 37 shared scenarios pass for the real Codex backend, registered as
 `CodexBackend conformance: <scenario>` by
-[`testing/conformance-codex.test.ts`](../../extensions/subagent-v2/testing/conformance-codex.test.ts).
+[`testing/conformance-codex.test.ts`](../../extensions/subagent/testing/conformance-codex.test.ts).
 
 What makes the pass mean something is what is *not* stubbed. The rig builds the
 production `createCodexBackend` and injects a scriptable stand-in through the
@@ -119,13 +119,13 @@ and it is rig-side: no production line knows about it.
 
 Everything provider-neutral is the suite's business. These are the cells that
 are Codex's own, in
-[`testing/codex/codex-backend.test.ts`](../../extensions/subagent-v2/testing/codex/codex-backend.test.ts),
-[`backend/codex/transport.test.ts`](../../extensions/subagent-v2/backend/codex/transport.test.ts),
-[`backend/codex/translate.test.ts`](../../extensions/subagent-v2/backend/codex/translate.test.ts),
-[`backend/codex/protocol.test.ts`](../../extensions/subagent-v2/backend/codex/protocol.test.ts),
-[`backend/codex/profile.test.ts`](../../extensions/subagent-v2/backend/codex/profile.test.ts),
+[`testing/codex/codex-backend.test.ts`](../../extensions/subagent/testing/codex/codex-backend.test.ts),
+[`backend/codex/transport.test.ts`](../../extensions/subagent/backend/codex/transport.test.ts),
+[`backend/codex/translate.test.ts`](../../extensions/subagent/backend/codex/translate.test.ts),
+[`backend/codex/protocol.test.ts`](../../extensions/subagent/backend/codex/protocol.test.ts),
+[`backend/codex/profile.test.ts`](../../extensions/subagent/backend/codex/profile.test.ts),
 and
-[`testing/codex/stand-in-app-server.test.ts`](../../extensions/subagent-v2/testing/codex/stand-in-app-server.test.ts).
+[`testing/codex/stand-in-app-server.test.ts`](../../extensions/subagent/testing/codex/stand-in-app-server.test.ts).
 
 | The spec's finding | Where it is proven |
 | --- | --- |
@@ -170,12 +170,12 @@ removes nothing; every method and field this adapter declares is still there.
 Two scripts, both opt-in, both in `release:check`:
 
 - `npm run v2:codex:smoke`
-  ([`scripts/v2-codex-live-smoke.mjs`](../../scripts/v2-codex-live-smoke.mjs))
+  ([`scripts/codex-live-smoke.mjs`](../../scripts/codex-live-smoke.mjs))
   builds a real Session over the production set and drives all six operations
   against a real `codex app-server`, then reads the runtime probe and all three
   adapter probes after the Session Scope has closed.
 - `npm run v2:codex:host-smoke`
-  (`scripts/v2-pi-host-live-smoke.mjs codex`) launches Pi in RPC mode with only
+  (`scripts/pi-host-live-smoke.mjs codex`) launches Pi in RPC mode with only
   the v2 entry point and delegates to a Profile naming `codex`.
 
 All 21 runtime checks passed, including the four that are Codex's own — one per
@@ -429,11 +429,11 @@ there were none to classify.
 ### Changes that are not semantics at all
 
 - `boundaries.test.ts` — three new confinement rules and four fixture tests.
-- `extensions/subagent-v2/testing/conformance-codex.test.ts` — the rig
+- `extensions/subagent/testing/conformance-codex.test.ts` — the rig
   registration.
 - `package.json` — the Codex rig in `test:v2:conformance`, and
   `v2:codex:smoke` / `v2:codex:host-smoke` in `release:check`.
-- `scripts/v2-codex-live-smoke.mjs` — new; `scripts/v2-pi-host-live-smoke.mjs`
+- `scripts/codex-live-smoke.mjs` — new; `scripts/pi-host-live-smoke.mjs`
   accepts `codex`.
 - `Makefile`, `README.md`, `CONTEXT.md`, `docs/v2/compatibility-matrix.md`,
   `docs/v2/roadmap.md` — the third backend, the M6 glossary terms, the Codex

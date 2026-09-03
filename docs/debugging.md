@@ -1,0 +1,260 @@
+# Debugging a live Session
+
+**What this is:** how to find out what is wrong when something is wrong, and
+what each number the extension reports actually means.
+
+**Where to start, always:** `/subagent`. It is the only surface that reports
+what the runtime is counting and holding, and reading it costs nothing.
+
+---
+
+## `/subagent`
+
+Run it while the Session is live. Between Sessions it answers
+`No subagent Session is running.`, which is an answer rather than an error —
+Pi registers commands once per process and a Session starts and ends many times
+inside it.
+
+The report is two kinds of block and the split is the whole point:
+
+```
+Runtime counters:
+  duplicateSettlements: 0
+  lateEvents: 0
+  ...
+Runtime probe:
+  liveRunFibers: 0
+  liveReducerFibers: 0
+  ...
+Backend probe (pi):
+  openSessions: 0
+  ...
+Backend probe (claude):
+  ...
+Backend probe (codex):
+  ...
+```
+
+- **Counters** are things that *happened* and nobody had to be told about at
+  the time. One is usually normal. Thousands is a bug.
+- **Probes** are what is *still alive*. Every field must read zero for a
+  Session with nothing in flight, and every field must read zero once a Session
+  has closed. There is one probe block per backend rather than a merged total,
+  because "which adapter is still holding something" is the only question the
+  block exists to answer and a sum cannot answer it.
+
+**Every field is printed, zeroes included.** A diagnostics command that hid its
+zeroes would make "is this counter even wired up" unanswerable.
+
+Read it **before** ending a Session you are suspicious of. After the Session is
+gone there is nothing to ask.
+
+## The runtime probe
+
+Seven counts. Non-zero with nothing running means something leaked.
+
+| Field | What is still held | What a leak means |
+| --- | --- | --- |
+| `liveRunFibers` | Run execution fibers | a Run's Scope did not close |
+| `liveReducerFibers` | per-Run reducer fibers | the same, one level in |
+| `openObservationQueues` | bounded observation intakes | a Run Scope closed without releasing its intake |
+| `openMailboxes` | Control mailboxes | as above, for Controls |
+| `unresolvedWaiters` | `agent_wait` callers still waiting | a waiter was registered and never released — note that aborting a wait *should* release it |
+| `repositorySubscriptions` | live views of the Run index | a UI consumer outlived its Session; the widget is the only one |
+| `openBackendAgents` | retained native conversations | a Subagent Scope did not close |
+
+`openBackendAgents` above zero **while a Session is live is normal and
+correct** — that is what retention is. It must be zero after the Session
+closes.
+
+## Each backend's probe
+
+What that provider's own handles are, so a leak names the adapter.
+
+- **Pi** — native sessions, and event subscriptions.
+- **Claude** — live Queries, open input streams, retained conversation
+  identities.
+- **Codex** — live App Server processes, reader fibers, pending JSON-RPC
+  requests, retained root threads, in-flight steers.
+
+**Codex is the one to check with the operating system.** It is the only backend
+that owns an OS process, and an adapter's probe reading zero is the adapter's
+word for it:
+
+```sh
+ps -eo pid=,ppid=,command= | grep 'codex.*app-server'
+```
+
+Nothing should be left after a Session closes. The live gate asks `ps` for
+exactly this reason, and since M7 it asks about every descendant it ever
+observed alive, not only the child it spawned.
+
+## The counters
+
+Grouped by what you should conclude.
+
+### Must be zero. Non-zero is a defect in the runtime.
+
+| Counter | What happened | What it means |
+| --- | --- | --- |
+| `duplicateSettlements` | a second terminal candidate arrived for a Run that had one | *not* itself a bug — two endings racing is normal — but a large number means something is producing candidates it should not. The first candidate always wins. |
+| `duplicateCommits` | the same Result was committed twice | settlement ran twice for one Run |
+| `conflictingCommits` | a *different* Result was committed for a Run that had one | worse: two different answers for one Run. The first stands. |
+| `unreadableResults` | the repository says a Run settled and the store cannot read it back | the output is gone and `agent_result` can only say it expired, so this counter is the only place the difference between a defect and ordinary eviction is visible |
+| `seamDecodeFailures` | an observation did not decode at the backend seam | an adapter emitted something the observation union does not describe. Suspect a provider whose payload shape changed. |
+| `queueOverflows` | a non-blocking bridge could not hand an observation over | the Pi callback bridge is the only one; it fails the Run out loud rather than losing half a transcript |
+
+### Expected to rise. Reading them is about the *rate*.
+
+| Counter | What happened | When to care |
+| --- | --- | --- |
+| `evictions` | a stored output was dropped to keep the store inside its budget | normal in a long Session. If `agent_result` is expiring output the model still wants, the Session is holding more Results than the budget allows. |
+| `lateEvents` | an observation was emitted after intake was sealed | normal: an adapter emitting from its own finalizer does this on every Run. The intake dropped it and nothing was mutated. |
+| `lateObservations` | an observation reached the reducer and the projection was already terminal | a different fact from `lateEvents`: it got further. Still a no-op. |
+| `reconciliationDifferences` | a terminal reconciliation changed something that had been streamed | one or two means streamed drift was healed, which is what reconciliation is for. Many means a backend's streaming and its terminal snapshot disagree systematically. |
+
+### Each one means something specific went wrong.
+
+| Counter | What happened | What to do |
+| --- | --- | --- |
+| `cleanupEscalations` | a native finalizer outlived the cleanup budget, so the core closed the BackendAgent out from under it | the Subagent's Conversation is lost, honestly, and a later resume says so. Look for a provider that hangs on close. |
+| `deliveryFailures` | a Notification exhausted its retry budget | the model was not told a Run finished. **The Result is still stored and `agent_result` still returns it** — delivery failure is never Result loss. |
+| `lateEndings` | an ending arrived after one had already won | arbitration discarded it. Normal on cancellation. |
+
+## Diagnostic categories
+
+Diagnostics appear on a Run and in `agent_result`'s expanded body, each with
+its category. Ten of them, and the category is what tells a runtime note apart
+from a reason a Run has no answer:
+
+| Category | Means |
+| --- | --- |
+| `backend-failure` | the provider or the adapter failed. **A reason the Run has no answer.** |
+| `transport-loss` | the connection to the provider went. **A reason.** |
+| `cleanup-escalation` | a finalizer was escalated past. **A reason** the conversation is lost. |
+| `queue-overflow` | a bridge could not hand an observation over |
+| `reconciliation-difference` | a terminal snapshot disagreed with what was streamed |
+| `late-event` | something was emitted after sealing |
+| `delivery-failure` | a Notification could not be delivered |
+| `profile` | a Profile could not be used |
+| `control` | a Control could not be delivered |
+| `other` | none of the above |
+
+Only the first three stand in for a missing error message in a failed Run's
+body. A `late-event` is a note; a `backend-failure` is the answer to "why did
+this fail".
+
+Provider-authored text is **redacted** rather than retained where a provider
+could have put an identity in it: a redacted diagnostic carries its category
+and `[redacted]`, which is deliberate and not a truncation bug.
+
+---
+
+## Symptoms
+
+### A Run never finishes
+
+1. `/subagent`: is `liveRunFibers` above zero with nothing apparently running?
+2. Is the Run's phase `finalizing`? Then its backend's execution ended and its
+   cleanup has not. Wait for the cleanup budget; a `cleanupEscalations` of one
+   afterwards means it was escalated past, which is the bound working.
+3. `agent_cancel` it. Cancellation is admitted immediately and the Run stops
+   when its execution and cleanup finish, keeping whatever output it produced.
+4. If cancel says `already cancelling`, the first request stands and a second
+   changes nothing.
+
+### The widget shows nothing
+
+A row lasts from `agent_start` until the Run's completion notice **lands** in
+the conversation. If a Run has settled and the row is still there, its notice
+has not landed — check `deliveryFailures`, and whether the turn that would have
+carried it was interrupted.
+
+If no row ever appears, the widget appears with the *first* live Run and is
+cleared when there are none left; between Sessions there is no widget.
+
+### The model was never told a Run finished
+
+`deliveryFailures` above zero, or an interrupt that discarded the follow-up. The
+Result is stored either way: `agent_result` with the Run id returns it. A notice
+lost to an interrupt is pushed again once the agent settles, exactly once.
+
+### `agent_result` says the output was evicted
+
+The Result store is bounded and the oldest unpinned output goes first. The Run
+is still known and its status still answers; the output is gone and cannot be
+recovered. If this is happening to Results the model still needs, the Session is
+producing more output than the budget holds.
+
+### `agent_start` says `at capacity`
+
+Too many Runs are active at once. Nothing was queued and no Run was started.
+Wait for one to finish or cancel one. If nothing is running and this still
+happens, the Result store could not reserve room — check `evictions` and see
+whether every stored Result is pinned, which is the one case a reservation
+cannot evict its way out of.
+
+### A resume says the Conversation was lost
+
+The provider context needed to continue is gone. Three ways to get here: the
+Subagent's BackendAgent was closed, a cleanup escalation closed it, or — for
+Codex — the App Server process died. Start a new Subagent; there is no
+replacement Conversation.
+
+### A steer was accepted and the model ignored it
+
+`accepted` means the text is in the Run's local mailbox and **nothing more**. It
+does not mean the backend dequeued it, a provider accepted it, or a model
+consumed it. Check the Run's transcript: a user observation appears only on
+authoritative provider confirmation, so no user item means it was never
+confirmed. Do not resend in a loop.
+
+### A Profile does not appear in `/agents`
+
+It failed validation, and the Session said so at start with a warning naming
+the file and the rule. The most likely cause after upgrading from 1.x is the
+Profile still naming its backend with the old field — see
+[the migration note](v2/profile-backend-field-migration.md).
+
+### Something is wrong right after upgrading the `codex` CLI
+
+`npm run check` goes red at the protocol check, which is the check working: the
+vendored schema is compared byte-for-byte against the installed CLI's. Bumping
+the pin is the `codex-upgrade` procedure in
+`.agents/skills/codex-upgrade/SKILL.md`.
+
+---
+
+## Reproducing it deterministically
+
+If a symptom can be reproduced without a provider, it belongs in a test rather
+than in a session:
+
+- **`runtime/stress.test.ts`** — hundreds of lifecycle cycles with every bound
+  lowered, asserting the probe is zero after every cycle. This is where an
+  accumulating leak shows up.
+- **`runtime/bounds.test.ts`** — each bound driven past, asserting the
+  truncation is recorded or the refusal is typed.
+- **`runtime/races.test.ts`**, **`runtime/faults.test.ts`** — controlled
+  interleavings and injected failures.
+- **the conformance suite** — thirty-seven scenarios against both fakes and all
+  three real adapters, with the only permitted skip driven by a declared
+  capability.
+
+Nothing in the lane lets real time pass. If a fix needs time to elapse, it uses
+`TestClock`; a timer anywhere fails the timing lint.
+
+## Live gates
+
+Six, all credentialed and all outside `check`:
+
+```sh
+npm run pi:smoke        npm run pi:host-smoke
+npm run claude:smoke    npm run claude:host-smoke
+npm run codex:smoke     npm run codex:host-smoke
+```
+
+A runtime gate drives the supervisor over one adapter and reads every probe
+after the Session Scope has closed. A host gate drives the same backend through
+the surface a user has. Each prints an exact success marker and nothing else
+counts as a pass.
