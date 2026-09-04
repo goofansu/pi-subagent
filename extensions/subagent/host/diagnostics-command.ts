@@ -98,8 +98,14 @@ export interface SessionDiagnostics {
    * cannot tell a refused hand-off from a lost one cannot say which half of
    * the pipeline is failing. It also carries `consumedBeforeLanding`, which is
    * the number a later hold-while-active envelope is scheduled on.
+   *
+   * **Required**, where the adapter probe is optional, and the difference is
+   * the point: a Session with no backend probes genuinely has none to report,
+   * while every Session has a sink. An optional field here would let a caller
+   * drop the block by forgetting it, which is the one failure a diagnostics
+   * command must not have.
    */
-  readonly handoff?: CountBlock;
+  readonly handoff: CountBlock;
   readonly adapterProbe?: AdapterProbe;
 }
 
@@ -123,9 +129,7 @@ export function formatSessionDiagnostics(
     // After the runtime's own numbers and before the adapters': the hand-off
     // is the host's half of what a Session did, and it sits between the two
     // halves it joins.
-    ...(diagnostics.handoff === undefined
-      ? []
-      : [block("Notification hand-offs", diagnostics.handoff)]),
+    block("Notification hand-offs", diagnostics.handoff),
     ...Object.entries(diagnostics.adapterProbe ?? {}).map(([name, held]) =>
       block(`Backend probe (${name})`, held),
     ),

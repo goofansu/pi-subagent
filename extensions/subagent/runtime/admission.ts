@@ -112,7 +112,8 @@ export interface RunAdmission {
   /**
    * {@link acquire}, under the caller's Scope, for callers that admit a Run.
    *
-   * The protocol is the supervisor's start and resume, and it has two halves.
+   * The protocol is the supervisor's start and resume — both of them, so that
+   * neither is the one somebody has to remember — and it has two halves.
    * **A rejection after admission is a failure of the admitted span** — a
    * backend that would not open, a reservation the store refused — so the
    * Scope closes on a failure and everything the lease holds goes back before

@@ -422,6 +422,7 @@ test("every backend's probe is reported beside the runtime's own, one block each
   const text = formatSessionDiagnostics({
     counters: { lateEvents: 2 },
     probe: { liveRunFibers: 0 },
+    handoff: { landings: 1 },
     adapterProbe: { pi: { ...pi.read() }, claude: { ...claude.read() } },
   });
 
@@ -432,6 +433,8 @@ test("every backend's probe is reported beside the runtime's own, one block each
       "  lateEvents: 2",
       "Runtime probe:",
       "  liveRunFibers: 0",
+      "Notification hand-offs:",
+      "  landings: 1",
       "Backend probe (pi):",
       "  openSessions: 1",
       "  liveSubscriptions: 1",
@@ -444,14 +447,32 @@ test("every backend's probe is reported beside the runtime's own, one block each
   );
 });
 
-test("a set with no probe of its own reports the two runtime blocks alone", () => {
+test("a set with no probe of its own reports the three Session blocks alone", () => {
+  // The adapter probe is the only optional block, and the asymmetry is
+  // deliberate: a Session with no backend probes genuinely has none, while
+  // every Session has a sink, so its block is required and cannot be dropped
+  // by a caller forgetting it.
+  const blocks = [
+    "Runtime counters:",
+    "  (none)",
+    "Runtime probe:",
+    "  (none)",
+    "Notification hand-offs:",
+    "  (none)",
+  ].join("\n");
+
   assert.equal(
-    formatSessionDiagnostics({ counters: {}, probe: {} }),
-    ["Runtime counters:", "  (none)", "Runtime probe:", "  (none)"].join("\n"),
+    formatSessionDiagnostics({ counters: {}, probe: {}, handoff: {} }),
+    blocks,
   );
   assert.equal(
-    formatSessionDiagnostics({ counters: {}, probe: {}, adapterProbe: {} }),
-    ["Runtime counters:", "  (none)", "Runtime probe:", "  (none)"].join("\n"),
+    formatSessionDiagnostics({
+      counters: {},
+      probe: {},
+      handoff: {},
+      adapterProbe: {},
+    }),
+    blocks,
   );
 });
 

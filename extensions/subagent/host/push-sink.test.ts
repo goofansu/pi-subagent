@@ -256,6 +256,24 @@ test("a push after unbinding is refused rather than queued", async () => {
   );
 });
 
+test("a second aborted turn does not lose the same notice twice", async () => {
+  // `lostAfterHandOff` is read against `rePushes` to see whether the two
+  // agree, so a notice counted lost on every abort until the parent settles
+  // would make a Session look like it was losing many more notices than it
+  // re-pushed.
+  const bound = rig();
+  await bound.push(NOTICE);
+
+  bound.sink.turnEnded({ stopReason: "aborted" });
+  bound.sink.turnEnded({ stopReason: "aborted" });
+  bound.sink.turnEnded({ signalAborted: true });
+
+  assert.equal(bound.sink.counts().lostAfterHandOff, 1);
+
+  bound.sink.agentSettled();
+  assert.equal(bound.sink.counts().rePushes, 1);
+});
+
 // -- Consumption -------------------------------------------------------------
 
 test("a push for a consumed Run is accepted and nothing is sent", async () => {

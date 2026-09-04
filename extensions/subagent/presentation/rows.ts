@@ -50,8 +50,8 @@ export const ROW_DELIMITER = "  ";
 /** Keep Profile names from consuming the rest of every row. */
 export const MAX_AGENT_COLUMN_WIDTH = 16;
 
-/** How much room an activity tail needs before it is worth starting. */
-const MIN_ACTIVITY_WIDTH = 12;
+/** How much room a row's dim tail needs before it is worth starting. */
+const MIN_TAIL_WIDTH = 12;
 
 /** Widths shared by every visible row so each field starts in one column. */
 export interface RowColumns {
@@ -162,20 +162,18 @@ export function formatRunRow(
 function formatRowStatus(row: RunRowView, now: number): string {
   // A settled row reads its status and its duration through the completion
   // view, which is the same value the result card and the notice header read.
-  // That is what stops a row and a card printing two durations for one Run.
+  // That is what stops a row and a card printing two durations for one Run. A
+  // live Run has no completion to describe, so it falls back to its phase and
+  // the elapsed reading — which is the same reading the view would have made.
   const completion = completionViewOfSnapshot(row, now);
+  const phase = completion?.status ?? row.phase;
   if (row.handoff === "exhausted") {
-    return `${runPhaseVerb(completion?.status ?? row.phase)} · notification failed`;
+    return `${runPhaseVerb(phase)} · notification failed`;
   }
-  return completion === undefined
-    ? formatRunPhase({
-        phase: row.phase,
-        elapsedMillis: elapsedMillis(row, now),
-      })
-    : formatRunPhase({
-        phase: completion.status,
-        elapsedMillis: completion.durationMillis,
-      });
+  return formatRunPhase({
+    phase,
+    elapsedMillis: completion?.durationMillis ?? elapsedMillis(row, now),
+  });
 }
 
 /**
@@ -200,7 +198,7 @@ function formatRowTail(
         : "";
   if (!tail) return "";
   const remaining = width - visibleWidth(line);
-  if (remaining < MIN_ACTIVITY_WIDTH) return "";
+  if (remaining < MIN_TAIL_WIDTH) return "";
   return theme.fg("dim", truncateToWidth(` · ${tail}`, remaining, "…"));
 }
 

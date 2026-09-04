@@ -60,9 +60,9 @@ export const NOTIFICATION_ERROR_MAX_BYTES = 500;
  * Result is the whole of what was stored and its own truncation record says
  * what bounding removed.
  *
- * The three values say what a model will *find*. Phase A's were `full` /
- * `partial` / `metadata-only`, with `full` for every completed Run whatever
- * its output — coherent, and misleading to a reader for whom "full result"
+ * The three values say what a model will *find*. Phase A's three were keyed to
+ * the status alone, so every completed Run promised a whole result whatever
+ * its output — coherent, and misleading to a reader for whom that promise
  * means an answer is waiting. A completed Run with nothing to show has no
  * answer, so it is `record-only` and says so once.
  * [ADR-0035](../../../docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)

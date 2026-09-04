@@ -101,9 +101,40 @@ post-admission rejection as a **failure**, so `admission.admit` releases on the
 way out; the Run fiber's Scope holds the lease from the fork on, with
 `detachRun` registered *after* the lease so last-in-first-out runs it first.
 
-**Evidence to name:** `runtime/admission.test.ts` (the refusal paths);
-`runtime/supervisor.test.ts` (the concurrent-close test the Phase B review
-added, unmodified); `runtime/stress.test.ts` (the zero probe).
+**Both operations, not one.** `resume` was converted alongside `start` at the
+phase's code review, and the reason is worth recording because it is not a
+leak. Resume's single post-admission rejection is a refused reservation, and
+`lease.reserveResult` already releases the whole lease on that path — so the
+old code was correct. It was correct *by a fact a reader had to go and check*,
+and two independent reviewers of this phase read the asymmetry as a leak. The
+next rejection added between the acquire and the fork would not have been
+compensated at all. Both operations now admit the same way, so neither is the
+one somebody has to remember, and `grep 'admission.acquire(' runtime/supervisor.ts`
+finds nothing.
+
+**The challenge gate's three answers** (contributing rules; C1 changes a
+decision in generic runtime code):
+
+1. **What does this delete?** Two procedural `lease.release()` call sites and
+   the reasoning that went with them — the Run fiber's exit call and `start`'s
+   compensating call on a failed open — plus the unwritten rule that a reader
+   of `resume` must know `reserveResult` compensates. What replaces them is not
+   an abstraction: `Effect.acquireRelease` is already in the tree, and the
+   lease's shape was decided in ADR-0034 precisely so this would be small.
+2. **Is it provider-neutral?** Yes, structurally: admission names no backend
+   and reads nothing a provider reports. The shared conformance suite passes on
+   all five rigs, and the fakes exercise both the admitted and the refused
+   paths.
+3. **What breaks if it is wrong?** Capacity is never returned, and the Session
+   refuses every later start with `at capacity` — permanently, because nothing
+   else frees a slot. That is why the detectors are named below rather than
+   left to review, and why `detachRun`-before-release has its own test.
+
+**Evidence to name:** `runtime/admission.test.ts` (the refusal paths, including
+a reservation refused after capacity was claimed); `runtime/supervisor.test.ts`
+(the concurrent-close test the Phase B review added, unmodified);
+`runtime/stress.test.ts` (the zero probe after hundreds of cycles including
+rejected and failed starts).
 
 **Status:** PASS.
 
@@ -117,7 +148,7 @@ correct moment. The three named pins are recorded as deliberately unconverted
 
 | Pair | Converted? | Why or why not |
 | --- | --- | --- |
-| admission claim/release | yes (item 4) | Two Scopes, and each has exactly one correct moment: the admitted span's Scope returns the lease when it closes on a rejection, and the Run fiber's Scope returns it when the Run is over. No `release()` call remains in `runtime/supervisor.ts`. |
+| admission claim/release | yes, both operations (item 4) | Two Scopes, and each has exactly one correct moment: the admitted span's Scope returns the lease when it closes on a rejection, and the Run fiber's Scope returns it when the Run is over. `start` and `resume` were both converted; no `release()` call and no `admission.acquire(` remains in `runtime/supervisor.ts`. |
 | subscription start/unsubscribe | yes, already | `RunRepository.subscribe` is an `Effect.acquireRelease` around the `repositorySubscriptions` probe (`runtime/repository.ts`), and its consumer — the widget — registers its own unsubscribe as a Session-Scope finalizer. Recorded rather than changed. |
 | delivery claim/recovery sweep | no | **Not a pair.** The claim is taken once per Run and kept whatever the push did; the sweep is a *retry over stored ids*, not the claim's release, and it has no single moment that is the claim's end. Converting it would mean inventing a release moment in order to have one. |
 | store pin `publication` | no | F6 |
@@ -179,10 +210,24 @@ Delivery tells the sink when its retry budget runs out, through one call on
 retrieving that Result resolves it. Ledger row W-2 is confirmed with the golden
 that asserts it.
 
-**One reading recorded.** W-2 puts `completed · notification failed` in the
-status position, which is where a settled row prints its duration, so on that
-one row the duration gives way to the explanation. W-1 stands for every other
-settled row. The ledger's W-2 entry records the reasoning.
+**One conflict in the source documents, resolved and recorded.** Ledger row
+W-2's after column reads `completed · notification failed`, and the spec's
+widget paragraph says "the row's duration and settled text are unchanged
+(W-1)". Both cannot hold on the exhausted row, because W-2's text occupies the
+status position — which is exactly where a settled row prints
+`completed in 12.4s`. **The ledger won**, on its own rule: "the after column
+is the specification", and W-1's sentence is read as covering every other
+settled row, which is the only reading under which both statements are true.
+The duration gives way and the explanation stays, because a row that will never
+leave on its own is being read for the reason it is stuck. The ledger's W-2
+entry carries the reasoning, and a golden asserts that no other settled row
+moved.
+
+**One generalisation, deliberate.** The row uses the Run's own verb rather than
+the literal `completed` W-2 names, so an exhausted *failed* Run reads
+`failed · notification failed`. Hard-coding `completed` would have printed a
+false status for every non-completed Run whose delivery exhausted. A golden
+asserts it.
 
 **Evidence to name:** `presentation/rows.test.ts` — the four `W-2:` goldens;
 `runtime/delivery.test.ts` — `a sink that always fails exhausts its budget,

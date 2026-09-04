@@ -282,11 +282,23 @@ to confirm.
 **What the duration does, decided at the Phase C gate.** The after column
 above puts `completed · notification failed` in the *status* position, which is
 where the settled row prints `completed in 12.4s`, so on this one row the
-duration gives way to the explanation. That is the reading the gate took, and
-the reason is what the row is for: a row that will never leave on its own is
-being read for the reason it is stuck, not for what the Run cost. W-1 stands
-for every other settled row, and the tail — the Run id and `result available` —
-is fitted and dropped exactly as the activity tail is.
+duration gives way to the explanation.
+
+**This was a conflict between two source sentences, and the gate says which
+won.** The Phase C spec's widget paragraph says "the row's duration and settled
+text are unchanged (W-1)", and both cannot hold on this row. The after column
+won, on this document's own rule — *the after column is the specification* —
+and W-1's sentence is read as covering every other settled row, which is the
+only reading under which both are true. The reason it is the right way round is
+what the row is for: a row that will never leave on its own is being read for
+the reason it is stuck, not for what the Run cost. A golden asserts that no
+other settled row moved.
+
+**The verb is the Run's own**, not the literal `completed` above: an exhausted
+*failed* Run reads `failed · notification failed`. Hard-coding one verb would
+have printed a false status for every non-completed Run whose delivery
+exhausted. The tail — the Run id and `result available` — is fitted and dropped
+exactly as the activity tail is.
 
 ### W-3 · Row resolves on retrieval (Phase C)
 

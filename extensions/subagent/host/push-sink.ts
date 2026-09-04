@@ -174,10 +174,12 @@ export interface SessionPushSink extends NotificationSink {
   /**
    * Whether this Run's completion notice has reached the conversation.
    *
-   * A question about landing alone, which is what the diagnostics and the
-   * tests here ask. Anything deciding whether a Run still needs attention
-   * wants {@link status} instead, because a consumed Run needs none and has
-   * not landed.
+   * A question about landing *alone*, and nothing in production asks it: the
+   * widget asks {@link status}, and the diagnostics report reads
+   * {@link counts}. It is kept because the tests here are about landing
+   * specifically, and a test that had to phrase that as `status(id) ===
+   * "resolved"` would pass for a consumed Run that never landed — which is the
+   * one distinction those tests exist to make.
    */
   readonly hasLanded: (runId: RunId) => boolean;
   /** How far this Run's hand-off has got. See {@link HandoffStatus}. */

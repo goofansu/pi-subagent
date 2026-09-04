@@ -28,6 +28,7 @@ import { type SessionFacts, Subagents } from "../application/index.ts";
 import { type RunId, runId } from "../domain/index.ts";
 import {
   formatSessionNotReady,
+  isCollectedRuns,
   renderCollectedResult,
   renderResumeResult,
   renderStartCall,
@@ -119,15 +120,16 @@ function sessionFactsOf(
  * a Result it actually returned; every rejection answers with text alone. So
  * the handler can recognise success without the application learning that a
  * host surface exists, which is the whole reason consumption is recorded here.
+ *
+ * Read through `isCollectedRuns`, the presentation guard the collapsed line
+ * already uses, rather than through a cast: the shape is `CollectedRuns` and
+ * saying so is what makes a change to it a compile error here instead of a
+ * silently missing consumption.
  */
 function summarisedRun(response: ToolResponse): RunId | undefined {
-  const details = response.details as
-    | { readonly runs?: readonly { readonly runId?: string }[] }
-    | undefined;
-  const runs = details?.runs;
-  if (runs?.length !== 1) return undefined;
-  const only = runs[0]?.runId;
-  return only === undefined ? undefined : runId(only);
+  const { details } = response;
+  if (!isCollectedRuns(details) || details.runs.length !== 1) return undefined;
+  return runId(details.runs[0].runId);
 }
 
 /**

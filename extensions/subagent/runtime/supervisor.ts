@@ -771,32 +771,47 @@ const makeSupervisor = (settings: SessionSettings) =>
       return { outcome: "resolved", record };
     };
 
-    const resume = (request: ResumeRequest): Effect.Effect<ResumeOutcome> =>
+    /**
+     * The admitted half of a resume, under a Scope of its own.
+     *
+     * The same shape as {@link admittedStart} and for the same reason: a
+     * rejection after admission is a failure of the span, so the Scope closing
+     * returns everything the lease holds, and a span that succeeds has forked
+     * the Run. Resume has one such rejection today and the lease's own
+     * `reserveResult` already compensates it — but "already compensates it" is
+     * a thing a reader has to check, and the next rejection added here would
+     * not have been. Both operations admit the same way so that neither is the
+     * one somebody has to remember.
+     */
+    const admittedResume = (
+      request: ResumeRequest,
+      record: SubagentRecord,
+    ): Effect.Effect<
+      Extract<ResumeOutcome, { outcome: "started" }>,
+      ResumeOutcome,
+      Scope.Scope
+    > =>
       Effect.gen(function* () {
-        if (yield* admission.isShuttingDown()) {
-          return { outcome: "shutting down" } as const;
-        }
-
-        const resolved = resolveResume(request);
-        if (resolved.outcome !== "resolved") return resolved;
-        const { record } = resolved;
-
         // The Subagent id is known, so its one-active-Run claim is taken in
         // the same atomic step as capacity rather than bound afterwards.
-        const acquired = yield* admission.acquire(record.id);
+        const acquired = yield* admission.admit(record.id);
         if (acquired.outcome !== "admitted") {
-          return acquired.outcome === "already running"
-            ? ({
-                outcome: "Subagent already running",
-                subagentId: record.id,
-              } as const)
-            : ({ outcome: acquired.outcome } as const);
+          return yield* Effect.fail(
+            acquired.outcome === "already running"
+              ? ({
+                  outcome: "Subagent already running",
+                  subagentId: record.id,
+                } as const)
+              : ({ outcome: acquired.outcome } as const),
+          );
         }
         const { lease } = acquired;
 
         const runId = yield* repository.allocateRunId();
         const reserved = yield* lease.reserveResult(runId);
-        if (!reserved) return { outcome: "at capacity" } as const;
+        if (!reserved) {
+          return yield* Effect.fail({ outcome: "at capacity" } as const);
+        }
 
         // The Run is certain from here, so the Subagent is running from here
         // — before it is published, and well before its Run Scope exists. A
@@ -822,6 +837,24 @@ const makeSupervisor = (settings: SessionSettings) =>
         });
 
         return { outcome: "started", runId, subagentId: record.id } as const;
+      });
+
+    const resume = (request: ResumeRequest): Effect.Effect<ResumeOutcome> =>
+      Effect.gen(function* () {
+        if (yield* admission.isShuttingDown()) {
+          return { outcome: "shutting down" } as const;
+        }
+
+        const resolved = resolveResume(request);
+        if (resolved.outcome !== "resolved") return resolved;
+
+        // Rejection and success are one union again on the way out: the
+        // failure channel exists only so that the Scope closes on a rejection.
+        return yield* Effect.catch(
+          Effect.scoped(admittedResume(request, resolved.record)),
+          (rejection): Effect.Effect<ResumeOutcome> =>
+            Effect.succeed(rejection),
+        );
       });
 
     /* ------------------------------------------------------------ */
