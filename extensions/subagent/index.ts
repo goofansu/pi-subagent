@@ -163,6 +163,9 @@ export function installSubagentV2(
     pi,
     handle,
     () => options.probe?.(),
+    // Plain counts rather than the sink, for the reason the tools get one
+    // function and the widget gets a read model.
+    () => ({ ...sink.counts() }),
     () => profiles,
     agentsDir,
   );

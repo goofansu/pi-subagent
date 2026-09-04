@@ -14,6 +14,7 @@ import {
   NO_LIVE_SESSION,
   SUBAGENT_COMMAND_NAME,
 } from "./diagnostics-command.ts";
+import { createSessionPushSink } from "./push-sink.ts";
 
 /**
  * The operator namespace, and the one report dogfood needs beneath it.
@@ -53,7 +54,7 @@ async function say(
 /** `/subagent diagnostics`: the report bare `/subagent` used to print. */
 const report = (rig: ReturnType<typeof hostRig>) => say(rig, "diagnostics");
 
-test("the report names every runtime counter and every probe field", async (t) => {
+test("the report names every runtime counter, every probe field, and every hand-off outcome", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
@@ -68,8 +69,98 @@ test("the report names every runtime counter and every probe field", async (t) =
   for (const resource of Object.keys(createRuntimeCounters().probe())) {
     assert.match(text, new RegExp(`\\b${resource}: \\d`), resource);
   }
+  // And every hand-off outcome, from the sink, for the same reason: a Session
+  // whose notices are all being refused and one whose notices are all being
+  // lost after hand-off look identical without them.
+  for (const field of Object.keys(createSessionPushSink().counts())) {
+    assert.match(text, new RegExp(`\\b${field}: \\d`), field);
+  }
   assert.match(text, /Runtime counters:/);
   assert.match(text, /Runtime probe:/);
+  assert.match(text, /Notification hand-offs:/);
+});
+
+test("the hand-off block sits between the runtime's numbers and the adapters'", () => {
+  const text = formatSessionDiagnostics({
+    counters: { lateEvents: 2 },
+    probe: { liveRunFibers: 0 },
+    handoff: {
+      pushesAttempted: 3,
+      handOffsAccepted: 2,
+      handOffsRefused: 1,
+      lostAfterHandOff: 1,
+      rePushes: 1,
+      landings: 1,
+      exhaustions: 0,
+      consumedBeforeLanding: 0,
+    },
+    adapterProbe: { pi: { openSessions: 1 } },
+  });
+
+  // Zeroes included, in the order the sink declares them, so "is this counter
+  // even wired up" stays answerable.
+  assert.equal(
+    text,
+    [
+      "Runtime counters:",
+      "  lateEvents: 2",
+      "Runtime probe:",
+      "  liveRunFibers: 0",
+      "Notification hand-offs:",
+      "  pushesAttempted: 3",
+      "  handOffsAccepted: 2",
+      "  handOffsRefused: 1",
+      "  lostAfterHandOff: 1",
+      "  rePushes: 1",
+      "  landings: 1",
+      "  exhaustions: 0",
+      "  consumedBeforeLanding: 0",
+      "Backend probe (pi):",
+      "  openSessions: 1",
+    ].join("\n"),
+  );
+});
+
+test("a live Session's hand-off block is the sink's, and it survives the Session", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+
+  const started = await rig.text("agent_start", {
+    agent: "explore",
+    description: "look around",
+    prompt: "have a look",
+  });
+  const runId = /run id (\S+)/.exec(started)?.[1];
+  assert.ok(runId);
+  await rig.text("agent_wait", { ids: [runId] });
+  await rig.pump();
+
+  const [live] = await report(rig);
+  assert.match(live, /pushesAttempted: 1/);
+  assert.match(live, /handOffsAccepted: 1/);
+  await rig.probe();
+
+  await rig.host.sessionShutdown();
+
+  // The counts are not cleared by `unbind`, so what the Session that just
+  // ended did is still readable; the command has no Session to read the
+  // probes from, which is an answer rather than an error.
+  assert.equal((await report(rig))[0], NO_LIVE_SESSION);
+  assert.equal(rig.installation.sink.counts().pushesAttempted, 1);
+  assert.equal(rig.noLeaks(), true);
+});
+
+test("bare /subagent does not print the hand-off block; it is the deep end's", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const [text] = await say(rig);
+
+  assert.doesNotMatch(text, /Notification hand-offs/);
+  for (const field of Object.keys(createSessionPushSink().counts())) {
+    assert.doesNotMatch(text, new RegExp(`\\b${field}\\b`), field);
+  }
 });
 
 test("between Sessions the report says there is nothing to report", async (t) => {

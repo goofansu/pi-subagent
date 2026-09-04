@@ -90,6 +90,16 @@ export type AdapterProbe = Readonly<Record<string, CountBlock>>;
 export interface SessionDiagnostics {
   readonly counters: CountBlock;
   readonly probe: CountBlock;
+  /**
+   * What this Session's completion hand-offs did, by outcome.
+   *
+   * The sink's, not the runtime's, and reported here rather than folded into
+   * the counters because they answer a different question: a counter that
+   * cannot tell a refused hand-off from a lost one cannot say which half of
+   * the pipeline is failing. It also carries `consumedBeforeLanding`, which is
+   * the number a later hold-while-active envelope is scheduled on.
+   */
+  readonly handoff?: CountBlock;
   readonly adapterProbe?: AdapterProbe;
 }
 
@@ -110,6 +120,12 @@ export function formatSessionDiagnostics(
   return [
     block("Runtime counters", diagnostics.counters),
     block("Runtime probe", diagnostics.probe),
+    // After the runtime's own numbers and before the adapters': the hand-off
+    // is the host's half of what a Session did, and it sits between the two
+    // halves it joins.
+    ...(diagnostics.handoff === undefined
+      ? []
+      : [block("Notification hand-offs", diagnostics.handoff)]),
     ...Object.entries(diagnostics.adapterProbe ?? {}).map(([name, held]) =>
       block(`Backend probe (${name})`, held),
     ),
@@ -295,6 +311,15 @@ export function registerSubagentCommand(
   pi: Pick<ExtensionAPI, "registerCommand" | "sendUserMessage">,
   handle: SessionHandle,
   adapterProbe: () => AdapterProbe | undefined,
+  /**
+   * What the Session push sink's hand-offs did, by outcome.
+   *
+   * A function returning plain counts rather than the sink itself, for the
+   * reason the widget is handed a read model: a command that could name the
+   * sink could push a notification. It is read at handler time because the
+   * counts belong to whichever Session is live.
+   */
+  handoffCounts: () => CountBlock,
   profiles: () => readonly Profile[],
   agentsDir: string,
 ): void {
@@ -319,7 +344,12 @@ export function registerSubagentCommand(
           await openProfilesUi(pi, profiles, agentsDir, ctx);
           return;
         case "diagnostics":
-          reportDiagnostics(await readLiveSession(handle), adapterProbe, ctx);
+          reportDiagnostics(
+            await readLiveSession(handle),
+            adapterProbe,
+            handoffCounts,
+            ctx,
+          );
           return;
         default:
           ctx.ui.notify(formatUnknownSubcommand(subcommand), "info");
@@ -359,6 +389,7 @@ async function readLiveSession(
 function reportDiagnostics(
   session: LiveSessionStatus | undefined,
   adapterProbe: () => AdapterProbe | undefined,
+  handoffCounts: () => CountBlock,
   ctx: Pick<ExtensionCommandContext, "ui">,
 ): void {
   if (session === undefined) {
@@ -370,6 +401,7 @@ function reportDiagnostics(
     formatSessionDiagnostics({
       counters: session.counters,
       probe: session.probe,
+      handoff: handoffCounts(),
       ...(held === undefined ? {} : { adapterProbe: held }),
     }),
     "info",

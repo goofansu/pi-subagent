@@ -173,7 +173,19 @@ re-pushes, landings, exhaustions, consumed before landing. Every field is
 printed, zeroes included. After a Session closes every one still reads, and the
 probes read zero.
 
-**Status:** OPEN.
+**Evidence to name:** `host/diagnostics-command.test.ts` — `the report names
+every runtime counter, every probe field, and every hand-off outcome`, `the
+hand-off block sits between the runtime's numbers and the adapters'`, `a live
+Session's hand-off block is the sink's, and it survives the Session`, and
+`bare /subagent does not print the hand-off block; it is the deep end's`.
+
+**One reading recorded.** "After a Session closes every one still reads" is
+about the *sink*: `unbind` clears the four sets and deliberately not the
+counts, so what the Session that just ended did stays readable. The command
+itself still answers `No subagent Session is running.` between Sessions, which
+is an answer rather than an error and is unchanged.
+
+**Status:** PASS.
 
 ### 10. One completion view for terminal presentation (C4)
 

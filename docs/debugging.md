@@ -81,6 +81,15 @@ Runtime probe:
   liveRunFibers: 0
   liveReducerFibers: 0
   ...
+Notification hand-offs:
+  pushesAttempted: 0
+  handOffsAccepted: 0
+  handOffsRefused: 0
+  lostAfterHandOff: 0
+  rePushes: 0
+  landings: 0
+  exhaustions: 0
+  consumedBeforeLanding: 0
 Backend probe (pi):
   openSessions: 0
   ...
@@ -90,7 +99,7 @@ Backend probe (codex):
   ...
 ```
 
-The report is two kinds of block and the split is the whole point:
+The report is three kinds of block and the split is the whole point:
 
 - **Counters** are things that *happened* and nobody had to be told about at
   the time. One is usually normal. Thousands is a bug.
@@ -99,6 +108,27 @@ The report is two kinds of block and the split is the whole point:
   has closed. There is one probe block per backend rather than a merged total,
   because "which adapter is still holding something" is the only question the
   block exists to answer and a sum cannot answer it.
+- **Notification hand-offs** are what happened to each completion notice, by
+  outcome. They come from the Session push sink rather than from the runtime,
+  and they are one Session's: binding a new Session starts them over.
+
+### The hand-off block
+
+| Field | What it counts | What a high one means |
+| --- | --- | --- |
+| `pushesAttempted` | calls delivery made to the sink | one per settled Run, normally |
+| `handOffsAccepted` | pushes the sink took | includes a consumed Run's, which is accepted and deliberately not sent |
+| `handOffsRefused` | pushes it could not take | no Session was bound, or the Session threw and was dropped. **The first half of the pipeline is failing** |
+| `lostAfterHandOff` | notices an aborted turn discarded | the parent is being interrupted a lot; each is re-pushed once |
+| `rePushes` | notices handed over a second time | should track `lostAfterHandOff`, minus any the parent consumed meanwhile |
+| `landings` | notices `message_start` carried into the conversation | the successful end of the pipeline |
+| `exhaustions` | Runs delivery gave up on | matches `deliveryFailures`. Those rows read `completed · notification failed` |
+| `consumedBeforeLanding` | landings whose Result the parent had already retrieved | notices that arrived after they were needed. Near zero means nothing to do; a steady count is the evidence a hold-while-active envelope waits for |
+
+A Session where `handOffsRefused` is high and `landings` is zero is failing
+before Pi ever sees a message; one where `handOffsAccepted` is high and
+`landings` is low is failing after. That distinction is the only reason these
+are eight numbers rather than one.
 
 **Every field is printed, zeroes included.** A diagnostics command that hid its
 zeroes would make "is this counter even wired up" unanswerable.
