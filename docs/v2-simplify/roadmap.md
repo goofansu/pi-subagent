@@ -248,6 +248,10 @@ special case is a rule the parent model has to remember.
 - The pointer gives the exact argument shape:
   `Call agent_result with {"id":"run-…"}.` prefixed by
   `Full result is available.` or `Partial result is available.`
+  **Superseded by [A8](#phase-a-follow-up--a6-a7-a8)**, which renames the three
+  values and rewrites the three sentences; the shipping text is there and in
+  [semantics §5](notification-semantics.md#pointer). This bullet is what Phase
+  A decided, kept because a roadmap records what each phase decided.
 - Label the preview as subagent-produced data and quote it, so delegated
   output is not presented in the voice of orchestration instructions:
 

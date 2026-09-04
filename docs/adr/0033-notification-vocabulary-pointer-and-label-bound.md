@@ -12,6 +12,19 @@ sentence, and a bound. It refines
 that storage precedes notification and that a notice points at
 `agent_result` — and leaves everything it decided in force.
 
+**Amended in one respect by
+[ADR-0035](0035-completion-hand-off-resolves-on-landing-or-consumption.md),
+accepted at the Phase C gate.** The availability vocabulary this entry decided
+— `full` / `partial` / `metadata-only`, with `full` for every completed Run —
+is renamed to `complete` / `partial` / `record-only` and derived from the
+Result's output rather than from its status alone, and the three pointer
+sentences change with it. The reason is recorded there: "full result" tells a
+model an answer is waiting, and for a completed Run with no output there is
+none. Everything else this entry decided — that only the Session push sink may
+say whether a notice landed, that every terminal notice carries a pointer with
+the exact argument shape, and that the Run label is bounded at admission —
+stands. The text below is what was decided on 2026-09-03 and is not rewritten.
+
 ## Context
 
 Three things were wrong at once, and only one of them was a bug.
