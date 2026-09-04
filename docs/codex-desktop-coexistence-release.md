@@ -10,9 +10,9 @@ ships, driven through the supervisor that ships. That was the whole change from
 the 1.x form of this document: the release being cleared has to be the release
 that goes out.
 
-Release status: **OPEN** for codex-cli 0.153.0. Deterministic checks and the
-procedure are implemented, but no authenticated/Desktop evidence record exists
-for any CLI version. `npm run codex:retained-release:check` is a no-quota gate
+Release status: **PASS** for codex-cli 0.153.0, recorded 2026-09-04 below.
+Deterministic checks and the procedure are implemented, and the first
+authenticated/Desktop evidence record exists for that CLI version. `npm run codex:retained-release:check` is a no-quota gate
 that first verifies the installed pinned protocol and then refuses to pass
 until one complete matching record below has `PASS` at every required
 checkpoint. It never fabricates or infers human evidence.
@@ -106,7 +106,24 @@ add a later passing record rather than rewriting history.
 
 ## Evidence records
 
-No Desktop coexistence run has been recorded for codex-cli 0.153.0. The 1.x
-form of this gate never accumulated one either, so nothing was lost by the
-change of procedure: the outstanding work is the same run it always was, now
-taken against the adapter that ships.
+The first record is for codex-cli 0.153.0, taken 2026-09-04 against the adapter
+that ships. The 1.x form of this gate never accumulated one, so nothing was
+lost by the change of procedure. Logs live in
+[`codex-coexistence-evidence/`](codex-coexistence-evidence/), as `.txt` because
+`*.log` is commonly ignored by git.
+
+### 2026-09-04 — codex-cli 0.153.0
+
+- Operator: James Su (goofansu)
+- OS: macOS 26.6 (25G72), Darwin 25.6.0
+- Codex Desktop version: ChatGPT.app 26.901.31953 (Codex Desktop runs inside it; the gate's descendant list shows its `cua_node` helpers)
+- Smoke log: `docs/codex-coexistence-evidence/2026-09-04-codex-cli-0.153.0-smoke.txt`
+- Desktop before smoke: PASS — a small prompt in an existing Desktop conversation on this repository completed normally before the gate started
+- Desktop during retained-idle prompt: PASS — at the `retained-idle` pause a Desktop prompt completed normally while the retained App Server sat idle between Turns
+- Desktop during active Turn 2: PASS — at the `active-Turn-2` pause a Desktop prompt completed while the resumed Run was visibly still in flight; the overlap was observed, not inferred
+- `CODEX_LIVE_SMOKE_PASS`: PASS — the log's final line; every gate line reads `ok`, including `the retained root is neither listed nor readable by a second App Server, whose Codex home is the same one (/Users/james/.codex)`
+- Descendant cleanup: observed process evidence — the gate saw the App Server binary and Desktop's `cua_node` / `node_repl` / `SkyComputerUseClient` helpers alive during the Runs and recorded `all observed App Server descendants are gone after closure (none alive)` for both the retained Session and the timeout Session; `no App Server child remains after closure ([])`
+- Desktop after Session cleanup: PASS — one more Desktop prompt completed normally after the gate exited
+- Rollout-writer/storage conflict observed: NO — Desktop showed no stray, missing, or corrupted threads at any point, and the subagent's ephemeral root never appeared in Desktop's thread list
+- Release conclusion: PASS
+

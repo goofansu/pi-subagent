@@ -1,0 +1,38 @@
+Codex runtime live gate (model: the App Server's default)
+
+Desktop retained-idle probe: the retained App Server is idle; verify Codex Desktop can complete work now (10 minute limit).
+Press Enter only after recording the retained-idle Desktop result:
+
+Desktop active-Turn-2 probe: Turn 2 is in flight; immediately exercise Codex Desktop and record whether usable overlap was actually observed (10 minute limit).
+Press Enter only after recording the active-Turn-2 Desktop result:
+  ok — start settles completed
+  ok — start returns the answer
+  ok — the App Server ran as a child of this process while a Run was live
+  ok — resume answers from the first Turn's retained root
+  ok — resume uses a distinct Run id
+  ok — a resumed Run is charged only for its own work
+  ok — steering is admitted
+  ok — steering reaches the answer
+  ok — a steer confirmed by client id produced exactly one user observation (1)
+  ok — cancel is admitted and the Run settles cancelled
+  ok — an interrupted Turn leaves the process, the root, and the Subagent alive (started, completed)
+  ok — shutdown refuses new work
+  ok — every settled Run produced exactly one notification (run-5e8s-1, run-5e8s-2, run-5e8s-3, run-5e8s-4, run-5e8s-5)
+  ok — no notification carries a provider identity
+  ok — every Subagent is one App Server with one ephemeral pathless root, and one resumed (2 roots, 3 Turns on the resumed one)
+  ok — the retained root is neither listed nor readable by a second App Server, whose Codex home is the same one (/Users/james/.codex)
+  ok — no public record names a provider identity field
+  ok — no provider identity value reached a public record (none)
+  ok — the runtime probe is clear after closure ({"liveRunFibers":0,"liveReducerFibers":0,"openObservationQueues":0,"openMailboxes":0,"unresolvedWaiters":0,"repositorySubscriptions":0,"openBackendAgents":0})
+  ok — all three adapter probes are clear after closure ({"pi":{"openSessions":0,"liveSubscriptions":0,"pendingCleanups":0},"claude":{"liveQueries":0,"openInputs":0,"retainedIdentities":0},"codex":{"liveProcesses":0,"readerFibers":0,"pendingRequests":0,"retainedRoots":0,"inFlightSteers":0}})
+  ok — no App Server child remains after closure ([])
+  evidence — observed descendants: 35173 /Users/james/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex [idle after retained Turn 1, idle after retained Turn 2, immediately before Session shutdown]; 35236 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node [idle after retained Turn 1, idle after retained Turn 2, immediately before Session shutdown]; 35237 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl [idle after retained Turn 1, idle after retained Turn 2, immediately before Session shutdown]; 35267 /Users/james/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient [idle after retained Turn 1]; 35256 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl [idle after retained Turn 1, idle after retained Turn 2, immediately before Session shutdown]; 35814 /Users/james/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex [immediately before Session shutdown]; 35842 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node [immediately before Session shutdown]; 35843 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl [immediately before Session shutdown]; 35852 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl [immediately before Session shutdown]
+  ok — all observed App Server descendants are gone after closure (none alive)
+  ok — a Run past its default timeout is cancelled with reason timeout (cancelled, timeout)
+  ok — the runtime probe is clear after the timeout Session ({"liveRunFibers":0,"liveReducerFibers":0,"openObservationQueues":0,"openMailboxes":0,"unresolvedWaiters":0,"repositorySubscriptions":0,"openBackendAgents":0})
+  ok — all three adapter probes are clear after the timeout Session ({"pi":{"openSessions":0,"liveSubscriptions":0,"pendingCleanups":0},"claude":{"liveQueries":0,"openInputs":0,"retainedIdentities":0},"codex":{"liveProcesses":0,"readerFibers":0,"pendingRequests":0,"retainedRoots":0,"inFlightSteers":0}})
+  ok — no App Server child remains after the timeout Session ([])
+  evidence — observed descendants: 35173 /Users/james/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex [idle after retained Turn 1, idle after retained Turn 2, immediately before Session shutdown]; 35236 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node [idle after retained Turn 1, idle after retained Turn 2, immediately before Session shutdown]; 35237 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl [idle after retained Turn 1, idle after retained Turn 2, immediately before Session shutdown]; 35267 /Users/james/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient [idle after retained Turn 1]; 35256 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl [idle after retained Turn 1, idle after retained Turn 2, immediately before Session shutdown]; 35814 /Users/james/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex [immediately before Session shutdown]; 35842 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node [immediately before Session shutdown]; 35843 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl [immediately before Session shutdown]; 35852 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl [immediately before Session shutdown]; 36072 /Users/james/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex [the timeout Session's Run in flight]; 36097 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node [the timeout Session's Run in flight]; 36098 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl [the timeout Session's Run in flight]; 36117 /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl [the timeout Session's Run in flight]
+  ok — all observed App Server descendants are gone after the timeout Session (none alive)
+
+CODEX_LIVE_SMOKE_PASS

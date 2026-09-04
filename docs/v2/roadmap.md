@@ -12,7 +12,9 @@ things are outstanding and none of them is code:
    unexercised.
 2. **The Codex Desktop coexistence record does not exist for any CLI version**,
    so `npm run codex:retained-release:check` is red. It was red before M6 too.
-   It is human-only and has no deterministic substitute.
+   It is human-only and has no deterministic substitute. *Closed 2026-09-04:
+   the record for codex-cli 0.153.0 exists and the check passes — item E3 of
+   [the 2.0 close](release-close.md).*
 3. **The release-candidate soak is open**, with an empty log — and because the
    deletion was taken before it rather than after, its rollback window is a
    release rollback rather than a Session-level switch.

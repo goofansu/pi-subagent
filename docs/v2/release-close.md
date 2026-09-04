@@ -1,7 +1,7 @@
 # The 2.0 close: soak, evidence, and the stable release
 
-**Status: in progress since 2026-09-04.** E1 and E4 are PASS; E3 and E2 wait
-on the maintainer; E5–E7 wait on E2.
+**Status: in progress since 2026-09-04.** E1, E3 and E4 are PASS; E0 and E2
+remain before E5–E7, which wait on E2.
 **Precondition, met:** [the Phase C gate](../v2-simplify/phase-c-exit-gate.md)
 closed on 2026-09-04 with one item outstanding and named — item 14, the six
 credentialed live lanes, which need credentials the closing environment did
@@ -365,13 +365,21 @@ script's output on the closing day.
 One evidence block for the pinned Codex CLI with PASS at every required
 checkpoint; `npm run codex:retained-release:check` exits 0.
 
-**Status:** OPEN — human-only, and nothing an agent can do brings it closer.
+**Status:** PASS (2026-09-04).
 
-The one precondition an agent could clear is cleared: `npm run
-codex:protocol:check` is green against the installed CLI, reporting
-`CODEX_PROTOCOL_CHECK_PASS — codex-cli 0.153.0` on 2026-09-04. So the
-maintainer's hour goes on the procedure rather than on a pin, and `0.153.0` is
-the version the evidence block is written for.
+The maintainer ran `CODEX_DESKTOP_COEXISTENCE_PROBE=1 npm run codex:smoke`
+from this repository with a Codex Desktop conversation open on the same
+project, and answered a Desktop prompt at each of the four checkpoints: before,
+at the retained-idle pause, at the active-Turn-2 pause with the overlap
+observed rather than inferred, and after cleanup. All four passed and no stray
+or corrupted thread appeared. The record is the `2026-09-04 — codex-cli
+0.153.0` block in [the coexistence document](../codex-desktop-coexistence-release.md);
+the gate's log is
+[`codex-coexistence-evidence/2026-09-04-codex-cli-0.153.0-smoke.txt`](../codex-coexistence-evidence/2026-09-04-codex-cli-0.153.0-smoke.txt),
+carrying `CODEX_LIVE_SMOKE_PASS`, the nondiscoverability line against the
+same Codex home, and descendant cleanup for both Sessions.
+`npm run codex:retained-release:check` reports
+`CODEX_RETAINED_RELEASE_CHECK_PASS — codex-cli 0.153.0`.
 
 ### 4. The end-state test is recorded
 
