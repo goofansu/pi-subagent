@@ -3,19 +3,74 @@
 **What this is:** how to find out what is wrong when something is wrong, and
 what each number the extension reports actually means.
 
-**Where to start, always:** `/subagent`. It is the only surface that reports
-what the runtime is counting and holding, and reading it costs nothing.
+**Where to start, always:** `/subagent`. It says in two lines what is loaded,
+what is running, and whether the runtime noticed anything actionable, and
+reading it costs nothing. `/subagent diagnostics` is the same Session with
+every counter and every probe printed, and it is the only surface that reports
+them.
 
 ---
 
 ## `/subagent`
 
-Run it while the Session is live. Between Sessions it answers
-`No subagent Session is running.`, which is an answer rather than an error —
-Pi registers commands once per process and a Session starts and ends many times
-inside it.
+The shallow status, and the one place to start. Run it while the Session is
+live. Between Sessions it answers `No subagent Session is running.`, which is
+an answer rather than an error — Pi registers commands once per process and a
+Session starts and ends many times inside it.
 
-The report is two kinds of block and the split is the whole point:
+```
+Subagents: 2 Profiles · 1 running, 2 completed, 1 failed
+Runtime: healthy · 4 held
+
+  explore   pi
+  reviewer  claude
+
+/subagent profiles — list Profiles and read their prompts
+/subagent diagnostics — runtime counters and cleanup probes
+```
+
+Four things and then the way deeper: what is loaded, what is running, how the
+runtime is, and which Profiles there are. Deliberately no counters — they are
+one level down.
+
+### The health line
+
+Two forms, and which one you get is a verdict on the counters **by class**
+rather than on their sum:
+
+```
+Runtime: healthy · 4 held
+Runtime: attention needed · 1 defect · 2 incidents · 4 held — /subagent diagnostics
+```
+
+- **defect** — the runtime did something it must not do. Somebody should look,
+  and the Session is not behaving.
+- **incident** — something outside the runtime went wrong and the runtime
+  coped. Worth seeing; not a bug in here.
+- **expected** — a thing that happens in the normal course of racing endings,
+  cancelling Runs, and bounding a store. **Never named in this line**, however
+  high it has climbed: a Session with twenty late events and two reconciliation
+  differences is running exactly as designed.
+
+Only the non-zero classes are named, worst first. A counter name the host does
+not recognise is reported as `unclassified` rather than ignored, because the
+counter block is structural — a counter cannot be added without appearing — and
+one that appeared and was silently dropped would defeat that.
+
+**The classes are the code's**, in
+[`runtime/counters.ts`](../extensions/subagent/runtime/counters.ts), as
+`COUNTER_CLASSES`, exhaustive by type: a counter added without a class fails to
+compile. The tables under [The counters](#the-counters) below are grouped by
+those same three classes, so the guide and the health line cannot drift apart
+silently.
+
+The `N held` is a *count* of the runtime probe and not a verdict on it. A live
+Session holds a fiber per Run and a repository subscription for its widget on
+purpose; the probe only has to read zero once the Session Scope has **closed**.
+
+## `/subagent diagnostics`
+
+The full report: every counter and every probe, zeroes included.
 
 ```
 Runtime counters:
@@ -34,6 +89,8 @@ Backend probe (claude):
 Backend probe (codex):
   ...
 ```
+
+The report is two kinds of block and the split is the whole point:
 
 - **Counters** are things that *happened* and nobody had to be told about at
   the time. One is usually normal. Thousands is a bug.
@@ -91,35 +148,38 @@ observed alive, not only the child it spawned.
 
 ## The counters
 
-Grouped by what you should conclude.
+Grouped by the three classes the code names, in
+[`runtime/counters.ts`](../extensions/subagent/runtime/counters.ts). The health
+line on bare `/subagent` reads the same classification, so a counter's class is
+one fact rather than two that can disagree.
 
-### Must be zero. Non-zero is a defect in the runtime.
+### defect — non-zero is a defect in the runtime
 
 | Counter | What happened | What it means |
 | --- | --- | --- |
-| `duplicateSettlements` | a second terminal candidate arrived for a Run that had one | *not* itself a bug — two endings racing is normal — but a large number means something is producing candidates it should not. The first candidate always wins. |
 | `duplicateCommits` | the same Result was committed twice | settlement ran twice for one Run |
 | `conflictingCommits` | a *different* Result was committed for a Run that had one | worse: two different answers for one Run. The first stands. |
 | `unreadableResults` | the repository says a Run settled and the store cannot read it back | the output is gone and `agent_result` can only say it expired, so this counter is the only place the difference between a defect and ordinary eviction is visible |
 | `seamDecodeFailures` | an observation did not decode at the backend seam | an adapter emitted something the observation union does not describe. Suspect a provider whose payload shape changed. |
 | `queueOverflows` | a non-blocking bridge could not hand an observation over | the Pi callback bridge is the only one; it fails the Run out loud rather than losing half a transcript |
 
-### Expected to rise. Reading them is about the *rate*.
-
-| Counter | What happened | When to care |
-| --- | --- | --- |
-| `evictions` | a stored output was dropped to keep the store inside its budget | normal in a long Session. If `agent_result` is expiring output the model still wants, the Session is holding more Results than the budget allows. |
-| `lateEvents` | an observation was emitted after intake was sealed | normal: an adapter emitting from its own finalizer does this on every Run. The intake dropped it and nothing was mutated. |
-| `lateObservations` | an observation reached the reducer and the projection was already terminal | a different fact from `lateEvents`: it got further. Still a no-op. |
-| `reconciliationDifferences` | a terminal reconciliation changed something that had been streamed | one or two means streamed drift was healed, which is what reconciliation is for. Many means a backend's streaming and its terminal snapshot disagree systematically. |
-
-### Each one means something specific went wrong.
+### incident — something outside the runtime went wrong and it coped
 
 | Counter | What happened | What to do |
 | --- | --- | --- |
 | `cleanupEscalations` | a native finalizer outlived the cleanup budget, so the core closed the BackendAgent out from under it | the Subagent's Conversation is lost, honestly, and a later resume says so. Look for a provider that hangs on close. |
 | `deliveryFailures` | a Notification exhausted its retry budget | the model was not told a Run finished. **The Result is still stored and `agent_result` still returns it** — delivery failure is never Result loss. |
+
+### expected — reading them is about the *rate*
+
+| Counter | What happened | When to care |
+| --- | --- | --- |
+| `duplicateSettlements` | a second terminal candidate arrived for a Run that had one | two endings racing is normal, and the first candidate always wins. A large number means something is producing candidates it should not. |
 | `lateEndings` | an ending arrived after one had already won | arbitration discarded it. Normal on cancellation. |
+| `evictions` | a stored output was dropped to keep the store inside its budget | normal in a long Session. If `agent_result` is expiring output the model still wants, the Session is holding more Results than the budget allows. |
+| `lateEvents` | an observation was emitted after intake was sealed | normal: an adapter emitting from its own finalizer does this on every Run. The intake dropped it and nothing was mutated. |
+| `lateObservations` | an observation reached the reducer and the projection was already terminal | a different fact from `lateEvents`: it got further. Still a no-op. |
+| `reconciliationDifferences` | a terminal reconciliation changed something that had been streamed | one or two means streamed drift was healed, which is what reconciliation is for. Many means a backend's streaming and its terminal snapshot disagree systematically. |
 
 ## Diagnostic categories
 
@@ -154,7 +214,8 @@ and `[redacted]`, which is deliberate and not a truncation bug.
 
 ### A Run never finishes
 
-1. `/subagent`: is `liveRunFibers` above zero with nothing apparently running?
+1. `/subagent diagnostics`: is `liveRunFibers` above zero with nothing
+   apparently running?
 2. Is the Run's phase `finalizing`? Then its backend's execution ended and its
    cleanup has not. Wait for the cleanup budget; a `cleanupEscalations` of one
    afterwards means it was escalated past, which is the bound working.
