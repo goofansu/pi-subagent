@@ -64,7 +64,7 @@ need, and together they exercise every seam the architecture claims to have.
 | R2 | 1 (`domain/notification.ts`) | ≤ 4 |
 | R3 | 0 | ≤ 3 |
 | R4 | 0 | ≤ 2 |
-| R5 | 0 | backend tree + composition + backend set |
+| R5 | 0 | backend tree + backend set |
 | R6 | expensive | expensive |
 | R7 | ≤ 2 | ≤ 5 |
 
@@ -102,7 +102,7 @@ is named.
 | R2 | 1 | 3–4 | `domain/notification.ts`, `presentation/notification-text.ts`; `host/notification-message.ts` and `presentation/renderers.ts` if the summary shows it. | Yes, at the edge. Phase A's slimmer notice makes the host payload independent of the notice's shape. |
 | R3 | 0 | 2 | `profiles/*` schema and the owning `backend/<name>/*` validator. | Yes. Nothing to do but keep it so. |
 | R4 | 0 | 2 | `presentation/rows.ts`, `host/widget.ts`; more if the snapshot needs a field, which is `domain/projection.ts` and `domain/reduce-run.ts` and would break the target. | Yes for a column the snapshot already carries. Phase C4's shared completion view keeps it there for terminal facts. |
-| R5 | 0 | backend tree + `runtime/composition.ts` + `host/production-backends.ts` + a conformance adapter | The M5 and M6 ports were adapter-local plus fixtures; nothing since has added a backend branch to the runtime. | Yes. Fenced by the provider-confinement boundary rules. |
+| R5 | 0 | backend tree + `host/production-backends.ts` + a conformance adapter | The M5 and M6 ports were adapter-local plus fixtures; nothing since has added a backend branch to the runtime. | Yes. Fenced by the provider-confinement boundary rules. |
 | R6 | many | many | `domain/phases.ts`, `domain/reduce-run.ts`, `domain/result.ts`, `runtime/arbitration.ts`, `runtime/run-scope.ts`, `runtime/supervisor.ts`, presentation status helpers. | Expected. |
 
 The reading says the seams the roadmap cares about already hold. What does

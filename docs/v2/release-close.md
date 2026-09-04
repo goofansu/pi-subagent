@@ -781,10 +781,15 @@ measured row carry the same error. `change-recipes.md` is on §8's *permanent,
 kept current* list and its own header says a recipe that misnames a file is a bug
 in the document, so this is a live defect rather than history. **Fixed here** —
 the recipe now names `host/production-backends.ts` alone and says why the other
-module does not change. `change-surface.md`'s R5 rows are left as they stand:
-that document is a dated measurement and §8 puts it among the historical ones,
-and its own convention is to add a later reading rather than rewrite an earlier
-one.
+module does not change. `change-surface.md`'s two R5 rows were left alone at
+first, as a dated measurement that its own convention says to add to rather
+than rewrite — then corrected, because they are not a superseded reading. That
+document's own R5 section already reads **Nothing generic.** `runtime/
+composition.ts` does not move: it takes a list of backends and knows none of
+them by name, and names `host/production-backends.ts` as the one module outside
+the adapter tree. The summary rows contradicted the detail beneath them, which
+is a transcription error rather than an earlier measurement, so both now say
+what the section says.
 
 **3. `host/production-backends.test.ts` uses `"gemini"` as its example of a
 backend that does not exist** (lines 171–177, `reason: "unknown backend

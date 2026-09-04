@@ -379,12 +379,12 @@ wrong and repairing it comes first.
 
 ## 10. The boundary rules
 
-Twenty-one rules in `boundaries.test.ts`, each guarding a property somebody
+Twenty-two rules in `boundaries.test.ts`, each guarding a property somebody
 could otherwise remove with one `import` line — or, for three of them, with a
 line that imports nothing at all. That is the test for whether a rule belongs
 there: not "is this tidy" but "what breaks if this edge exists". The table
-below has nineteen rows because the three adapter-confinement rules say the
-same thing about three adapters.
+below has twenty rows because the three adapter-confinement rules say the same
+thing about three adapters.
 
 | Rule | What it guards |
 | --- | --- |
@@ -407,6 +407,7 @@ same thing about three adapters.
 | No inflection of *land* or of *consume* appears in `runtime/delivery.ts` or its test | delivery knows pending, handed off, and exhausted; only the push sink sees `message_start` and is told by the `agent_result` handler, so only the sink may say a notice landed or that the parent has read the Result. A link's target is not scanned, so delivery may cite the ADR whose filename carries both words |
 | `presentation/notification-text.ts` names only the domain and presentation | narrower than the presentation rule above, which admits Pi's packages: a notice is prose a model reads, so changing what it says provably touches no runtime module |
 | No `Ref.make`, `new Map`, or `new Set` in `runtime/supervisor.ts` | the supervisor sequences lifecycles and owns no state; admission, the Subagent records, and the waiter ledger each own the state whose invariant they carry, and a fourth holder in the file every lifecycle change passes through would read as local to whatever was being changed. The `stages` trace array is the documented exception |
+| No dynamic `import()` or `require()` with a computed specifier, outside a named allow-list of one | every rule above is a rule about *specifiers*, and the checker can only read a literal one. One `await import(url)` would let any of them be broken with the suite still green, so the form is banned rather than the edges guessed at. The allow-list's single entry reads a dependency-free script outside the tree, and carries its reason |
 
 Two more lanes belong beside them: the **timing lint**, which forbids timers
 everywhere and sleeps in tests that have no test clock, and the **import

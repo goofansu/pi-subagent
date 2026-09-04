@@ -2,9 +2,12 @@
 
 **Status:** Open. Started 2026-09-03 as the M4 Pi soak; extended to all three
 backends at the M7 cutover.
-**What is being soaked:** `2.0.0-rc.1` — the rewrite with the production
-backend set, as the maintainer's default subagent extension. It is what an
-installed package loads; nothing has to be switched on.
+**What is being soaked:** `2.0.0-rc.2` at commit `7511a88` — the rewrite with
+the production backend set, as the maintainer's default subagent extension. It
+is what an installed package loads; nothing has to be switched on. That commit
+is [the 2.0 close](release-close.md)'s E0, the last one to touch `extensions/`
+before the tag, so a day logged from here is a day on the build that ships and
+stays a day on it.
 **What closing it unlocks:** the `2.0.0` release, without the release-candidate
 marker.
 **The plan for running it** is [the 2.0 close](release-close.md), which starts

@@ -58,7 +58,7 @@ they are the architecture, and the invariants above carry them.
 
 ## The boundary rules
 
-Twenty-one of them, in `extensions/subagent/boundaries.test.ts`. They are listed
+Twenty-two of them, in `extensions/subagent/boundaries.test.ts`. They are listed
 with what each guards in [the architecture note](architecture.md#10-the-boundary-rules).
 
 **The test for whether a new rule belongs there** is not "is this tidy" but
