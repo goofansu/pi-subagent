@@ -40,7 +40,7 @@ know — the probe readings at shutdown, and anything that went wrong.
 
 | # | Item | Owner | What closes it |
 | --- | --- | --- | --- |
-| E0 | The last code lands before the first soak day. | agent | An empty description is refused at admission (closes [#3](https://github.com/goofansu/pi-subagent/issues/3)); the tally script's expected result sentences are cross-checked against the prose module in `check`; the sink's rule for new state is written where the state lives. Nothing under `extensions/` changes after this until the tag. |
+| E0 | The last code lands before the first soak day. | agent | An empty description is refused at admission (the end-state test's finding 5); the tally script's expected result sentences are cross-checked against the prose module in `check`; the sink's rule for new state is written where the state lives. Nothing under `extensions/` changes after this until the tag. |
 | E1 | The soak tally is computed from Pi's session logs, not remembered. | agent | `scripts/soak-tally.mjs`; `soak.md`'s tally section generated; a shutdown entry is three lines. |
 | E2 | The soak is run on the Phase C build. | human | Five distinct days; every operation on every backend at least three times; a probe reading at every shutdown; the hand-off block read at every shutdown. |
 | E3 | The Codex Desktop coexistence record exists for the pinned CLI. | human | One evidence block with PASS at every required checkpoint; `npm run codex:retained-release:check` green. |
@@ -69,8 +69,9 @@ after a soak day makes that day a day on a different build.
   family's equivalent — refusal rather than a generated label, because there
   is nothing to shorten and a generated name would hide a caller error the
   model can fix in one round trip. This fixes the end-state test's finding 5
-  before the soak instead of carrying it; the commit closes
-  [#3](https://github.com/goofansu/pi-subagent/issues/3).
+  before the soak instead of carrying it. The issue that briefly tracked it
+  was deleted once the fix landed, so the finding is referenced here and not
+  by link.
 - **The tally script's prose list is cross-checked in `check`.** The script
   reads Run and Subagent ids out of the tool result's sentences and fails
   loudly if they change — at tally time, days after the change. A test in the
@@ -221,8 +222,7 @@ Verified item by item; each reads PASS, OPEN, or NOT MET with its evidence.
 
 An empty or whitespace-only description is refused at start and resume with a
 typed outcome in the existing refusal family, and no notice or collapsed line
-can carry an empty label; [#3](https://github.com/goofansu/pi-subagent/issues/3)
-is closed by the commit. A test under `extensions/` asserts the tally script's
+can carry an empty label. A test under `extensions/` asserts the tally script's
 expected result openings against what `presentation/prose.ts` produces, and
 the new refusal is in the list. The push sink's header states the rule for
 adding state. The commit that lands these is the last commit to touch
@@ -405,8 +405,8 @@ rather than change; `change-recipes.md`'s *Add a backend* recipe names
 uses `"gemini"` as its example of a backend that does not exist; a fourth backend
 owning a process would relax the `node:child_process` fence; and an empty
 description produces `Subagent "" completed in …`. The second is fixed here, in
-`change-recipes.md`; the fifth is carried to
-[#3](https://github.com/goofansu/pi-subagent/issues/3) for 2.0.x; the rest are
+`change-recipes.md`; the fifth was carried to an issue and then fixed by E0 before the soak, and
+the issue deleted; the rest are
 recorded, not actioned.
 
 ### 5. Every Phase D item has a recorded decision
@@ -440,9 +440,8 @@ carry their final wording. Every finding marked *carried to a 2.0.x issue* in
 this document — at this writing, the empty-label notice (end-state finding 5)
 — links to an open issue.
 
-**Status:** OPEN. Finding 5 is linked to
-[#3](https://github.com/goofansu/pi-subagent/issues/3), which E0 fixes before
-the soak rather than carrying to 2.0.x; the remaining contract and roadmap
+**Status:** OPEN. Finding 5 was fixed by E0 before the soak rather than carried to 2.0.x, and
+its issue deleted, so nothing is carried and the clause is met; the remaining contract and roadmap
 work waits on E2 as sequenced above.
 
 ## Risks
@@ -824,8 +823,8 @@ completed in 12.4s.` and a collapsed line can read `explore ·  · completed in
 12.4s`. Severity 4, a papercut, found by reading rather than by use.
 **Fixed before the soak by [E0](#e0-the-last-code-before-the-soak) rather than
 carried**, since the label is the first thing a parent reads in a notice and
-the soak would otherwise run on a build with a known empty one:
-[#3](https://github.com/goofansu/pi-subagent/issues/3) is closed by that
-commit, and [gate item 0](#0-the-last-code-landed-before-the-first-soak-day)
-records the evidence. It was not a soak defect — no soak Session produced one —
+the soak would otherwise run on a build with a known empty one.
+[Gate item 0](#0-the-last-code-landed-before-the-first-soak-day) records the
+evidence; the issue that briefly tracked the finding was deleted once the fix
+landed. It was not a soak defect — no soak Session produced one —
 and it is not a Phase D item.
