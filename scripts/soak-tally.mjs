@@ -552,10 +552,19 @@ export function formatTally(tally) {
 function parseArguments(argv) {
   const options = { since: undefined };
   const rest = [...argv];
+  const valueFor = (flag) => {
+    const value = rest.shift();
+    if (value === undefined || value.startsWith("--"))
+      throw new SoakTallyError(`${flag} needs a directory after it`);
+    return value;
+  };
   while (rest.length > 0) {
     const argument = rest.shift();
-    if (argument === "--sessions") options.sessionsDir = rest.shift();
-    else if (argument === "--profiles") options.profilesDir = rest.shift();
+    if (argument === "--sessions") options.sessionsDir = valueFor(argument);
+    else if (argument === "--profiles")
+      options.profilesDir = valueFor(argument);
+    else if (argument.startsWith("--"))
+      throw new SoakTallyError(`unknown option '${argument}'`);
     else if (options.since === undefined) options.since = argument;
     else throw new SoakTallyError(`unexpected argument '${argument}'`);
   }
