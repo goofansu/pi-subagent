@@ -1,10 +1,15 @@
 # The 2.0 close: soak, evidence, and the stable release
 
-**Status: planned 2026-09-04; starts when the Phase C gate closes.**
-**Precondition:** [the Phase C gate](../v2-simplify/phase-c-exit-gate.md) is
-closed. The soak must run on the build that ships, and Phase C changes the
+**Status: in progress since 2026-09-04.** E1 and E4 are PASS; E3 and E2 wait
+on the maintainer; E5–E7 wait on E2.
+**Precondition, met:** [the Phase C gate](../v2-simplify/phase-c-exit-gate.md)
+closed on 2026-09-04 with one item outstanding and named — item 14, the six
+credentialed live lanes, which need credentials the closing environment did
+not have. The soak must run on the build that ships, and Phase C changes the
 widget's row lifetime and one model-facing sentence, so a soak day logged
-before it closes is a day on a different build.
+before it closed would have been a day on a different build. Phase C's item 14
+is closed by this phase's E7: `release:check` runs the same six lanes on the
+release commit, and their markers are recorded in both gates.
 **What closing it unlocks:** `2.0.0`, without the release-candidate marker;
 the simplification programme's close; and a recorded decision on each Phase D
 item, made on numbers.
@@ -35,6 +40,7 @@ know — the probe readings at shutdown, and anything that went wrong.
 
 | # | Item | Owner | What closes it |
 | --- | --- | --- | --- |
+| E0 | The last code lands before the first soak day. | agent | An empty description is refused at admission (closes [#3](https://github.com/goofansu/pi-subagent/issues/3)); the tally script's expected result sentences are cross-checked against the prose module in `check`; the sink's rule for new state is written where the state lives. Nothing under `extensions/` changes after this until the tag. |
 | E1 | The soak tally is computed from Pi's session logs, not remembered. | agent | `scripts/soak-tally.mjs`; `soak.md`'s tally section generated; a shutdown entry is three lines. |
 | E2 | The soak is run on the Phase C build. | human | Five distinct days; every operation on every backend at least three times; a probe reading at every shutdown; the hand-off block read at every shutdown. |
 | E3 | The Codex Desktop coexistence record exists for the pinned CLI. | human | One evidence block with PASS at every required checkpoint; `npm run codex:retained-release:check` green. |
@@ -42,6 +48,41 @@ know — the probe readings at shutdown, and anything that went wrong.
 | E5 | The Phase D decision is made on the soak's numbers. | agent, human sign-off | Each Phase D item marked *scheduled* (with the ADR as the next phase's first ticket) or *deferred* (with the re-read date), in the simplification roadmap, by its decision rule. |
 | E6 | The simplification programme closes. | agent | The roadmap's §8 document split: banners on the historical documents, the change-surface method into the contributor rules, status lines. |
 | E7 | `2.0.0` ships. | agent, human for the tag | Version bumped; the compatibility matrix marked frozen at 2.0; the README's install and rollback notes current; `npm run release:check` green on the tagged commit; the v2 roadmap's items 10 and 12 given their final wording. |
+
+### E0. The last code, before the soak
+
+Added 2026-09-04 from the post-Phase-C review, which found three things worth
+doing and one thing worth checking. The check passed: the ADR, the sink's own
+comments and the semantics document all say a push for a consumed Run is
+*accepted and not sent* and call the outcome a hand-off, never a message sent,
+so no wording moves. The three that are done are done now because each touches
+`extensions/` or its tests, and the soak record's rule is that a change landing
+after a soak day makes that day a day on a different build.
+
+- **An empty description is refused.** `boundRunLabel("")` and
+  `boundRunLabel("   ")` both return `""`, and the schema's description field
+  has no minimum, so a notice can read `Subagent "" completed in 12.4s.` and a
+  collapsed line `explore ·  · completed in 12.4s`. The label is the first
+  thing a parent reads in a notice, so an empty one is not a papercut. It is
+  refused with a typed outcome at the same place the label is bounded, in the
+  `Cannot start <agent>: …` family the surface already uses and the resume
+  family's equivalent — refusal rather than a generated label, because there
+  is nothing to shorten and a generated name would hide a caller error the
+  model can fix in one round trip. This fixes the end-state test's finding 5
+  before the soak instead of carrying it; the commit closes
+  [#3](https://github.com/goofansu/pi-subagent/issues/3).
+- **The tally script's prose list is cross-checked in `check`.** The script
+  reads Run and Subagent ids out of the tool result's sentences and fails
+  loudly if they change — at tally time, days after the change. A test in the
+  extension tree imports the script's expected openings and the prose module
+  and asserts they agree, so a reword fails `npm run check` at reword time.
+  The new refusal sentence above is the first thing this test has to cover.
+- **The sink's rule for new state is written where the state lives.** The push
+  sink now owns unlanded, lost, landed, exhausted and consumed, plus eight
+  counts, and is where notification features will accumulate. Its header
+  comment gains the rule: a new state is added only if it changes whether a
+  hand-off is unresolved, resolved, or failed; anything else — batching
+  metadata, envelope membership — lives beside the sink, not in it.
 
 ### E1. The soak tally, computed
 
@@ -136,16 +177,21 @@ line reads closed. Nothing is deleted.
 a ledger row. The README's install line is the tagged release and its rollback
 paragraph names `#v1.0.0` as the previous major. `npm run release:check` — the
 deterministic gate, all six live lanes, the retained-release check — is green
-on the commit that is tagged `v2.0.0`. The v2 roadmap's item 10 reads met with
-the soak's closing tally; item 12 stays *not met* by its own measure and
-points at the change-surface table as what is true instead. The tag and the
-push are the maintainer's.
+on the commit that is tagged `v2.0.0`. The six lane markers close
+[the Phase C gate's item 14](../v2-simplify/phase-c-exit-gate.md) as well as
+this gate's item 7, and are recorded in both. The v2 roadmap's item 10 reads
+met with the soak's closing tally; item 12 stays *not met* by its own measure
+and points at the change-surface table as what is true instead. Each finding
+this phase marked *carried to a 2.0.x issue* has an issue before the release
+commit, so a carry is a link and not a sentence. The tag and the push are the
+maintainer's.
 
 ## Sequencing
 
 ```text
 Phase C gate closes
         │
+        ├── E0 last code before the soak    (agent, first: nothing under extensions/ moves after it)
         ├── E1 soak tally script            (agent, first: the soak needs it on day one)
         ├── E4 end-state test               (agent, any time after C)
         ├── E3 coexistence record           (human, any one hour)
@@ -161,14 +207,28 @@ E5 Phase D decision, on the tally and the shutdown entries
 E7 release: release:check green → tag v2.0.0
 ```
 
-E1 goes first because the first soak day should be counted by the script, not
-reconstructed. E3 and E4 have no dependency and fill idle time. Nothing in E5
+E0 and E1 go first: E0 because the soak is of the build that ships and the
+build is not final until it lands, E1 because the first soak day should be
+counted by the script, not reconstructed. E3 and E4 have no dependency and fill idle time. Nothing in E5
 through E7 starts before the tally is full: a Phase D decision on three days is
 the thing this phase exists to stop doing.
 
 ## The gate
 
 Verified item by item; each reads PASS, OPEN, or NOT MET with its evidence.
+
+### 0. The last code landed before the first soak day
+
+An empty or whitespace-only description is refused at start and resume with a
+typed outcome in the existing refusal family, and no notice or collapsed line
+can carry an empty label; [#3](https://github.com/goofansu/pi-subagent/issues/3)
+is closed by the commit. A test under `extensions/` asserts the tally script's
+expected result openings against what `presentation/prose.ts` produces, and
+the new refusal is in the list. The push sink's header states the rule for
+adding state. The commit that lands these is the last commit to touch
+`extensions/` before `v2.0.0`, and the soak's first entry is dated after it.
+
+**Status:** OPEN.
 
 ### 1. The tally is generated and the entry is small
 
@@ -268,7 +328,8 @@ rather than change; `change-recipes.md`'s *Add a backend* recipe names
 uses `"gemini"` as its example of a backend that does not exist; a fourth backend
 owning a process would relax the `node:child_process` fence; and an empty
 description produces `Subagent "" completed in …`. The second is fixed here, in
-`change-recipes.md`; the fifth is carried to a 2.0.x issue; the rest are
+`change-recipes.md`; the fifth is carried to
+[#3](https://github.com/goofansu/pi-subagent/issues/3) for 2.0.x; the rest are
 recorded, not actioned.
 
 ### 5. Every Phase D item has a recorded decision
@@ -290,7 +351,7 @@ contributor rules; the simplification roadmap's status reads closed.
 
 `npm run release:check` exit 0 on the commit tagged `v2.0.0`, run after the
 last code change, with the six lane markers and the retained-release marker
-recorded here.
+recorded here and the six lane markers recorded in the Phase C gate's item 14.
 
 **Status:** OPEN.
 
@@ -298,9 +359,14 @@ recorded here.
 
 The matrix's status reads frozen at 2.0 with the change rule; the README's
 install and rollback paragraphs are current; the v2 roadmap's items 10 and 12
-carry their final wording.
+carry their final wording. Every finding marked *carried to a 2.0.x issue* in
+this document — at this writing, the empty-label notice (end-state finding 5)
+— links to an open issue.
 
-**Status:** OPEN.
+**Status:** OPEN. Finding 5 is linked to
+[#3](https://github.com/goofansu/pi-subagent/issues/3), which E0 fixes before
+the soak rather than carrying to 2.0.x; the remaining contract and roadmap
+work waits on E2 as sequenced above.
 
 ## Risks
 
@@ -674,5 +740,5 @@ directly: `boundRunLabel("")` and `boundRunLabel("   ")` both return `""`
 plain required string with no minimum, so a notice can read `Subagent ""
 completed in 12.4s.` and a collapsed line can read `explore ·  · completed in
 12.4s`. Severity 4, a papercut, found by reading rather than by use. **Carried to
-a 2.0.x issue.** It is not a soak defect — no soak Session has produced one — and
-it is not a Phase D item.
+[#3](https://github.com/goofansu/pi-subagent/issues/3) for 2.0.x.** It is not a
+soak defect — no soak Session has produced one — and it is not a Phase D item.
