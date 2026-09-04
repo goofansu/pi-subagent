@@ -47,14 +47,31 @@ export interface NotificationPushFailure {
 /**
  * Where a notification goes.
  *
- * An interface with one method, because M3 supplies the real Session push and
- * nothing about delivery should change when it does. In M2 the only
- * implementation is the fake the tests use.
+ * Two methods, and the second is a *report* rather than a request. `push` asks
+ * the host to take a message; `exhausted` tells it that this Run's budget is
+ * spent and no push will be attempted again. Delivery already knows that fact
+ * — it is the branch that counts `deliveryFailures` — and the host is the only
+ * component that can show it, so telling the sink is what gives the whole
+ * hand-off state one owner instead of leaving a fifth state stranded in a
+ * counter nobody can display.
+ *
+ * It is still an interface about delivery and nothing else. Everything the
+ * host knows beyond these two states is the host's vocabulary, and boundary
+ * rule 19 keeps it out of this file.
+ * [ADR-0035](../../../docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)
+ * is the decision.
  */
 export interface NotificationSink {
   readonly push: (
     notification: RunNotification,
   ) => Effect.Effect<void, NotificationPushFailure>;
+  /**
+   * This Run's retry budget is spent, and delivery is done trying.
+   *
+   * Cannot fail: there is nothing a host could say that delivery would act
+   * on, and a report that could fail would need a retry of its own.
+   */
+  readonly exhausted: (runId: RunId) => Effect.Effect<void>;
 }
 
 interface DeliveryState {
@@ -139,6 +156,9 @@ const makeDelivery = (
           }));
         } else {
           counters.count("deliveryFailures");
+          // Reported, not retried: the host is the only thing that can show a
+          // Run whose notice is never coming.
+          yield* sink.exhausted(runId);
         }
         // Either way the pin goes: a result held open for a notification the
         // host will never take is a result nothing can ever evict.

@@ -454,6 +454,35 @@ const SECOND_SCHEMA_LIBRARY = "typebox";
 const LANDING_VOCABULARY = /\b(un)?land(ed|ing|ings|s)?\b/i;
 
 /**
+ * The second word only the Session push sink may say.
+ *
+ * *Consumed* means the parent retrieved this Run's Result with
+ * `agent_result`, which the sink is told by the tool handler and delivery
+ * cannot observe at all. It is fenced for the reason *landed* is, and against
+ * the same one wrong conclusion by a second door: a `handedOff` set explained
+ * by a comment about the model having consumed the notice is a set whose next
+ * reader treats an accepted push as an answer the model has read.
+ *
+ * The sink's own vocabulary is not covered, and neither is the `agent_result`
+ * handler's — both are host files, and both are where the word belongs.
+ */
+const CONSUMPTION_VOCABULARY = /\bconsum(e|ed|es|ing|ption)\b/i;
+
+/**
+ * The one thing the two vocabulary scans do not read: a link's target.
+ *
+ * `[the decision](../../../docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)`
+ * carries both banned words in a file path, and a rule that fired on it would
+ * be a rule forbidding delivery to cite the ADR that governs it. The property
+ * being given up is nothing: these rules are about the *reading* a maintainer
+ * takes away, and a path fragment is not a reading — the link text beside it
+ * still is, and is still scanned.
+ */
+function withoutLinkTargets(source: string): string {
+  return source.replace(/\]\([^)]*\)/g, "]()");
+}
+
+/**
  * The state constructions the supervisor may not contain.
  *
  * Phase B moved admission, the Subagent records, and the waiter ledger out of
@@ -1246,21 +1275,31 @@ export function findBoundaryViolations(
     }
   }
 
-  // 19. Delivery does not say "landed". It knows pending, handed off, and
-  //     exhausted; the Session push sink knows the rest. This is a scan for a
-  //     word rather than an import check because the mistake it prevents is a
-  //     mistake of reading: a `handedOff` set introduced by a comment about
-  //     landing is a set whose next reader treats an accepted push as a notice
-  //     the model has read. The push sink's own `hasLanded`, `landed`,
-  //     `unlanded`, and `onLanding` are correct and are not covered.
+  // 19. Delivery does not say "landed", and does not say "consumed" either. It
+  //     knows pending, handed off, and exhausted; the Session push sink knows
+  //     the rest. This is a scan for two words rather than an import check
+  //     because the mistake it prevents is a mistake of reading: a `handedOff`
+  //     set introduced by a comment about landing — or about the model having
+  //     consumed the notice — is a set whose next reader treats an accepted
+  //     push as a notice the model has read. *Consumed* is the second door to
+  //     that same conclusion, which is why it is fenced beside the first. The
+  //     push sink's own `hasLanded`, `landed`, `unlanded`, `subscribe`, and
+  //     `consumed` are correct and are not covered.
   for (const file of graph.deliveryFiles) {
     if (!fs.existsSync(file)) continue;
-    const source = fs.readFileSync(file, "utf8");
-    const found = LANDING_VOCABULARY.exec(source);
-    if (!found) continue;
-    violations.add(
-      `${describe(file)} says "${found[0]}", and only the Session push sink may say whether a notice landed`,
-    );
+    const source = withoutLinkTargets(fs.readFileSync(file, "utf8"));
+    const landing = LANDING_VOCABULARY.exec(source);
+    if (landing) {
+      violations.add(
+        `${describe(file)} says "${landing[0]}", and only the Session push sink may say whether a notice landed`,
+      );
+    }
+    const consumption = CONSUMPTION_VOCABULARY.exec(source);
+    if (consumption) {
+      violations.add(
+        `${describe(file)} says "${consumption[0]}", and only the Session push sink may say whether the model has read a Result`,
+      );
+    }
   }
 
   // 20. The notification formatter depends on the domain notice and nothing
@@ -2044,6 +2083,59 @@ test('the delivery module saying "landed" is rejected, and the push sink saying 
     `${describe(path.join(graph.runtimeRoot, "delivery.test.ts"))} says "lands", and only the Session push sink may say whether a notice landed`,
     `${describe(path.join(graph.runtimeRoot, "delivery.ts"))} says "landed", and only the Session push sink may say whether a notice landed`,
   ]);
+});
+
+test('the delivery module saying "consumed" is rejected, and the push sink saying it is not', (t) => {
+  const { graph, write } = fixtureGraph(t, "delivery-consumption-vocabulary");
+  write("extensions/subagent/index.ts", "export const entry = 1;\n");
+  // The sink is the one owner of this word too, so its whole consumption API
+  // is written out here: a rule that fired on this file would take the
+  // vocabulary away from the component that has it.
+  write(
+    "extensions/subagent/host/push-sink.ts",
+    [
+      "/** The parent consumed this Run's Result. */",
+      "export const consumed = () => {};",
+      "export const consumedBeforeLanding = 0;",
+      "",
+    ].join("\n"),
+  );
+  write(
+    "extensions/subagent/runtime/delivery.ts",
+    [
+      "// A push the model has consumed is not pushed again.",
+      "export const handedOff = () => [];",
+      "",
+    ].join("\n"),
+  );
+  write(
+    "extensions/subagent/runtime/delivery.test.ts",
+    ["export const consumption = 1;", ""].join("\n"),
+  );
+
+  assert.deepEqual(findBoundaryViolations(graph), [
+    `${describe(path.join(graph.runtimeRoot, "delivery.test.ts"))} says "consumption", and only the Session push sink may say whether the model has read a Result`,
+    `${describe(path.join(graph.runtimeRoot, "delivery.ts"))} says "consumed", and only the Session push sink may say whether the model has read a Result`,
+  ]);
+});
+
+test("delivery may cite the ADR whose filename carries both banned words", (t) => {
+  // The one exemption, and it is a narrow one: the link *target* is not read.
+  // The link text is, which is what keeps the exemption from being a hole.
+  const { graph, write } = fixtureGraph(t, "delivery-adr-citation");
+  write("extensions/subagent/index.ts", "export const entry = 1;\n");
+  write(
+    "extensions/subagent/runtime/delivery.ts",
+    [
+      "/**",
+      " * [The decision](../../docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md).",
+      " */",
+      "export const handedOff = () => [];",
+      "",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findBoundaryViolations(graph), []);
 });
 
 test("delivery's own three states are not landing vocabulary", (t) => {

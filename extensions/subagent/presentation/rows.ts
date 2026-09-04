@@ -122,13 +122,7 @@ export function formatRunRow(
     "dim",
     padEndToWidth(row.identity.backendId, columns.backend),
   );
-  const status = theme.fg(
-    tone,
-    formatRunPhase({
-      phase: row.phase,
-      elapsedMillis: elapsedMillis(row, now),
-    }),
-  );
+  const status = theme.fg(tone, formatRowStatus(row, now));
   const turns = theme.fg(
     "dim",
     padEndToWidth(formatTurns(row.usage.turns), columns.turns),
@@ -140,7 +134,7 @@ export function formatRunRow(
   ]) {
     const candidate = components.join(ROW_DELIMITER);
     if (visibleWidth(candidate) <= width) {
-      return candidate + formatActivityTail(row, theme, width, candidate);
+      return candidate + formatRowTail(row, theme, width, candidate);
     }
   }
   return truncateToWidth(
@@ -151,19 +145,53 @@ export function formatRunRow(
   );
 }
 
-/** The dim "what it is doing" tail, fitted to the width the columns left. */
-function formatActivityTail(
+/**
+ * The status a row shows, which for one state is not the phase's own phrase.
+ *
+ * A settled Run whose completion notice exhausted its retry budget will never
+ * leave the widget on its own — nothing is coming — so its row says why in the
+ * place a reader is already looking. That is ledger row W-2, and it is the one
+ * thing the widget knows that the Run does not: the phase is `completed` and
+ * the hand-off is what failed.
+ *
+ * The duration gives way here rather than the explanation, because a row that
+ * is stuck is being read for the reason it is stuck. Every other row is
+ * unchanged (W-1).
+ */
+function formatRowStatus(row: RunRowView, now: number): string {
+  if (row.handoff === "exhausted") {
+    return `${runPhaseVerb(row.terminalStatus ?? row.phase)} · notification failed`;
+  }
+  return formatRunPhase({
+    phase: row.phase,
+    elapsedMillis: elapsedMillis(row, now),
+  });
+}
+
+/**
+ * The dim tail, fitted to the width the columns left.
+ *
+ * Two rows have one: a running Run says what it is doing, and an exhausted
+ * hand-off says which Run it was and that the answer is there anyway — the
+ * two facts a reader needs to type `agent_result` and be rid of the row.
+ * Everything else has nothing to add and adds nothing.
+ */
+function formatRowTail(
   row: RunRowView,
   theme: RenderableTheme,
   width: number,
   line: string,
 ): string {
-  if (row.phase !== "running") return "";
-  const doing = row.activity ?? row.identity.description;
-  if (!doing) return "";
+  const tail =
+    row.handoff === "exhausted"
+      ? `${row.identity.runId} · result available`
+      : row.phase === "running"
+        ? (row.activity ?? row.identity.description)
+        : "";
+  if (!tail) return "";
   const remaining = width - visibleWidth(line);
   if (remaining < MIN_ACTIVITY_WIDTH) return "";
-  return theme.fg("dim", truncateToWidth(` · ${doing}`, remaining, "…"));
+  return theme.fg("dim", truncateToWidth(` · ${tail}`, remaining, "…"));
 }
 
 /** Summarise the listed Runs using the shared phase vocabulary. */

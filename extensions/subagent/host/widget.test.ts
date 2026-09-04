@@ -300,7 +300,7 @@ test("a slow subscriber still renders the latest state after the burst", async (
   assert.match(rig.host.widgetLines(80)[1], / · last$/);
 });
 
-test("the widget lists Runs that are not terminal and terminal ones whose notice has not landed", () => {
+test("the widget lists Runs that are not terminal and terminal ones whose hand-off is unresolved", () => {
   const snapshot = (id: string, phase: RunSnapshot["phase"]): RunSnapshot => ({
     identity: {
       runId: runId(id),
@@ -326,12 +326,74 @@ test("the widget lists Runs that are not terminal and terminal ones whose notice
     [runId("run-4"), snapshot("run-4", "completed")],
   ]);
 
+  const rows = widgetRows(index, (id) =>
+    id === runId("run-4")
+      ? "resolved"
+      : id === runId("run-3")
+        ? "exhausted"
+        : "pending",
+  );
+
   assert.deepEqual(
-    widgetRows(index, (id) => id === runId("run-4")).map(
-      (row) => row.identity.runId,
-    ),
+    rows.map((row) => row.identity.runId),
     ["run-1", "run-2", "run-3"],
   );
+  // An exhausted hand-off keeps its row and is marked, because nothing is
+  // coming for it and the row has to say so. Every other row is handed over
+  // exactly as the index published it.
+  assert.deepEqual(
+    rows.map((row) => row.handoff),
+    [undefined, undefined, "exhausted"],
+  );
+});
+
+test("W-3: a settled row leaves when the parent retrieves its Result, with no landing", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const started = await heldRun(rig);
+  await rig.text("agent_wait", { ids: [started.runId] });
+  await rig.pump();
+
+  // Waiting resolves nothing: it reports terminality and withholds the answer,
+  // so the parent still needs pointing at the Result.
+  assert.equal(rig.host.hasWidget(), true);
+  assert.deepEqual(rig.installation.sink.landed(), []);
+
+  await rig.text("agent_result", { id: started.runId });
+  await rig.pump();
+
+  // The notice never landed, and the row went anyway: the parent has done
+  // everything the notice exists to make it do.
+  assert.deepEqual(rig.installation.sink.landed(), []);
+  assert.equal(rig.installation.sink.status(runId(started.runId)), "resolved");
+  assert.equal(rig.host.hasWidget(), false);
+});
+
+test("W-2: a row whose notice will never arrive says so, and retrieving the Result takes it away", async (t) => {
+  // The sink refuses every push because no Session is bound to send through,
+  // which is the one way delivery's budget actually runs out in practice.
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const started = await heldRun(rig);
+  rig.installation.sink.bind(() => {
+    throw new Error("this Session went stale");
+  });
+  await rig.text("agent_wait", { ids: [started.runId] });
+  await rig.pump();
+
+  assert.equal(rig.installation.sink.status(runId(started.runId)), "exhausted");
+  const row = rig.host.widgetLines(120)[1];
+  assert.match(row, /completed · notification failed/);
+  assert.match(row, new RegExp(`${started.runId} · result available`));
+
+  await rig.text("agent_result", { id: started.runId });
+  await rig.pump();
+
+  assert.equal(rig.host.hasWidget(), false);
 });
 
 test("the widget owns one key, so a Session cannot leave two of them installed", () => {

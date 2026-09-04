@@ -43,6 +43,19 @@ export interface RunRowView {
   readonly terminalStatus?: TerminalRunPhase;
   /** When the Run settled. Present exactly when the phase is terminal. */
   readonly settledAt?: number;
+  /**
+   * How the Run's completion hand-off ended, when it ended badly.
+   *
+   * Presentation-only and set by the widget from a host fact it already reads.
+   * It is deliberately *not* on the published Run snapshot: notification state
+   * is the Session push sink's, and a snapshot that carried it would be the
+   * repository knowing about delivery.
+   *
+   * `exhausted` is the one value there is, because it is the one a row has to
+   * explain: delivery's retry budget ran out, so nothing will ever land and
+   * this row will never leave on its own.
+   */
+  readonly handoff?: "exhausted";
 }
 
 /**

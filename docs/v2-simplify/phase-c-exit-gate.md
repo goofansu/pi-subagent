@@ -115,10 +115,18 @@ notice Pi already holds lands, is marked landed, and increments
 does not contain the word *consumed*; the boundary rule that fences *landed*
 covers it.
 
-**Evidence to name:** `host/push-sink.test.ts`; `host/tools.test.ts`;
-`boundaries.test.ts`.
+**Evidence to name:** `host/push-sink.test.ts` — `a push for a consumed Run is
+accepted and nothing is sent`, `a consumed notice lost to an interrupt is not
+pushed again`, `a consumed notice Pi already holds lands anyway, and is
+counted`, `consuming a Run whose notice already landed changes nothing`;
+`host/tools.test.ts` — `agent_result tells the host the parent has the Result,
+and nothing else does`, `a rejected agent_result tells the host nothing`, `a
+Result the store evicted tells the host nothing either`; `boundaries.test.ts` —
+`the delivery module saying "consumed" is rejected, and the push sink saying it
+is not`, with `delivery may cite the ADR whose filename carries both banned
+words` as the one narrow exemption.
 
-**Status:** OPEN.
+**Status:** PASS.
 
 ### 7. The widget sees three hand-off states and nothing finer (C3)
 
@@ -128,9 +136,14 @@ or consumed and the widget cannot tell which. A settled row leaves on
 retrieval with no landing (ledger W-3). The sink keeps handed-off, lost,
 attempt counts, and the consumed set internally.
 
-**Evidence to name:** `host/widget.test.ts`; the widget's dependency type.
+**Evidence to name:** `host/widget.test.ts` — `W-3: a settled row leaves when
+the parent retrieves its Result, with no landing` and `the widget lists Runs
+that are not terminal and terminal ones whose hand-off is unresolved`; the
+dependency type `CompletionHandoffView` in `host/widget.ts`, which has exactly
+`status` and `subscribe`, and `HandoffStatus`, declared with the asker rather
+than the answerer because rule 18 forbids the widget to name the sink.
 
-**Status:** OPEN.
+**Status:** PASS.
 
 ### 8. An exhausted notice is visible (C3)
 
@@ -140,7 +153,17 @@ Delivery tells the sink when its retry budget runs out, through one call on
 retrieving that Result resolves it. Ledger row W-2 is confirmed with the golden
 that asserts it.
 
-**Status:** OPEN.
+**One reading recorded.** W-2 puts `completed · notification failed` in the
+status position, which is where a settled row prints its duration, so on that
+one row the duration gives way to the explanation. W-1 stands for every other
+settled row. The ledger's W-2 entry records the reasoning.
+
+**Evidence to name:** `presentation/rows.test.ts` — the four `W-2:` goldens;
+`runtime/delivery.test.ts` — `a sink that always fails exhausts its budget,
+releases the pin, and leaves the result` now also asserts the sink was told,
+and the successful-retry test asserts it was not.
+
+**Status:** PASS.
 
 ### 9. Diagnostics distinguish the hand-off outcomes (C3)
 

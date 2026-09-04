@@ -106,6 +106,7 @@ test("a sink that fails once is retried on the clock and delivers one notificati
         return {
           received: rig.sink.received().length,
           attempts: rig.sink.attempts(),
+          told: rig.sink.exhaustedRuns(),
           stored: yield* rig.supervisor.result(started.runId),
           counters: rig.counters.counters(),
         };
@@ -115,6 +116,9 @@ test("a sink that fails once is retried on the clock and delivers one notificati
   assert.equal(outcome.received, 1);
   assert.equal(outcome.attempts, 2);
   assert.equal(outcome.counters.deliveryFailures, 0);
+  // A push that got through on a retry is not an exhaustion, and the sink is
+  // not told one: the two halves of "exactly when the budget is spent".
+  assert.deepEqual(outcome.told, []);
   // The stored result was not touched by the failure or the retry.
   assert.equal(outcome.stored.outcome, "result");
   if (outcome.stored.outcome === "result") {
@@ -143,6 +147,7 @@ test("a sink that always fails exhausts its budget, releases the pin, and leaves
           received: rig.sink.received().length,
           attempts: rig.sink.attempts(),
           exhausted: yield* rig.delivery.exhausted(),
+          told: rig.sink.exhaustedRuns(),
           runId: started.runId,
           pins: yield* rig.store.pinsOf(started.runId),
           stored: yield* rig.supervisor.result(started.runId),
@@ -154,6 +159,10 @@ test("a sink that always fails exhausts its budget, releases the pin, and leaves
   assert.equal(outcome.received, 0);
   assert.equal(outcome.attempts, 3);
   assert.deepEqual(outcome.exhausted, [outcome.runId]);
+  // And the sink was told, once, in the same branch that counted the failure.
+  // The host is the only component that can show a Run whose notice is never
+  // coming, so a state delivery kept to itself would be a state nobody sees.
+  assert.deepEqual(outcome.told, [outcome.runId]);
   // The pin goes even when no push was ever accepted, or the result would be
   // one nothing could ever evict.
   assert.ok(!outcome.pins.includes("delivery"));

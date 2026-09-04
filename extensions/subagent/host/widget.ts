@@ -37,14 +37,24 @@
  * than closing over a snapshot, so a change is a redraw request rather than a
  * teardown and rebuild.
  *
- * A Run's row lasts from `agent_start` until its **completion notice lands**,
- * not until the Run settles. A Run shorter than the turn that started it
- * settles before anybody has looked at the widget, so a row that went at
- * settlement would be a row nobody ever read — and the compatibility matrix
- * promises v1's lifetime, which was exactly this. Landing is the push sink's
- * fact, so the widget is handed a predicate for it and a way to be told when
- * one happens. It reads the predicate and never writes it: whether a notice
- * landed is not the widget's business to decide.
+ * A Run's row lasts from `agent_start` until its **completion hand-off is
+ * resolved** — its notice landed, or the parent retrieved its Result with
+ * `agent_result` — and not until the Run settles. A Run shorter than the turn
+ * that started it settles before anybody has looked at the widget, so a row
+ * that went at settlement would be a row nobody ever read. A parent that
+ * fetched the Result at once, on the other hand, has done everything the
+ * notice exists to make it do, so its row goes without waiting for a landing.
+ *
+ * The hand-off is the push sink's fact, so the widget is handed a read model
+ * for it — one question and one subscription — and reads it without ever
+ * writing it. It asks `status` and gets one of three answers, and *resolved*
+ * deliberately does not say whether it was a landing or a retrieval: a row
+ * that stays and a row that goes is the whole of what this component decides,
+ * and one that knew more would eventually act on more.
+ *
+ * The third answer, `exhausted`, is the one the row has to *say* rather than
+ * act on. Delivery's retry budget ran out, so nothing will ever land and the
+ * row would otherwise sit with no explanation.
  */
 
 import type { Component, TUI } from "@earendil-works/pi-tui";
@@ -72,31 +82,61 @@ export interface WidgetHost {
 
 /**
  * What the widget shows, in index order: every Run that is not terminal, plus
- * every terminal Run whose completion notice has not landed yet.
+ * every terminal Run whose hand-off is not resolved.
+ *
+ * An exhausted hand-off keeps its row and is marked, because nothing is coming
+ * for it and a row that will never leave on its own has to say why.
  */
 export function widgetRows(
   index: RunIndex,
-  hasLanded: (runId: RunId) => boolean,
+  status: (runId: RunId) => HandoffStatus,
 ): readonly RunRowView[] {
-  return [...index.values()].filter(
-    (snapshot: RunSnapshot) =>
-      !isTerminalRunPhase(snapshot.phase) ||
-      !hasLanded(snapshot.identity.runId),
-  );
+  return [...index.values()].flatMap((snapshot: RunSnapshot) => {
+    if (!isTerminalRunPhase(snapshot.phase)) return [snapshot];
+    const handoff = status(snapshot.identity.runId);
+    if (handoff === "resolved") return [];
+    // Presentation-only, and set from a host fact the widget already reads —
+    // the snapshot is untouched, which is what keeps the repository out of
+    // notification state (freeze F9).
+    return handoff === "exhausted"
+      ? [{ ...snapshot, handoff: "exhausted" as const }]
+      : [snapshot];
+  });
 }
 
 /**
- * The landing facts the widget reads, which the Session push sink supplies.
+ * How far a Run's completion hand-off has got, in the three states anything
+ * outside the Session push sink is allowed to know.
+ *
+ * Declared with the read model that consumes it rather than with the sink that
+ * answers it, and that is the boundary rather than an accident: the widget may
+ * not name the sink (rule 18), so the vocabulary of the question lives with
+ * the asker and the sink satisfies it.
+ *
+ * A Run the sink has never heard of is `pending`, which is the answer a row
+ * wants: a Run that settled a moment ago and whose notice is still in flight
+ * is indistinguishable from here, and both should keep their row.
+ */
+export type HandoffStatus = "pending" | "resolved" | "exhausted";
+
+/**
+ * The hand-off the widget reads, which the Session push sink supplies.
  *
  * Named here rather than importing the sink's own type, because the widget
- * needs two functions and the sink is a whole delivery surface. This is the
- * boundary: a widget that could name the sink could push a notification.
+ * needs one question and one subscription and the sink is a whole delivery
+ * surface. This is the boundary: a widget that could name the sink could push
+ * a notification.
+ *
+ * One read model rather than a predicate per state, and that is the shape the
+ * exhausted row paid for: `hasLanded` and `onLanding` would have become
+ * `hasExhausted`, and then `wasRePushed`, and then `attempts`, each reasonable
+ * beside the row that wanted it.
  */
-export interface NoticeLandings {
-  /** Whether this Run's completion notice reached the conversation. */
-  readonly hasLanded: (runId: RunId) => boolean;
-  /** Called on every landing. Returns an unsubscribe. */
-  readonly onLanding: (listener: () => void) => () => void;
+export interface CompletionHandoffView {
+  /** How far this Run's completion hand-off has got. */
+  readonly status: (runId: RunId) => HandoffStatus;
+  /** Called when any of that changes. Returns an unsubscribe. */
+  readonly subscribe: (listener: () => void) => () => void;
 }
 
 /** What a test counts to measure coalescing. */
@@ -126,7 +166,7 @@ export interface ActiveWidget {
 export function installActiveWidget(
   host: WidgetHost,
   now: () => number,
-  landings: NoticeLandings,
+  handoff: CompletionHandoffView,
 ): Effect.Effect<ActiveWidget, never, RunRepository | Scope.Scope> {
   return Effect.gen(function* () {
     const repository = yield* RunRepository;
@@ -139,9 +179,10 @@ export function installActiveWidget(
      * renderer had to run, which is machinery in the one place that should
      * have none.
      *
-     * The index is kept beside the rows because a landing changes which rows
-     * the *same* index produces, and recomputing from the index is what keeps
-     * this a cache: throwing both away and re-reading gives the same answer.
+     * The index is kept beside the rows because a hand-off resolving changes
+     * which rows the *same* index produces, and recomputing from the index is
+     * what keeps this a cache: throwing both away and re-reading gives the
+     * same answer.
      */
     let index: RunIndex = new Map();
     let latest: readonly RunRowView[] = [];
@@ -206,7 +247,7 @@ export function installActiveWidget(
 
     /** Re-read both sources and put the host in step with them. */
     const refresh = (): void => {
-      latest = widgetRows(index, landings.hasLanded);
+      latest = widgetRows(index, handoff.status);
       reconcile(latest);
     };
 
@@ -214,12 +255,12 @@ export function installActiveWidget(
     // Scope that closes mid-change still clears the widget.
     yield* Effect.addFinalizer(() => Effect.sync(uninstall));
 
-    // A landing is a host event rather than an index change, so it arrives
-    // here rather than on the stream. The unsubscribe is a finalizer for the
-    // same reason the uninstall is: the listener must not outlive the Session
-    // whose rows it redraws.
-    const stopWatchingLandings = landings.onLanding(refresh);
-    yield* Effect.addFinalizer(() => Effect.sync(stopWatchingLandings));
+    // A landing, a retrieval and an exhaustion are host events rather than
+    // index changes, so they arrive here rather than on the stream. The
+    // unsubscribe is a finalizer for the same reason the uninstall is: the
+    // listener must not outlive the Session whose rows it redraws.
+    const stopWatchingHandoffs = handoff.subscribe(refresh);
+    yield* Effect.addFinalizer(() => Effect.sync(stopWatchingHandoffs));
 
     const changesStream = yield* repository.subscribe();
     yield* Effect.forkScoped(

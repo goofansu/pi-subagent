@@ -147,7 +147,16 @@ export function installSubagentV2(
   };
 
   const agentsDir = profilesDir(options.agentDir);
-  registerSubagentTools(pi, handle, agentGuidelines, hostFacts.childDepth);
+  registerSubagentTools(
+    pi,
+    handle,
+    agentGuidelines,
+    hostFacts.childDepth,
+    // One narrow function rather than the sink, exactly as the widget is
+    // handed a read model: the `agent_result` handler says the parent has the
+    // Result and nothing more.
+    (id) => sink.consumed(id),
+  );
   // One operator command. v1's `/agents` is gone in 2.0 and its flow is
   // `/subagent profiles`; the matrix's `/agents` row records the removal.
   registerSubagentCommand(
@@ -171,7 +180,9 @@ export function installSubagentV2(
   });
 
   // The three events notification landing is decided by. The sink owns the
-  // decision; the entry point only forwards neutral evidence to it.
+  // decision; the entry point only forwards neutral evidence to it. The fourth
+  // way a hand-off resolves — the parent retrieving the Result — is not a host
+  // event, so it arrives through the `agent_result` handler above.
   pi.on("message_start", (event) => sink.messageStarted(event.message));
   pi.on("turn_end", (event, ctx) =>
     sink.turnEnded({

@@ -25,6 +25,7 @@ import type {
 import { Effect } from "effect";
 import type { ToolResponse } from "../application/index.ts";
 import { type SessionFacts, Subagents } from "../application/index.ts";
+import { type RunId, runId } from "../domain/index.ts";
 import {
   formatSessionNotReady,
   renderCollectedResult,
@@ -112,6 +113,24 @@ function sessionFactsOf(
 }
 
 /**
+ * The Run a response summarised, when it summarised exactly one.
+ *
+ * `Subagents.result` answers `{ text, details: { runs: [summary] } }` only for
+ * a Result it actually returned; every rejection answers with text alone. So
+ * the handler can recognise success without the application learning that a
+ * host surface exists, which is the whole reason consumption is recorded here.
+ */
+function summarisedRun(response: ToolResponse): RunId | undefined {
+  const details = response.details as
+    | { readonly runs?: readonly { readonly runId?: string }[] }
+    | undefined;
+  const runs = details?.runs;
+  if (runs?.length !== 1) return undefined;
+  const only = runs[0]?.runId;
+  return only === undefined ? undefined : runId(only);
+}
+
+/**
  * An Effect that succeeds when the host's signal aborts, and never otherwise.
  *
  * This is the only place in v2 that touches an abort signal, and the boundary
@@ -161,6 +180,22 @@ export function registerSubagentTools(
    * and a test changes it between calls.
    */
   childDepth: () => number,
+  /**
+   * Tell the host that the parent has this Run's Result.
+   *
+   * One narrow function rather than the push sink itself, exactly as the
+   * widget is handed a read model rather than the sink: a handler that could
+   * name the sink could push a notification, and then two things would decide
+   * what the model is told.
+   *
+   * It is called from the `agent_result` handler and from nowhere else — not
+   * from `Subagents.result`, which would make the application aware that a
+   * host surface exists, and not from the store, which delivery and
+   * diagnostics also read.
+   * [ADR-0035](../../../docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)
+   * is the decision.
+   */
+  noteResultConsumed: (id: RunId) => void,
 ): void {
   /** What every handler answers with when there is no live runtime. */
   const notReady = (copy: ToolCopy): ToolResponse => ({
@@ -286,9 +321,19 @@ export function registerSubagentTools(
     ): Promise<HostToolResult> {
       const input = decodeResult(params);
       if (!input.decoded) return hostResult({ text: input.text });
-      return hostResult(
-        await handle.run(Subagents.result(input.value), notReady(RESULT_COPY)),
+      const response = await handle.run(
+        Subagents.result(input.value),
+        notReady(RESULT_COPY),
       );
+      // The parent now has the answer, so its completion notice has nothing
+      // left to tell it. Recognised by the shape the façade answers a
+      // *returned Result* with and no other: every rejection — `not yet
+      // terminal`, an unknown id, an expired Result — answers with text
+      // alone. If that shape ever changes, the tools test for consumption is
+      // what fails.
+      const consumed = summarisedRun(response);
+      if (consumed !== undefined) noteResultConsumed(consumed);
+      return hostResult(response);
     },
   });
 

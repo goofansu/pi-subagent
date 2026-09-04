@@ -13,7 +13,7 @@
  */
 
 import { Effect } from "effect";
-import type { RunNotification } from "../domain/index.ts";
+import type { RunId, RunNotification } from "../domain/index.ts";
 import type {
   NotificationPushFailure,
   NotificationSink,
@@ -26,10 +26,20 @@ export interface FakeNotificationSink extends NotificationSink {
   readonly attempts: () => number;
   /** Fail the next `count` pushes. `Infinity` fails every one. */
   readonly failNext: (count: number) => void;
+  /**
+   * The Runs delivery said it had given up on, in the order it said so.
+   *
+   * Recorded rather than ignored because "delivery reports exhaustion exactly
+   * when its budget is spent, and never after a push it got through" is a
+   * property with two halves, and a sink that dropped the call could only
+   * prove the first.
+   */
+  readonly exhaustedRuns: () => readonly RunId[];
 }
 
 export function createFakeNotificationSink(): FakeNotificationSink {
   const received: RunNotification[] = [];
+  const exhaustedRuns: RunId[] = [];
   let attempts = 0;
   let failing = 0;
   return {
@@ -45,7 +55,12 @@ export function createFakeNotificationSink(): FakeNotificationSink {
         received.push(notification);
         return Effect.void;
       }),
+    exhausted: (runId) =>
+      Effect.sync(() => {
+        exhaustedRuns.push(runId);
+      }),
     received: () => [...received],
+    exhaustedRuns: () => [...exhaustedRuns],
     attempts: () => attempts,
     failNext: (count) => {
       failing = count;

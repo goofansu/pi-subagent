@@ -284,8 +284,22 @@ forgets it, an aborted turn marks every unlanded notice lost, and
 `agent_settled` pushes each lost notice again exactly once. Exactly one landing
 per Notification.
 
-A settled Run's widget row lasts until its notice lands, which is what landing
-is read for outside delivery.
+**Landing is not the only way a hand-off finishes.** A parent that retrieves a
+Run's Result with `agent_result` has done everything the notice exists to make
+it do, so the tool handler tells the sink the Run was **consumed** and the
+hand-off is resolved: a later push is accepted and not sent, and a notice lost
+to an aborted turn is not pushed again. A notice Pi already holds still lands —
+the extension API has no call that takes a queued message back — and is counted
+as *consumed before landing*, which is the evidence a later hold-while-active
+envelope waits for. Delivery also reports **exhaustion** to the sink when its
+retry budget runs out, so the whole hand-off state has one owner.
+
+A settled Run's widget row lasts until its hand-off is **resolved** — landed or
+consumed, whichever came first — and an exhausted one keeps its row and says
+so. The widget reads that through one read model with three states, `pending`,
+`resolved` and `exhausted`, and never learns which of the two resolved it.
+
+→ [ADR-0035](adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)
 
 → [ADR-0002](adr/0002-push-only-result-delivery.md),
 [ADR-0006](adr/0006-completion-notifications-and-result-store.md)
@@ -390,7 +404,7 @@ same thing about three adapters.
 | A child process is spawned in one directory | the one backend that owns an OS process owns all of it |
 | App Server vocabulary stays inside the Codex adapter | the composition root sees a factory, an id, options, and a probe |
 | The widget imports neither the push sink nor delivery | a widget that could push would make two deciders of what the model is told |
-| No inflection of *land* appears in `runtime/delivery.ts` or its test | delivery knows pending, handed off, and exhausted; only the push sink sees `message_start`, so only the sink may say a notice landed |
+| No inflection of *land* or of *consume* appears in `runtime/delivery.ts` or its test | delivery knows pending, handed off, and exhausted; only the push sink sees `message_start` and is told by the `agent_result` handler, so only the sink may say a notice landed or that the parent has read the Result. A link's target is not scanned, so delivery may cite the ADR whose filename carries both words |
 | `presentation/notification-text.ts` names only the domain and presentation | narrower than the presentation rule above, which admits Pi's packages: a notice is prose a model reads, so changing what it says provably touches no runtime module |
 | No `Ref.make`, `new Map`, or `new Set` in `runtime/supervisor.ts` | the supervisor sequences lifecycles and owns no state; admission, the Subagent records, and the waiter ledger each own the state whose invariant they carry, and a fourth holder in the file every lifecycle change passes through would read as local to whatever was being changed. The `stages` trace array is the documented exception |
 

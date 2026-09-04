@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { runId } from "../domain/index.ts";
 import { installSubagentV2 } from "../index.ts";
 import { emitText } from "../testing/fakes/script.ts";
 import {
@@ -10,6 +11,7 @@ import {
   startedIds,
 } from "../testing/host-rig.ts";
 import { createStandInHost } from "../testing/stand-in-host.ts";
+import { STRESS_POLICY } from "../testing/stress-policy.ts";
 import { createDemoBackendSet } from "./demo-backends.ts";
 
 /**
@@ -496,6 +498,73 @@ test("agent_result on a live Run says it has not finished, distinctly from unkno
     await rig.text("agent_result", { id: "run-never" }),
     /^No run with id run-never\./,
   );
+});
+
+test("agent_result tells the host the parent has the Result, and nothing else does", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const started = await startedRun(rig);
+  const id = runId(started.runId);
+
+  // `agent_wait` reports terminality and deliberately withholds the answer, so
+  // a parent waiting on a fan-out must still be pointed at each Result.
+  await rig.text("agent_wait", { ids: [started.runId] });
+  assert.equal(rig.installation.sink.status(id), "pending");
+
+  await rig.text("agent_result", { id: started.runId });
+
+  assert.equal(rig.installation.sink.status(id), "resolved");
+});
+
+test("a rejected agent_result tells the host nothing", async (t) => {
+  const rig = hostRig(t, {
+    resumableSteps: [[{ step: "await-gate", gate: "hold" }]],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const started = await startedRun(rig);
+
+  // `not yet terminal` and an unknown id both answer with text alone, which is
+  // the shape the handler recognises success by. Neither is a Result the
+  // parent now has.
+  await rig.text("agent_result", { id: started.runId });
+  await rig.text("agent_result", { id: "run-never" });
+
+  assert.equal(rig.installation.sink.status(runId(started.runId)), "pending");
+  assert.equal(rig.installation.sink.status(runId("run-never")), "pending");
+});
+
+test("a Result the store evicted tells the host nothing either", async (t) => {
+  // `ResultExpired` is a rejection like any other: the output is gone, so the
+  // parent has nothing, and a notice that lands afterwards is stale but
+  // harmless. The store budget here holds two results, so the first Run's
+  // output is evicted well before it is asked for.
+  const rig = hostRig(t, {
+    policy: {
+      ...STRESS_POLICY,
+      deliveryRetryBudget: { attempts: 1, delayMillis: 0 },
+    },
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const first = await startedRun(rig);
+  await rig.text("agent_wait", { ids: [first.runId] });
+  await rig.pump();
+  for (let index = 0; index < 6; index += 1) {
+    const next = await startedRun(rig);
+    await rig.text("agent_wait", { ids: [next.runId] });
+    await rig.pump();
+  }
+
+  assert.match(
+    await rig.text("agent_result", { id: first.runId }),
+    /its output was evicted/,
+  );
+  assert.equal(rig.installation.sink.status(runId(first.runId)), "pending");
 });
 
 // ── The teardown race ────────────────────────────────────────────────────────

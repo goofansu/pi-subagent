@@ -212,3 +212,47 @@ test("the widget caps its rows and says how many it is not showing", () => {
 test("an empty list renders nothing at all", () => {
   assert.deepEqual(renderRunRows([], theme, 80, FIXTURE_NOW), []);
 });
+
+test("W-2: a row whose notice will never arrive says so, with the id and the result", () => {
+  // A settled row's only exits are a landing and a retrieval, and an exhausted
+  // hand-off will never get the first. So the row explains itself, and gives
+  // the two facts a reader needs to take the second: which Run it is and that
+  // the answer is there regardless.
+  assert.equal(
+    row(120, { phase: "completed", handoff: "exhausted" }),
+    "explore  pi  3 turns  completed · notification failed · run-1 · result available",
+  );
+});
+
+test("W-2: the duration gives way to the explanation, and only on that row", () => {
+  // W-1 stands for every other settled row: the figure is the Run's, and it
+  // reads the same however late the row is drawn.
+  assert.equal(
+    row(120, { phase: "completed" }),
+    "explore  pi  3 turns  completed in 12.4s",
+  );
+  assert.doesNotMatch(
+    row(120, { phase: "completed", handoff: "exhausted" }),
+    /12\.4s/,
+  );
+});
+
+test("W-2: an exhausted failed Run keeps its own verb", () => {
+  assert.equal(
+    row(120, { phase: "failed", handoff: "exhausted" }),
+    "explore  pi  3 turns  failed · notification failed · run-1 · result available",
+  );
+});
+
+test("W-2: the explanation's tail gives way first, and the turn count next", () => {
+  // The tail is fitted like the activity tail and skipped when there is not
+  // room to read it; then turn accounting goes; the status never gives.
+  assert.equal(
+    row(60, { phase: "completed", handoff: "exhausted" }),
+    "explore  pi  3 turns  completed · notification failed",
+  );
+  assert.equal(
+    row(46, { phase: "completed", handoff: "exhausted" }),
+    "explore  pi  completed · notification failed",
+  );
+});

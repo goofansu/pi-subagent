@@ -1,7 +1,8 @@
 # The simplification presentation ledger
 
-**Status:** Confirmed at the Phase A gate. Every row names the golden that
-asserts its after column, except W-2, which is Phase C's.
+**Status:** Confirmed at the Phase A gate, and again at the Phase C gate for
+the four rows that were Phase C's: N-10, W-2, W-3 and C-3. Every row names the
+golden that asserts its after column.
 
 The v2 programme kept [a ledger of every textual difference between v1 and
 v2](../v2/presentation-ledger.md) so that a changed sentence was a decision
@@ -278,6 +279,15 @@ available`.
 **Why** — semantics §6, Phase C3. Recorded here so the Phase C gate has a row
 to confirm.
 
+**What the duration does, decided at the Phase C gate.** The after column
+above puts `completed · notification failed` in the *status* position, which is
+where the settled row prints `completed in 12.4s`, so on this one row the
+duration gives way to the explanation. That is the reading the gate took, and
+the reason is what the row is for: a row that will never leave on its own is
+being read for the reason it is stuck, not for what the Run cost. W-1 stands
+for every other settled row, and the tail — the Run id and `result available` —
+is fitted and dropped exactly as the activity tail is.
+
 ### W-3 · Row resolves on retrieval (Phase C)
 
 **Before** — a settled row stays until its notice lands, whatever the parent
@@ -390,8 +400,8 @@ after column, by test name and file.
 | C-2 | `C-2: /subagent is the only command, and /agents is gone`; `C-2: /subagent profiles opens the Profile flow`; `the Profile flow registers no command of its own`; `the entry point registers the six tools, its one command, and the notification renderer` | `host/diagnostics-command.test.ts`; `host/agents-command.test.ts`; `index.test.ts` | confirmed |
 | T-1 | `T1: the label's bound is stated on both description fields` | `host/tool-schemas.test.ts` | confirmed |
 | W-1 | the row-lifetime and settled-duration tests, unmodified | `host/widget.test.ts`; `presentation/rows.test.ts` | confirmed unchanged |
-| W-2 | — | — | Phase C |
-| W-3 | — | `host/widget.test.ts` | Phase C |
+| W-2 | `W-2: a row whose notice will never arrive says so, with the id and the result`; `W-2: the duration gives way to the explanation, and only on that row`; `W-2: an exhausted failed Run keeps its own verb`; `W-2: the explanation's tail gives way first, and the turn count next`; `W-2: a row whose notice will never arrive says so, and retrieving the Result takes it away` | `presentation/rows.test.ts`; `host/widget.test.ts` | confirmed at the Phase C gate |
+| W-3 | `W-3: a settled row leaves when the parent retrieves its Result, with no landing`; `the widget lists Runs that are not terminal and terminal ones whose hand-off is unresolved` | `host/widget.test.ts` | confirmed at the Phase C gate |
 | N-10 | `N-10: the pointer says what a model will find, in each of the three availabilities`; `N-10: availability is read off the output, not off the status alone`; `N-2: a completed Run with no output has no body, and its record is available` | `presentation/notification-text.test.ts` | confirmed at the Phase C gate |
 | C-3 | `C-3: a Session whose only raised counters are expected ones is healthy`; `C-3: the health line names the non-zero classes, worst first`; `C-3: a counter the host does not recognise is named rather than ignored`; `health is a verdict on what was noticed and a count of what is held` | `host/diagnostics-command.test.ts` | confirmed at the Phase C gate |
 

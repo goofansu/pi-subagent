@@ -41,7 +41,11 @@ import { ProfileCatalog } from "../runtime/profile-catalog.ts";
 import type { SessionPushSink } from "./push-sink.ts";
 import type { SessionHandle } from "./session-handle.ts";
 import { formatAgentGuidelines } from "./tool-copy.ts";
-import type { ActiveWidget, NoticeLandings, WidgetHost } from "./widget.ts";
+import type {
+  ActiveWidget,
+  CompletionHandoffView,
+  WidgetHost,
+} from "./widget.ts";
 import { installActiveWidget } from "./widget.ts";
 
 /** What one Session start needs from the process. */
@@ -87,11 +91,11 @@ export interface StartedSession {
 function openSession(
   host: WidgetHost,
   now: () => number,
-  landings: NoticeLandings,
+  handoff: CompletionHandoffView,
 ): Effect.Effect<StartedSession, never, SessionServices | Scope.Scope> {
   return Effect.gen(function* () {
     const catalog = yield* ProfileCatalog;
-    const widget = yield* installActiveWidget(host, now, landings);
+    const widget = yield* installActiveWidget(host, now, handoff);
     return {
       widget,
       profiles: catalog.list(),
@@ -135,8 +139,8 @@ export type SessionStartContext = Pick<ExtensionContext, "ui"> & {
  * widget, into the runtime's own Scope, so it leaves when the runtime does.
  * The sink is bound last, because binding it is what makes notifications start
  * flowing and there is no point in that before the Session can render them.
- * The widget reads the sink's landing facts before that bind, which is safe
- * for the same reason: nothing has landed yet, and nothing could have.
+ * The widget reads the sink's hand-off view before that bind, which is safe
+ * for the same reason: nothing has settled yet, so no hand-off exists.
  */
 export async function startSession(
   wiring: SessionWiring,
@@ -171,11 +175,11 @@ export async function startSession(
   try {
     opened = await runtime.runPromise(
       Scope.provide(
-        // Two functions rather than the sink itself: the widget reads whether
-        // a notice landed and never decides it.
+        // A read model rather than the sink itself: the widget asks how far a
+        // hand-off has got and never decides it.
         openSession(widgetHost, wiring.now, {
-          hasLanded: wiring.sink.hasLanded,
-          onLanding: wiring.sink.onLanding,
+          status: wiring.sink.status,
+          subscribe: wiring.sink.subscribe,
         }),
         runtime.scope,
       ),
