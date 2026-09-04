@@ -23,7 +23,10 @@ by every count that can be constructed honestly. The measurement, and what is
 true instead, are in [the deletion ledger](deletion-ledger.md).
 
 [The M7 exit gate](m7-exit-gate.md) verifies every item one at a time and is
-the record. **This roadmap is now history**: the plan it describes was
+the record. **The plan that closes the three outstanding items is
+[the 2.0 close](release-close.md)**, written 2026-09-04 after the
+simplification programme's Phase C was planned; it also says why the soak's
+log has stayed empty and what changes that. **This roadmap is now history**: the plan it describes was
 followed, and the documents that describe the product are
 [the architecture note](../architecture.md), [the glossary](../../CONTEXT.md),
 [the compatibility matrix](compatibility-matrix.md), and

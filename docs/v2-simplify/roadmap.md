@@ -30,7 +30,10 @@ is a host hold-buffer and belongs with Phase D's envelope, while the part that
 resolves the widget row and stops re-pushes is Phase C's. [The Phase A
 follow-up](#phase-a-follow-up--a6-a7-a8) and [Phase C](#phase-c--the-completion-hand-off-and-resource-lifetime-polish)
 below are rewritten accordingly; Phase D's two delivery items are merged into
-one; nothing in Phases A and B is reopened.
+one; nothing in Phases A and B is reopened. **What follows Phase C is not
+Phase D**: it is [the 2.0 close](../v2/release-close.md) — the soak, the
+coexistence record, the release, and the reading of Phase D's decision rules
+against the soak's numbers.
 
 **Strategy:** a controlled simplification programme inside the shipped
 architecture, not a second rewrite.
@@ -767,14 +770,20 @@ which also verifies the Phase A follow-up.
 
 Nothing here is on the path to 2.0. Each item waits for the release-candidate
 soak ([soak.md](../v2/soak.md)), real usage, or the counter named beside it,
-and each gets its own ADR when picked up.
+and each gets its own ADR when picked up. **Each item has a decision rule,
+written here before the numbers exist**, and [the 2.0 close](../v2/release-close.md)
+applies the rules to the soak's log and marks every item *scheduled* or
+*deferred* with the reading that decided it.
 
 - **Terminal Run compaction.** The repository keeps every Run snapshot until
   Session shutdown and the push sink keeps every landed id in a `Set`. Both
   are bounded only by Session length. Compact a terminal Run to a tombstone
   (Run id, Subagent id, terminal status, enough to distinguish
   `ResultExpired` from unknown) once its hand-off has resolved and its Result
-  has expired or been consumed.
+  has expired or been consumed. **Decision rule:** *scheduled* if any soak
+  Session's `/subagent` Run summary shows a hundred or more terminal Runs, or
+  a shutdown entry records a widget redraw or a notice that was visibly slow;
+  otherwise *deferred*, re-read at the first 2.x minor.
 - **Delivery's pin held through landing.** Delivery releases its store pin
   when the hand-off succeeds, so a notice can land and `agent_result` can
   already say `ResultExpired`. A bounded pin held from notice construction
@@ -782,7 +791,10 @@ and each gets its own ADR when picked up.
   settle, with a byte and count budget so an idle parent cannot pin the
   store forever. This is a store policy change and needs an ADR. It is *not*
   Phase C's consumption: that resolves a hand-off, this keeps output
-  evictable or not.
+  evictable or not. **Decision rule:** *scheduled* on the first soak entry in
+  which `agent_result` answered `ResultExpired` for a Run whose notice had
+  landed in the same Session — a pointer that lied; otherwise *deferred*,
+  re-read whenever `evictions` is non-zero in a shutdown entry.
 - **Hold while active: one envelope for batching and suppression.** Up to
   `maxActiveRuns` notices can land close together, each a follow-up that can
   trigger a parent turn, and Phase C shows that a notice handed to Pi while
@@ -796,7 +808,11 @@ and each gets its own ADR when picked up.
   aggregation has stayed out of settlement. **Evidence:** the
   `consumedBeforeLanding` count Phase C adds, read from the soak and from
   dogfood Sessions; if it stays near zero, the envelope is batching alone and
-  waits for the soak's fan-out numbers.
+  waits for the soak's fan-out numbers. **Decision rule:** *scheduled* if
+  `consumedBeforeLanding` is non-zero in a third or more of the soak's
+  shutdown entries, or three or more in any one; or if two or more shutdown
+  entries record three or more notices landing in one parent turn. Otherwise
+  *deferred*, re-read at the first 2.x minor.
 
 ## 5. Sequencing and the 2.0 release
 
@@ -806,7 +822,8 @@ and each gets its own ADR when picked up.
 | A follow-up | Closed 2026-09-04, with C           | A8 changed model-facing text before 2.0 stable. A6 and A7 were corrections and held nothing. |
 | B     | Closed 2026-09-04                        | Behaviour-preserving; held no release. Every pre-existing runtime test passes unmodified. |
 | C     | Closed 2026-09-04                        | The widget's row-lifetime cell and the notice's pointer cell changed, both before stable. The six live lanes are owed: see the gate's item 14. |
-| D     | When the soak, usage, or `consumedBeforeLanding` shows a need | Not scheduled.                                                        |
+| 2.0 close | After C: [release-close.md](../v2/release-close.md) | The soak on the Phase C build, the coexistence record, the end-state test, the Phase D decision, the programme close, the release. |
+| D     | Only if a decision rule fires at the 2.0 close | Not scheduled. Each scheduled item's ADR is its phase's first ticket. |
 
 The three outstanding release items from [the v2 roadmap](../v2/roadmap.md)
 (live gates on the cutover build, the Codex Desktop coexistence record, the
@@ -863,4 +880,5 @@ understand the product.
 | [`notification-semantics.md`](notification-semantics.md) §2–§6, which the compatibility matrix cites | `notification-semantics.md` §1's before/after tables and §8 |
 
 Historical documents gain a one-line banner saying so and pointing at the
-permanent one that superseded them. Nothing is deleted.
+permanent one that superseded them. Nothing is deleted. This split is item E6
+of [the 2.0 close](../v2/release-close.md).

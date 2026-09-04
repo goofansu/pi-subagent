@@ -7,6 +7,11 @@ backend set, as the maintainer's default subagent extension. It is what an
 installed package loads; nothing has to be switched on.
 **What closing it unlocks:** the `2.0.0` release, without the release-candidate
 marker.
+**The plan for running it** is [the 2.0 close](release-close.md), which starts
+when the simplification programme's Phase C gate closes — the soak must run on
+the build that ships — and which replaces this record's hand-written tally with
+one computed from Pi's session logs, so that the maintainer writes only the
+shutdown readings.
 
 **The rollback window is not what it was designed to be, and that is worth
 being plain about.** The plan was for this soak to run *before* 1.x was
