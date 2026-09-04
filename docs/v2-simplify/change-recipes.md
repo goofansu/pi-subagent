@@ -139,7 +139,11 @@ row); F9.
 
 - `backend/<name>/*` — the adapter: `Backend`, `BackendAgent`, `execute`,
   Profile validation, observation translation
-- `runtime/composition.ts` and `host/production-backends.ts` — registration
+- `host/production-backends.ts` — registration, and all of it: construct
+  the backend, add it to the set's `backends` list, add its probe block.
+  `runtime/composition.ts` declares what a `BackendSet` *is* and names no
+  backend, so it does not change; this line said otherwise until the 2.0
+  close's end-state test read the module
 - a conformance test file under `testing/` wiring the shared scenarios to the
   new adapter, with skips declared by capability
 - a live smoke script and a `*:host-smoke` lane, and the matrix's proof
@@ -147,7 +151,7 @@ row); F9.
 
 **Must not change** — and this is the whole test of the seam:
 
-- `runtime/*` beyond the one registration line
+- `runtime/*` — all of it. Registration is the host's.
 - `domain/*`
 - `presentation/*`
 - `host/*` beyond the one registration line

@@ -1,0 +1,3 @@
+{"type":"session","version":3,"id":"session-d","timestamp":"2026-09-05T12:00:00.000Z","cwd":"/repo/one"}
+{"type":"message","id":"d-1","parentId":null,"timestamp":"2026-09-05T12:00:10.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-d1","name":"agent_start","arguments":{"agent":"explore","description":"Trace the widget","prompt":"Trace the widget."}}]}}
+{"type":"message","id":"d-2","parentId":"d-1","timestamp":"2026-09-05T12:00:11.000Z","message":{"role":"toolResult","toolCallId":"call-d1","toolName":"agent_start","content":[{"type":"text","text":"Launched explore.\nsubagent: subagent-dd-1\nrun: run-dd-1"}],"isError":false,"timestamp":1788696011000}}

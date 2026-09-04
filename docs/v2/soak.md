@@ -128,8 +128,9 @@ could not place — with the Session and the line — and the number of Sessions
 read. Neither is pasted here, but a run with a long unattributed list is one to
 look at before believing the tables: the script lists what it cannot attribute
 rather than dropping it, precisely so the tally never reads fuller than the
-usage was. A field the script needs and cannot find is a thrown error naming
-the file and the line, not a smaller number.
+usage was. A field it needs and cannot find is a thrown error naming the
+file and the line, not a smaller number — and so is a tool result whose wording
+has changed, because the Run and Subagent ids are read out of those sentences.
 
 **Last pasted:** never. The tables below are the empty ones this record opened
 with.

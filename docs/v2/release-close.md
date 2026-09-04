@@ -200,6 +200,26 @@ is date, live backends, and the paste.
   and the union would let a backend record more switches than it ever had
   Sessions. The other side of the switch is already counted as the earlier
   Session's shutdown.
+- One place the plan and the ticket disagreed: this document said an
+  unresolvable resume is "counted under *unknown* and listed", and the ticket
+  said it "appears in the *unattributed* list … and in no table". The ticket
+  won. An `unknown` row in a per-backend table would be a fourth backend that
+  does not exist, and the exit gate reads those tables per backend; the list is
+  where a reader is meant to look, and `soak.md` now says a long one is a
+  reason to distrust the tables above it.
+- **The result prose is a format too, and it is checked.** The code review's
+  spec axis found that ids are read out of the tool result's sentences, so a
+  reworded `Started …` would have left every later resume, steer and cancel
+  unresolvable — arriving in the record as a smaller tally rather than as an
+  error, which is the one failure the script exists to refuse. A start's or a
+  resume's result must now open with one of the sentences
+  `presentation/prose.ts` actually produces, and one that says a Run started
+  must carry its ids; anything else throws with the file, the line, and where
+  to go and look. Writing the check found a real gap in the list — a start
+  refused with `Unknown agent: …` opens with neither `Started ` nor
+  `Cannot start ` and is not an error result — which is the check earning its
+  place on the first run. Covered by `a result whose wording has changed fails
+  loudly, naming the file and the line`.
 
 ### 2. The soak's exit criteria are met
 
@@ -247,8 +267,9 @@ rather than change; `change-recipes.md`'s *Add a backend* recipe names
 `change-surface.md`'s R5 rows repeat the error; `host/production-backends.test.ts`
 uses `"gemini"` as its example of a backend that does not exist; a fourth backend
 owning a process would relax the `node:child_process` fence; and an empty
-description produces `Subagent "" completed in …`. The second and the fifth are
-carried to 2.0.x issues; the rest are recorded, not actioned.
+description produces `Subagent "" completed in …`. The second is fixed here, in
+`change-recipes.md`; the fifth is carried to a 2.0.x issue; the rest are
+recorded, not actioned.
 
 ### 5. Every Phase D item has a recorded decision
 
@@ -623,8 +644,12 @@ registration. The module takes `readonly Backend[]` and names no backend;
 `host/production-backends.ts` alone. `change-surface.md`'s R5 target row and its
 measured row carry the same error. `change-recipes.md` is on §8's *permanent,
 kept current* list and its own header says a recipe that misnames a file is a bug
-in the document, so this is a live defect rather than history. **Carried to a
-2.0.x documentation issue.**
+in the document, so this is a live defect rather than history. **Fixed here** —
+the recipe now names `host/production-backends.ts` alone and says why the other
+module does not change. `change-surface.md`'s R5 rows are left as they stand:
+that document is a dated measurement and §8 puts it among the historical ones,
+and its own convention is to add a later reading rather than rewrite an earlier
+one.
 
 **3. `host/production-backends.test.ts` uses `"gemini"` as its example of a
 backend that does not exist** (lines 171–177, `reason: "unknown backend

@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   computeTally,
   formatTally,
+  parseArguments,
   readProfileBackends,
 } from "./soak-tally.mjs";
 
@@ -26,6 +27,7 @@ const FIXTURES = path.join(import.meta.dirname, "fixtures", "soak-tally");
 const SESSIONS = path.join(FIXTURES, "sessions");
 const PROFILES = path.join(FIXTURES, "profiles");
 const MALFORMED = path.join(FIXTURES, "malformed");
+const REWORDED = path.join(FIXTURES, "reworded");
 
 function fixtureTally(since = "2026-09-05") {
   return computeTally({
@@ -223,4 +225,72 @@ test("the printed tables carry soak.md's headings and columns, so they can be pa
   );
   assert.ok(printed.includes("subagent-zz-9"));
   assert.ok(printed.includes("Sessions read: 2"));
+});
+
+test("a result whose wording has changed fails loudly, naming the file and the line", () => {
+  // The ids are read out of the tool result's prose, so the prose is a format
+  // this script depends on. A start that no longer says "Started …" would
+  // otherwise leave every later resume, steer and cancel unresolvable — which
+  // reaches the record as a smaller tally rather than as an error.
+  assert.throws(
+    () =>
+      computeTally({
+        sessionsDir: REWORDED,
+        profilesDir: PROFILES,
+        since: "2026-09-05",
+      }),
+    (error) => {
+      assert.match(error.message, /session-d\.jsonl/);
+      assert.match(error.message, /:3\b/);
+      assert.match(error.message, /agent_start/);
+      assert.match(error.message, /presentation\/prose\.ts/);
+      return true;
+    },
+  );
+});
+
+test("a directory flag with nothing usable after it is refused rather than quietly defaulted", () => {
+  // A tally of the wrong tree is the one wrong answer this script can give
+  // without saying so, so neither of these may fall back to Pi's own home.
+  assert.throws(
+    () => parseArguments(["2026-09-05", "--sessions"]),
+    /--sessions needs a directory after it/,
+  );
+  assert.throws(
+    () => parseArguments(["2026-09-05", "--sessions", "--profiles", "/p"]),
+    /--sessions needs a directory after it/,
+  );
+  assert.throws(
+    () => parseArguments(["2026-09-05", "--session", "/s"]),
+    /unknown option '--session'/,
+  );
+  assert.throws(
+    () => parseArguments(["2026-09-05", "2026-09-06"]),
+    /unexpected argument '2026-09-06'/,
+  );
+});
+
+test("both directories default under Pi's agent directory, and either flag overrides its own", () => {
+  const defaults = parseArguments(["2026-09-05"]);
+  assert.equal(defaults.since, "2026-09-05");
+  assert.equal(path.basename(defaults.sessionsDir), "sessions");
+  assert.equal(path.basename(defaults.profilesDir), "agents");
+  assert.equal(
+    path.dirname(defaults.sessionsDir),
+    path.dirname(defaults.profilesDir),
+  );
+
+  const given = parseArguments([
+    "2026-09-05",
+    "--sessions",
+    SESSIONS,
+    "--profiles",
+    PROFILES,
+  ]);
+  assert.equal(given.sessionsDir, SESSIONS);
+  assert.equal(given.profilesDir, PROFILES);
+
+  const onlyOne = parseArguments(["2026-09-05", "--profiles", PROFILES]);
+  assert.equal(onlyOne.profilesDir, PROFILES);
+  assert.equal(path.basename(onlyOne.sessionsDir), "sessions");
 });

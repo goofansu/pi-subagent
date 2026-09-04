@@ -84,7 +84,7 @@ function fail(file, line, what) {
 }
 
 /** Where Pi keeps its agent directory, by the same rule Pi uses. */
-export function defaultAgentDir() {
+function defaultAgentDir() {
   const fromEnvironment = process.env[ENV_AGENT_DIR];
   if (fromEnvironment) {
     return fromEnvironment.startsWith("~")
@@ -187,6 +187,36 @@ function readSessionFile(file) {
   return { header, entries };
 }
 
+/**
+ * How a start's or a resume's result announces what it did.
+ *
+ * The ids are in the tool result's prose, so that prose is a format this script
+ * depends on exactly as much as it depends on the entry fields — and it is the
+ * half a reader is least likely to think of as a format. Every outcome of the
+ * two operations opens with one of the shapes below: a Run was started, or it
+ * was refused and says why. A result opening with none of them is a wording
+ * change, and a result that says it started a Run but carries no ids is the
+ * same thing. Both throw. The alternative is a resume that quietly stops
+ * resolving, which turns up as a smaller tally rather than as an error, and
+ * that is exactly the failure the script exists to refuse.
+ *
+ * A refusal opener added later will throw here too. That is a false alarm and
+ * it is the right trade: it costs one line in this list, once, and it is the
+ * only way a real wording change cannot pass as a quiet week. The list is
+ * `presentation/prose.ts`'s `formatStartOutcome`, `formatResumeOutcome` and
+ * `formatToolInputRejected`, read off their outcome cases.
+ */
+const RESULT_PROSE = {
+  agent_start: {
+    started: "Started ",
+    refused: ["Cannot start ", "Unknown agent: ", "Cannot run "],
+  },
+  agent_resume: {
+    started: "Resumed subagent ",
+    refused: ["Cannot resume ", "Cannot run "],
+  },
+};
+
 /** The text parts of a tool result, joined. */
 function resultText(content) {
   if (!Array.isArray(content)) return "";
@@ -203,7 +233,7 @@ function requireString(value, file, line, what) {
 }
 
 /** Add one occurrence of an operation, on a day, to a backend's row. */
-function record(rows, backend, operation, day) {
+function countOperation(rows, backend, operation, day) {
   let backendRows = rows.get(backend);
   if (backendRows === undefined) {
     backendRows = new Map(
@@ -216,6 +246,13 @@ function record(rows, backend, operation, day) {
   row.days.add(day);
 }
 
+/** Why an id could not be placed, spelled once per kind of id. */
+const NO_PROFILE =
+  "no Profile of that name is on disk, so its backend cannot be read";
+const NO_SUBAGENT = "no agent_start in this Session produced that Subagent id";
+const NO_RUN =
+  "no agent_start or agent_resume in this Session produced that Run id";
+
 /**
  * Count one Session, and report which backends it had open.
  *
@@ -227,11 +264,21 @@ function tallySession({ file, session, profileBackends, rows, unattributed }) {
   const subagentBackends = new Map();
   const runBackends = new Map();
   const awaitingResult = new Map();
-  const used = new Set();
+  const backendsUsed = new Set();
   let lastInstant = session.header.timestamp;
 
   const listUnattributed = (line, operation, id, why) => {
     unattributed.push({ file, line, operation, id, why });
+  };
+  /** The backend an id belongs to, or nothing and a line in the list. */
+  const placedBy = (known, id, line, operation, why) => {
+    const backend = known.get(id);
+    if (backend === undefined) listUnattributed(line, operation, id, why);
+    return backend;
+  };
+  const count = (backend, operation, day) => {
+    countOperation(rows, backend, operation, day);
+    backendsUsed.add(backend);
   };
 
   for (const { entry, line } of session.entries) {
@@ -246,12 +293,36 @@ function tallySession({ file, session, profileBackends, rows, unattributed }) {
       awaitingResult.delete(message.toolCallId);
       if (message.isError === true) continue;
       const text = resultText(message.content);
+      const prose = RESULT_PROSE[pending.operation];
+      if (prose.refused.some((opener) => text.startsWith(opener))) continue;
+      if (!text.startsWith(prose.started))
+        throw fail(
+          file,
+          line,
+          `the result of ${pending.operation} opens with none of the sentences ` +
+            `this script knows — not '${prose.started}', and not ` +
+            `${prose.refused.map((opener) => `'${opener}'`).join(" or ")} — so ` +
+            "its ids cannot be read. Re-read the outcome cases in " +
+            "presentation/prose.ts and add the opener here.",
+        );
       const subagentId = /(?:^|\n)subagent id (\S+)/.exec(text)?.[1];
       const runId = /(?:^|\n)run id (\S+)/.exec(text)?.[1];
+      if (runId === undefined)
+        throw fail(
+          file,
+          line,
+          `the result of ${pending.operation} says a Run started but carries no run id`,
+        );
+      if (pending.operation === "agent_start" && subagentId === undefined)
+        throw fail(
+          file,
+          line,
+          "an agent_start result says a Subagent started but carries no subagent id",
+        );
       if (pending.backend === undefined) continue;
       if (subagentId !== undefined)
         subagentBackends.set(subagentId, pending.backend);
-      if (runId !== undefined) runBackends.set(runId, pending.backend);
+      runBackends.set(runId, pending.backend);
       continue;
     }
 
@@ -294,19 +365,15 @@ function tallySession({ file, session, profileBackends, rows, unattributed }) {
           line,
           "agent_start has no agent argument",
         );
-        const backend = profileBackends.get(profile);
-        if (backend === undefined)
-          listUnattributed(
-            line,
-            name,
-            profile,
-            "no Profile of that name is on disk, so its backend cannot be read",
-          );
-        else {
-          record(rows, backend, name, day);
-          used.add(backend);
-        }
-        awaitingResult.set(callId, { backend });
+        const backend = placedBy(
+          profileBackends,
+          profile,
+          line,
+          name,
+          NO_PROFILE,
+        );
+        if (backend !== undefined) count(backend, name, day);
+        awaitingResult.set(callId, { backend, operation: name });
         continue;
       }
 
@@ -317,19 +384,15 @@ function tallySession({ file, session, profileBackends, rows, unattributed }) {
           line,
           "agent_resume has no id argument",
         );
-        const backend = subagentBackends.get(subagentId);
-        if (backend === undefined)
-          listUnattributed(
-            line,
-            name,
-            subagentId,
-            "no agent_start in this Session produced that Subagent id",
-          );
-        else {
-          record(rows, backend, name, day);
-          used.add(backend);
-        }
-        awaitingResult.set(callId, { backend });
+        const backend = placedBy(
+          subagentBackends,
+          subagentId,
+          line,
+          name,
+          NO_SUBAGENT,
+        );
+        if (backend !== undefined) count(backend, name, day);
+        awaitingResult.set(callId, { backend, operation: name });
         continue;
       }
 
@@ -340,18 +403,8 @@ function tallySession({ file, session, profileBackends, rows, unattributed }) {
           line,
           "agent_steer has no id argument",
         );
-        const backend = runBackends.get(runId);
-        if (backend === undefined)
-          listUnattributed(
-            line,
-            name,
-            runId,
-            "no agent_start or agent_resume in this Session produced that Run id",
-          );
-        else {
-          record(rows, backend, name, day);
-          used.add(backend);
-        }
+        const backend = placedBy(runBackends, runId, line, name, NO_RUN);
+        if (backend !== undefined) count(backend, name, day);
         continue;
       }
 
@@ -373,20 +426,10 @@ function tallySession({ file, session, profileBackends, rows, unattributed }) {
           line,
           "agent_cancel names an id that is not a string",
         );
-        const backend = runBackends.get(runId);
-        if (backend === undefined)
-          listUnattributed(
-            line,
-            name,
-            runId,
-            "no agent_start or agent_resume in this Session produced that Run id",
-          );
-        else reached.add(backend);
+        const backend = placedBy(runBackends, runId, line, name, NO_RUN);
+        if (backend !== undefined) reached.add(backend);
       }
-      for (const backend of reached) {
-        record(rows, backend, name, day);
-        used.add(backend);
-      }
+      for (const backend of reached) count(backend, name, day);
     }
   }
 
@@ -394,14 +437,14 @@ function tallySession({ file, session, profileBackends, rows, unattributed }) {
   // the day the Session's last entry falls on rather than its first: a Session
   // that ran past midnight shut down on the later day.
   const shutdownDay = localDay(lastInstant, file, session.header.line);
-  for (const backend of used)
-    record(rows, backend, "Session shutdown", shutdownDay);
+  for (const backend of backendsUsed)
+    countOperation(rows, backend, "Session shutdown", shutdownDay);
 
   return {
     cwd: session.header.cwd,
     startedAt: session.header.timestamp,
     startDay: localDay(session.header.timestamp, file, session.header.line),
-    used,
+    used: backendsUsed,
   };
 }
 
@@ -431,7 +474,7 @@ function tallySwitches(sessions, rows) {
     group.sort((left, right) => left.startedAt.localeCompare(right.startedAt));
     for (const switched of group.slice(1))
       for (const backend of switched.used)
-        record(rows, backend, "Session switch", switched.startDay);
+        countOperation(rows, backend, "Session switch", switched.startDay);
   }
 }
 
@@ -549,7 +592,7 @@ export function formatTally(tally) {
   return `${lines.join("\n")}\n`;
 }
 
-function parseArguments(argv) {
+export function parseArguments(argv) {
   const options = { since: undefined };
   const rest = [...argv];
   const valueFor = (flag) => {
