@@ -33,7 +33,7 @@
  * is the decision; contributing invariant 12 is the rule this module owns.
  */
 
-import { Effect, Ref } from "effect";
+import { Effect, Exit, Ref, type Scope } from "effect";
 import type { RunId, SubagentId } from "../domain/index.ts";
 
 /**
@@ -55,11 +55,11 @@ export type AdmissionOutcome =
 /**
  * What one admitted Run holds, and the one call that gives it all back.
  *
- * The lease is not a resource in the Effect sense yet. Phase C1 replaces the
- * Run fiber's `release()` call with `Effect.acquireRelease`, so that capacity
- * is returned by the Run Scope closing rather than by a call somebody has to
- * remember — and the reason that is a one-line change then is that the shape
- * is decided here now.
+ * The lease is a **scoped resource**: nobody calls `release` procedurally.
+ * {@link RunAdmission.admit} returns it when the admitting Scope closes on a
+ * failure, and the Run fiber's own Scope returns it when the Run is over. The
+ * two never both fire on one lease, and `release` is idempotent by
+ * construction if they ever did.
  */
 export interface AdmissionLease {
   /**
@@ -109,6 +109,27 @@ export interface RunAdmission {
   readonly acquire: (
     subagentId?: SubagentId,
   ) => Effect.Effect<AdmissionOutcome>;
+  /**
+   * {@link acquire}, under the caller's Scope, for callers that admit a Run.
+   *
+   * The protocol is the supervisor's start and resume, and it has two halves.
+   * **A rejection after admission is a failure of the admitted span** — a
+   * backend that would not open, a reservation the store refused — so the
+   * Scope closes on a failure and everything the lease holds goes back before
+   * the rejection reaches the caller. **A span that succeeds has forked a
+   * Run**, and from that instant the Run fiber's own Scope holds the lease, so
+   * this Scope must not take it back.
+   *
+   * That is why the release is conditional on the exit rather than
+   * unconditional: the two Scopes own the lease at different times, and the
+   * hand-over is exactly the moment the admitted span succeeds. Nobody has to
+   * remember a compensating call on either path, which is the whole point —
+   * before this there were three sites that gave capacity back and each had to
+   * know which half of the lease it was holding.
+   */
+  readonly admit: (
+    subagentId?: SubagentId,
+  ) => Effect.Effect<AdmissionOutcome, never, Scope.Scope>;
   /** What the pre-check in start, resume, and steer reads. */
   readonly isShuttingDown: () => Effect.Effect<boolean>;
   /** True for the first caller only. The one observable instant. */
@@ -202,27 +223,37 @@ export function makeAdmission(
       };
     };
 
+    const acquire = (
+      subagentId?: SubagentId,
+    ): Effect.Effect<AdmissionOutcome> =>
+      Ref.modify(state, (current) => {
+        if (current.shuttingDown) {
+          // Answered first, and before the two conditions that can change,
+          // because it is the one that will not.
+          return [{ outcome: "shutting down" } as AdmissionOutcome, current];
+        }
+        if (subagentId !== undefined && current.running.has(subagentId)) {
+          return [{ outcome: "already running" }, current];
+        }
+        if (current.activeRuns >= maxActiveRuns) {
+          return [{ outcome: "at capacity" }, current];
+        }
+        const running = new Set(current.running);
+        if (subagentId !== undefined) running.add(subagentId);
+        return [
+          { outcome: "admitted", lease: makeLease(subagentId) },
+          { ...current, activeRuns: current.activeRuns + 1, running },
+        ];
+      });
+
     return {
-      acquire: (subagentId) =>
-        Ref.modify(state, (current) => {
-          if (current.shuttingDown) {
-            // Answered first, and before the two conditions that can change,
-            // because it is the one that will not.
-            return [{ outcome: "shutting down" } as AdmissionOutcome, current];
-          }
-          if (subagentId !== undefined && current.running.has(subagentId)) {
-            return [{ outcome: "already running" }, current];
-          }
-          if (current.activeRuns >= maxActiveRuns) {
-            return [{ outcome: "at capacity" }, current];
-          }
-          const running = new Set(current.running);
-          if (subagentId !== undefined) running.add(subagentId);
-          return [
-            { outcome: "admitted", lease: makeLease(subagentId) },
-            { ...current, activeRuns: current.activeRuns + 1, running },
-          ];
-        }),
+      acquire,
+      admit: (subagentId) =>
+        Effect.acquireRelease(acquire(subagentId), (admitted, exit) =>
+          admitted.outcome === "admitted" && Exit.isFailure(exit)
+            ? admitted.lease.release()
+            : Effect.void,
+        ),
       isShuttingDown: () =>
         Effect.map(Ref.get(state), (current) => current.shuttingDown),
       beginShutdown: () =>

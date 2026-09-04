@@ -25,12 +25,20 @@
  *    depth, then one atomic acquire for global capacity, and the guaranteed
  *    result reservation taken through the lease it yields.
  * 2. Open the BackendAgent inside the new Subagent Scope. A failure here is
- *    `backend unavailable`, the lease releases everything it holds, and the
- *    ids stay spent (ADR-0030).
+ *    `backend unavailable` and the ids stay spent (ADR-0030).
  * 3. Publish the Run and fork its Run fiber.
  *
  * `start` returns after step 3, so a caller receives either ids for a Run that
  * exists or a typed rejection — never an id for work that never began.
+ *
+ * **Nothing here releases the lease by hand.** Steps 1 to 3 run under one
+ * Scope and a rejection among them is a *failure* of that span, so
+ * `admission.admit` gives back the capacity slot and the reservation as the
+ * Scope closes; once the fork has happened the Run fiber's own Scope holds the
+ * lease and returns it when the Run is over, after `detachRun`. Phase C1 is
+ * where the two procedural `release()` calls went, and the ordering the Phase
+ * B review restored is now a consequence of Scope finalizers running
+ * last-in-first-out rather than of a comment asking for it.
  *
  * The order of those steps is what keeps both admission rules true, and it
  * does not change: **nothing waits**, because at capacity the answer is
@@ -157,7 +165,7 @@ export interface SessionSettings {
  */
 interface ForkedRun {
   readonly record: SubagentRecord;
-  /** Released when the Run fiber exits, whatever ended it. */
+  /** Returned by the Run fiber's Scope closing, whatever ended the Run. */
   readonly lease: AdmissionLease;
   readonly identity: RunIdentity;
   readonly prompt: string;
@@ -385,6 +393,19 @@ const makeSupervisor = (settings: SessionSettings) =>
         // stop one, and only the Session ending does.
         const fiber = yield* Effect.forkIn(
           Effect.gen(function* () {
+            // The lease first, so that Scope finalizers running
+            // last-in-first-out give it back *last*. The order matters and is
+            // the property the Phase B review restored: the Subagent's
+            // active-Run claim is what stops a resume being admitted, so
+            // returning it before the record was detached would let the next
+            // Run reach `attachRun` while this one still looked in flight.
+            yield* Effect.addFinalizer(() => lease.release());
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                counters.released("liveRunFibers");
+                records.detachRun(record.id);
+              }),
+            );
             counters.acquired("liveRunFibers");
             return yield* runToSettlement(
               {
@@ -421,20 +442,13 @@ const makeSupervisor = (settings: SessionSettings) =>
                   }
                   yield* Deferred.succeed(started, undefined);
                 }),
-            );
+            ).pipe(Scope.provide(record.scope));
           }).pipe(
-            Effect.ensuring(
-              Effect.gen(function* () {
-                counters.released("liveRunFibers");
-                records.detachRun(record.id);
-                // Last, and this order matters: the Subagent's active-Run
-                // claim is what stops a resume being admitted, so releasing
-                // it before the record was detached would let the next Run
-                // reach `attachRun` while this one still looked in flight.
-                yield* lease.release();
-              }),
-            ),
-            Scope.provide(record.scope),
+            // The Run fiber's own Scope, which is what holds the lease and the
+            // detach. `runToSettlement` still runs under the *Subagent's*
+            // Scope, so the Run Scope it forks stays a child of that one and a
+            // closing Subagent still closes it.
+            Effect.scoped,
           ),
           sessionScope,
         );
@@ -573,23 +587,38 @@ const makeSupervisor = (settings: SessionSettings) =>
       return { outcome: "resolved", profile, backend };
     };
 
-    const start = (request: StartRequest): Effect.Effect<StartOutcome> =>
+    /**
+     * The admitted half of a start: everything from the capacity claim to the
+     * fork.
+     *
+     * It runs under a Scope of its own, and a rejection *after* admission is
+     * expressed as a **failure** rather than as a returned value. That is not
+     * decoration: `admission.admit` releases the lease when this Scope closes
+     * on a failure, so a backend that would not open gives back the capacity
+     * slot and the result reservation before the rejection reaches the caller,
+     * with nobody remembering a compensating call. A span that succeeds has
+     * forked the Run, and from that instant the Run fiber's Scope holds the
+     * lease.
+     */
+    const admittedStart = (
+      request: StartRequest,
+      profile: Profile,
+      backend: Backend,
+    ): Effect.Effect<
+      Extract<StartOutcome, { outcome: "started" }>,
+      StartOutcome,
+      Scope.Scope
+    > =>
       Effect.gen(function* () {
-        if (yield* admission.isShuttingDown()) {
-          return { outcome: "shutting down" } as const;
-        }
-
-        const resolved = resolveStart(request);
-        if (resolved.outcome !== "resolved") return resolved;
-        const { profile, backend } = resolved;
-
         // No Subagent id yet, so nothing to claim for one: a start's Subagent
         // is bound to the lease after the open, below.
-        const acquired = yield* admission.acquire();
+        const acquired = yield* admission.admit();
         if (acquired.outcome !== "admitted") {
-          return acquired.outcome === "shutting down"
-            ? ({ outcome: "shutting down" } as const)
-            : ({ outcome: "at capacity" } as const);
+          return yield* Effect.fail(
+            acquired.outcome === "shutting down"
+              ? ({ outcome: "shutting down" } as const)
+              : ({ outcome: "at capacity" } as const),
+          );
         }
         const { lease } = acquired;
 
@@ -598,21 +627,20 @@ const makeSupervisor = (settings: SessionSettings) =>
         const subagentId = yield* repository.allocateSubagentId();
         const runId = yield* repository.allocateRunId();
 
-        // A refusal has already released the lease, so there is nothing to
-        // compensate here.
         const reserved = yield* lease.reserveResult(runId);
-        if (!reserved) return { outcome: "at capacity" } as const;
+        if (!reserved) {
+          return yield* Effect.fail({ outcome: "at capacity" } as const);
+        }
 
         const context = subagentContextFor(request, subagentId);
         const opened = yield* openSubagent(backend, profile, context);
         if (opened.outcome !== "opened") {
-          // Everything the lease holds is released before the rejection
-          // returns, and nothing was published, so no Run ever existed.
-          yield* lease.release();
-          return {
+          // Nothing was published, so no Run ever existed; this Scope closing
+          // on the failure is what returns everything the lease holds.
+          return yield* Effect.fail({
             outcome: "backend unavailable",
             diagnostic: opened.diagnostic,
-          } as const;
+          } as const);
         }
 
         const record = records.insert({
@@ -644,6 +672,24 @@ const makeSupervisor = (settings: SessionSettings) =>
         });
 
         return { outcome: "started", runId, subagentId } as const;
+      });
+
+    const start = (request: StartRequest): Effect.Effect<StartOutcome> =>
+      Effect.gen(function* () {
+        if (yield* admission.isShuttingDown()) {
+          return { outcome: "shutting down" } as const;
+        }
+
+        const resolved = resolveStart(request);
+        if (resolved.outcome !== "resolved") return resolved;
+        const { profile, backend } = resolved;
+
+        // Rejection and success are one union again on the way out: the
+        // failure channel exists only so that the Scope closes on a rejection.
+        return yield* Effect.catch(
+          Effect.scoped(admittedStart(request, profile, backend)),
+          (rejection): Effect.Effect<StartOutcome> => Effect.succeed(rejection),
+        );
       });
 
     /**

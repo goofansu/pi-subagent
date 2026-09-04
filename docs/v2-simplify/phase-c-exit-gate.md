@@ -66,7 +66,20 @@ remains in the supervisor. `detachRun` still runs before the lease releases.
 The stress lane's zero probe still holds after hundreds of cycles including
 rejected and failed starts.
 
-**Status:** OPEN.
+**How the two paths are covered.** The acquire stays in `start` and `resume`
+rather than moving into the Run fiber, because the fiber has to be attached to
+its record *before* the outcome is reported and a fiber cannot hand itself its
+own handle without two more `Deferred`s — machinery boundary rule 21 exists to
+keep out. Instead the admitted span runs under its own Scope and expresses a
+post-admission rejection as a **failure**, so `admission.admit` releases on the
+way out; the Run fiber's Scope holds the lease from the fork on, with
+`detachRun` registered *after* the lease so last-in-first-out runs it first.
+
+**Evidence to name:** `runtime/admission.test.ts` (the refusal paths);
+`runtime/supervisor.test.ts` (the concurrent-close test the Phase B review
+added, unmodified); `runtime/stress.test.ts` (the zero probe).
+
+**Status:** PASS.
 
 ### 5. The acquire/release audit is recorded (C2)
 
@@ -78,14 +91,19 @@ correct moment. The three named pins are recorded as deliberately unconverted
 
 | Pair | Converted? | Why or why not |
 | --- | --- | --- |
-| admission claim/release | yes (item 4) | |
-| subscription start/unsubscribe | | |
-| delivery claim/recovery sweep | | |
+| admission claim/release | yes (item 4) | Two Scopes, and each has exactly one correct moment: the admitted span's Scope returns the lease when it closes on a rejection, and the Run fiber's Scope returns it when the Run is over. No `release()` call remains in `runtime/supervisor.ts`. |
+| subscription start/unsubscribe | yes, already | `RunRepository.subscribe` is an `Effect.acquireRelease` around the `repositorySubscriptions` probe (`runtime/repository.ts`), and its consumer — the widget — registers its own unsubscribe as a Session-Scope finalizer. Recorded rather than changed. |
+| delivery claim/recovery sweep | no | **Not a pair.** The claim is taken once per Run and kept whatever the push did; the sweep is a *retry over stored ids*, not the claim's release, and it has no single moment that is the claim's end. Converting it would mean inventing a release moment in order to have one. |
 | store pin `publication` | no | F6 |
 | store pin `waiters` | no | F6 |
 | store pin `delivery` | no | F6 |
 
-**Status:** OPEN.
+The three named pins are deliberately unconverted, and the freeze says why: a
+pin's release has more than one correct moment — the holder decides, and
+delivery's is a hand-off rather than a Scope closing — so a Scope would have to
+pick one and be wrong for the others.
+
+**Status:** PASS. Every row has a verdict and a reason.
 
 ### 6. The hand-off resolves on landing or consumption (C3)
 
