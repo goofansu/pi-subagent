@@ -1,10 +1,16 @@
-# Phase C exit gate — resource lifetime polish
+# Phase C exit gate — the completion hand-off, and resource lifetime polish
 
-**Status: not started.** C1 is blocked on Phase B's admission extraction. C3
-and C4 depend on nothing and may land while Phase B is in progress.
-**Verified against:** [the roadmap](roadmap.md), Phase C;
-[the notification semantics](notification-semantics.md) §6 and §7;
-[the freeze](freeze.md), rows F6 and F10.
+**Status: not started.** Rewritten 2026-09-04 at the Phase B close, when
+[the roadmap](roadmap.md) redefined C3 around the hand-off and added the Phase
+A follow-up (A6–A8), which this gate verifies as well. C1 is ready: the lease
+exists and its release is one call. A6–A8, C3 and C4 depend on nothing in each
+other and may land in any order after A8, which changes model-facing text and
+goes first.
+**Verified against:** [the roadmap](roadmap.md), Phase A follow-up and Phase
+C; [the notification semantics](notification-semantics.md) §1 *Consumption*,
+§3, §5, §6 and §7; [the presentation ledger](presentation-ledger.md) rows
+N-10, W-2, W-3, C-3; [the freeze](freeze.md), rows F4, F6 and F10;
+[ADR-0035](../adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md).
 
 ## The deterministic gate
 
@@ -16,16 +22,53 @@ npm run check   →  exit 0
 
 ## The items
 
-### 1. Admission capacity is returned by scope closing
+### 1. The health line judges by class (A6)
 
-The Run fiber acquires its admission lease with `Effect.acquireRelease` and
-the release is a finalizer of the Run Scope. No procedural release call
-remains in the supervisor. The stress lane's zero probe still holds after
-hundreds of cycles including rejected and failed starts.
+`runtime/counters.ts` classifies every `SupervisorCounter` as `defect`,
+`incident`, or `expected`, exhaustively by type. Bare `/subagent` reads
+`Runtime: healthy · N held` for a Session whose only non-zero counters are
+expected ones, and `Runtime: attention needed · …` naming the non-zero classes
+otherwise. A counter name the host does not recognise counts as actionable.
+
+**Evidence to name:** `host/diagnostics-command.test.ts` (ledger C-3);
+`runtime/counters.test.ts` or the type-level check.
 
 **Status:** OPEN.
 
-### 2. The acquire/release audit is recorded
+### 2. The debugging guide describes two commands (A7)
+
+`docs/debugging.md` has one section for `/subagent` (the shallow status and
+the health line, with the three classes named) and one for
+`/subagent diagnostics` (the full report). Its counter tables are regrouped
+to the three classes and name them; `duplicateSettlements` and `lateEndings`
+sit under *expected*.
+
+**Status:** OPEN.
+
+### 3. Availability says what a model will find (A8)
+
+`ResultAvailability` is `complete` / `partial` / `record-only`, derived as
+semantics §3 says. The three pointer sentences are semantics §5's. A completed
+Run with no output has no body and the record-only pointer. Ledger row N-10 is
+confirmed with its goldens, and rows N-1, N-2, N-4, N-5, N-7 still pass
+reading their pointer through it.
+
+**Evidence to name:** `presentation/notification-text.test.ts`; the host
+smoke lanes (item 14).
+
+**Status:** OPEN.
+
+### 4. Admission capacity is returned by scope closing (C1)
+
+The Run fiber acquires its admission lease with `Effect.acquireRelease` and
+the release is a finalizer of the Run Scope. No procedural release call
+remains in the supervisor. `detachRun` still runs before the lease releases.
+The stress lane's zero probe still holds after hundreds of cycles including
+rejected and failed starts.
+
+**Status:** OPEN.
+
+### 5. The acquire/release audit is recorded (C2)
 
 For each remaining pair — subscription start/unsubscribe, delivery
 claim/recovery sweep, the three store pins — this gate records whether it was
@@ -35,7 +78,7 @@ correct moment. The three named pins are recorded as deliberately unconverted
 
 | Pair | Converted? | Why or why not |
 | --- | --- | --- |
-| admission claim/release | yes (item 1) | |
+| admission claim/release | yes (item 4) | |
 | subscription start/unsubscribe | | |
 | delivery claim/recovery sweep | | |
 | store pin `publication` | no | F6 |
@@ -44,35 +87,54 @@ correct moment. The three named pins are recorded as deliberately unconverted
 
 **Status:** OPEN.
 
-### 3. The widget sees three notice states and nothing finer
+### 6. The hand-off resolves on landing or consumption (C3)
 
-The widget's landing dependency is a read model with `status(runId)` returning
-`pending`, `landed`, or `exhausted`, and a `subscribe`. The sink tracks
-handed-off, lost, and attempt counts internally and does not expose them to
-the widget.
+The sink records `consumed` when the `agent_result` tool handler reports a
+returned Result. A push for a consumed Run is accepted and not sent; a
+consumed notice lost after hand-off is not re-pushed at settle; a consumed
+notice Pi already holds lands, is marked landed, and increments
+`consumedBeforeLanding`. `agent_wait` consumes nothing. `runtime/delivery.ts`
+does not contain the word *consumed*; the boundary rule that fences *landed*
+covers it.
+
+**Evidence to name:** `host/push-sink.test.ts`; `host/tools.test.ts`;
+`boundaries.test.ts`.
+
+**Status:** OPEN.
+
+### 7. The widget sees three hand-off states and nothing finer (C3)
+
+The widget's dependency is a read model with `status(runId)` returning
+`pending`, `resolved`, or `exhausted`, and a `subscribe`. `resolved` is landed
+or consumed and the widget cannot tell which. A settled row leaves on
+retrieval with no landing (ledger W-3). The sink keeps handed-off, lost,
+attempt counts, and the consumed set internally.
 
 **Evidence to name:** `host/widget.test.ts`; the widget's dependency type.
 
 **Status:** OPEN.
 
-### 4. An exhausted notice is visible
+### 8. An exhausted notice is visible (C3)
 
-A settled Run whose delivery exhausted its retry budget shows a row reading
-`completed · notification failed` with its Run id and `result available`.
-Ledger row W-2 is confirmed with the golden that asserts it.
-
-**Status:** OPEN.
-
-### 5. Diagnostics distinguish the delivery failures
-
-`/subagent diagnostics` reports pushes attempted, hand-offs accepted, hand-offs
-refused, notices lost after hand-off, re-pushes, landings, and exhaustions as
-separate counts. After a Session closes every one still reads, and the probes
-read zero.
+Delivery tells the sink when its retry budget runs out, through one call on
+`NotificationSink`. A settled Run whose delivery exhausted shows a row reading
+`completed · notification failed` with its Run id and `result available`;
+retrieving that Result resolves it. Ledger row W-2 is confirmed with the golden
+that asserts it.
 
 **Status:** OPEN.
 
-### 6. One completion view for terminal presentation
+### 9. Diagnostics distinguish the hand-off outcomes (C3)
+
+`/subagent diagnostics` reports a hand-off block from the sink: pushes
+attempted, hand-offs accepted, hand-offs refused, notices lost after hand-off,
+re-pushes, landings, exhaustions, consumed before landing. Every field is
+printed, zeroes included. After a Session closes every one still reads, and the
+probes read zero.
+
+**Status:** OPEN.
+
+### 10. One completion view for terminal presentation (C4)
 
 A presentation-only type carrying Run id, Subagent id, agent, label, status,
 and duration is derived from `RunSnapshot`, `RunResult`, and
@@ -82,7 +144,7 @@ it. The settled-duration goldens still pass.
 
 **Status:** OPEN.
 
-### 7. The bounds lane covers the exhausted projection
+### 11. The bounds lane covers the exhausted projection
 
 `runtime/bounds.test.ts` or `host/push-sink.test.ts` drives delivery past its
 retry budget and asserts the projection reads `exhausted` and the Result is
@@ -90,20 +152,39 @@ untouched.
 
 **Status:** OPEN.
 
-### 8. Race and stress lanes pass unchanged
+### 12. Race and stress lanes pass unchanged
+
+`runtime/races.test.ts` and `runtime/stress.test.ts` have an empty diff for
+the phase.
 
 **Status:** OPEN.
 
-### 9. Host smoke re-run
+### 13. ADR-0035 is accepted, and the contracts say landing or retrieval
 
-The widget changed. `pi:host-smoke`, `claude:host-smoke`, and
-`codex:host-smoke` are run on the closing commit.
+ADR-0035 was proposed before the first C3 commit and is accepted in the
+closing commit. The compatibility matrix's widget **Row lifetime** cell reads
+"until its completion notice reaches the conversation or its Result is
+retrieved with `agent_result`, whichever comes first" and cites semantics §6.
+The debugging guide's "widget shows nothing" symptom says the same. The
+ledger's confirmation table names a golden for N-10, W-2, W-3 and C-3.
 
 **Status:** OPEN.
 
-### 10. The change-surface table is re-measured
+### 14. The live gates are re-run
 
-R4 (display-only widget column) must still read zero generic modules.
+Model-facing text changed (A8) and lifecycle mechanics moved (C1). All six
+lanes (`pi:smoke`, `pi:host-smoke`, `claude:smoke`, `claude:host-smoke`,
+`codex:smoke`, `codex:host-smoke`) are run on the closing commit and their
+pass markers recorded here.
+
+**Status:** OPEN.
+
+### 15. The change-surface table is re-measured
+
+The Phase C row of [`change-surface.md`](change-surface.md) is measured on the
+closing tree. R4 (display-only widget column) must still read zero generic
+modules; R1 must still read zero, because A8 changed wording and touched
+nothing under `runtime/`.
 
 **Status:** OPEN.
 

@@ -45,16 +45,24 @@ landed.
 | **handed off** | `sendMessage` accepted the custom message. Pi holds it. | Delivery, from the sink's push result. | No. |
 | **lost after hand-off** | A host turn was aborted while the message was queued; Pi discarded it. Re-pushed once, when the parent agent settles. | Session push sink, from `agent_end` / turn-abort evidence. | No. |
 | **landed** | `message_start` carried the notice. The model has it. | Session push sink, from `message_start`. | Yes. |
-| **exhausted** | The retry budget ran out with no hand-off accepted. Default budget: three attempts, one second apart. | Delivery, from its own retry loop. | Yes, for delivery. The Result is unaffected. |
+| **exhausted** | The retry budget ran out with no hand-off accepted. Default budget: three attempts, one second apart. | Delivery, from its own retry loop; told to the sink in one call, so the sink can show it. | Yes, for delivery. The Result is unaffected. |
+| **consumed** *(Phase C)* | The parent retrieved this Run's Result with `agent_result`. The hand-off is resolved whether or not the notice ever lands. | Session push sink, told by the `agent_result` tool handler. | Yes, for the hand-off. A notice Pi already holds lands anyway and is counted. |
 
 ### Who may use which word
 
 ```text
 CompletionDelivery (runtime)   pending · handed off · exhausted
-SessionPushSink (host)         handed off · lost after hand-off · landed
-widget (host)                  landed or not; exhausted or not — nothing finer
+SessionPushSink (host)         handed off · lost after hand-off · landed · consumed
+agent_result handler (host)    says "consumed", once, on a returned Result
+widget (host)                  pending · resolved · exhausted — nothing finer
 ResultStore (runtime)          knows nothing about notification state
 ```
+
+**Revised at the Phase B close (2026-09-04).** The widget's line read "landed
+or not; exhausted or not". Phase C3 replaces the two landing functions with
+one read model whose `resolved` is *landed or consumed*, and the widget does
+not learn which. Delivery never learns the word *consumed*; rule 19's fence
+extends to it.
 
 **Fenced.** Boundary rule 19 forbids the word *landed* and its inflections in
 `runtime/delivery.ts` **and in its test**, because the reading a maintainer
@@ -81,6 +89,36 @@ unchanged. They are correct.
 - Delivery's pin on the stored Result is released on hand-off, not on landing.
   Phase D's consumption lease revisits this on evidence; nothing here does.
 - A notification failure of any kind cannot change or lose the stored Result.
+
+### Consumption (Phase C3)
+
+> A terminal Run's hand-off is **unresolved** until its completion notice
+> lands **or** its Result is retrieved with `agent_result`, whichever comes
+> first.
+
+- **What resolves.** A returned Result from `agent_result`. Not `agent_wait`,
+  which reports terminality and deliberately withholds the answer; a parent
+  waiting on a fan-out must still be pointed at each Result. Not a rejection
+  (`not yet terminal`, `unknown Run`), and not `ResultExpired`: the notice
+  that then lands is stale but harmless, and the case is eviction, which is
+  rare and already counted.
+- **What consumption does.** A push for a consumed Run is *accepted and not
+  sent*, which delivery sees as a hand-off — the host accepted the message,
+  and the host's acceptance includes deciding not to send it. A consumed notice
+  lost after hand-off is not re-pushed at settle. A consumed notice Pi already
+  holds lands as usual, is marked landed, and increments **consumed before
+  landing**.
+- **Why a queued notice is not withdrawn.** While the parent is streaming,
+  the sink's follow-up goes into Pi's own queue and the extension API has no
+  call that removes one queued message. Suppressing a handed-off notice needs
+  the host to hold notices while the parent is active and hand them over at
+  settle, which is Phase D's envelope, on the evidence of the count above.
+- **Where it is recorded.** In the `agent_result` tool handler in `host/`,
+  through one function handed to tool registration, the way the widget is
+  handed its read model. Not in `Subagents.result` (the application would know
+  a host surface exists), not in `ResultStore.read` (delivery and diagnostics
+  read too), and not as a store pin (F6; pins decide eviction, consumption
+  decides orientation).
 
 ---
 
@@ -134,13 +172,23 @@ there.
 
 | `resultAvailability` | When | What `agent_result` returns |
 | --- | --- | --- |
-| `full` | `status` is `completed`. | The whole stored Result. Its own truncation record says if bounding cut anything. |
-| `partial` | `status` is `failed` or `cancelled`, and the Result has a non-empty `finalOutput` or a non-empty transcript. | What the Run produced before it ended. |
-| `metadata-only` | `status` is `failed` or `cancelled`, and both `finalOutput` and the transcript are empty. | Identity, status, timestamps, usage, diagnostics. No output. |
+| `complete` | `status` is `completed` and `finalOutput` is non-empty. | The answer, whole. Its own truncation record says if bounding cut anything. |
+| `partial` | Not `complete`, and the Result has a non-empty `finalOutput` or a non-empty transcript. | What the Run produced: output before it failed or was cancelled, or a completed Run's transcript when it gave no final answer. |
+| `record-only` | Both `finalOutput` and the transcript are empty, whatever the status. | Identity, status, timestamps, usage, diagnostics. No output. |
 
-A completed Run whose output was truncated by Result bounding is still `full`:
-the Result is the whole of what was stored, and the truncation is reported
-inside it. Availability describes the Result, not the Run's success.
+A completed Run whose output was truncated by Result bounding is still
+`complete`: the Result is the whole of what was stored, and the truncation is
+reported inside it. Availability describes the Result, not the Run's success.
+
+**Revised at the Phase B close (2026-09-04), for the Phase A follow-up A8.**
+Phase A's values were `full` / `partial` / `metadata-only`, with `full` for
+every completed Run, so a completed Run with empty output read `No output was
+produced.` and then `Full result is available.` The semantics were coherent
+and the sentence misleads a model, to whom "full result" means an answer is
+waiting. The three values now say what a model will find, and the derivation
+reads the output rather than the status alone. A completed Run with an empty
+final output and a non-empty transcript is `partial`, which is fair: readable
+work, no answer.
 
 ---
 
@@ -209,7 +257,7 @@ Subagent: <subagentId>
 | Status | Body |
 | --- | --- |
 | completed, preview non-empty | `Preview from the subagent:` newline `"<preview>"` |
-| completed, preview empty | `No output was produced.` |
+| completed, preview empty | no body; the record-only pointer says no output was produced *(A8; was `No output was produced.`)* |
 | failed, error present | `Reason: <errorMessage>` |
 | failed, no error | `Reason: none reported.` |
 | cancelled | no body; the reason is in the header |
@@ -227,9 +275,16 @@ composes:
 
 | `resultAvailability` | Pointer |
 | --- | --- |
-| `full` | `Full result is available. Call agent_result with {"id":"<runId>"}.` |
-| `partial` | `Partial result is available. Call agent_result with {"id":"<runId>"}.` |
-| `metadata-only` | `No output was produced. Call agent_result with {"id":"<runId>"} for the Run's record.` |
+| `complete` | `The result is available. Call agent_result with {"id":"<runId>"}.` |
+| `partial` | `Partial output is available. Call agent_result with {"id":"<runId>"}.` |
+| `record-only` | `No output was produced. The Run record is available. Call agent_result with {"id":"<runId>"}.` |
+
+**Revised at the Phase B close (2026-09-04), for A8.** Phase A's sentences were
+`Full result is available.`, `Partial result is available.`, and `No output
+was produced. Call agent_result with {…} for the Run's record.` The
+availability sentence now owns "no output was produced" for every status, so
+the completed-with-no-output body is empty rather than saying it twice; the
+call keeps its exact argument shape and its own sentence in all three.
 
 ### Accounting
 
@@ -265,7 +320,7 @@ Subagent: subagent-k3f9-1
 Preview from the subagent:
 "Found two redirect-validation gaps in callback handling…"
 
-Full result is available. Call agent_result with {"id":"run-k3f9-2"}.
+The result is available. Call agent_result with {"id":"run-k3f9-2"}.
 
 cost $0.0421 · 12.3k in / 4.5k out · 3 turns
 ```
@@ -279,7 +334,7 @@ Subagent: subagent-k3f9-3
 
 Reason: the backend refused
 
-Partial result is available. Call agent_result with {"id":"run-k3f9-4"}.
+Partial output is available. Call agent_result with {"id":"run-k3f9-4"}.
 ```
 
 ```text
@@ -289,7 +344,7 @@ Agent: explore
 Run: run-k3f9-5
 Subagent: subagent-k3f9-4
 
-Partial result is available. Call agent_result with {"id":"run-k3f9-5"}.
+Partial output is available. Call agent_result with {"id":"run-k3f9-5"}.
 
 cost $0.0130 · 8.1k in / 1.2k out · 2 turns
 ```
@@ -364,32 +419,51 @@ its schema is the host's; the notice's shape can change without touching it.
 
 ### The widget row
 
-Unchanged by Phase A. The row keeps the Run until its notice lands, as the
-matrix says. Phase C3 adds one state to what the row can say: when delivery is
-**exhausted**, the row reads `completed · notification failed` with the Run id
-and `result available`, so a settled row that will never leave on its own says
-why. The widget learns this through a three-state read model —
-`pending` | `landed` | `exhausted` — and nothing finer.
+Unchanged by Phase A. Phase C3 changes the row's lifetime and adds one state
+to what it can say.
+
+**Lifetime.** A row lasts from `agent_start` until the Run's hand-off is
+**resolved**: its completion notice landed, *or* the parent retrieved its
+Result with `agent_result`, whichever came first. A parent that fetches a
+Result the moment its Run settles sees the row go at once, with no landing.
+The matrix's row-lifetime cell is updated to say so at the Phase C gate.
+
+**Exhausted.** When delivery is **exhausted**, the row reads
+`completed · notification failed` with the Run id and `result available`, so
+a settled row that will never leave on its own says why. Retrieving that
+Result resolves it and the row goes.
+
+The widget learns both through one read model —
+`status(runId): pending | resolved | exhausted` and a `subscribe` — and
+nothing finer. It never learns whether *resolved* was a landing or a
+retrieval.
 
 ---
 
 ## 7. Diagnostics
 
-`/subagent diagnostics` gains, in the delivery block, separate counts for:
-pushes attempted, hand-offs accepted, hand-offs refused, notices lost after
-hand-off, re-pushes, landings, exhaustions. Today's counters are kept; these
-are additions. A counter that cannot distinguish a refused hand-off from a
+`/subagent diagnostics` gains a hand-off block, read from the sink, with
+separate counts for: pushes attempted, hand-offs accepted, hand-offs refused,
+notices lost after hand-off, re-pushes, landings, exhaustions, and **consumed
+before landing** — the number of notices that landed after the parent had
+already retrieved the Result, which is the evidence Phase D's envelope waits
+for. Today's counters are kept; these are additions. A counter that cannot distinguish a refused hand-off from a
 lost one cannot say which half of the pipeline is failing.
 
 ---
 
 ## 8. What this document deliberately does not decide
 
-- **Batching.** Up to `maxActiveRuns` notices can land close together. A
-  host-only envelope that groups them is Phase D, on evidence from the soak,
-  and would keep `RunNotification` one-per-Run.
+- **Batching and suppression.** Up to `maxActiveRuns` notices can land close
+  together, and a notice Pi already holds lands even if the parent fetched the
+  Result first. One host-only envelope that holds notices while the parent is
+  active, drops the consumed ones at settle, and sends the rest once is Phase
+  D, on the evidence of the consumed-before-landing count and the soak. It
+  would keep `RunNotification` one-per-Run.
 - **When delivery's pin is released.** It is released on hand-off today and
-  stays so. A consumption lease through landing is Phase D.
+  stays so. Holding it through landing is Phase D, and is a different thing
+  from Phase C's consumption: the pin decides eviction, consumption decides
+  whether the parent still needs orienting.
 - ~~**Whether `/agents` disappears.**~~ **Decided, and against this
   document's draft.** The draft said Phase A adds `/subagent profiles`, keeps
   `/agents` as an alias, and leaves the removal to the first minor after 2.0.

@@ -1,6 +1,7 @@
 # Simplification roadmap: fewer concepts, better completion notices
 
-**Status: Phases A and B closed; C and D proposed.**
+**Status: Phases A and B closed; a Phase A follow-up and Phase C are
+planned; D proposed.**
 [The Phase A gate](phase-a-exit-gate.md) is closed, with item 14 carried and
 three change-surface findings that
 [the Phase B gate](phase-b-exit-gate.md) settled; the Phase B gate is closed,
@@ -11,6 +12,20 @@ history. It answers the one definition-of-done clause the rewrite did not meet
 (less lifecycle machinery than v1, per [the deletion ledger](../v2/deletion-ledger.md))
 and acts on the completion-notification findings of the post-M7 architecture
 review.
+
+**Revised 2026-09-04, after the Phase B close.** The architecture re-review of
+the two closed phases found two things Phase A left wrong — the bare
+`/subagent` health verdict treats every counter as a symptom, and a completed
+Run with no output announces a "full" result — and proposed a model in which
+a completion notice is a *hand-off* that either landing **or** the parent's
+own `agent_result` call resolves. Checking that proposal against Pi's queue
+API changed its shape: a follow-up Pi has already queued cannot be withdrawn
+by an extension, so the part of the proposal that suppresses a queued notice
+is a host hold-buffer and belongs with Phase D's envelope, while the part that
+resolves the widget row and stops re-pushes is Phase C's. [The Phase A
+follow-up](#phase-a-follow-up--a6-a7-a8) and [Phase C](#phase-c--the-completion-hand-off-and-resource-lifetime-polish)
+below are rewritten accordingly; Phase D's two delivery items are merged into
+one; nothing in Phases A and B is reopened.
 
 **Strategy:** a controlled simplification programme inside the shipped
 architecture, not a second rewrite.
@@ -339,6 +354,67 @@ records that as a deviation with the diff. `run-scope.ts`,
 `result-store.ts`, `repository.ts`, and every file under `backend/` are
 untouched.
 
+#### Phase A follow-up — A6, A7, A8
+
+Three corrections to what Phase A shipped, found by the re-review. They are
+not a reopened gate: the Phase A gate's verdicts stand, and these are
+verified at the Phase C gate, whose live lanes cover the one text change.
+They come first because A8 changes model-facing text and the window for that
+closes at 2.0 stable, and because A6 and A7 are the cheapest fixes in the
+programme.
+
+**A6. The health line judges only what is actionable.** Bare `/subagent`
+reads `Runtime: healthy` when the sum of every counter is zero and
+`Runtime: N counted` otherwise. [The debugging guide](../debugging.md#the-counters)
+already classifies the counters three ways — must be zero, expected to rise,
+each one means something specific — so a Session with twenty late events and
+two reconciliation differences is running exactly as designed and is told it
+is not healthy. The taxonomy moves from prose into code: `runtime/counters.ts`
+gains one classification, `Record<SupervisorCounter, CounterClass>`, with
+classes **defect** (`duplicateCommits`, `conflictingCommits`,
+`unreadableResults`, `seamDecodeFailures`, `queueOverflows`), **incident**
+(`cleanupEscalations`, `deliveryFailures`) and **expected**
+(`duplicateSettlements`, `lateEvents`, `lateObservations`, `lateEndings`,
+`reconciliationDifferences`, `evictions`). The record is exhaustive by type, so
+a counter added without a class does not compile. The health line reads
+`Runtime: healthy · 4 held` when no defect or incident counter is non-zero,
+and `Runtime: attention needed · 1 defect · 2 incidents · 4 held — /subagent
+diagnostics` otherwise, naming only the non-zero classes. Expected counters
+are not summed into the shallow status; that is what `/subagent diagnostics`
+is for. A counter name the host does not recognise is treated as actionable,
+so the structural `CountBlock` cannot hide one. Two counters change class
+against the guide's current tables and the guide is corrected in A7:
+`duplicateSettlements`, whose own description says two endings racing is
+normal, and `lateEndings`, documented as normal on cancellation.
+
+**A7. The debugging guide describes two commands.** Its `/subagent` section
+still shows the counters-and-probes report, which since A4 is
+`/subagent diagnostics`. The section splits: `/subagent` is the shallow
+status and its health line, with the three classes named; `/subagent
+diagnostics` is the full report. The counter tables are regrouped to the
+three classes A6 encodes, and each table names its class. The "widget shows
+nothing" symptom is rewritten by Phase C, not here.
+
+**A8. Availability says what a model will find.** `resultAvailability` is
+`full` for every completed Run, because it describes the stored Result rather
+than the output, so a completed Run with empty output reads `No output was
+produced.` followed by `Full result is available.` The semantics were
+coherent and the sentence misleads: to a model, "full result" means an answer
+is waiting. The three values become **`complete`** (completed, non-empty final
+output), **`partial`** (anything else with a non-empty final output or
+transcript) and **`record-only`** (nothing readable). The pointer sentences
+become `The result is available.`, `Partial output is available.`, and `No
+output was produced. The Run record is available.`, each followed by the
+exact `agent_result` call. Because the record-only sentence now says no
+output was produced, the completed-with-no-output body says nothing, as the
+cancelled body already does; the sentence is said once. Availability still
+describes the stored Result — a completed Run whose output was cut by
+bounding is `complete` — and the rule that every terminal notice carries a
+pointer is unchanged. [The semantics document §3 and §5](notification-semantics.md#3-result-availability)
+carry the decided text; [ledger row N-10](presentation-ledger.md#n-10--availability-vocabulary-phase-a-follow-up-a8)
+records the change; the host smoke lanes, which assert on this text, are
+re-run at the Phase C gate.
+
 ### Phase B — Supervisor decomposition by mechanism
 
 **Why.** `runtime/supervisor.ts` is 1,030 lines at the Phase A close (994
@@ -527,19 +603,45 @@ the new modules, `boundaries.test.ts` for the fence, one ADR, the glossary,
 and this directory's documents. Must not change: any production file outside
 `runtime/`, and any existing test under `runtime/`.
 
-### Phase C — Resource lifetime polish
+### Phase C — The completion hand-off, and resource lifetime polish
 
-**Why.** Effect reduces machinery only when paired acquire/release calls
-become scoped resources. The repository already does this for subscriptions
-and resource probes; Phase C extends it where it removes compensation logic,
-and stops where a pair carries domain meaning.
+**Why.** Two reasons, one old and one new. The old one: Effect reduces
+machinery only when paired acquire/release calls become scoped resources. The
+repository already does this for subscriptions and resource probes; C1 and C2
+extend it where it removes compensation logic and stop where a pair carries
+domain meaning. The new one: a completion notice exists to make the parent
+fetch the Result, and today the runtime treats it as an artifact every settled
+Run must land, so a parent that fetched the Result on its own still has a row
+in the widget waiting for a landing and, after an aborted turn, gets the notice
+re-pushed. C3 gives the hand-off a second way to resolve.
+
+**What Pi allows, which decided the shape.** While the parent is streaming,
+the sink's `sendMessage(…, { deliverAs: "followUp", triggerTurn: true })`
+goes into Pi's own follow-up queue (`AgentSession.sendCustomMessage` →
+`agent.followUp`). The extension API exposes `hasPendingMessages()` and nothing
+that removes one queued message; `clearQueue()` is on the session object, not
+the extension API, and would discard the user's queued messages with ours. So
+a notice that has been handed off will land whatever the parent does, and
+"the parent called `agent_result`, so the notification is suppressed" is
+achievable only for a notice the host has not yet handed to Pi. Delivery pushes
+at settlement, which makes that window milliseconds wide except after a push
+failure or a lost hand-off. Widening it means the host holding notices while
+the parent is active and handing them over when it settles — which is exactly
+the batching envelope Phase D already describes. So: Phase C makes
+consumption resolve everything that is ours to resolve (the widget row, the
+re-push, a push not yet accepted) and counts how often a notice lands after
+its Result was already consumed; Phase D's envelope, when the count or the
+soak calls for it, is what turns that count into suppression.
 
 #### C1. Admission as a scoped lease
 
 Replace the procedural release in the Run fiber with
 `Effect.acquireRelease(admission.acquire(...), lease => lease.release())`, so
 capacity is returned by the Run Scope closing rather than by a call the
-supervisor has to remember. This is the second half of B1.
+supervisor has to remember. This is the second half of B1. The ordering the
+Phase B code review restored — `detachRun` before the lease releases, so a
+concurrent close still finds the Run's fiber — is a property the finalizer
+order must keep, and the test that caught it is the detector.
 
 #### C2. Audit the remaining pairs
 
@@ -547,28 +649,78 @@ For each of `claim/releaseClaim` (gone after C1), subscription
 start/unsubscribe, delivery claim/recovery sweep, and the per-holder store
 pins: convert to a scoped resource if and only if the release has exactly one
 correct moment and that moment is a scope closing. The store's three named
-pins fail that test on purpose and stay as they are.
+pins fail that test on purpose and stay as they are (freeze F6).
 
-#### C3. A notice-state projection for the widget
+#### C3. The completion hand-off resolves on landing or consumption
 
-The widget in `host/widget.ts` receives `hasLanded` and `onLanding`. That is
-a good boundary; keep its size. When exhausted delivery becomes visible (the
-sink today lets a settled row sit forever if the retry budget runs out, with
-no explanation), do not grow the interface to
-`hasExhausted`/`wasRepushed`/`getAttempts`. Replace it with one read model:
+The sink today knows a notice as unlanded, lost, or landed. It gains
+**consumed**: the parent retrieved this Run's Result through `agent_result`.
+The rule, which [ADR-0035](../adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)
+records:
+
+> A terminal Run's hand-off is **unresolved** until its completion notice
+> lands **or** its Result is retrieved with `agent_result`, whichever comes
+> first. `agent_wait` does not resolve it: it reports that a Run is terminal
+> and deliberately does not return the answer, so a parent waiting on a
+> fan-out must still be pointed at each Result.
+
+What consumption does inside the sink, and nothing else:
+
+- A push for a consumed Run is accepted and not sent. Delivery sees a
+  hand-off, releases its pin, and stops; the semantics document's meaning of
+  *handed off* — the host accepted the message — is kept, with the host's
+  acceptance including the decision not to send.
+- A consumed notice that was lost after hand-off is not re-pushed when the
+  parent settles.
+- A consumed notice that Pi already holds lands anyway; the sink marks it
+  landed as today and counts it as **consumed before landing**. That counter
+  is Phase D's evidence.
+- Consumption is recorded at the host boundary, in the `agent_result` tool
+  handler, when the application answered with a Result. It is not recorded by
+  `ResultStore.read`, which delivery and diagnostics also call, and it is not
+  a store pin: pins answer "may this output be evicted?", consumption answers
+  "does the parent still need to be oriented toward it?", and F6 keeps the
+  pin holders as they are.
+
+The widget's dependency changes from two functions about landing to one read
+model about the hand-off, and it is the same read model the exhausted state
+was going to need:
 
 ```ts
-interface NoticeStateReader {
-  status(runId: RunId): "pending" | "landed" | "exhausted";
+interface CompletionHandoffView {
+  status(runId: RunId): "pending" | "resolved" | "exhausted";
   subscribe(listener: () => void): () => void;
 }
 ```
 
-The sink keeps handed-off, lost, and attempt counts internally. The widget
-row for an exhausted notice reads `completed · notification failed` with the
-Run id and `result available`, so the human no longer sees a mysteriously
-permanent row. Diagnostics gain separate counters for hand-off failures, lost
-hand-offs, re-pushes, landings, and exhaustions.
+`resolved` is landed or consumed, and the widget does not learn which. A row
+stays while its Run is not terminal or its hand-off is `pending` or
+`exhausted`; an exhausted row reads `completed · notification failed` with the
+Run id and `result available`, so a settled row that will never leave on its
+own says why; consuming an exhausted Run's Result resolves it and the row
+goes. The sink learns of exhaustion from delivery, through one call on the
+`NotificationSink` interface made when the retry budget runs out, so the whole
+hand-off state has one owner. The sink keeps handed-off, lost, attempt counts,
+and the consumed set internally.
+
+`/subagent diagnostics` gains a hand-off block from the sink: pushes attempted,
+hand-offs accepted, hand-offs refused, notices lost after hand-off, re-pushes,
+landings, exhaustions, and consumed before landing.
+
+**What does not move.** Delivery's pin is still released on hand-off (Phase D
+revisits that). Storage still precedes notification and `agent_result` is
+still authoritative (F4). The conformance scenarios for
+notification-follows-storage and retry-cannot-alter-settlement are untouched.
+`CompletionDelivery` does not learn the word *consumed*; the fence on
+*landed* extends to it.
+
+**What was considered and rejected.** Recording consumption in
+`Subagents.result` — the application layer would then know a host surface
+exists. Making `ResultStore.read` consumption — internal reads would suppress
+notices. A consumption pin on the store — a second meaning for a mechanism
+whose three holders are frozen by name. Consuming on `agent_wait` — a parent
+that waits for fan-out terminality would silence the pointers it needs.
+Suppressing a handed-off notice — Pi has no API for it.
 
 #### C4. One `RunCompletionView` for terminal presentation
 
@@ -579,53 +731,73 @@ by carrying `settledAt` on the snapshot. Add a small presentation-only type
 (run id, subagent id, agent, label, status, duration) with one derivation
 from each source, and route status wording, duration wording, and
 agent/label formatting through it and through the existing `runPhaseTone`,
-`runPhaseVerb`, and `formatTurns` helpers. No new service.
+`NOTICE_VERB`, and `formatTurns` helpers. No new service.
 
 #### Phase C exit gate
 
-Verified item by item in [`phase-c-exit-gate.md`](phase-c-exit-gate.md).
+Verified item by item in [`phase-c-exit-gate.md`](phase-c-exit-gate.md),
+which also verifies the Phase A follow-up.
 
 - Race and stress lanes (`runtime/races.test.ts`, `runtime/stress.test.ts`)
-  pass unchanged; bounds lane (`runtime/bounds.test.ts`) gains a case for the
-  exhausted-notice projection.
-- A widget test shows an exhausted notice rendering as such.
-- `npm run check` green; host smoke re-run because the widget changed.
+  pass unchanged; the bounds lane gains a case for the exhausted projection.
+- A widget test shows an exhausted notice rendering as such, and one shows a
+  settled row leaving on consumption with no landing.
+- A push-sink test shows a consumed notice is not re-pushed after an aborted
+  turn, and a push for a consumed Run is accepted without a send.
+- The health line is asserted for a Session with only expected counters
+  raised (healthy) and one with an incident (attention needed).
+- The presentation goldens for the three pointer sentences replace the old
+  three, and the ledger's confirmation table names them.
+- `npm run check` green; all six live lanes re-run, because model-facing text
+  changed (A8) and lifecycle mechanics moved (C1).
+- ADR-0035 accepted; the compatibility matrix's widget row-lifetime cell and
+  the debugging guide's "widget shows nothing" symptom say landing *or*
+  retrieval.
 
 ### Phase D — Long-session concerns, on evidence only
 
 Nothing here is on the path to 2.0. Each item waits for the release-candidate
-soak ([soak.md](../v2/soak.md)) or real usage to show the need, and each gets
-its own ADR when picked up.
+soak ([soak.md](../v2/soak.md)), real usage, or the counter named beside it,
+and each gets its own ADR when picked up.
 
 - **Terminal Run compaction.** The repository keeps every Run snapshot until
   Session shutdown and the push sink keeps every landed id in a `Set`. Both
   are bounded only by Session length. Compact a terminal Run to a tombstone
   (Run id, Subagent id, terminal status, enough to distinguish
-  `ResultExpired` from unknown) once its notice has landed and its Result has
-  expired or been consumed.
-- **Notification-consumption lease.** Delivery releases its store pin when
-  the hand-off succeeds, so a notice can land and `agent_result` can already
-  say `ResultExpired`. A bounded lease held from notice construction through
-  landing, released on the first `agent_result` read or the parent's next
+  `ResultExpired` from unknown) once its hand-off has resolved and its Result
+  has expired or been consumed.
+- **Delivery's pin held through landing.** Delivery releases its store pin
+  when the hand-off succeeds, so a notice can land and `agent_result` can
+  already say `ResultExpired`. A bounded pin held from notice construction
+  through landing, released on landing or consumption or the parent's next
   settle, with a byte and count budget so an idle parent cannot pin the
-  store forever. This is a store policy change and needs an ADR.
-- **Fan-out batching at the host.** Up to `maxActiveRuns` notices can land
-  close together, each a follow-up that can trigger a parent turn. Keep
-  `RunNotification` one-per-Run and immutable; add a host-only envelope that
-  accumulates while the parent is active, sends once when it settles, sends
-  immediately when the parent is idle and one Run finishes, orders failures
-  first, and treats the envelope landing as every contained id landing. This
-  lives entirely in `host/`, and that placement is itself the test that
-  delivery aggregation has stayed out of settlement.
+  store forever. This is a store policy change and needs an ADR. It is *not*
+  Phase C's consumption: that resolves a hand-off, this keeps output
+  evictable or not.
+- **Hold while active: one envelope for batching and suppression.** Up to
+  `maxActiveRuns` notices can land close together, each a follow-up that can
+  trigger a parent turn, and Phase C shows that a notice handed to Pi while
+  the parent is active cannot be withdrawn if the parent fetches the Result
+  first. One host-only mechanism answers both: accumulate notices while the
+  parent is active, and when it settles drop the consumed ones and send the
+  rest once; when the parent is idle and one Run finishes, send immediately.
+  Keep `RunNotification` one-per-Run and immutable; order failures first;
+  treat the envelope landing as every contained id landing. This lives
+  entirely in `host/`, and that placement is itself the test that delivery
+  aggregation has stayed out of settlement. **Evidence:** the
+  `consumedBeforeLanding` count Phase C adds, read from the soak and from
+  dogfood Sessions; if it stays near zero, the envelope is batching alone and
+  waits for the soak's fan-out numbers.
 
 ## 5. Sequencing and the 2.0 release
 
 | Phase | When                                     | Relationship to 2.0                                                                 |
 | ----- | ---------------------------------------- | ----------------------------------------------------------------------------------- |
-| A     | Before 2.0 stable                        | Changes model-facing text; do it before the matrix freezes it. Blocks stable.       |
+| A     | Closed                                   | Changed model-facing text before the matrix freezes it.                             |
+| A follow-up | Next, before C3                    | A8 changes model-facing text; must land before 2.0 stable. A6 and A7 are corrections and hold nothing. |
 | B     | Closed 2026-09-04                        | Behaviour-preserving; held no release. Every pre-existing runtime test passes unmodified. |
-| C     | Next                                     | C1 depends on B1 and is ready: the lease exists and its release is one call. C3 and C4 are independent. |
-| D     | When the soak or usage shows a need      | Not scheduled.                                                                      |
+| C     | After the follow-up                      | C1 depends on B1 and is ready. C3 changes the widget's row-lifetime contract in the matrix, so it too lands before stable. C4 is independent. |
+| D     | When the soak, usage, or `consumedBeforeLanding` shows a need | Not scheduled.                                                        |
 
 The three outstanding release items from [the v2 roadmap](../v2/roadmap.md)
 (live gates on the cutover build, the Codex Desktop coexistence record, the
@@ -642,6 +814,8 @@ require the live gates to be re-run after it, not before.
 | Notice redesign breaks a parent model's learned habit                 | Pointer text keeps the tool name and adds the exact argument shape; the ledger records the break.                   |
 | Phase D items get pulled forward "while we are in there"              | Each needs an ADR and a soak finding. Neither exists yet.                                                           |
 | Comment density hides the invariant comments among historical ones    | Alongside A5, keep invariant and why-not-obvious comments in source, move history to ADRs and the change recipes.   |
+| Consumption grows into a second pin, or leaks into the runtime          | It is a set in the sink and a call at the tool boundary, nothing else. The *landed* fence extends to *consumed* in `runtime/delivery.ts`; F6 keeps the pin holders named. |
+| The re-review's "suppressed notification" is promised and cannot be kept | The roadmap states what Pi allows. C3 promises the row, the re-push, and the count; suppression is Phase D's envelope, on that count. |
 
 ## 7. The end-state test
 
@@ -664,3 +838,20 @@ not list the supervisor, a backend, or the store.
 If both are true, the evolvability that the review scored at seven is at nine,
 whether or not the line count moved. The optimisation is fewer reasons for
 unrelated files to change together, and that is what every phase above is for.
+
+## 8. When the programme closes
+
+The code got simpler and this directory got larger. When Phase C closes, the
+documents split into what a contributor needs and what happened, so that a
+future backend author does not read the simplification's history to
+understand the product.
+
+| Permanent, kept current | Historical, frozen at the close |
+| --- | --- |
+| [`architecture.md`](../architecture.md), [`contributing.md`](../contributing.md), [`debugging.md`](../debugging.md) | this roadmap |
+| the ADRs | `freeze.md`, `change-surface.md` (the method stays in `contributing.md`; the measurements are history) |
+| [`change-recipes.md`](change-recipes.md) | the three phase gates, `presentation-ledger.md` |
+| [`notification-semantics.md`](notification-semantics.md) §2–§6, which the compatibility matrix cites | `notification-semantics.md` §1's before/after tables and §8 |
+
+Historical documents gain a one-line banner saying so and pointing at the
+permanent one that superseded them. Nothing is deleted.

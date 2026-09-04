@@ -187,6 +187,39 @@ and grammar, so that a habit learned on the release candidate still holds".
 Unchanged wins; the illustrations were the defect and have been corrected in
 [semantics §5](notification-semantics.md#accounting).
 
+### N-10 · Availability vocabulary (Phase A follow-up, A8)
+
+**Before** — three pointer sentences keyed by `full` / `partial` /
+`metadata-only`, with every completed Run `full`:
+
+```text
+Full result is available. Call agent_result with {"id":"run-1"}.
+Partial result is available. Call agent_result with {"id":"run-1"}.
+No output was produced. Call agent_result with {"id":"run-1"} for the Run's record.
+```
+
+and a completed Run with no output reading `No output was produced.` in the
+body and then `Full result is available.` in the pointer.
+
+**After** — three sentences keyed by `complete` / `partial` / `record-only`,
+the values read off the output rather than the status:
+
+```text
+The result is available. Call agent_result with {"id":"run-1"}.
+Partial output is available. Call agent_result with {"id":"run-1"}.
+No output was produced. The Run record is available. Call agent_result with {"id":"run-1"}.
+```
+
+A completed Run with no output has no body and the record-only pointer, so
+"no output was produced" is said once. A completed Run with an empty final
+output and a transcript is `partial`. The call keeps its exact argument shape
+and its own sentence in all three.
+
+**Why** — semantics §3 and §5 as revised at the Phase B close. "Full result"
+tells a model an answer is waiting; for an empty completed Run there is none.
+Rows N-1, N-2, N-4, N-5 and N-7 read their pointer through this row from the
+Phase C gate on.
+
 ## Collapsed transcript summary (human-facing)
 
 ### S-1 · Summary line
@@ -238,6 +271,20 @@ available`.
 **Why** — semantics §6, Phase C3. Recorded here so the Phase C gate has a row
 to confirm.
 
+### W-3 · Row resolves on retrieval (Phase C)
+
+**Before** — a settled row stays until its notice lands, whatever the parent
+does; a parent that called `agent_result` at once still sees the row wait for
+the landing.
+
+**After** — the row goes when the hand-off resolves: the notice landed *or*
+`agent_result` returned the Result, whichever first. The row's text does not
+change; only its lifetime does. An exhausted row (W-2) also goes on
+retrieval.
+
+**Why** — semantics §1 *Consumption* and §6, Phase C3; ADR-0035. The matrix's
+row-lifetime cell is updated with this row.
+
 ## Operator commands
 
 ### C-1 · `/subagent`
@@ -285,6 +332,21 @@ about — and it makes the user relearn the name twice: once when the second way
 appears and again when the first goes. It is the one public surface 2.0 removes
 rather than preserves, and the compatibility matrix marks it **[v2 change]**.
 
+### C-3 · `/subagent` health line (Phase A follow-up, A6)
+
+**Before** — `Runtime: healthy · 4 held` when every counter is zero;
+`Runtime: 22 counted · 4 held — /subagent diagnostics` for any non-zero
+counter, including the ones the debugging guide documents as expected to rise.
+
+**After** — `Runtime: healthy · 4 held` when no *defect* or *incident* counter
+is non-zero, however many expected counters have risen;
+`Runtime: attention needed · 1 defect · 2 incidents · 4 held — /subagent
+diagnostics` otherwise, naming only the non-zero classes.
+
+**Why** — roadmap A6. The taxonomy the guide already states moves into
+`runtime/counters.ts` as an exhaustive classification, and the shallow status
+judges by it rather than by a sum.
+
 ## Tool schema copy
 
 ### T-1 · The description field
@@ -322,6 +384,9 @@ after column, by test name and file.
 | T-1 | `T1: the label's bound is stated on both description fields` | `host/tool-schemas.test.ts` | confirmed |
 | W-1 | the row-lifetime and settled-duration tests, unmodified | `host/widget.test.ts`; `presentation/rows.test.ts` | confirmed unchanged |
 | W-2 | — | — | Phase C |
+| W-3 | — | `host/widget.test.ts` | Phase C |
+| N-10 | — | `presentation/notification-text.test.ts` | Phase C gate (A8) |
+| C-3 | — | `host/diagnostics-command.test.ts` | Phase C gate (A6) |
 
 Two rows landed differently from their drafted after column, and the
 difference is in the fixtures rather than in the code:
