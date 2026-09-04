@@ -45,6 +45,10 @@ import type {
 import { Effect } from "effect";
 import type { Profile } from "../domain/index.ts";
 import { formatRowSummary, type RunRowView } from "../presentation/index.ts";
+import {
+  COUNTER_CLASSES,
+  type SupervisorCounter,
+} from "../runtime/counters.ts";
 import { RunRepository } from "../runtime/repository.ts";
 import { SubagentSupervisor } from "../runtime/supervisor.ts";
 import { formatNoAgentsMessage, openProfilesUi } from "./agents-command.ts";
@@ -134,11 +138,45 @@ export interface SubagentStatus {
 }
 
 /**
- * Whether the runtime noticed anything, and what it is still holding.
+ * The bucket a counter the host does not recognise falls into.
  *
- * Only the first half is a verdict. Every counter is a thing that *happened*
- * which nobody had to be told about at the time, so "healthy" is "nothing
- * noticed" and needs no taxonomy of which counters are serious.
+ * Not a fourth {@link CounterClass}: the classification in `runtime/counters.ts`
+ * is exhaustive by type and cannot have one. This is what the *host* does with
+ * a name that reached it anyway — the counter block is structural, so a
+ * counter can arrive here that the compiled record does not know, and the one
+ * thing that must not happen is its disappearing into "healthy".
+ */
+const UNCLASSIFIED = "unclassified";
+
+/** How the health line names each class it has to report, singular and plural. */
+const CLASS_NOUNS: Readonly<Record<string, readonly [string, string]>> = {
+  defect: ["defect", "defects"],
+  incident: ["incident", "incidents"],
+  [UNCLASSIFIED]: [UNCLASSIFIED, UNCLASSIFIED],
+};
+
+/** The order the line names classes in: worst first, then the unknown. */
+const REPORTED_CLASSES = ["defect", "incident", UNCLASSIFIED] as const;
+
+/**
+ * Whether the runtime noticed anything **actionable**, and what it is holding.
+ *
+ * Only the first half is a verdict, and the verdict is by class rather than by
+ * sum. Every counter is a thing that happened which nobody had to be told
+ * about at the time — but they are not the same kind of thing, and adding them
+ * up says the wrong one. A Session with twenty late events and two
+ * reconciliation differences is running exactly as designed; one that
+ * committed a conflicting result is not. The taxonomy that says which is which
+ * is `COUNTER_CLASSES`, in the runtime, exhaustive by type, so a counter added
+ * without a class fails to compile rather than quietly reading as a symptom.
+ *
+ * Expected counters therefore never appear here at all. They are in
+ * `/subagent diagnostics`, where a maintainer chasing a number wants them.
+ *
+ * A name this host does not recognise is {@link UNCLASSIFIED} and is named in
+ * the line: the counter block is structural so that a counter cannot be added
+ * without appearing, and a counter that appeared and was silently ignored
+ * would defeat that.
  *
  * The probe is deliberately reported rather than judged. A live Session holds
  * a repository subscription for its widget and a fiber per Run on purpose;
@@ -151,11 +189,27 @@ export interface SubagentStatus {
  * than reproducing them: that is what makes this the shallow end.
  */
 export function formatRuntimeHealth(session: LiveSessionStatus): string {
-  const noticed = sum(session.counters);
   const held = `${sum(session.probe)} held`;
-  return noticed === 0
+  const raised = REPORTED_CLASSES.flatMap((name) => {
+    const count = countOfClass(session.counters, name);
+    if (count === 0) return [];
+    const [singular, plural] = CLASS_NOUNS[name];
+    return [`${count} ${count === 1 ? singular : plural}`];
+  });
+  return raised.length === 0
     ? `Runtime: healthy · ${held}`
-    : `Runtime: ${noticed} counted · ${held} — /subagent diagnostics`;
+    : `Runtime: attention needed · ${raised.join(" · ")} · ${held} — /subagent diagnostics`;
+}
+
+/** How much of one class the block holds, by looking each name up. */
+function countOfClass(block: CountBlock, wanted: string): number {
+  let total = 0;
+  for (const [name, value] of Object.entries(block)) {
+    const found: string =
+      COUNTER_CLASSES[name as SupervisorCounter] ?? UNCLASSIFIED;
+    if (found === wanted) total += value;
+  }
+  return total;
 }
 
 function sum(block: CountBlock): number {

@@ -55,22 +55,28 @@ Subagent: subagent-1
 Preview from the subagent:
 "done"
 
-Full result is available. Call agent_result with {"id":"run-1"}.
+The result is available. Call agent_result with {"id":"run-1"}.
 ```
 
 **Why** — semantics §5: the label identifies the work, the ids move to the
 identity block, the preview is labelled and quoted as subagent output, the
-pointer carries the exact argument shape and the availability.
+pointer carries the exact argument shape and the availability. The pointer
+sentence shown is [N-10](#n-10--availability-vocabulary-phase-a-follow-up-a8)'s,
+which replaced Phase A's `Full result is available.` at the Phase C gate.
 
 ### N-2 · Completed, no output
 
 **Before** — `…completed.\n\nNo output was produced.\n\n<pointer>`
 
-**After** — header and identity block as N-1, body `No output was produced.`,
-pointer `Full result is available. Call agent_result with {"id":"run-1"}.`
+**After** — header and identity block as N-1, **no body**, and the record-only
+pointer `No output was produced. The Run record is available. Call agent_result
+with {"id":"run-1"}.`
 
-**Why** — semantics §5. A completed Run's Result is full even when its output
-is empty.
+**Why** — semantics §5, as revised for A8. Phase A's after column had a body
+reading `No output was produced.` and then a pointer promising a full result;
+[N-10](#n-10--availability-vocabulary-phase-a-follow-up-a8) is where that was
+decided against, and this row now ships N-10's shape: the sentence is said
+once, by the pointer.
 
 ### N-3 · Completed, long output
 
@@ -105,7 +111,7 @@ Subagent: subagent-1
 
 Reason: the backend refused
 
-Partial result is available. Call agent_result with {"id":"run-1"}.
+Partial output is available. Call agent_result with {"id":"run-1"}.
 ```
 
 **Why** — semantics §3 and §5: the fixture has `half an answer` as final
@@ -117,10 +123,11 @@ model had to know that failed Runs may keep output.
 **Before** — `…failed: no reason reported\n\n<pointer>`
 
 **After** — body `Reason: none reported.`; pointer by availability
-(`metadata-only` when the fixture has no output:
-`No output was produced. Call agent_result with {"id":"run-1"} for the Run's record.`).
+(`record-only` when the fixture has no output:
+`No output was produced. The Run record is available. Call agent_result with {"id":"run-1"}.`).
 
-**Why** — semantics §3 and §5.
+**Why** — semantics §3 and §5. The availability name and the sentence are
+[N-10](#n-10--availability-vocabulary-phase-a-follow-up-a8)'s.
 
 ### N-6 · Failed, pathological error
 
@@ -149,7 +156,7 @@ Agent: explore
 Run: run-1
 Subagent: subagent-1
 
-Partial result is available. Call agent_result with {"id":"run-1"}.
+Partial output is available. Call agent_result with {"id":"run-1"}.
 ```
 
 **Why** — semantics §3 and §5. **This is the one behavioural change in the
@@ -367,13 +374,13 @@ after column, by test name and file.
 
 | Row | Golden | File | Status |
 | --- | --- | --- | --- |
-| N-1 | `N-1: a completed notice labels and quotes the preview, then points at the full result` | `presentation/notification-text.test.ts` | confirmed |
-| N-2 | `N-2: a completed Run with no output says so, and its Result is still full` | `presentation/notification-text.test.ts` | confirmed |
+| N-1 | `N-1: a completed notice labels and quotes the preview, then points at the result` | `presentation/notification-text.test.ts` | confirmed — the pointer sentence is N-10's since the Phase C gate |
+| N-2 | `N-2: a completed Run with no output has no body, and its record is available` | `presentation/notification-text.test.ts` | confirmed — rewritten at the Phase C gate: the body is gone and the pointer says it once |
 | N-3 | `N-3: a long answer is previewed rather than delivered` | `presentation/notification-text.test.ts` | confirmed |
-| N-4 | `N-4: a failed notice states its reason and says partial output is there` | `presentation/notification-text.test.ts` | confirmed |
-| N-5 | `N-5: a failed Run with no reason and no output says both` | `presentation/notification-text.test.ts` | confirmed |
+| N-4 | `N-4: a failed notice states its reason and says partial output is there` | `presentation/notification-text.test.ts` | confirmed — reads its pointer through N-10 |
+| N-5 | `N-5: a failed Run with no reason and no output says both` | `presentation/notification-text.test.ts` | confirmed — reads its pointer through N-10 |
 | N-6 | `N-6: a failed notice bounds a pathological error message` | `presentation/notification-text.test.ts` | confirmed |
-| N-7 | `N-7: a cancelled notice names its reason and points at the partial result`; `a cancelled Run with nothing to show says so and still points at the record` | `presentation/notification-text.test.ts` | confirmed |
+| N-7 | `N-7: a cancelled notice names its reason and points at the partial output`; `a cancelled Run with nothing to show says so and still points at the record` | `presentation/notification-text.test.ts` | confirmed — reads its pointer through N-10 |
 | N-8 | `N-8: the notice is identical whichever backend ran the Run` | `presentation/notification-text.test.ts` | confirmed — now structural: the notices are one value, and the shape has no `backendId` |
 | N-9 | `N-9: a Run with nothing to account for carries no accounting at all`; `N-9: the accounting a notice carries is only what the line prints`; `N-9: an accounting line can never read as nothing but a model name`; `accounting abbreviates usage and names the model last` | `presentation/notification-text.test.ts` | confirmed — the text did not move |
 | S-1 | `S-1: a collapsed notice names the agent, the task, and the outcome`; `S-1: the collapsed line reads the same whichever backend ran the Run`; `a collapsed notice carries no id and no character count` | `presentation/renderers.test.ts` | confirmed |
@@ -385,8 +392,8 @@ after column, by test name and file.
 | W-1 | the row-lifetime and settled-duration tests, unmodified | `host/widget.test.ts`; `presentation/rows.test.ts` | confirmed unchanged |
 | W-2 | — | — | Phase C |
 | W-3 | — | `host/widget.test.ts` | Phase C |
-| N-10 | — | `presentation/notification-text.test.ts` | Phase C gate (A8) |
-| C-3 | — | `host/diagnostics-command.test.ts` | Phase C gate (A6) |
+| N-10 | `N-10: the pointer says what a model will find, in each of the three availabilities`; `N-10: availability is read off the output, not off the status alone`; `N-2: a completed Run with no output has no body, and its record is available` | `presentation/notification-text.test.ts` | confirmed at the Phase C gate |
+| C-3 | `C-3: a Session whose only raised counters are expected ones is healthy`; `C-3: the health line names the non-zero classes, worst first`; `C-3: a counter the host does not recognise is named rather than ignored`; `health is a verdict on what was noticed and a count of what is held` | `host/diagnostics-command.test.ts` | confirmed at the Phase C gate |
 
 Two rows landed differently from their drafted after column, and the
 difference is in the fixtures rather than in the code:

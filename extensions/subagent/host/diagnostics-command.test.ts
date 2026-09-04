@@ -190,13 +190,74 @@ test("health is a verdict on what was noticed and a count of what is held", () =
     }),
     "Runtime: healthy · 2 held",
   );
+  // A defect is what makes the verdict change, and the count beside it is the
+  // defects alone: the two expected counters here are not in the line at all.
   assert.equal(
     formatRuntimeHealth({
       runs: [],
       counters: { lateEvents: 2, queueOverflows: 1 },
       probe: { liveRunFibers: 1 },
     }),
-    "Runtime: 3 counted · 1 held — /subagent diagnostics",
+    "Runtime: attention needed · 1 defect · 1 held — /subagent diagnostics",
+  );
+});
+
+test("C-3: a Session whose only raised counters are expected ones is healthy", () => {
+  // The defect this row fixes. Twenty late events and two reconciliation
+  // differences is a Session running exactly as designed, and the old line
+  // called it `Runtime: 22 counted`.
+  assert.equal(
+    formatRuntimeHealth({
+      runs: [],
+      counters: {
+        lateEvents: 20,
+        reconciliationDifferences: 2,
+        duplicateSettlements: 3,
+        lateEndings: 3,
+        lateObservations: 1,
+        evictions: 4,
+      },
+      probe: { liveRunFibers: 4 },
+    }),
+    "Runtime: healthy · 4 held",
+  );
+});
+
+test("C-3: the health line names the non-zero classes, worst first", () => {
+  assert.equal(
+    formatRuntimeHealth({
+      runs: [],
+      counters: { deliveryFailures: 1, lateEvents: 9 },
+      probe: {},
+    }),
+    "Runtime: attention needed · 1 incident · 0 held — /subagent diagnostics",
+  );
+  assert.equal(
+    formatRuntimeHealth({
+      runs: [],
+      counters: {
+        conflictingCommits: 1,
+        cleanupEscalations: 1,
+        deliveryFailures: 1,
+        lateEvents: 40,
+      },
+      probe: { liveRunFibers: 4 },
+    }),
+    "Runtime: attention needed · 1 defect · 2 incidents · 4 held — /subagent diagnostics",
+  );
+});
+
+test("C-3: a counter the host does not recognise is named rather than ignored", () => {
+  // The counter block is structural so that a counter cannot be added without
+  // appearing. A name with no class must therefore not disappear into
+  // "healthy" — it is the one case where silence would defeat the block.
+  assert.equal(
+    formatRuntimeHealth({
+      runs: [],
+      counters: { somethingNobodyClassified: 1, lateEvents: 3 },
+      probe: {},
+    }),
+    "Runtime: attention needed · 1 unclassified · 0 held — /subagent diagnostics",
   );
 });
 
