@@ -300,15 +300,17 @@ The session widget listing live Runs. **Unchanged by Phase A of the
 simplification programme**, deliberately: a change to notices is not also a
 change to the widget.
 [The notification semantics §6](../v2-simplify/notification-semantics.md#6-what-the-human-sees)
-says so, and records the one state Phase C adds — an exhausted notice's row
-reading `completed · notification failed` — which is not this table's yet.
+says so. **Phase C changed two cells and no others**: the row's *lifetime*,
+which now ends on landing or on retrieval, and the one state an exhausted
+notice adds to what a row can say. The row's text, its ordering, its columns
+and its settled duration are untouched.
 
 | | Pi | Claude | Codex |
 | --- | --- | --- | --- |
 | **Expected outcome** | One row per live Run carrying agent, backend name, turn count, status, and current activity — nothing else fixed, and no id or model. The row for a Pi Run reads `explore pi 3 turns running · …`. | Identical apart from the backend name: `explore claude 3 turns running · …`. | Identical apart from the backend name: `explore codex 3 turns running · …`. |
 | **Observation only** | The widget never determines lifecycle state. | Same. | Same. |
 | **Lifecycle** | Appears with the first Run and is removed when none are left; a change redraws rather than reinstalls. | Same. | Same. |
-| **Row lifetime** | A Run's row lasts from `agent_start` until its completion notice reaches the conversation, not until the Run settles. | Same — the row's lifetime is backend-independent. | Same. |
+| **Row lifetime** | **[Phase C]** A Run's row lasts from `agent_start` until its completion notice reaches the conversation **or** its Result is retrieved with `agent_result`, whichever comes first — not until the Run settles. A parent that fetches the Result at once has done everything the notice exists to make it do, so its row goes with no landing; `agent_wait` resolves nothing and its row stays. A row whose notice exhausted delivery's retry budget keeps its row and reads `completed · notification failed` with the Run id and `result available`, and retrieving that Result takes it away. [Semantics §6](../v2-simplify/notification-semantics.md#6-what-the-human-sees). | Same — the row's lifetime is backend-independent. | Same. |
 | **Settled duration** | A settled row states what the Run cost, and the figure stops moving when the Run does: it is the instant the Run settled less the instant it started, published on the row and taken from the same reading of the clock the stored Result records, so the row and the RunCard built from that Result print one number and a redraw never changes it. Since Phase A the completion notice reads the same figure from the same two instants, so a row, a card, and a notice print one number. | Same — the figure is the Run's, not the draw's, whichever backend ran it. | Same. |
 
 

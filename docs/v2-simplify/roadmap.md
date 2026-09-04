@@ -1,11 +1,16 @@
 # Simplification roadmap: fewer concepts, better completion notices
 
-**Status: Phases A and B closed; a Phase A follow-up and Phase C are
-planned; D proposed.**
+**Status: Phases A, B and C closed, and the Phase A follow-up with them; D
+proposed.**
 [The Phase A gate](phase-a-exit-gate.md) is closed, with item 14 carried and
 three change-surface findings that
 [the Phase B gate](phase-b-exit-gate.md) settled; the Phase B gate is closed,
-with all thirteen items PASS. This is the plan that
+with all thirteen items PASS;
+[the Phase C gate](phase-c-exit-gate.md) is closed with fourteen of fifteen
+items PASS and item 14 — the six credentialed live lanes — outstanding and
+named, because the closing environment had no provider credentials. That is
+the same item Phase A carried, and it is the one thing owed before the phase
+is announced to anyone relying on the live surfaces. This is the plan that
 follows
 [the v2 roadmap](../v2/roadmap.md), which delivered the rewrite and is now
 history. It answers the one definition-of-done clause the rewrite did not meet
@@ -798,9 +803,9 @@ and each gets its own ADR when picked up.
 | Phase | When                                     | Relationship to 2.0                                                                 |
 | ----- | ---------------------------------------- | ----------------------------------------------------------------------------------- |
 | A     | Closed                                   | Changed model-facing text before the matrix freezes it.                             |
-| A follow-up | Next, before C3                    | A8 changes model-facing text; must land before 2.0 stable. A6 and A7 are corrections and hold nothing. |
+| A follow-up | Closed 2026-09-04, with C           | A8 changed model-facing text before 2.0 stable. A6 and A7 were corrections and held nothing. |
 | B     | Closed 2026-09-04                        | Behaviour-preserving; held no release. Every pre-existing runtime test passes unmodified. |
-| C     | After the follow-up                      | C1 depends on B1 and is ready. C3 changes the widget's row-lifetime contract in the matrix, so it too lands before stable. C4 is independent. |
+| C     | Closed 2026-09-04                        | The widget's row-lifetime cell and the notice's pointer cell changed, both before stable. The six live lanes are owed: see the gate's item 14. |
 | D     | When the soak, usage, or `consumedBeforeLanding` shows a need | Not scheduled.                                                        |
 
 The three outstanding release items from [the v2 roadmap](../v2/roadmap.md)

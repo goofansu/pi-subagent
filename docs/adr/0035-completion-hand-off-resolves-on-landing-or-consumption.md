@@ -10,8 +10,20 @@ Date: 2026-09-04
 whose premise is deciding before coding writes its ADR first.
 
 **Accepted** in the commit that closes
-[the Phase C gate](../v2-simplify/phase-c-exit-gate.md). The acceptance
-criterion is stated in *Acceptance* below.
+[the Phase C gate](../v2-simplify/phase-c-exit-gate.md) — the commit carrying
+this entry. The acceptance criterion stated in *Acceptance* below is met: the
+gate's items 6, 7, 8 and 13 read PASS, and the conformance scenarios
+`a-notification-follows-storage` and
+`a-notification-retry-cannot-duplicate-or-alter-settlement` pass unchanged.
+`npm run check` is green.
+
+**One reading recorded at the gate.** The ledger's W-2 after column puts
+`completed · notification failed` in the *status* position, which is where a
+settled row prints its duration, so on that one row the duration gives way to
+the explanation. Every other settled row is unchanged (W-1). The ledger's W-2
+entry carries the reasoning.
+
+Everything from *Context* down is the text that was proposed, unchanged.
 
 Refines [ADR-0006](0006-completion-notifications-and-result-store.md), which
 decided that storage precedes notification and that a notice points at

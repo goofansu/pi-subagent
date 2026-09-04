@@ -256,10 +256,23 @@ and `[redacted]`, which is deliberate and not a truncation bug.
 
 ### The widget shows nothing
 
-A row lasts from `agent_start` until the Run's completion notice **lands** in
-the conversation. If a Run has settled and the row is still there, its notice
-has not landed — check `deliveryFailures`, and whether the turn that would have
-carried it was interrupted.
+A row lasts from `agent_start` until the Run's completion hand-off is
+**resolved**: its notice **landed** in the conversation, *or* the parent
+retrieved its Result with `agent_result`, whichever came first. `agent_wait`
+resolves nothing, so a row can outlive a wait.
+
+If a Run has settled and its row is still there, neither has happened yet.
+Read `/subagent diagnostics`: `handOffsRefused` says the sink could not hand
+the message over at all, `lostAfterHandOff` says a turn was interrupted while
+it was queued, and a `landings` well below `handOffsAccepted` says the
+messages are being accepted and not arriving.
+
+A row reading **`completed · notification failed`** is one whose delivery
+exhausted its retry budget — `deliveryFailures` and `exhaustions` will both be
+non-zero. Nothing more will be pushed for it, and it will not leave on its own.
+**The Result is still there**: the row carries the Run id and says `result
+available`, and `agent_result` with that id both returns the answer and takes
+the row away.
 
 If no row ever appears, the widget appears with the *first* live Run and is
 cleared when there are none left; between Sessions there is no widget.
@@ -268,7 +281,13 @@ cleared when there are none left; between Sessions there is no widget.
 
 `deliveryFailures` above zero, or an interrupt that discarded the follow-up. The
 Result is stored either way: `agent_result` with the Run id returns it. A notice
-lost to an interrupt is pushed again once the agent settles, exactly once.
+lost to an interrupt is pushed again once the agent settles, exactly once —
+unless the parent has already retrieved that Result, in which case the notice
+has nothing left to say and is deliberately not pushed again.
+
+A notice that arrives *after* the parent has read the Result is counted as
+`consumedBeforeLanding` and is harmless: Pi has no call that takes a queued
+message back, so a notice already handed over lands whatever the parent does.
 
 ### `agent_result` says the output was evicted
 

@@ -139,7 +139,7 @@ failure for that phase, not a note.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Phase A | **0 / 2** | **0 / 3** | **0 / 3** | **0 / 1** | **0 / 8–12** | **9 / 14** | **2 / 5** | R1, R2 and R4 meet their targets; R3 exceeds by one module against the target as it then stood. R7 is Phase A's label bound, decomposed out of ticket 02 and recorded here as R7's baseline. See the module lists and the findings below. |
 | Phase B | **0 / 1** | **0 / 2** | **0 / 3** | **0 / 1** | **0 / 8–12** | **9 / 14** | **2 / 5** | Every row meets its target. R3 did not move and now meets the target it was measured against. R6 did not grow, which is the reading the gate asked for: the extraction added three generic modules to the tree and a terminal-lifecycle change touches none of them. |
-| Phase C | — | — | — | — | — | — | — | |
+| Phase C | **0 / 1** | **0 / 2** | **0 / 3** | **0 / 1** | **0 / 8–12** | **9 / 14** | **2 / 5** | Every row meets its target and no row moved. R1 and R4 are the two the gate named and both read zero generic modules: A8 changed model-facing wording and touched nothing under `runtime/`, and the exhausted row's marker is a presentation-only field the widget sets, so a display-only column is still one module. The phase added one production module, `presentation/completion-view.ts`, and it is not generic. |
 
 The tree at the Phase A gate held **103 production modules**, of which **23
 were generic lifecycle** — thirteen under `runtime/` and the ten named
@@ -148,6 +148,12 @@ generic**: `runtime/admission.ts`, `runtime/subagent-records.ts`, and
 `runtime/waiters.ts` joined the runtime. That is the cost side of the phase
 stated in this document's own units — three more generic modules in the tree —
 and no representative change touches any of them, which is why no row moved.
+
+At the Phase C gate it holds **107**, of which **26 are generic** — unchanged.
+The one module the phase added is `presentation/completion-view.ts`, which is
+presentation, and the generic count did not move at all: C3's whole hand-off
+lives in `host/`, and its one runtime change was a method on an interface
+`runtime/delivery.ts` already owned.
 
 ### Method, so this can be repeated
 
@@ -213,6 +219,13 @@ import only from `domain/` and `presentation/`.
 pointer's two availability sentences touched
 `presentation/notification-text.ts` and nothing else.
 
+**Phase C: 0 / 1.** Re-measured the same way on the closing tree, by rewording
+the `partial` pointer sentence. One module,
+`presentation/notification-text.ts`. A8 is the real thing this row is about and
+it was larger — it renamed the availability values, which is an R2-shaped
+change, so it touched `domain/notification.ts` as well — but a *pure reword*
+is still one presentation file, and boundary rule 20 is what keeps it there.
+
 ### R2 — add a field to the completion notice
 
 **0 / 3.** Target 1 / ≤ 4. **Meets, and better than target.** Measured from
@@ -248,6 +261,11 @@ is declared and derived in `domain/notification.ts` and printed in
 this time, because a plain new field does not change how the card reads the
 figures it already prints — which is what pulled it in during Phase A.
 
+**Phase C: 0 / 2.** Re-measured with the same `toolCount` field and the same
+two modules. C4's completion view did not pull a third in: the view carries
+only facts all three sources already had, so a new notice field is not one of
+its six and the header reads it from the notice directly.
+
 ### R3 — add a Profile option that one backend understands
 
 **0 / 3.** Target 0 / ≤ 2. **Exceeds by one module.** Measured on the
@@ -267,6 +285,13 @@ move**, which is what the Phase B gate required of it, and it now meets the
 target rather than exceeding it — because the target was raised on the
 argument in finding 1 rather than because anything about the cost changed.
 
+**Phase C: 0 / 3, carried forward.** Not re-measured by a throwaway branch,
+and the reason is stated rather than assumed: Phase C's diff touches none of
+this row's three modules — `backend/claude/profile.ts`,
+`backend/claude/options.ts`, `backend/profile-fields.ts` — and adds no new path
+between a Profile field and an adapter. Nothing in the phase is in this row's
+way. The same holds for R5's module list and for R7's.
+
 ### R4 — add a display-only column to the widget
 
 **0 / 1.** Target 0 / ≤ 2. **Meets, and better than target.** Measured on the
@@ -283,6 +308,15 @@ does not, for a column the snapshot carries.
 module, `presentation/rows.ts`, which declares the column width, measures it
 across the visible rows, formats the cell, and adds it to the widest of the
 three row layouts.
+
+**Phase C: 0 / 1.** Re-measured the same way. This is the row the gate watches
+hardest this phase, because C3 gave the row something new to say — an
+exhausted hand-off reads `completed · notification failed` — and it could have
+been paid for with a snapshot field, which would have been
+`domain/projection.ts` and `domain/reduce-run.ts` and two generic modules. It
+was not: `handoff` is a presentation-only field on `RunRowView` that the widget
+sets from a host fact it already reads, so the snapshot is untouched and a
+display-only column is still one module.
 
 ### R5 — add a fourth backend that supports resume and steering
 

@@ -1,11 +1,13 @@
 # Phase C exit gate — the completion hand-off, and resource lifetime polish
 
-**Status: not started.** Rewritten 2026-09-04 at the Phase B close, when
-[the roadmap](roadmap.md) redefined C3 around the hand-off and added the Phase
-A follow-up (A6–A8), which this gate verifies as well. C1 is ready: the lease
-exists and its release is one call. A6–A8, C3 and C4 depend on nothing in each
-other and may land in any order after A8, which changes model-facing text and
-goes first.
+**Status: closed, with one item outstanding and named.** Rewritten 2026-09-04
+at the Phase B close, when [the roadmap](roadmap.md) redefined C3 around the
+hand-off and added the Phase A follow-up (A6–A8), which this gate verifies as
+well; verified item by item at the Phase C close. Fourteen of the fifteen items
+read PASS. **Item 14, the six credentialed live lanes, has not been run** —
+they need real provider credentials and real processes, which the closing
+environment does not have — and the item records exactly what is owed and why
+it matters.
 **Verified against:** [the roadmap](roadmap.md), Phase A follow-up and Phase
 C; [the notification semantics](notification-semantics.md) §1 *Consumption*,
 §3, §5, §6 and §7; [the presentation ledger](presentation-ledger.md) rows
@@ -18,7 +20,9 @@ N-10, W-2, W-3, C-3; [the freeze](freeze.md), rows F4, F6 and F10;
 npm run check   →  exit 0
 ```
 
-**Status:** OPEN.
+**Status:** PASS. Typecheck, lint, 1,281 tests, the shared conformance suite on
+all five rigs, and the pinned Codex protocol check, all green on the closing
+commit.
 
 ## The items
 
@@ -30,10 +34,17 @@ npm run check   →  exit 0
 expected ones, and `Runtime: attention needed · …` naming the non-zero classes
 otherwise. A counter name the host does not recognise counts as actionable.
 
-**Evidence to name:** `host/diagnostics-command.test.ts` (ledger C-3);
-`runtime/counters.test.ts` or the type-level check.
+**Evidence to name:** `host/diagnostics-command.test.ts` — `C-3: a Session
+whose only raised counters are expected ones is healthy`, `C-3: the health line
+names the non-zero classes, worst first`, `C-3: a counter the host does not
+recognise is named rather than ignored`, and the updated `health is a verdict
+on what was noticed and a count of what is held`; `runtime/counters.test.ts` —
+`every counter a Session reports has a class, and the record invents none`,
+which holds `COUNTER_CLASSES` and the zero block to one set of names, on top of
+the type-level exhaustiveness the `Record<SupervisorCounter, CounterClass>`
+already gives.
 
-**Status:** OPEN.
+**Status:** PASS.
 
 ### 2. The debugging guide describes two commands (A7)
 
@@ -43,7 +54,15 @@ the health line, with the three classes named) and one for
 to the three classes and name them; `duplicateSettlements` and `lateEndings`
 sit under *expected*.
 
-**Status:** OPEN.
+**Evidence to name:** `docs/debugging.md`, sections `/subagent` (with *The
+health line*) and `/subagent diagnostics` (with *The hand-off block*, added by
+item 9), and *The counters*, whose three tables are titled `defect`,
+`incident` and `expected` and name `runtime/counters.ts` as their source. Every
+counter in `COUNTER_CLASSES` appears in exactly one table, and
+`runtime/counters.test.ts`'s `the three classes are the ones the debugging
+guide names` fails if a fourth class is added without a section here.
+
+**Status:** PASS.
 
 ### 3. Availability says what a model will find (A8)
 
@@ -53,10 +72,17 @@ Run with no output has no body and the record-only pointer. Ledger row N-10 is
 confirmed with its goldens, and rows N-1, N-2, N-4, N-5, N-7 still pass
 reading their pointer through it.
 
-**Evidence to name:** `presentation/notification-text.test.ts`; the host
-smoke lanes (item 14).
+**Evidence to name:** `presentation/notification-text.test.ts` — `N-10: the
+pointer says what a model will find, in each of the three availabilities`,
+`N-10: availability is read off the output, not off the status alone`, and
+`N-2: a completed Run with no output has no body, and its record is available`,
+which asserts the sentence appears exactly once; rows N-1, N-4, N-5, N-7 and
+the three-backend N-8 all pass reading their pointer through it.
+`git diff --stat` shows nothing under `extensions/subagent/runtime/` for the
+A8 commit, which is what item 15's R1 reading depends on. **The host smoke
+lanes assert on this text and have not been run — see item 14.**
 
-**Status:** OPEN.
+**Status:** PASS on the deterministic gate; unverified against a live provider.
 
 ### 4. Admission capacity is returned by scope closing (C1)
 
@@ -210,14 +236,39 @@ only the domain and `./views.ts`, so the presentation boundary rules hold.
 retry budget and asserts the projection reads `exhausted` and the Result is
 untouched.
 
-**Status:** OPEN.
+Covered in both halves, at the seam each half belongs to.
+`runtime/delivery.test.ts` — `a sink that always fails exhausts its budget,
+releases the pin, and leaves the result` — drives the real retry budget on a
+test clock and asserts three things together: delivery's own projection lists
+the Run as exhausted, the sink was told exactly once, and the stored Result is
+still readable with its output intact. Its sibling, `a push that fails once is
+retried and the result is announced from the store`, asserts the sink was
+*not* told, which is the other half of "exactly when the budget is spent".
+`host/push-sink.test.ts` — `a Run delivery gave up on reads exhausted, and
+consuming it resolves it` — covers the sink's own projection and the way out
+of it.
+
+**Status:** PASS.
 
 ### 12. Race and stress lanes pass unchanged
 
 `runtime/races.test.ts` and `runtime/stress.test.ts` have an empty diff for
 the phase.
 
-**Status:** OPEN.
+```sh
+git diff --stat 0b90460..HEAD -- \
+  extensions/subagent/runtime/races.test.ts \
+  extensions/subagent/runtime/stress.test.ts
+# no output
+```
+
+The conformance suite is likewise untouched: `testing/conformance.ts` has an
+empty diff, and its two notification scenarios —
+`a-notification-follows-storage` and
+`a-notification-retry-cannot-duplicate-or-alter-settlement` — pass on all five
+rigs.
+
+**Status:** PASS.
 
 ### 13. ADR-0035 is accepted, and the contracts say landing or retrieval
 
@@ -228,7 +279,19 @@ retrieved with `agent_result`, whichever comes first" and cites semantics §6.
 The debugging guide's "widget shows nothing" symptom says the same. The
 ledger's confirmation table names a golden for N-10, W-2, W-3 and C-3.
 
-**Status:** OPEN.
+All four hold. ADR-0035 was proposed in `723e9c7`, before any C3 code, and is
+accepted in this closing commit with the criterion shown met; ADR-0033 carries
+a status note pointing at it and its own text is untouched. The matrix's
+**Row lifetime** cell reads "until its completion notice reaches the
+conversation **or** its Result is retrieved with `agent_result`, whichever
+comes first" and cites semantics §6, and the widget section's note that the
+exhausted row "is not this table's yet" is replaced by the fact. The debugging
+guide's *The widget shows nothing* symptom says landing or retrieval, and says
+what a `notification failed` row means and how to clear it. The ledger's
+confirmation table names goldens for N-10, W-2, W-3 and C-3, and its status
+line no longer excepts W-2.
+
+**Status:** PASS.
 
 ### 14. The live gates are re-run
 
@@ -237,7 +300,33 @@ lanes (`pi:smoke`, `pi:host-smoke`, `claude:smoke`, `claude:host-smoke`,
 `codex:smoke`, `codex:host-smoke`) are run on the closing commit and their
 pass markers recorded here.
 
-**Status:** OPEN.
+**Not run.** The six lanes are credentialed: each drives a real provider — a
+Pi session, a Claude Query, a `codex app-server` process — and the environment
+this phase closed in has no provider credentials and no way to obtain them.
+They are outside `npm run check` for exactly that reason, and no substitute was
+invented for them.
+
+**What is owed, and what would catch what.** Two things changed that only these
+lanes see end to end:
+
+- **A8's text.** The host smoke lanes assert on the pointer sentence a real
+  model reads. `scripts/pi-host-live-smoke.mjs` and its Claude and Codex
+  siblings will fail on `Full result is available.` if any of them still
+  carries the old sentence, which is the check the deterministic gate cannot
+  make because it asserts against the same constants the code uses.
+- **C1's scoped lease.** The runtime lanes read every probe after the Session
+  Scope has closed, over a real adapter. The stress lane already reads zero
+  after hundreds of cycles with the fakes; what the live lanes add is a
+  provider whose own finalizers take real time.
+
+```sh
+npm run pi:smoke        npm run pi:host-smoke
+npm run claude:smoke    npm run claude:host-smoke
+npm run codex:smoke     npm run codex:host-smoke
+```
+
+**Status:** OPEN. Record the six pass markers here before the phase is
+announced as closed to anyone relying on the live surfaces.
 
 ### 15. The change-surface table is re-measured
 
@@ -246,8 +335,54 @@ closing tree. R4 (display-only widget column) must still read zero generic
 modules; R1 must still read zero, because A8 changed wording and touched
 nothing under `runtime/`.
 
-**Status:** OPEN.
+Measured on the closing tree: **R1 0 / 1, R2 0 / 2, R4 0 / 1**, each from a
+throwaway edit and a `git diff --name-only`. R3, R5, R6 and R7 are carried
+forward with the reason stated rather than assumed: the phase's diff touches no
+module in any of their lists.
+
+R4 is the reading the gate watched hardest, because C3 gave the row something
+new to say and it could have been paid for with a snapshot field — which would
+have been `domain/projection.ts` and `domain/reduce-run.ts`, two generic
+modules, and a failed gate. It was not: `handoff` is presentation-only, set by
+the widget from a host fact it already reads, and the snapshot is untouched
+(freeze F9).
+
+The tree holds **107 production modules, 26 of them generic** — one more module
+than at the Phase B gate, `presentation/completion-view.ts`, and not a generic
+one. C3's whole hand-off is in `host/`; its one runtime change is a method on
+an interface `runtime/delivery.ts` already owned.
+
+**Status:** PASS.
 
 ## Verdict
 
-To be written when verified.
+**Closed, with item 14 outstanding.**
+
+Fourteen of the fifteen items read PASS on the closing commit, and
+`npm run check` exits 0. What the phase set out to do, it did:
+
+- A completion hand-off now has two ways to finish. A parent that retrieves a
+  Result has done what the notice existed to make it do, so the widget row goes
+  at once and an aborted turn does not re-push a notice about work the parent
+  has finished with. `agent_wait` resolves nothing, deliberately.
+- A settled row that will never leave on its own says why, and the widget pays
+  for that with one read model rather than with a third, fourth and fifth
+  predicate on its boundary.
+- The health line stopped calling a healthy Session broken, and the taxonomy
+  that decides it is in code, exhaustive by type, with the guide grouped to
+  match.
+- A completed Run with nothing to show no longer promises a full result.
+- Capacity is returned by a Scope closing rather than by a call somebody has to
+  remember, and the ordering the Phase B review restored is now a consequence
+  of finalizer order rather than of a comment asking for it.
+- Terminal status and duration are derived once and read three ways, so a row
+  and a card cannot print two durations for one Run again.
+
+**What is outstanding.** The six credentialed live lanes (item 14) were not
+run: this environment has no provider credentials. Two changes in this phase
+are of the kind those lanes exist to catch — A8's model-facing sentences, which
+the host lanes assert on, and C1's scoped lease, which the runtime lanes see
+over a real adapter with real finalizers. **The phase should not be announced
+as closed to anyone relying on the live surfaces until those six markers are
+recorded in item 14.** Everything a deterministic gate can check has been
+checked.
