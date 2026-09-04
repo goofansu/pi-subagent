@@ -12,6 +12,7 @@
  * state because presentation could reach the thing that owned lifecycle.
  */
 
+export * from "./completion-view.ts";
 export * from "./details.ts";
 export * from "./notification-text.ts";
 export * from "./prose.ts";

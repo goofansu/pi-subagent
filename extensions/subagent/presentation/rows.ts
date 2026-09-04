@@ -18,6 +18,7 @@
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { RunPhase } from "../domain/index.ts";
+import { completionViewOfSnapshot } from "./completion-view.ts";
 import {
   formatRunPhase,
   formatTurns,
@@ -159,13 +160,22 @@ export function formatRunRow(
  * unchanged (W-1).
  */
 function formatRowStatus(row: RunRowView, now: number): string {
+  // A settled row reads its status and its duration through the completion
+  // view, which is the same value the result card and the notice header read.
+  // That is what stops a row and a card printing two durations for one Run.
+  const completion = completionViewOfSnapshot(row, now);
   if (row.handoff === "exhausted") {
-    return `${runPhaseVerb(row.terminalStatus ?? row.phase)} · notification failed`;
+    return `${runPhaseVerb(completion?.status ?? row.phase)} · notification failed`;
   }
-  return formatRunPhase({
-    phase: row.phase,
-    elapsedMillis: elapsedMillis(row, now),
-  });
+  return completion === undefined
+    ? formatRunPhase({
+        phase: row.phase,
+        elapsedMillis: elapsedMillis(row, now),
+      })
+    : formatRunPhase({
+        phase: completion.status,
+        elapsedMillis: completion.durationMillis,
+      });
 }
 
 /**

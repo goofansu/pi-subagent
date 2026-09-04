@@ -43,6 +43,7 @@ import type {
   RunId,
   RunNotification,
 } from "../domain/index.ts";
+import { completionViewOfNotification } from "./completion-view.ts";
 import {
   formatDuration,
   formatTokenCount,
@@ -64,7 +65,10 @@ function formatNotificationHeader(notice: RunNotification): string {
     notice.status === "cancelled" && notice.cancellationReason !== undefined
       ? ` (${notice.cancellationReason})`
       : "";
-  return `Subagent "${notice.label}" ${runPhaseNoticeVerb(notice.status)} in ${formatDuration(notice.durationMillis)}${reason}.`;
+  // The label, the status and the duration through the completion view, which
+  // is the same value the widget's settled row and the result card read.
+  const completion = completionViewOfNotification(notice);
+  return `Subagent "${completion.label}" ${runPhaseNoticeVerb(completion.status)} in ${formatDuration(completion.durationMillis)}${reason}.`;
 }
 
 /**

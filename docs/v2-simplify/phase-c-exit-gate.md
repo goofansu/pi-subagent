@@ -195,7 +195,14 @@ and duration is derived from `RunSnapshot`, `RunResult`, and
 result card, and the notice header all print their status and duration through
 it. The settled-duration goldens still pass.
 
-**Status:** OPEN.
+**Evidence to name:** `presentation/completion-view.test.ts` — `one Run derived
+from the snapshot, the Result and the notice is one value`, `the three agree
+for a failed and for a cancelled Run too`, `a Run that has not settled has no
+completion to describe`, `the duration is the Run's, not the draw's`; every N,
+S and W golden passes unmodified, and `presentation/completion-view.ts` names
+only the domain and `./views.ts`, so the presentation boundary rules hold.
+
+**Status:** PASS.
 
 ### 11. The bounds lane covers the exhausted projection
 

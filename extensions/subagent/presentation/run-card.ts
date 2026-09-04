@@ -35,6 +35,7 @@ import {
   toNotificationAccounting,
   transcriptItemText,
 } from "../domain/index.ts";
+import { completionViewOfResult } from "./completion-view.ts";
 import { formatNotificationAccounting } from "./notification-text.ts";
 import { formatResultBody } from "./result-body.ts";
 import {
@@ -239,17 +240,20 @@ export function runCard(source: RunCardSource): RunCard {
   );
   const links = omitWhenEmpty(result.links.map(formatResultLinkLine));
   const truncation = formatTruncation(result);
+  // Status and duration through the completion view, which is the same value
+  // the widget's settled row and the notice header read.
+  const completion = completionViewOfResult(result);
   return {
-    runId: result.runId,
-    subagentId: result.subagentId,
-    agent: result.agent,
-    description: result.description,
+    runId: completion.runId,
+    subagentId: completion.subagentId,
+    agent: completion.agent,
+    description: completion.label,
     backendId: result.backendId,
     status: formatRunPhase({
-      phase: result.status,
-      elapsedMillis: Math.max(0, result.settledAt - result.startedAt),
+      phase: completion.status,
+      elapsedMillis: completion.durationMillis,
     }),
-    tone: runPhaseTone(result.status),
+    tone: runPhaseTone(completion.status),
     ...(accounting === undefined ? {} : { accounting }),
     ...(context === undefined ? {} : { context }),
     ...(transcript === undefined ? {} : { transcript }),
