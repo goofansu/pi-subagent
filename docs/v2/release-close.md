@@ -228,7 +228,8 @@ the new refusal is in the list. The push sink's header states the rule for
 adding state. The commit that lands these is the last commit to touch
 `extensions/` before `v2.0.0`, and the soak's first entry is dated after it.
 
-**Status:** PASS (2026-09-04).
+**Status:** PASS (2026-09-04), commit `7511a88` — the last commit to touch
+`extensions/` before the tag.
 
 - **The refusal.** `empty label` is a new outcome on both `StartOutcome` and
   `ResumeOutcome`, added to
