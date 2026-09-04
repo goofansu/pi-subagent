@@ -62,10 +62,20 @@ in the same Session; a resume it cannot resolve is counted under *unknown* and
 listed, so the tally never silently drops one.
 
 What the script cannot know stays manual and gets small: a shutdown entry is
-the date, the backend set that was live, and the pasted `/subagent diagnostics`
-output, from which the probes, the health line's classes, and the hand-off
-block — including `consumedBeforeLanding` — are read. The record's *Reading the
-probes* section becomes *Writing a shutdown entry* and says exactly that.
+the date, the backend set that was live, and the paste, from which the probes,
+the health line's classes, and the hand-off block — including
+`consumedBeforeLanding` — are read. The record's *Reading the probes* section
+becomes *Writing a shutdown entry* and says exactly that.
+
+**The paste is of two commands, not one.** This plan said
+`/subagent diagnostics`, and building E1 found that command does not carry
+everything Phase D's rules read: the runtime counters, the runtime probe, the
+hand-off block and the adapter probes are its, but the health line and the Run
+summary belong to bare `/subagent`. The terminal-compaction rule reads the Run
+summary and the envelope rule reads `consumedBeforeLanding`, so an entry with
+only one of the two blocks cannot answer both. A shutdown entry therefore
+pastes `/subagent` and `/subagent diagnostics`, which is still one action at
+one moment.
 
 The script is tooling for a process, not product: it lives in `scripts/`, is
 not in `check`, and is not an operator command. It reads Pi's on-disk format,
@@ -165,9 +175,31 @@ Verified item by item; each reads PASS, OPEN, or NOT MET with its evidence.
 `scripts/soak-tally.mjs` prints the three tables from Pi's session logs; a
 resume it cannot resolve is listed, not dropped; a format change fails loudly.
 `soak.md`'s tally section says it is generated and by what; its shutdown entry
-is date, live backends, and pasted diagnostics.
+is date, live backends, and the paste.
 
-**Status:** OPEN.
+**Status:** PASS (2026-09-04).
+
+- The script is [`scripts/soak-tally.mjs`](../../scripts/soak-tally.mjs): no
+  dependencies, in neither `check` nor `release:check`, and not an operator
+  command. `node scripts/soak-tally.mjs 2026-08-31` reads the maintainer's own
+  Sessions from the release-candidate window and prints the three tables, an
+  unattributed list of five starts naming Profiles no longer on disk, and
+  `Sessions read: 80`. Those Sessions are not soak evidence — wrong build —
+  but they are what the script was developed against, and the `<since-date>`
+  is what will keep them out of the soak's tally.
+- Attribution, the unattributable id, the switch, and the format-change failure
+  are covered by [`scripts/soak-tally.test.mjs`](../../scripts/soak-tally.test.mjs)
+  on the two synthetic Sessions under `scripts/fixtures/soak-tally/`. Eight
+  tests; `npm run check` green.
+- [`soak.md`](soak.md)'s tally section names the command that generates the
+  tables and carries a **Last pasted** line; its *Reading the probes at each
+  shutdown* section is now *Writing a shutdown entry* with the three-line form.
+- One decision the plan did not settle: a switch is counted under the backends
+  the Session that was switched *to* had open, not under the union of it and
+  the Session before it. The record calls a switch a property of one Session,
+  and the union would let a backend record more switches than it ever had
+  Sessions. The other side of the switch is already counted as the earlier
+  Session's shutdown.
 
 ### 2. The soak's exit criteria are met
 

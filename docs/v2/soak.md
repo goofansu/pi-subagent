@@ -32,10 +32,16 @@ several times, across distinct days — **and now per backend**, because a Pi
 Subagent, a Claude Query, and a Codex App Server fail in different ways and a
 tally that pooled them could be full while one of the three had never been run.
 
-So this file is a log rather than a certificate. Each entry names the date, the
-backend, the operation, what it was actually used for, and what happened. An
-entry that says "worked" and nothing else is worth having: the point is the
-tally, and the defects below are where the interesting part goes.
+So this file is a log rather than a certificate — and since [the 2.0
+close](release-close.md) it is no longer the place the operations are counted.
+The operation rows are read out of Pi's own session logs by
+[`scripts/soak-tally.mjs`](../../scripts/soak-tally.mjs), which knows the
+operation, the backend and the day of every `agent_*` call already recorded.
+What is written here by hand is one shutdown entry per Session — the readings
+no log can take — and a row for anything that went wrong. That is deliberate:
+two soak windows closed empty because the tally was a record of things the
+maintainer had already done, and nothing made writing it cheaper than not
+writing it.
 
 ## Exit criteria
 
@@ -54,31 +60,81 @@ A fifth, added because the deletion came first: **any severity-1 or severity-2
 defect found here is a release-rollback decision rather than a switch**, so the
 entry that records one should say what a user would do about it today.
 
-## Reading the probes at each shutdown
+## Writing a shutdown entry
 
-The diagnostics command reports the runtime's own counters and one probe block
-per backend adapter. Read it *before* ending a Session with nothing in flight,
-because after the Session is gone there is nothing to ask:
+This is the whole of what the soak asks anyone to remember, and it is one
+thing: at each Session end, with nothing in flight, run `/subagent` and then
+`/subagent diagnostics`, and write three lines under today's date.
+
+1. **The date, and the backends that were live** in that Session.
+2. **The paste** — both blocks, unedited.
+3. **Anything that went wrong**, which also gets a row in
+   [Defects](#defects) with a severity.
+
+Nothing else. The operation counts are the script's; this is the reading.
+
+**Both commands, because they report different things.** Bare `/subagent`
+carries the Run summary and the health line; `/subagent diagnostics` carries
+the runtime counters, the runtime probe, the notification hand-off block, and
+one probe block per backend adapter. [Phase D's decision
+rules](../v2-simplify/roadmap.md#phase-d--long-session-concerns-on-evidence-only)
+read the Run summary from the first and `consumedBeforeLanding` from the
+second, so a paste of one command cannot answer them.
+
+Take the reading *before* ending the Session: after the Session is gone there
+is nothing to ask.
+
+Four things are read out of the paste later rather than written out again now,
+which is why the paste goes in whole:
 
 - **the runtime probe** — live Run fibers, live reducer fibers, open observation
   queues, open mailboxes, unresolved waiters, repository subscriptions, open
   BackendAgents;
-- **Pi** — native sessions and event subscriptions;
-- **Claude** — live Queries, open input streams, retained conversation
-  identities;
-- **Codex** — live App Server processes, reader fibers, pending JSON-RPC
-  requests, retained root threads, in-flight steers.
+- **each adapter probe** — Pi's native sessions and event subscriptions;
+  Claude's live Queries, open input streams and retained conversation
+  identities; Codex's live App Server processes, reader fibers, pending
+  JSON-RPC requests, retained root threads and in-flight steers;
+- **the hand-off block** — what each completion notice did, by outcome,
+  including `consumedBeforeLanding`, which is the number the hold-while-active
+  envelope's decision rule is read from;
+- **the health line** and the Run summary above it — the runtime's own verdict
+  by counter class, and how many Runs this Session has settled, which is the
+  number the terminal-compaction rule is read from.
 
-Every one should read zero for a Session with nothing running. A figure above
-zero is a severity-2 defect and goes in the table below.
+Every probe field should read zero for a Session with nothing running. A
+figure above zero is a severity-2 defect and goes in the table below.
+[The debugging guide](../debugging.md) is what each field means.
 
 ---
 
 ## Tally
 
-Three tables, one per backend, because the exit gate is per backend. Update the
-tally when a day's entries are added: a tally that disagrees with the log is a
-tally that has stopped being read.
+**These three tables are generated, not kept by hand.** At the end of each soak
+day run
+
+```
+node scripts/soak-tally.mjs <the-first-soak-day>
+```
+
+and paste its three tables over the three below. The script reads every Pi
+Session started on or after that date, attributes each `agent_start` to a
+backend through the Profile it names, resolves each `agent_resume`,
+`agent_steer` and `agent_cancel` through the start or resume in the same
+Session that produced its id, and counts Sessions as shutdowns and switches. So
+a day of real usage counts whether or not anyone wrote it down.
+
+It also prints, below the tables, an **unattributed** list of every call it
+could not place — with the Session and the line — and the number of Sessions it
+read. Neither is pasted here, but a run with a long unattributed list is one to
+look at before believing the tables: the script lists what it cannot attribute
+rather than dropping it, precisely so the tally never reads fuller than the
+usage was. A field the script needs and cannot find is a thrown error naming
+the file and the line, not a smaller number.
+
+**Last pasted:** never. The tables below are the empty ones this record opened
+with.
+
+Three tables, one per backend, because the exit gate is per backend.
 
 ### Pi
 
@@ -126,27 +182,38 @@ backends work, so no specialist is off the table, and the widget is visible for
 long enough to read. The first day's usage goes below.
 
 <!--
-One entry per session of use, newest last. Name the backend in every line: a
-tally is per backend and a line that does not say which one cannot be counted.
+One entry per Session of use, newest last, in the form above: the date and the
+live backends, the paste, and anything that went wrong. No operation counts —
+the script counts those, and a hand-written count that disagreed with it would
+only raise the question of which to believe.
 
-### 2026-09-04
+### 2026-09-04 — Pi, Claude and Codex live
 
-- **Pi** `agent_start` × 3 — asked `explore` to summarise three unfamiliar
-  modules. All three answered; the widget showed the tail of each and each row
-  stayed until its answer arrived in the conversation.
-- **Pi** `agent_resume` × 1 — followed up on the second with a narrower
-  question. The answer depended on what the first Run had already read, so the
-  retained conversation is doing its job.
-- **Claude** `agent_start` × 2, `agent_steer` × 1 — `spec-reviewer` on two
-  specs; steered the second mid-Run to also check the issue list. The steer
-  appeared once in the transcript.
-- **Codex** `agent_start` × 1, `agent_cancel` × 1 — `implementer` on a change
-  that turned out to be wrong. Settled `cancelled (requested)` with the partial
-  output retained, and the Subagent stayed resumable.
-- Session shutdown × 2 — `/subagent` read zero on the runtime probe and on
-  all three adapter probes each time.
-- Session switch × 1 — reloaded mid-afternoon; the new Session's ids started
-  again and the old ones reported unknown, as they should.
+```
+Subagents: 5 Profiles · 0 running, 7 completed, 1 failed
+Runtime: healthy · 0 held
+
+Runtime counters:
+  duplicateSettlements: 0
+  ...
+Runtime probe:
+  liveRunFibers: 0
+  ...
+Notification hand-offs:
+  pushesAttempted: 8
+  ...
+  consumedBeforeLanding: 0
+Backend probe (pi):
+  openSessions: 0
+  ...
+Backend probe (claude):
+  ...
+Backend probe (codex):
+  ...
+```
+
+- Nothing went wrong. (Anything that did goes here in a sentence, and in the
+  defects table below with a severity.)
 -->
 
 ## Defects
