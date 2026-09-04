@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import {
+  hasComputedImport,
   readImportSpecifiers,
   resolveRelativeSource,
 } from "./import-specifiers.ts";
@@ -95,4 +96,30 @@ test("package specifiers resolve to nothing so callers match them by name", (t) 
   assert.equal(resolveRelativeSource(importer, "effect"), undefined);
   assert.equal(resolveRelativeSource(importer, "effect/testing"), undefined);
   assert.equal(resolveRelativeSource(importer, "node:fs"), undefined);
+});
+
+test("a computed dynamic import is reported, and a literal one is not", () => {
+  // The specifier reader drops a computed edge, which is the only honest thing
+  // it can do — the argument is an expression. This is how a caller finds out
+  // that it dropped one.
+  assert.equal(hasComputedImport('await import("./a.ts");'), false);
+  assert.equal(hasComputedImport("await import(`./a.ts`);"), false);
+  assert.equal(hasComputedImport('require("./a.ts");'), false);
+
+  assert.equal(hasComputedImport("await import(where);"), true);
+  // The fixture is source code, and the placeholder is the whole point: a
+  // template with a substitution is precisely the computed specifier this
+  // reports.
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: see above
+  assert.equal(hasComputedImport("await import(`./${name}.ts`);"), true);
+  assert.equal(
+    hasComputedImport('await import(new URL("./a.ts", x).href);'),
+    true,
+  );
+  assert.equal(hasComputedImport("require(where);"), true);
+
+  // Not an import at all, and not reported as one.
+  assert.equal(hasComputedImport('const s = "await import(where)";'), false);
+  assert.equal(hasComputedImport("// await import(where)"), false);
+  assert.equal(hasComputedImport("importSomething(where);"), false);
 });

@@ -118,8 +118,23 @@ test("T1: the label's bound is stated on both description fields", () => {
     assert.match(
       document.properties.description.description ?? "",
       new RegExp(
-        `^Label for this (specific|new) Run; one line, at most ${RUN_LABEL_MAX_BYTES} bytes, shortened if longer$`,
+        `^Label for this (specific|new) Run; one line, at most ${RUN_LABEL_MAX_BYTES} bytes, shortened if longer, and never empty — an empty description is refused$`,
       ),
+    );
+  }
+});
+
+test("T1: both description fields say the field is never empty", () => {
+  // The other half of the bound. An empty description is refused rather than
+  // shortened, so the schema says so instead of letting a model discover it by
+  // being refused — which is the same reason the byte bound is stated.
+  for (const schema of [StartInputSchema, ResumeInputSchema]) {
+    const document = toolParameters(schema) as {
+      properties: { description: { description?: string } };
+    };
+    assert.match(
+      document.properties.description.description ?? "",
+      /, and never empty — an empty description is refused$/,
     );
   }
 });

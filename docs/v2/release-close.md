@@ -228,7 +228,75 @@ the new refusal is in the list. The push sink's header states the rule for
 adding state. The commit that lands these is the last commit to touch
 `extensions/` before `v2.0.0`, and the soak's first entry is dated after it.
 
-**Status:** OPEN.
+**Status:** PASS (2026-09-04).
+
+- **The refusal.** `empty label` is a new outcome on both `StartOutcome` and
+  `ResumeOutcome`, added to
+  [operation semantics §2](operation-semantics.md#2-start-and-resume-admission-are-atomic)
+  first, since the unions are transcribed from it and a test reads both. It is
+  decided in `application/subagents.ts` where the label is bounded, before the
+  supervisor is reached, so nothing is reserved and no identifier is spent:
+  `agent_start refuses an empty description, and spends no identifier doing it`
+  refuses `""`, `"   "` and `"\n\t "` and then requires the next start to be
+  the Session's *first* Run and Subagent, and `agent_resume refuses an empty
+  description, and the Subagent stays resumable` resumes for real afterwards.
+  The sentences are `presentation/prose.ts`'s, in the two families the surface
+  already uses — proven by `a start and a resume refuse an empty description in
+  their own family's words`.
+- **The schemas.** `T1: both description fields say the field is never empty`,
+  and the existing `T1` now reads the clause whole.
+- **The matrix.** `agent_start` and `agent_resume` each gained an **Empty
+  description** row with its proof, and the **The Run label** cell states both
+  ends of the bound and what each does. Marked **[2.0 close]**, which is before
+  the matrix freezes at E7. Neither presentation ledger gains a row: the v2
+  ledger is a closed one-time v1-versus-v2 comparison and v1 had no lower bound
+  to compare against, and the simplification ledger records what that programme
+  changed.
+- **The cross-check.** `extensions/subagent/soak-tally-openings.test.ts` reads
+  `scripts/soak-tally.mjs`'s `RESULT_PROSE` and this tree's formatters in both
+  directions, over one sample of every outcome built from each union's own name
+  list — so an outcome added to either operation fails here as well as failing
+  to compile. It lives at the tree root rather than beside the prose, for the
+  reason `packaging.test.ts` does: it asserts an agreement between this
+  extension and the repository around it, and a presentation file may name only
+  the domain and Pi. Shown to fail both ways before it was kept: rewording
+  `Started ` to `Launched ` in `presentation/prose.ts` failed both directions,
+  and adding an opening the tree does not produce failed the second. Its third
+  test is a property of the script alone — that its started and refused
+  openings stay distinguishable, so a refusal can never be mistaken for a start
+  and searched for ids — and no edit to either side fails it.
+
+  What the test holds is the **opening**, not the sentence: the script reads
+  families, so rewording a refusal's body passes here, and should. What fails is
+  a change to an opening, which is the change that would stop the script
+  resolving ids.
+- **The impossibility is enforced rather than argued.** That no Run can carry an
+  empty label rests on `labelledRequest` being the only door, and nothing
+  fenced that. `label-bound.test.ts` now reads the tree and requires
+  `application/subagents.ts` to be the only production caller of
+  `supervisor.start`, `supervisor.resume` and `boundRunLabel`. A second caller
+  would have taken the property away silently.
+- **The checker can see the edge the cross-check adds.** That test imports the
+  script through a computed specifier, because the script is plain Node with no
+  types on purpose. `tools/import-specifiers.ts` drops a computed edge — the
+  only honest thing a specifier reader can do — and every boundary rule is a
+  rule about specifiers, so one such line anywhere would let any of them be
+  broken with the suite still green. It was the only computed `import()` in the
+  tree. Boundary rule 22 now bans the form, with a named allow-list of one and
+  the reason beside it; `hasComputedImport` is what finds one, with its own
+  tests and a fixture that rejects a production file and a test file alike.
+- **Precedence.** The refusal happens before admission, so it outranks
+  `shutting down`: a shutting-down Session answers a call with no description
+  with `empty label`. Both start nothing, so what changes is which sentence a
+  caller reads. Recorded in operation semantics §2 and in the matrix's **During
+  shutdown** cell.
+- **The sink.** `host/push-sink.ts`'s header carries the rule: a new state
+  earns its place only if it changes whether a hand-off is unresolved,
+  resolved, or failed, with batching metadata as the named example that does
+  not, and Phase D's envelope named as the mechanism that therefore sits above
+  the sink rather than inside it.
+- `npm run check` green on the commit: 1300 tests, 0 failures, 8 skipped;
+  conformance 191; `CODEX_PROTOCOL_CHECK_PASS — codex-cli 0.153.0`.
 
 ### 1. The tally is generated and the entry is small
 
@@ -739,6 +807,11 @@ directly: `boundRunLabel("")` and `boundRunLabel("   ")` both return `""`
 (`domain/result.ts`), and `description` is declared in the tool schemas as a
 plain required string with no minimum, so a notice can read `Subagent ""
 completed in 12.4s.` and a collapsed line can read `explore ·  · completed in
-12.4s`. Severity 4, a papercut, found by reading rather than by use. **Carried to
-[#3](https://github.com/goofansu/pi-subagent/issues/3) for 2.0.x.** It is not a
-soak defect — no soak Session has produced one — and it is not a Phase D item.
+12.4s`. Severity 4, a papercut, found by reading rather than by use.
+**Fixed before the soak by [E0](#e0-the-last-code-before-the-soak) rather than
+carried**, since the label is the first thing a parent reads in a notice and
+the soak would otherwise run on a build with a known empty one:
+[#3](https://github.com/goofansu/pi-subagent/issues/3) is closed by that
+commit, and [gate item 0](#0-the-last-code-landed-before-the-first-soak-day)
+records the evidence. It was not a soak defect — no soak Session produced one —
+and it is not a Phase D item.

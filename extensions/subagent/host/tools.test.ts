@@ -613,3 +613,61 @@ test("a tool call after shutdown returns the not-ready sentence", async (t) => {
     /this Session has no subagent runtime/,
   );
 });
+
+test("agent_start refuses an empty description, and spends no identifier doing it", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  // Whitespace counts as empty, because the label is bounded to one line
+  // first: a description of a newline and a tab bounds away to nothing, and a
+  // Run labelled "" reaches the notice header, the collapsed line and the
+  // widget row as a pair of empty quotes.
+  for (const description of ["", "   ", "\n\t "]) {
+    assert.equal(
+      await rig.text("agent_start", {
+        agent: RIG_RESUMABLE_PROFILE,
+        description,
+        prompt: "have a look",
+      }),
+      "Cannot start explore: its description is empty. No Run was started and " +
+        "no id was handed out. Send a one-line description of the task: it is " +
+        "the label this Run is shown under everywhere.",
+    );
+  }
+
+  // Three refusals, and the next start is still this Session's first Run and
+  // first Subagent. Nothing was admitted and no identifier was spent.
+  const ids = await startedRun(rig);
+  assert.match(ids.runId, /-1$/);
+  assert.match(ids.subagentId, /-1$/);
+});
+
+test("agent_resume refuses an empty description, and the Subagent stays resumable", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const first = await startedRun(rig);
+  await rig.text("agent_wait", { ids: [first.runId] });
+
+  assert.equal(
+    await rig.text("agent_resume", {
+      id: first.subagentId,
+      description: "  ",
+      prompt: "carry on",
+    }),
+    `Cannot resume subagent ${first.subagentId}: its description is empty. No ` +
+      "Run was started and nothing was queued. Send a one-line description of " +
+      "this Run: it is the label this Run is shown under everywhere.",
+  );
+
+  // The refusal claimed no active Run on the Subagent, so the real resume
+  // still works — which is the "nothing was reserved" half of the rejection.
+  const resumed = await rig.text("agent_resume", {
+    id: first.subagentId,
+    description: "narrower question",
+    prompt: "carry on",
+  });
+  assert.match(resumed, /^Resumed subagent /);
+});

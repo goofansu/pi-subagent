@@ -81,6 +81,7 @@ test("agent_start has one sentence per rejection, naming what to do next", () =>
         { filePath: "/agents/broken.md", reason: "no description" },
       ],
     },
+    { outcome: "empty label" },
     { outcome: "at capacity" },
     { outcome: "shutting down" },
     { outcome: "delegation-depth exceeded", depth: 2 },
@@ -157,12 +158,13 @@ test("a backend diagnostic authored by the core keeps its message", () => {
 
 // ── agent_resume ─────────────────────────────────────────────────────────────
 
-test("agent_resume renders unknown, running, unsupported, lost, capacity, and shutdown distinctly", () => {
+test("agent_resume renders unknown, running, empty, unsupported, lost, capacity, and shutdown distinctly", () => {
   const rendered = new Map<string, string>();
   const outcomes: ResumeOutcome[] = [
     { outcome: "started", runId: RUN, subagentId: SUBAGENT },
     { outcome: "unknown Subagent", subagentId: SUBAGENT },
     { outcome: "Subagent already running", subagentId: SUBAGENT },
+    { outcome: "empty label" },
     { outcome: "resume unsupported" },
     { outcome: "conversation lost" },
     { outcome: "at capacity" },
@@ -466,5 +468,24 @@ test("agent_result covers every rejection, and the union's fourth member is the 
     rendered.get("RunNotTerminal"),
     "Run run-1 has not finished yet, so it has no result. Its notification " +
       "will arrive on its own, and agent_wait blocks until it does.",
+  );
+});
+
+test("a start and a resume refuse an empty description in their own family's words", () => {
+  // The lower half of the label bound. There is nothing to shorten and nothing
+  // honest to invent, so this branch of contributing invariant 11 refuses with
+  // a typed outcome — and it says what to send instead, because a model that
+  // reads "empty" and not "send one" has no next move.
+  assert.equal(
+    formatStartOutcome("explore", { outcome: "empty label" }, AVAILABLE),
+    "Cannot start explore: its description is empty. No Run was started and " +
+      "no id was handed out. Send a one-line description of the task: it is " +
+      "the label this Run is shown under everywhere.",
+  );
+  assert.equal(
+    formatResumeOutcome(SUBAGENT, { outcome: "empty label" }),
+    "Cannot resume subagent subagent-1: its description is empty. No Run was " +
+      "started and nothing was queued. Send a one-line description of this " +
+      "Run: it is the label this Run is shown under everywhere.",
   );
 });

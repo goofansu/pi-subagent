@@ -10,6 +10,13 @@
  * whole point. Comments and ordinary string literals that happen to look like
  * module paths are not import edges, and a dynamic `import()` or `require()`
  * with a static string argument is.
+ *
+ * A dynamic `import()` or `require()` whose argument is *computed* is an edge
+ * this reader cannot see, and {@link hasComputedImport} is how a boundary test
+ * finds one. Dropping such an edge silently is the right thing for a specifier
+ * reader to do and the wrong thing for a fence to allow: every confinement rule
+ * is a rule about specifiers, so one line of `await import(url)` would make any
+ * of them unenforceable without failing anything.
  */
 
 import fs from "node:fs";
@@ -79,6 +86,49 @@ export function readImportSpecifiers(source: string): string[] {
 
   visit(sourceFile);
   return specifiers;
+}
+
+/**
+ * Whether a file contains a dynamic `import()` or `require()` whose module
+ * specifier is computed rather than a literal.
+ *
+ * The edge is real and this reader cannot name it, so a boundary test asks this
+ * and decides. There is no honest way to resolve it here: the argument is an
+ * expression, and evaluating it would mean running the file.
+ */
+export function hasComputedImport(source: string): boolean {
+  const sourceFile = ts.createSourceFile(
+    "boundary-fixture.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const literal = (node: ts.Node | undefined): boolean =>
+    Boolean(
+      node &&
+        (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)),
+    );
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(node)) {
+      const dynamicImport =
+        node.expression.kind === ts.SyntaxKind.ImportKeyword;
+      const requireCall =
+        ts.isIdentifier(node.expression) && node.expression.text === "require";
+      if (dynamicImport || requireCall) {
+        const [argument] = node.arguments;
+        if (!literal(argument)) {
+          found = true;
+          return;
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return found;
 }
 
 /**

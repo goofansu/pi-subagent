@@ -117,6 +117,12 @@ export function formatStartOutcome(
         `Cannot start ${agent}: its Profile is not usable. Nothing was started.`,
         ...diagnosticLines(outcome.diagnostics),
       ].join("\n");
+    case "empty label":
+      return (
+        `Cannot start ${agent}: its description is empty. No Run was started ` +
+        "and no id was handed out. Send a one-line description of the task: " +
+        "it is the label this Run is shown under everywhere."
+      );
     case "at capacity":
       return (
         `Cannot start ${agent}: this Session is already running as many ` +
@@ -171,6 +177,12 @@ export function formatResumeOutcome(
         `Cannot resume subagent ${outcome.subagentId}: it already has an ` +
         "active Run. The request was not queued and no provider work was " +
         "started. Wait for that Run to finish, then resume."
+      );
+    case "empty label":
+      return (
+        `Cannot resume subagent ${subagentId}: its description is empty. No ` +
+        "Run was started and nothing was queued. Send a one-line description " +
+        "of this Run: it is the label this Run is shown under everywhere."
       );
     case "resume unsupported":
       return (

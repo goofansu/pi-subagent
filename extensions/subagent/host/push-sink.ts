@@ -43,6 +43,19 @@
  * - a consumed notice Pi already holds **lands as usual**, and is counted as
  *   {@link HandoffCounts.consumedBeforeLanding}.
  *
+ * **When to add a state here, and when not to.** A new sink state earns its
+ * place only if it changes whether a hand-off is *unresolved*, *resolved*, or
+ * *failed* — those three are what the sink exists to distinguish, and what
+ * every reader of it asks. Anything else is bookkeeping that belongs to
+ * whoever needs it. Batching metadata is the example that does not qualify:
+ * knowing which notices would travel in one envelope, or how many are waiting
+ * for a parent to settle, changes nothing about whether any one hand-off has
+ * resolved, and a sink that carried it would be a sink two things could
+ * disagree about. The hold-while-active envelope in the simplification
+ * roadmap's Phase D is a host mechanism *above* this sink for exactly that
+ * reason, and it reads `consumedBeforeLanding` rather than adding a state to
+ * produce it.
+ *
  * The third is not a gap that was overlooked. While the parent is streaming,
  * the follow-up is in Pi's own queue and the extension API exposes nothing
  * that removes one queued message, so a handed-off notice lands whatever the

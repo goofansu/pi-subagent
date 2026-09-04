@@ -68,11 +68,13 @@ const RUN_ID = RunId.annotate({
  *
  * Spelled once and appended to both description fields, because a model that
  * learned the rule on `agent_start` and found it unstated on `agent_resume`
- * would reasonably conclude the two differ. It states the bound *and* what
- * happens past it: the answer is that the label is shortened, not that the
- * call is refused, so nothing here invites a retry.
+ * would reasonably conclude the two differ. It states both ends of the bound
+ * *and* what happens at each: past the byte bound the label is shortened and
+ * the call goes through, so nothing there invites a retry; empty is refused,
+ * so the model sends a description instead of discovering the rule by being
+ * refused.
  */
-const LABEL_BOUND_CLAUSE = `; one line, at most ${RUN_LABEL_MAX_BYTES} bytes, shortened if longer`;
+const LABEL_BOUND_CLAUSE = `; one line, at most ${RUN_LABEL_MAX_BYTES} bytes, shortened if longer, and never empty — an empty description is refused`;
 
 export const StartInputSchema = Schema.Struct({
   agent: Schema.String.annotate({

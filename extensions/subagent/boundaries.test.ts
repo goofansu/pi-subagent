@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  hasComputedImport,
   listSourceFiles,
   readImportSpecifiers,
   readNamedImports,
@@ -1345,8 +1346,40 @@ export function findBoundaryViolations(
     }
   }
 
+  // 22. An edge this checker cannot see is an edge no rule above can hold.
+  //     Every rule here is a rule about specifiers, so one `await import(url)`
+  //     with a computed argument would let any of them be broken without
+  //     failing anything — a presentation file could reach the runtime, an
+  //     adapter could reach the host, and the suite would stay green. The form
+  //     is therefore banned outright, with a named list of the files allowed to
+  //     use it and why.
+  //
+  //     `soak-tally-openings.test.ts` is on the list because it reads
+  //     `scripts/soak-tally.mjs`, which is plain Node with no types on purpose
+  //     — it runs against a maintainer's Pi home without this tree being built,
+  //     so a literal import of it is a typecheck error rather than a stricter
+  //     check. It names a file outside the tree, which no rule above governs.
+  for (const file of listSourceFiles(treeRoot, { includeTests: true })) {
+    if (COMPUTED_IMPORT_ALLOWED.has(path.relative(treeRoot, file))) continue;
+    if (!hasComputedImport(fs.readFileSync(file, "utf8"))) continue;
+    violations.add(
+      `${describe(file)} imports a computed specifier, which hides the edge from this checker`,
+    );
+  }
+
   return [...violations].sort();
 }
+
+/**
+ * The files allowed to write a dynamic import the checker cannot read.
+ *
+ * Tree-relative, and short on purpose: each entry is a rule this suite has
+ * stopped being able to enforce for that file, so each needs a reason at rule
+ * 22 above.
+ */
+const COMPUTED_IMPORT_ALLOWED: ReadonlySet<string> = new Set([
+  "soak-tally-openings.test.ts",
+]);
 
 /** A disposable pair of trees laid out exactly like the real ones. */
 function fixtureGraph(
@@ -2558,6 +2591,39 @@ test("a child process is spawned in the Codex adapter and nowhere else", (t) => 
     `${describe(
       path.join(graph.codexTestingRoot, "stand-in-app-server.ts"),
     )} imports node:child_process, and only the Codex adapter may spawn a child process`,
+  ]);
+});
+
+test("a computed dynamic import is rejected, because no rule above can see it", (t) => {
+  const { graph, write } = fixtureGraph(t, "computed-import");
+  write("extensions/subagent/index.ts", "export {};\n");
+  // Allowed: a dynamic import whose argument is a literal is an ordinary edge,
+  // and every rule above reads it.
+  write(
+    "extensions/subagent/host/session.ts",
+    'const loaded = await import("../domain/index.ts");\nvoid loaded;\n',
+  );
+  // Rejected: the same import written so the checker cannot read it. This is
+  // the form that would let a presentation file reach the runtime with the
+  // suite still green.
+  write(
+    "extensions/subagent/presentation/status.ts",
+    "const where = `../runtime/repository.ts`;\nconst loaded = await import(where);\nvoid loaded;\n",
+  );
+  // Rejected in a test too: rules 6 and 11 through 22 all include tests, so a
+  // test is exactly where the hole would be cheapest to open.
+  write(
+    "extensions/subagent/host/session.test.ts",
+    'const loaded = await import(String("../runtime/repository.ts"));\nvoid loaded;\n',
+  );
+
+  assert.deepEqual(findBoundaryViolations(graph), [
+    `${describe(
+      path.join(graph.hostRoot, "session.test.ts"),
+    )} imports a computed specifier, which hides the edge from this checker`,
+    `${describe(
+      path.join(graph.presentationRoot, "status.ts"),
+    )} imports a computed specifier, which hides the edge from this checker`,
   ]);
 });
 

@@ -50,12 +50,13 @@ test("every outcome union has exactly the members its name list declares", () =>
   assert.equal(proofs.length, 6);
 });
 
-test("start rejects with the six reasons the semantics document lists", () => {
+test("start rejects with the seven reasons the semantics document lists", () => {
   assert.deepEqual(
     START_OUTCOMES.filter((name) => name !== "started"),
     [
       "unknown agent",
       "invalid profile",
+      "empty label",
       "at capacity",
       "shutting down",
       "delegation-depth exceeded",
@@ -70,12 +71,13 @@ test("resume has no backend-unavailable outcome, because resume opens nothing", 
   assert.equal(RESUME_OUTCOMES.includes("backend unavailable" as never), false);
 });
 
-test("resume rejects with the six reasons the semantics document lists", () => {
+test("resume rejects with the seven reasons the semantics document lists", () => {
   assert.deepEqual(
     RESUME_OUTCOMES.filter((name) => name !== "started"),
     [
       "unknown Subagent",
       "Subagent already running",
+      "empty label",
       "resume unsupported",
       "conversation lost",
       "at capacity",

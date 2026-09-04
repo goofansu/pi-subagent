@@ -40,10 +40,30 @@ When admission fails:
 - **No Notification is emitted**, because no Run existed to complete.
 
 Rejection reasons a caller can observe from `agent_start`: unknown agent,
-invalid profile, at capacity, shutting down, delegation-depth exceeded,
-`backend unavailable`.
-From `agent_resume`: unknown Subagent, Subagent already running, resume
-unsupported by the backend, Conversation loss, at capacity, shutting down.
+invalid profile, empty label, at capacity, shutting down, delegation-depth
+exceeded, `backend unavailable`.
+From `agent_resume`: unknown Subagent, Subagent already running, empty label,
+resume unsupported by the backend, Conversation loss, at capacity, shutting
+down.
+
+**`empty label`** is decided one step earlier than the rest, and everything
+above still holds. The caller's description becomes the Run's Label, bounded to
+one line and to its byte budget at the point tool input becomes a supervisor
+request; a description that is empty, or that bounds away to nothing, has no
+label in it. There are **two** bounds on a Label and each takes one branch: the
+upper one — one line, one byte budget — truncates and records the shortening,
+because a label too long can be cut honestly, and the lower one refuses,
+because there is nothing to shorten and nothing honest to invent. A Run
+labelled `""` would reach the notice header, the collapsed transcript line and
+the widget row as a pair of empty quotes, and a substituted label would be the
+surface stating a fact about the Run that no caller gave it.
+
+The refusal is made before admission is entered at all, so nothing is reserved,
+nothing is claimed, and no identifier is spent — and so it **outranks every
+rejection admission makes**, `shutting down` included. A shutting-down Session
+answers a call with no description with `empty label` rather than
+`shutting down`. Both are refusals that start nothing and queue nothing, so what
+the precedence changes is which sentence a caller reads.
 
 ### `agent_start` awaits the backend opening
 

@@ -30,6 +30,18 @@ export function alreadyTerminal(status: TerminalRunPhase): AlreadyTerminal {
 /**
  * `agent_start`.
  *
+ * `empty label` is the Run label's *lower* bound — a second bound beside the
+ * one-line, 200-byte upper one — and the one rejection decided *before*
+ * admission. Contributing invariant 11 lets each bound truncate-and-record or
+ * refuse; the upper bound truncates, and this one refuses, because there is
+ * nothing to shorten in an empty description and nothing honest to invent. It
+ * is decided where the label is bounded, which is the last point before a
+ * supervisor request exists, so nothing is reserved and no identifier is spent.
+ *
+ * It therefore outranks every rejection admission makes, `shutting down`
+ * included. Both are refusals that start nothing, so the precedence changes
+ * which sentence a caller reads and nothing else.
+ *
  * Admission is the single synchronous decision point for everything that can
  * be decided without provider I/O: a rejection allocates nothing and creates
  * no public Run. Identifiers allocated for a start that then fails at open
@@ -51,6 +63,7 @@ export type StartOutcome =
       readonly outcome: "invalid profile";
       readonly diagnostics: readonly ProfileDiagnostic[];
     }
+  | { readonly outcome: "empty label" }
   | { readonly outcome: "at capacity" }
   | { readonly outcome: "shutting down" }
   | {
@@ -83,6 +96,7 @@ export type ResumeOutcome =
       readonly outcome: "Subagent already running";
       readonly subagentId: SubagentId;
     }
+  | { readonly outcome: "empty label" }
   | { readonly outcome: "resume unsupported" }
   | { readonly outcome: "conversation lost" }
   | { readonly outcome: "at capacity" }
@@ -166,6 +180,7 @@ export const START_OUTCOMES = [
   "started",
   "unknown agent",
   "invalid profile",
+  "empty label",
   "at capacity",
   "shutting down",
   "delegation-depth exceeded",
@@ -176,6 +191,7 @@ export const RESUME_OUTCOMES = [
   "started",
   "unknown Subagent",
   "Subagent already running",
+  "empty label",
   "resume unsupported",
   "conversation lost",
   "at capacity",

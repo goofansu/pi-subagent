@@ -206,7 +206,7 @@ function readSessionFile(file) {
  * `presentation/prose.ts`'s `formatStartOutcome`, `formatResumeOutcome` and
  * `formatToolInputRejected`, read off their outcome cases.
  */
-const RESULT_PROSE = {
+export const RESULT_PROSE = {
   agent_start: {
     started: "Started ",
     refused: ["Cannot start ", "Unknown agent: ", "Cannot run "],
