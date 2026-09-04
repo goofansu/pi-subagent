@@ -136,7 +136,7 @@ It becomes:
 | `agent` | string | Profile name; already bounded by Profile loading. | Result identity. |
 | `label` | string | One line, ≤ 200 UTF-8 bytes (`RUN_LABEL_MAX_BYTES`). | The Run's description, bounded once at admission (see §4). |
 | `status` | `completed` \| `failed` \| `cancelled` | — | Result status. |
-| `resultAvailability` | `full` \| `partial` \| `metadata-only` | — | See §3. |
+| `resultAvailability` | `complete` \| `partial` \| `record-only` | — | See §3. |
 | `preview` | string | One line, ≤ 500 bytes. | Result `finalOutput`. Unchanged. |
 | `errorMessage` | string, optional | One line, ≤ 500 bytes. | Result primary error. Unchanged. |
 | `cancellationReason` | optional | — | Result. Present exactly when cancelled. Unchanged. |

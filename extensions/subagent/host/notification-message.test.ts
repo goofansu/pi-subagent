@@ -182,7 +182,7 @@ test("an expanded notice shows the bounded text below the summary", () => {
   assert.match(rendered?.join("\n") ?? "", /the answer/);
   assert.match(
     rendered?.join("\n") ?? "",
-    /Full result is available\. Call agent_result with \{"id":"run-1"\}\./,
+    /The result is available\. Call agent_result with \{"id":"run-1"\}\./,
   );
 });
 

@@ -21,7 +21,7 @@ import {
   formatResultPointer,
 } from "./notification-text.ts";
 
-test("N-1: a completed notice labels and quotes the preview, then points at the full result", () => {
+test("N-1: a completed notice labels and quotes the preview, then points at the result", () => {
   const notice = fixtureNotification({ finalOutput: "done" });
 
   assert.equal(
@@ -29,7 +29,7 @@ test("N-1: a completed notice labels and quotes the preview, then points at the 
     'Subagent "look around" completed in 12.4s.\n\n' +
       "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
       'Preview from the subagent:\n"done"\n\n' +
-      'Full result is available. Call agent_result with {"id":"run-1"}.',
+      'The result is available. Call agent_result with {"id":"run-1"}.',
   );
 });
 
@@ -57,20 +57,22 @@ test("N-8: the notice is identical whichever backend ran the Run", () => {
     'Subagent "look around" completed in 12.4s.\n\n' +
       "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
       'Preview from the subagent:\n"done"\n\n' +
-      'Full result is available. Call agent_result with {"id":"run-1"}.',
+      'The result is available. Call agent_result with {"id":"run-1"}.',
   );
 });
 
-test("N-2: a completed Run with no output says so, and its Result is still full", () => {
-  // Availability describes the stored Result and not the Run's success, so a
-  // completed Run with nothing to preview still has a whole Result to fetch.
+test("N-2: a completed Run with no output has no body, and its record is available", () => {
+  // "No output was produced" is said once, by the pointer, and the body is
+  // absent rather than repeating it and then promising a full result.
+  const text = formatNotificationText(fixtureNotification({}));
+
   assert.equal(
-    formatNotificationText(fixtureNotification({})),
+    text,
     'Subagent "look around" completed in 12.4s.\n\n' +
       "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
-      "No output was produced.\n\n" +
-      'Full result is available. Call agent_result with {"id":"run-1"}.',
+      'No output was produced. The Run record is available. Call agent_result with {"id":"run-1"}.',
   );
+  assert.equal(text.split("No output was produced").length - 1, 1);
 });
 
 test("N-3: a long answer is previewed rather than delivered", () => {
@@ -99,7 +101,7 @@ test("N-4: a failed notice states its reason and says partial output is there", 
     'Subagent "look around" failed in 12.4s.\n\n' +
       "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
       "Reason: the backend refused\n\n" +
-      'Partial result is available. Call agent_result with {"id":"run-1"}.',
+      'Partial output is available. Call agent_result with {"id":"run-1"}.',
   );
   assert.doesNotMatch(formatNotificationText(notice), /half an answer/);
 });
@@ -124,11 +126,11 @@ test("N-5: a failed Run with no reason and no output says both", () => {
     'Subagent "look around" failed in 12.4s.\n\n' +
       "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
       "Reason: none reported.\n\n" +
-      'No output was produced. Call agent_result with {"id":"run-1"} for the Run\'s record.',
+      'No output was produced. The Run record is available. Call agent_result with {"id":"run-1"}.',
   );
 });
 
-test("N-7: a cancelled notice names its reason and points at the partial result", () => {
+test("N-7: a cancelled notice names its reason and points at the partial output", () => {
   const notice = fixtureNotification({
     ending: cancelledEnding("requested"),
     finalOutput: "half an answer",
@@ -142,7 +144,7 @@ test("N-7: a cancelled notice names its reason and points at the partial result"
     formatNotificationText(notice),
     'Subagent "look around" was cancelled in 12.4s (requested).\n\n' +
       "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
-      'Partial result is available. Call agent_result with {"id":"run-1"}.',
+      'Partial output is available. Call agent_result with {"id":"run-1"}.',
   );
   assert.doesNotMatch(formatNotificationText(notice), /half an answer/);
 });
@@ -154,7 +156,7 @@ test("a cancelled Run with nothing to show says so and still points at the recor
     ),
     'Subagent "look around" was cancelled in 12.4s (shutdown).\n\n' +
       "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
-      'No output was produced. Call agent_result with {"id":"run-1"} for the Run\'s record.',
+      'No output was produced. The Run record is available. Call agent_result with {"id":"run-1"}.',
   );
 });
 
@@ -174,35 +176,59 @@ test("every terminal status ends with the availability sentence and the exact ca
     assert.equal(notice.retrieveWith, "agent_result");
     assert.match(
       formatNotificationText(notice),
-      /(Full|Partial) result is available\. Call agent_result with \{"id":"run-1"\}\.$/,
+      /(The result|Partial output) is available\. Call agent_result with \{"id":"run-1"\}\.$/,
     );
   }
 });
 
-test("the pointer says how much is there for each of the three availabilities", () => {
+test("N-10: the pointer says what a model will find, in each of the three availabilities", () => {
   const runId = fixtureNotification({}).runId;
   assert.equal(
-    formatResultPointer(runId, "full"),
-    'Full result is available. Call agent_result with {"id":"run-1"}.',
+    formatResultPointer(runId, "complete"),
+    'The result is available. Call agent_result with {"id":"run-1"}.',
   );
   assert.equal(
     formatResultPointer(runId, "partial"),
-    'Partial result is available. Call agent_result with {"id":"run-1"}.',
+    'Partial output is available. Call agent_result with {"id":"run-1"}.',
   );
   assert.equal(
-    formatResultPointer(runId, "metadata-only"),
-    'No output was produced. Call agent_result with {"id":"run-1"} for the Run\'s record.',
+    formatResultPointer(runId, "record-only"),
+    'No output was produced. The Run record is available. Call agent_result with {"id":"run-1"}.',
   );
 });
 
-test("availability describes the stored Result rather than the Run's success", () => {
-  // A completed Run is `full` however little it said; a failed or cancelled
-  // one is `partial` on either kind of evidence, because a Run stopped
-  // mid-answer often has a transcript and no final output.
-  assert.equal(fixtureNotification({}).resultAvailability, "full");
+test("N-10: availability is read off the output, not off the status alone", () => {
+  // A completed Run with nothing to show is `record-only`, not `complete`:
+  // "the result is available" would tell a model an answer is waiting when
+  // there is none. A failed or cancelled one is `partial` on either kind of
+  // evidence, because a Run stopped mid-answer often has a transcript and no
+  // final output.
+  assert.equal(
+    fixtureNotification({ finalOutput: "done" }).resultAvailability,
+    "complete",
+  );
+  assert.equal(fixtureNotification({}).resultAvailability, "record-only");
+  // Availability describes the stored Result, not the Run's success: bounding
+  // cut the preview and the Result is still the whole of what was stored.
+  assert.equal(
+    fixtureNotification({
+      finalOutput: "x".repeat(NOTIFICATION_PREVIEW_MAX_BYTES + 500),
+    }).resultAvailability,
+    "complete",
+  );
   assert.equal(
     fixtureNotification({ ending: failedEnding("boom") }).resultAvailability,
-    "metadata-only",
+    "record-only",
+  );
+  // Readable work and no answer: a completed Run whose transcript survived its
+  // empty final output is partial rather than hidden behind "no output".
+  assert.equal(
+    fixtureNotification({
+      transcript: [
+        { role: "assistant", parts: [{ kind: "text", text: "half" }] },
+      ],
+    }).resultAvailability,
+    "partial",
   );
   assert.equal(
     fixtureNotification({ ending: failedEnding("boom"), finalOutput: "half" })
@@ -270,7 +296,7 @@ test("accounting omits absent and undisplayed usage facts", () => {
     formatNotificationText(cancelled),
     'Subagent "look around" was cancelled in 12.4s (requested).\n\n' +
       "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
-      'No output was produced. Call agent_result with {"id":"run-1"} for the Run\'s record.',
+      'No output was produced. The Run record is available. Call agent_result with {"id":"run-1"}.',
   );
 });
 

@@ -56,14 +56,22 @@ export const NOTIFICATION_ERROR_MAX_BYTES = 500;
  * whether fetching it is worth a tool call.
  *
  * It describes the **stored Result**, not the Run's success: a completed Run
- * whose output was cut by Result bounding is still `full`, because the Result
- * is the whole of what was stored and its own truncation record says what
- * bounding removed.
+ * whose output was cut by Result bounding is still `complete`, because the
+ * Result is the whole of what was stored and its own truncation record says
+ * what bounding removed.
+ *
+ * The three values say what a model will *find*. Phase A's were `full` /
+ * `partial` / `metadata-only`, with `full` for every completed Run whatever
+ * its output — coherent, and misleading to a reader for whom "full result"
+ * means an answer is waiting. A completed Run with nothing to show has no
+ * answer, so it is `record-only` and says so once.
+ * [ADR-0035](../../../docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)
+ * records the amendment.
  */
 export const ResultAvailability = Schema.Literals([
-  "full",
+  "complete",
   "partial",
-  "metadata-only",
+  "record-only",
 ]);
 
 export type ResultAvailability = typeof ResultAvailability.Type;
@@ -71,16 +79,20 @@ export type ResultAvailability = typeof ResultAvailability.Type;
 /**
  * Read availability off a stored Result.
  *
- * A failed or cancelled Run counts as `partial` on either kind of evidence —
- * a final output or a transcript — because either is something a model can
- * read, and a Run that was interrupted mid-answer often has the second
- * without the first.
+ * The **output** decides it rather than the status alone. A completed Run that
+ * produced no final answer but left a transcript is `partial`, which is fair:
+ * readable work, no answer. A failed or cancelled Run counts as `partial` on
+ * either kind of evidence — a final output or a transcript — because either is
+ * something a model can read, and a Run that was interrupted mid-answer often
+ * has the second without the first.
  */
 export function resultAvailabilityOf(result: RunResult): ResultAvailability {
-  if (result.status === "completed") return "full";
+  if (result.status === "completed" && result.finalOutput !== "") {
+    return "complete";
+  }
   return result.finalOutput !== "" || result.transcript.length > 0
     ? "partial"
-    : "metadata-only";
+    : "record-only";
 }
 
 /**

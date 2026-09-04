@@ -24,7 +24,8 @@
  *
  * - **completed** carries the bounded preview, labelled and quoted as the
  *   subagent's, so a model can decide whether the answer is worth fetching
- *   without fetching it.
+ *   without fetching it. A completed Run with nothing to preview has no body
+ *   at all; the pointer is where "no output was produced" is said.
  * - **failed** carries the primary error. Partial output is not in the
  *   notice; the pointer says it exists and `agent_result` has it.
  * - **cancelled** has no body: its reason is in the header, and a cancelled
@@ -83,16 +84,21 @@ function formatNotificationIdentity(notice: RunNotification): string {
 /**
  * How every notice tells a model where the rest of the answer is.
  *
- * Two sentences: how much is there, then the exact call that fetches it. The
+ * Two sentences: what it will find, then the exact call that fetches it. The
  * argument shape is spelled out so the parent copies rather than composes —
  * a model that has to assemble `{"id": …}` from prose is a model that can
- * assemble it wrongly.
+ * assemble it wrongly — and the call keeps its own sentence in all three, so
+ * the habit reads the same whatever the availability.
  *
- * Present for every terminal status, `cancelled` included. That is the one
- * behaviourally observable change of this phase: a cancelled Run keeps the
- * output it produced before it was stopped, and a timeout or a shutdown
- * cancels Runs the parent never asked to cancel, so "you already know the id
- * you cancelled" was never true of every cancellation.
+ * The record-only sentence **owns** "no output was produced". It is the one
+ * place that says it, which is why a completed Run with an empty preview has
+ * no body: saying it in the body and then promising a full result in the
+ * pointer is what this wording replaced.
+ *
+ * Present for every terminal status, `cancelled` included: a cancelled Run
+ * keeps the output it produced before it was stopped, and a timeout or a
+ * shutdown cancels Runs the parent never asked to cancel, so "you already know
+ * the id you cancelled" was never true of every cancellation.
  */
 export function formatResultPointer(
   runId: RunId,
@@ -100,12 +106,12 @@ export function formatResultPointer(
 ): string {
   const call = `Call agent_result with {"id":"${runId}"}`;
   switch (availability) {
-    case "full":
-      return `Full result is available. ${call}.`;
+    case "complete":
+      return `The result is available. ${call}.`;
     case "partial":
-      return `Partial result is available. ${call}.`;
-    case "metadata-only":
-      return `No output was produced. ${call} for the Run's record.`;
+      return `Partial output is available. ${call}.`;
+    case "record-only":
+      return `No output was produced. The Run record is available. ${call}.`;
   }
 }
 
@@ -155,8 +161,11 @@ export function formatNotificationAccounting(
 function formatNotificationBody(notice: RunNotification): string | undefined {
   switch (notice.status) {
     case "completed":
+      // No body when there is nothing to preview. The pointer says a Run
+      // record is available and says "no output was produced" once, which is
+      // the whole reason this branch has an absence rather than a sentence.
       return notice.preview === ""
-        ? "No output was produced."
+        ? undefined
         : `Preview from the subagent:\n"${notice.preview}"`;
     case "failed":
       return `Reason: ${notice.errorMessage || "none reported."}`;

@@ -323,7 +323,7 @@ test("a cancelled Run still notifies, and its notice points at what it produced"
     sent[0].message.content,
     `Subagent "look around" was cancelled in 0.0s (requested).\n\n` +
       `Agent: explore\nRun: ${ids.runId}\nSubagent: ${ids.subagentId}\n\n` +
-      `No output was produced. Call agent_result with {"id":"${ids.runId}"} for the Run's record.`,
+      `No output was produced. The Run record is available. Call agent_result with {"id":"${ids.runId}"}.`,
   );
 });
 
@@ -345,7 +345,7 @@ test("the message the sink sends is the one the renderer can parse", async (t) =
     agent: RIG_RESUMABLE_PROFILE,
     label: "look around",
     status: "completed",
-    resultAvailability: "full",
+    resultAvailability: "complete",
     preview: RIG_ANSWER,
     // The Run's real duration, which is wall-clock: the round trip is about
     // the two shapes agreeing, not about what the clock said.
