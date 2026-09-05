@@ -86,26 +86,43 @@ function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
-/** A plain scalar: quoted string, boolean, null, number, or bare text. */
-function readScalar(raw: string): unknown {
-  const value = raw.trim();
-  if (value.length === 0) return null;
+function readQuotedScalar(value: string): string | undefined {
   const quote = value[0];
-  if (
-    (quote === '"' || quote === "'") &&
-    value.endsWith(quote) &&
-    value.length > 1
-  ) {
-    const inner = value.slice(1, -1);
+  if (quote !== '"' && quote !== "'") return undefined;
+
+  for (let index = 1; index < value.length; index += 1) {
+    if (quote === '"' && value[index] === "\\") {
+      index += 1;
+      continue;
+    }
+    if (value[index] !== quote) continue;
+    if (quote === "'" && value[index + 1] === "'") {
+      index += 1;
+      continue;
+    }
+    const trailing = value.slice(index + 1).trim();
+    if (trailing !== "" && !trailing.startsWith("#")) return undefined;
+    const inner = value.slice(1, index);
     return quote === '"'
       ? inner.replace(/\\"/g, '"')
       : inner.replace(/''/g, "'");
   }
+  return undefined;
+}
+
+/** A plain scalar: quoted string, boolean, null, number, or bare text. */
+function readScalar(raw: string): unknown {
+  const value = raw.trim();
+  if (value.length === 0) return null;
+  const quoted = readQuotedScalar(value);
+  if (quoted !== undefined) return quoted;
   // A plain scalar ends at an unquoted comment, exactly as YAML says.
   const commented = value.replace(/\s+#.*$/, "").trim();
   if (commented === "true") return true;
   if (commented === "false") return false;
   if (commented === "null" || commented === "~") return null;
+  // Version-like values stay numbers too; backend validation reports them when
+  // the field requires a string.
   if (commented !== "" && Number.isFinite(Number(commented))) {
     return Number(commented);
   }
@@ -115,10 +132,34 @@ function readScalar(raw: string): unknown {
 function readInlineList(raw: string): unknown[] {
   const inner = raw.trim().slice(1, -1).trim();
   if (inner.length === 0) return [];
-  return inner.split(",").map((item) => readScalar(item));
+
+  const items: string[] = [];
+  let start = 0;
+  let quote: '"' | "'" | undefined;
+  for (let index = 0; index < inner.length; index += 1) {
+    const character = inner[index];
+    if (quote !== undefined) {
+      if (quote === '"' && character === "\\") {
+        index += 1;
+      } else if (character === quote) {
+        if (quote === "'" && inner[index + 1] === "'") index += 1;
+        else quote = undefined;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === ",") {
+      items.push(inner.slice(start, index));
+      start = index + 1;
+    }
+  }
+  items.push(inner.slice(start));
+  return items.map((item) => readScalar(item));
 }
 
 const KEY_LINE = /^([A-Za-z0-9_.$-]+):(.*)$/;
+const FRONTMATTER_FENCE = /^---[ \t]*$/;
 
 /**
  * Split a Profile file into frontmatter fields, a body, and the problems the
@@ -127,23 +168,32 @@ const KEY_LINE = /^([A-Za-z0-9_.$-]+):(.*)$/;
  */
 function readFrontmatter(text: string): Frontmatter {
   const normalized = stripBom(text).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  if (!normalized.startsWith("---")) {
-    return { fields: {}, body: normalized, problems: [] };
+  const documentLines = normalized.split("\n");
+  if (!FRONTMATTER_FENCE.test(documentLines[0])) {
+    return {
+      fields: Object.create(null) as Record<string, unknown>,
+      body: normalized,
+      problems: [],
+    };
   }
-  const end = normalized.indexOf("\n---", 3);
+  const end = documentLines.findIndex(
+    (line, index) => index > 0 && FRONTMATTER_FENCE.test(line),
+  );
   if (end === -1) {
     return {
-      fields: {},
+      fields: Object.create(null) as Record<string, unknown>,
       body: normalized,
       problems: ["frontmatter is opened with '---' but never closed"],
     };
   }
-  const block = normalized.slice(4, end);
-  const body = normalized.slice(end + 4).trim();
+  const lines = documentLines.slice(1, end);
+  const body = documentLines
+    .slice(end + 1)
+    .join("\n")
+    .trim();
 
-  const fields: Record<string, unknown> = {};
+  const fields = Object.create(null) as Record<string, unknown>;
   const problems: string[] = [];
-  const lines = block.split("\n");
   let index = 0;
   while (index < lines.length) {
     const line = lines[index];
@@ -256,7 +306,7 @@ export function parseProfile(text: string, filePath: string): ProfileParse {
 
   if (diagnostics.length > 0) return { outcome: "diagnostics", diagnostics };
 
-  const backendFields: Record<string, unknown> = {};
+  const backendFields = Object.create(null) as Record<string, unknown>;
   for (const [field, value] of Object.entries(fields)) {
     if (field === "description" || field === "backend") continue;
     backendFields[field] = value;

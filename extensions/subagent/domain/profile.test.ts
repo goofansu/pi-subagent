@@ -14,6 +14,10 @@ const LEGACY_FIELD = ["har", "ness"].join("");
 
 const path = "/home/dev/.pi/agents/reviewer.md";
 
+function prototypeLess<T extends Record<string, unknown>>(values: T): T {
+  return Object.assign(Object.create(null), values) as T;
+}
+
 function profileOf(text: string, filePath = path) {
   const parsed = parseProfile(text, filePath);
   assert.equal(
@@ -50,7 +54,7 @@ test("a Profile is a description, a backend, and a body", () => {
     name: "reviewer",
     description: "Reviews diffs",
     backend: "claude",
-    fields: {},
+    fields: prototypeLess({}),
     systemPrompt: "Be terse.",
   });
 });
@@ -114,15 +118,24 @@ test("every other frontmatter field is collected unchanged and uninterpreted", (
     ].join("\n"),
   );
 
-  assert.deepEqual(profile.fields, {
-    model: "model-a",
-    effort: "high",
-    tools: "read,write",
-    appendSystemPrompt: false,
-    temperature: 0.4,
-    labels: ["a", "b"],
-    reviewers: ["ana", "bo"],
-  });
+  assert.deepEqual(
+    profile.fields,
+    prototypeLess({
+      model: "model-a",
+      effort: "high",
+      tools: "read,write",
+      appendSystemPrompt: false,
+      temperature: 0.4,
+      labels: ["a", "b"],
+      reviewers: ["ana", "bo"],
+    }),
+  );
+});
+
+test("version-like frontmatter values remain numbers", () => {
+  const profile = profileOf("---\ndescription: d\nmodel: 4.1\n---\nbody");
+
+  assert.equal(profile.fields.model, 4.1);
 });
 
 test("a Profile still using the v1 field keeps it as an ordinary field", () => {
@@ -133,7 +146,7 @@ test("a Profile still using the v1 field keeps it as an ordinary field", () => {
   // The parser does not special-case it: it becomes the backend's business,
   // and the backend reports it as unrecognized.
   assert.equal(profile.backend, "pi");
-  assert.deepEqual(profile.fields, { [LEGACY_FIELD]: "claude" });
+  assert.deepEqual(profile.fields, prototypeLess({ [LEGACY_FIELD]: "claude" }));
 });
 
 test("a missing description is a diagnostic, however it is missing", () => {
@@ -240,13 +253,53 @@ test("scalars are read as YAML reads them, comments and quotes included", () => 
   );
 
   assert.equal(profile.description, "A: reviewer");
-  assert.deepEqual(profile.fields, {
-    model: "model-a",
-    effort: "high",
-    enabled: true,
-    retries: 3,
-    note: null,
-  });
+  assert.deepEqual(
+    profile.fields,
+    prototypeLess({
+      model: "model-a",
+      effort: "high",
+      enabled: true,
+      retries: 3,
+      note: null,
+    }),
+  );
+});
+
+test("a quoted scalar may contain a hash before a trailing comment", () => {
+  const profile = profileOf('---\ndescription: "a #1 thing" # note\n---\nbody');
+
+  assert.equal(profile.description, "a #1 thing");
+});
+
+test("an inline list does not split commas inside quotes", () => {
+  const profile = profileOf(
+    '---\ndescription: d\ntools: [a, "b,c"]\n---\nbody',
+  );
+
+  assert.deepEqual(profile.fields.tools, ["a", "b,c"]);
+});
+
+test("frontmatter fields preserve a __proto__ key without a prototype", () => {
+  const profile = profileOf(
+    "---\ndescription: d\n__proto__: unexpected\n---\nbody",
+  );
+
+  assert.equal(Object.getPrototypeOf(profile.fields), null);
+  assert.equal(Object.hasOwn(profile.fields, "__proto__"), true);
+  assert.equal(Reflect.get(profile.fields, "__proto__"), "unexpected");
+});
+
+test("only a line of exactly three dashes is a frontmatter fence", () => {
+  assert.deepEqual(reasonsOf("----\ndescription: not frontmatter\n---\nbody"), [
+    "missing required description frontmatter",
+  ]);
+  assert.deepEqual(reasonsOf("---\ndescription: d\n---extra\n---\nbody"), [
+    "frontmatter line is not 'key: value': '---extra'",
+  ]);
+  assert.equal(
+    profileOf("--- \ndescription: d\n---\t\nbody").systemPrompt,
+    "body",
+  );
 });
 
 test("a Profile is named after its file, on either kind of path", () => {
