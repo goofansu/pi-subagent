@@ -81,6 +81,28 @@ test("the options carry the Session's trust posture and the excluded tools", asy
   assert.equal(options.settingsManager?.isProjectTrusted(), false);
 });
 
+test("off leaves Pi's thinking level unset and native levels pass through", async (t) => {
+  const agentDir = emptyAgentDir(t);
+
+  const off = await createPiSessionOptions({
+    profile: profile(),
+    subagent: subagent(),
+    thinking: "off",
+    agentDir,
+  });
+  assert.equal("thinkingLevel" in off, false);
+
+  for (const thinking of ["minimal", "low", "medium", "high", "xhigh", "max"]) {
+    const options = await createPiSessionOptions({
+      profile: profile(),
+      subagent: subagent(),
+      thinking,
+      agentDir,
+    });
+    assert.equal(options.thinkingLevel, thinking, thinking);
+  }
+});
+
 test("a Profile's tools list reaches the session, and no list leaves the defaults", async (t) => {
   const agentDir = emptyAgentDir(t);
 
