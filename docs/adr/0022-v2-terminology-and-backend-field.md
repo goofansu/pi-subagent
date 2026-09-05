@@ -104,7 +104,7 @@ package manifest exposes only v1 and v2 is opted into per process.
 Refusing an alias means v2 cannot accept a Profile that a user has not yet
 migrated, so the diagnostic has to be good: an unrecognized-field diagnostic
 that names the field and the Profile is enough for the author to find the
-migration note, and the note is linked from the README.
+rename, which the README spells out where a 1.x reader first looks.
 
 Reserving `AgentHarness` costs a rename in every ported adapter, and buys the
 ability to say "the Pi adapter's BackendAgent wraps Pi's AgentHarness" without

@@ -4,7 +4,7 @@ Date: 2026-08-29
 
 ## Status
 
-Accepted. Supersedes ADR-0012 only where it said no stable Subagent identity
+Accepted. Supersedes only the earlier claim that no stable Subagent identity
 exists, and refines ADR-0003 without changing its one-shot Run decision.
 [ADR-0014](0014-controlled-agent-resume.md) supersedes this ADR only where it
 deferred the `agent_resume` operation.

@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
  * is the only production caller of `boundRunLabel`. Nothing fenced that. A
  * second caller would take the property away silently, and a property that can
  * be lost silently is a comment rather than an invariant — which is the
- * question contributing.md's simplification rule asks of every change.
+ * question the simplification rule asks of every change.
  *
  * So this reads the tree. It is a source scan rather than a boundary rule
  * because the boundary checker works on imports and the host legitimately

@@ -184,7 +184,7 @@ test("a toolCall entry with no name fails loudly, naming the file and the line",
   );
 });
 
-test("the printed tables carry soak.md's headings and columns, so they can be pasted over the old ones", () => {
+test("the printed tables carry the soak record's headings and columns, so they can be pasted over the old ones", () => {
   const printed = formatTally(fixtureTally());
 
   for (const heading of ["### Pi", "### Claude"]) {

@@ -183,8 +183,8 @@ tokens, a cancellation signal object, and provider control types.
 ## Consequences
 
 Adding a member to this contract is now expensive on purpose. One more member
-is one more thing three adapters must implement, and the shape test makes the
-cost visible at the moment it is proposed rather than at the moment the third
+is one more thing every adapter must implement, and the shape test makes the
+cost visible at the moment it is proposed rather than at the moment the next
 adapter is ported.
 
 Because capabilities are declared on the opened BackendAgent rather than per

@@ -26,9 +26,9 @@ doing.
 It had been doing something. Identities are Session-scoped by design: the
 `RunRepository` is a session-long service, local Subagent and Run identity sets
 are forgotten at the Session boundary, and after Session shutdown nothing is
-retrievable, because Results belong to the Session that asked. The Subagents, their retained
-native sessions, and their stored Results all die with the process. Identifiers
-that outlived them would point at nothing.
+retrievable, because Results belong to the Session that asked. The Subagents,
+their retained native sessions, and their stored Results all die with the
+process. Identifiers that outlived them would point at nothing.
 
 But **the conversation transcript is not Session-scoped.** Reloading a Pi
 session builds a new runtime whose numbering starts again at one, into a

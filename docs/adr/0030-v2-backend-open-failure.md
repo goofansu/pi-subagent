@@ -121,7 +121,7 @@ caller must never hold an id for work that never started.
 
 `agent_start` returns after step 3, so a caller receives either ids for a Run
 that exists or a typed rejection. This is a difference from v1, which returns
-before any provider work; it is recorded in the operation-semantics document.
+before any provider work.
 
 ### What a failed or timed-out open releases
 

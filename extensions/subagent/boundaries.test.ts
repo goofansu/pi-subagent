@@ -2365,7 +2365,7 @@ test("a computed dynamic import is rejected, because no rule above can see it", 
     "extensions/subagent/presentation/status.ts",
     "const where = `../runtime/repository.ts`;\nconst loaded = await import(where);\nvoid loaded;\n",
   );
-  // Rejected in a test too: rules 6 and 11 through 22 all include tests, so a
+  // Rejected in a test too: rules 6 and 11 through 20 all include tests, so a
   // test is exactly where the hole would be cheapest to open.
   write(
     "extensions/subagent/host/session.test.ts",

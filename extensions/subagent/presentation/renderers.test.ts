@@ -304,10 +304,11 @@ test("S-1: a collapsed notice names the agent, the task, and the outcome", () =>
 });
 
 test("S-1: the collapsed line reads the same whichever backend ran the Run", () => {
-  // It carries no cost, and that is why. Cost is the one optional field in the
-  // usage contract, so a cost here would be present on some Runs and missing
-  // on others — and the reader would have no way to tell a free Run from an
-  // unreported one. What a Run spent is on the notice's accounting line.
+  // It carries no cost, and that is why. A cost total starts at zero and is
+  // only added to, so a backend that reported no money is indistinguishable
+  // from a Run that cost nothing — a figure here would read as a fact when it
+  // is sometimes an absence. What a Run spent is on the notice's accounting
+  // line.
   assert.doesNotMatch(
     formatNotificationSummary(
       {

@@ -166,7 +166,7 @@ so its rough edges should be found in something we throw away. Three questions:
    diagnostic — and does it stay free of provider payload?
 3. Can `JsonSchema` emit tool parameter schemas the Pi host accepts?
 
-The findings belong in `docs/v2/spikes/`, like the backend ones.
+The findings belong with the spike that answers them, like the backend ones.
 
 ### What stays out
 

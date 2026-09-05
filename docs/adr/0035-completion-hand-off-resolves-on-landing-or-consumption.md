@@ -166,13 +166,13 @@ could push a notification.
   `consumed` set, and the `agent_result` handler calls one function.
 - **Every `NotificationSink` gains `exhausted`.** That is a required method on
   an interface every test rig builds, so `testing/fake-sink.ts`,
-  `testing/session-rig.ts`, the three backend rigs, `boundaries.test.ts`'s
+  `testing/session-rig.ts`, every backend rig, `boundaries.test.ts`'s
   fixture, and `host/production-backends.test.ts` all gain it. All are test
   code.
-- **A compatibility-matrix cell changes.** The widget's row-lifetime cell now
-  reads "until its completion notice reaches the conversation or its Result is
-  retrieved with `agent_result`, whichever comes first". That is a public
-  contract changing, and it is why this is an ADR rather than a fix.
+- **The widget's documented row lifetime changes.** A row now lasts until its
+  completion notice reaches the conversation or its Result is retrieved with
+  `agent_result`, whichever comes first. That is a public contract changing,
+  and it is why this is an ADR rather than a fix.
 - One more state for a reader of the sink to hold: unlanded, lost, landed,
   exhausted, consumed. It is five states in one module rather than three in
   one and two in another, which is the trade being made.

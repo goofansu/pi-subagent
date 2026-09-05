@@ -236,7 +236,7 @@ has to answer:
   at six call sites; and a linear scan over every record in the Session.
 - *Is it provider-neutral?* Yes, and unchanged in that respect: neither module
   can name a backend, both are exercised by the existing conformance suite on
-  all five rigs through the supervisor, and each gets a unit test at its own
+  every rig through the supervisor, and each gets a unit test at its own
   API against no provider at all.
 - *What breaks if it is wrong?* Two Runs are admitted where the policy allows
   one, or a Subagent runs two Runs at once, or a Run is admitted whose result
@@ -247,6 +247,6 @@ has to answer:
 
 **The acceptance criterion.** Every existing test under
 `extensions/subagent/runtime/` passes with no edits, and the conformance suite
-passes on all five rigs. A test that has to change means the behaviour changed,
+passes on every rig. A test that has to change means the behaviour changed,
 which this phase forbids — so an extraction that needs a test edit goes back
 rather than taking the edit.

@@ -77,7 +77,8 @@ reads the store. `wait` and `result` still observe the same immutable value.
 Reservations are still taken at admission, so `at capacity` is still an honest
 answer for concurrent pressure rather than a discovery at settlement.
 
-**The architecture challenge gate**, from `docs/contributing.md`:
+**The architecture challenge gate**, the four questions a structural change
+has to answer:
 
 - *What does this delete?* Nothing structural — it deletes a stall. No
   abstraction is added: `evict` already existed, with the budget it needed, and

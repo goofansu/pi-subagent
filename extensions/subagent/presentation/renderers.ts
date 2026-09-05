@@ -276,14 +276,14 @@ export const MAX_NOTICE_LABEL_WIDTH = 48;
  * about to make a tool call; the character count told the reader nothing they
  * could act on.
  *
- * **No cost.** Cost is the one optional field in the usage contract: a backend
- * reports what its provider hands it, and money is the figure a provider is
- * likeliest not to hand over. So a cost on this line would be present on some
- * Runs and missing on others, and a reader would have no way to tell a free
- * Run from an unreported one. What the Run spent stays on the notice's
- * accounting line, where the four figures sit together and an absent cost is
- * one absent figure among four rather than the difference between two shapes
- * of line.
+ * **No cost.** A backend reports the money it is told about, and money is the
+ * figure a provider is likeliest not to report at all. `UsageTotals.cost`
+ * starts at zero and is only ever added to, so a Run whose backend reported no
+ * cost totals zero — indistinguishable from a Run that genuinely cost nothing.
+ * A cost on this line would therefore read as a fact when it is sometimes an
+ * absence. What the Run spent stays on the notice's accounting line, where the
+ * four figures sit together and an unreported cost is one zero among four
+ * rather than a line that quietly means two different things.
  *
  * **The whole line is fitted, not just the label.** The label takes whatever
  * `width` leaves after the agent, the outcome and the hint — those are what
