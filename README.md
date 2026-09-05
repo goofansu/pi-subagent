@@ -22,8 +22,7 @@ Upgrading from 1.x? One line per Profile changes — see
 
 `/subagent` is the one place to start. On its own it prints a short status:
 how many Profiles are loaded, how many Runs are running and how they ended,
-whether the runtime has noticed anything and how much it is holding, one line
-per Profile with the backend it names, and the way deeper.
+one line per Profile with the backend it names, and the way deeper.
 
 `/subagent profiles` lists loaded Profiles, shows their prompts, and hands one
 a task. With none configured, it prints the directory to add one to.

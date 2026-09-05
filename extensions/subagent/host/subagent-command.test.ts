@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { backendId } from "../domain/index.ts";
-import { createRuntimeCounters } from "../runtime/counters.ts";
 import { hostRig } from "../testing/host-rig.ts";
 import { fixtureRow } from "../testing/presentation-fixtures.ts";
-import { createSessionPushSink } from "./push-sink.ts";
 import {
-  formatRuntimeHealth,
   formatSubagentStatus,
   formatUnknownSubcommand,
   NO_LIVE_SESSION,
@@ -17,10 +14,11 @@ import {
  * The operator namespace: one status, one way deeper.
  *
  * What makes bare `/subagent` worth having is that it is the one place to
- * start, so it says four things and points at the Profile list. What it must
- * never become again is a wall of counters — the numbers the runtime and the
- * adapters keep are for the suites and the live smokes that read them, and the
- * one verdict an operator can act on is the health line.
+ * start, so it says three things and points at the Profile list. What it must
+ * never become again is a report on the runtime — the counters and probes the
+ * runtime and the adapters keep are for the suites and the live smokes that
+ * read them, and neither a block of them nor a one-line verdict over them
+ * belongs in front of an operator who cannot act on either.
  */
 
 /** Run the command's handler the way the host would, and read what it said. */
@@ -48,7 +46,7 @@ async function say(
 
 // -- The shallow status ------------------------------------------------------
 
-test("C-1: bare /subagent prints the shallow status and no counters", async (t) => {
+test("C-1: bare /subagent prints the shallow status and nothing about the runtime", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
@@ -56,23 +54,16 @@ test("C-1: bare /subagent prints the shallow status and no counters", async (t) 
   const [text] = await say(rig);
 
   assert.match(text, /^Subagents: \d+ Profiles? · no Runs$/m);
-  assert.match(text, /^Runtime: healthy · \d+ held$/m);
   assert.match(text, /^\/subagent profiles — /m);
-  // No command prints the counters, and a status that printed them would be
-  // the command this one replaced.
-  for (const counter of Object.keys(createRuntimeCounters().counters())) {
-    assert.doesNotMatch(text, new RegExp(`\\b${counter}\\b`), counter);
-  }
-  // Nor the sink's hand-off counts, for the same reason.
-  for (const field of Object.keys(createSessionPushSink().counts())) {
-    assert.doesNotMatch(text, new RegExp(`\\b${field}\\b`), field);
-  }
+  // The status once carried a `Runtime:` verdict over the counters. It does
+  // not any more, and nothing else in the status names the runtime at all.
+  assert.doesNotMatch(text, /Runtime/);
 });
 
 test("C-1: the status names every Profile with the backend it names", () => {
   assert.equal(
     formatSubagentStatus({
-      session: { runs: [], counters: {}, probe: {} },
+      session: { runs: [] },
       profiles: [
         {
           name: "explore",
@@ -93,7 +84,6 @@ test("C-1: the status names every Profile with the backend it names", () => {
     }),
     [
       "Subagents: 2 Profiles · no Runs",
-      "Runtime: healthy · 0 held",
       "",
       "  explore   pi",
       "  reviewer  claude",
@@ -112,8 +102,6 @@ test("C-1: the status counts Runs in the shared phase vocabulary", () => {
         fixtureRow({ phase: "completed" }),
         fixtureRow({ phase: "failed" }),
       ],
-      counters: {},
-      probe: {},
     },
     profiles: [],
     agentsDir: "/agents",
@@ -125,7 +113,7 @@ test("C-1: the status counts Runs in the shared phase vocabulary", () => {
 test("a Session with no Profiles still says where to put one", () => {
   assert.match(
     formatSubagentStatus({
-      session: { runs: [], counters: {}, probe: {} },
+      session: { runs: [] },
       profiles: [],
       agentsDir: "/home/someone/.pi/agents",
     }),
@@ -143,92 +131,6 @@ test("a Session with no runtime says so and still says where to put a Profile", 
   assert.ok(text.includes(NO_LIVE_SESSION));
   assert.match(text, /Add a Profile to /);
   assert.match(text, /^\/subagent profiles — /m);
-});
-
-test("health is a verdict on what was noticed and a count of what is held", () => {
-  assert.equal(
-    formatRuntimeHealth({ runs: [], counters: {}, probe: {} }),
-    "Runtime: healthy · 0 held",
-  );
-  // What a live Session holds is held on purpose — a fiber per Run and a
-  // repository subscription for the widget — so it is reported and not judged.
-  assert.equal(
-    formatRuntimeHealth({
-      runs: [fixtureRow({ phase: "running" })],
-      counters: {},
-      probe: { liveRunFibers: 1, repositorySubscriptions: 1 },
-    }),
-    "Runtime: healthy · 2 held",
-  );
-  // A defect is what makes the verdict change, and the count beside it is the
-  // defects alone: the two expected counters here are not in the line at all.
-  assert.equal(
-    formatRuntimeHealth({
-      runs: [],
-      counters: { lateEvents: 2, queueOverflows: 1 },
-      probe: { liveRunFibers: 1 },
-    }),
-    "Runtime: attention needed · 1 defect · 1 held",
-  );
-});
-
-test("C-3: a Session whose only raised counters are expected ones is healthy", () => {
-  // The defect this row fixes. Twenty late events and two reconciliation
-  // differences is a Session running exactly as designed, and the old line
-  // called it `Runtime: 22 counted`.
-  assert.equal(
-    formatRuntimeHealth({
-      runs: [],
-      counters: {
-        lateEvents: 20,
-        reconciliationDifferences: 2,
-        duplicateSettlements: 3,
-        lateEndings: 3,
-        lateObservations: 1,
-        evictions: 4,
-      },
-      probe: { liveRunFibers: 4 },
-    }),
-    "Runtime: healthy · 4 held",
-  );
-});
-
-test("C-3: the health line names the non-zero classes, worst first", () => {
-  assert.equal(
-    formatRuntimeHealth({
-      runs: [],
-      counters: { deliveryFailures: 1, lateEvents: 9 },
-      probe: {},
-    }),
-    "Runtime: attention needed · 1 incident · 0 held",
-  );
-  assert.equal(
-    formatRuntimeHealth({
-      runs: [],
-      counters: {
-        conflictingCommits: 1,
-        cleanupEscalations: 1,
-        deliveryFailures: 1,
-        lateEvents: 40,
-      },
-      probe: { liveRunFibers: 4 },
-    }),
-    "Runtime: attention needed · 1 defect · 2 incidents · 4 held",
-  );
-});
-
-test("C-3: a counter the host does not recognise is named rather than ignored", () => {
-  // The counter block is structural so that a counter cannot be added without
-  // appearing. A name with no class must therefore not disappear into
-  // "healthy" — it is the one case where silence would defeat the block.
-  assert.equal(
-    formatRuntimeHealth({
-      runs: [],
-      counters: { somethingNobodyClassified: 1, lateEvents: 3 },
-      probe: {},
-    }),
-    "Runtime: attention needed · 1 unclassified · 0 held",
-  );
 });
 
 // -- The namespace ----------------------------------------------------------
