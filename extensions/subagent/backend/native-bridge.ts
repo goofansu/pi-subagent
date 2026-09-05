@@ -27,6 +27,10 @@
 
 import { type RunObservation, runDiagnostic } from "../domain/index.ts";
 
+/** The failure an overflowing callback bridge reports. */
+export const BRIDGE_OVERFLOW_MESSAGE =
+  "the backend outran its observation intake";
+
 /** What a bridge that could not hand an observation over must emit instead. */
 export function bridgeOverflowObservations(): readonly RunObservation[] {
   return [
@@ -41,7 +45,7 @@ export function bridgeOverflowObservations(): readonly RunObservation[] {
       kind: "ending",
       ending: {
         ending: "failed",
-        message: "the backend outran its observation intake",
+        message: BRIDGE_OVERFLOW_MESSAGE,
       },
     },
   ];
