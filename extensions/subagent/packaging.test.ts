@@ -41,14 +41,15 @@ test("the package manifest exposes this extension and nothing else", () => {
   assert.deepEqual(manifest.pi?.extensions, ["./extensions/subagent/index.ts"]);
 });
 
-test("the package version is the 2.0.0 release candidate", () => {
-  // The marker stays until the four live gates have run on the build being
-  // released. That cannot be established by writing code, so it cannot be
-  // established by this test — what it can do is stop the marker being dropped
-  // by accident, because a plain 2.0.0 asserts the gates were run.
+test("the package version is 2.0.0", () => {
+  // The release-candidate marker this replaces was held by two things. One was
+  // the four live gates, which have now been run on the release build; the
+  // other was a release-candidate soak, which no longer exists. Neither could
+  // be established by writing code, which is why the marker was the assertion
+  // — and why dropping it is a decision rather than an edit.
   const manifest = readPackageManifest();
 
-  assert.match(manifest.version ?? "", /^2\.0\.0-rc\.\d+$/);
+  assert.equal(manifest.version, "2.0.0");
 });
 
 test("the README carries an upgrade notice naming the new Profile field", () => {
