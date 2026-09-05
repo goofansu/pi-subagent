@@ -211,6 +211,8 @@ export function runPiExecution(
     // wait has a bound of its own, below: the session going idle with the
     // prompt already settled.
     let deliveries = 0;
+    let nativeDeliveries = 0;
+    let nativePrompt: ReturnType<typeof startNativePrompt> | undefined;
 
     const steerLoop = Effect.gen(function* () {
       for (;;) {
@@ -218,10 +220,28 @@ export function runPiExecution(
         if (control === undefined) return;
         if (context.isClosed()) return;
         deliveries += 1;
+        if (nativePrompt?.settled()) {
+          yield* io
+            .emit({
+              kind: "diagnostic",
+              diagnostic: confinedControl(STEER_ABANDONED_MESSAGE),
+            })
+            .pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  deliveries -= 1;
+                  bridge.signal();
+                }),
+              ),
+            );
+          continue;
+        }
+        nativeDeliveries += 1;
         yield* deliverSteer(session, control.text, io).pipe(
           Effect.ensuring(
             Effect.sync(() => {
               deliveries -= 1;
+              nativeDeliveries -= 1;
               bridge.signal();
             }),
           ),
@@ -232,6 +252,7 @@ export function runPiExecution(
     const body = Effect.gen(function* () {
       const steering = yield* Effect.forkChild(steerLoop);
       const native = startNativePrompt(session, input.prompt, bridge);
+      nativePrompt = native;
       for (;;) {
         const seenVersion = bridge.version();
         yield* drain;
@@ -242,7 +263,7 @@ export function runPiExecution(
           // and stop waiting: a Run that waited on it would not settle at
           // all, and admission already told the caller the Control was
           // accepted — only the delivery failed.
-          if (session.isIdle) {
+          if (session.isIdle && nativeDeliveries > 0) {
             yield* io.emit({
               kind: "diagnostic",
               diagnostic: confinedControl(STEER_REJECTED_CATEGORY),
@@ -253,6 +274,20 @@ export function runPiExecution(
         yield* bridge.waitPast(seenVersion);
       }
       yield* Fiber.interrupt(steering);
+      const abandonedSteering = yield* Effect.sync(() => {
+        try {
+          return session.clearQueue().steering.length > 0;
+        } catch {
+          // Completion remains authoritative when the queue refuses inspection.
+          return false;
+        }
+      });
+      if (abandonedSteering) {
+        yield* io.emit({
+          kind: "diagnostic",
+          diagnostic: confinedControl(STEER_ABANDONED_MESSAGE),
+        });
+      }
       bridge.stop();
       yield* drain;
       completed = true;
