@@ -44,9 +44,6 @@ import {
   scripts,
 } from "../testing/fakes/script.ts";
 
-/** What the demo set is called, for the start-up diagnostic. */
-export const DEMO_BACKEND_SET_NAME = "demo";
-
 /** The two demo Profile names, one per fake. */
 export const DEMO_RESUMABLE_PROFILE = "demo-resumable";
 export const DEMO_ONE_SHOT_PROFILE = "demo-one-shot";
@@ -133,7 +130,6 @@ export function createDemoBackendSet(): BackendSet {
   ];
 
   return {
-    name: DEMO_BACKEND_SET_NAME,
     backends: [resumable.backend, oneShot.backend],
     profiles,
     // A fake spawns nothing, so no process it started can be loading this

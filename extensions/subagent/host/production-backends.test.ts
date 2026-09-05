@@ -14,10 +14,7 @@ import {
   STAND_IN_MODEL,
 } from "../testing/claude/stand-in-query.ts";
 import { createFakeNotificationSink } from "../testing/fake-sink.ts";
-import {
-  createProductionBackendSet,
-  PRODUCTION_BACKEND_SET_NAME,
-} from "./production-backends.ts";
+import { createProductionBackendSet } from "./production-backends.ts";
 
 /**
  * The set the extension actually ships.
@@ -31,7 +28,6 @@ import {
 test("the production set offers both backends and no Profiles of its own", () => {
   const set = createProductionBackendSet().set;
 
-  assert.equal(set.name, PRODUCTION_BACKEND_SET_NAME);
   assert.deepEqual(
     set.backends.map((backend) => backend.id),
     ["pi", "claude"],

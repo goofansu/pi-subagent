@@ -40,9 +40,6 @@ import {
 } from "../backend/pi/index.ts";
 import type { BackendSet } from "../runtime/composition.ts";
 
-/** What the set is called, for the start-up diagnostic. */
-export const PRODUCTION_BACKEND_SET_NAME = "production";
-
 export interface ProductionBackendOptions {
   readonly pi?: PiBackendOptions;
   readonly claude?: ClaudeBackendOptions;
@@ -78,7 +75,6 @@ export function createProductionBackendSet(
   const claude = createClaudeBackend(options.claude ?? {});
   return {
     set: {
-      name: PRODUCTION_BACKEND_SET_NAME,
       backends: [pi.backend, claude.backend],
       profiles: [],
       isChildLoad: isChildResourceLoad,

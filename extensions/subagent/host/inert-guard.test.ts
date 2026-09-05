@@ -30,7 +30,6 @@ test("a process the backend set calls a child registers nothing at all", () => {
   const installation = installSubagentV2(host.pi, {
     agentDir: rig.agentsDir,
     backendSet: () => ({
-      name: "child",
       backends: [],
       profiles: [],
       isChildLoad: () => true,
@@ -52,7 +51,6 @@ test("a process the backend set reports as nested registers nothing at all", () 
   installSubagentV2(host.pi, {
     agentDir: "/nowhere",
     backendSet: () => ({
-      name: "nested",
       backends: [],
       profiles: [],
       isChildLoad: () => false,
@@ -70,7 +68,6 @@ test("a parent process registers everything", () => {
   installSubagentV2(host.pi, {
     agentDir: "/nowhere",
     backendSet: () => ({
-      name: "parent",
       backends: [],
       profiles: [],
       isChildLoad: () => false,

@@ -68,8 +68,6 @@ export const DEFAULT_MAX_DELEGATION_DEPTH = 1;
  * a Session whose Subagents disagreed about what they were.
  */
 export interface BackendSet {
-  /** What the set is called, for the start-up diagnostic. */
-  readonly name: string;
   readonly backends: readonly Backend[];
   /** Profiles the set supplies, merged under the user's own. */
   readonly profiles: readonly Profile[];

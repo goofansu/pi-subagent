@@ -34,9 +34,6 @@ import {
 } from "../backend/pi/index.ts";
 import type { BackendSet } from "../runtime/composition.ts";
 
-/** What the set is called, for the start-up diagnostic. */
-export const PI_BACKEND_SET_NAME = "pi";
-
 /** A Pi backend set, plus the adapter probe the live lane reads. */
 export interface PiBackendSet {
   readonly set: BackendSet;
@@ -50,7 +47,6 @@ export function createPiBackendSet(
   const handle = createPiBackend(options);
   return {
     set: {
-      name: PI_BACKEND_SET_NAME,
       backends: [handle.backend],
       profiles: [],
       isChildLoad: isChildResourceLoad,
