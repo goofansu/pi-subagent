@@ -10,8 +10,8 @@
  * produces nothing rather than a failure, because a provider that adds a
  * content block must not be able to fail a Run.
  *
- * Two functions hold state, and both are **Run-local by construction** — they
- * are created per execution and discarded with it:
+ * Three concerns require state, all **Run-local by construction** — the
+ * translator is created per execution and discarded with it:
  *
  * - **Usage differencing.** `modelUsage` and `total_cost_usd` are *cumulative
  *   across the turns of one Query*, so each result frame carries the running
@@ -25,6 +25,9 @@
  *   one unique *root* assistant message id — not one assistant frame — and the
  *   result frame's own `num_turns` may only *raise* the count, never lower it.
  *   A cancelled Run has already made real progress and must not have it erased.
+ * - **Streaming activity.** Partial-message block starts become thinking,
+ *   writing, or a bare tool name only when that activity changes. Deltas carry
+ *   no retained text and every other streaming event is discarded.
  *
  * The other decision worth naming is the one the spike forced. `modelUsage`
  * reports every model the Query pipeline ran, including ones the Profile never
@@ -117,6 +120,7 @@ export type ClaudeFrameKind =
   | "init"
   | "assistant"
   | "user"
+  | "stream"
   | "result"
   | "other";
 
@@ -158,6 +162,7 @@ export interface ClaudeFrameReading {
 function frameKind(frame: Record<string, unknown>): ClaudeFrameKind {
   if (frame.type === "assistant" && isRecord(frame.message)) return "assistant";
   if (frame.type === "user" && isRecord(frame.message)) return "user";
+  if (frame.type === "stream_event") return "stream";
   if (frame.type === "result") return "result";
   if (frame.type === "system" && frame.subtype === "init") return "init";
   return "other";
@@ -455,6 +460,7 @@ export function createClaudeTranslator(): ClaudeTranslator {
   let previous = ZERO_CUMULATIVE_USAGE;
   let primaryModel: string | undefined;
   let lastAssistantAnswered = false;
+  let lastStreamingKind: string | undefined;
   const rootMessages = new Set<string>();
   let turns = 0;
 
@@ -519,8 +525,50 @@ export function createClaudeTranslator(): ClaudeTranslator {
         : undefined;
     if (activity !== undefined) {
       observations.push({ kind: "activity", activity });
+      // The detailed completion replaced the streamed bare name. A later call
+      // of the same tool must be allowed to replace that old detail at once.
+      lastStreamingKind = undefined;
     }
     return { observations };
+  };
+
+  const streamFrame = (frame: Record<string, unknown>): ClaudeTranslation => {
+    if (
+      frame.parent_tool_use_id != null ||
+      typeof frame.subagent_type === "string"
+    ) {
+      return { observations: [] };
+    }
+    const event = isRecord(frame.event) ? frame.event : undefined;
+    if (event?.type !== "content_block_start") return { observations: [] };
+    const block = isRecord(event.content_block)
+      ? event.content_block
+      : undefined;
+    let kind: string | undefined;
+    let activity: string | undefined;
+    if (block?.type === "thinking") {
+      kind = "thinking";
+      activity = "thinking…";
+    } else if (block?.type === "text") {
+      kind = "writing";
+      activity = "writing…";
+    } else if (
+      block?.type === "tool_use" &&
+      typeof block.name === "string" &&
+      block.name !== ""
+    ) {
+      kind = `tool:${block.name}`;
+      activity = toolActivity(block.name, undefined);
+    }
+    if (
+      kind === undefined ||
+      activity === undefined ||
+      kind === lastStreamingKind
+    ) {
+      return { observations: [] };
+    }
+    lastStreamingKind = kind;
+    return { observations: [{ kind: "activity", activity }] };
   };
 
   const userFrame = (frame: Record<string, unknown>): ClaudeTranslation => {
@@ -594,6 +642,8 @@ export function createClaudeTranslator(): ClaudeTranslator {
           return assistantFrame(reading.frame);
         case "user":
           return userFrame(reading.frame);
+        case "stream":
+          return streamFrame(reading.frame);
         case "init":
           return initFrame(reading.frame);
         case "result":

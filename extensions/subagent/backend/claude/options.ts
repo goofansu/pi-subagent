@@ -4,6 +4,9 @@
  * Ported from v1, decision for decision, because every one of them was
  * arrived at by running children for real:
  *
+ * - **Partial messages are included.** Their content-block starts drive the
+ *   Run's live thinking, writing, and tool activity; the completed frames
+ *   remain the source of transcript and accounting observations.
  * - **The operator's environment is inherited.** `settingSources` and
  *   `mcpServers` are deliberately *omitted*, which is what makes the SDK load
  *   the operator's own settings and expose their MCP servers and cloud
@@ -143,6 +146,7 @@ export function createClaudeOptions(input: ClaudeOptionsInput): Options {
   const tools = parseTools(input.profile);
   return {
     cwd: input.subagent.cwd,
+    includePartialMessages: true,
     ...(input.model === undefined ? {} : { model: input.model }),
     abortController: input.abort,
     thinking: claudeThinking(input.effort),

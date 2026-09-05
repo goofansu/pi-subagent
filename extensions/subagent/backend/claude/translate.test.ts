@@ -77,6 +77,25 @@ function assistantFrame(
   };
 }
 
+function streamFrame(
+  event: unknown,
+  overrides: {
+    readonly parentToolUseId?: string | null;
+    readonly subagentType?: string;
+  } = {},
+): unknown {
+  return {
+    type: "stream_event",
+    event,
+    parent_tool_use_id: overrides.parentToolUseId ?? null,
+    ...(overrides.subagentType === undefined
+      ? {}
+      : { subagent_type: overrides.subagentType }),
+    session_id: IDENTITY,
+    uuid: "99999999-9999-4999-8999-999999999999",
+  };
+}
+
 function modelUsage(
   entries: Readonly<
     Record<
@@ -146,6 +165,10 @@ function resultFrame(
 test("each frame kind is read as itself, and everything else is ignored", () => {
   assert.equal(readClaudeFrame(initFrame()).kind, "init");
   assert.equal(readClaudeFrame(assistantFrame()).kind, "assistant");
+  assert.equal(
+    readClaudeFrame(streamFrame({ type: "message_stop" })).kind,
+    "stream",
+  );
   assert.equal(readClaudeFrame(resultFrame()).kind, "result");
   assert.equal(
     readClaudeFrame({ type: "rate_limit_event", session_id: IDENTITY }).kind,
@@ -414,6 +437,153 @@ test("a nested sidechain tool-use block does not report root activity", () => {
       [],
     );
   }
+});
+
+test("root content block starts report thinking, writing, and a bare tool name", () => {
+  const { observations } = translate([
+    streamFrame({
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "thinking", thinking: "", signature: "" },
+    }),
+    streamFrame({
+      type: "content_block_start",
+      index: 1,
+      content_block: { type: "text", text: "" },
+    }),
+    streamFrame({
+      type: "content_block_start",
+      index: 2,
+      content_block: {
+        type: "tool_use",
+        id: "toolu_stream",
+        name: "Bash",
+        input: {},
+      },
+    }),
+  ]);
+
+  assert.deepEqual(observations, [
+    { kind: "activity", activity: "thinking…" },
+    { kind: "activity", activity: "writing…" },
+    { kind: "activity", activity: "Bash" },
+  ]);
+});
+
+test("streaming activity is emitted only when its kind changes", () => {
+  const thinking = streamFrame({
+    type: "content_block_start",
+    index: 0,
+    content_block: { type: "thinking", thinking: "", signature: "" },
+  });
+  const writing = streamFrame({
+    type: "content_block_start",
+    index: 1,
+    content_block: { type: "text", text: "" },
+  });
+  const tool = streamFrame({
+    type: "content_block_start",
+    index: 2,
+    content_block: {
+      type: "tool_use",
+      id: "toolu_stream",
+      name: "Read",
+      input: {},
+    },
+  });
+
+  assert.deepEqual(
+    translate([thinking, thinking, writing, writing, tool, tool]).observations,
+    [
+      { kind: "activity", activity: "thinking…" },
+      { kind: "activity", activity: "writing…" },
+      { kind: "activity", activity: "Read" },
+    ],
+  );
+  // A new execution has new translator state.
+  assert.deepEqual(translate([thinking]).observations, [
+    { kind: "activity", activity: "thinking…" },
+  ]);
+});
+
+test("streaming deltas, stops, and message events produce no observations", () => {
+  assert.deepEqual(
+    translate([
+      streamFrame({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "half a sentence" },
+      }),
+      streamFrame({ type: "content_block_stop", index: 0 }),
+      streamFrame({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { output_tokens: 10 },
+      }),
+      streamFrame({ type: "message_stop" }),
+    ]).observations,
+    [],
+  );
+});
+
+test("nested-subagent streaming events produce no observations", () => {
+  const start = {
+    type: "content_block_start",
+    index: 0,
+    content_block: { type: "text", text: "" },
+  };
+
+  assert.deepEqual(
+    translate([
+      streamFrame(start, { parentToolUseId: "toolu_parent" }),
+      streamFrame(start, { subagentType: "explore" }),
+    ]).observations,
+    [],
+  );
+});
+
+test("a completed tool frame replaces its streamed bare name with its detail", () => {
+  const { observations } = translate([
+    streamFrame({
+      type: "content_block_start",
+      index: 0,
+      content_block: {
+        type: "tool_use",
+        id: "toolu_complete",
+        name: "Bash",
+        input: {},
+      },
+    }),
+    assistantFrame({
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_complete",
+          name: "Bash",
+          input: { command: "npm test" },
+        },
+      ],
+    }),
+    streamFrame({
+      type: "content_block_start",
+      index: 0,
+      content_block: {
+        type: "tool_use",
+        id: "toolu_next",
+        name: "Bash",
+        input: {},
+      },
+    }),
+  ]);
+
+  assert.deepEqual(
+    observations.filter((one) => one.kind === "activity"),
+    [
+      { kind: "activity", activity: "Bash" },
+      { kind: "activity", activity: "Bash: npm test" },
+      { kind: "activity", activity: "Bash" },
+    ],
+  );
 });
 
 test("a failed tool result is a failed completion", () => {

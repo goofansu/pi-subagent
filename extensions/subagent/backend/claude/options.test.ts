@@ -64,6 +64,10 @@ test("the working directory is the Subagent's, fixed for its life", () => {
   assert.equal(options().cwd, "/work");
 });
 
+test("the Query includes partial messages for live model-turn activity", () => {
+  assert.equal(options().includePartialMessages, true);
+});
+
 test("the family alias is passed through, and no alias leaves the SDK's default", () => {
   assert.equal(options({}, { model: "sonnet" }).model, "sonnet");
   assert.equal("model" in options(), false);
