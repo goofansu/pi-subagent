@@ -484,13 +484,6 @@ test("the live report carries one block per backend, straight from the set", asy
     adapterProbe: () => ({
       pi: { openSessions: 1, liveSubscriptions: 0, pendingCleanups: 0 },
       claude: { liveQueries: 2, openInputs: 1, retainedIdentities: 1 },
-      codex: {
-        liveProcesses: 1,
-        readerFibers: 1,
-        pendingRequests: 0,
-        retainedRoots: 1,
-        inFlightSteers: 0,
-      },
     }),
   });
   await rig.host.sessionStart();
@@ -500,7 +493,6 @@ test("the live report carries one block per backend, straight from the set", asy
 
   assert.match(text, /Backend probe \(pi\):\n {2}openSessions: 1/);
   assert.match(text, /Backend probe \(claude\):\n {2}liveQueries: 2/);
-  assert.match(text, /Backend probe \(codex\):\n {2}liveProcesses: 1/);
   assert.match(text, /Runtime counters:/);
   assert.match(text, /Runtime probe:/);
 });

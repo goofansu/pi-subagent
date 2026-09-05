@@ -696,16 +696,12 @@ function mayImportClaudeAdapter(file: string, graph: BoundaryGraph): boolean {
 /**
  * The tests outside the Codex adapter's own directories that may name it.
  *
- * Named one by one, exactly as the Pi and Claude lists are, and for the same
- * reason: "any test may import the adapter" would be a hole rather than an
- * exception. Both entries are host tests that are *about* the adapter — the
- * three probes the diagnostics command reports, and what the production set
- * actually holds — and neither has anywhere else to get them.
+ * Empty: the production set no longer holds Codex, so no host test imports the
+ * adapter. Kept as an empty list rather than deleted so the rule below still
+ * reads like Pi's and Claude's, and so re-admitting a test would be an edit
+ * that names it.
  */
-const CODEX_ADAPTER_TEST_IMPORTERS = new Set([
-  "host/diagnostics-command.test.ts",
-  "host/production-backends.test.ts",
-]);
+const CODEX_ADAPTER_TEST_IMPORTERS = new Set<string>([]);
 
 /**
  * Who may reach into the Codex adapter.
