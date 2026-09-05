@@ -346,14 +346,16 @@ const makeSupervisor = (settings: SessionSettings) =>
     const counters = settings.counters;
     const { policy } = settings;
     /**
-     * The Session Scope: the layer's own scope, and the parent of every
-     * Subagent Scope and every Run fiber.
+     * The Session Scope and its work child.
      *
-     * Taking it here is what makes "closing the Session Scope closes every
-     * Run, Subagent, and BackendAgent beneath it" a structural fact rather
-     * than a shutdown procedure that has to remember them all.
+     * The work scope is acquired before Shutdown's finalizer is registered,
+     * so LIFO finalization runs Shutdown first and only then interrupts any
+     * work it did not have to escalate past. Every shorter-lived scope and
+     * fiber belongs to this child; the Session Scope itself owns only the two
+     * ordered finalizers.
      */
     const sessionScope = yield* Scope.Scope;
+    const workScope = yield* Scope.fork(sessionScope);
 
     /**
      * Admission, with the supervisor's lifetime and no Layer of its own.
@@ -381,6 +383,31 @@ const makeSupervisor = (settings: SessionSettings) =>
     const stages: string[] = [];
 
     const now = Effect.clockWith((clock) => clock.currentTimeMillis);
+
+    /**
+     * Run cleanup detached and report whether it finished inside the budget.
+     *
+     * Timing out a `Scope.close` directly would interrupt the close and wait
+     * for that interruption. An uninterruptible finalizer could therefore
+     * defeat the timeout. The detached close instead reports through a
+     * Deferred; timing out that interruptible await never waits for the close.
+     */
+    const finishesWithinCleanupBudget = (
+      cleanup: Effect.Effect<void>,
+    ): Effect.Effect<boolean> =>
+      Effect.gen(function* () {
+        const finished = yield* Deferred.make<boolean>();
+        yield* Effect.forkDetach(
+          Effect.flatMap(Effect.exit(cleanup), (exit) =>
+            Deferred.succeed(finished, Exit.isSuccess(exit)),
+          ),
+        );
+        const withinBudget = yield* Effect.timeoutOption(
+          Deferred.await(finished),
+          policy.cleanupBudgetMillis,
+        );
+        return withinBudget._tag === "Some" && withinBudget.value;
+      });
 
     /* ------------------------------------------------------------ */
     /* Running a Run                                                 */
@@ -458,7 +485,7 @@ const makeSupervisor = (settings: SessionSettings) =>
             // closing Subagent still closes it.
             Effect.scoped,
           ),
-          sessionScope,
+          workScope,
         );
         records.attachFiber(record.id, fiber);
         // Returning only once the Run Scope exists means a caller that has an
@@ -483,7 +510,7 @@ const makeSupervisor = (settings: SessionSettings) =>
             yield* delivery.deliver(runId);
             yield* delivery.sweep();
           }),
-          sessionScope,
+          workScope,
         );
       });
 
@@ -506,15 +533,12 @@ const makeSupervisor = (settings: SessionSettings) =>
       (record: SubagentRecord) =>
       (scope: Scope.Closeable): Effect.Effect<RunDiagnostic | undefined> =>
         Effect.gen(function* () {
-          const closed = yield* Effect.exit(
-            Effect.timeout(
-              Scope.close(scope, Exit.void),
-              policy.cleanupBudgetMillis,
-            ),
+          const closed = yield* finishesWithinCleanupBudget(
+            Scope.close(scope, Exit.void),
           );
-          if (Exit.isSuccess(closed)) return undefined;
+          if (closed) return undefined;
           counters.count("cleanupEscalations");
-          yield* record.agent.close();
+          yield* finishesWithinCleanupBudget(record.agent.close());
           records.markConversationLost(record.id);
           return runDiagnostic(
             "cleanup-escalation",
@@ -547,7 +571,7 @@ const makeSupervisor = (settings: SessionSettings) =>
             if (Exit.isSuccess(finished)) return;
             yield* cancelOne(runId, "timeout");
           }),
-          record.scope,
+          workScope,
         );
       });
 
@@ -713,9 +737,9 @@ const makeSupervisor = (settings: SessionSettings) =>
       context: SubagentContext,
     ) =>
       Effect.gen(function* () {
-        // Forked from the Session Scope, so closing the Session closes every
-        // Subagent beneath it in reverse acquisition order.
-        const scope = yield* Scope.fork(sessionScope);
+        // Forked from the work scope, so Shutdown gets the first chance to
+        // cancel and await this Subagent before structural interruption.
+        const scope = yield* Scope.fork(workScope);
         const attempt = yield* Effect.exit(
           backend
             .open(profile, context)
@@ -1040,7 +1064,16 @@ const makeSupervisor = (settings: SessionSettings) =>
         // Wait for the Run Scope's finalizers and the BackendAgent's native
         // cleanup to finish before the Subagent Scope closes them.
         if (fiber) yield* Effect.ignore(Fiber.join(fiber));
-        yield* Scope.close(record.scope, Exit.void);
+        const closed = yield* finishesWithinCleanupBudget(
+          Scope.close(record.scope, Exit.void),
+        );
+        if (!closed) {
+          // Unlike execution cleanup escalation, there is no stronger close
+          // to try here: this Scope close is already running the BackendAgent
+          // finalizer, and the record is permanently closed, so no later
+          // resume needs a conversation-loss marker.
+          counters.count("cleanupEscalations");
+        }
       });
 
     const shutdown = (): Effect.Effect<void> =>
@@ -1050,11 +1083,13 @@ const makeSupervisor = (settings: SessionSettings) =>
         const first = yield* admission.beginShutdown();
         if (!first) return;
 
-        // Reverse acquisition order: the newest Subagent closes first, which
-        // is what closing the Session Scope would do on its own.
-        for (const record of [...records.all()].reverse()) {
-          yield* closeSubagent(record, "shutdown");
-        }
+        // Subagents are independent. Close them concurrently so N Runs whose
+        // cleanup hangs consume one cleanup budget rather than N budgets.
+        yield* Effect.forEach(
+          [...records.all()].reverse(),
+          (record) => closeSubagent(record, "shutdown"),
+          { concurrency: "unbounded" },
+        );
         // The next Session's model did not start these Runs and has no context
         // in which to act on their answers, so an undelivered notification is
         // dropped rather than queued, the store is cleared, and every local
@@ -1064,6 +1099,11 @@ const makeSupervisor = (settings: SessionSettings) =>
         records.clear();
         yield* repository.forget();
       });
+
+    // Registered after the work scope was forked, so the Session Scope's LIFO
+    // order makes disposal run the same idempotent Shutdown exposed above
+    // before it structurally closes the remaining work.
+    yield* Scope.addFinalizer(sessionScope, shutdown());
 
     /* ------------------------------------------------------------ */
     /* result                                                        */

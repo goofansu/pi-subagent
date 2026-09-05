@@ -40,7 +40,7 @@ export interface SupervisorCounters {
   readonly lateObservations: number;
   /** A non-blocking bridge could not hand an observation over. */
   readonly queueOverflows: number;
-  /** A native finalizer outlived the cleanup budget. */
+  /** A native execution or BackendAgent finalizer outlived its cleanup budget. */
   readonly cleanupEscalations: number;
   /**
    * A terminal snapshot disagreed with what was streamed.

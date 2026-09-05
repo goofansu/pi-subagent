@@ -79,6 +79,11 @@ export interface FakeBackendOptions {
   readonly gates?: Readonly<Record<string, Deferred.Deferred<void>>>;
   /** A shared ordering log. The fake appends its own lifecycle events. */
   readonly trace?: string[];
+  /** Hold BackendAgent close at a named gate for cleanup-budget tests. */
+  readonly close?: {
+    readonly gate: string;
+    readonly uninterruptible?: boolean;
+  };
   readonly id?: BackendId;
   /**
    * What `validateProfile` reports, so validation scenarios can vary it.
@@ -379,8 +384,16 @@ function createFakeBackend(
       admitResume,
       execute,
       close: () =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           // Idempotent: closing twice counts once and does nothing twice.
+          if (closed) return;
+          if (options.close !== undefined) {
+            trace.push("agent-close-waiting");
+            const wait = Deferred.await(gate(options.close.gate));
+            yield* options.close.uninterruptible
+              ? Effect.uninterruptible(wait)
+              : wait;
+          }
           if (closed) return;
           closed = true;
           counters.closed();

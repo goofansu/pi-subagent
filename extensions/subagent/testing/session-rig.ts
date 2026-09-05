@@ -102,6 +102,11 @@ export interface SessionRigOptions {
   readonly resumable?: boolean;
   readonly gates?: Record<string, Deferred.Deferred<void>>;
   readonly trace?: string[];
+  /** Hold BackendAgent close at a named gate for cleanup-budget tests. */
+  readonly close?: {
+    readonly gate: string;
+    readonly uninterruptible?: boolean;
+  };
   /** Provide a test clock, for the tests where time has to pass. */
   readonly testClock?: boolean;
 }
@@ -140,6 +145,7 @@ export function withSession<A>(
     ...(options.open === undefined ? {} : { open: options.open }),
     ...(options.gates === undefined ? {} : { gates: options.gates }),
     ...(options.trace === undefined ? {} : { trace: options.trace }),
+    ...(options.close === undefined ? {} : { close: options.close }),
   });
   const sink = createFakeNotificationSink();
   const counters = createRuntimeCounters();
