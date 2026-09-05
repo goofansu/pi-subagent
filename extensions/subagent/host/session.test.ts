@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
+import { Effect } from "effect";
 import { formatInvalidProfilesWarning } from "../presentation/index.ts";
 import {
   hostRig,
@@ -24,6 +25,18 @@ const A_PINNED_PROFILE =
   "---\ndescription: Pins a model\nmodel: claude-opus-5\n---\nDo the thing.\n";
 const A_MISSING_MODEL_PROFILE =
   "---\ndescription: Pins a model this Session lacks\nmodel: not-installed\n---\nDo it.\n";
+
+test("the Session handle rethrows a defect from live work", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  const defect = new Error("host work defect");
+
+  await assert.rejects(
+    rig.installation.handle.run(Effect.die(defect), "not ready"),
+    (failure) => failure === defect,
+  );
+});
 
 test("a Session start loads the backend set's Profiles and the user's own", async (t) => {
   const rig = hostRig(t, {

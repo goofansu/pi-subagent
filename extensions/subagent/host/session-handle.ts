@@ -24,7 +24,7 @@
  *   per-process, so it has to have something to say.
  */
 
-import type { Effect, ManagedRuntime } from "effect";
+import { Cause, type Effect, Exit, type ManagedRuntime } from "effect";
 import type { SessionServices } from "../runtime/composition.ts";
 
 /** The managed runtime one Session owns, with its host-side installs. */
@@ -95,7 +95,10 @@ export function createSessionHandle(): SessionHandle {
     run: async (work, whenNotReady) => {
       const current = live;
       if (!current) return whenNotReady;
-      return await current.runtime.runPromise(work);
+      const exit = await current.runtime.runPromiseExit(work);
+      if (Exit.isSuccess(exit)) return exit.value;
+      if (Cause.hasInterruptsOnly(exit.cause)) return whenNotReady;
+      throw Cause.squash(exit.cause);
     },
   };
 }
