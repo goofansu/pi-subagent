@@ -120,6 +120,10 @@ export function runPiExecution(
           }
           return;
         }
+        case "activity": {
+          bridge.push(read.observation);
+          return;
+        }
         case "tool": {
           for (const observation of read.observations) bridge.push(observation);
           return;

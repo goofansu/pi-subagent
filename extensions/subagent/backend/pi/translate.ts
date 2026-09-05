@@ -1,9 +1,11 @@
 /**
  * Pi's native messages and events, as Run observations. Pure, and total.
  *
- * Translation is total and reads no session. The event translator retains
- * only running shell commands, keyed by call id, because Pi omits arguments
- * from their end events; it is created per execution and retains nothing
+ * Translation is total and reads no session. The event translator retains two
+ * things and nothing else: the running shell commands, keyed by call id,
+ * because Pi omits arguments from their end events; and the kind of output the
+ * model last streamed, so a turn's activity is emitted once per kind change
+ * rather than once per delta. It is created per execution and retains nothing
  * across Runs. A shape this module does not recognize produces nothing rather
  * than a failure, because a provider that adds a content block should not be
  * able to fail a Run.
@@ -249,6 +251,8 @@ export function piTranscriptItem(message: unknown): TranscriptItem | undefined {
 export type PiEventReading =
   /** A message the session emitted. The caller decides whether to keep it. */
   | { readonly kind: "message"; readonly message: unknown }
+  /** A changed model-output kind, already translated to one activity. */
+  | { readonly kind: "activity"; readonly observation: RunObservation }
   /** A tool call starting or finishing, already translated. */
   | { readonly kind: "tool"; readonly observations: readonly RunObservation[] }
   /** The non-retrying terminal frame, with the messages it carried. */
@@ -262,18 +266,55 @@ export interface PiEventTranslator {
   readonly event: (event: unknown) => PiEventReading;
 }
 
+type PiTurnKind = "thinking" | "text";
+
+/** The output kind carried by an assistant message update, if any. */
+function piTurnKind(event: Record<string, unknown>): PiTurnKind | undefined {
+  if (event.type !== "message_update") return undefined;
+  const delta = event.assistantMessageEvent;
+  if (!isRecord(delta)) return undefined;
+  if (delta.type === "thinking_delta") return "thinking";
+  if (delta.type === "text_delta") return "text";
+  return undefined;
+}
+
 /**
- * One Run's event translator, including shell commands remembered until end.
+ * One Run's event translator, with the two things it remembers.
  *
- * Pi's end event carries the result and call id but not the arguments, so the
- * command is retained from its start event. Creating this translator inside
- * each execution keeps that provider state Run-local.
+ * Shell commands are remembered until their end event, because Pi's end event
+ * carries the result and call id but not the arguments. The model's last
+ * output kind is remembered so `thinking…` and `writing…` are emitted once per
+ * change rather than once per delta; a tool activity forgets it, which makes
+ * the next delta newer than the tool even when the model resumes with the same
+ * kind it emitted before the call. Creating this translator inside each
+ * execution keeps all of that Run-local, so a resumed Run's first delta is new.
  */
 export function createPiEventTranslator(): PiEventTranslator {
   const shellActivities = new Map<string, string>();
+  let lastTurnKind: PiTurnKind | undefined;
   return {
     event: (event) => {
+      if (isRecord(event)) {
+        const turnKind = piTurnKind(event);
+        if (turnKind !== undefined) {
+          if (turnKind === lastTurnKind) return IGNORED;
+          lastTurnKind = turnKind;
+          return {
+            kind: "activity",
+            observation: {
+              kind: "activity",
+              activity: turnKind === "thinking" ? "thinking…" : "writing…",
+            },
+          };
+        }
+      }
       const reading = readPiEvent(event);
+      if (
+        reading.kind === "tool" &&
+        reading.observations.some((one) => one.kind === "activity")
+      ) {
+        lastTurnKind = undefined;
+      }
       if (!isRecord(event)) return reading;
       const callId = event.toolCallId;
       if (typeof callId !== "string" || callId === "") return reading;
