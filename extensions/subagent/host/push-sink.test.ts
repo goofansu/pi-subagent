@@ -310,6 +310,21 @@ test("a consumed notice lost to an interrupt is not pushed again", async () => {
   assert.equal(bound.sink.status(NOTICE.runId), "resolved");
 });
 
+test("a notice consumed after it was lost is forgotten at settlement", async () => {
+  const bound = rig();
+  await bound.push(NOTICE);
+  bound.sink.turnEnded({ stopReason: "aborted" });
+
+  bound.sink.consumed(NOTICE.runId);
+  bound.sink.agentSettled();
+  bound.sink.turnEnded({ stopReason: "aborted" });
+
+  assert.deepEqual(bound.sink.unlanded(), []);
+  assert.equal(bound.sink.counts().lostAfterHandOff, 1);
+  assert.equal(bound.sink.counts().rePushes, 0);
+  assert.equal(bound.sent().length, 1);
+});
+
 test("a consumed notice Pi already holds lands anyway, and is counted", async () => {
   const bound = rig();
   await bound.push(NOTICE);
@@ -319,6 +334,19 @@ test("a consumed notice Pi already holds lands anyway, and is counted", async ()
 
   // Not a gap: the extension API has no call that takes a queued message back.
   // The count is what Phase D's envelope is scheduled on.
+  assert.deepEqual(bound.sink.landed(), [NOTICE.runId]);
+  assert.equal(bound.sink.counts().landings, 1);
+  assert.equal(bound.sink.counts().consumedBeforeLanding, 1);
+});
+
+test("a consumed notice that survives an aborted turn still lands and is counted", async () => {
+  const bound = rig();
+  await bound.push(NOTICE);
+  bound.sink.consumed(NOTICE.runId);
+  bound.sink.turnEnded({ stopReason: "aborted" });
+
+  bound.landed(bound.sent()[0]);
+
   assert.deepEqual(bound.sink.landed(), [NOTICE.runId]);
   assert.equal(bound.sink.counts().landings, 1);
   assert.equal(bound.sink.counts().consumedBeforeLanding, 1);
@@ -561,4 +589,50 @@ test("unbinding forgets every hold and every held notice", async () => {
   // The next Session's model did not start this Run, so the notice is gone
   // rather than released into it — and a fresh push for the id is not held.
   assert.equal(bound.sink.counts().heldForWait, 0);
+});
+
+test("an all hold released after unbinding cannot weaken the next Session's all hold", async () => {
+  const bound = rig();
+  const staleRelease = bound.sink.hold("all");
+
+  bound.sink.unbind();
+  staleRelease();
+  bound.sink.bind(() => {
+    throw new Error("the fresh hold should keep the notice in the sink");
+  });
+  bound.sink.hold("all");
+
+  assert.equal(await bound.push(NOTICE), "pushed");
+  assert.deepEqual(bound.sent(), []);
+  assert.equal(bound.sink.counts().heldForWait, 1);
+});
+
+test("a wait holds a lost notice when the agent settles", async () => {
+  const bound = rig();
+  await bound.push(NOTICE);
+  bound.sink.turnEnded({ stopReason: "aborted" });
+  bound.sink.hold([NOTICE.runId]);
+
+  bound.sink.agentSettled();
+
+  assert.equal(bound.sent().length, 1);
+  assert.equal(bound.sink.counts().heldForWait, 1);
+  assert.equal(bound.sink.counts().rePushes, 0);
+  assert.deepEqual(bound.sink.unlanded(), []);
+});
+
+test("a stale scoped release is a no-op on the current Session's live hold", async () => {
+  const bound = rig();
+  const staleRelease = bound.sink.hold([NOTICE.runId]);
+
+  bound.sink.unbind();
+  bound.sink.bind(() => {
+    throw new Error("the current hold should keep the notice in the sink");
+  });
+  bound.sink.hold([NOTICE.runId]);
+  staleRelease();
+
+  assert.equal(await bound.push(NOTICE), "pushed");
+  assert.deepEqual(bound.sent(), []);
+  assert.equal(bound.sink.counts().heldForWait, 1);
 });

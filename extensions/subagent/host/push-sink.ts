@@ -21,9 +21,9 @@
  * 3. **turn end** whose stop reason was aborted, or whose signal was aborted,
  *    marks every unlanded notice *lost*. Neutral evidence rather than a guess:
  *    the sink does not decide what an interrupt is, it is told.
- * 4. **agent settled** pushes every lost notice again, once, and clears the
- *    lost mark before pushing — because a re-push may land synchronously, and
- *    a notice marked lost after it landed would be pushed a third time.
+ * 4. **agent settled** pushes every lost notice again and clears the lost
+ *    state before pushing — because a re-push may land synchronously. If that
+ *    re-push is lost to another aborted turn, it may be re-pushed again.
  *
  * Exactly one landing per notification is this module's contract, and it is
  * tested through those four events rather than through delivery.
@@ -86,7 +86,7 @@
  *
  * ## What the widget is told, and what it is not
  *
- * Six states live here — unlanded, lost, landed, exhausted, consumed, held —
+ * Six states live here — handed-off, lost, landed, exhausted, consumed, held —
  * and the widget sees three: `pending`, `resolved`, `exhausted`. It never learns
  * whether *resolved* was a landing or a retrieval, because a row that stays
  * and a row that goes is the whole of what it is deciding, and a component
@@ -146,7 +146,7 @@ export interface HandoffCounts {
   readonly handOffsRefused: number;
   /** Notices an aborted turn discarded before they reached the conversation. */
   readonly lostAfterHandOff: number;
-  /** Notices handed over a second time when the parent settled. */
+  /** Notices handed over again when the parent settled. */
   readonly rePushes: number;
   /** Notices `message_start` carried into the conversation. */
   readonly landings: number;
@@ -201,7 +201,7 @@ export interface SessionPushSink extends NotificationSink {
   readonly messageStarted: (message: unknown) => void;
   /** A host turn finished. An aborted one loses every unlanded notice. */
   readonly turnEnded: (evidence: HostTurnEvidence) => void;
-  /** The parent agent went idle. Every lost notice is pushed again, once. */
+  /** The parent agent went idle. Every currently lost notice is pushed again. */
   readonly agentSettled: () => void;
   /**
    * The parent has this Run's Result: `agent_result` returned it, or a wait
@@ -253,36 +253,33 @@ export interface SessionPushSink extends NotificationSink {
   readonly counts: () => HandoffCounts;
 }
 
-/** What the sink keeps about a notice that has not landed. */
-interface Unlanded {
-  readonly notification: RunNotification;
-  /** Whether an aborted turn has been seen since this notice was pushed. */
-  lost: boolean;
+type NoticeState =
+  | "handed-off"
+  | "lost"
+  | "held"
+  | "landed"
+  | "consumed"
+  | "exhausted";
+
+/** The one state record the sink keeps for a Run. */
+interface NoticeRecord {
+  readonly state: NoticeState;
+  /** Retained only while a notice may still land or need another dispatch. */
+  readonly notification?: RunNotification;
+}
+
+type DispatchResult = "sent" | "kept" | "dropped";
+
+interface Hold {
+  readonly generation: number;
+  readonly scope: ReadonlySet<RunId> | "all";
 }
 
 export function createSessionPushSink(): SessionPushSink {
   let send: SendNotification | undefined;
-  const unlanded = new Map<RunId, Unlanded>();
-  /**
-   * The Run ids whose notice landed, in landing order.
-   *
-   * A `Set` rather than an array so that asking about one Run is a lookup
-   * rather than a scan, and insertion order still gives {@link landed} the
-   * sequence it reports. Bounded by the number of Runs one Session settles,
-   * which is what the repository's own index is bounded by.
-   */
-  const landed = new Set<RunId>();
-  /** Runs whose Result the parent has retrieved. Bounded the same way. */
-  const consumed = new Set<RunId>();
-  /** How many active waits cover each Run, and how many cover every Run. */
-  const holds = new Map<RunId, number>();
-  let holdAll = 0;
-  /** Notices kept back for a held Run. Bounded by the Runs one wait covers. */
-  const held = new Map<RunId, RunNotification>();
-  const isHeld = (runId: RunId): boolean =>
-    holdAll > 0 || (holds.get(runId) ?? 0) > 0;
-  /** Runs delivery gave up announcing. Bounded the same way. */
-  const exhausted = new Set<RunId>();
+  let generation = 0;
+  const records = new Map<RunId, NoticeRecord>();
+  const holds = new Set<Hold>();
   const listeners = new Set<() => void>();
   let counts: HandoffCounts = ZERO_COUNTS;
 
@@ -301,34 +298,60 @@ export function createSessionPushSink(): SessionPushSink {
     }
   };
 
+  const isHeld = (runId: RunId): boolean =>
+    [...holds].some(
+      (hold) =>
+        hold.generation === generation &&
+        (hold.scope === "all" || hold.scope.has(runId)),
+    );
+
+  const isResolvedOrExhausted = (state: NoticeState): boolean =>
+    state === "landed" || state === "consumed" || state === "exhausted";
+
+  const isAwaitingLanding = (
+    record: NoticeRecord | undefined,
+  ): record is NoticeRecord & { notification: RunNotification } =>
+    record?.notification !== undefined &&
+    (record.state === "handed-off" ||
+      record.state === "lost" ||
+      record.state === "consumed");
+
   /**
-   * Hand one notice to the Session, recording it as unlanded *first*.
+   * Decide in one place whether to send, keep, or drop a notice.
    *
-   * The order matters and is not incidental: Pi may report the message
-   * starting synchronously inside `sendMessage`, and a notice recorded after
-   * that would be recorded as unlanded immediately after it had landed — and
-   * then pushed again at the next abort.
+   * The handed-off transition precedes `send`: Pi may report the message
+   * starting synchronously, and recording it afterwards would resurrect a
+   * notice that had already landed.
    */
-  const handOver = (notification: RunNotification, lost = false): boolean => {
+  const dispatch = (notification: RunNotification): DispatchResult => {
+    const current = records.get(notification.runId);
+    if (current && isResolvedOrExhausted(current.state)) return "dropped";
+
     const target = send;
-    if (!target) return false;
-    unlanded.set(notification.runId, { notification, lost });
+    if (!target) {
+      if (current?.state === "held") records.delete(notification.runId);
+      return "dropped";
+    }
+
+    if (isHeld(notification.runId)) {
+      records.set(notification.runId, { notification, state: "held" });
+      count("heldForWait");
+      return "kept";
+    }
+
+    records.set(notification.runId, {
+      notification,
+      state: "handed-off",
+    });
     try {
       target(buildNotificationMessage(notification));
-      return true;
+      return "sent";
     } catch {
-      // A throw stops this sink using the Session at all, and the cost of that
-      // is worth stating: a *transient* throw silences every later
-      // notification until the next `bind`. It is v1's behaviour and it is
-      // deliberate, because the throw that actually happens is a Session that
-      // went stale before its shutdown event arrived — such a Session throws
-      // on every method, and re-attempting it once per settled Run would turn
-      // one dead Session into one dead push per Run. The Result is stored
-      // either way, so nothing is lost that `agent_result` cannot return, and
-      // the next Session's `bind` restores the sink.
-      unlanded.delete(notification.runId);
+      // A stale Session throws on every method. Stop using it rather than
+      // producing one failed push for every Run; the Result remains stored.
+      records.delete(notification.runId);
       send = undefined;
-      return false;
+      return "dropped";
     }
   };
 
@@ -336,23 +359,10 @@ export function createSessionPushSink(): SessionPushSink {
     push: (notification) =>
       Effect.suspend(() => {
         count("pushesAttempted");
-        // Accepted and not sent. Delivery sees a hand-off, which is what
-        // happened: the host took responsibility for the message, and taking
-        // responsibility included deciding the parent does not need it.
-        if (consumed.has(notification.runId)) {
-          count("handOffsAccepted");
-          return Effect.void;
-        }
-        // Accepted and kept. The wait that covers this Run is about to
-        // deliver its Result, and a notice handed to Pi now could not be
-        // taken back once it had.
-        if (send !== undefined && isHeld(notification.runId)) {
-          held.set(notification.runId, notification);
-          count("handOffsAccepted");
-          count("heldForWait");
-          return Effect.void;
-        }
-        if (handOver(notification)) {
+        const state = records.get(notification.runId)?.state;
+        const terminal = state !== undefined && isResolvedOrExhausted(state);
+        const result = dispatch(notification);
+        if (terminal || result !== "dropped") {
           count("handOffsAccepted");
           return Effect.void;
         }
@@ -364,10 +374,18 @@ export function createSessionPushSink(): SessionPushSink {
 
     exhausted: (runId) =>
       Effect.sync(() => {
-        // A consumed Run's hand-off is already resolved, so there is nothing
-        // an exhaustion could add: the parent has the answer either way.
-        if (consumed.has(runId) || exhausted.has(runId)) return;
-        exhausted.add(runId);
+        const current = records.get(runId);
+        if (
+          current?.state === "consumed" ||
+          current?.state === "landed" ||
+          current?.state === "exhausted"
+        ) {
+          return;
+        }
+        records.set(runId, {
+          notification: current?.notification,
+          state: "exhausted",
+        });
         count("exhaustions");
         announce();
       }),
@@ -381,25 +399,24 @@ export function createSessionPushSink(): SessionPushSink {
 
     unbind: () => {
       send = undefined;
-      unlanded.clear();
-      landed.clear();
-      consumed.clear();
-      exhausted.clear();
+      generation += 1;
       holds.clear();
-      holdAll = 0;
-      held.clear();
+      records.clear();
     },
 
     messageStarted: (message) => {
       const details = parseNotificationMessage(message);
       if (!details) return;
-      if (!unlanded.delete(details.runId)) return;
-      landed.add(details.runId);
+      const current = records.get(details.runId);
+      if (!isAwaitingLanding(current)) return;
+
+      const consumedBeforeLanding = current.state === "consumed";
+      // Reinsert so map order remains the public landing order even when
+      // notices that were pushed earlier land later.
+      records.delete(details.runId);
+      records.set(details.runId, { state: "landed" });
       count("landings");
-      // Pi held this one already, and the extension API has no call that takes
-      // a queued message back. Counted rather than prevented; the count is
-      // what Phase D's envelope is scheduled on.
-      if (consumed.has(details.runId)) count("consumedBeforeLanding");
+      if (consumedBeforeLanding) count("consumedBeforeLanding");
       announce();
     },
 
@@ -410,86 +427,93 @@ export function createSessionPushSink(): SessionPushSink {
       ) {
         return;
       }
-      for (const notice of unlanded.values()) {
-        if (notice.lost) continue;
-        notice.lost = true;
-        count("lostAfterHandOff");
+      for (const [id, record] of records) {
+        if (record.state === "handed-off") {
+          records.set(id, { ...record, state: "lost" });
+          count("lostAfterHandOff");
+        }
       }
     },
 
     agentSettled: () => {
-      // Snapshot first: `handOver` writes to the same map, and a landing that
-      // arrives synchronously during the loop would otherwise mutate what is
-      // being iterated.
-      const lost = [...unlanded.values()].filter((notice) => notice.lost);
-      for (const notice of lost) {
-        // A consumed Run's notice is not pushed again, and the sink forgets
-        // it: Pi discarded the message and nothing will land, so keeping it
-        // unlanded would keep a row alive for a Result the parent has read.
-        if (consumed.has(notice.notification.runId)) {
-          unlanded.delete(notice.notification.runId);
-          continue;
-        }
-        // Cleared before pushing, because the push may land synchronously.
-        notice.lost = false;
-        count("rePushes");
-        handOver(notice.notification);
+      const lost = [...records.values()].filter(
+        (record): record is NoticeRecord & { notification: RunNotification } =>
+          record.state === "lost" && record.notification !== undefined,
+      );
+      for (const record of lost) {
+        if (dispatch(record.notification) === "sent") count("rePushes");
       }
     },
 
     consumed: (runId) => {
-      // A landed notice has already done its work, so consumption adds
-      // nothing; recording it would only make `consumedBeforeLanding` count
-      // the ordinary case.
-      if (landed.has(runId) || consumed.has(runId)) return;
-      consumed.add(runId);
+      const current = records.get(runId);
+      if (current?.state === "landed" || current?.state === "consumed") return;
+
+      if (current?.state === "held") {
+        count("answeredByWait");
+        records.set(runId, { state: "consumed" });
+      } else if (
+        current?.state === "handed-off" &&
+        current.notification !== undefined
+      ) {
+        // Pi may still land a notice it already holds, so retain it only for
+        // recognizing that message-start and counting the late landing.
+        records.set(runId, {
+          notification: current.notification,
+          state: "consumed",
+        });
+      } else {
+        // A lost notice was already discarded, and consumption resolves it.
+        records.set(runId, { state: "consumed" });
+      }
       announce();
     },
 
     hold: (scope) => {
-      if (scope === "all") holdAll += 1;
-      else
-        for (const runId of scope)
-          holds.set(runId, (holds.get(runId) ?? 0) + 1);
+      const hold: Hold = {
+        generation,
+        scope: scope === "all" ? "all" : new Set(scope),
+      };
+      holds.add(hold);
       let released = false;
       return () => {
-        // Idempotent for the reason the waiter registration is: a hold given
-        // up twice would give up another wait's, and its notices with it.
         if (released) return;
         released = true;
-        if (scope === "all") holdAll -= 1;
-        else {
-          for (const runId of scope) {
-            const left = (holds.get(runId) ?? 1) - 1;
-            if (left <= 0) holds.delete(runId);
-            else holds.set(runId, left);
-          }
-        }
-        // Snapshot first: `handOver` writes to `unlanded`, not to `held`, but
-        // a listener announced from a landing could call back into the sink.
-        for (const notification of [...held.values()]) {
-          if (isHeld(notification.runId)) continue;
-          held.delete(notification.runId);
-          // The wait delivered this Result, so the notice has nothing left
-          // to tell the parent. Dropped, and counted as the duplicate it
-          // would have been.
-          if (consumed.has(notification.runId)) {
-            count("answeredByWait");
+        // A release belongs only to the Session generation that acquired it.
+        // In particular, it cannot remove a same-shaped hold from the next
+        // Session after shutdown interrupted its waiter.
+        if (hold.generation !== generation) return;
+        holds.delete(hold);
+
+        for (const record of [...records.values()]) {
+          if (
+            record.state !== "held" ||
+            record.notification === undefined ||
+            isHeld(record.notification.runId)
+          ) {
             continue;
           }
-          // The wait gave up with the Run still going, or was handed no
-          // Result. The notice goes now, exactly as it would have at settle.
-          handOver(notification);
+          dispatch(record.notification);
         }
       };
     },
 
-    unlanded: () => [...unlanded.keys()],
-    landed: () => [...landed],
-    hasLanded: (runId) => landed.has(runId),
+    unlanded: () =>
+      [...records]
+        .filter(
+          ([, record]) =>
+            record.state === "handed-off" || record.state === "lost",
+        )
+        .map(([id]) => id),
+    landed: () =>
+      [...records]
+        .filter(([, record]) => record.state === "landed")
+        .map(([id]) => id),
+    hasLanded: (runId) => records.get(runId)?.state === "landed",
     status: (runId) => {
-      if (landed.has(runId) || consumed.has(runId)) return "resolved";
-      return exhausted.has(runId) ? "exhausted" : "pending";
+      const state = records.get(runId)?.state;
+      if (state === "landed" || state === "consumed") return "resolved";
+      return state === "exhausted" ? "exhausted" : "pending";
     },
     subscribe: (listener) => {
       listeners.add(listener);
