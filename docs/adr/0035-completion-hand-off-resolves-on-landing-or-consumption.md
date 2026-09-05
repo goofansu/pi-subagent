@@ -21,6 +21,18 @@ settled row prints its duration, so on that one row the duration gives way to
 the explanation. Every other settled row is unchanged (W-1). The ledger's W-2
 entry carries the reasoning.
 
+**Amended in one respect by
+[ADR-0036](0036-a-wait-delivers-the-result-it-waited-for.md).** The sentence
+"`agent_wait` resolves nothing" no longer holds: a wait now delivers the Result
+of each Run it waited for and resolves those hand-offs, and the alternative
+*Consuming on `agent_wait`* rejected below is adopted there for the reason it
+was rejected here — the objection was that a wait withheld the answer, and it
+no longer does. The hold that makes suppression real, where this entry could
+only count *consumed before landing*, is decided there too. Everything else
+this entry decided — that a hand-off resolves on landing or consumption, that
+the widget reads one three-state read model, that delivery reports exhaustion,
+and that consumption is recorded at the host boundary — stands.
+
 Everything from *Context* down is the text that was proposed, unchanged.
 
 Refines [ADR-0006](0006-completion-notifications-and-result-store.md), which

@@ -33,6 +33,7 @@ import type {
   SubagentId,
   WaitOutcome,
 } from "../domain/index.ts";
+import { formatResult } from "./run-card.ts";
 
 /**
  * The end of an exhaustive switch.
@@ -55,9 +56,17 @@ function runPointer(runId: RunId): string {
   );
 }
 
-/** How a notice-bearing operation tells a caller not to poll. */
+/**
+ * How a notice-bearing operation tells a caller not to poll.
+ *
+ * The sentence carries the delivery model in miniature: the answer comes to
+ * the parent on its own, so the parent's next move is other work, not a wait.
+ * [ADR-0036](../../../docs/adr/0036-a-wait-delivers-the-result-it-waited-for.md).
+ */
 const NOTIFICATION_PROMISE =
-  "Its notification will arrive when the Run finishes; carry on until then.";
+  "Its completion is delivered to you automatically when the Run finishes; " +
+  "continue independent work until then, and wait only if nothing else " +
+  "remains.";
 
 /**
  * Profile diagnostics as one line each.
@@ -350,15 +359,33 @@ export function formatCancelOutcomes(
 }
 
 /* ------------------------------------------------------------------ */
-/* agent_wait                                                          */
+/* agent_wait and agent_wait_all                                       */
 /* ------------------------------------------------------------------ */
 
 /**
- * `agent_wait`, which reports lifecycle state and never output.
+ * What a wait says about a terminal Run whose output the store has let go.
  *
- * `agents` supplies the Profile name behind each Run id so a barrier over
- * several agents reads as a list of specialists rather than a list of
- * identifiers. An id the Session no longer names is reported by id alone,
+ * The same fact `agent_result` reports as `ResultExpired`, in the wait's own
+ * grammar: the Run is named by agent and status like every other terminal
+ * Run, and the sentence says the output is gone rather than leaving a card
+ * missing.
+ */
+const OUTPUT_EVICTED =
+  "its output was evicted to keep this Session's result store bounded and " +
+  "cannot be recovered.";
+
+/**
+ * A wait, which delivers the Result of each Run it waited for.
+ *
+ * A terminal Run that still has its Result renders as the same card
+ * `agent_result` returns — identity, cost, recent transcript, and the answer —
+ * so the parent has nothing further to fetch
+ * ([ADR-0036](../../../docs/adr/0036-a-wait-delivers-the-result-it-waited-for.md)).
+ * One whose output was evicted is named by agent and status and told so.
+ *
+ * `agents` supplies the Profile name behind each Run id for the outcomes that
+ * carry no Result, so a barrier over several agents still reads as a list of
+ * specialists. An id the Session no longer names is reported by id alone,
  * which is honest rather than blank.
  */
 export function formatWaitOutcomes(
@@ -372,6 +399,10 @@ export function formatWaitOutcomes(
   for (const outcome of outcomes) {
     switch (outcome.outcome) {
       case "terminal": {
+        if (outcome.result !== undefined) {
+          terminal.push(formatResult(outcome.result));
+          break;
+        }
         const agent = agents.get(outcome.runId);
         // The reason is part of the lifecycle state rather than an extra: a
         // Run cancelled at shutdown and a Run cancelled on request stopped
@@ -382,8 +413,8 @@ export function formatWaitOutcomes(
             : `${outcome.status} (${outcome.cancellationReason})`;
         terminal.push(
           agent === undefined
-            ? `${outcome.runId}: ${status}`
-            : `${agent} (${outcome.runId}): ${status}`,
+            ? `${outcome.runId}: ${status}, but ${OUTPUT_EVICTED}`
+            : `${agent} (${outcome.runId}): ${status}, but ${OUTPUT_EVICTED}`,
         );
         break;
       }
@@ -413,6 +444,22 @@ export function formatWaitOutcomes(
   return sections.join("\n\n");
 }
 
+/**
+ * `agent_wait_all` when nothing is active.
+ *
+ * Says where the answers went rather than showing an empty list: every Run
+ * that finished before the call was announced by its own notification, so a
+ * parent that expected something here has already been given it, or is about
+ * to be.
+ */
+export function formatNoActiveRuns(): string {
+  return (
+    "No Runs are active in this Session. Every Run started here has already " +
+    "finished and is announced by its own completion notice; use agent_result " +
+    "with a Run id to re-read one."
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* agent_result                                                        */
 /* ------------------------------------------------------------------ */
@@ -439,8 +486,8 @@ export function formatResultRejection(
     case "RunNotTerminal":
       return (
         `Run ${outcome.runId} has not finished yet, so it has no result. Its ` +
-        "notification will arrive on its own, and agent_wait blocks until it " +
-        "does."
+        "completion is delivered to you on its own; agent_wait blocks until " +
+        "then and returns the result directly."
       );
     case "unknown Run":
       return (

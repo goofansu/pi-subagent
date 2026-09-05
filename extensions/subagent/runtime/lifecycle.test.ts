@@ -499,19 +499,30 @@ test("shutdown closes a Subagent by cancel-and-await-cleanup, so its Run settles
 /* Wait                                                            */
 /* ============================================================== */
 
-test("a wait returns the terminal status, and a repeated wait returns the same one", async () => {
+test("a wait returns the terminal status and the Result, and a repeated wait returns the same", async () => {
   const { value } = await withSession({ steps: [[emitText("done")]] }, (rig) =>
     Effect.gen(function* () {
       const started = startedRun(yield* rig.supervisor.start(request()));
       const first = yield* rig.supervisor.wait([started.runId]);
       const second = yield* rig.supervisor.wait([started.runId]);
-      return { first, second, runId: started.runId };
+      const read = yield* rig.supervisor.result(started.runId);
+      return { first, second, read, runId: started.runId };
     }),
   );
 
-  assert.deepEqual(value?.first, [
-    { outcome: "terminal", runId: value?.runId, status: "completed" },
-  ]);
+  assert.equal(value?.first.length, 1);
+  const [outcome] = value?.first ?? [];
+  assert.equal(outcome?.outcome, "terminal");
+  if (outcome?.outcome !== "terminal") return;
+  assert.equal(outcome.runId, value?.runId);
+  assert.equal(outcome.status, "completed");
+  // The Result rides on the outcome, and it is the stored one: a wait and
+  // `agent_result` read the same value.
+  assert.equal(outcome.result?.finalOutput, "done");
+  assert.deepEqual(
+    outcome.result,
+    value?.read.outcome === "result" ? value.read.result : undefined,
+  );
   assert.deepEqual(value?.second, value?.first);
 });
 
@@ -547,9 +558,13 @@ test("a wait that times out reports still running, and the Run carries on", asyn
   assert.deepEqual(value?.gaveUp, [
     { outcome: "still running", runId: value?.runId },
   ]);
-  assert.deepEqual(value?.settled, [
-    { outcome: "terminal", runId: value?.runId, status: "completed" },
-  ]);
+  assert.equal(value?.settled.length, 1);
+  const [settled] = value?.settled ?? [];
+  assert.equal(settled?.outcome, "terminal");
+  if (settled?.outcome !== "terminal") return;
+  assert.equal(settled.runId, value?.runId);
+  assert.equal(settled.status, "completed");
+  assert.equal(settled.result?.finalOutput, "eventually");
   assert.equal(value?.result, "result");
 });
 

@@ -128,8 +128,8 @@ export type CancelOutcome =
   | { readonly outcome: "unknown Run"; readonly runId: RunId };
 
 /**
- * `agent_wait`, per Run id. A wait that gives up reports the Run as still
- * running, which is a normal outcome and not an error.
+ * `agent_wait` and `agent_wait_all`, per Run id. A wait that gives up reports
+ * the Run as still running, which is a normal outcome and not an error.
  */
 export type WaitOutcome =
   | {
@@ -145,6 +145,17 @@ export type WaitOutcome =
        * conclude its own request had taken effect. v1 reported it here too.
        */
       readonly cancellationReason?: CancellationReason;
+      /**
+       * The stored Result, when the store still holds it.
+       *
+       * A wait delivers the answer it waited for
+       * ([ADR-0036](../../../docs/adr/0036-a-wait-delivers-the-result-it-waited-for.md)),
+       * so the Result rides on the terminal outcome rather than being fetched
+       * a second time. Absent exactly when the output was evicted: the Run is
+       * still terminal, its status still answers, and the caller is told the
+       * output is gone rather than handed a fabricated one.
+       */
+      readonly result?: RunResult;
     }
   | { readonly outcome: "still running"; readonly runId: RunId }
   | { readonly outcome: "unknown Run"; readonly runId: RunId };

@@ -64,10 +64,30 @@
  * [ADR-0035](../../../docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)
  * is the decision.
  *
+ * ## Holding, and why a wait is the one time a push is not handed over
+ *
+ * A wait delivers the Result it waited for
+ * ([ADR-0036](../../../docs/adr/0036-a-wait-delivers-the-result-it-waited-for.md)),
+ * and delivery pushes at settlement — which is the same instant the waiter is
+ * woken. Left alone, the notice would reach Pi's queue before the wait
+ * returned, and nothing could take it back. So the wait tool handler tells
+ * this sink which Runs it is about to wait on, **before** it starts waiting,
+ * and a push for a held Run is **accepted and kept here** rather than handed
+ * to Pi. When the wait ends the hold is released, and each kept notice goes
+ * one of two ways: the wait delivered its Result, so the notice is dropped as
+ * *answered by the wait*; or the wait gave up — timeout, abort, or an evicted
+ * output — and the notice is handed over now, exactly as it would have been.
+ *
+ * A held notice is *unresolved* while it is held: the hand-off has neither
+ * landed nor been consumed, and the widget row stays. That is what earns
+ * holding its place under the rule above — it is a way an unresolved hand-off
+ * can become resolved without a landing — and it is bounded by the number of
+ * Runs one wait covers, which is the number of Runs the Session has.
+ *
  * ## What the widget is told, and what it is not
  *
- * Five states live here — unlanded, lost, landed, exhausted, consumed — and
- * the widget sees three: `pending`, `resolved`, `exhausted`. It never learns
+ * Six states live here — unlanded, lost, landed, exhausted, consumed, held —
+ * and the widget sees three: `pending`, `resolved`, `exhausted`. It never learns
  * whether *resolved* was a landing or a retrieval, because a row that stays
  * and a row that goes is the whole of what it is deciding, and a component
  * that knew more would eventually act on more.
@@ -140,6 +160,16 @@ export interface HandoffCounts {
    * notice has a number behind it.
    */
   readonly consumedBeforeLanding: number;
+  /** Pushes kept here because an active wait covered the Run. */
+  readonly heldForWait: number;
+  /**
+   * Held notices dropped because the wait delivered the Result.
+   *
+   * The duplicate this sink no longer sends. `heldForWait` minus this is how
+   * many holds ended in a hand-over after all — a wait that timed out or was
+   * aborted with the Run still going.
+   */
+  readonly answeredByWait: number;
 }
 
 const ZERO_COUNTS: HandoffCounts = {
@@ -151,6 +181,8 @@ const ZERO_COUNTS: HandoffCounts = {
   landings: 0,
   exhaustions: 0,
   consumedBeforeLanding: 0,
+  heldForWait: 0,
+  answeredByWait: 0,
 };
 
 export interface SessionPushSink extends NotificationSink {
@@ -172,14 +204,24 @@ export interface SessionPushSink extends NotificationSink {
   /** The parent agent went idle. Every lost notice is pushed again, once. */
   readonly agentSettled: () => void;
   /**
-   * The parent retrieved this Run's Result with `agent_result`.
+   * The parent has this Run's Result: `agent_result` returned it, or a wait
+   * delivered it.
    *
-   * Told by the tool handler, through one narrow function, and by nothing
-   * else. Not `agent_wait`, which reports terminality and withholds the
-   * answer; not an internal store read, which delivery and diagnostics also
+   * Told by the tool handlers, through one narrow function, and by nothing
+   * else — not an internal store read, which delivery and diagnostics also
    * make.
    */
   readonly consumed: (runId: RunId) => void;
+  /**
+   * The parent is about to wait on these Runs; keep their notices here until
+   * the returned release is called.
+   *
+   * `"all"` is `agent_wait_all`'s hold: every Run of the Session, because the
+   * ids it covers are read off the index after the hold has to be in place.
+   * Called by the wait handlers before they start waiting, and released
+   * however the wait ends. Releasing twice does nothing.
+   */
+  readonly hold: (scope: readonly RunId[] | "all") => () => void;
   /** Run ids whose notice has been pushed and not yet seen to land. */
   readonly unlanded: () => readonly RunId[];
   /** Run ids whose notice has landed, in landing order. */
@@ -232,6 +274,13 @@ export function createSessionPushSink(): SessionPushSink {
   const landed = new Set<RunId>();
   /** Runs whose Result the parent has retrieved. Bounded the same way. */
   const consumed = new Set<RunId>();
+  /** How many active waits cover each Run, and how many cover every Run. */
+  const holds = new Map<RunId, number>();
+  let holdAll = 0;
+  /** Notices kept back for a held Run. Bounded by the Runs one wait covers. */
+  const held = new Map<RunId, RunNotification>();
+  const isHeld = (runId: RunId): boolean =>
+    holdAll > 0 || (holds.get(runId) ?? 0) > 0;
   /** Runs delivery gave up announcing. Bounded the same way. */
   const exhausted = new Set<RunId>();
   const listeners = new Set<() => void>();
@@ -294,6 +343,15 @@ export function createSessionPushSink(): SessionPushSink {
           count("handOffsAccepted");
           return Effect.void;
         }
+        // Accepted and kept. The wait that covers this Run is about to
+        // deliver its Result, and a notice handed to Pi now could not be
+        // taken back once it had.
+        if (send !== undefined && isHeld(notification.runId)) {
+          held.set(notification.runId, notification);
+          count("handOffsAccepted");
+          count("heldForWait");
+          return Effect.void;
+        }
         if (handOver(notification)) {
           count("handOffsAccepted");
           return Effect.void;
@@ -327,6 +385,9 @@ export function createSessionPushSink(): SessionPushSink {
       landed.clear();
       consumed.clear();
       exhausted.clear();
+      holds.clear();
+      holdAll = 0;
+      held.clear();
     },
 
     messageStarted: (message) => {
@@ -383,6 +444,44 @@ export function createSessionPushSink(): SessionPushSink {
       if (landed.has(runId) || consumed.has(runId)) return;
       consumed.add(runId);
       announce();
+    },
+
+    hold: (scope) => {
+      if (scope === "all") holdAll += 1;
+      else
+        for (const runId of scope)
+          holds.set(runId, (holds.get(runId) ?? 0) + 1);
+      let released = false;
+      return () => {
+        // Idempotent for the reason the waiter registration is: a hold given
+        // up twice would give up another wait's, and its notices with it.
+        if (released) return;
+        released = true;
+        if (scope === "all") holdAll -= 1;
+        else {
+          for (const runId of scope) {
+            const left = (holds.get(runId) ?? 1) - 1;
+            if (left <= 0) holds.delete(runId);
+            else holds.set(runId, left);
+          }
+        }
+        // Snapshot first: `handOver` writes to `unlanded`, not to `held`, but
+        // a listener announced from a landing could call back into the sink.
+        for (const notification of [...held.values()]) {
+          if (isHeld(notification.runId)) continue;
+          held.delete(notification.runId);
+          // The wait delivered this Result, so the notice has nothing left
+          // to tell the parent. Dropped, and counted as the duplicate it
+          // would have been.
+          if (consumed.has(notification.runId)) {
+            count("answeredByWait");
+            continue;
+          }
+          // The wait gave up with the Run still going, or was handed no
+          // Result. The notice goes now, exactly as it would have at settle.
+          handOver(notification);
+        }
+      };
     },
 
     unlanded: () => [...unlanded.keys()],

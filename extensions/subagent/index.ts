@@ -93,7 +93,7 @@ export interface SubagentV2Installation {
  *
  * - the process-level state the registrations close over — the session handle,
  *   the push sink, the live guideline array, and the live Profile list;
- * - the registrations themselves: six tools, one command, one message
+ * - the registrations themselves: seven tools, one command, one message
  *   renderer;
  * - the two Session events that build and dispose a runtime;
  * - the three host events that drive notification landing.
@@ -114,7 +114,7 @@ export function installSubagentV2(
   const hostFacts = options.backendSet();
   if (hostFacts.isChildLoad() || hostFacts.childDepth() > 0) {
     // Inert inside a child. Registering the delegation tools there would show
-    // a model six tools it is not allowed to use, and it would try: the depth
+    // a model seven tools it is not allowed to use, and it would try: the depth
     // check in admission is the backstop, not the answer. Nothing is
     // registered and no Session event is subscribed to, so this process
     // behaves as though the extension were not installed at all.
@@ -152,10 +152,11 @@ export function installSubagentV2(
     handle,
     agentGuidelines,
     hostFacts.childDepth,
-    // One narrow function rather than the sink, exactly as the widget is
-    // handed a read model: the `agent_result` handler says the parent has the
-    // Result and nothing more.
-    (id) => sink.consumed(id),
+    // Two narrow functions rather than the sink, exactly as the widget is
+    // handed a read model: the result and wait handlers say the parent has a
+    // Result, the wait handlers say which Runs they are about to wait on, and
+    // neither can push anything.
+    { consumed: (id) => sink.consumed(id), hold: (scope) => sink.hold(scope) },
   );
   // One operator command. v1's `/agents` is gone in 2.0 and its flow is
   // `/subagent profiles`, which is the one public surface 2.0 removes.
@@ -184,8 +185,9 @@ export function installSubagentV2(
 
   // The three events notification landing is decided by. The sink owns the
   // decision; the entry point only forwards neutral evidence to it. The fourth
-  // way a hand-off resolves — the parent retrieving the Result — is not a host
-  // event, so it arrives through the `agent_result` handler above.
+  // way a hand-off resolves — the parent being handed the Result, by
+  // `agent_result` or by a wait — is not a host event, so it arrives through
+  // the tool handlers above.
   pi.on("message_start", (event) => sink.messageStarted(event.message));
   pi.on("turn_end", (event, ctx) =>
     sink.turnEnded({

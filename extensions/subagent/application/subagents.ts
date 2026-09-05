@@ -1,9 +1,9 @@
 /**
  * `Subagents`: the one thing the host handlers call.
  *
- * Six functions, each of which does exactly three things — map a decoded tool
- * input to a supervisor request, call the supervisor, and hand the outcome to
- * presentation. It owns no state, holds no reference to a Session, and has no
+ * Seven functions, each of which does exactly three things — map a decoded
+ * tool input to a supervisor request, call the supervisor, and hand the
+ * outcome to presentation. It owns no state, holds no reference to a Session, and has no
  * fields: every operation is a function of its input, the Session facts the
  * host read at execute time, and the services it declares.
  *
@@ -11,7 +11,7 @@
  * lifecycle, presentation, and delivery directly, and once three callers could
  * reach the same mutable Run record, no single place knew what a Run looked
  * like. Here the host cannot reach the repository, the store, or a backend at
- * all: it holds a managed runtime and calls these six functions, and the
+ * all: it holds a managed runtime and calls these seven functions, and the
  * boundary test says so.
  *
  * Nothing here decides what a rejection *says*. The prose lives in
@@ -21,6 +21,7 @@
 import { Effect } from "effect";
 import {
   boundRunLabel,
+  isTerminalRunPhase,
   labelShortenedDiagnostic,
   type RunDiagnostic,
   type RunId,
@@ -28,6 +29,7 @@ import {
 import {
   type CollectedRuns,
   formatCancelOutcomes,
+  formatNoActiveRuns,
   formatResult,
   formatResultRejection,
   formatResumeOutcome,
@@ -47,6 +49,7 @@ import type {
   SessionFacts,
   StartInput,
   SteerInput,
+  WaitAllInput,
   WaitInput,
 } from "./inputs.ts";
 
@@ -231,7 +234,20 @@ const cancel = (
   });
 
 /**
- * `agent_wait`. Observes terminality; it never owns a Run.
+ * Wait for these Runs and deliver what they produced.
+ *
+ * The one path both waits share
+ * ([ADR-0036](../../../docs/adr/0036-a-wait-delivers-the-result-it-waited-for.md)):
+ * `agent_wait` names the Runs and `agent_wait_all` reads them off the index,
+ * and from there the two are the same operation. A terminal outcome carries
+ * its Result, and the text renders that Result exactly as `agent_result`
+ * would — so a parent that waited has the answer and nothing further to fetch.
+ *
+ * The `details` list only the Runs whose Result was actually returned. That
+ * is the shape the `agent_result` handler already recognises a delivered
+ * Result by, and the host reads it to record consumption — so a Run whose
+ * output was evicted is in the text (its status still answers) and not in the
+ * details (the parent was handed no Result to consume).
  *
  * A zero timeout is the answer-now form the host uses when its turn was
  * aborted: the same reading, without waiting for it. That is why the timeout
@@ -239,28 +255,22 @@ const cancel = (
  * timeout and an abort behave identically, so they had better be the same
  * code path.
  */
-const wait = (
-  input: WaitInput,
+const collect = (
+  runIds: readonly RunId[],
+  timeoutSeconds: number | undefined,
 ): Effect.Effect<ToolResponse, never, SubagentsServices> =>
   Effect.gen(function* () {
     const supervisor = yield* SubagentSupervisor;
-    const runIds = distinct(input.ids);
     const outcomes = yield* supervisor.wait(
       runIds,
-      input.timeoutSeconds === undefined
+      timeoutSeconds === undefined
         ? undefined
-        : Math.max(0, Math.round(input.timeoutSeconds * 1_000)),
+        : Math.max(0, Math.round(timeoutSeconds * 1_000)),
     );
     const agents = yield* agentNamesOf(runIds);
-    const terminal = outcomes.flatMap((outcome) =>
-      outcome.outcome === "terminal"
-        ? [
-            {
-              runId: String(outcome.runId),
-              agent: agents.get(outcome.runId) ?? String(outcome.runId),
-              status: outcome.status,
-            },
-          ]
+    const delivered = outcomes.flatMap((outcome) =>
+      outcome.outcome === "terminal" && outcome.result !== undefined
+        ? [summaryOf(outcome.result)]
         : [],
     );
     const stillRunning = outcomes.filter(
@@ -268,8 +278,40 @@ const wait = (
     ).length;
     return {
       text: formatWaitOutcomes(outcomes, agents),
-      details: { runs: terminal, stillRunning } satisfies CollectedRuns,
+      details: { runs: delivered, stillRunning } satisfies CollectedRuns,
     };
+  });
+
+/** `agent_wait`. The named Runs, deduplicated in the caller's order. */
+const wait = (
+  input: WaitInput,
+): Effect.Effect<ToolResponse, never, SubagentsServices> =>
+  collect(distinct(input.ids), input.timeoutSeconds);
+
+/**
+ * `agent_wait_all`. Every Run of this Session that is active right now.
+ *
+ * Active, not every Run ever started: a Run that had already finished was
+ * announced by its own notification — or is about to be, if Pi is still
+ * holding the notice — and delivering it again here would be the duplicate
+ * the wait exists to avoid. The idle answer says so, so a parent that expected
+ * something is told where it went rather than shown an empty list.
+ */
+const waitAll = (
+  input: WaitAllInput,
+): Effect.Effect<ToolResponse, never, SubagentsServices> =>
+  Effect.gen(function* () {
+    const repository = yield* RunRepository;
+    const active = (yield* repository.list())
+      .filter((snapshot) => !isTerminalRunPhase(snapshot.phase))
+      .map((snapshot) => snapshot.identity.runId);
+    if (active.length === 0) {
+      return {
+        text: formatNoActiveRuns(),
+        details: { runs: [], stillRunning: 0 } satisfies CollectedRuns,
+      };
+    }
+    return yield* collect(active, input.timeoutSeconds);
   });
 
 /** `agent_result`. The stored answer, or the reason there is not one. */
@@ -301,5 +343,6 @@ export const Subagents = Object.freeze({
   steer,
   cancel,
   wait,
+  waitAll,
   result,
 });

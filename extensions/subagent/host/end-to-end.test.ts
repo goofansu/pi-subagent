@@ -82,11 +82,12 @@ for (const fake of BOTH_FAKES) {
       /unknown Run/,
     );
 
-    // wait: the success path, and the unknown-id path.
-    assert.match(
-      await rig.text("agent_wait", { ids: [ids.runId] }),
-      new RegExp(`\\(${ids.runId}\\): completed`),
-    );
+    // wait: the success path, which delivers the Result, and the unknown-id
+    // path.
+    const waited = await rig.text("agent_wait", { ids: [ids.runId] });
+    assert.match(waited, new RegExp(`, run ${ids.runId}:\n`));
+    assert.match(waited, /· completed in /);
+    assert.match(waited, new RegExp(RIG_ANSWER));
     assert.equal(
       await rig.text("agent_wait", { ids: ["run-never"] }),
       "Unknown run ids: run-never.",
@@ -138,7 +139,7 @@ test("when the widget stops listing a Run, agent_result returns its result", asy
   t.after(() => rig.installation.handle.release());
 
   const ids = await started(rig, RIG_RESUMABLE_PROFILE);
-  await rig.text("agent_wait", { ids: [ids.runId] });
+  await rig.settled(ids.runId);
   await rig.pump();
   // A row lasts until its notice lands, so landing the notice is what takes
   // the Run off the widget.
@@ -181,7 +182,7 @@ test("a settled Run sends exactly one follow-up notice that triggers a turn", as
   t.after(() => rig.installation.handle.release());
 
   const ids = await started(rig, RIG_RESUMABLE_PROFILE);
-  await rig.text("agent_wait", { ids: [ids.runId] });
+  await rig.settled(ids.runId);
   await rig.pump();
 
   const sent = rig.host.sent();
@@ -220,7 +221,7 @@ test("a push that fails leaves the Result retrievable and unchanged", async (t) 
   t.after(() => rig.installation.handle.release());
 
   const ids = await started(rig, RIG_RESUMABLE_PROFILE);
-  await rig.text("agent_wait", { ids: [ids.runId] });
+  await rig.settled(ids.runId);
   await rig.pump();
 
   // The push threw, so nothing was sent and nothing is waiting to land.
@@ -240,7 +241,7 @@ test("a notice an interrupt discarded is pushed again and lands exactly once", a
   t.after(() => rig.installation.handle.release());
 
   const ids = await started(rig, RIG_RESUMABLE_PROFILE);
-  await rig.text("agent_wait", { ids: [ids.runId] });
+  await rig.settled(ids.runId);
   await rig.pump();
   assert.equal(rig.host.sent().length, 1);
   assert.deepEqual(rig.installation.sink.unlanded(), [ids.runId]);
@@ -272,7 +273,7 @@ test("a notice that landed the first time is never sent twice", async (t) => {
   t.after(() => rig.installation.handle.release());
 
   const ids = await started(rig, RIG_RESUMABLE_PROFILE);
-  await rig.text("agent_wait", { ids: [ids.runId] });
+  await rig.settled(ids.runId);
   await rig.pump();
   await rig.host.messageStart({
     role: "custom",
@@ -291,7 +292,7 @@ test("shutting down drops an unlanded notice rather than sending it into the nex
   await rig.host.sessionStart();
 
   const ids = await started(rig, RIG_RESUMABLE_PROFILE);
-  await rig.text("agent_wait", { ids: [ids.runId] });
+  await rig.settled(ids.runId);
   await rig.pump();
   assert.deepEqual(rig.installation.sink.unlanded(), [ids.runId]);
 
@@ -314,7 +315,7 @@ test("a cancelled Run still notifies, and its notice points at what it produced"
 
   const ids = await started(rig, RIG_RESUMABLE_PROFILE);
   await rig.text("agent_cancel", { ids: [ids.runId] });
-  await rig.text("agent_wait", { ids: [ids.runId] });
+  await rig.settled(ids.runId);
   await rig.pump();
 
   const sent = rig.host.sent();
@@ -333,7 +334,7 @@ test("the message the sink sends is the one the renderer can parse", async (t) =
   t.after(() => rig.installation.handle.release());
 
   const ids = await started(rig, RIG_RESUMABLE_PROFILE);
-  await rig.text("agent_wait", { ids: [ids.runId] });
+  await rig.settled(ids.runId);
   await rig.pump();
 
   // The build and the parse are one declaration, so this is a round trip
@@ -346,6 +347,7 @@ test("the message the sink sends is the one the renderer can parse", async (t) =
     label: "look around",
     status: "completed",
     resultAvailability: "complete",
+    output: RIG_ANSWER,
     preview: RIG_ANSWER,
     // The Run's real duration, which is wall-clock: the round trip is about
     // the two shapes agreeing, not about what the clock said.

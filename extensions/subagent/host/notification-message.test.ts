@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { cancelledEnding, failedEnding } from "../domain/index.ts";
+import {
+  cancelledEnding,
+  failedEnding,
+  NOTIFICATION_INLINE_MAX_BYTES,
+} from "../domain/index.ts";
 import {
   formatNotificationText,
   type RenderableTheme,
@@ -180,9 +184,11 @@ test("an expanded notice shows the bounded text below the summary", () => {
 
   assert.ok((rendered?.length ?? 0) > 1);
   assert.match(rendered?.join("\n") ?? "", /the answer/);
+  // A short output travels whole, so the pointer is a note rather than a
+  // fetch instruction.
   assert.match(
     rendered?.join("\n") ?? "",
-    /The result is available\. Call agent_result with \{"id":"run-1"\}\./,
+    /nothing further to fetch\. agent_result with \{"id":"run-1"\} re-reads it/,
   );
 });
 
@@ -245,17 +251,20 @@ test("a message this extension did not shape is left to the host", () => {
   );
 });
 
-test("a failed notice renders the error and a cancelled one renders neither output nor error", () => {
+test("a failed notice renders the error and a cancelled one renders no error, and neither renders a long output", () => {
+  // Past the inline bound the partial output stays behind `agent_result`,
+  // which is the case in which the notice must not carry it.
+  const long = `half an answer ${"h".repeat(NOTIFICATION_INLINE_MAX_BYTES)}`;
   const failed = buildNotificationMessage(
     fixtureNotification({
       ending: failedEnding("the backend refused"),
-      finalOutput: "half an answer",
+      finalOutput: long,
     }),
   );
   const cancelled = buildNotificationMessage(
     fixtureNotification({
       ending: cancelledEnding("requested"),
-      finalOutput: "half an answer",
+      finalOutput: long,
     }),
   );
 

@@ -13,7 +13,7 @@ import { SUBAGENT_TOOL_NAMES } from "./tools.ts";
  *
  * Two different guards, and both matter. The **registration** guard is what
  * stops a child's model from ever seeing the delegation tools: a model shown
- * six tools will try to use them, and being refused six times is worse than
+ * seven tools will try to use them, and being refused seven times is worse than
  * never being offered. The **admission** guard is the backstop for a direct
  * call, and until M4 it was unreachable because the host reported a constant
  * depth of zero.

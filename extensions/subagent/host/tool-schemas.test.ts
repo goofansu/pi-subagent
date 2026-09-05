@@ -11,6 +11,7 @@ import {
   StartInputSchema,
   SteerInputSchema,
   toolParameters,
+  WaitAllInputSchema,
   WaitInputSchema,
 } from "./tool-schemas.ts";
 
@@ -29,6 +30,7 @@ const SCHEMAS = [
   ["agent_start", StartInputSchema],
   ["agent_resume", ResumeInputSchema],
   ["agent_wait", WaitInputSchema],
+  ["agent_wait_all", WaitAllInputSchema],
   ["agent_result", ResultInputSchema],
   ["agent_cancel", CancelInputSchema],
   ["agent_steer", SteerInputSchema],
@@ -80,6 +82,24 @@ test("the wait timeout is emitted as a plain positive number, not a union with s
   assert.equal(document.properties.timeoutSeconds.type, "number");
   assert.equal(document.properties.timeoutSeconds.exclusiveMinimum, 0);
   assert.deepEqual(document.required, ["ids"]);
+});
+
+test("agent_wait_all takes no ids and the same timeout as agent_wait", () => {
+  const document = toolParameters(WaitAllInputSchema) as {
+    properties: Record<string, Record<string, unknown>>;
+    required?: string[];
+  };
+  const wait = toolParameters(WaitInputSchema) as {
+    properties: Record<string, Record<string, unknown>>;
+  };
+
+  assert.deepEqual(Object.keys(document.properties), ["timeoutSeconds"]);
+  assert.deepEqual(document.required ?? [], []);
+  // One declaration, so the two cannot drift in what they tell a model.
+  assert.deepEqual(
+    document.properties.timeoutSeconds,
+    wait.properties.timeoutSeconds,
+  );
 });
 
 test("an id field is emitted with the identifier pattern and its length bound", () => {
@@ -152,6 +172,8 @@ test("Pi's own tool-argument validation accepts a well-formed call for each tool
       { id: "subagent-1", description: "d", prompt: "p" },
     ],
     ["agent_wait", WaitInputSchema, { ids: ["run-1"], timeoutSeconds: 30 }],
+    ["agent_wait_all", WaitAllInputSchema, {}],
+    ["agent_wait_all", WaitAllInputSchema, { timeoutSeconds: 30 }],
     ["agent_result", ResultInputSchema, { id: "run-1" }],
     ["agent_cancel", CancelInputSchema, { ids: ["run-1", "run-2"] }],
     ["agent_steer", SteerInputSchema, { id: "run-1", message: "go left" }],

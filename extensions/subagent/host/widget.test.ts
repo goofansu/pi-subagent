@@ -110,7 +110,7 @@ test("a terminal Run keeps its row until its completion notice lands, and the la
   t.after(() => rig.installation.handle.release());
 
   const started = await heldRun(rig);
-  await rig.text("agent_wait", { ids: [started.runId] });
+  await rig.settled(started.runId);
   await rig.pump();
 
   // The row's job is to be read, and a Run shorter than the turn that started
@@ -139,7 +139,7 @@ test("a settled row says what the Run cost, and the number does not move", async
   t.after(() => rig.installation.handle.release());
 
   const started = await heldRun(rig);
-  await rig.text("agent_wait", { ids: [started.runId] });
+  await rig.settled(started.runId);
   await rig.pump();
 
   // The Run has settled and is waiting for its notice to land, which is the
@@ -167,7 +167,7 @@ test("a notice lost to an interrupt keeps its row until the re-push lands", asyn
   t.after(() => rig.installation.handle.release());
 
   const started = await heldRun(rig);
-  await rig.text("agent_wait", { ids: [started.runId] });
+  await rig.settled(started.runId);
   await rig.pump();
   assert.equal(rig.host.hasWidget(), true);
 
@@ -353,11 +353,10 @@ test("W-3: a settled row leaves when the parent retrieves its Result, with no la
   t.after(() => rig.installation.handle.release());
 
   const started = await heldRun(rig);
-  await rig.text("agent_wait", { ids: [started.runId] });
+  await rig.settled(started.runId);
   await rig.pump();
 
-  // Waiting resolves nothing: it reports terminality and withholds the answer,
-  // so the parent still needs pointing at the Result.
+  // Settled, notice handed to Pi, nothing landed: the row is waiting.
   assert.equal(rig.host.hasWidget(), true);
   assert.deepEqual(rig.installation.sink.landed(), []);
 
@@ -367,6 +366,22 @@ test("W-3: a settled row leaves when the parent retrieves its Result, with no la
   // The notice never landed, and the row went anyway: the parent has done
   // everything the notice exists to make it do.
   assert.deepEqual(rig.installation.sink.landed(), []);
+  assert.equal(rig.installation.sink.status(runId(started.runId)), "resolved");
+  assert.equal(rig.host.hasWidget(), false);
+});
+
+test("W-4: a settled row leaves when a wait delivers its Result, and no notice follows", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const started = await heldRun(rig);
+  await rig.text("agent_wait", { ids: [started.runId] });
+  await rig.pump();
+
+  // The wait handed the parent the answer, so the hand-off resolved without a
+  // landing and the notice was never Pi's to deliver.
+  assert.deepEqual(rig.host.sent(), []);
   assert.equal(rig.installation.sink.status(runId(started.runId)), "resolved");
   assert.equal(rig.host.hasWidget(), false);
 });
@@ -382,7 +397,7 @@ test("W-2: a row whose notice will never arrive says so, and retrieving the Resu
   rig.installation.sink.bind(() => {
     throw new Error("this Session went stale");
   });
-  await rig.text("agent_wait", { ids: [started.runId] });
+  await rig.settled(started.runId);
   await rig.pump();
 
   assert.equal(rig.installation.sink.status(runId(started.runId)), "exhausted");

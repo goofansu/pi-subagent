@@ -1,5 +1,5 @@
 /**
- * The six tool inputs, declared once as Schema.
+ * The seven tool inputs, declared once as Schema.
  *
  * ADR-0029 adopted Effect Schema for v2, and the M2 spike cleared the last
  * thing keeping a second schema library alive here: `Schema.toJsonSchemaDocument`
@@ -112,25 +112,33 @@ export const CancelInputSchema = Schema.Struct({
   }),
 });
 
+/**
+ * The wait timeout: `Schema.Finite`, and positive.
+ *
+ * A zero or negative timeout would mean "give up before starting", which is
+ * not a wait, and an infinite one would mean "never give up", which the
+ * absent field already says. One declaration for both waits, so the two
+ * cannot drift in what they accept or in what they tell a model.
+ */
+const TIMEOUT_SECONDS = Schema.optionalKey(
+  Schema.Finite.check(Schema.isGreaterThan(0)).annotate({
+    description:
+      "Give up waiting after this long. Prefer a value that comfortably " +
+      "exceeds the delegated work; the Runs keep going after a timeout and " +
+      "their completions are still delivered on their own.",
+  }),
+);
+
 export const WaitInputSchema = Schema.Struct({
   ids: Schema.Array(RunId).annotate({
     description: "Run ids returned by agent_start or agent_resume",
   }),
-  /**
-   * `Schema.Finite`, and positive.
-   *
-   * A zero or negative timeout would mean "give up before starting", which is
-   * not a wait, and an infinite one would mean "never give up", which the
-   * absent field already says.
-   */
-  timeoutSeconds: Schema.optionalKey(
-    Schema.Finite.check(Schema.isGreaterThan(0)).annotate({
-      description:
-        "Give up waiting after this long. Prefer a value that comfortably " +
-        "exceeds the delegated work; the Runs keep going after a timeout and " +
-        "notify on their own.",
-    }),
-  ),
+  timeoutSeconds: TIMEOUT_SECONDS,
+});
+
+/** No ids: `agent_wait_all` covers every Run that is active when it is called. */
+export const WaitAllInputSchema = Schema.Struct({
+  timeoutSeconds: TIMEOUT_SECONDS,
 });
 
 export const ResultInputSchema = Schema.Struct({

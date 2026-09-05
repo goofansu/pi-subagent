@@ -124,24 +124,38 @@ the Run settles, and is retrieved by Run id with `agent_result`. A provider's
 own "result" event is adapter-local Turn evidence; it is not this Result and is
 not synonymous with settlement.
 
-**Notification** — a small status-specific completion notice pushed as a
-follow-up message. It opens with the Run's **Label**, so a model running
-several Subagents reads which delegation finished before it reads an
-identifier; it identifies the owning Subagent and the specific Run, says how
-much of the Result is there — **complete**, **partial**, or **record-only**,
-read off the Result's own output rather than off the Run's status — and points
-at `agent_result` with the exact argument shape. It is not the Result itself.
+**Notification** — a status-specific completion notice pushed as a follow-up
+message. It opens with the Run's **Label**, so a model running several
+Subagents reads which delegation finished before it reads an identifier; it
+identifies the owning Subagent and the specific Run, and says how much of the
+Result is there — **complete**, **partial**, or **record-only**, read off the
+Result's own output rather than off the Run's status. When the final output
+fits `NOTIFICATION_INLINE_MAX_BYTES` (16 KiB) the notice carries it **whole**
+and its pointer says nothing further need be fetched; otherwise it carries a
+bounded **preview** and points at `agent_result` with the exact argument shape.
+Presence of `output` on the value is what tells the two apart. The Result store
+stays authoritative either way.
+[ADR-0037](docs/adr/0037-a-notice-carries-a-short-output-whole.md).
 **Pushed is not landed**: Pi may hold a follow-up while the model is
 mid-turn, and if an interrupt discards it the notice is pushed again once the
-agent settles. One landing per Notification is the invariant. The five states a
+agent settles. One landing per Notification is the invariant. The six states a
 notice can be in — **handed off**, **landed**, **lost after hand-off**,
-**exhausted**, **consumed** — are defined under **Delivery sweep**, each with
-the one component that decides it.
+**exhausted**, **consumed**, **held** — are defined under **Delivery sweep**,
+each with the one component that decides it.
 
-**Wait** — `agent_wait` observes terminality only. It returns Run identity and
-terminal phase, never output, and neither suppresses Notifications nor touches
-the Result store. Repeated waits return the same phase. Aborting a wait stops
-only that waiter.
+**Wait** — `agent_wait` blocks until the named Runs are terminal and
+delivers each one's Result, rendered exactly as `agent_result` renders it;
+`agent_wait_all` does the same for every Run that is active when it is called,
+and names none. A delivered Result is **consumed** (see below), so no
+Notification follows it: while a wait covers a Run the Session push sink
+**holds** that Run's notice rather than handing it to Pi, and at the end of the
+wait drops a held notice whose Result the wait delivered and hands over any
+other. A wait reads the Result store without changing it; repeated waits return
+the same Result. Aborting a wait stops only that waiter. The delivery model a
+model is told — a completion arrives on its own, so the default is independent
+work and a wait is for when nothing else remains — is stated once, in
+`DELIVERY_MODEL`, and quoted by `agent_start` and both waits.
+[ADR-0036](docs/adr/0036-a-wait-delivers-the-result-it-waited-for.md).
 
 **Result store** — the authoritative home of every terminal Run's output,
 addressable by id from the moment the Run settles. Reading observes a stored
@@ -388,15 +402,23 @@ attempts a second apart by default. Decided by `CompletionDelivery`, from its
 own retry loop, and terminal for delivery. The stored Result is untouched, so
 `agent_result` still answers.
 
-**Consumed** — the parent retrieved this Run's Result with `agent_result`.
-Decided by the **Session push sink**, told by the `agent_result` tool handler
-and by nothing else: not `agent_wait`, which reports terminality and withholds
-the answer; not a rejection or an expired Result; and not any internal store
-read. A push for a consumed Run is accepted and not sent, and a consumed notice
-lost after hand-off is not re-pushed — but a notice Pi already holds lands
-anyway, because the extension API has no call that removes a queued message,
-and that case is counted as *consumed before landing*.
+**Consumed** — the parent has this Run's Result: `agent_result` returned it,
+or a wait delivered it. Decided by the **Session push sink**, told by those
+tool handlers and by nothing else: not a rejection or an expired Result, and
+not any internal store read. A push for a consumed Run is accepted and not
+sent, and a consumed notice lost after hand-off is not re-pushed — but a notice
+Pi already holds lands anyway, because the extension API has no call that
+removes a queued message, and that case is counted as *consumed before
+landing*.
 [ADR-0035](docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md).
+
+**Held** — a push for a Run that an active wait covers, accepted by the
+Session push sink and kept there rather than handed to Pi. Told by the wait
+tool handlers, which place the hold before they start waiting and release it
+however the wait ends. At release a held notice is dropped as **answered by
+the wait** if its Result was delivered, and handed over otherwise. Unresolved
+while held.
+[ADR-0036](docs/adr/0036-a-wait-delivers-the-result-it-waited-for.md).
 
 **Completion hand-off** — the whole business of getting one notice to the
 parent, from the first push to whatever ends it. It is **resolved** when the
@@ -470,8 +492,9 @@ notice rather than a pin on the stored Result, because delivery releases that
 pin on a successful push.
 
 Landing is not the only end. A **Completion hand-off** also resolves when its
-Run is **consumed**, and the sink is told of **exhaustion** by delivery, so all
-five states have one owner and a settled row can say why it is stuck.
+Run is **consumed**, the sink is told of **exhaustion** by delivery, and a
+notice is **held** while a wait covers its Run, so all six states have one
+owner and a settled row can say why it is stuck.
 
 **RunCard** — the pure presentation of one Run, built from a published index row
 (live, and therefore carrying no output) or from an immutable stored Result

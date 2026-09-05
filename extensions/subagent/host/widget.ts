@@ -38,8 +38,8 @@
  * teardown and rebuild.
  *
  * A Run's row lasts from `agent_start` until its **completion hand-off is
- * resolved** — its notice landed, or the parent retrieved its Result with
- * `agent_result` — and not until the Run settles. A Run shorter than the turn
+ * resolved** — its notice landed, or the parent was handed its Result by
+ * `agent_result` or by a wait — and not until the Run settles. A Run shorter than the turn
  * that started it settles before anybody has looked at the widget, so a row
  * that went at settlement would be a row nobody ever read. A parent that
  * fetched the Result at once, on the other hand, has done everything the

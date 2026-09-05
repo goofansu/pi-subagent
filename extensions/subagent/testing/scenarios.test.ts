@@ -62,12 +62,17 @@ test("start, progress, complete, result: the result is every observation, in ord
       }),
   );
 
-  assert.deepEqual(value.waited, [
-    { outcome: "terminal", runId: value.started.runId, status: "completed" },
-  ]);
+  assert.equal(value.waited.length, 1);
+  const [waited] = value.waited;
+  assert.equal(waited.outcome, "terminal");
+  if (waited.outcome !== "terminal") return;
+  assert.equal(waited.runId, value.started.runId);
+  assert.equal(waited.status, "completed");
   assert.equal(value.read.outcome, "result");
   if (value.read.outcome !== "result") return;
   const { result } = value.read;
+  // The wait carried the same stored Result the read returned.
+  assert.deepEqual(waited.result, result);
   assert.equal(result.status, "completed");
   assert.equal(result.finalOutput, "the answer");
   assert.deepEqual(texts(result), ["looking", "", "the answer"]);

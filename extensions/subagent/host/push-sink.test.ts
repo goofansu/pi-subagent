@@ -440,6 +440,8 @@ test("every hand-off outcome is counted separately, and a bind starts them over"
     landings: 1,
     exhaustions: 1,
     consumedBeforeLanding: 0,
+    heldForWait: 0,
+    answeredByWait: 0,
   });
 
   // The counts are one Session's, so the next Session's report is about the
@@ -454,5 +456,109 @@ test("every hand-off outcome is counted separately, and a bind starts them over"
     landings: 0,
     exhaustions: 0,
     consumedBeforeLanding: 0,
+    heldForWait: 0,
+    answeredByWait: 0,
   });
+});
+
+// -- Holding for a wait --------------------------------------------------------
+
+test("a push for a held Run is accepted and kept, not handed to Pi", async () => {
+  const bound = rig();
+  const release = bound.sink.hold([NOTICE.runId]);
+
+  assert.equal(await bound.push(NOTICE), "pushed");
+
+  // Delivery saw a hand-off and the notice is nowhere Pi can see it: not
+  // sent, not unlanded, and the row it belongs to is still pending.
+  assert.deepEqual(bound.sent(), []);
+  assert.deepEqual(bound.sink.unlanded(), []);
+  assert.equal(bound.sink.status(NOTICE.runId), "pending");
+  assert.equal(bound.sink.counts().heldForWait, 1);
+  assert.equal(bound.sink.counts().handOffsAccepted, 1);
+  release();
+});
+
+test("a held notice whose Result the wait delivered is dropped at release", async () => {
+  const bound = rig();
+  const release = bound.sink.hold([NOTICE.runId]);
+  await bound.push(NOTICE);
+
+  // What the wait handler does when the wait returns: consume, then release.
+  bound.sink.consumed(NOTICE.runId);
+  release();
+
+  assert.deepEqual(bound.sent(), []);
+  assert.equal(bound.sink.status(NOTICE.runId), "resolved");
+  assert.equal(bound.sink.counts().answeredByWait, 1);
+  // Nothing left for a later abort to lose or a later settle to re-push.
+  bound.sink.turnEnded({ stopReason: "aborted" });
+  bound.sink.agentSettled();
+  assert.deepEqual(bound.sent(), []);
+});
+
+test("a held notice whose wait gave up is handed over at release, exactly as at settle", async () => {
+  const bound = rig();
+  const release = bound.sink.hold([NOTICE.runId]);
+  await bound.push(NOTICE);
+
+  // The wait timed out or was aborted: no Result was delivered.
+  release();
+
+  assert.equal(bound.sent().length, 1);
+  assert.deepEqual(bound.sink.unlanded(), [NOTICE.runId]);
+  assert.equal(bound.sink.counts().answeredByWait, 0);
+  bound.landed(bound.sent()[0]);
+  assert.equal(bound.sink.status(NOTICE.runId), "resolved");
+});
+
+test('a hold covers only the Runs it names, and "all" covers every Run', async () => {
+  const bound = rig();
+  const other = fixtureNotification({ identity: { runId: runId("run-9") } });
+
+  const release = bound.sink.hold([NOTICE.runId]);
+  await bound.push(other);
+  assert.equal(
+    bound.sent().length,
+    1,
+    "an unheld Run's notice went straight through",
+  );
+  release();
+
+  const releaseAll = bound.sink.hold("all");
+  await bound.push(NOTICE);
+  assert.equal(bound.sent().length, 1, 'every Run is held under "all"');
+  bound.sink.consumed(NOTICE.runId);
+  releaseAll();
+  assert.equal(bound.sent().length, 1);
+  assert.equal(bound.sink.counts().answeredByWait, 1);
+});
+
+test("overlapping holds keep a notice until the last one releases, and a release is idempotent", async () => {
+  const bound = rig();
+  const first = bound.sink.hold([NOTICE.runId]);
+  const second = bound.sink.hold([NOTICE.runId]);
+  await bound.push(NOTICE);
+
+  first();
+  first();
+  assert.deepEqual(bound.sent(), [], "the second wait still covers the Run");
+
+  second();
+  assert.equal(bound.sent().length, 1);
+});
+
+test("unbinding forgets every hold and every held notice", async () => {
+  const bound = rig();
+  bound.sink.hold([NOTICE.runId]);
+  await bound.push(NOTICE);
+
+  bound.sink.unbind();
+  bound.sink.bind(() => {
+    throw new Error("nothing should be sent into the next Session");
+  });
+
+  // The next Session's model did not start this Run, so the notice is gone
+  // rather than released into it — and a fresh push for the id is not held.
+  assert.equal(bound.sink.counts().heldForWait, 0);
 });

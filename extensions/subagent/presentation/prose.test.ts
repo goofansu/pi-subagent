@@ -17,8 +17,10 @@ import {
   WAIT_OUTCOMES,
   type WaitOutcome,
 } from "../domain/index.ts";
+import { fixtureResult } from "../testing/presentation-fixtures.ts";
 import {
   formatCancelOutcomes,
+  formatNoActiveRuns,
   formatResultRejection,
   formatResumeOutcome,
   formatStartOutcome,
@@ -27,6 +29,7 @@ import {
   formatUnknownAgent,
   formatWaitOutcomes,
 } from "./prose.ts";
+import { formatResult } from "./run-card.ts";
 
 const RUN = runId("run-1");
 const OTHER_RUN = runId("run-2");
@@ -66,8 +69,9 @@ test("agent_start renders the started ids as prose a model can act on", () => {
       "subagent id subagent-1\n" +
       "run id run-1\n\n" +
       "Use run id run-1 for agent_wait, agent_result, agent_cancel, and " +
-      "agent_steer. Its notification will arrive when the Run finishes; " +
-      "carry on until then.",
+      "agent_steer. Its completion is delivered to you automatically when " +
+      "the Run finishes; continue independent work until then, and wait only " +
+      "if nothing else remains.",
   );
 });
 
@@ -182,7 +186,9 @@ test("agent_resume renders unknown, running, empty, unsupported, lost, capacity,
       "run id run-1\n\n" +
       "agent_resume returns immediately, not with the answer. Use run id " +
       "run-1 for agent_wait, agent_result, agent_cancel, and agent_steer. Its " +
-      "notification will arrive when the Run finishes; carry on until then.",
+      "completion is delivered to you automatically when the Run finishes; " +
+      "continue independent work until then, and wait only if nothing else " +
+      "remains.",
   );
   assert.equal(
     rendered.get("unknown Subagent"),
@@ -340,26 +346,32 @@ test("agent_cancel with no ids says so", () => {
   assert.equal(formatCancelOutcomes([]), "No run ids were given.");
 });
 
-// ── agent_wait ───────────────────────────────────────────────────────────────
+// ── agent_wait and agent_wait_all ────────────────────────────────────────────
 
-test("agent_wait names terminal ids with status, still-running ids, and unknown ids", () => {
+const EVICTED =
+  "but its output was evicted to keep this Session's result store bounded " +
+  "and cannot be recovered.";
+
+test("a wait delivers each terminal Run's Result as the card agent_result returns", () => {
+  const result = fixtureResult({ finalOutput: "the answer" });
   const outcomes: WaitOutcome[] = [
-    { outcome: "terminal", runId: RUN, status: "completed" },
+    { outcome: "terminal", runId: RUN, status: "completed", result },
     { outcome: "still running", runId: OTHER_RUN },
     { outcome: "unknown Run", runId: runId("run-3") },
   ];
 
   assert.equal(
     formatWaitOutcomes(outcomes, new Map([[RUN, "explore"]])),
-    "explore (run-1): completed\n\n" +
+    `${formatResult(result)}\n\n` +
       "Still running: run-2. The wait gave up, not the Runs: each keeps going " +
       "and notifies on its own, so do not immediately wait on the same ids " +
       "again.\n\n" +
       "Unknown run ids: run-3.",
   );
+  assert.match(formatWaitOutcomes(outcomes), /the answer$/m);
 });
 
-test("agent_wait says why a cancelled Run was cancelled, and says nothing extra otherwise", () => {
+test("a wait names an evicted Run by agent and status, and says its output is gone", () => {
   // v1 rendered `cancelled (requested)` and `cancelled (shutdown)`, and the
   // two are different facts: only one of them is something the caller asked
   // for. A completed Run has no reason and must not grow a parenthesis.
@@ -384,18 +396,18 @@ test("agent_wait says why a cancelled Run was cancelled, and says nothing extra 
         [OTHER_RUN, "librarian"],
       ]),
     ),
-    "explore (run-1): cancelled (requested)\n\n" +
-      "librarian (run-2): cancelled (shutdown)",
+    `explore (run-1): cancelled (requested), ${EVICTED}\n\n` +
+      `librarian (run-2): cancelled (shutdown), ${EVICTED}`,
   );
   assert.equal(
     formatWaitOutcomes([
       { outcome: "terminal", runId: RUN, status: "completed" },
     ]),
-    "run-1: completed",
+    `run-1: completed, ${EVICTED}`,
   );
 });
 
-test("agent_wait covers every outcome and reports an unnamed Run by id", () => {
+test("a wait covers every outcome and reports an unnamed Run by id", () => {
   const rendered = new Map<string, string>();
   const outcomes: WaitOutcome[] = [
     { outcome: "terminal", runId: RUN, status: "failed" },
@@ -407,11 +419,17 @@ test("agent_wait covers every outcome and reports an unnamed Run by id", () => {
   }
 
   coversEveryOutcome(WAIT_OUTCOMES, rendered);
-  assert.equal(rendered.get("terminal"), "run-1: failed");
+  assert.equal(rendered.get("terminal"), `run-1: failed, ${EVICTED}`);
 });
 
-test("agent_wait with no ids says so", () => {
+test("a wait with no ids says so, and a wait-all with nothing active says where the answers went", () => {
   assert.equal(formatWaitOutcomes([]), "No run ids were given.");
+  assert.equal(
+    formatNoActiveRuns(),
+    "No Runs are active in this Session. Every Run started here has already " +
+      "finished and is announced by its own completion notice; use " +
+      "agent_result with a Run id to re-read one.",
+  );
 });
 
 // ── agent_result ─────────────────────────────────────────────────────────────
@@ -467,8 +485,9 @@ test("agent_result covers every rejection, and the union's fourth member is the 
   );
   assert.equal(
     rendered.get("RunNotTerminal"),
-    "Run run-1 has not finished yet, so it has no result. Its notification " +
-      "will arrive on its own, and agent_wait blocks until it does.",
+    "Run run-1 has not finished yet, so it has no result. Its completion is " +
+      "delivered to you on its own; agent_wait blocks until then and returns " +
+      "the result directly.",
   );
 });
 

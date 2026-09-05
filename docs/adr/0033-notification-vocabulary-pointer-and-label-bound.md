@@ -23,6 +23,13 @@ say whether a notice landed, that every terminal notice carries a pointer with
 the exact argument shape, and that the Run label is bounded at admission —
 stands. The text below is what was decided on 2026-09-03 and is not rewritten.
 
+**Amended in a second respect by
+[ADR-0037](0037-a-notice-carries-a-short-output-whole.md).** The pointer's
+sentence gains an inlined form for a notice that carries the output whole: it
+names the `agent_result` call as the way to re-read the Run rather than
+instructing the model to make it. The pointer is still universal and still
+carries the exact argument shape.
+
 ## Context
 
 Three things were wrong at once, and only one of them was a bug.

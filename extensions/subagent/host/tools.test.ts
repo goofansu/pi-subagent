@@ -341,7 +341,7 @@ test("an id named twice in agent_cancel produces one observation", async (t) => 
 
 // ── agent_wait ───────────────────────────────────────────────────────────────
 
-test("agent_wait names each terminal Run by agent and status", async (t) => {
+test("agent_wait delivers each terminal Run's full result, as agent_result would", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
@@ -349,10 +349,31 @@ test("agent_wait names each terminal Run by agent and status", async (t) => {
   const first = await startedRun(rig);
   const second = await startedRun(rig, RIG_ONE_SHOT_PROFILE);
 
+  const text = await rig.text("agent_wait", {
+    ids: [first.runId, second.runId],
+  });
+
+  // Two cards, one per Run, each the same text `agent_result` returns for it.
   assert.equal(
-    await rig.text("agent_wait", { ids: [first.runId, second.runId] }),
-    `explore (${first.runId}): completed\n\nonce (${second.runId}): completed`,
+    text,
+    [
+      await rig.text("agent_result", { id: first.runId }),
+      await rig.text("agent_result", { id: second.runId }),
+    ].join("\n\n"),
   );
+  assert.match(
+    text,
+    new RegExp(
+      `^explore \\(subagent ${first.subagentId}\\), run ${first.runId}:`,
+    ),
+  );
+  assert.match(
+    text,
+    new RegExp(
+      `\nonce \\(subagent ${second.subagentId}\\), run ${second.runId}:`,
+    ),
+  );
+  assert.equal(text.match(new RegExp(RIG_ANSWER, "g"))?.length, 4);
 });
 
 test("agent_wait says why a cancelled Run was cancelled", async (t) => {
@@ -369,9 +390,11 @@ test("agent_wait says why a cancelled Run was cancelled", async (t) => {
   const started = await startedRun(rig);
   await rig.text("agent_cancel", { ids: [started.runId] });
 
-  assert.equal(
-    await rig.text("agent_wait", { ids: [started.runId] }),
-    `explore (${started.runId}): cancelled (requested)`,
+  const text = await rig.text("agent_wait", { ids: [started.runId] });
+  assert.match(text, /look around · pi · cancelled after /);
+  assert.match(
+    text,
+    /^The Run was cancelled before producing output \(requested\)\.$/m,
   );
 });
 
@@ -386,7 +409,7 @@ test("agent_wait reports an unknown id rather than blocking on it", async (t) =>
   );
 });
 
-test("agent_wait is repeatable and does not consume the Result", async (t) => {
+test("agent_wait is repeatable, and the Result stays readable afterwards", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
@@ -395,11 +418,96 @@ test("agent_wait is repeatable and does not consume the Result", async (t) => {
   const first = await rig.text("agent_wait", { ids: [started.runId] });
   const second = await rig.text("agent_wait", { ids: [started.runId] });
 
+  // Reading is not taking: the wait observed the stored Result, and so does
+  // every later reader.
   assert.equal(first, second);
   assert.match(
     await rig.text("agent_result", { id: started.runId }),
     new RegExp(RIG_ANSWER),
   );
+});
+
+test("agent_wait tells the host the parent has each delivered Result, so no notice follows", async (t) => {
+  // Each fake numbers its scripts per BackendAgent, so two concurrent Runs
+  // that settle on cue come from the two backends, one gate each. Both settle
+  // *during* the wait, which is the ordering the hold exists for.
+  const rig = hostRig(t, {
+    resumableSteps: [
+      [
+        { step: "await-gate", gate: "a" },
+        emitText(RIG_ANSWER),
+        { step: "complete" },
+      ],
+    ],
+    oneShotSteps: [
+      [
+        { step: "await-gate", gate: "b" },
+        emitText(RIG_ANSWER),
+        { step: "complete" },
+      ],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const first = await startedRun(rig);
+  const second = await startedRun(rig, RIG_ONE_SHOT_PROFILE);
+
+  const waiting = rig.text("agent_wait", {
+    ids: [first.runId, second.runId],
+  });
+  await rig.release("a");
+  await rig.release("b");
+  await waiting;
+  await rig.pump();
+
+  // Both hand-offs resolved by the wait, and neither notice reached Pi: the
+  // wait delivered the answer, so a notice pointing at it would have been the
+  // duplicate. Delivery's push and the waiter's wake-up are forked at the same
+  // instant, so which arrives first is not fixed — a push during the wait is
+  // held and then dropped, a push after it finds the Run consumed — and both
+  // are accepted hand-offs that send nothing.
+  assert.equal(rig.installation.sink.status(runId(first.runId)), "resolved");
+  assert.equal(rig.installation.sink.status(runId(second.runId)), "resolved");
+  assert.deepEqual(rig.host.sent(), []);
+  assert.deepEqual(rig.installation.sink.unlanded(), []);
+  const counts = rig.installation.sink.counts();
+  assert.equal(counts.pushesAttempted, 2);
+  assert.equal(counts.handOffsAccepted, 2);
+  assert.equal(counts.handOffsRefused, 0);
+});
+
+test("a wait that gave up leaves the notice to arrive on its own", async (t) => {
+  const rig = hostRig(t, {
+    resumableSteps: [
+      [
+        { step: "await-gate", gate: "hold" },
+        emitText(RIG_ANSWER),
+        { step: "complete" },
+      ],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const started = await startedRun(rig);
+  const controller = new AbortController();
+  const waiting = rig.text(
+    "agent_wait",
+    { ids: [started.runId] },
+    { signal: controller.signal },
+  );
+  controller.abort();
+  await waiting;
+
+  // No Result was delivered, so nothing was consumed and nothing is held.
+  await rig.release("hold");
+  await rig.settled(started.runId);
+  await rig.pump();
+
+  assert.equal(rig.installation.sink.status(runId(started.runId)), "pending");
+  assert.equal(rig.host.sent().length, 1);
+  assert.deepEqual(rig.installation.sink.unlanded(), [started.runId]);
 });
 
 test("aborting the turn ends only the wait: the Run settles and its result stands", async (t) => {
@@ -440,7 +548,7 @@ test("aborting the turn ends only the wait: the Run settles and its result stand
   );
 });
 
-test("agent_wait carries the terminal Runs and the still-running count in its details", async (t) => {
+test("agent_wait carries the delivered Runs and the still-running count in its details", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
@@ -452,6 +560,109 @@ test("agent_wait carries the terminal Runs and the still-running count in its de
     runs: [{ runId: started.runId, agent: "explore", status: "completed" }],
     stillRunning: 0,
   });
+});
+
+// ── agent_wait_all ───────────────────────────────────────────────────────────
+
+test("agent_wait_all delivers every active Run's result and consumes each", async (t) => {
+  const rig = hostRig(t, {
+    resumableSteps: [
+      [
+        { step: "await-gate", gate: "a" },
+        emitText("first answer"),
+        { step: "complete" },
+      ],
+    ],
+    oneShotSteps: [
+      [
+        { step: "await-gate", gate: "b" },
+        emitText("second answer"),
+        { step: "complete" },
+      ],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const first = await startedRun(rig);
+  const second = await startedRun(rig, RIG_ONE_SHOT_PROFILE);
+  const waiting = rig.call("agent_wait_all", {});
+  await rig.release("a");
+  await rig.release("b");
+  const result = await waiting;
+  await rig.pump();
+
+  const text = result.content.map((part) => part.text ?? "").join("");
+  assert.match(text, /first answer/);
+  assert.match(text, /second answer/);
+  assert.deepEqual(result.details, {
+    runs: [
+      { runId: first.runId, agent: "explore", status: "completed" },
+      { runId: second.runId, agent: "once", status: "completed" },
+    ],
+    stillRunning: 0,
+  });
+  assert.equal(rig.installation.sink.status(runId(first.runId)), "resolved");
+  assert.equal(rig.installation.sink.status(runId(second.runId)), "resolved");
+  assert.deepEqual(rig.host.sent(), []);
+});
+
+test("agent_wait_all covers only the Runs that were active when it was called", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  // Finished before the call, and its notice was already handed to Pi: it
+  // is announced there, not repeated here.
+  const earlier = await startedRun(rig);
+  await rig.settled(earlier.runId);
+  await rig.pump();
+  assert.equal(rig.host.sent().length, 1);
+
+  const result = await rig.call("agent_wait_all", {});
+  const text = result.content.map((part) => part.text ?? "").join("");
+
+  assert.equal(
+    text,
+    "No Runs are active in this Session. Every Run started here has already " +
+      "finished and is announced by its own completion notice; use " +
+      "agent_result with a Run id to re-read one.",
+  );
+  assert.deepEqual(result.details, { runs: [], stillRunning: 0 });
+  assert.equal(rig.installation.sink.status(runId(earlier.runId)), "pending");
+});
+
+test("agent_wait_all honours its timeout and reports what is still running", async (t) => {
+  const rig = hostRig(t, {
+    resumableSteps: [[{ step: "await-gate", gate: "hold" }]],
+  });
+  await rig.host.sessionStart();
+  t.after(async () => {
+    await rig.release("hold");
+    await rig.installation.handle.release();
+  });
+
+  const started = await startedRun(rig);
+
+  const text = await rig.text("agent_wait_all", { timeoutSeconds: 0.01 });
+
+  assert.equal(
+    text,
+    `Still running: ${started.runId}. The wait gave up, not the Runs: each ` +
+      "keeps going and notifies on its own, so do not immediately wait on " +
+      "the same ids again.",
+  );
+});
+
+test("agent_wait_all rejects an id argument, because it takes none", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  assert.match(
+    await rig.text("agent_wait_all", { ids: ["run-1"] }),
+    /^Cannot run agent_wait_all: its arguments were not usable\./,
+  );
 });
 
 // ── agent_result ─────────────────────────────────────────────────────────────
@@ -500,7 +711,7 @@ test("agent_result on a live Run says it has not finished, distinctly from unkno
   );
 });
 
-test("agent_result tells the host the parent has the Result, and nothing else does", async (t) => {
+test("agent_result tells the host the parent has the Result", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
@@ -508,9 +719,10 @@ test("agent_result tells the host the parent has the Result, and nothing else do
   const started = await startedRun(rig);
   const id = runId(started.runId);
 
-  // `agent_wait` reports terminality and deliberately withholds the answer, so
-  // a parent waiting on a fan-out must still be pointed at each Result.
-  await rig.text("agent_wait", { ids: [started.runId] });
+  // Settled without a wait, so the notice is Pi's and the hand-off is open
+  // until something resolves it.
+  await rig.settled(started.runId);
+  await rig.pump();
   assert.equal(rig.installation.sink.status(id), "pending");
 
   await rig.text("agent_result", { id: started.runId });
@@ -552,11 +764,11 @@ test("a Result the store evicted tells the host nothing either", async (t) => {
   t.after(() => rig.installation.handle.release());
 
   const first = await startedRun(rig);
-  await rig.text("agent_wait", { ids: [first.runId] });
+  await rig.settled(first.runId);
   await rig.pump();
   for (let index = 0; index < 6; index += 1) {
     const next = await startedRun(rig);
-    await rig.text("agent_wait", { ids: [next.runId] });
+    await rig.settled(next.runId);
     await rig.pump();
   }
 
@@ -582,6 +794,7 @@ test("a tool call with no live runtime returns a sentence and throws nothing", a
     ["agent_start", { agent: "explore", description: "d", prompt: "p" }],
     ["agent_resume", { id: "subagent-1", description: "d", prompt: "p" }],
     ["agent_wait", { ids: ["run-1"] }],
+    ["agent_wait_all", {}],
     ["agent_result", { id: "run-1" }],
     ["agent_cancel", { ids: ["run-1"] }],
     ["agent_steer", { id: "run-1", message: "go" }],

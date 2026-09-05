@@ -25,6 +25,7 @@ import {
   backendId,
   DEFAULT_BACKEND_ID,
   type Profile,
+  runId,
 } from "../domain/index.ts";
 import type { AdapterProbe } from "../host/subagent-command.ts";
 import { installSubagentV2, type SubagentV2Installation } from "../index.ts";
@@ -160,6 +161,19 @@ export interface HostRig {
   ) => Promise<string>;
   /** Call a tool and return the whole result, details included. */
   readonly call: StandInHost["call"];
+
+  /**
+   * Wait for these Runs to settle without the model-facing wait.
+   *
+   * `agent_wait` delivers the Result and consumes the notice, so a test that
+   * is *about* the notice — that it was pushed, that it landed, that the
+   * widget row waited for it — cannot use the tool to get the Run to the
+   * point where the notice exists. This reads terminality through the
+   * supervisor instead, which is the one other place the rig reaches past the
+   * host boundary, and for the same reason as the probe: what it observes has
+   * no surface of its own.
+   */
+  readonly settled: (...runIds: readonly string[]) => Promise<void>;
 
   /**
    * Give the Session's fibers turns to run, without letting real time pass.
@@ -343,6 +357,13 @@ export function hostRig(
     oneShot,
     agentsDir,
     call: host.call,
+    settled: (...runIds) =>
+      installation.handle.run(
+        Effect.flatMap(SubagentSupervisor, (supervisor) =>
+          Effect.asVoid(supervisor.wait(runIds.map((id) => runId(id)))),
+        ),
+        undefined,
+      ),
     text: async (name, params, callOptions) =>
       resultText(
         (await host.call(name, params, callOptions)) as StandInToolResult,

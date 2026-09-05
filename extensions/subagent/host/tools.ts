@@ -1,5 +1,5 @@
 /**
- * The six model tools, registered once per process.
+ * The seven model tools, registered once per process.
  *
  * Each handler does four things and nothing else: read the Session facts from
  * the live context, decode its input, call the façade through the session
@@ -12,10 +12,15 @@
  * Session, and a call that arrives with no live runtime is answered rather
  * than thrown.
  *
- * `agent_wait` is the one handler with real mechanism in it, and the mechanism
- * is the point: operation semantics section 6 says aborting the calling turn
- * ends *only that wait*, so the host bridges Pi's abort signal to the
- * interruption of the wait fiber and to nothing else. See {@link whenAborted}.
+ * The two waits are the handlers with real mechanism in them, and the
+ * mechanism is the point twice over. Operation semantics section 6 says
+ * aborting the calling turn ends *only that wait*, so the host bridges Pi's
+ * abort signal to the interruption of the wait fiber and to nothing else; see
+ * {@link whenAborted}. And a wait delivers the Result it waited for
+ * ([ADR-0036](../../../docs/adr/0036-a-wait-delivers-the-result-it-waited-for.md)),
+ * so before it starts waiting it tells the host to hold those Runs' notices,
+ * and when it returns it records each delivered Result as consumed and
+ * releases the hold; see {@link collected}.
  */
 
 import type {
@@ -23,7 +28,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Effect } from "effect";
-import type { ToolResponse } from "../application/index.ts";
+import type { SubagentsServices, ToolResponse } from "../application/index.ts";
 import { type SessionFacts, Subagents } from "../application/index.ts";
 import { type RunId, runId } from "../domain/index.ts";
 import {
@@ -41,6 +46,7 @@ import {
   START_COPY,
   STEER_COPY,
   type ToolCopy,
+  WAIT_ALL_COPY,
   WAIT_COPY,
 } from "./tool-copy.ts";
 import {
@@ -51,6 +57,7 @@ import {
   StartInputSchema,
   SteerInputSchema,
   toolParameters,
+  WaitAllInputSchema,
   WaitInputSchema,
 } from "./tool-schemas.ts";
 
@@ -59,10 +66,30 @@ export const SUBAGENT_TOOL_NAMES = [
   START_COPY.name,
   RESUME_COPY.name,
   WAIT_COPY.name,
+  WAIT_ALL_COPY.name,
   RESULT_COPY.name,
   CANCEL_COPY.name,
   STEER_COPY.name,
 ] as const;
+
+/**
+ * What the host is told about a Result changing hands.
+ *
+ * Two narrow functions rather than the push sink itself, exactly as the widget
+ * is handed a read model rather than the sink: a handler that could name the
+ * sink could push a notification, and then two things would decide what the
+ * model is told. `consumed` says the parent now has this Run's Result; `hold`
+ * says the parent is about to wait on these Runs and their notices are to be
+ * kept back until the returned release is called.
+ * [ADR-0035](../../../docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)
+ * decided consumption;
+ * [ADR-0036](../../../docs/adr/0036-a-wait-delivers-the-result-it-waited-for.md)
+ * decided the hold.
+ */
+export interface ResultHandoff {
+  readonly consumed: (id: RunId) => void;
+  readonly hold: (scope: readonly RunId[] | "all") => () => void;
+}
 
 /** What Pi expects a tool's `execute` to return. */
 interface HostToolResult {
@@ -114,22 +141,25 @@ function sessionFactsOf(
 }
 
 /**
- * The Run a response summarised, when it summarised exactly one.
+ * The Runs whose Result a response delivered.
  *
  * `Subagents.result` answers `{ text, details: { runs: [summary] } }` only for
- * a Result it actually returned; every rejection answers with text alone. So
- * the handler can recognise success without the application learning that a
- * host surface exists, which is the whole reason consumption is recorded here.
+ * a Result it actually returned, and the two waits list in `runs` exactly the
+ * Runs whose Result rode back on the outcome; every rejection, every
+ * still-running entry, and every evicted output answers outside that list. So
+ * the handler can recognise a delivered Result without the application
+ * learning that a host surface exists, which is the whole reason consumption
+ * is recorded here.
  *
  * Read through `isCollectedRuns`, the presentation guard the collapsed line
  * already uses, rather than through a cast: the shape is `CollectedRuns` and
  * saying so is what makes a change to it a compile error here instead of a
  * silently missing consumption.
  */
-function summarisedRun(response: ToolResponse): RunId | undefined {
+function deliveredRuns(response: ToolResponse): readonly RunId[] {
   const { details } = response;
-  if (!isCollectedRuns(details) || details.runs.length !== 1) return undefined;
-  return runId(details.runs[0].runId);
+  if (!isCollectedRuns(details)) return [];
+  return details.runs.map((run) => runId(run.runId));
 }
 
 /**
@@ -156,7 +186,7 @@ function whenAborted(signal: AbortSignal): Effect.Effect<void> {
 }
 
 /**
- * Register the six tools against one session handle.
+ * Register the seven tools against one session handle.
  *
  * Split from the extension factory so a test can drive the handlers with a
  * stand-in host and no process state, which is how every host-level test in
@@ -183,26 +213,61 @@ export function registerSubagentTools(
    */
   childDepth: () => number,
   /**
-   * Tell the host that the parent has this Run's Result.
+   * Tell the host that a Result changed hands. See {@link ResultHandoff}.
    *
-   * One narrow function rather than the push sink itself, exactly as the
-   * widget is handed a read model rather than the sink: a handler that could
-   * name the sink could push a notification, and then two things would decide
-   * what the model is told.
-   *
-   * It is called from the `agent_result` handler and from nowhere else — not
-   * from `Subagents.result`, which would make the application aware that a
-   * host surface exists, and not from the store, which delivery and
-   * diagnostics also read.
-   * [ADR-0035](../../../docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)
-   * is the decision.
+   * Called from the `agent_result` handler and the two wait handlers, and
+   * from nowhere else — not from the façade, which would make the application
+   * aware that a host surface exists, and not from the store, which delivery
+   * and diagnostics also read.
    */
-  noteResultConsumed: (id: RunId) => void,
+  handoff: ResultHandoff,
 ): void {
   /** What every handler answers with when there is no live runtime. */
   const notReady = (copy: ToolCopy): ToolResponse => ({
     text: formatSessionNotReady(copy.name),
   });
+
+  /**
+   * Run a wait and hand its delivered Results over.
+   *
+   * The hold goes on *before* the wait begins, because delivery pushes at the
+   * same instant the waiter is woken and a notice already in Pi's queue
+   * cannot be taken back. Consumption is recorded *before* the hold is
+   * released, so the release finds every delivered Run consumed and drops its
+   * notice rather than sending it. And the release runs however the wait
+   * ended — a timeout, an abort, a runtime that went away — because a hold
+   * that outlived its wait would keep a notice back for a parent that is no
+   * longer waiting.
+   *
+   * The abort bridge is here too, and it is the same for both waits: a turn
+   * that was aborted still gets an answer, and it is the answer a timeout
+   * gives — the ids that are still running. `raceFirst` interrupts the loser,
+   * so the abort ends this wait and nothing else; every Run keeps going,
+   * settles once, stores its result, and its completion is delivered.
+   */
+  const collected = async (
+    copy: ToolCopy,
+    scope: readonly RunId[] | "all",
+    waiting: Effect.Effect<ToolResponse, never, SubagentsServices>,
+    answerNow: Effect.Effect<ToolResponse, never, SubagentsServices>,
+    signal: AbortSignal | undefined,
+  ): Promise<HostToolResult> => {
+    const release = handoff.hold(scope);
+    try {
+      const work =
+        signal === undefined
+          ? waiting
+          : Effect.raceFirst(
+              waiting,
+              Effect.flatMap(whenAborted(signal), () => answerNow),
+            );
+      const response = await handle.run(work, notReady(copy));
+      for (const id of deliveredRuns(response)) handoff.consumed(id);
+      return hostResult(response);
+    } finally {
+      release();
+    }
+  };
 
   const register = (
     copy: ToolCopy,
@@ -291,21 +356,41 @@ export function registerSubagentTools(
     ): Promise<HostToolResult> {
       const input = decodeWait(params);
       if (!input.decoded) return hostResult({ text: input.text });
-      const waiting = Subagents.wait(input.value);
-      // A turn that was aborted still gets an answer, and it is the same
-      // answer a timeout gives: the ids that are still running. `raceFirst`
-      // interrupts the loser, so the abort ends this wait and nothing else —
-      // every Run keeps going, settles once, stores its result, and notifies.
-      const work =
-        signal === undefined
-          ? waiting
-          : Effect.raceFirst(
-              waiting,
-              Effect.flatMap(whenAborted(signal), () =>
-                Subagents.wait({ ...input.value, timeoutSeconds: 0 }),
-              ),
-            );
-      return hostResult(await handle.run(work, notReady(WAIT_COPY)));
+      return collected(
+        WAIT_COPY,
+        input.value.ids,
+        Subagents.wait(input.value),
+        Subagents.wait({ ...input.value, timeoutSeconds: 0 }),
+        signal,
+      );
+    },
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* agent_wait_all                                                   */
+  /* ---------------------------------------------------------------- */
+
+  const decodeWaitAll = decodeToolInput(WAIT_ALL_COPY.name, WaitAllInputSchema);
+
+  register(WAIT_ALL_COPY, toolParameters(WaitAllInputSchema), {
+    renderResult: renderCollectedResult,
+    async execute(
+      _toolCallId: string,
+      params: unknown,
+      signal: AbortSignal | undefined,
+    ): Promise<HostToolResult> {
+      const input = decodeWaitAll(params);
+      if (!input.decoded) return hostResult({ text: input.text });
+      // The ids this wait covers are read off the index inside the façade, so
+      // the hold has to cover every Run: a hold on a list the handler does not
+      // yet have would be a hold on nothing.
+      return collected(
+        WAIT_ALL_COPY,
+        "all",
+        Subagents.waitAll(input.value),
+        Subagents.waitAll({ ...input.value, timeoutSeconds: 0 }),
+        signal,
+      );
     },
   });
 
@@ -333,8 +418,7 @@ export function registerSubagentTools(
       // terminal`, an unknown id, an expired Result — answers with text
       // alone. If that shape ever changes, the tools test for consumption is
       // what fails.
-      const consumed = summarisedRun(response);
-      if (consumed !== undefined) noteResultConsumed(consumed);
+      for (const id of deliveredRuns(response)) handoff.consumed(id);
       return hostResult(response);
     },
   });

@@ -6,6 +6,7 @@ import {
   cancelledEnding,
   failedEnding,
   NOTIFICATION_ERROR_MAX_BYTES,
+  NOTIFICATION_INLINE_MAX_BYTES,
   NOTIFICATION_MODEL_MAX_BYTES,
   NOTIFICATION_PREVIEW_MAX_BYTES,
   redactedDiagnostic,
@@ -21,15 +22,47 @@ import {
   formatResultPointer,
 } from "./notification-text.ts";
 
-test("N-1: a completed notice labels and quotes the preview, then points at the result", () => {
+test("N-1: a completed notice carries a short output whole, and says nothing further need be fetched", () => {
   const notice = fixtureNotification({ finalOutput: "done" });
 
+  assert.equal(notice.output, "done");
   assert.equal(
     formatNotificationText(notice),
     'Subagent "look around" completed in 12.4s.\n\n' +
       "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
-      'Preview from the subagent:\n"done"\n\n' +
-      'The result is available. Call agent_result with {"id":"run-1"}.',
+      'Output from the subagent:\n"""\ndone\n"""\n\n' +
+      "This is the complete output; nothing further to fetch. agent_result " +
+      'with {"id":"run-1"} re-reads it with the transcript.',
+  );
+});
+
+test("N-1: a whole output keeps its line breaks and its Markdown", () => {
+  const output = "# Findings\n\n- one\n- two\n\nDone.";
+  const text = formatNotificationText(
+    fixtureNotification({ finalOutput: output }),
+  );
+
+  assert.match(
+    text,
+    new RegExp(`"""\n${output.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\n"""`),
+  );
+  assert.doesNotMatch(text, /Preview from the subagent/);
+});
+
+test("N-1: an output at the inline bound travels whole, and one byte past it is previewed", () => {
+  const atBound = fixtureNotification({
+    finalOutput: "x".repeat(NOTIFICATION_INLINE_MAX_BYTES),
+  });
+  const pastBound = fixtureNotification({
+    finalOutput: "x".repeat(NOTIFICATION_INLINE_MAX_BYTES + 1),
+  });
+
+  assert.equal(byteLength(atBound.output ?? ""), NOTIFICATION_INLINE_MAX_BYTES);
+  assert.equal(pastBound.output, undefined);
+  assert.match(formatNotificationText(atBound), /nothing further to fetch/);
+  assert.match(
+    formatNotificationText(pastBound),
+    /Preview from the subagent:\n"x+"\n\nThe result is available\. Call agent_result with \{"id":"run-1"\}\.$/,
   );
 });
 
@@ -55,8 +88,9 @@ test("N-8: the notice is identical whichever backend ran the Run", () => {
     texts[0],
     'Subagent "look around" completed in 12.4s.\n\n' +
       "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
-      'Preview from the subagent:\n"done"\n\n' +
-      'The result is available. Call agent_result with {"id":"run-1"}.',
+      'Output from the subagent:\n"""\ndone\n"""\n\n' +
+      "This is the complete output; nothing further to fetch. agent_result " +
+      'with {"id":"run-1"} re-reads it with the transcript.',
   );
 });
 
@@ -76,9 +110,10 @@ test("N-2: a completed Run with no output has no body, and its record is availab
 
 test("N-3: a long answer is previewed rather than delivered", () => {
   const notice = fixtureNotification({
-    finalOutput: "x".repeat(NOTIFICATION_PREVIEW_MAX_BYTES + 500),
+    finalOutput: "x".repeat(NOTIFICATION_INLINE_MAX_BYTES + 500),
   });
 
+  assert.equal(notice.output, undefined);
   assert.equal(byteLength(notice.preview), NOTIFICATION_PREVIEW_MAX_BYTES);
   const text = formatNotificationText(notice);
   // The ceiling is the preview's bound plus the fixed sections: a header, a
@@ -87,10 +122,27 @@ test("N-3: a long answer is previewed rather than delivered", () => {
   assert.match(text, /Call agent_result with \{"id":"run-1"\}\./);
 });
 
-test("N-4: a failed notice states its reason and says partial output is there", () => {
+test("N-4: a failed notice states its reason, then the short partial output whole", () => {
   const notice = fixtureNotification({
     ending: failedEnding("the backend refused"),
     finalOutput: "half an answer",
+  });
+
+  assert.equal(
+    formatNotificationText(notice),
+    'Subagent "look around" failed in 12.4s.\n\n' +
+      "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
+      "Reason: the backend refused\n\n" +
+      'Output produced before failure:\n"""\nhalf an answer\n"""\n\n' +
+      "This is all the output the Run produced. agent_result with " +
+      '{"id":"run-1"} re-reads it with the transcript.',
+  );
+});
+
+test("N-4: a failed notice with a long partial output states its reason and points at the rest", () => {
+  const notice = fixtureNotification({
+    ending: failedEnding("the backend refused"),
+    finalOutput: "h".repeat(NOTIFICATION_INLINE_MAX_BYTES + 1),
   });
 
   // The output itself is not in the notice; the pointer says it exists, which
@@ -102,7 +154,6 @@ test("N-4: a failed notice states its reason and says partial output is there", 
       "Reason: the backend refused\n\n" +
       'Partial output is available. Call agent_result with {"id":"run-1"}.',
   );
-  assert.doesNotMatch(formatNotificationText(notice), /half an answer/);
 });
 
 test("N-6: a failed notice bounds a pathological error message", () => {
@@ -129,23 +180,38 @@ test("N-5: a failed Run with no reason and no output says both", () => {
   );
 });
 
-test("N-7: a cancelled notice names its reason and points at the partial output", () => {
+test("N-7: a cancelled notice names its reason and carries a short partial output whole", () => {
   const notice = fixtureNotification({
     ending: cancelledEnding("requested"),
     finalOutput: "half an answer",
   });
 
-  // The behavioural change of this phase. A cancelled Run keeps what it
-  // produced, and a timeout or a shutdown cancels Runs the parent never asked
-  // to cancel — so "the model already knows the id it cancelled" was never
-  // true of every cancellation.
+  // A cancelled Run keeps what it produced, and a timeout or a shutdown
+  // cancels Runs the parent never asked to cancel — so "the model already
+  // knows the id it cancelled" was never true of every cancellation.
+  assert.equal(
+    formatNotificationText(notice),
+    'Subagent "look around" was cancelled in 12.4s (requested).\n\n' +
+      "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
+      'Output produced before cancellation:\n"""\nhalf an answer\n"""\n\n' +
+      "This is all the output the Run produced. agent_result with " +
+      '{"id":"run-1"} re-reads it with the transcript.',
+  );
+});
+
+test("N-7: a cancelled notice with a long partial output points at it", () => {
+  const notice = fixtureNotification({
+    ending: cancelledEnding("requested"),
+    finalOutput: "h".repeat(NOTIFICATION_INLINE_MAX_BYTES + 1),
+  });
+
   assert.equal(
     formatNotificationText(notice),
     'Subagent "look around" was cancelled in 12.4s (requested).\n\n' +
       "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
       'Partial output is available. Call agent_result with {"id":"run-1"}.',
   );
-  assert.doesNotMatch(formatNotificationText(notice), /half an answer/);
+  assert.doesNotMatch(formatNotificationText(notice), /hhhh/);
 });
 
 test("a cancelled Run with nothing to show says so and still points at the record", () => {
@@ -175,6 +241,18 @@ test("every terminal status ends with the availability sentence and the exact ca
     assert.equal(notice.retrieveWith, "agent_result");
     assert.match(
       formatNotificationText(notice),
+      /agent_result with \{"id":"run-1"\} re-reads it with the transcript\.$/,
+    );
+    const long = fixtureNotification(
+      ending === undefined
+        ? { finalOutput: "d".repeat(NOTIFICATION_INLINE_MAX_BYTES + 1) }
+        : {
+            ending,
+            finalOutput: "s".repeat(NOTIFICATION_INLINE_MAX_BYTES + 1),
+          },
+    );
+    assert.match(
+      formatNotificationText(long),
       /(The result|Partial output) is available\. Call agent_result with \{"id":"run-1"\}\.$/,
     );
   }
@@ -194,6 +272,31 @@ test("N-10: the pointer says what a model will find, in each of the three availa
     formatResultPointer(runId, "record-only"),
     'No output was produced. The Run record is available. Call agent_result with {"id":"run-1"}.',
   );
+});
+
+test("N-10: an inlined pointer is a note rather than an instruction, and never says Call", () => {
+  const runId = fixtureNotification({}).runId;
+  assert.equal(
+    formatResultPointer(runId, "complete", true),
+    "This is the complete output; nothing further to fetch. agent_result " +
+      'with {"id":"run-1"} re-reads it with the transcript.',
+  );
+  assert.equal(
+    formatResultPointer(runId, "partial", true),
+    "This is all the output the Run produced. agent_result with " +
+      '{"id":"run-1"} re-reads it with the transcript.',
+  );
+  // Record-only has nothing to inline, so the flag changes nothing.
+  assert.equal(
+    formatResultPointer(runId, "record-only", true),
+    formatResultPointer(runId, "record-only"),
+  );
+  for (const availability of ["complete", "partial"] as const) {
+    assert.doesNotMatch(
+      formatResultPointer(runId, availability, true),
+      /\bCall\b/,
+    );
+  }
 });
 
 test("N-10: availability is read off the output, not off the status alone", () => {

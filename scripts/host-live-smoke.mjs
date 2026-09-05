@@ -4,7 +4,7 @@
 //
 // Launches Pi in RPC mode with **only** this extension loaded, asks the
 // model to delegate to a Profile naming the given backend, and reads the
-// answer back through `agent_result`. The runtime gates next to this one
+// answer back through `agent_wait`. The runtime gates next to this one
 // prove the lifecycle; this proves the other half — that the whole thing is
 // reachable through the surface a user has, with the real registrations, the
 // real Session events, the production backend set, and no v1 in the process at
@@ -168,8 +168,9 @@ try {
   const prompt = [
     'Use agent_start with agent "host-live-smoke", a one-line description, and',
     `the prompt: Reply with exactly the word ${marker} and nothing else.`,
-    "Then use agent_wait with the run id it returned, then agent_result with",
-    "the same run id, and finally tell me the word the subagent replied with.",
+    "Then use agent_wait with the run id it returned, which returns the",
+    "subagent's result directly, and finally tell me the word the subagent",
+    "replied with.",
   ].join(" ");
 
   const { code, out, err } = await runPi(prompt);
@@ -177,7 +178,7 @@ try {
 
   check("the Pi process exited cleanly", code === 0);
   check("agent_start was called", /agent_start/.test(transcript));
-  check("agent_result was called", /agent_result/.test(transcript));
+  check("agent_wait was called", /agent_wait/.test(transcript));
   check("the subagent's answer came back", transcript.includes(marker));
   // The v1 tree it used to check for is gone, and so is the check: there is
   // one extension now, and "the entry point that loaded is the only one there

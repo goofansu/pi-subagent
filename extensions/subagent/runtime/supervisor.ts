@@ -296,8 +296,15 @@ function runIdentityFor(
  * evicted still carries its status in the entry that stayed. The repository's
  * snapshot is the fallback for the moment between publication and a store that
  * has not been asked yet.
+ *
+ * The Result itself rides on the outcome when the store still holds it
+ * ([ADR-0036](../../../docs/adr/0036-a-wait-delivers-the-result-it-waited-for.md)):
+ * a wait delivers what it waited for, and reading it here — under the
+ * waiters' pin, before the registration is released — is what makes the pin
+ * mean what invariant 13 says it means. An evicted output leaves the field
+ * absent rather than the outcome different.
  */
-function terminalStatusOf(
+function terminalOutcomeOf(
   store: ResultStore["Service"],
   runId: RunId,
   snapshot: RunSnapshot,
@@ -324,6 +331,7 @@ function terminalStatusOf(
       ...(status === "cancelled" && reason !== undefined
         ? { cancellationReason: reason }
         : {}),
+      ...(stored.outcome === "result" ? { result: stored.result } : {}),
     } as const;
   });
 }
@@ -963,7 +971,7 @@ const makeSupervisor = (settings: SessionSettings) =>
           return { outcome: "unknown Run", runId } as const;
         }
         if (known.state === "terminal") {
-          return yield* terminalStatusOf(store, runId, known.snapshot);
+          return yield* terminalOutcomeOf(store, runId, known.snapshot);
         }
         const handle = handleOf(runId);
         if (!handle) return { outcome: "still running", runId } as const;
@@ -971,20 +979,29 @@ const makeSupervisor = (settings: SessionSettings) =>
         // Registered before the wait begins and released however it ends.
         // Aborting or timing out a wait stops only that waiter: the Run
         // continues, still settles exactly once, and still stores its result.
+        //
+        // The read is *inside* the registration, and the order is the point:
+        // the waiters' pin exists so that a registered reader finds the Result
+        // it was woken for, and a read after the release would be a read the
+        // pin never protected.
         const registration = waiters.register(runId);
-        const finished = yield* Effect.exit(
-          timeoutMillis === undefined
-            ? Deferred.await(handle.completion)
-            : Effect.timeout(Deferred.await(handle.completion), timeoutMillis),
-        ).pipe(Effect.ensuring(registration.release));
-
-        if (Exit.isFailure(finished)) {
-          return { outcome: "still running", runId } as const;
-        }
-        const settled = yield* repository.lookup(runId);
-        return settled.state === "terminal"
-          ? yield* terminalStatusOf(store, runId, settled.snapshot)
-          : ({ outcome: "still running", runId } as const);
+        return yield* Effect.gen(function* () {
+          const finished = yield* Effect.exit(
+            timeoutMillis === undefined
+              ? Deferred.await(handle.completion)
+              : Effect.timeout(
+                  Deferred.await(handle.completion),
+                  timeoutMillis,
+                ),
+          );
+          if (Exit.isFailure(finished)) {
+            return { outcome: "still running", runId } as const;
+          }
+          const settled = yield* repository.lookup(runId);
+          return settled.state === "terminal"
+            ? yield* terminalOutcomeOf(store, runId, settled.snapshot)
+            : ({ outcome: "still running", runId } as const);
+        }).pipe(Effect.ensuring(registration.release));
       });
 
     const wait = (

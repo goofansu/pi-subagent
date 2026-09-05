@@ -6,6 +6,15 @@ Date: 2026-08-25
 
 Accepted. Supersedes ADR-0002.
 
+**Amended by [ADR-0037](0037-a-notice-carries-a-short-output-whole.md)
+(2026-09-05).** The rule that a pushed notice carries *a bounded preview* and
+never the output now applies only past a size bound: an output that fits 16 KiB
+travels whole in the notice, and a longer one is previewed and pointed at as
+this entry decided. Storage still precedes notification and the Result store is
+still authoritative; what changed is how much of the stored output the common
+case's notice repeats. The text below is what was decided on 2026-08-25 and is
+not rewritten.
+
 ### Status after M7 (2026-09-03)
 
 **The delivery module this describes is gone.** Its three jobs are now three things: `ResultStore` owns storage, reservations, pins, and eviction; `CompletionDelivery` reads what was stored and pushes it; the Session push sink owns landing. The rule that made this ADR worth having — **storage precedes notification, and delivery reads the store** — is unchanged and is why a notification failure is survivable.

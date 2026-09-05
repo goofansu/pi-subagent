@@ -34,24 +34,37 @@ and holding — see [Diagnostics](#diagnostics).
 for key — the filter, the prompt view and the work action are unchanged — so
 what moved is the name. It is the one public surface 2.0 removes.
 
-Delegation uses six tools. `agent_start` creates a stable, Session-scoped
+Delegation uses seven tools. `agent_start` creates a stable, Session-scoped
 Subagent and immediately starts its first **Run**. The Run is detached from the
-turn that started it and settles exactly once, so starting work and retrieving
-its answer are separate steps:
+turn that started it and settles exactly once, and its completion is delivered
+to the model on its own — so the model's default after starting one is to
+carry on with independent work, and to wait only when nothing else remains:
 
 | Tool | What it does |
 | --- | --- |
 | `agent_start` | Creates a Subagent, starts its first Run, and returns distinct Subagent and Run ids immediately. Takes `agent`, `description`, and `prompt`; the Profile decides the model, effort, and tools. |
 | `agent_resume` | Takes an idle Subagent id with a new `description` and `prompt`, starts a distinct Run, and returns its Run id rather than an answer. It never queues behind an active Run. |
-| `agent_wait` | Waits for named Runs to become terminal and returns lifecycle state only — never output. Takes an optional `timeoutSeconds`. Waiting never suppresses a notification or consumes a Result. |
+| `agent_wait` | Blocks until the named Runs are terminal and returns each one's full result directly — the same output `agent_result` returns — with no duplicate completion notice afterwards. Takes an optional `timeoutSeconds`. |
+| `agent_wait_all` | The same, for every Run that is active when it is called. Takes no ids; Runs that had already finished are not repeated. The barrier for a fan-out. |
 | `agent_cancel` | Stops named Runs. Partial output survives, and each Run still sends its own completion notice. |
 | `agent_steer` | Offers bounded guidance to an active Run. Acceptance means local mailbox admission and nothing more. |
-| `agent_result` | Reads a finished Run's authoritative full output by id. |
+| `agent_result` | Reads a finished Run's authoritative full output by id. Needed when a notice previewed an output too long to carry, and for re-reading a Run later. |
 
 **The Subagent id is only for `agent_resume`.** `agent_wait`, `agent_result`,
 `agent_cancel`, and `agent_steer` all take the Run id that `agent_start` or
 `agent_resume` returned. They are deliberately different identifiers: one names
 the specialist, the other names one unit of work.
+
+**How a result reaches the model.** A Run's completion or failure is delivered
+automatically once it reaches a final status: if the model is mid-turn the
+notice is queued and arrives when the turn ends; if it is idle the notice
+starts a new turn. The notice carries the Run's output whole when it fits 16
+KiB, which covers most delegated answers, and a bounded preview with a pointer
+to `agent_result` when it does not. A wait is for the case where the next step
+depends on the answers and nothing else remains, and an active wait receives
+the results directly — the notice for a Run a wait delivered is never sent, so
+the model is told once. Every tool that starts or waits on a Run states this
+model in its description.
 
 Every terminal output is stored under its Run id and records its owning
 Subagent for orientation. A small completion notice names both identities and
@@ -81,15 +94,20 @@ or `already cancelled`. None of these reopens or mutates a terminal Result.
 ### Completion notices
 
 A pushed notice appears as one collapsed line and expands with the same key
-that expands tool output. A completed Run's notice carries a bounded preview, a
-failed Run's carries the primary error, a cancelled Run's is terse and says
-whether it was cancelled on request or at shutdown. Every notice points at
-`agent_result` for the rest.
+that expands tool output. When the Run's output fits 16 KiB the notice carries
+it whole, set off in a labelled block, and says nothing further need be
+fetched. When it does not, a completed Run's notice carries a bounded preview
+and points at `agent_result` for the rest. A failed Run's notice carries the
+primary error and then whatever partial output it can carry; a cancelled Run's
+says whether it was cancelled on request or at shutdown and carries its partial
+output the same way. Every notice names the `agent_result` call that re-reads
+the Run with its transcript.
 
 A notice never interrupts. While the model is working it follows on after the
 current turn; while the Session is idle it starts a turn of its own. If an
 interrupt discards it, it is pushed again once the agent settles — exactly
-once.
+once. A Run whose result a wait delivered, or that the model read with
+`agent_result` before its notice was handed over, sends no notice at all.
 
 ## Profiles
 
@@ -266,13 +284,16 @@ list allows, and cannot delegate further.
 
 **Version 2.0.0 is a rewrite of the execution architecture, and it is what
 `pi install` gives you.** The behaviour it presents is largely the same: the
-same six tools, the same Profile files in the same directory, the same widget
-rows.
+same six tools plus `agent_wait_all`, the same Profile files in the same
+directory, the same widget rows.
 
-**Two things a 1.x user will notice.** `/agents` is gone; the Profile list is
-`/subagent profiles`, unchanged inside. And the completion notices say more:
-each one opens with the task you delegated rather than two identifiers, and
-every one of them points at `agent_result` with the exact argument shape.
+**Three things a 1.x user will notice.** `/agents` is gone; the Profile list
+is `/subagent profiles`, unchanged inside. The completion notices say more:
+each one opens with the task you delegated rather than two identifiers, carries
+the output itself when it is short, and names the `agent_result` call with the
+exact argument shape. And `agent_wait` returns the result it waited for rather
+than a status line, with no notice following it — so the
+wait-then-read-then-notice sequence 1.x produced is one step.
 
 **One thing breaks in your files, and it is a one-line edit per Profile.** A
 Profile names its backend with `backend:` where 1.x used `harness:`. Rename

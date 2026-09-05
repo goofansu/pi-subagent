@@ -28,7 +28,7 @@ export interface RunSummary {
 /** Which Runs a collected result covers, for the collapsed line. */
 export interface CollectedRuns {
   readonly runs: readonly RunSummary[];
-  /** Runs asked for that had not finished. Only `agent_wait` produces these. */
+  /** Runs asked for that had not finished. Only the two waits produce these. */
   readonly stillRunning?: number;
 }
 

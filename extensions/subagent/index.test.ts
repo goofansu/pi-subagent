@@ -23,7 +23,7 @@ import { createStandInHost, resultText } from "./testing/stand-in-host.ts";
  * the host tests' business.
  */
 
-test("the entry point registers the six tools, its one command, and the notification renderer", () => {
+test("the entry point registers the seven tools, its one command, and the notification renderer", () => {
   const host = createStandInHost();
 
   installSubagentV2(host.pi, {

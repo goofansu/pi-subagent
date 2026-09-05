@@ -1,14 +1,20 @@
 /**
- * The completion Notification: a notice, not the answer.
+ * The completion Notification: the answer when it is short, a notice when it
+ * is not.
  *
- * When a Run settles, the model that started it is told — but what it is told
- * is deliberately small. A Notification identifies the owning Subagent and the
- * specific Run, says how it ended, gives a bounded preview so the model can
- * decide whether to look, and points at `agent_result` for the rest. It is not
- * the Result, and a caller that treats it as one is reading a preview.
+ * When a Run settles, the model that started it is told. A Notification
+ * identifies the owning Subagent and the specific Run, says how it ended, and
+ * then does one of two things with the output
+ * ([ADR-0037](../../../docs/adr/0037-a-notice-carries-a-short-output-whole.md)):
+ * an output that fits {@link NOTIFICATION_INLINE_MAX_BYTES} travels **whole**,
+ * so the common case is one message and no fetch; a longer one is
+ * **previewed**, bounded, with a pointer at `agent_result` for the rest. The
+ * two are told apart by the shape — `output` is present exactly when the
+ * whole output is here — so a formatter cannot mistake a preview for the
+ * answer.
  *
- * The preview is bounded here rather than at the point of delivery, because a
- * bound that lives at one of several call sites is a bound that one of them
+ * Both bounds are applied here rather than at the point of delivery, because
+ * a bound that lives at one of several call sites is a bound that one of them
  * will forget.
  *
  * Every terminal notice points at `agent_result`, whatever happened, and says
@@ -36,11 +42,25 @@ import { Schema } from "effect";
 import { RunId, SubagentId } from "./ids.ts";
 import { CancellationReason, TerminalRunPhase } from "./phases.ts";
 import { RUN_LABEL_MAX_BYTES, type RunResult } from "./result.ts";
-import { boundOneLine } from "./text.ts";
+import { boundOneLine, byteLength } from "./text.ts";
 import type { UsageSnapshot } from "./usage.ts";
 
 /** Long enough to recognize the answer, short enough not to be it. */
 export const NOTIFICATION_PREVIEW_MAX_BYTES = 500;
+
+/**
+ * The largest final output a notice carries whole.
+ *
+ * Sixteen kibibytes — the same bound the projection puts on one text part
+ * and the mailbox puts on one steering message, so "fits one message" means
+ * one thing across the extension. It is a few thousand tokens: room for the
+ * summary, finding, or plan a delegated task usually returns, and small
+ * enough that a fan-out of ten completions costs the parent long messages
+ * rather than a context window. Past it the notice previews and points, which
+ * is ADR-0006's original shape and the reason the fetch tool still exists. A
+ * chosen default, not a measured one.
+ */
+export const NOTIFICATION_INLINE_MAX_BYTES = 16 * 1024;
 
 /**
  * The bound on the primary error a failed notice carries.
@@ -178,7 +198,23 @@ export const RunNotification = Schema.Struct({
   status: TerminalRunPhase,
   /** How much of the Result is there. See {@link resultAvailabilityOf}. */
   resultAvailability: ResultAvailability,
-  /** One line of the final output, or empty when there was none. */
+  /**
+   * The whole final output, present exactly when it is non-empty and fits
+   * {@link NOTIFICATION_INLINE_MAX_BYTES}.
+   *
+   * Presence is the discriminant: a notice with `output` *is* the answer and
+   * its pointer says so; a notice without one is a preview and points at the
+   * Result. Carried untouched — line breaks and all — because it is the
+   * agent's Markdown and the parent reads it as such.
+   */
+  output: Schema.optionalKey(Schema.String),
+  /**
+   * One line of the final output, or empty when there was none.
+   *
+   * Always built, read only when `output` is absent: the collapsed line and
+   * the preview body need it then, and building it unconditionally keeps the
+   * notice's shape independent of which branch the formatter takes.
+   */
   preview: Schema.String,
   /** The bounded primary error, present only for a failed Run that had one. */
   errorMessage: Schema.optionalKey(Schema.String),
@@ -219,6 +255,10 @@ export function toRunNotification(result: RunResult): RunNotification {
     label: boundOneLine(result.description, RUN_LABEL_MAX_BYTES),
     status: result.status,
     resultAvailability: resultAvailabilityOf(result),
+    ...(result.finalOutput !== "" &&
+    byteLength(result.finalOutput) <= NOTIFICATION_INLINE_MAX_BYTES
+      ? { output: result.finalOutput }
+      : {}),
     preview: boundOneLine(result.finalOutput, NOTIFICATION_PREVIEW_MAX_BYTES),
     ...(result.errorMessage === undefined
       ? {}

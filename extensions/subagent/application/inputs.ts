@@ -3,7 +3,7 @@
  *
  * These are what the façade takes, and they are declared here rather than at
  * the host because the façade is what they are *for*: the host's `Schema`
- * declarations describe the same six shapes for Pi's benefit, and the compiler
+ * declarations describe the same seven shapes for Pi's benefit, and the compiler
  * checks that what a decode produces is what an operation accepts at the one
  * call site where the two meet.
  *
@@ -60,6 +60,14 @@ export interface CancelInput {
 
 export interface WaitInput {
   readonly ids: readonly RunId[];
+  readonly timeoutSeconds?: number;
+}
+
+/**
+ * `agent_wait_all` names no Run: it covers every Run of this Session that is
+ * active when the call arrives, which is why the shape has no `ids`.
+ */
+export interface WaitAllInput {
   readonly timeoutSeconds?: number;
 }
 

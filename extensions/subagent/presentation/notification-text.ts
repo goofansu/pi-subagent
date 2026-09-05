@@ -20,21 +20,27 @@
  * pointer *universal*: it is a section rather than something each branch
  * remembers to append, so no status can be the one that forgets it.
  *
- * The body is the only place the statuses differ:
+ * The body is the only place the statuses differ, and within each status the
+ * one question is whether the notice carries the output whole
+ * ([ADR-0037](../../../docs/adr/0037-a-notice-carries-a-short-output-whole.md)):
  *
- * - **completed** carries the bounded preview, labelled and quoted as the
- *   subagent's, so a model can decide whether the answer is worth fetching
- *   without fetching it. A completed Run with nothing to preview has no body
- *   at all; the pointer is where "no output was produced" is said.
- * - **failed** carries the primary error. Partial output is not in the
- *   notice; the pointer says it exists and `agent_result` has it.
- * - **cancelled** has no body: its reason is in the header, and a cancelled
- *   Run's partial output stays behind `agent_result` too.
+ * - **completed** carries the whole output when the notice has it, set off in
+ *   a labelled block, and the pointer then says nothing further need be
+ *   fetched. Otherwise it carries the bounded preview, labelled and quoted, so
+ *   a model can decide whether the answer is worth fetching without fetching
+ *   it. A completed Run with nothing to show has no body at all; the pointer
+ *   is where "no output was produced" is said.
+ * - **failed** carries the primary error, then the partial output whole when
+ *   the notice has it. Otherwise the pointer says the partial output exists
+ *   and `agent_result` has it.
+ * - **cancelled** carries the partial output whole when the notice has it, and
+ *   otherwise has no body: its reason is in the header.
  *
- * Quoting the preview is **not a security boundary** and does not claim to
- * be. It keeps delegated output out of the voice of the orchestration
- * instructions, so a subagent that read hostile repository text does not get
- * to address the parent as if it were the runtime.
+ * Quoting the preview and fencing the whole output are **not a security
+ * boundary** and do not claim to be. They keep delegated output out of the
+ * voice of the orchestration instructions, so a subagent that read hostile
+ * repository text does not get to address the parent as if it were the
+ * runtime.
  */
 
 import type {
@@ -94,6 +100,12 @@ function formatNotificationIdentity(notice: RunNotification): string {
  * assemble it wrongly — and the call keeps its own sentence in all three, so
  * the habit reads the same whatever the availability.
  *
+ * When the notice carries the output whole, `inlined` turns the pointer from
+ * an instruction into a note: there is nothing further to fetch, and the call
+ * is named only as the way to read the Run again — its transcript, its cost,
+ * or this same output later. The verb "Call" is deliberately absent from
+ * those two sentences, because it is the word the habit is keyed on.
+ *
  * The record-only sentence **owns** "no output was produced". It is the one
  * place that says it, which is why a completed Run with an empty preview has
  * no body: saying it in the body and then promising a full result in the
@@ -107,16 +119,32 @@ function formatNotificationIdentity(notice: RunNotification): string {
 export function formatResultPointer(
   runId: RunId,
   availability: ResultAvailability,
+  inlined = false,
 ): string {
-  const call = `Call agent_result with {"id":"${runId}"}`;
+  const call = `agent_result with {"id":"${runId}"}`;
   switch (availability) {
     case "complete":
-      return `The result is available. ${call}.`;
+      return inlined
+        ? `This is the complete output; nothing further to fetch. ${call} re-reads it with the transcript.`
+        : `The result is available. Call ${call}.`;
     case "partial":
-      return `Partial output is available. ${call}.`;
+      return inlined
+        ? `This is all the output the Run produced. ${call} re-reads it with the transcript.`
+        : `Partial output is available. Call ${call}.`;
     case "record-only":
-      return `No output was produced. The Run record is available. ${call}.`;
+      return `No output was produced. The Run record is available. Call ${call}.`;
   }
+}
+
+/**
+ * The whole output, set off from the runtime's own sentences.
+ *
+ * A labelled block between two fence lines rather than a quoted string: the
+ * output is multi-line Markdown, and a closing quote at the end of a
+ * paragraph is easy to lose. The fence is the boundary a reader scans for.
+ */
+function formatOutputBlock(label: string, output: string): string {
+  return `${label}:\n"""\n${output}\n"""`;
 }
 
 /**
@@ -165,18 +193,31 @@ export function formatNotificationAccounting(
 function formatNotificationBody(notice: RunNotification): string | undefined {
   switch (notice.status) {
     case "completed":
+      if (notice.output !== undefined) {
+        return formatOutputBlock("Output from the subagent", notice.output);
+      }
       // No body when there is nothing to preview. The pointer says a Run
       // record is available and says "no output was produced" once, which is
       // the whole reason this branch has an absence rather than a sentence.
       return notice.preview === ""
         ? undefined
         : `Preview from the subagent:\n"${notice.preview}"`;
-    case "failed":
-      return `Reason: ${notice.errorMessage || "none reported."}`;
+    case "failed": {
+      const reason = `Reason: ${notice.errorMessage || "none reported."}`;
+      return notice.output === undefined
+        ? reason
+        : `${reason}\n\n${formatOutputBlock("Output produced before failure", notice.output)}`;
+    }
     case "cancelled":
-      // The reason is in the header, and a cancelled Run's partial output
-      // stays behind `agent_result`, which the pointer now says.
-      return undefined;
+      // The reason is in the header. A cancelled Run's partial output is here
+      // when it is short, and behind `agent_result` — which the pointer says —
+      // when it is not.
+      return notice.output === undefined
+        ? undefined
+        : formatOutputBlock(
+            "Output produced before cancellation",
+            notice.output,
+          );
   }
 }
 
@@ -185,7 +226,11 @@ export function formatNotificationText(notice: RunNotification): string {
   return [
     `${formatNotificationHeader(notice)}\n\n${formatNotificationIdentity(notice)}`,
     formatNotificationBody(notice),
-    formatResultPointer(notice.runId, notice.resultAvailability),
+    formatResultPointer(
+      notice.runId,
+      notice.resultAvailability,
+      notice.output !== undefined,
+    ),
     notice.accounting === undefined
       ? undefined
       : formatNotificationAccounting(notice.accounting),
