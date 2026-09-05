@@ -24,11 +24,9 @@ was made for readability, and nobody wrote down what the randomness had been
 doing.
 
 It had been doing something. Identities are Session-scoped by design: the
-`RunRepository` is a session-long service, and
-[the compatibility matrix](../v2/compatibility-matrix.md) says twice that this
-is intended — *"Local Subagent and Run identity sets are forgotten at the
-Session boundary"* and *"After Session shutdown — Nothing is retrievable:
-Results belong to the Session that asked."* The Subagents, their retained
+`RunRepository` is a session-long service, local Subagent and Run identity sets
+are forgotten at the Session boundary, and after Session shutdown nothing is
+retrievable, because Results belong to the Session that asked. The Subagents, their retained
 native sessions, and their stored Results all die with the process. Identifiers
 that outlived them would point at nothing.
 
@@ -59,8 +57,7 @@ Two smaller facts shaped the decision. Sequential numbering is genuinely worth
 something: `run-3` is an identifier a person reads in a widget row, types into
 `agent_cancel`, and matches against a notice, and `run-3f9a1c22` is not. And
 the defect was found by hand-driving the product on its first day as a daily
-driver, not by any test — the full record is in
-[the M4 live findings](../v2/m4-live-findings.md).
+driver, not by any test.
 
 ## Decision
 

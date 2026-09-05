@@ -48,7 +48,8 @@ every diagnostic.
 
 v2 uses exactly these words, from the first line of code:
 
-- **backend** — the identity of Pi, Claude, or Codex. `BackendId` is its type.
+- **backend** — the identity of one named provider integration, such as Pi or
+  Claude. `BackendId` is its type.
 - **adapter** — the integration boundary that implements one backend. Provider
   wire objects never cross it.
 - **BackendAgent** — the adapter-owned retained native conversation, session, or
@@ -69,8 +70,8 @@ v2 Profile parsing understands exactly three generic things: `description`,
 to the named backend for validation, and a field the backend does not recognize
 is a diagnostic.
 
-`backend` is the **only** field v2 understands for naming Pi, Claude, or Codex.
-The migration is a **documented configuration rename**, not a deprecated alias:
+`backend` is the **only** field v2 understands for naming a backend. The
+migration is a **documented configuration rename**, not a deprecated alias:
 
 - The values are unchanged. `harness: claude` becomes `backend: claude`.
 - A Profile that still uses the old name fails v2 validation as an
@@ -88,9 +89,8 @@ The migration is a **documented configuration rename**, not a deprecated alias:
 - **v1 continues to read its field unchanged.** v1 is frozen; nothing about this
   decision touches it.
 
-Profile authors are told what to do in
-[the migration note](../v2/profile-backend-field-migration.md), which is linked
-from the README's agent-format section.
+Profile authors are told what to do in the README's "Upgrading from 1.x"
+section, which spells the rename out.
 
 ## Consequences
 

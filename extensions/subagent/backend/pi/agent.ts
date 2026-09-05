@@ -22,8 +22,7 @@
  * tracked a native cleanup that outlived its bound because v1 had no bounded
  * escalation to fall back on. M2 does: a finalizer that overruns the cleanup
  * budget causes the core to close this BackendAgent and mark the conversation
- * lost, which is the monotonic outcome ADR-0021 asks for and needs no state
- * here at all.
+ * lost. Loss is monotonic, so that outcome needs no state here at all.
  */
 
 import { Deferred, Effect, type Scope } from "effect";

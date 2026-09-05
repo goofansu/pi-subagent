@@ -68,8 +68,8 @@ started a Run, was told the answer was ready, started eight more, and then asked
 for the first result can be told the output expired where previously it would
 have been told there was no capacity for the eight. That is the trade, and it is
 the right way round: `ResultExpired` is a documented outcome that names the Run,
-its owner, and its status, and operation semantics §8 already distinguishes it
-from an unknown Run. `at capacity` with nothing running is not a documented
+its owner, and its status, and it is already distinct from an unknown Run in
+the `agent_result` outcome union. `at capacity` with nothing running is not a documented
 outcome of anything — it is a stall.
 
 **What it does not change.** Storage still precedes notification. Delivery still

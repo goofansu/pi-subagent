@@ -4,16 +4,13 @@ Date: 2026-09-04
 
 ## Status
 
-**Accepted** in the commit that closes
-[the Phase B gate](../v2-simplify/phase-b-exit-gate.md) — the commit carrying
+**Accepted** in the commit that closes the Phase B gate — the commit carrying
 this entry. The acceptance criterion stated below is met: every test under
 `extensions/subagent/runtime/` that existed before the phase passes with no
-edits, and the conformance suite passes on all five rigs. `npm run check` is
-green.
+edits, and the conformance suite passes on every rig. `npm run check` is green.
 
 The third module named at the gate, `runtime/waiters.ts`, is the waiter
-decision this ADR deliberately left to a measurement, and the gate's item 5
-records what decided it.
+decision this ADR deliberately left to a measurement.
 
 **Amended by the phase's code review, in the same commit.** The records module
 has an eleventh operation, `markRunning`, because a Subagent's phase moves when
@@ -27,8 +24,7 @@ sketches in it are what was decided, not an API reference; the gate is where
 the shipped API is recorded.
 
 **Proposed** in `96d210a`, written before `runtime/admission.ts` existed,
-which is [the roadmap's](../v2-simplify/roadmap.md) Phase B discipline and the
-lesson [the Phase A gate](../v2-simplify/phase-a-exit-gate.md) recorded: a
+which is the Phase B discipline and the lesson the Phase A gate recorded: a
 programme whose premise is deciding before coding should write its ADR first.
 
 Supersedes nothing, and changes nothing any earlier decision decided.
@@ -217,8 +213,7 @@ Subagent's state can be has one file to answer it, at the price of those
 questions no longer being answered by the file that raises them.
 
 **What it does not change.** Every outcome of every public operation, in every
-edge case, as [operation semantics](../v2/operation-semantics.md) decides
-them. The order of steps inside `start` and `resume`: admission before
+edge case, as the outcome unions in `domain/outcomes.ts` decide them. The order of steps inside `start` and `resume`: admission before
 identifiers, identifiers before the reservation, the reservation before the
 open, the open before publication, publication before the fork. Cleanup
 escalation, the default timeout, delivery initiation, and settlement. The
@@ -232,8 +227,8 @@ before it publishes — and the store's reservation removal is already a no-op
 once a commit has consumed it. So this is a property the design now has, not a
 bug it repairs, and it is recorded that way on purpose.
 
-**The architecture challenge gate**, from
-[contributing.md](../contributing.md#the-architecture-challenge-gate):
+**The architecture challenge gate**, the four questions a structural change
+has to answer:
 
 - *What does this delete?* A clamped counter and the reason it was clamped;
   three release sites that each had to remember what they held; one mutation of

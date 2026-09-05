@@ -6,10 +6,10 @@
 
 **The managed release is the contract's `close`.** Backend-neutral managed release is what `close` on a BackendAgent means, and it is idempotent and releases every retained native resource — a conformance scenario each backend passes. The 1.x modules this described were deleted at M7.
 
-See [the deletion ledger](../v2/deletion-ledger.md) for what replaced
-each 1.x abstraction, and [the architecture note](../architecture.md) for
-how the product is built now. Everything below is kept unedited: the reason
-a decision was made is part of the record even when its subject is gone.
+The glossary in [CONTEXT.md](../../CONTEXT.md) records what replaced each 1.x
+abstraction and how the product is built now. Everything below is kept
+unedited: the reason a decision was made is part of the record even when its
+subject is gone.
 
 ## Context
 
@@ -20,10 +20,9 @@ provider evidence.
 
 ## Decision
 
-Production Pi, Claude, and healthy Codex adapters support steering and
-Session-scoped Resume. Resume uses the neutral atomic admission interface from
-ADR-0021: admitted with a prepared Run, unsupported, or Conversation loss. All
-pass the same Control-capability-aware per-Run conformance and 32-repeat managed
+Every production adapter supports steering and Session-scoped Resume. Resume
+uses one neutral atomic admission interface: admitted with a prepared Run,
+unsupported, or Conversation loss. All pass the same Control-capability-aware per-Run conformance and 32-repeat managed
 conformance, including provider-Result-transparent steering, FIFO delivery,
 admission-without-Fact, cancellation followed by resume, immutable independent
 Results and notifications, per-Run transcript and usage isolation, one active
@@ -32,7 +31,7 @@ inside their adapters and the existing static/runtime boundary gates remain
 mandatory.
 
 `npm run check` is the local gate. `npm run release:check` additionally runs
-separate authenticated steering and resume proofs for Codex, Pi, and Claude.
+separate authenticated steering and resume proofs for each backend.
 Each proof has a unique success marker, a hard timeout, signal handling, a
 forced cancellation cleanup probe, and unconditional Session shutdown. The
 release is not complete unless every enabled provider's live gates pass in an

@@ -13,10 +13,9 @@ Carries forward:
   observations.
 - [ADR-0007](0007-harness-seam-with-neutral-facts.md) — only a neutral
   vocabulary crosses the adapter boundary; provider wire objects never do.
-- [ADR-0012](0012-ordered-codex-steering.md) — a complete external occurrence
-  receives stable ingress order *inside* the adapter, before asynchronous
-  interpretation can reorder it. v2 generalizes this from a Codex-owned
-  refinement to the rule for every adapter.
+- A complete external occurrence receives stable ingress order *inside* the
+  adapter, before asynchronous interpretation can reorder it. That began as one
+  adapter's own refinement; v2 generalizes it to the rule for every adapter.
 - [ADR-0018](0018-ordered-claude-query-conversation.md) — one ordered input
   engine per Run, and a provider Result is a Turn checkpoint rather than
   settlement.
@@ -35,16 +34,16 @@ Uses the vocabulary of [ADR-0022](0022-v2-terminology-and-backend-field.md).
 
 ## Context
 
-Three backends reach the core through three very different event shapes: Pi
-pushes typed session events to a per-Run subscriber, Claude yields frames from a
-per-Run async iterable, and Codex writes notifications to one process-wide
-stream shared by every Run of a Subagent (see the
-[Codex spike](../v2/spikes/codex-backend-api-risk.md)).
+Backends reach the core through very different event shapes: Pi pushes typed
+session events to a per-Run subscriber, Claude yields frames from a per-Run
+async iterable, and a process-backed adapter would write notifications to one
+stream shared by every Run of a Subagent.
 
 If ordering were left to each adapter's Promise continuations, two observations
 that arrived in one order could be reduced in another. v1 learned this the hard
-way in Codex and answered it with an ingress-ordered reducer; v2 needs the rule
-stated once for all backends, before any of them is written.
+way in an adapter whose stream outlived its Runs, and answered it with an
+ingress-ordered reducer; v2 needs the rule stated once for all backends, before
+any of them is written.
 
 ## Decision
 
@@ -87,11 +86,10 @@ event source outlives the Run:
 
 - **Pi and Claude** get it structurally — the subscription and the Query both
   live in the Run Scope and are gone once it closes.
-- **Codex** does not. Its stream is Subagent-scoped
-  ([ADR-0023](0023-v2-scope-ownership.md), exception 2), so the adapter's
-  demultiplexer must drop, or route to no Run, any frame whose `turnId` names a
-  Run that has settled. A frame for an unknown or terminal Run is discarded
-  silently; it is not an error and it is not a diagnostic on the next Run.
+- An adapter whose stream is Subagent-scoped would not. Its demultiplexer must
+  drop, or route to no Run, any frame naming a Run that has settled. A frame for
+  an unknown or terminal Run is discarded silently; it is not an error and it is
+  not a diagnostic on the next Run.
 
 Adapters must not "heal" a terminal Run with a late event. Terminal
 reconciliation is a different thing: it happens *before* settlement, as part of
@@ -121,8 +119,8 @@ Conflating Activity means the widget may never show a particular intermediate
 step. That is correct — Activity exists to say what is happening now, not to be
 a log.
 
-Silently discarding late Codex frames means a genuine adapter bug (routing a
-frame to the wrong Run) looks like nothing at all rather than like an error. The
-Codex adapter's tests must therefore assert routing positively — that a frame
-for the *current* Turn does arrive — rather than only asserting that stale
-frames do not.
+Silently discarding a late frame means a genuine adapter bug (routing a frame
+to the wrong Run) looks like nothing at all rather than like an error. Such an
+adapter's tests must therefore assert routing positively — that a frame for the
+*current* Run does arrive — rather than only asserting that stale frames do
+not.

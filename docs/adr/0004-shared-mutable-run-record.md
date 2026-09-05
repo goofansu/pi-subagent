@@ -10,10 +10,10 @@ Superseded by [ADR-0005](0005-executor-reports-facts.md).
 
 **The shared mutable Run record is gone.** `SubagentRuns` and its `TrackedRun` handles were deleted with the 1.x tree at M7. Nothing hands out write access to a Run any more: `RunRepository` is the only writer of Run snapshots and publishes immutable values. The cost this ADR accepted — four modules able to reach one record, so no single place knew what a Run looked like — is the cost the rewrite existed to stop paying.
 
-See [the deletion ledger](../v2/deletion-ledger.md) for what replaced
-each 1.x abstraction, and [the architecture note](../architecture.md) for
-how the product is built now. This ADR is kept unedited above: the reason a
-decision was made is part of the record even when its subject is gone.
+The glossary in [CONTEXT.md](../../CONTEXT.md) records what replaced each 1.x
+abstraction and how the product is built now. This ADR is kept unedited above:
+the reason a decision was made is part of the record even when its subject is
+gone.
 
 ## Context
 

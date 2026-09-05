@@ -29,10 +29,8 @@ I/O fails while opening can report it through its first execution's `failed`
 ending, and the unopened-BackendAgent state makes that natural.
 
 M2 is where that answer had to become code, and it does not survive contact
-with [operation semantics section
-1](../v2/operation-semantics.md#1-failed-start-admission-allocates-nothing),
-which says a failed start creates no public Run, allocates nothing, and emits
-no Notification.
+with the rule that a failed start creates no public Run, allocates nothing, and
+emits no Notification.
 
 Follow the deferred answer through. `agent_start` admits, allocates a
 `SubagentId` and a `RunId`, opens the BackendAgent — which fails — and then, in

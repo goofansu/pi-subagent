@@ -9,14 +9,24 @@ Accepted. Supersedes the fact-vocabulary consequence of
 supersedes only the executor-resolution consequence inherited from ADR-0005;
 this ADR's neutral-fact decision remains in force.
 
+### Status after M7 (2026-09-03)
+
+**The Harness seam is the backend contract.** The decision this ADR made — that
+a named backend owns model, effort and tool vocabulary behind a seam the core
+never sees provider types through — is what
+[ADR-0028](0028-v2-backend-contract.md) now holds, and the word is **backend**
+rather than Harness ([ADR-0022](0022-v2-terminology-and-backend-field.md)). The
+product ships two of them, Pi and Claude. Everything below is kept unedited:
+the reason a decision was made is part of the record even when its subject is
+gone.
+
 ## Context
 
 ADR-0005 deliberately let pi-ai's `Message` cross the executor seam while pi
 was the only harness, and named a second harness actually being built as the
 trigger to re-open it and design the domain fact vocabulary. That trigger has
-fired: subagents are to run on the Claude Agent SDK and Codex CLI as well as
-on child pi processes, with the orchestration core importing zero backend wire
-types.
+fired: subagents are to run on other providers' agent SDKs as well as on child
+pi processes, with the orchestration core importing zero backend wire types.
 
 Today the pi wire shape is consumed above the seam in four places: the fold's
 usage extraction in `run.ts`, the content-part narrowing in `messages.ts`,
@@ -27,7 +37,7 @@ also speaks pi vocabulary on the input side: model resolution builds pi's
 
 ## Decision
 
-A **Harness** is a named backend (`pi`, `claude`, `codex`) that validates the
+A **Harness** is a named backend that validates the
 harness-owned parts of a profile (`model`, `effort`, `tools`,
 `appendSystemPrompt` keep one name, harness-local meaning), resolves model and
 effort in its own vocabulary, and supplies an **Executor** per run. Profiles

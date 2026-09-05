@@ -5,10 +5,9 @@ Date: 2026-09-02
 ## Status
 
 Accepted for the v2 tree. **Implemented in M2**, whose exit gate records what
-it deleted; the spike that gated it is
-[`docs/v2/spikes/effect-schema.md`](../v2/spikes/effect-schema.md). The two
-M3 obligations in the table below — the Notification custom message and
-replacing `typebox` — are still ahead.
+it deleted, and gated by a spike against the library. The two M3 obligations in
+the table below — the Notification custom message and replacing `typebox` — are
+still ahead.
 
 Revised the day it was written. The first draft kept schemas out of the domain
 module in order to preserve M1's "domain imports nothing" boundary test
@@ -33,8 +32,8 @@ Carries forward:
   authoritative and independent of Notification delivery. Storing a Result and
   carrying one in a Notification are the two obligations that need an encoder.
 
-This ADR supersedes nothing. It refines the engineering guardrails in
-[the v2 roadmap](../v2/roadmap.md), section 10.
+This ADR supersedes nothing. It refines the v2 programme's engineering
+guardrails.
 
 ## Context
 
@@ -176,9 +175,8 @@ The findings belong in `docs/v2/spikes/`, like the backend ones.
   maintenance burden.
 - **Schema for the Profile frontmatter reader.** That is a *parser*, not a
   decoder — it turns text into values, which no schema library does — and it
-  lives in the domain module besides. The narrowness of that reader is recorded
-  as a gap in [the M1 exit gate](../v2/m1-exit-gate.md) and is a separate
-  question.
+  lives in the domain module besides. The narrowness of that reader was
+  recorded as a gap at the M1 exit gate and is a separate question.
 
 ## Consequences
 

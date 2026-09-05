@@ -21,9 +21,9 @@ Carries forward:
   exactly once, each adapter owns its ordering and Ending derivation, and the
   shared conformance surface enforces the observable contract. v2 keeps all
   three.
-- [ADR-0012](0012-ordered-codex-steering.md) — the adapter's ordered engine
-  alone settles its execution, and steering admission is independent of the
-  ending. v2 keeps both; it generalizes the first from Codex to every adapter.
+- The adapter's ordered engine alone settles its execution, and steering
+  admission is independent of the ending. v2 keeps both, and generalizes the
+  first from the one adapter that needed it to every adapter.
 - [ADR-0018](0018-ordered-claude-query-conversation.md) — a provider Result is
   an adapter-local Turn checkpoint, not Run settlement, while earlier guidance
   is outstanding. v2 keeps this distinction for every backend.
@@ -64,17 +64,16 @@ tolerated no-op that silently overwrites.
 
 Cancellation requested before or during execution does not settle the Run;
 cancellation is a *request*, and the Run settles `cancelled` only when its
-execution and finalizers have finished — see
-[operation semantics §3](../v2/operation-semantics.md#3-cancellation-is-idempotent-and-distinguishes-request-from-terminal).
+execution and finalizers have finished. Cancelling twice is idempotent.
 
 A Run may settle with **no observations**. That is a valid `cancelled` (or
 `failed`) Run with empty output, not an error, and the core must never fabricate
 an answer to fill it.
 
-**A Run must be able to settle without the backend's cooperation.** The
-[Codex spike](../v2/spikes/codex-backend-api-risk.md) killed its backend process
-mid-Run and observed no terminal frame at all, and a later request that neither
-resolved nor rejected. An adapter therefore derives an ending from whatever
+**A Run must be able to settle without the backend's cooperation.** A spike
+killed a backend process mid-Run and observed no terminal frame at all, and a
+later request that neither resolved nor rejected. An adapter therefore derives
+an ending from whatever
 evidence it owns — process exit, transport loss, its own bound on a request —
 rather than waiting for a terminal frame the backend may never send. Waiting
 forever is not a settlement policy.

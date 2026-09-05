@@ -4,13 +4,11 @@ Date: 2026-09-04
 
 ## Status
 
-**Proposed**, before the first Phase C3 commit, which is
-[the roadmap's](../v2-simplify/roadmap.md) discipline and the lesson
-[the Phase A gate](../v2-simplify/phase-a-exit-gate.md) recorded: a programme
-whose premise is deciding before coding writes its ADR first.
+**Proposed**, before the first Phase C3 commit, which is the programme's
+discipline and the lesson the Phase A gate recorded: a programme whose premise
+is deciding before coding writes its ADR first.
 
-**Accepted** in the commit that closes
-[the Phase C gate](../v2-simplify/phase-c-exit-gate.md) — the commit carrying
+**Accepted** in the commit that closes the Phase C gate — the commit carrying
 this entry. The acceptance criterion stated in *Acceptance* below is met: the
 gate's items 6, 7, 8 and 13 read PASS, and the conformance scenarios
 `a-notification-follows-storage` and
@@ -154,8 +152,8 @@ could push a notification.
   store too, so an internal read would suppress a notice nobody had read.
 - **A fourth store pin.** Pins answer "may this output be evicted?";
   consumption answers "does the parent still need orienting?". They are
-  different questions, and [the freeze](../v2-simplify/freeze.md) row F6 keeps
-  the three named pin holders exactly three.
+  different questions, and the freeze that governed this phase kept the three
+  named pin holders exactly three.
 - **Consuming on `agent_wait`.** A parent that waits for a fan-out to finish
   would silence the very pointers it needs to read each Result.
 - **Suppressing a notice Pi already holds.** There is no extension API for it;
@@ -218,9 +216,7 @@ describes the *stored Result*, not the Run's success — and the sentence
 misleads a model, to whom "full result" means an answer is waiting.
 
 The values become `complete` / `partial` / `record-only`, and the derivation
-reads the output rather than the status alone, exactly as
-[the notification semantics §3](../v2-simplify/notification-semantics.md#3-result-availability)
-now says:
+reads the output rather than the status alone:
 
 - `complete` — the status is `completed` and the final output is non-empty.
 - `partial` — not `complete`, and there is a non-empty final output or a

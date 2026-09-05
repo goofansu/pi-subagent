@@ -12,8 +12,8 @@
  * unsupported is the same wherever it happens, so
  * {@link CommonProfileFieldOptions.sharedFields} lets a backend narrow the set
  * and the field then earns the ordinary unrecognized diagnostic instead of
- * being validated. ADR-0009's rule is that nothing a Profile asks for is
- * silently ignored, and one diagnostic — not two — is what says so.
+ * being validated. The rule is that nothing a Profile asks for is silently
+ * ignored, and one diagnostic — not two — is what says so.
  *
  * This is the field knowledge from v1's backend-seam contract module, ported:
  * the same seven-value effort scale, the same comma-separated tools syntax, the

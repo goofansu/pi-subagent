@@ -23,11 +23,9 @@ domain change, not a contract change — no declaration here mentions it, and no
 adapter has to do anything differently for it — but a reader checking "did
 anything an adapter sees change" deserves to be told yes, this.
 
-The four changes M4 made outside the Pi adapter are enumerated and classified
-in
-[the M4 exit gate](../v2/m4-exit-gate.md#13-every-change-m4-made-outside-the-pi-adapter-directory);
-all four are missing provider-neutral semantics with fake-backend proofs, and
-none is provider leakage.
+The four changes M4 made outside the Pi adapter were enumerated and classified
+at its exit gate; all four are missing provider-neutral semantics with
+fake-backend proofs, and none is provider leakage.
 
 **M5 held it a second time** (2026-09-03), and this is the stronger reading of
 the same measurement. Claude is the backend this contract was most carefully
@@ -39,14 +37,12 @@ observations. All four fit, and `contract.ts` is still byte-identical to what
 M1 wrote. Nothing flowing through the contract widened either — `MessageRole`
 was M4's one such change and there was no second. The three provider-neutral
 changes M5 made outside `backend/claude/`, and the one shared conformance check
-it loosened, are enumerated in
-[the M5 exit gate](../v2/m5-exit-gate.md#11-every-change-m5-made-outside-the-claude-adapter-directory).
+it loosened, were enumerated at its exit gate.
 
 Stable means a change here is now a decision with a cost rather than a detail.
-If Claude at M5 or Codex at M6 needs one, the roadmap's rule applies: it is an
-exit-gate finding to be classified before it is made, and a contract that
-changes for each backend is the signal to pause the port and repair the
-abstraction.
+If a backend needs one, the rule is that it is an exit-gate finding to be
+classified before it is made, and a contract that changes for each backend is
+the signal to pause the port and repair the abstraction.
 
 Carries forward:
 
@@ -63,10 +59,10 @@ Carries forward:
   conformance surface is what enforces both. v2 declares capabilities on the
   opened BackendAgent instead of per Run, which is stricter, and keeps
   idempotent close and the conformance surface.
-- [ADR-0021](0021-retained-ephemeral-codex-conversation.md) — the retained
-  native conversation belongs to the Subagent rather than the Run. That is what
-  makes `BackendAgent` a Subagent-scoped interface with `execute` nested inside
-  it.
+- [ADR-0017](0017-retained-pi-sdk-conversation.md) and
+  [ADR-0018](0018-ordered-claude-query-conversation.md) — the retained native
+  conversation belongs to the Subagent rather than the Run. That is what makes
+  `BackendAgent` a Subagent-scoped interface with `execute` nested inside it.
 - [ADR-0023](0023-v2-scope-ownership.md) — the Session → Subagent → Run →
   native execution hierarchy, and the four exceptions the backend spikes found.
   The contract is the hierarchy expressed in three interfaces.
@@ -162,7 +158,7 @@ and the supervisor does it in M2. **This half still stands.**
 
 > **Amended by [ADR-0030](0030-v2-backend-open-failure.md) at M2.** The
 > paragraph below deferred a failure channel on `open`, and the deferral did
-> not survive contact with operation semantics section 1: reporting a failed
+> not survive contact with the failed-start rule: reporting a failed
 > open through a Run's `failed` ending means publishing a public Run, storing a
 > Result, and sending a Notification for work that never began. `open` now
 > returns an Effect that may fail with `BackendOpenFailure`, carrying one

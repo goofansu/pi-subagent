@@ -4,10 +4,8 @@ Date: 2026-09-03
 
 ## Status
 
-Accepted. Three decisions of
-[the notification semantics](../v2-simplify/notification-semantics.md), taken
-together because they are the same argument applied to a state name, a
-sentence, and a bound. It refines
+Accepted. Three decisions about notification semantics, taken together because
+they are the same argument applied to a state name, a sentence, and a bound. It refines
 [ADR-0006](0006-completion-notifications-and-result-store.md) — which decided
 that storage precedes notification and that a notice points at
 `agent_result` — and leaves everything it decided in force.
@@ -136,9 +134,8 @@ call site having remembered it.
 **What it costs.** The label bound is the expensive part: five production
 modules, two of them generic, because a bound on caller-supplied input is
 declared in the domain, applied in the façade, and carried through the
-supervisor to reach the Run's diagnostics.
-[The change-surface document](../v2-simplify/change-surface.md) records that
-as a finding and asks the Phase B gate to give this shape of change a target
+supervisor to reach the Run's diagnostics. That was recorded as a finding at
+the time, with a request that a later gate give this shape of change a target
 of its own. A model that pastes a paragraph into `description` now gets a Run
 whose label is one line and whose Result says the label was shortened; a model
 that reads the schema does not do it at all.
@@ -158,8 +155,8 @@ lifecycle behaviour moved: the conformance scenarios
 `a-notification-follows-storage` and
 `a-notification-retry-cannot-duplicate-or-alter-settlement` pass unmodified.
 
-**The architecture challenge gate**, from
-[the contributor rules](../contributing.md#the-architecture-challenge-gate):
+**The architecture challenge gate**, the four questions a structural change
+has to answer:
 
 - *What does this delete?* Two structural branches from the notification
   formatter, the Result's whole `UsageSnapshot` and its backend identity from

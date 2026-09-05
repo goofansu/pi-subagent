@@ -12,10 +12,10 @@ ADRs 0015–0019 subsequently enable the production provider implementations.
 
 **The modules are gone; the operation is the product's.** `agent_resume` is one of the six tools, its outcomes are typed, and `resume` is a declared capability so `unsupported` is answered without calling a provider. The 1.x machinery this ADR described — the manager's synchronous claim, the Attempt it prepared — was deleted at M7.
 
-See [the deletion ledger](../v2/deletion-ledger.md) for what replaced
-each 1.x abstraction, and [the architecture note](../architecture.md) for
-how the product is built now. This ADR is kept unedited above: the reason a
-decision was made is part of the record even when its subject is gone.
+The glossary in [CONTEXT.md](../../CONTEXT.md) records what replaced each 1.x
+abstraction and how the product is built now. This ADR is kept unedited above:
+the reason a decision was made is part of the record even when its subject is
+gone.
 
 ## Context
 
@@ -45,9 +45,9 @@ Harness, resolved model policy, working directory, child depth, project trust,
 and adapter trust posture. Capability is declared neutrally by that adapter;
 core receives no provider continuation token and never branches on a harness
 name. The controlled resumable adapter proves private semantic context crosses
-Runs while each public Result contains only its own output. Pi, Claude, and
-Codex remain unsupported in this milestone; ADR-0015 later enables Codex
-without changing the neutral admission contract.
+Runs while each public Result contains only its own output. Every production
+adapter remains unsupported in this milestone; each is enabled later without
+changing the neutral admission contract.
 
 Delivery registers every resumed Run through the existing per-Run Result and
 notification state machines. Resume neither releases a notification-pending
@@ -65,5 +65,6 @@ for `agent_resume`, and Run ids for `agent_wait`, `agent_result`,
 `agent_cancel`, and `agent_steer`. There is still no idle-Subagent observer or
 public close operation. Production Resume remains gated on provider-adapter
 atomic admission and proof of continuation, disposable execution, correlation,
-accounting, cleanup, and live behavior. ADR-0021 replaces the original boolean
-capability with admitted, unsupported, and Conversation loss outcomes.
+accounting, cleanup, and live behavior. The original boolean capability was
+later replaced with admitted, unsupported, and Conversation loss outcomes,
+which is the `ResumeAdmission` the backend contract carries.

@@ -8,10 +8,10 @@ Accepted for the v2 tree. Supersedes no earlier decision.
 
 Carries forward:
 
-- [ADR-0012](0012-ordered-codex-steering.md) — an accepted admission is ordered
-  before its offer returns; only the adapter's ordered engine may initiate
-  native steering; cancellation-first closes admission before a later Control
-  can be sent. v2 keeps all three, generalized to every backend.
+- An accepted admission is ordered before its offer returns; only the adapter's
+  ordered engine may initiate native steering; cancellation-first closes
+  admission before a later Control can be sent. v2 keeps all three, generalized
+  to every backend.
 - [ADR-0018](0018-ordered-claude-query-conversation.md) — one correlated Control
   is provider-visible at a time, and only provider echo or correlation reports
   the neutral user observation.
@@ -26,10 +26,7 @@ Carries forward:
 
 This ADR supersedes nothing.
 
-Uses the vocabulary of [ADR-0022](0022-v2-terminology-and-backend-field.md), and
-matches [operation semantics §7](../v2/operation-semantics.md#7-a-full-control-mailbox-returns-an-immediate-typed-outcome)
-and [§5](../v2/operation-semantics.md#5-shutdown-rejects-new-work-as-soon-as-it-begins)
-exactly.
+Uses the vocabulary of [ADR-0022](0022-v2-terminology-and-backend-field.md).
 
 ## Context
 
@@ -63,10 +60,9 @@ state. A Control admitted to one Run can never reach the Subagent's next Run.
 ### Admission is synchronous and never blocks
 
 `agent_steer` returns an outcome immediately, in the caller's turn, without
-awaiting any provider work. The outcomes are exactly those in
-[operation semantics §7](../v2/operation-semantics.md#7-a-full-control-mailbox-returns-an-immediate-typed-outcome):
-`accepted`, `mailbox full`, `invalid`, `unsupported`, `mailbox closed`,
-`already <status>`, `unknown Run`.
+awaiting any provider work. The outcomes are exactly `accepted`,
+`mailbox full`, `invalid`, `unsupported`, `mailbox closed`, `already <status>`,
+and `unknown Run`.
 
 Validation of the text precedes identity lookup, so malformed text gets one
 answer whether or not the Run id exists.
@@ -109,8 +105,7 @@ returns `mailbox closed`, and admissions that were never sent to the backend are
 discarded. Settlement does not wait for the mailbox to drain.
 
 Once shutdown begins, Controls are rejected as **shutting down** before any
-mailbox is consulted
-([operation semantics §5](../v2/operation-semantics.md#5-shutdown-rejects-new-work-as-soon-as-it-begins)).
+mailbox is consulted.
 
 ## Consequences
 

@@ -20,9 +20,9 @@ Carries forward:
 - [ADR-0010](0010-run-endings.md) — usage is not part of the neutral ending. An
   ending says how a Run finished; what it spent is a separate projection. v2
   keeps them apart.
-- [ADR-0012](0012-ordered-codex-steering.md) — an adapter's accounting delta is
-  Run-scoped and reduced in the same ordered engine as its other occurrences.
-  v2 keeps this and generalizes it to every adapter.
+- An adapter's accounting delta is Run-scoped and reduced in the same ordered
+  engine as its other occurrences. v2 keeps this and generalizes it to every
+  adapter.
 - [ADR-0020](0020-run-settlement-through-harness-conformance.md) — the shared
   conformance surface is what enforces usage behaviour per adapter; the
   `usage-totals` scenario is where these rules are checked. v2 keeps it.
@@ -33,26 +33,24 @@ Uses the vocabulary of [ADR-0022](0022-v2-terminology-and-backend-field.md).
 
 ## Context
 
-The three backends report usage in three incompatible shapes. The
-[Pi](../v2/spikes/pi-backend-api-risk.md),
-[Claude](../v2/spikes/claude-backend-api-risk.md), and
-[Codex](../v2/spikes/codex-backend-api-risk.md) spikes observed exactly what
-each one offers:
+Backends report usage in incompatible shapes. A spike per backend observed
+exactly what each one offers:
 
 | Backend | Shape observed | Terminal reconciliation surface |
 | --- | --- | --- |
 | **Pi** | Per-message counters — input, output, cache read, cache write, reasoning, a per-message occupancy figure, and a cost breakdown. Naturally additive. | The terminal message list the adapter already uses as a snapshot. |
 | **Claude** | A terminal frame carrying counters for the whole execution, a per-model breakdown with cost and context window, and a turn count. Cumulative within one execution. | The terminal frame itself. |
-| **Codex** | Streamed usage notifications carrying both a Conversation-cumulative total and a per-Turn figure, each broken into input, cached input, cache write, output, reasoning, and a total. | **None.** The Turn-completion frame carries no usage at all. |
 
-The exact field names behind each row are recorded in the spike documents, where
+A backend may also report a **Conversation-cumulative** total with no terminal
+usage surface at all; the rules below cover that case whether or not one ships
+today. The exact field names behind each row belong in an adapter, where
 provider vocabulary belongs. This ADR names only what the shapes mean.
 
 Two spike findings force decisions rather than mere translation. Claude's
 per-model breakdown for a single-model Run contained **two** models — the one
-the Profile asked for and a smaller one the SDK invoked internally. And Codex's
-authoritative figure is **Conversation-cumulative**, so a resumed Run that read
-it naively would be charged for every prior Run of that Subagent.
+the Profile asked for and a smaller one the SDK invoked internally. And a
+Conversation-cumulative authoritative figure, where a backend reports one, would
+charge a resumed Run for every prior Run of that Subagent if read naively.
 
 ## Decision
 
@@ -66,15 +64,15 @@ it crosses the boundary:
 - **Claude** differences its cumulative counters at every provider Turn boundary,
   with nonnegative handling for a reset, and starts a fresh baseline for each
   Run's execution.
-- **Codex** takes a Conversation-cumulative baseline when the Run's first Turn
-  starts and emits the difference. The per-Turn figure the provider also offers
-  is not enough on its own, because one Run may span several Turns.
+- **A backend reporting a Conversation-cumulative total** takes a baseline when
+  the Run's first provider turn starts and emits the difference. A per-turn
+  figure the provider also offers is not enough on its own, because one Run may
+  span several provider turns.
 
 **Resume never charges prior Conversation usage.** A resumed Run's reported
 usage covers only its own work. Cache reads it benefits from are its own reads —
-the [Claude spike](../v2/spikes/claude-backend-api-risk.md) observed the second
-Run reporting exactly as many cached-input tokens as the first Run had written,
-which is the correct attribution.
+the Claude spike observed the second Run reporting exactly as many cached-input
+tokens as the first Run had written, which is the correct attribution.
 
 ### Which models a Run is charged for
 
@@ -95,9 +93,9 @@ observed value wins, and intermediate values may be dropped exactly like Activit
 ([ADR-0024](0024-v2-observation-ordering.md)).
 
 - Pi's per-message occupancy figure is a gauge value, not a delta.
-- Codex's Conversation-cumulative total doubles as the Conversation's occupancy
-  gauge.
 - Claude's per-model context window supplies the denominator when one is shown.
+- A Conversation-cumulative total, where a backend reports one, doubles as that
+  Conversation's occupancy gauge.
 
 Summing a gauge is a category error, and it is the single easiest mistake to
 make when porting these adapters. A missing or unparseable gauge value leaves
@@ -109,8 +107,8 @@ At settlement an adapter may reconcile its streamed usage projection with an
 authoritative terminal figure. Reconciliation **replaces** a field; it never
 adds to it. Healing drift must not double count.
 
-Where a backend has no terminal usage surface — Codex — reconciliation uses the
-last usage notification observed before the completion frame, and the adapter
+Where a backend has no terminal usage surface, reconciliation uses the last
+usage notification observed before the completion frame, and the adapter
 **must not wait** for a usage frame that will never arrive.
 
 Turn counts follow the same rule with one refinement carried forward from v1: a
@@ -134,7 +132,7 @@ different fields with different fold rules, and a reviewer has to check which
 kind a new counter is before adding it. That check is the whole point of writing
 this down.
 
-Codex having no terminal usage surface means its reconciliation is
-best-effort by construction: if the last usage notification arrives after the
-completion frame, that Run's final figure is slightly stale. Waiting for it would
-risk never settling, so a slightly stale figure is accepted over a stuck Run.
+A backend with no terminal usage surface has best-effort reconciliation by
+construction: if its last usage notification arrives after the completion frame,
+that Run's final figure is slightly stale. Waiting for it would risk never
+settling, so a slightly stale figure is accepted over a stuck Run.
