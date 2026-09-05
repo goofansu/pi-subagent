@@ -256,7 +256,7 @@ test("a tool-use block carries the native id, so the entry merges by call id", (
           type: "tool_use",
           id: "toolu_1",
           name: "Read",
-          input: { file_path: "/a" },
+          input: { file_path: "/work/presentation/rows.ts" },
         },
       ],
     }),
@@ -285,7 +285,7 @@ test("a tool-use block carries the native id, so the entry merges by call id", (
       model: "claude-sonnet-4-6",
     },
     { kind: "usage", usage: { turns: 1 } },
-    { kind: "activity", activity: "Read" },
+    { kind: "activity", activity: "Read: presentation/rows.ts" },
     {
       kind: "message",
       role: "tool",
@@ -298,6 +298,122 @@ test("a tool-use block carries the native id, so the entry merges by call id", (
       outputSummary: "40 lines",
     },
   ]);
+});
+
+test("Claude shell, path, and pattern tools carry their key argument", () => {
+  const cases = [
+    [
+      "Bash",
+      { command: "  npm   test  \nignored second line" },
+      "Bash: npm test",
+    ],
+    [
+      "Edit",
+      { file_path: "/work/presentation/rows.ts" },
+      "Edit: presentation/rows.ts",
+    ],
+    [
+      "Write",
+      { file_path: "backend/activity.ts" },
+      "Write: backend/activity.ts",
+    ],
+    ["Grep", { pattern: "  getFinalOutput\\s+  " }, "Grep: getFinalOutput\\s+"],
+    ["Glob", { pattern: "**/*.test.ts" }, "Glob: **/*.test.ts"],
+  ] as const;
+
+  for (const [name, input, activity] of cases) {
+    const translated = translate([
+      assistantFrame({
+        content: [{ type: "tool_use", id: "toolu_kind", name, input }],
+      }),
+    ]).observations;
+    assert.deepEqual(
+      translated.filter((one) => one.kind === "activity"),
+      [{ kind: "activity", activity }],
+    );
+  }
+});
+
+test("an unknown Claude tool uses its first string input or its bare name", () => {
+  const detailed = translate([
+    assistantFrame({
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_mcp",
+          name: "mcp__tracker__search",
+          input: { limit: 10, query: "  open   incidents  ", after: "cursor" },
+        },
+      ],
+    }),
+  ]).observations;
+  assert.deepEqual(detailed.at(-1), {
+    kind: "activity",
+    activity: "mcp__tracker__search: open incidents",
+  });
+
+  for (const block of [
+    { type: "tool_use", id: "toolu_empty", name: "mcp__tracker__refresh" },
+    {
+      type: "tool_use",
+      id: "toolu_invalid",
+      name: "Bash",
+      input: { command: 42, fallback: "not the key argument" },
+    },
+  ]) {
+    const observations = translate([
+      assistantFrame({ content: [block] }),
+    ]).observations;
+    assert.deepEqual(observations.at(-1), {
+      kind: "activity",
+      activity: block.name,
+    });
+  }
+});
+
+test("Claude tool activity is capped before it becomes an observation", () => {
+  const observations = translate([
+    assistantFrame({
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_long",
+          name: "Bash",
+          input: { command: "x".repeat(200) },
+        },
+      ],
+    }),
+  ]).observations;
+
+  assert.deepEqual(observations.at(-1), {
+    kind: "activity",
+    activity: `Bash: ${"x".repeat(114)}`,
+  });
+});
+
+test("a nested sidechain tool-use block does not report root activity", () => {
+  for (const sidechain of [
+    { parentToolUseId: "toolu_parent" },
+    { subagentType: "explore" },
+  ]) {
+    const observations = translate([
+      assistantFrame({
+        ...sidechain,
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_nested",
+            name: "Read",
+            input: { file_path: "/work/private/notes.md" },
+          },
+        ],
+      }),
+    ]).observations;
+    assert.deepEqual(
+      observations.filter((one) => one.kind === "activity"),
+      [],
+    );
+  }
 });
 
 test("a failed tool result is a failed completion", () => {

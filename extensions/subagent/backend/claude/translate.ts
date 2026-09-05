@@ -44,6 +44,7 @@ import {
   runDiagnostic,
   type UsageDelta,
 } from "../../domain/index.ts";
+import { toolActivity } from "../activity.ts";
 
 /** What a confined provider diagnostic says instead of provider text. */
 export const CLAUDE_DIAGNOSTIC_REDACTED = "[redacted]";
@@ -511,7 +512,11 @@ export function createClaudeTranslator(): ClaudeTranslator {
     if (turnDelta > 0) {
       observations.push({ kind: "usage", usage: { turns: turnDelta } });
     }
-    const activity = latestToolCall(parts);
+    const activity =
+      frame.parent_tool_use_id == null &&
+      typeof frame.subagent_type !== "string"
+        ? latestToolActivity(message.content)
+        : undefined;
     if (activity !== undefined) {
       observations.push({ kind: "activity", activity });
     }
@@ -602,13 +607,21 @@ export function createClaudeTranslator(): ClaudeTranslator {
   };
 }
 
-/** What the widget shows a Run doing: the last tool it called. */
-export function latestToolCall(
-  parts: readonly MessagePart[],
-): string | undefined {
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    const part = parts[index];
-    if (part.kind === "tool_call") return part.name;
+/** What the widget shows a Run doing, read from the last raw tool-use block. */
+export function latestToolActivity(content: unknown): string | undefined {
+  const blocks = Array.isArray(content) ? content : [content];
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index];
+    if (
+      !isRecord(block) ||
+      block.type !== "tool_use" ||
+      typeof block.name !== "string" ||
+      block.name === ""
+    ) {
+      continue;
+    }
+    const input = isRecord(block.input) ? block.input : undefined;
+    return toolActivity(block.name, input);
   }
   return undefined;
 }

@@ -11,12 +11,18 @@ type ToolDetail =
 /** Provider tool names and the argument that best says what each call is about. */
 const TOOL_DETAILS: ReadonlyMap<string, ToolDetail> = new Map([
   ["bash", { kind: "shell", key: "command" }],
+  ["Bash", { kind: "shell", key: "command" }],
   ["read", { kind: "path", key: "path" }],
   ["ls", { kind: "path", key: "path" }],
   ["write", { kind: "path", key: "path" }],
   ["edit", { kind: "path", key: "path" }],
+  ["Read", { kind: "path", key: "file_path" }],
+  ["Write", { kind: "path", key: "file_path" }],
+  ["Edit", { kind: "path", key: "file_path" }],
   ["grep", { kind: "pattern", key: "pattern" }],
   ["find", { kind: "pattern", key: "pattern" }],
+  ["Grep", { kind: "pattern", key: "pattern" }],
+  ["Glob", { kind: "pattern", key: "pattern" }],
 ]);
 
 /** Make provider text safe for a one-line activity observation. */
