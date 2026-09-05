@@ -43,6 +43,7 @@ import { RunId, SubagentId } from "./ids.ts";
 import { CancellationReason, TerminalRunPhase } from "./phases.ts";
 import { RUN_LABEL_MAX_BYTES, type RunResult } from "./result.ts";
 import { boundOneLine, byteLength } from "./text.ts";
+import { transcriptItemText } from "./transcript.ts";
 import type { UsageSnapshot } from "./usage.ts";
 
 /** Long enough to recognize the answer, short enough not to be it. */
@@ -100,19 +101,24 @@ export type ResultAvailability = typeof ResultAvailability.Type;
  * Read availability off a stored Result.
  *
  * The **output** decides it rather than the status alone. A completed Run that
- * produced no final answer but left a transcript is `partial`, which is fair:
- * readable work, no answer. A failed or cancelled Run counts as `partial` on
- * either kind of evidence — a final output or a transcript — because either is
- * something a model can read, and a Run that was interrupted mid-answer often
- * has the second without the first.
+ * produced no final answer but left meaningful transcript evidence is
+ * `partial`, which is fair: readable work, no answer. Whitespace alone is not
+ * evidence. A failed or cancelled Run counts as `partial` on either kind of
+ * evidence — a final output or a transcript — because either is something a
+ * model can read, and a Run interrupted mid-answer often has the second
+ * without the first.
  */
 export function resultAvailabilityOf(result: RunResult): ResultAvailability {
-  if (result.status === "completed" && result.finalOutput !== "") {
+  const hasOutput = result.finalOutput.trim() !== "";
+  if (result.status === "completed" && hasOutput) {
     return "complete";
   }
-  return result.finalOutput !== "" || result.transcript.length > 0
-    ? "partial"
-    : "record-only";
+  const hasTranscriptEvidence = result.transcript.some(
+    (item) =>
+      transcriptItemText(item).trim() !== "" ||
+      item.parts.some((part) => part.kind === "tool_call"),
+  );
+  return hasOutput || hasTranscriptEvidence ? "partial" : "record-only";
 }
 
 /**
@@ -199,7 +205,7 @@ export const RunNotification = Schema.Struct({
   /** How much of the Result is there. See {@link resultAvailabilityOf}. */
   resultAvailability: ResultAvailability,
   /**
-   * The whole final output, present exactly when it is non-empty and fits
+   * The whole final output, present exactly when it is non-whitespace and fits
    * {@link NOTIFICATION_INLINE_MAX_BYTES}.
    *
    * Presence is the discriminant: a notice with `output` *is* the answer and
@@ -255,7 +261,7 @@ export function toRunNotification(result: RunResult): RunNotification {
     label: boundOneLine(result.description, RUN_LABEL_MAX_BYTES),
     status: result.status,
     resultAvailability: resultAvailabilityOf(result),
-    ...(result.finalOutput !== "" &&
+    ...(result.finalOutput.trim() !== "" &&
     byteLength(result.finalOutput) <= NOTIFICATION_INLINE_MAX_BYTES
       ? { output: result.finalOutput }
       : {}),

@@ -299,8 +299,15 @@ export function reduceRun(
       // The final output is the most recent assistant *text*. An assistant
       // message that only calls tools has not answered anything, so it leaves
       // the previous answer standing.
-      const text = transcriptItemText(item);
-      if (observation.role === "assistant" && text !== "") {
+      // Derive the answer from the observation's own parts, not the bounded
+      // transcript item. Transcript text and final output have independent
+      // bounds; applying the part bound first would make the larger output
+      // bound unreachable.
+      const text = transcriptItemText({
+        role: observation.role,
+        parts: observation.parts,
+      });
+      if (observation.role === "assistant" && text.trim() !== "") {
         const output = boundProjectionText(
           text,
           bounds.maxFinalOutputBytes,
