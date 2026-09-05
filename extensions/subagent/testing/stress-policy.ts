@@ -68,12 +68,14 @@ export const STEER = "also look left";
  * from its own finalizer does it on every Run — while one that got as far as
  * the reducer means sealing did not happen when it should have.
  *
- * `reconciliationDifferences` is deliberately **not** here. A terminal
- * reconciliation that changes something streamed is reconciliation doing its
- * job, and the counter is classified `expected` for that reason; a Session
- * with thousands of them has a backend whose streaming and terminal snapshot
- * disagree systematically, and that is a rate to read rather than a zero to
- * assert.
+ * `reconciliationDifferences` is deliberately **not** here — but not because a
+ * busy Session is expected to raise it. It counts the Runs whose terminal
+ * snapshot *disagreed* with what they streamed, one per Run, and a Session of
+ * identical answered Runs whose snapshots restate their streams reads zero. It
+ * is exempt because a genuine disagreement is reconciliation doing its job
+ * rather than a defect: a backend whose streaming and terminal figures differ
+ * is telling the truth about itself, and the honest thing to watch is the rate
+ * at which it does so rather than a zero to assert.
  */
 const MUST_STAY_ZERO = [
   "duplicateSettlements",

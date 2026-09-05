@@ -203,6 +203,16 @@ export interface BackendConformanceExpectation {
   readonly resumeWhileRunning?: string;
   /** How many notifications the sink received. */
   readonly notifications?: number;
+  /**
+   * How many Runs the Session should count as having disagreed with their
+   * streams, across the whole fixture.
+   *
+   * Declared rather than asserted loosely, because whether a backend's
+   * terminal snapshot differs from what it streamed is a property of the
+   * *fixture*, not of the runtime. A rig whose snapshot restates the stream
+   * must be able to say the honest answer is zero.
+   */
+  readonly reconciliationDifferences?: number;
 }
 
 export interface BackendConformanceFixture {
@@ -1034,7 +1044,21 @@ const SCENARIO_CHECKS: {
       // it, so the reported figure is the authoritative one exactly.
       assert.equal(run.result.usage.totals.input, declared);
     }
-    assert.ok(outcome.counters.reconciliationDifferences >= 1);
+    // And the counter says whether the snapshot *disagreed*, which is a fact
+    // about this fixture rather than about the runtime: a rig whose snapshot
+    // restates what it streamed declares zero and passes because the counter
+    // is right, not because it was counting arrivals.
+    const differences = fixture.expected.reconciliationDifferences;
+    assert.equal(
+      typeof differences,
+      "number",
+      "this scenario needs the expected count of counted differences declared",
+    );
+    assert.equal(
+      outcome.counters.reconciliationDifferences,
+      differences,
+      "reconciliationDifferences",
+    );
   },
   "context-occupancy-is-a-gauge": (fixture, outcome) => {
     for (const [index, run] of outcome.runs.entries()) {

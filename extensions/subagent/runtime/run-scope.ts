@@ -186,6 +186,16 @@ function reducerLoop(
       if (folded.report.report === "ignored-late") {
         context.counters.count("lateObservations");
       }
+      // The other arrival path. An adapter whose work finished before a cancel
+      // reached it announces its snapshot through the intake rather than in a
+      // terminal bundle, and a difference that arrived that way is the same
+      // fact about the backend.
+      if (
+        observation.kind === "reconciliation" &&
+        reconciliationDiffered(folded.report)
+      ) {
+        context.counters.count("reconciliationDifferences");
+      }
       yield* context.repository.recordProjection(
         context.identity.runId,
         folded.projection,
@@ -204,6 +214,24 @@ function reducerLoop(
       }
     }
   });
+}
+
+/**
+ * Whether a reduced reconciliation actually disagreed with what was streamed.
+ *
+ * The reducer reports the set of projection fields a snapshot altered, and
+ * that set is the whole test. A snapshot the reducer ignored as late carries
+ * no set, and one that restated the stream carries an empty one; neither is a
+ * difference. Counting arrivals instead — which is what this used to do —
+ * makes `reconciliationDifferences` read as a count of answered Runs on a
+ * backend that always sends a snapshot.
+ */
+function reconciliationDiffered(report: AppliedReport): boolean {
+  const changed =
+    report.report === "applied" || report.report === "applied-with-truncation"
+      ? report.changed
+      : undefined;
+  return (changed?.length ?? 0) > 0;
 }
 
 /** What the execution's exit means, before arbitration has a say. */
@@ -360,7 +388,7 @@ export function runToSettlement(
       reports.push(step.report);
       if (
         observation.kind === "reconciliation" &&
-        step.report.report !== "ignored-late"
+        reconciliationDiffered(step.report)
       ) {
         counters.count("reconciliationDifferences");
       }

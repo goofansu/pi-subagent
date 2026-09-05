@@ -245,7 +245,12 @@ arguments and the runtime decides what to emit as a diagnostic.
 applied as the last ordered observation of a Run and before settlement. Present
 fields replace, absent fields retain, usage replaces rather than adds, and
 replaying it is a no-op. A backend with no snapshot sends none and never
-fabricates one. [ADR-0025](docs/adr/0025-v2-terminal-settlement.md).
+fabricates one. Applying one reports **which fields it changed**, compared
+after bounding, so a snapshot that restates the stream reports nothing: that is
+what separates "a snapshot was applied" from "a snapshot disagreed", and it is
+what the `reconciliation-difference` diagnostic and the
+`reconciliationDifferences` counter are both counting.
+[ADR-0025](docs/adr/0025-v2-terminal-settlement.md).
 
 **Terminal bundle** — what one backend execution resolves to: an ending plus an
 optional terminal reconciliation. It is a *report*, not a settlement — the

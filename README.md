@@ -203,6 +203,18 @@ counter would be the command this one replaced.
   time: duplicate settlement attempts, late events, queue overflows, cleanup
   escalations, reconciliation differences, delivery failures, evictions. One is
   usually normal; thousands is a bug.
+
+  `reconciliationDifferences` counts Runs whose **terminal snapshot disagreed
+  with what was streamed** — one increment per Run that disagreed, however many
+  fields it disagreed about. A Session that answered a hundred Runs whose
+  snapshots restated their streams reads zero, so a reading that climbs is
+  saying something: this backend's streaming figures and its terminal figures
+  differ for a reason worth understanding, and until it is understood the
+  numbers a Run reports mid-flight are not the numbers it settles with. A Run
+  that disagreed carries a `reconciliation-difference` diagnostic naming the
+  fields that changed — visible in the Run's result, and where to look first —
+  unless that Run said so much that the diagnostics bound evicted it, which the
+  Run's own truncation record reports.
 - **probes** — what is still alive. The runtime's own says whether the core is
   holding a fiber, a queue, a mailbox, a waiter, a subscription, or a
   BackendAgent. One block per backend says whether that provider's handles are

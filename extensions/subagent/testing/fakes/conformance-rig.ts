@@ -661,8 +661,12 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
                     // Replaced, not 40 + 50.
                     usageTotals: { input: 50, output: 12 },
                     turns: 2,
+                    // The snapshot disagreed about usage and raised the turn
+                    // count, so the Run says so in its own diagnostics.
+                    diagnosticCategories: ["reconciliation-difference"],
                   },
                 ],
+                reconciliationDifferences: 1,
               },
             },
           );

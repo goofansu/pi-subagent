@@ -42,7 +42,20 @@ export interface SupervisorCounters {
   readonly queueOverflows: number;
   /** A native finalizer outlived the cleanup budget. */
   readonly cleanupEscalations: number;
-  /** A terminal reconciliation changed something that was streamed. */
+  /**
+   * A terminal snapshot disagreed with what was streamed.
+   *
+   * One increment per applied reconciliation that changed at least one
+   * projection field, however many fields it changed, and on either path a
+   * snapshot can arrive by: inside the terminal bundle, or announced through
+   * the intake when a cancel reached a Run that had already finished. A
+   * snapshot that restated the stream is not counted, and neither is one the
+   * reducer ignored as late — so a Session that answered a hundred Runs whose
+   * snapshots agreed with their streams reads zero.
+   *
+   * The Run that disagreed also carries a `reconciliation-difference`
+   * diagnostic naming the fields, which is where to look when this climbs.
+   */
   readonly reconciliationDifferences: number;
   /** A notification exhausted its retry budget. */
   readonly deliveryFailures: number;
@@ -73,10 +86,10 @@ export type SupervisorCounter = keyof SupervisorCounters;
 /**
  * What a counter *means* for the reader of a health line.
  *
- * Three classes, because a Session with twenty late events and two
- * reconciliation differences is running exactly as designed, and one that
- * committed a conflicting result is not. Summing the two and reporting the
- * total says the second thing about the first.
+ * Three classes, because a Session with twenty late events and two Runs whose
+ * terminal snapshots disagreed with their streams is running exactly as
+ * designed, and one that committed a conflicting result is not. Summing the
+ * two and reporting the total says the second thing about the first.
  *
  * - **defect** — the runtime did something it must not do. Somebody should
  *   look, and the Session is not behaving.

@@ -45,7 +45,11 @@ import {
   type RunProjection,
   type TruncationRecord,
 } from "./projection.ts";
-import { reconcileRun } from "./reconcile-run.ts";
+import {
+  type ReconciledField,
+  reconcileRun,
+  reconciliationDifference,
+} from "./reconcile-run.ts";
 import { type ToolEntry, transcriptItemText } from "./transcript.ts";
 import { addUsageDelta, replaceContextGauge } from "./usage.ts";
 
@@ -56,13 +60,30 @@ import { addUsageDelta, replaceContextGauge } from "./usage.ts";
  * errors — a tool call with no call id being the one M1 produces. It is on the
  * report rather than in the projection because the projection is the Run, and
  * a note about how the Run was reported is not part of what the Run said.
+ *
+ * `changed` accompanies a reconciliation's report and no other's: it is the set
+ * of projection fields the snapshot actually altered, carried even when it is
+ * empty. A caller going through the reducer therefore learns whether a
+ * snapshot *disagreed* with the stream without calling {@link reconcileRun}
+ * itself, which is what makes counting differences possible on every path a
+ * reconciliation can arrive by.
+ *
+ * It is optional on the type because these two report shapes serve every
+ * observation kind and only one kind has a change set. So a reader must treat
+ * an absent set and an empty one alike — both mean nothing disagreed — rather
+ * than reading absence as "not checked".
  */
 export type AppliedReport =
-  | { readonly report: "applied"; readonly notes?: readonly string[] }
+  | {
+      readonly report: "applied";
+      readonly notes?: readonly string[];
+      readonly changed?: readonly ReconciledField[];
+    }
   | {
       readonly report: "applied-with-truncation";
       readonly dropped: readonly TruncationEvent[];
       readonly notes?: readonly string[];
+      readonly changed?: readonly ReconciledField[];
     }
   | { readonly report: "ignored-late"; readonly kind: RunObservationKind }
   | {
@@ -164,21 +185,19 @@ function applied(
   projection: RunProjection,
   dropped: readonly TruncationEvent[],
   notes: readonly string[],
+  changed?: readonly ReconciledField[],
 ): ReduceOutcome {
+  const extra = {
+    ...(notes.length > 0 ? { notes } : {}),
+    ...(changed === undefined ? {} : { changed }),
+  };
   if (dropped.length > 0) {
     return {
       projection,
-      report: {
-        report: "applied-with-truncation",
-        dropped,
-        ...(notes.length > 0 ? { notes } : {}),
-      },
+      report: { report: "applied-with-truncation", dropped, ...extra },
     };
   }
-  return {
-    projection,
-    report: { report: "applied", ...(notes.length > 0 ? { notes } : {}) },
-  };
+  return { projection, report: { report: "applied", ...extra } };
 }
 
 /**
@@ -410,7 +429,25 @@ export function reduceRun(
         observation.reconciliation,
         bounds,
       );
-      return applied(reconciled.projection, reconciled.dropped, notes);
+      dropped.push(...reconciled.dropped);
+      let next = reconciled.projection;
+      // A snapshot that disagreed says so in the Run itself, not only in a
+      // Session-wide counter. The diagnostic is core-authored, so it carries a
+      // real message; a snapshot that restated the stream appends nothing, and
+      // an ordinary answered Run still settles with an empty list.
+      if (reconciled.changed.length > 0) {
+        next = appendBounded(
+          next,
+          dropped,
+          reconciliationDifference(reconciled.changed),
+          {
+            list: "diagnostics",
+            record: "droppedDiagnostics",
+            max: bounds.maxDiagnostics,
+          },
+        );
+      }
+      return applied(next, dropped, notes, reconciled.changed);
     }
 
     case "ending": {

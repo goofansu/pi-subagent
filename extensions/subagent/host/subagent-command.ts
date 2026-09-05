@@ -15,10 +15,10 @@
  * vocabulary, so a status line and a widget row use one set of words.
  *
  * The roadmap asks M4 for dogfood diagnostics — cleanup escalation, duplicate
- * settlement attempts, queue overflow, reconciliation differences, late
- * events, delivery failures — and the honest way to provide them is to report
- * the counters the runtime already keeps rather than to invent a second set of
- * numbers that could disagree with them.
+ * settlement attempts, queue overflow, terminal snapshots that disagreed with
+ * what was streamed, late events, delivery failures — and the honest way to
+ * provide them is to report the counters the runtime already keeps rather than
+ * to invent a second set of numbers that could disagree with them.
  *
  * Two kinds of block, and the split is the point. The **counters** are things
  * that happened and nobody had to be told about at the time; a Session with
@@ -183,11 +183,12 @@ const REPORTED_CLASSES = ["defect", "incident", UNCLASSIFIED] as const;
  * Only the first half is a verdict, and the verdict is by class rather than by
  * sum. Every counter is a thing that happened which nobody had to be told
  * about at the time — but they are not the same kind of thing, and adding them
- * up says the wrong one. A Session with twenty late events and two
- * reconciliation differences is running exactly as designed; one that
- * committed a conflicting result is not. The taxonomy that says which is which
- * is `COUNTER_CLASSES`, in the runtime, exhaustive by type, so a counter added
- * without a class fails to compile rather than quietly reading as a symptom.
+ * up says the wrong one. A Session with twenty late events and two Runs whose
+ * terminal snapshots disagreed with what they streamed is running exactly as
+ * designed; one that committed a conflicting result is not. The taxonomy that
+ * says which is which is `COUNTER_CLASSES`, in the runtime, exhaustive by
+ * type, so a counter added without a class fails to compile rather than
+ * quietly reading as a symptom.
  *
  * Expected counters therefore never appear here at all. They are in
  * `/subagent diagnostics`, where a maintainer chasing a number wants them.

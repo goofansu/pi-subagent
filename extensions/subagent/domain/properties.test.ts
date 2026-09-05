@@ -10,6 +10,7 @@ import {
   type RunProjection,
 } from "./projection.ts";
 import { reconcileRun } from "./reconcile-run.ts";
+import type { TerminalReconciliation } from "./reconciliation.ts";
 import { type AppliedReport, reduceRun } from "./reduce-run.ts";
 import { contextGauge } from "./usage.ts";
 
@@ -187,14 +188,85 @@ test("reconciliation is idempotent for every generated sequence", () => {
       model: `model-${seed % 3}`,
     };
 
-    const once = reconcileRun(
-      streamed,
-      reconciliation,
+    const once = reconcileRun(streamed, reconciliation, TIGHT_BOUNDS);
+    const twice = reconcileRun(once.projection, reconciliation, TIGHT_BOUNDS);
+
+    assert.deepEqual(twice.projection, once.projection, `seed ${seed}`);
+    // Replay is a no-op, so it disagreed with nothing.
+    assert.deepEqual(twice.changed, [], `seed ${seed}`);
+  }
+});
+
+test("a snapshot restating the streamed projection reports no change", () => {
+  for (const seed of seeds(RUNS)) {
+    const { observations } = randomSequence(seed);
+    const streamed = fold(
+      observations.filter((observation) => observation.kind !== "ending"),
       TIGHT_BOUNDS,
     ).projection;
-    const twice = reconcileRun(once, reconciliation, TIGHT_BOUNDS).projection;
 
-    assert.deepEqual(twice, once, `seed ${seed}`);
+    // Every field read straight back off the projection, so the snapshot
+    // agrees with the stream in every particular. Bounding it a second time
+    // must not be mistaken for a disagreement.
+    const where = `seed ${seed}`;
+    const outcome = reconcileRun(
+      streamed,
+      {
+        transcript: streamed.transcript,
+        finalOutput: streamed.finalOutput,
+        usage: streamed.usage.totals,
+        context: streamed.usage.context,
+        turns: streamed.usage.turns,
+        ...(streamed.model === undefined ? {} : { model: streamed.model }),
+      },
+      TIGHT_BOUNDS,
+    );
+
+    assert.deepEqual(outcome.changed, [], `seed ${seed}`);
+    // And the fields it could have changed are the ones it started with. The
+    // truncation record is excluded on purpose: a replacement *sets* it, so a
+    // restating snapshot rewrites the count of what an earlier bound removed
+    // without disagreeing about anything the Run said.
+    assert.deepEqual(outcome.projection.transcript, streamed.transcript, where);
+    assert.equal(outcome.projection.finalOutput, streamed.finalOutput, where);
+    assert.deepEqual(outcome.projection.usage, streamed.usage, where);
+    assert.equal(outcome.projection.model, streamed.model, where);
+  }
+});
+
+test("every field a snapshot changes is the field it is reported under", () => {
+  for (const seed of seeds(RUNS)) {
+    const { observations } = randomSequence(seed);
+    const streamed = fold(
+      observations.filter((observation) => observation.kind !== "ending"),
+      TIGHT_BOUNDS,
+    ).projection;
+
+    // One field at a time, each set to a value the stream cannot have held,
+    // so the change set names exactly that one field and no other.
+    const only: readonly (readonly [TerminalReconciliation, string])[] = [
+      [
+        {
+          transcript: [
+            {
+              role: "assistant",
+              parts: [{ kind: "text", text: `healed ${seed}` }],
+            },
+          ],
+        },
+        "transcript",
+      ],
+      [{ finalOutput: `answer ${seed}` }, "finalOutput"],
+      [{ usage: { cost: streamed.usage.totals.cost + 1 } }, "usage"],
+      [{ context: contextGauge(streamed.usage.context.tokens + 1) }, "context"],
+      [{ turns: streamed.usage.turns + 1 }, "turns"],
+      [{ model: `model-${seed}-other` }, "model"],
+    ];
+
+    for (const [reconciliation, field] of only) {
+      const outcome = reconcileRun(streamed, reconciliation, TIGHT_BOUNDS);
+      assert.deepEqual(outcome.changed, [field], `seed ${seed}: ${field}`);
+    }
   }
 });
 

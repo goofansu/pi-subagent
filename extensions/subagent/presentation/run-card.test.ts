@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   cancelledEnding,
   failedEnding,
+  reconciliationDifference,
   resultLink,
   runDiagnostic,
 } from "../domain/index.ts";
@@ -241,4 +242,19 @@ test("a gauge with no window reported reads as an occupancy alone", () => {
   });
 
   assert.equal(card.context, "context 1.8k");
+});
+
+test("a reconciliation difference is rendered like any other diagnostic", () => {
+  // The category is core-authored, so the message is real rather than the
+  // redacted marker, and it names the fields the terminal snapshot changed.
+  const card = runCard({
+    from: "result",
+    result: fixtureResult({
+      diagnostics: [reconciliationDifference(["usage", "turns"])],
+    }),
+  });
+
+  assert.deepEqual(card.diagnostics, [
+    "reconciliation-difference: terminal snapshot changed usage, turns",
+  ]);
 });

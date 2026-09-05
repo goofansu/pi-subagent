@@ -619,8 +619,12 @@ export function piConformanceRig(): BackendConformanceRig {
                   status: "completed",
                   usageTotals: { input: 50, output: 12 },
                   turns: 1,
+                  // The restated usage is genuine drift, so the Run carries
+                  // the diagnostic that names it.
+                  diagnosticCategories: ["reconciliation-difference"],
                 },
               ],
+              reconciliationDifferences: 1,
             },
           });
 

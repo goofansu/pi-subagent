@@ -709,6 +709,13 @@ export function claudeConformanceRig(): BackendConformanceRig {
           // there is no authoritative message list to recompute a total from.
           // So the property holds by construction: there is nothing to double
           // count, and the streamed figure is the reported one exactly.
+          //
+          // And the two fields it does carry are the two that were streamed:
+          // the same turn count and the same model. So the snapshot agrees
+          // with the stream in every particular, the Run carries no
+          // difference diagnostic, and the counter reads zero. That is the
+          // honest answer for this backend, and the rig declares it rather
+          // than passing on a count of arrivals.
           return claudeFixture({
             scripts: [ORDINARY],
             plans: [{}],
@@ -718,8 +725,10 @@ export function claudeConformanceRig(): BackendConformanceRig {
                   status: "completed",
                   usageTotals: { input: 40, output: 10 },
                   turns: 2,
+                  diagnosticCategories: [],
                 },
               ],
+              reconciliationDifferences: 0,
             },
           });
 
