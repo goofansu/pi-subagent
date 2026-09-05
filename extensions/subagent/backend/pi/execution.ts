@@ -27,14 +27,15 @@
  * bundle; the core decides.
  */
 
-import { Effect, Fiber, type Scope } from "effect";
+import { Deferred, Effect, Fiber, Option, type Scope } from "effect";
 import {
   answeredEnding,
   failedEnding,
   type TerminalReconciliation,
 } from "../../domain/index.ts";
 import type { ExecutionIO, RunInput, TerminalBundle } from "../contract.ts";
-import { type CallbackBridge, createCallbackBridge } from "./bridge.ts";
+import { BRIDGE_OVERFLOW_MESSAGE } from "../native-bridge.ts";
+import { createCallbackBridge } from "./bridge.ts";
 import type { PiProbeCounters } from "./probe.ts";
 import type { PiSession, PiSessionEvent } from "./session.ts";
 import {
@@ -66,6 +67,10 @@ export const STEER_REJECTED_CATEGORY = "Pi steering was not delivered";
 export const STEER_ABANDONED_MESSAGE =
   "the Pi session finished without taking guidance that was still being delivered";
 
+type NativeSettlement =
+  | { readonly kind: "native"; readonly error: unknown }
+  | { readonly kind: "overflow" };
+
 export interface PiExecutionContext {
   readonly session: PiSession;
   /** The adapter's own closed flag. The SDK does not defend a disposed session. */
@@ -85,7 +90,8 @@ export function runPiExecution(
       return { ending: failedEnding(CLOSED_BEFORE_EXECUTION_MESSAGE) };
     }
 
-    const bridge = createCallbackBridge();
+    const bridge = yield* createCallbackBridge();
+    const settlement = yield* Deferred.make<NativeSettlement>();
     const translator = createPiEventTranslator();
     // Everything the listener writes and the drain loop reads. Plain mutable
     // state, because a callback cannot yield and a `Ref` it could not write.
@@ -96,6 +102,14 @@ export function runPiExecution(
     // Reference identity, not content: two consumed Controls can carry the
     // same text, and equal content is not the same event.
     const seen = new WeakSet<object>();
+
+    const offer = (observation: Parameters<typeof bridge.offer>[0]): void => {
+      if (bridge.offer(observation)) return;
+      Deferred.doneUnsafe(
+        settlement,
+        Effect.succeed({ kind: "overflow" } as const),
+      );
+    };
 
     const listen = (event: PiSessionEvent): void => {
       if (!bridge.accepting()) return;
@@ -116,16 +130,16 @@ export function runPiExecution(
             seen.add(message);
           }
           for (const observation of piMessageObservations(message)) {
-            bridge.push(observation);
+            offer(observation);
           }
           return;
         }
         case "activity": {
-          bridge.push(read.observation);
+          offer(read.observation);
           return;
         }
         case "tool": {
-          for (const observation of read.observations) bridge.push(observation);
+          for (const observation of read.observations) offer(observation);
           return;
         }
         case "terminal": {
@@ -142,12 +156,43 @@ export function runPiExecution(
       }
     };
 
-    /** Hand every buffered observation to the intake, with backpressure. */
-    const drain = Effect.gen(function* () {
+    /** Hand everything currently queued to the intake, with backpressure. */
+    const drainAvailable = Effect.gen(function* () {
       for (;;) {
-        const next = bridge.take();
-        if (next === undefined) return;
-        yield* io.emit(next);
+        const next = yield* bridge.poll;
+        if (Option.isNone(next)) break;
+        yield* io.emit(next.value);
+      }
+      for (const observation of bridge.takeOverflowPolicy()) {
+        yield* io.emit(observation);
+      }
+    });
+
+    /** Emit in offer order until native work settles, then empty the Queue. */
+    const drainUntilSettlement = Effect.gen(function* () {
+      for (;;) {
+        // Drain bursts in one take. Racing once per observation creates and
+        // interrupts a waiting fiber for every item in a provider burst.
+        yield* drainAvailable;
+        if (Deferred.isDoneUnsafe(settlement)) return;
+
+        const next = yield* Effect.race(
+          bridge.take.pipe(
+            Effect.map((observation) => ({
+              kind: "observation" as const,
+              observation,
+            })),
+          ),
+          Deferred.await(settlement).pipe(
+            Effect.map(() => ({ kind: "settled" as const })),
+          ),
+        );
+        if (next.kind === "observation") {
+          yield* io.emit(next.observation);
+          continue;
+        }
+        yield* drainAvailable;
+        return;
       }
     });
 
@@ -174,24 +219,12 @@ export function runPiExecution(
           probe.released("liveSubscriptions");
         }),
     );
-    yield* Effect.acquireRelease(Effect.void, () =>
-      Effect.gen(function* () {
-        if (completed) return;
-        yield* Effect.promise(async () => {
-          probe.acquired("pendingCleanups");
-          try {
-            await stopNativeWork(session);
-          } finally {
-            probe.released("pendingCleanups");
-          }
-        });
-        yield* drain;
-      }),
-    );
-
     /** What a cancelled Run still has to say before its intake is sealed. */
+    let interruptAnnounced = false;
     const announceOnInterrupt = Effect.gen(function* () {
-      yield* drain;
+      if (interruptAnnounced) return;
+      interruptAnnounced = true;
+      yield* drainAvailable;
       const snapshot = terminal;
       if (snapshot === undefined) return;
       // The work finished before the cancel reached it. Announcing the
@@ -212,7 +245,7 @@ export function runPiExecution(
     // prompt already settled.
     let deliveries = 0;
     let nativeDeliveries = 0;
-    let nativePrompt: ReturnType<typeof startNativePrompt> | undefined;
+    let deliveryFinished = Deferred.makeUnsafe<void>();
 
     const steerLoop = Effect.gen(function* () {
       for (;;) {
@@ -220,7 +253,9 @@ export function runPiExecution(
         if (control === undefined) return;
         if (context.isClosed()) return;
         deliveries += 1;
-        if (nativePrompt?.settled()) {
+        deliveryFinished = Deferred.makeUnsafe<void>();
+        const finished = deliveryFinished;
+        if (Deferred.isDoneUnsafe(settlement)) {
           yield* io
             .emit({
               kind: "diagnostic",
@@ -230,7 +265,7 @@ export function runPiExecution(
               Effect.ensuring(
                 Effect.sync(() => {
                   deliveries -= 1;
-                  bridge.signal();
+                  Deferred.doneUnsafe(finished, Effect.void);
                 }),
               ),
             );
@@ -242,7 +277,7 @@ export function runPiExecution(
             Effect.sync(() => {
               deliveries -= 1;
               nativeDeliveries -= 1;
-              bridge.signal();
+              Deferred.doneUnsafe(finished, Effect.void);
             }),
           ),
         );
@@ -251,27 +286,59 @@ export function runPiExecution(
 
     const body = Effect.gen(function* () {
       const steering = yield* Effect.forkChild(steerLoop);
-      const native = startNativePrompt(session, input.prompt, bridge);
-      nativePrompt = native;
-      for (;;) {
-        const seenVersion = bridge.version();
-        yield* drain;
-        if (native.settled() && bridge.size() === 0) {
-          if (deliveries === 0) break;
-          // The prompt has settled and the session is quiet, so a delivery
-          // still in flight is one the session is never going to take. Say so
-          // and stop waiting: a Run that waited on it would not settle at
-          // all, and admission already told the caller the Control was
-          // accepted — only the delivery failed.
-          if (session.isIdle && nativeDeliveries > 0) {
-            yield* io.emit({
-              kind: "diagnostic",
-              diagnostic: confinedControl(STEER_REJECTED_CATEGORY),
+      const draining = yield* Effect.forkChild(drainUntilSettlement);
+      yield* Effect.forkChild(
+        startNativePrompt(session, input.prompt, settlement),
+      );
+      const outcome = yield* Effect.acquireUseRelease(
+        Effect.void,
+        () =>
+          Deferred.await(settlement).pipe(
+            Effect.onInterrupt(() => announceOnInterrupt),
+            Effect.tap((settled) =>
+              Effect.sync(() => {
+                completed = settled.kind === "native";
+              }),
+            ),
+          ),
+        () =>
+          Effect.gen(function* () {
+            if (completed) return;
+            yield* Effect.promise(async () => {
+              probe.acquired("pendingCleanups");
+              try {
+                await stopNativeWork(session);
+              } finally {
+                probe.released("pendingCleanups");
+              }
             });
-            break;
-          }
+          }),
+      );
+
+      if (outcome.kind === "overflow") {
+        yield* Fiber.interrupt(steering);
+        bridge.stop();
+        yield* Fiber.join(draining);
+        // The settlement can win the take race just before the synchronous
+        // callback records its overflow policy. Offers are closed now, so one
+        // final drain makes the policy pair lossless in that window too.
+        yield* drainAvailable;
+        return { ending: failedEnding(BRIDGE_OVERFLOW_MESSAGE) };
+      }
+
+      yield* Fiber.join(draining);
+      if (deliveries > 0) {
+        if (nativeDeliveries > 0 && session.isIdle) {
+          // The prompt has settled and Pi is idle, so a delivery still in
+          // flight is one the session is never going to take. Do not let it
+          // hold the Run open indefinitely.
+          yield* io.emit({
+            kind: "diagnostic",
+            diagnostic: confinedControl(STEER_REJECTED_CATEGORY),
+          });
+        } else {
+          yield* Deferred.await(deliveryFinished);
         }
-        yield* bridge.waitPast(seenVersion);
       }
       yield* Fiber.interrupt(steering);
       const abandonedSteering = yield* Effect.sync(() => {
@@ -289,9 +356,8 @@ export function runPiExecution(
         });
       }
       bridge.stop();
-      yield* drain;
-      completed = true;
-      return yield* bundleFor(native.error(), terminal, io);
+      yield* drainAvailable;
+      return yield* bundleFor(outcome.error, terminal, io);
     });
 
     return yield* Effect.onInterrupt(body, () => announceOnInterrupt);
@@ -351,29 +417,35 @@ function bundleFor(
   });
 }
 
-/** The promise side of one Run: prompt, then wait for the session to settle. */
+/** The promise side of one Run, forked inside the execution Scope. */
 function startNativePrompt(
   session: PiSession,
   prompt: string,
-  bridge: CallbackBridge,
-): { readonly settled: () => boolean; readonly error: () => unknown } {
-  let settled = false;
-  let error: unknown;
-  void (async () => {
-    try {
-      await session.prompt(prompt);
-    } catch (rejection) {
-      error = rejection ?? new Error("prompt rejected");
-    }
-    try {
-      await session.waitForIdle();
-    } catch {
-      // Idleness is best effort: the prompt's own outcome is what settles.
-    }
-    settled = true;
-    bridge.signal();
-  })();
-  return { settled: () => settled, error: () => error };
+  settlement: Deferred.Deferred<NativeSettlement>,
+): Effect.Effect<void> {
+  const outcome = Effect.callback<NativeSettlement>((resume) => {
+    Promise.resolve()
+      .then(() => session.prompt(prompt))
+      .then(
+        () => undefined,
+        (rejection: unknown) => rejection ?? new Error("prompt rejected"),
+      )
+      .then((error) =>
+        Promise.resolve()
+          .then(() => session.waitForIdle())
+          .then(
+            () => error,
+            () => error,
+          ),
+      )
+      .then((error) => {
+        resume(Effect.succeed({ kind: "native", error }));
+      });
+  });
+  return outcome.pipe(
+    Effect.flatMap((native) => Deferred.succeed(settlement, native)),
+    Effect.asVoid,
+  );
 }
 
 /**
