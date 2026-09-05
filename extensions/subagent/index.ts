@@ -7,12 +7,14 @@ import {
   NOTIFICATION_MESSAGE_TYPE,
   renderNotificationMessage,
 } from "./host/notification-message.ts";
+import type { ProductionBackendSet } from "./host/production-backends.ts";
 import { createProductionBackendSet } from "./host/production-backends.ts";
 import type { SessionPushSink } from "./host/push-sink.ts";
 import { createSessionPushSink } from "./host/push-sink.ts";
 import { shutdownSession, startSession } from "./host/session.ts";
 import type { SessionHandle } from "./host/session-handle.ts";
 import { createSessionHandle } from "./host/session-handle.ts";
+import type { AdapterProbe } from "./host/subagent-command.ts";
 import { registerSubagentCommand } from "./host/subagent-command.ts";
 import { registerSubagentTools } from "./host/tools.ts";
 import type { ActiveWidget } from "./host/widget.ts";
@@ -43,6 +45,17 @@ export interface SubagentV2Options {
   readonly policy?: RuntimePolicy;
   /** Reads the wall clock. Supplied by a test so widget durations are fixed. */
   readonly now?: () => number;
+  /**
+   * What the live backend adapters are still holding, one block per backend,
+   * for the diagnostics command.
+   *
+   * Outside the backend contract on purpose: a probe on the contract would be
+   * a number the core could start believing. It is reported beside the
+   * runtime's own counters because dogfood needs both in one place — the
+   * runtime's probe says whether the core leaked, and these say whether an
+   * adapter did, and which one.
+   */
+  readonly probe?: () => AdapterProbe | undefined;
 }
 
 /**
@@ -146,7 +159,16 @@ export function installSubagentV2(
   );
   // One operator command. v1's `/agents` is gone in 2.0 and its flow is
   // `/subagent profiles`, which is the one public surface 2.0 removes.
-  registerSubagentCommand(pi, handle, () => profiles, agentsDir);
+  registerSubagentCommand(
+    pi,
+    handle,
+    () => options.probe?.(),
+    // Plain counts rather than the sink, for the reason the tools get one
+    // function and the widget gets a read model.
+    () => ({ ...sink.counts() }),
+    () => profiles,
+    agentsDir,
+  );
   pi.registerMessageRenderer(
     NOTIFICATION_MESSAGE_TYPE,
     renderNotificationMessage,
@@ -192,12 +214,22 @@ export function installSubagentV2(
  * child. The demo set and the Pi-only set stay in the tree because a host test
  * and Pi's own live lane need them, but nothing ships either.
  *
- * Each Session gets its own backends, because `createProductionBackendSet` is
- * called for each one.
+ * The set is built once here rather than per Session so that the probes the
+ * diagnostics command reports are the live adapters'. Each Session still gets
+ * its own backends, because `createProductionBackendSet` is called for each
+ * one.
  */
 export default function subagentV2Extension(pi: ExtensionAPI): void {
+  let live: ProductionBackendSet | undefined;
   installSubagentV2(pi, {
     agentDir: getAgentDir(),
-    backendSet: () => createProductionBackendSet().set,
+    backendSet: () => {
+      live = createProductionBackendSet();
+      return live.set;
+    },
+    // Handed on as the set reported it: the command prints whatever each
+    // adapter is counting, and naming a provider's own fields here would put
+    // provider vocabulary in the entry point.
+    probe: () => live?.probe(),
   });
 }

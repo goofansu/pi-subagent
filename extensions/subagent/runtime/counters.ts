@@ -70,6 +70,57 @@ export interface SupervisorCounters {
 
 export type SupervisorCounter = keyof SupervisorCounters;
 
+/**
+ * What a counter *means* for the reader of a health line.
+ *
+ * Three classes, because a Session with twenty late events and two
+ * reconciliation differences is running exactly as designed, and one that
+ * committed a conflicting result is not. Summing the two and reporting the
+ * total says the second thing about the first.
+ *
+ * - **defect** — the runtime did something it must not do. Somebody should
+ *   look, and the Session is not behaving.
+ * - **incident** — something outside the runtime went wrong and the runtime
+ *   coped: a native finalizer that outlived its budget, a notification the
+ *   host would never take. Worth seeing; not a bug in here.
+ * - **expected** — a thing that happens in the normal course of racing
+ *   endings, cancelling Runs, and bounding a store. A non-zero count says
+ *   the Session was busy.
+ */
+export type CounterClass = "defect" | "incident" | "expected";
+
+/**
+ * Every counter's class, exhaustively by type.
+ *
+ * `Record<SupervisorCounter, CounterClass>` rather than a partial map, so a
+ * counter added to {@link SupervisorCounters} without a class **fails to
+ * compile**. That is the whole reason the taxonomy is here rather than in the
+ * debugging guide, where it lived as prose that the health line did not read
+ * and could not be held to.
+ *
+ * `duplicateSettlements` and `lateEndings` are *expected*, which moves them
+ * against the guide's earlier tables and the guide follows: two endings racing
+ * is the normal outcome of a cancellation, and both counters' own doc comments
+ * above say so.
+ */
+export const COUNTER_CLASSES: Readonly<
+  Record<SupervisorCounter, CounterClass>
+> = {
+  duplicateCommits: "defect",
+  conflictingCommits: "defect",
+  unreadableResults: "defect",
+  seamDecodeFailures: "defect",
+  queueOverflows: "defect",
+  cleanupEscalations: "incident",
+  deliveryFailures: "incident",
+  duplicateSettlements: "expected",
+  lateEvents: "expected",
+  lateObservations: "expected",
+  lateEndings: "expected",
+  reconciliationDifferences: "expected",
+  evictions: "expected",
+};
+
 const ZERO_COUNTERS: SupervisorCounters = {
   duplicateSettlements: 0,
   lateEvents: 0,

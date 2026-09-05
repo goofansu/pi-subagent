@@ -22,10 +22,13 @@ Upgrading from 1.x? One line per Profile changes — see
 
 `/subagent` is the one place to start. On its own it prints a short status:
 how many Profiles are loaded, how many Runs are running and how they ended,
-one line per Profile with the backend it names, and the way deeper.
+whether the runtime has noticed anything and how much it is holding, one line
+per Profile with the backend it names, and the two ways deeper.
 
 `/subagent profiles` lists loaded Profiles, shows their prompts, and hands one
 a task. With none configured, it prints the directory to add one to.
+`/subagent diagnostics` reports what the live Session's runtime is counting
+and holding — see [Diagnostics](#diagnostics).
 
 1.x's `/agents` is **removed in 2.0**. Its flow is `/subagent profiles`, key
 for key — the filter, the prompt view and the work action are unchanged — so
@@ -189,6 +192,26 @@ task when asking for one to be cancelled.
 
 The widget is a display. Pi routes keyboard input to the editor, never to a
 widget, so Runs are stopped with `agent_cancel`.
+
+## Diagnostics
+
+`/subagent diagnostics` reports two kinds of block for the live Session. Bare
+`/subagent` deliberately reports neither: a first screen that printed every
+counter would be the command this one replaced.
+
+- **counters** — things that happened and nobody had to be told about at the
+  time: duplicate settlement attempts, late events, queue overflows, cleanup
+  escalations, reconciliation differences, delivery failures, evictions. One is
+  usually normal; thousands is a bug.
+- **probes** — what is still alive. The runtime's own says whether the core is
+  holding a fiber, a queue, a mailbox, a waiter, a subscription, or a
+  BackendAgent. One block per backend says whether that provider's handles are
+  still held: for Pi, native sessions and event subscriptions; for Claude, live
+  Queries, open input streams, and retained conversation identities.
+
+Every field is printed, zeroes included, and every one reads zero for a Session
+with nothing in flight — so a probe field that is still non-zero after
+everything has settled is a handle nothing released.
 
 ## Behaviour worth knowing
 
