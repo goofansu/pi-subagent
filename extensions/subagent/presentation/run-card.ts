@@ -99,6 +99,8 @@ export interface RunCard {
   readonly links?: readonly string[];
   /** What bounding dropped, when it dropped anything. */
   readonly truncation?: string;
+  /** A direct warning immediately before a bounded final output. */
+  readonly outputTruncation?: string;
   /**
    * The Run's answer, present only for a terminal card.
    *
@@ -153,6 +155,11 @@ export function formatContextGauge(context: {
   return `context ${used} / ${formatTokenCount(context.window)} (${percent}%)`;
 }
 
+/** A byte count with stable thousands separators for prose. */
+function formatByteCount(amount: number): string {
+  return amount.toLocaleString("en-US");
+}
+
 /**
  * What bounding removed, when it removed anything.
  *
@@ -173,6 +180,21 @@ export function formatTruncation(result: RunResult): string | undefined {
   }
   if (truncation.droppedLinks > 0) {
     dropped.push(`${truncation.droppedLinks} links`);
+  }
+  if (truncation.truncatedTranscriptBytes > 0) {
+    dropped.push(
+      `${formatByteCount(truncation.truncatedTranscriptBytes)} bytes of transcript text`,
+    );
+  }
+  if (truncation.truncatedToolOutputBytes > 0) {
+    dropped.push(
+      `${formatByteCount(truncation.truncatedToolOutputBytes)} bytes of tool output`,
+    );
+  }
+  if (truncation.truncatedOutputBytes > 0) {
+    dropped.push(
+      `${formatByteCount(truncation.truncatedOutputBytes)} bytes of the final output`,
+    );
   }
   return dropped.length > 0
     ? `Dropped to stay within bounds: ${dropped.join(", ")}.`
@@ -240,6 +262,10 @@ export function runCard(source: RunCardSource): RunCard {
   );
   const links = omitWhenEmpty(result.links.map(formatResultLinkLine));
   const truncation = formatTruncation(result);
+  const outputTruncation =
+    result.truncation.truncatedOutputBytes > 0
+      ? `${formatByteCount(result.truncation.truncatedOutputBytes)} bytes of the final output were cut.`
+      : undefined;
   // Status and duration through the completion view, which is the same value
   // the widget's settled row and the notice header read.
   const completion = completionViewOfResult(result);
@@ -261,6 +287,7 @@ export function runCard(source: RunCardSource): RunCard {
     ...(diagnostics === undefined ? {} : { diagnostics }),
     ...(links === undefined ? {} : { links }),
     ...(truncation === undefined ? {} : { truncation }),
+    ...(outputTruncation === undefined ? {} : { outputTruncation }),
     output: formatResultBody(result),
   };
 }
@@ -311,7 +338,12 @@ export function runCardLines(card: RunCard): readonly string[] {
     ...(card.truncation === undefined ? [] : ["", card.truncation]),
   ];
   if (card.output === undefined) return lines;
-  return [...lines, "", card.output];
+  return [
+    ...lines,
+    ...(card.outputTruncation === undefined ? [] : ["", card.outputTruncation]),
+    "",
+    card.output,
+  ];
 }
 
 /**
