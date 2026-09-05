@@ -147,7 +147,7 @@ statuses keep output.
 **What it does not change.** Storage still precedes notification, and delivery
 still reconstructs the notice from the stored Result. Delivery's pin is still
 released on hand-off rather than on landing; a consumption lease through
-landing is a Phase D question and needs soak evidence. The retry budget, the
+landing is a Phase D question and needs evidence from real use. The retry budget, the
 recovery sweep, the atomic Run-id claim, and re-pushing a lost notice once on
 settle are all unchanged. One landing per Notification is still the sink's
 contract. The preview and error bounds are still 500 bytes each. No Run

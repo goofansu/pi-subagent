@@ -1,1 +1,0 @@
-Not a Profile file: the discovery rule is the .md extension.

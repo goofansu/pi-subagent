@@ -42,11 +42,10 @@ test("the package manifest exposes this extension and nothing else", () => {
 });
 
 test("the package version is the 2.0.0 release candidate", () => {
-  // The marker stays until two things have happened: the four live gates run
-  // on the build being released, and the release-candidate soak closes.
-  // Neither can be established by writing code, so neither can be established
-  // by this test — what it can do is stop the marker being dropped by
-  // accident, because a plain 2.0.0 asserts both.
+  // The marker stays until the four live gates have run on the build being
+  // released. That cannot be established by writing code, so it cannot be
+  // established by this test — what it can do is stop the marker being dropped
+  // by accident, because a plain 2.0.0 asserts the gates were run.
   const manifest = readPackageManifest();
 
   assert.match(manifest.version ?? "", /^2\.0\.0-rc\.\d+$/);

@@ -1179,13 +1179,8 @@ export function findBoundaryViolations(
   //     failing anything — a presentation file could reach the runtime, an
   //     adapter could reach the host, and the suite would stay green. The form
   //     is therefore banned outright, with a named list of the files allowed to
-  //     use it and why.
-  //
-  //     `soak-tally-openings.test.ts` is on the list because it reads
-  //     `scripts/soak-tally.mjs`, which is plain Node with no types on purpose
-  //     — it runs against a maintainer's Pi home without this tree being built,
-  //     so a literal import of it is a typecheck error rather than a stricter
-  //     check. It names a file outside the tree, which no rule above governs.
+  //     use it and why. The list is empty: every import in the tree is one this
+  //     checker can read.
   for (const file of listSourceFiles(treeRoot, { includeTests: true })) {
     if (COMPUTED_IMPORT_ALLOWED.has(path.relative(treeRoot, file))) continue;
     if (!hasComputedImport(fs.readFileSync(file, "utf8"))) continue;
@@ -1200,13 +1195,11 @@ export function findBoundaryViolations(
 /**
  * The files allowed to write a dynamic import the checker cannot read.
  *
- * Tree-relative, and short on purpose: each entry is a rule this suite has
- * stopped being able to enforce for that file, so each needs a reason at rule
- * 22 above.
+ * Empty. Tree-relative when it is not: each entry would be a rule this suite
+ * has stopped being able to enforce for that file, so each would need a reason
+ * at rule 20 above.
  */
-const COMPUTED_IMPORT_ALLOWED: ReadonlySet<string> = new Set([
-  "soak-tally-openings.test.ts",
-]);
+const COMPUTED_IMPORT_ALLOWED: ReadonlySet<string> = new Set<string>([]);
 
 /** A disposable pair of trees laid out exactly like the real ones. */
 function fixtureGraph(

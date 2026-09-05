@@ -1,2 +1,0 @@
-{"type":"session","version":3,"id":"session-c","timestamp":"2026-09-05T12:00:00.000Z","cwd":"/repo/one"}
-{"type":"message","id":"c-1","parentId":null,"timestamp":"2026-09-05T12:00:10.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-c1","tool":"agent_start","arguments":{"agent":"explore","description":"Trace the widget","prompt":"Trace the widget."}}]}}
