@@ -186,19 +186,27 @@ Runs are listed in a widget above the editor, one line each:
 
 ```
  subagents   2 running   1 completed
- ⠏ explore      pi      running    12.8s  3 turns  look around · grep: getFinalOutput
- ⠏ reviewer     claude  running     8.2s  1 turn   review the delivery module
- ✓ implementer  claude  completed  1m 2s  4 turns
+ explore      pi      running             3 turns  look around · grep: getFinalOutput
+ reviewer     claude  running             1 turn   review the delivery module
+ implementer  claude  completed in 1m 2s
 ```
 
-A row reads left to right in the order you ask about a Run: a glyph that says
-whether it is alive (a spinner while it runs, `◌` while it finalizes, `✓`, `✗`,
-or `⊘` once it has settled), the agent and its backend, the status word, how
-long it has been at it, how many turns it has taken, and finally what it is
-doing right now. A running row ends with its label and, in italics, the backend's
-latest reported activity; before the first report, the label alone, which is
-also what tells two Runs of one agent apart. A Run whose cancellation has been
-asked for says `cancelling` until it takes.
+A row reads left to right in the order you need each thing: the agent and its
+backend, the status, how many turns it has taken, what it is for, and what it
+is doing right now. A live row's status is one word — `running`,
+`finalizing`, or `cancelling` once a cancellation has been asked for — and a
+settled row says what the Run took instead of its turn count: `completed in
+1m 2s`, `failed after 12.4s`. There is no spinner, no clock, and no icon in front of the agent: the
+status word and the row's colour say which phase a Run is in, and its turn
+count moving is the sign that it is working.
+
+The tail is the Run's label and, in italics after a `·`, the backend's latest
+tool call. The label is never dropped for the activity. When both will not fit,
+the label is shortened to make room for the activity as long as twelve cells of
+it survive; below that the activity goes and the label takes the room. Every
+field starts in the same column on every row, and on a narrow terminal the
+fields give way from the right: activity, then label, then the turn count. The
+agent, backend, and status always remain.
 
 Each row is a band across the terminal in the background your theme gives Pi's
 own tool calls: the pending colour while the Run is live, the success colour
@@ -206,16 +214,9 @@ once it has completed, the error colour when it failed, was cancelled, or its
 notice could not be delivered. A fan-out therefore reads as what it is — tool
 calls the parent made — in whatever theme you use.
 
-The spinner turns and a live duration counts. While any Run is live the widget
-redraws once per frame; once every row has settled it stops, so a widget that
-is only waiting for a notice to land costs nothing. A settled row's duration is
-what the Run cost, and does not change however long the row waits.
-
-Every field starts in the same column on every row, and on a narrow terminal
-the whole table gives way together: the activity tail is fitted to whatever is
-left, and the turn count and then the duration are dropped until the tail has
-room to be read. The glyph, agent, backend, and status
-always remain.
+A settled row's duration is what the Run cost, and does not change however
+long the row waits for its notice. The widget redraws only when a Run reports
+something, so a fan-out that is merely waiting costs nothing.
 
 The title line above the rows names the widget and counts its Runs by phase,
 each count as a chip in its phase's colour. There is no rule: the editor draws
@@ -227,8 +228,8 @@ completion notice, where the figures are labelled for what they are.
 conversation**, not until the Run settles. A Run shorter than the turn that
 started it would otherwise appear and vanish before anyone read it. A fan-out
 wider than eight Runs is summarised rather than filling the screen. A settled
-Run whose notice can never be delivered leads with `!` and says so, naming its
-Run id, because `agent_result` is what takes that row away.
+Run whose notice can never be delivered is painted in the error colour and says
+so, naming its Run id, because `agent_result` is what takes that row away.
 
 Run ids appear in tool results and notices, where the model that acts on them
 reads them, so the widget does not repeat them: name a Run by its agent and

@@ -12,16 +12,14 @@ import {
   formatRowSummary,
   formatRunRow,
   MAX_AGENT_COLUMN_WIDTH,
+  MIN_LABEL_WIDTH,
+  MIN_TAIL_WIDTH,
   measureColumns,
   orderRows,
   type RenderableTheme,
   ROW_DELIMITER,
   renderRunRows,
   rowBackground,
-  SPINNER_FRAMES,
-  SPINNER_INTERVAL_MS,
-  spinnerFrame,
-  TAIL_BUDGET,
 } from "./rows.ts";
 
 /** A theme that paints nothing, so a golden test reads the text itself. */
@@ -88,17 +86,15 @@ function rowAt(now: number, overrides = {}): string {
   ).trimEnd();
 }
 
-/** The frame the fixture instant lands on, so goldens can name it. */
-const FRAME = spinnerFrame(FIXTURE_NOW);
-
 // ── One row ──────────────────────────────────────────────────────────────────
 
-test("a row reads glyph, agent, backend, status, duration, turns, then the label", () => {
+test("a live row reads agent, backend, status, turns, then the label", () => {
   const line = row(120);
 
   assert.equal(ROW_DELIMITER, "  ");
-  assert.equal(FRAME, "⠧");
-  assert.equal(line, "⠧ explore  pi  running  12.4s  3 turns  look around");
+  assert.equal(line, "explore  pi  running  3 turns  look around");
+  // No spinner and no clock: the turn count moving is the sign of life.
+  assert.doesNotMatch(line, /\d\.\ds/);
   // The Run id and the model are deliberately absent: ids belong to tool
   // results and notices, where the model that acts on them reads them.
   assert.doesNotMatch(line, /run-1/);
@@ -113,45 +109,41 @@ test("a row names each backend the same way", () => {
       row(120, { identity: { backendId: backendId(backend) } }),
     ),
     [
-      "⠧ explore  pi  running  12.4s  3 turns  look around",
-      "⠧ explore  claude  running  12.4s  3 turns  look around",
-      "⠧ explore  demo-one-shot  running  12.4s  3 turns  look around",
+      "explore  pi  running  3 turns  look around",
+      "explore  claude  running  3 turns  look around",
+      "explore  demo-one-shot  running  3 turns  look around",
     ],
   );
 });
 
-test("a live row's duration counts and its spinner turns with the instant it is drawn at", () => {
-  // The host redraws once per spinner frame while a Run is live, and each
-  // redraw hands the renderer a later instant. The renderer reads no clock of
-  // its own, so the same instant always draws the same row.
-  const later = FIXTURE_NOW + 3 * SPINNER_INTERVAL_MS;
+test("a live row reads the same at any instant, because nothing on it is a clock", () => {
+  // The widget redraws only on a change, so a row that depended on the
+  // instant it was drawn at would be stale between changes.
+  const later = FIXTURE_NOW + 61_000;
+  assert.equal(rowAt(later), rowAt(FIXTURE_NOW));
   assert.equal(
-    rowAt(later),
-    "⠋ explore  pi  running  13.0s  3 turns  look around",
-  );
-  assert.equal(rowAt(later), rowAt(later));
-  assert.notEqual(spinnerFrame(later), FRAME);
-
-  // Every running row spins in step: the frame is the instant's, not the row's.
-  assert.equal(
-    rowAt(later, { identity: { agent: "other" } }).charAt(0),
-    rowAt(later).charAt(0),
+    rowAt(later, { phase: "finalizing" }),
+    rowAt(FIXTURE_NOW, { phase: "finalizing" }),
   );
 });
 
-test("the spinner cycles through Pi's own frames, one per interval", () => {
-  assert.equal(SPINNER_FRAMES.length, 10);
-  assert.equal(SPINNER_INTERVAL_MS, 200);
-  const frames = SPINNER_FRAMES.map((_frame, index) =>
-    spinnerFrame(index * SPINNER_INTERVAL_MS),
-  );
-  assert.deepEqual(frames, [...SPINNER_FRAMES]);
+test("a settled row says what the Run took, and drops its turn count", () => {
   assert.equal(
-    spinnerFrame(SPINNER_FRAMES.length * SPINNER_INTERVAL_MS),
-    SPINNER_FRAMES[0],
+    row(120, { phase: "completed" }),
+    "explore  pi  completed in 12.4s",
   );
-  // A frame is always one cell wide, so the columns after it stay aligned.
-  for (const frame of SPINNER_FRAMES) assert.equal(visibleWidth(frame), 1);
+  assert.equal(
+    row(120, { phase: "failed" }),
+    "explore  pi  failed after 12.4s",
+  );
+  assert.equal(
+    row(120, { phase: "cancelled" }),
+    "explore  pi  cancelled after 12.4s",
+  );
+  assert.equal(
+    row(120, { phase: "finalizing" }),
+    "explore  pi  finalizing  3 turns  look around",
+  );
 });
 
 test("a settled row's duration is the Run's cost, so a later draw reads the same", () => {
@@ -163,29 +155,7 @@ test("a settled row's duration is the Run's cost, so a later draw reads the same
   for (const phase of ["completed", "failed", "cancelled"] as const) {
     assert.equal(rowAt(later, { phase }), rowAt(FIXTURE_NOW, { phase }));
   }
-  assert.equal(
-    rowAt(later, { phase: "completed" }),
-    "✓ explore  pi  completed  12.4s  3 turns",
-  );
-});
-
-test("each phase has its own glyph and the widget observes the phase without determining it", () => {
-  assert.equal(
-    row(120, { phase: "finalizing" }),
-    "◌ explore  pi  finalizing  12.4s  3 turns  look around",
-  );
-  assert.equal(
-    row(120, { phase: "completed" }),
-    "✓ explore  pi  completed  12.4s  3 turns",
-  );
-  assert.equal(
-    row(120, { phase: "failed" }),
-    "✗ explore  pi  failed  12.4s  3 turns",
-  );
-  assert.equal(
-    row(120, { phase: "cancelled" }),
-    "⊘ explore  pi  cancelled  12.4s  3 turns",
-  );
+  assert.match(rowAt(later, { phase: "completed" }), /completed in 12\.4s/);
 });
 
 test("a running Run whose cancellation is recorded says it is cancelling", () => {
@@ -193,33 +163,85 @@ test("a running Run whose cancellation is recorded says it is cancelling", () =>
   // `running` would tell them nothing had happened.
   assert.equal(
     row(120, { cancellation: { reason: "requested" } }),
-    "⠧ explore  pi  cancelling  12.4s  3 turns  look around",
+    "explore  pi  cancelling  3 turns  look around",
   );
   // A settled Run's phase is the fact; a cancellation recorded on the way
   // there is not what its row says.
   assert.equal(
     row(120, { phase: "completed", cancellation: { reason: "requested" } }),
-    "✓ explore  pi  completed  12.4s  3 turns",
+    "explore  pi  completed in 12.4s",
   );
 });
 
 test("a settled row shows no tail even if an activity is still on the snapshot", () => {
+  // The turn count goes with it; a settled row is status and nothing else.
   assert.equal(
     row(120, { phase: "failed", activity: "bash: npm test" }),
-    "✗ explore  pi  failed  12.4s  3 turns",
+    "explore  pi  failed after 12.4s",
   );
 });
 
-test("reported activity joins the label in the tail, and wins when both will not fit", () => {
+test("a Run with no turns yet reads as a dash rather than a zero", () => {
+  assert.equal(
+    row(120, { usage: fixtureUsage({ turns: 0 }) }),
+    "explore  pi  running  —  look around",
+  );
+});
+
+test("a row shows no tool count and no context gauge, whatever the snapshot carries", () => {
+  // Both were tried and neither told an operator anything they acted on.
+  const line = row(120, {
+    tools: 4,
+    usage: fixtureUsage({
+      turns: 3,
+      context: { tokens: 84_000, window: 200_000 },
+    }),
+  });
+  assert.equal(line, "explore  pi  running  3 turns  look around");
+  assert.doesNotMatch(line, /tool|%|▰/);
+});
+
+// ── The tail ─────────────────────────────────────────────────────────────────
+
+test("reported activity joins the label in the tail", () => {
   assert.equal(
     row(120, { activity: "bash: npm test" }),
-    "⠧ explore  pi  running  12.4s  3 turns  look around · bash: npm test",
+    "explore  pi  running  3 turns  look around · bash: npm test",
   );
-  // The label is the part the reader already knows.
+});
+
+test("the label outranks the activity: it is shortened for the activity, never dropped", () => {
+  // Room for the label to be cut and still leave MIN_LABEL_WIDTH: the activity
+  // stays and the label gives up its end.
+  assert.equal(MIN_LABEL_WIDTH, 12);
   assert.equal(
-    row(56, { activity: "bash: npm test" }),
-    "⠧ explore  pi  running  12.4s  bash: npm test",
+    row(58, {
+      identity: { description: "a long label that goes on and on and on" },
+      activity: "read",
+    }),
+    "explore  pi  running  3 turns  a long label that g… · read",
   );
+  // An activity too long to leave that much label goes, and the label takes
+  // the room. A row that said only `read` would not say which Run was reading.
+  assert.equal(
+    row(60, {
+      identity: { description: "a long label that goes on and on and on" },
+      activity: "a very long activity name here",
+    }),
+    "explore  pi  running  3 turns  a long label that goes on an…",
+  );
+  // A short label is kept whole rather than cut below its own length.
+  assert.equal(
+    row(58, { activity: "bash: npm test" }),
+    "explore  pi  running  3 turns  look around",
+  );
+});
+
+test("the tail is skipped altogether when there is not room to read it", () => {
+  assert.equal(MIN_TAIL_WIDTH, 12);
+  // The fixed part is 29 cells; a tail needs a delimiter and 12 more.
+  assert.match(row(29 + 2 + 12), /look around$/);
+  assert.equal(row(29 + 2 + 11), "explore  pi  running  3 turns");
 });
 
 test("the label and the activity are painted apart: the activity brighter and in italics", () => {
@@ -240,109 +262,12 @@ test("the label and the activity are painted apart: the activity brighter and in
       paint("dim", "look around"),
     ),
   );
-  // And a truncated activity is still italic, to its last cell.
-  const narrow = formatRunRow(
-    fixtureRow({ activity: "a very long activity that will not fit" }),
-    named,
-    50,
-    FIXTURE_NOW,
-  );
-  assert.ok(narrow.includes("\u001b[3m") && narrow.includes("…"));
 });
 
-// ── Bands ────────────────────────────────────────────────────────────────────
-
-test("each row is painted as a band in the background Pi gives its own tool calls", () => {
-  const rows = [
-    fixtureRow({ identity: { agent: "live" } }),
-    fixtureRow({ identity: { agent: "done" }, phase: "completed" }),
-    fixtureRow({ identity: { agent: "broke" }, phase: "failed" }),
-    fixtureRow({ identity: { agent: "stopped" }, phase: "cancelled" }),
-  ];
-  const [, live = "", done = "", broke = "", stopped = ""] = renderRunRows(
-    rows,
-    named,
-    60,
-    FIXTURE_NOW,
-  );
-  assert.ok(live.startsWith("\u001b[44m"), "a live row is pending");
-  assert.ok(done.startsWith("\u001b[42m"), "a completed row is success");
-  assert.ok(broke.startsWith("\u001b[41m"), "a failed row is error");
-  assert.ok(stopped.startsWith("\u001b[41m"), "a cancelled row is error");
-  // Edge to edge: the band is padded to the width and closed at its end.
-  for (const line of [live, done, broke, stopped]) {
-    assert.equal(visibleWidth(line), 60);
-    assert.ok(line.endsWith("\u001b[49m"));
-  }
-});
-
-test("a band survives a full reset inside its text", () => {
-  // Truncation leaves a full SGR reset behind, which would switch the
-  // background off for the rest of the line. The band is painted around it.
-  const rows = [
-    fixtureRow({
-      activity: "an activity long enough to be cut off by the width",
-    }),
-  ];
-  const [, line = ""] = renderRunRows(rows, named, 60, FIXTURE_NOW);
-  assert.ok(line.includes("\u001b[0m\u001b[44m"));
-  assert.equal(visibleWidth(line), 60);
-  assert.ok(line.endsWith("\u001b[49m"));
-});
-
-test("W-2: a stuck row is painted as the failure it reports, whatever its phase", () => {
-  assert.equal(
-    rowBackground(fixtureRow({ phase: "completed", handoff: "exhausted" })),
-    "toolErrorBg",
-  );
-  assert.equal(
-    rowBackground(fixtureRow({ phase: "completed" })),
-    "toolSuccessBg",
-  );
-  assert.equal(rowBackground(fixtureRow()), "toolPendingBg");
-  assert.equal(
-    rowBackground(fixtureRow({ phase: "finalizing" })),
-    "toolPendingBg",
-  );
-});
-
-test("the header and the overflow line are not bands", () => {
-  const rows = Array.from({ length: 4 }, (_unused, index) =>
-    fixtureRow({ identity: { agent: `agent-${index}` } }),
-  );
-  const lines = renderRunRows(rows, named, 60, FIXTURE_NOW, 2);
-  const bands = ["\u001b[44m", "\u001b[42m", "\u001b[41m"];
-  for (const band of bands) {
-    assert.ok(!(lines[0] ?? "").includes(band), "the header is painted");
-    assert.ok(!(lines.at(-1) ?? "").includes(band), "the overflow is painted");
-  }
-});
-
-test("a Run with no turns yet reads as a dash rather than a zero", () => {
-  assert.equal(
-    row(120, { usage: fixtureUsage({ turns: 0 }) }),
-    "⠧ explore  pi  running  12.4s  —  look around",
-  );
-});
-
-test("a row shows no tool count and no context gauge, whatever the snapshot carries", () => {
-  // Both were tried and neither told an operator anything they acted on.
-  const line = row(120, {
-    tools: 4,
-    usage: fixtureUsage({
-      turns: 3,
-      context: { tokens: 84_000, window: 200_000 },
-    }),
-  });
-  assert.equal(line, "⠧ explore  pi  running  12.4s  3 turns  look around");
-  assert.doesNotMatch(line, /tool|%|▰/);
-});
-
-test("the glyph and status are painted in the phase's tone, and a live duration brighter than a settled one", () => {
+test("the status is painted in the phase's tone, and nothing precedes the agent", () => {
   const live = formatRunRow(fixtureRow(), named, 120, FIXTURE_NOW);
-  assert.ok(live.startsWith(`${paint("warning", "⠧")} `));
   assert.match(live, painted("warning", "running"));
-  assert.match(live, painted("text", "12.4s"));
+  assert.ok(live.startsWith(paint("toolTitle", bold("explore"))));
 
   const settled = formatRunRow(
     fixtureRow({ phase: "completed" }),
@@ -350,9 +275,10 @@ test("the glyph and status are painted in the phase's tone, and a live duration 
     120,
     FIXTURE_NOW,
   );
-  assert.ok(settled.startsWith(`${paint("success", "✓")} `));
-  assert.match(settled, painted("dim", "12.4s"));
+  assert.match(settled, painted("success", "completed in 12.4s"));
 });
+
+// ── Fitting ──────────────────────────────────────────────────────────────────
 
 test("a row never exceeds the width it is given", () => {
   for (const width of [120, 80, 46, 30, 12]) {
@@ -364,42 +290,25 @@ test("a row never exceeds the width it is given", () => {
   }
 });
 
-test("optional columns give way in order, and glyph, agent, backend, and status never do", () => {
+test("fields give way from the right: activity, label, then turns; agent, backend, and status never", () => {
   const rows = [fixtureRow()];
   const at = (width: number) => measureColumns(rows, FIXTURE_NOW, width);
 
-  // Wide enough for everything and a tail budget besides.
-  assert.deepEqual(
-    Object.entries(at(120)).filter(([, w]) => w === 0),
-    [],
-  );
-  // Then the turn count, then the duration. The fixed part with every column
-  // is 38 cells; each step frees its column and a delimiter, and the tail
-  // needs a delimiter and its budget.
-  assert.ok(at(64).turns > 0);
-  assert.equal(at(63).turns, 0);
-  assert.ok(at(63).duration > 0);
-  assert.equal(at(54).duration, 0);
-  assert.ok(at(54).status > 0);
+  // The fixed part with the turn count is 7+2+2+2+7+2+7 = 29 cells. The
+  // turn count is kept whenever that fits, whatever it leaves the tail.
+  assert.ok(at(29).turns > 0);
+  assert.equal(at(28).turns, 0);
+  assert.ok(at(28).status > 0);
+
+  // A settled row has no turn count at all: the count is a live row's sign
+  // of life, and means nothing once nothing is moving.
+  const settled = [fixtureRow({ phase: "completed" })];
+  assert.equal(measureColumns(settled, FIXTURE_NOW, 120).turns, 0);
 
   const narrow = row(22);
   assert.doesNotMatch(narrow, /3 turns/);
   assert.doesNotMatch(narrow, /look around/);
-  assert.match(narrow, /^⠧ explore {2}pi {2}running/);
-});
-test("an optional column is drawn only when it leaves the tail its budget", () => {
-  assert.equal(TAIL_BUDGET, 24);
-  // The fixed part with every column is 2+7+2+2+2+7+2+5+2+7 = 38 cells, and
-  // the tail sits after a delimiter.
-  const rows = [fixtureRow()];
-  const exact = 38 + ROW_DELIMITER.length + TAIL_BUDGET;
-  assert.ok(measureColumns(rows, FIXTURE_NOW, exact).turns > 0);
-  assert.equal(measureColumns(rows, FIXTURE_NOW, exact - 1).turns, 0);
-  // A row with nothing to say after its columns needs no budget for it. Its
-  // fixed part is 40 cells: `completed` is two wider than `running`.
-  const settled = [fixtureRow({ phase: "completed" })];
-  assert.ok(measureColumns(settled, FIXTURE_NOW, 40).turns > 0);
-  assert.equal(measureColumns(settled, FIXTURE_NOW, 39).turns, 0);
+  assert.equal(narrow, "explore  pi  running");
 });
 
 test("a long agent name is truncated without hiding later fields", () => {
@@ -408,7 +317,7 @@ test("a long agent name is truncated without hiding later fields", () => {
   });
 
   assert.equal(MAX_AGENT_COLUMN_WIDTH, 16);
-  assert.match(line, /^⠧ a-very-long-age… {2}pi/);
+  assert.match(line, /^a-very-long-age… {2}pi/);
   assert.match(line, /running/);
 });
 
@@ -456,9 +365,37 @@ test("the whole widget is a title line, aligned rows, and an overflow summary", 
 
   assert.deepEqual(lines, [
     " subagents   2 running",
-    " ⠧ explore   pi  running  12.4s  3 turns  look around",
-    " ⠧ reviewer  pi  running  12.4s  1 turn   read the diff",
+    " explore   pi  running  3 turns  look around",
+    " reviewer  pi  running  1 turn   read the diff",
   ]);
+});
+
+test("a settled row's phrase does not widen the status column the live rows share", () => {
+  // `completed in 12.4s` is much wider than `running`. Sized to it, every
+  // live row's turn count would sit a dozen cells right of its status word.
+  // The column is sized to the live rows, and the phrase overflows it: a
+  // settled row has nothing after its status to keep aligned.
+  const rows = [
+    fixtureRow({ identity: { agent: "explore" } }),
+    fixtureRow({ identity: { agent: "reviewer" }, phase: "completed" }),
+  ];
+  const lines = renderRunRows(rows, theme, 80, FIXTURE_NOW).map((line) =>
+    stripVTControlCharacters(line).trimEnd(),
+  );
+  assert.deepEqual(lines, [
+    " subagents   1 running   1 completed",
+    " explore   pi  running  3 turns  look around",
+    " reviewer  pi  completed in 12.4s",
+  ]);
+  // Two live rows with different status words still align on the wider one.
+  const mixedLive = renderRunRows(
+    [fixtureRow(), fixtureRow({ phase: "finalizing" })],
+    theme,
+    80,
+    FIXTURE_NOW,
+  ).map((line) => stripVTControlCharacters(line).trimEnd());
+  assert.equal(mixedLive[1], " explore  pi  running     3 turns  look around");
+  assert.equal(mixedLive[2], " explore  pi  finalizing  3 turns  look around");
 });
 
 test("the header is the name and one inverted chip per phase, and says nothing about spend", () => {
@@ -519,6 +456,77 @@ test("an empty list renders nothing at all", () => {
   assert.deepEqual(renderRunRows([], theme, 80, FIXTURE_NOW), []);
 });
 
+// ── Bands ────────────────────────────────────────────────────────────────────
+
+test("each row is painted as a band in the background Pi gives its own tool calls", () => {
+  const rows = [
+    fixtureRow({ identity: { agent: "live" } }),
+    fixtureRow({ identity: { agent: "done" }, phase: "completed" }),
+    fixtureRow({ identity: { agent: "broke" }, phase: "failed" }),
+    fixtureRow({ identity: { agent: "stopped" }, phase: "cancelled" }),
+  ];
+  const [, live = "", done = "", broke = "", stopped = ""] = renderRunRows(
+    rows,
+    named,
+    60,
+    FIXTURE_NOW,
+  );
+  assert.ok(live.startsWith("\u001b[44m"), "a live row is pending");
+  assert.ok(done.startsWith("\u001b[42m"), "a completed row is success");
+  assert.ok(broke.startsWith("\u001b[41m"), "a failed row is error");
+  assert.ok(stopped.startsWith("\u001b[41m"), "a cancelled row is error");
+  // Edge to edge: the band is padded to the width and closed at its end.
+  for (const line of [live, done, broke, stopped]) {
+    assert.equal(visibleWidth(line), 60);
+    assert.ok(line.endsWith("\u001b[49m"));
+  }
+});
+
+test("a band survives a full reset inside its text", () => {
+  // Truncation leaves a full SGR reset behind, which would switch the
+  // background off for the rest of the line. The band is painted around it.
+  const rows = [
+    fixtureRow({
+      identity: {
+        description:
+          "a label long enough to be cut off by the width it is given",
+      },
+    }),
+  ];
+  const [, line = ""] = renderRunRows(rows, named, 60, FIXTURE_NOW);
+  assert.ok(line.includes("\u001b[0m\u001b[44m"));
+  assert.equal(visibleWidth(line), 60);
+  assert.ok(line.endsWith("\u001b[49m"));
+});
+
+test("W-2: a stuck row is painted as the failure it reports, whatever its phase", () => {
+  assert.equal(
+    rowBackground(fixtureRow({ phase: "completed", handoff: "exhausted" })),
+    "toolErrorBg",
+  );
+  assert.equal(
+    rowBackground(fixtureRow({ phase: "completed" })),
+    "toolSuccessBg",
+  );
+  assert.equal(rowBackground(fixtureRow()), "toolPendingBg");
+  assert.equal(
+    rowBackground(fixtureRow({ phase: "finalizing" })),
+    "toolPendingBg",
+  );
+});
+
+test("the header and the overflow line are not bands", () => {
+  const rows = Array.from({ length: 4 }, (_unused, index) =>
+    fixtureRow({ identity: { agent: `agent-${index}` } }),
+  );
+  const lines = renderRunRows(rows, named, 60, FIXTURE_NOW, 2);
+  const bands = ["\u001b[44m", "\u001b[42m", "\u001b[41m"];
+  for (const band of bands) {
+    assert.ok(!(lines[0] ?? "").includes(band), "the header is painted");
+    assert.ok(!(lines.at(-1) ?? "").includes(band), "the overflow is painted");
+  }
+});
+
 // ── W-2: the row that will never leave on its own ───────────────────────────
 
 test("W-2: a row whose notice will never arrive says so, with the id and the result", () => {
@@ -528,18 +536,18 @@ test("W-2: a row whose notice will never arrive says so, with the id and the res
   // the answer is there regardless.
   assert.equal(
     row(120, { phase: "completed", handoff: "exhausted" }),
-    "! explore  pi  completed  12.4s  3 turns  notification failed · run-1 · result available",
+    "explore  pi  completed in 12.4s  notification failed · run-1 · result available",
   );
 });
 
-test("W-2: the stuck row leads with a mark in the error colour, and only that row", () => {
+test("W-2: the stuck row is painted in the error colour, and only that row", () => {
   const stuck = formatRunRow(
     fixtureRow({ phase: "completed", handoff: "exhausted" }),
     named,
     120,
     FIXTURE_NOW,
   );
-  assert.ok(stuck.startsWith(`${paint("error", "!")} `));
+  assert.match(stuck, painted("error", "completed in 12.4s"));
   assert.ok(
     stuck.endsWith(
       paint("error", "notification failed · run-1 · result available"),
@@ -547,30 +555,27 @@ test("W-2: the stuck row leads with a mark in the error colour, and only that ro
   );
   // W-1 stands for every other settled row: the figure is the Run's, and the
   // row is painted as the phase says.
-  assert.ok(
-    formatRunRow(
-      fixtureRow({ phase: "completed" }),
-      named,
-      120,
-      FIXTURE_NOW,
-    ).startsWith(`${paint("success", "✓")} `),
+  assert.match(
+    formatRunRow(fixtureRow({ phase: "completed" }), named, 120, FIXTURE_NOW),
+    painted("success", "completed in 12.4s"),
   );
 });
 
 test("W-2: an exhausted failed Run keeps its own verb", () => {
   assert.equal(
     row(120, { phase: "failed", handoff: "exhausted" }),
-    "! explore  pi  failed  12.4s  3 turns  notification failed · run-1 · result available",
+    "explore  pi  failed after 12.4s  notification failed · run-1 · result available",
   );
 });
 
-test("W-2: the explanation is fitted like any tail, and the columns give way to keep it", () => {
+test("W-2: the explanation is fitted like any tail, and goes when there is no room", () => {
   assert.equal(
     row(60, { phase: "completed", handoff: "exhausted" }),
-    "! explore  pi  completed  12.4s  notification failed · run-…",
+    "explore  pi  completed in 12.4s  notification failed · run-…",
   );
+  // Still a stuck row: the error colour and the band say so.
   assert.equal(
-    row(40, { phase: "completed", handoff: "exhausted" }),
-    "! explore  pi  completed  notification …",
+    row(43, { phase: "completed", handoff: "exhausted" }),
+    "explore  pi  completed in 12.4s",
   );
 });

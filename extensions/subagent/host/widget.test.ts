@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
 import { backendId, runId, subagentId } from "../domain/index.ts";
-import { SPINNER_FRAMES } from "../presentation/index.ts";
 import type { RunIndex, RunSnapshot } from "../runtime/repository.ts";
 import {
   hostRig,
@@ -63,15 +61,15 @@ test("the widget appears with the first live Run and its row reads as the matrix
   assert.equal(rows.length, 2);
   // The title names the widget and counts the Run, and nothing else.
   assert.equal(rows[0], " subagents   1 running");
-  // The row: a spinner frame, then the agent, backend, status, a counting
-  // duration, the turn count, and what the Run said it is doing.
+  // The row: the agent, backend, status, the turn count, and what the Run
+  // said it is doing. No glyph and no clock on a live row.
   assert.match(
     rows[1],
     new RegExp(
-      `^ . explore {2}pi {2}running {2}\\d+\\.\\ds {2}(1 turn|—) {2}look around( · ${RIG_ACTIVITY})?$`,
+      `^ explore {2}pi {2}running {2}(1 turn|—) {2}look around( · ${RIG_ACTIVITY})?$`,
     ),
   );
-  assert.ok(SPINNER_FRAMES.includes(rows[1]?.charAt(1) as never));
+  assert.doesNotMatch(rows[1] ?? "", /\d\.\ds/);
 });
 
 test("a Run of the one-shot backend names its own backend in the row", async (t) => {
@@ -85,7 +83,7 @@ test("a Run of the one-shot backend names its own backend in the row", async (t)
 
   assert.match(
     rig.host.widgetLines(120)[1],
-    /^ . once {2}one-shot {2}running {2}\d+\.\ds {2}—/,
+    /^ once {2}one-shot {2}running {2}—/,
   );
 });
 
@@ -126,7 +124,7 @@ test("a terminal Run keeps its row until its completion notice lands, and the la
   // answer is in the conversation, which is what v1 did and what the matrix
   // promises.
   assert.equal(rig.host.hasWidget(), true);
-  assert.match(rig.host.widgetLines(60)[1], /^ ✓ explore {2}pi {2}completed/);
+  assert.match(rig.host.widgetLines(60)[1], /^ explore {2}pi {2}completed in /);
   assert.deepEqual(rig.installation.sink.unlanded(), [started.runId]);
 
   await rig.host.messageStart({
@@ -166,7 +164,7 @@ test("a settled row says what the Run cost, and the number does not move", async
 
   // And what it says is a cost, not an age: a fake Run takes milliseconds, so
   // the figure is a sub-minute one however late the row is drawn.
-  assert.match(settled[1], /completed {2}\d+\.\ds/);
+  assert.match(settled[1], /completed in \d+\.\ds/);
 });
 
 test("a notice lost to an interrupt keeps its row until the re-push lands", async (t) => {
@@ -410,7 +408,7 @@ test("W-2: a row whose notice will never arrive says so, and retrieving the Resu
 
   assert.equal(rig.installation.sink.status(runId(started.runId)), "exhausted");
   const row = rig.host.widgetLines(120)[1];
-  assert.match(row, /^ ! explore {2}pi {2}completed /);
+  assert.match(row, /^ explore {2}pi {2}completed in /);
   assert.match(
     row,
     new RegExp(`notification failed · ${started.runId} · result available$`),
@@ -420,30 +418,6 @@ test("W-2: a row whose notice will never arrive says so, and retrieving the Resu
   await rig.pump();
 
   assert.equal(rig.host.hasWidget(), false);
-});
-
-test("the widget ticks exactly while a shown Run is live", async (t) => {
-  // A live row's spinner and duration move, and neither is an index change,
-  // so a fiber wakes the widget once per frame — and only then. A settled row
-  // waiting for its notice must not keep a Session redrawing.
-  const rig = hostRig(t, {
-    resumableSteps: [[{ step: "await-gate", gate: "hold" }]],
-  });
-  await rig.host.sessionStart();
-  t.after(() => rig.installation.handle.release());
-
-  assert.equal(rig.installation.widget()?.activity().ticking, false);
-
-  const started = await heldRun(rig);
-  await rig.pump();
-  assert.equal(rig.installation.widget()?.activity().ticking, true);
-
-  await rig.release("hold");
-  await rig.settled(started.runId);
-  await rig.pump();
-  // The row is still there, waiting for its notice; the ticker is not.
-  assert.equal(rig.host.hasWidget(), true);
-  assert.equal(rig.installation.widget()?.activity().ticking, false);
 });
 
 test("the widget owns one key, so a Session cannot leave two of them installed", () => {
