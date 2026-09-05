@@ -1,6 +1,6 @@
 // The host-level live gate, for one backend at a time.
 //
-// Usage: node --import tsx scripts/pi-host-live-smoke.mjs [pi|claude]
+// Usage: node --import tsx scripts/host-live-smoke.mjs [pi|claude]
 //
 // Launches Pi in RPC mode with **only** this extension loaded, asks the
 // model to delegate to a Profile naming the given backend, and reads the
@@ -76,7 +76,7 @@ const agentsDir = path.join(getAgentDir(), "agents");
 const profilePath = path.join(agentsDir, "host-live-smoke.md");
 let wroteProfile = false;
 
-const cwd = mkdtempSync(path.join(tmpdir(), "pi-host-live-smoke-"));
+const cwd = mkdtempSync(path.join(tmpdir(), "host-live-smoke-"));
 
 function writeProfile() {
   if (existsSync(profilePath)) {

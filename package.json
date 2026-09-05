@@ -15,9 +15,9 @@
   "scripts": {
     "check": "npm run typecheck && npm run lint && npm test && npm run test:conformance",
     "pi:smoke": "node --import tsx scripts/pi-live-smoke.mjs",
-    "pi:host-smoke": "node --import tsx scripts/pi-host-live-smoke.mjs pi",
+    "pi:host-smoke": "node --import tsx scripts/host-live-smoke.mjs pi",
     "claude:smoke": "node --import tsx scripts/claude-live-smoke.mjs",
-    "claude:host-smoke": "node --import tsx scripts/pi-host-live-smoke.mjs claude",
+    "claude:host-smoke": "node --import tsx scripts/host-live-smoke.mjs claude",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "prepare": "node .husky/install.mjs",
