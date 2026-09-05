@@ -163,7 +163,7 @@ export interface TerminalBundle {
  *
  * A BackendAgent may begin life **unopened** in the provider sense, holding no
  * provider identity and acquiring one as a side effect of its first Run. That
- * is not a degraded state; it is what one of the three backends actually does.
+ * is not a degraded state; it is what one of the two backends actually does.
  */
 export interface BackendAgent {
   readonly capabilities: BackendCapabilities;

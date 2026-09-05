@@ -1,6 +1,6 @@
 // The host-level live gate, for one backend at a time.
 //
-// Usage: node --import tsx scripts/pi-host-live-smoke.mjs [pi|claude|codex]
+// Usage: node --import tsx scripts/pi-host-live-smoke.mjs [pi|claude]
 //
 // Launches Pi in RPC mode with **only** this extension loaded, asks the
 // model to delegate to a Profile naming the given backend, and reads the
@@ -17,9 +17,9 @@
 //
 // Credentials follow the existing live-smoke conventions. Override the Pi
 // executable with PI_LIVE_BIN, the parent model with PI_LIVE_MODEL, the
-// delegate's model with PI_LIVE_MODEL, CLAUDE_LIVE_MODEL, or
-// CODEX_LIVE_MODEL, and the overall bound with PI_LIVE_TIMEOUT_MS. This
-// spends provider quota and is not part of `npm run check`.
+// delegate's model with PI_LIVE_MODEL or CLAUDE_LIVE_MODEL, and the overall
+// bound with PI_LIVE_TIMEOUT_MS. This spends provider quota and is not part
+// of `npm run check`.
 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -29,7 +29,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-const BACKENDS = new Set(["pi", "claude", "codex"]);
+const BACKENDS = new Set(["pi", "claude"]);
 const backend = process.argv[2] ?? "pi";
 if (!BACKENDS.has(backend)) {
   console.error(
@@ -47,17 +47,12 @@ const repositoryRoot = path.resolve(
 );
 const entry = path.join(repositoryRoot, "extensions", "subagent", "index.ts");
 const bin = process.env.PI_LIVE_BIN ?? "pi";
-// The delegate's model. Pi's is a catalogue reference, Claude's is a family
-// alias, and Codex's is a name the App Server resolves itself — three
-// different vocabularies, so three variables and no shared default. Codex's is
-// left unset unless asked for, because the App Server's own default is the
-// right one and this gate is not about model selection.
+// The delegate's model. Pi's is a catalogue reference and Claude's is a family
+// alias — two different vocabularies, so two variables and no shared default.
 const model =
   backend === "claude"
     ? (process.env.CLAUDE_LIVE_MODEL ?? "haiku")
-    : backend === "codex"
-      ? process.env.CODEX_LIVE_MODEL
-      : process.env.PI_LIVE_MODEL;
+    : process.env.PI_LIVE_MODEL;
 const timeoutMs = Number(process.env.PI_LIVE_TIMEOUT_MS ?? 300_000);
 const failures = [];
 let interrupted;

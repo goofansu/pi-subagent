@@ -39,7 +39,7 @@ import {
  *
  * A backend contract is the seam every adapter from M4 onward implements, so
  * widening it is expensive in a way that is invisible at the moment it
- * happens: one more member is one more thing three adapters must do. These
+ * happens: one more member is one more thing every adapter must do. These
  * assertions make widening a failing test.
  *
  * Four kinds of vocabulary are named as forbidden below because they are the

@@ -1,4 +1,4 @@
-.PHONY: check conformance dev protocol-check release-gate smoke-claude smoke-codex smoke-pi
+.PHONY: check conformance dev protocol-check release-gate smoke-claude smoke-pi
 
 # The extension in isolation: every other extension disabled, only this entry
 # point loaded, for checking the surface rather than for using it. `--offline`
@@ -8,8 +8,8 @@
 dev:
 	pi --offline -np -nc -ns -ne -e extensions/subagent/index.ts --tools agent_start,agent_resume,agent_wait,agent_result,agent_cancel,agent_steer
 
-# The shared backend conformance suite: the two fake backends and all three
-# real adapters run exactly the same scenarios, and none of them skips one.
+# The shared backend conformance suite: the two fake backends and both real
+# adapters run exactly the same scenarios, and none of them skips one.
 conformance:
 	npm run test:conformance
 
@@ -24,9 +24,6 @@ smoke-pi:
 
 smoke-claude:
 	npm run claude:smoke && npm run claude:host-smoke
-
-smoke-codex:
-	npm run codex:smoke && npm run codex:host-smoke
 
 check:
 	npm run check
