@@ -289,6 +289,24 @@ test("an unconfirmed steer is consumed silently", async () => {
   );
 });
 
+test("a prompt can finish while a consumed steer stays unsettled", async () => {
+  const { standIn } = drive([
+    { step: "await-steer", confirm: false, settle: false },
+    { step: "terminal" },
+  ]);
+
+  const prompting = standIn.session.prompt("go");
+  let steered = false;
+  void standIn.session.steer("guidance").then(() => {
+    steered = true;
+  });
+  await prompting;
+  await Promise.resolve();
+
+  assert.equal(steered, false);
+  assert.equal(standIn.session.isIdle, true);
+});
+
 test("a rejected steer is how an adapter learns delivery did not happen", async () => {
   const { standIn } = drive([
     { step: "await-steer", confirm: false, reject: true },

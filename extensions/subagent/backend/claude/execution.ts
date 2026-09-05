@@ -98,6 +98,9 @@ export const QUERY_FAILED_CATEGORY = "Claude query failed";
 export const CONTROL_NOT_DELIVERED_CATEGORY =
   "Claude guidance was not delivered";
 
+/** How long silence may follow a Turn boundary with guidance outstanding. */
+export const TURN_BOUNDARY_WAIT_MILLIS = 1_000;
+
 /** What the SDK's own stderr reports, without keeping a word of it. */
 export const SDK_STDERR_CATEGORY = "the Claude SDK reported diagnostics";
 
@@ -160,6 +163,7 @@ export function runClaudeExecution(
     let visible: PendingControl | undefined;
     let accepting = true;
     let semanticComplete = false;
+    let awaitingTurnBoundary = false;
     let successfulResult = false;
     let sawStderr = false;
     let fatal: TerminalBundle | undefined;
@@ -420,7 +424,27 @@ export function runClaudeExecution(
     const body = Effect.gen(function* () {
       const steering = yield* Effect.forkChild(steerLoop);
       for (;;) {
-        const step = yield* nextFrame;
+        const step = awaitingTurnBoundary
+          ? yield* Effect.timeout(nextFrame, TURN_BOUNDARY_WAIT_MILLIS).pipe(
+              Effect.match({
+                onFailure: () => ({ step: "timeout" }) as const,
+                onSuccess: (next) => next,
+              }),
+            )
+          : yield* nextFrame;
+        if (step.step === "timeout") {
+          discardOutstanding();
+          yield* io.emit(notDelivered);
+          semanticComplete = true;
+          accepting = false;
+          freeSlot();
+          stream.close();
+          break;
+        }
+        // The Turn-boundary obligation is one bounded wait. A frame arriving
+        // within it is provider cooperation; later waits are governed by the
+        // state that frame establishes.
+        awaitingTurnBoundary = false;
         if (step.step === "done") break;
         if (step.step === "threw") {
           if (!semanticComplete) {
@@ -529,7 +553,9 @@ export function runClaudeExecution(
         }
         if (hasOutstanding()) {
           // An adapter-local Turn boundary. The Run stays active until the
-          // guidance the provider has already been given has been answered.
+          // guidance the provider has already been given has been answered,
+          // but silence after this boundary is bounded on the runtime clock.
+          awaitingTurnBoundary = true;
           continue;
         }
         semanticComplete = true;

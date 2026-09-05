@@ -124,6 +124,9 @@ const ORDINARY: readonly FakeStep[] = [
   { step: "complete" },
 ];
 
+/** The fake adapter's bound for a provider that contributes no next event. */
+const QUIET_PROVIDER_WAIT_MILLIS = 1_000;
+
 /** A policy with the bounds one scenario needs lowered. */
 function lowered(overrides: Partial<RuntimePolicy>): RuntimePolicy {
   return { ...DEFAULT_RUNTIME_POLICY, ...overrides };
@@ -366,6 +369,44 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
               runs: [{ status: "cancelled", cancellationReason: "requested" }],
             },
           });
+
+        case "an-execution-settles-when-the-provider-goes-quiet":
+          return fixtureOf(
+            kind,
+            scripts([
+              {
+                step: "result-then-quiet",
+                waitMillis: QUIET_PROVIDER_WAIT_MILLIS,
+              },
+            ]),
+            {
+              testClock: true,
+              plans: [
+                {
+                  ...(steerable
+                    ? {
+                        controls: [
+                          { type: "steer", text: "guidance awaiting a turn" },
+                        ],
+                      }
+                    : {}),
+                  advanceClockMillis: QUIET_PROVIDER_WAIT_MILLIS + 1,
+                },
+              ],
+              expected: {
+                runs: [
+                  {
+                    status: "completed",
+                    diagnosticCategories: ["control"],
+                    ...(steerable ? { steerOutcomes: ["accepted"] } : {}),
+                  },
+                ],
+                ...(steerable
+                  ? { controlsReceived: ["guidance awaiting a turn"] }
+                  : {}),
+              },
+            },
+          );
 
         case "observations-carry-no-provider-vocabulary":
           return fixtureOf(

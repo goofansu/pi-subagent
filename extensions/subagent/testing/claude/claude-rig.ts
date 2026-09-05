@@ -96,6 +96,8 @@ export interface ClaudeRigOptions {
   readonly openHangs?: boolean;
   /** The process environment the child inherits. */
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /** Replace the runtime clock so adapter-local bounds can be advanced. */
+  readonly testClock?: boolean;
 }
 
 export interface ClaudeSessionOutcome<A> {
@@ -140,6 +142,9 @@ export function withClaudeSession<A>(
       sink,
       counters,
       ...(options.policy === undefined ? {} : { policy: options.policy }),
+      ...(options.testClock === undefined
+        ? {}
+        : { testClock: options.testClock }),
     },
     (services) =>
       body({

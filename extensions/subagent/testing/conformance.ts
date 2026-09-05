@@ -29,7 +29,8 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
+import { TestClock } from "effect/testing";
 import type { Backend, RunControl } from "../backend/contract.ts";
 import type {
   CancellationReason,
@@ -89,6 +90,7 @@ export const RUN_CONFORMANCE_SCENARIOS = [
   "late-events-cannot-mutate-a-terminal-run",
   "a-failing-sink-cannot-strand-the-execution",
   "a-run-may-settle-with-no-observations",
+  "an-execution-settles-when-the-provider-goes-quiet",
   "observations-carry-no-provider-vocabulary",
   // Added in M2.
   "capacity-rejection-is-immediate",
@@ -169,6 +171,8 @@ export interface ConformanceRunPlan {
   readonly steerAfterCancel?: boolean;
   /** Wait on this Run only after it has already settled. */
   readonly waitAfterSettlement?: boolean;
+  /** Advance a supplied test clock after Controls have reached the mailbox. */
+  readonly advanceClockMillis?: number;
 }
 
 /** What the suite should find. Every field is checked only if the rig gave it. */
@@ -237,6 +241,8 @@ export interface BackendConformanceFixture {
   readonly sinkFailsOnce?: boolean;
   /** After the plans, fill the store until the first result is evicted. */
   readonly evictOldest?: boolean;
+  /** Replace the runtime clock for a scenario that proves a time bound. */
+  readonly testClock?: boolean;
 }
 
 /**
@@ -460,6 +466,11 @@ function runFixture(
           floodOutcomes.push(outcome.outcome);
         }
 
+        if (plan.advanceClockMillis !== undefined) {
+          yield* quiesce;
+          yield* TestClock.adjust(plan.advanceClockMillis);
+        }
+
         let steerAfterCancel: string | undefined;
         if (plan.cancel) {
           yield* supervisor.cancel([runId]);
@@ -557,6 +568,7 @@ function runFixture(
         }),
       ),
       Effect.scoped,
+      Effect.provide(fixture.testClock ? TestClock.layer() : Layer.empty),
     ),
     // The probe is read *after* the Session Scope has closed, which is the
     // only moment at which "nothing is still alive" means anything.
@@ -881,6 +893,23 @@ const SCENARIO_CHECKS: {
       assert.equal(run.result.finalOutput, "");
       assert.deepEqual(run.result.transcript, []);
       assert.equal(run.result.usage.turns, 0);
+    }
+  },
+  "an-execution-settles-when-the-provider-goes-quiet": (_fixture, outcome) => {
+    assert.ok(outcome.runs.length > 0, "the scenario drove no Run");
+    for (const run of outcome.runs) {
+      assert.equal(run.result.status, "completed", "silence cancelled the Run");
+      assert.equal(
+        run.result.cancellationReason,
+        undefined,
+        "the scenario must not cancel the Run",
+      );
+      assert.ok(
+        run.result.diagnostics.some(
+          (diagnostic) => diagnostic.category === "control",
+        ),
+        "the undelivered guidance was not diagnosed",
+      );
     }
   },
   "observations-carry-no-provider-vocabulary": (_fixture, outcome) => {

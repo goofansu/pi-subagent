@@ -102,6 +102,8 @@ export type PiScriptStep =
       readonly step: "await-steer";
       readonly confirm: boolean;
       readonly reject?: boolean;
+      /** Leave the native `steer` promise pending after consuming it. */
+      readonly settle?: boolean;
     }
   /** Emit the terminal frame. `willRetry` means it is not terminal after all. */
   | { readonly step: "terminal"; readonly willRetry?: boolean }
@@ -366,7 +368,7 @@ export function createStandInPiSession(
               }),
             );
           }
-          pending.settle(step.reject === true);
+          if (step.settle !== false) pending.settle(step.reject === true);
           break;
         }
         case "terminal": {

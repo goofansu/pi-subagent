@@ -140,7 +140,14 @@ export interface RunInput {
 
 /** Where an execution reports to, and where it takes guidance from. */
 export interface ExecutionIO {
-  /** Report one observation. Ordered and lossless within the Run. */
+  /**
+   * Report one observation. Ordered and lossless within the Run.
+   *
+   * After the Run's terminal candidate is captured and its intake is sealed,
+   * an emit is still accepted but discarded and counted as late; it never
+   * fails. This lets execution-scope finalizers report without racing
+   * settlement.
+   */
   readonly emit: (observation: RunObservation) => Effect.Effect<void>;
   readonly controls: ControlFeed;
 }
@@ -182,12 +189,22 @@ export interface BackendAgent {
    * inside the Run's own scope: a provider turn, query, or prompt may end
    * without ending the Run, but it can never outlive it. Cancellation is
    * interruption of this Effect.
+   *
+   * The Effect must resolve to a terminal bundle without the provider's
+   * cooperation: every wait on the provider is bounded. Finalizers acquired
+   * in the execution scope should be interruptible, because the core's
+   * cleanup budget interrupts cleanup that does not finish in time.
    */
   readonly execute: (
     input: RunInput,
     io: ExecutionIO,
   ) => Effect.Effect<TerminalBundle, never, Scope.Scope>;
-  /** Release everything this BackendAgent retains. Safe to run more than once. */
+  /**
+   * Release everything this BackendAgent retains. Safe to run more than once.
+   *
+   * The core may call this while `execute` is in flight. It never invokes
+   * `execute` twice concurrently on the same BackendAgent.
+   */
   readonly close: () => Effect.Effect<void>;
 }
 

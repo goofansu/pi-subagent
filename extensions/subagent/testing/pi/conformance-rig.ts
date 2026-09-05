@@ -3,7 +3,7 @@
  *
  * It builds the actual adapter — the same `createPiBackend` the entry point
  * uses — with the stand-in session injected through the factory the adapter
- * already has for that purpose, and runs the shared 37-scenario suite against
+ * already has for that purpose, and runs the shared 38-scenario suite against
  * it. Nothing about the adapter is stubbed: validation, the retained session,
  * the per-Run execution, the translation, the steering consumer, and the
  * cancellation path are all the production code.
@@ -441,6 +441,35 @@ export function piConformanceRig(): BackendConformanceRig {
             plans: [{ cancel: true }],
             expected: {
               runs: [{ status: "cancelled", cancellationReason: "requested" }],
+            },
+          });
+
+        case "an-execution-settles-when-the-provider-goes-quiet":
+          return piFixture({
+            scripts: [
+              [
+                {
+                  step: "await-steer",
+                  confirm: false,
+                  settle: false,
+                },
+                { step: "terminal" },
+              ],
+            ],
+            plans: [
+              {
+                controls: [{ type: "steer", text: "guidance awaiting a turn" }],
+              },
+            ],
+            expected: {
+              runs: [
+                {
+                  status: "completed",
+                  steerOutcomes: ["accepted"],
+                  diagnosticCategories: ["control"],
+                },
+              ],
+              controlsReceived: ["guidance awaiting a turn"],
             },
           });
 
