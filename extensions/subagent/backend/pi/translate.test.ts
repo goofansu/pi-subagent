@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   confined,
   confinedControl,
+  createPiTranslator,
   currentRunMessages,
   isPiUserText,
   messageIdentity,
@@ -218,6 +219,107 @@ test("usage fields that are not whole nonnegative counts are dropped", () => {
     observations.some((one) => one.kind === "context"),
     false,
   );
+});
+
+// ── Streaming turn activity ──────────────────────────────────────────────────
+
+function messageUpdate(type: string): Record<string, unknown> {
+  return {
+    type: "message_update",
+    message: assistant(),
+    assistantMessageEvent: { type, delta: "some tokens" },
+  };
+}
+
+test("thinking and text deltas name their model-turn activity", () => {
+  const translator = createPiTranslator();
+
+  assert.deepEqual(translator.event(messageUpdate("thinking_delta")), {
+    kind: "activity",
+    observation: { kind: "activity", activity: "thinking…" },
+  });
+  assert.deepEqual(translator.event(messageUpdate("text_delta")), {
+    kind: "activity",
+    observation: { kind: "activity", activity: "writing…" },
+  });
+});
+
+test("model-turn activity is emitted only when the output kind changes", () => {
+  const translator = createPiTranslator();
+
+  assert.equal(
+    translator.event(messageUpdate("thinking_delta")).kind,
+    "activity",
+  );
+  assert.deepEqual(translator.event(messageUpdate("thinking_delta")), {
+    kind: "other",
+  });
+  assert.equal(translator.event(messageUpdate("text_delta")).kind, "activity");
+  assert.deepEqual(translator.event(messageUpdate("text_delta")), {
+    kind: "other",
+  });
+  assert.deepEqual(translator.event(messageUpdate("thinking_delta")), {
+    kind: "activity",
+    observation: { kind: "activity", activity: "thinking…" },
+  });
+});
+
+test("a tool activity is newer, and the next turn delta is newer again", () => {
+  const translator = createPiTranslator();
+
+  assert.equal(
+    translator.event(messageUpdate("thinking_delta")).kind,
+    "activity",
+  );
+  const tool = translator.event({
+    type: "tool_execution_start",
+    toolCallId: "call-1",
+    toolName: "read_file",
+    args: {},
+  });
+  assert.equal(tool.kind, "tool");
+  if (tool.kind === "tool") {
+    assert.deepEqual(tool.observations[0], {
+      kind: "activity",
+      activity: "read_file",
+    });
+  }
+  assert.deepEqual(translator.event(messageUpdate("thinking_delta")), {
+    kind: "activity",
+    observation: { kind: "activity", activity: "thinking…" },
+  });
+});
+
+test("model-turn output kind is reset across executions", () => {
+  const firstExecution = createPiTranslator();
+  const resumedExecution = createPiTranslator();
+
+  assert.equal(
+    firstExecution.event(messageUpdate("text_delta")).kind,
+    "activity",
+  );
+  assert.equal(firstExecution.event(messageUpdate("text_delta")).kind, "other");
+  assert.deepEqual(resumedExecution.event(messageUpdate("text_delta")), {
+    kind: "activity",
+    observation: { kind: "activity", activity: "writing…" },
+  });
+});
+
+test("message updates emit no message; the message still comes from message end", () => {
+  const translator = createPiTranslator();
+  const message = assistant();
+
+  assert.deepEqual(translator.event(messageUpdate("text_delta")), {
+    kind: "activity",
+    observation: { kind: "activity", activity: "writing…" },
+  });
+  assert.deepEqual(translator.event({ type: "message_end", message }), {
+    kind: "message",
+    message,
+  });
+  assert.deepEqual(translator.event(messageUpdate("text_end")), {
+    kind: "other",
+  });
 });
 
 // ── Tool execution ───────────────────────────────────────────────────────────

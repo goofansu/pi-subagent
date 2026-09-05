@@ -1,10 +1,11 @@
 /**
- * Pi's native messages and events, as Run observations. Pure, and total.
+ * Pi's native messages and events, as Run observations. Total, with Run-local state.
  *
- * Everything in this module is a function of its arguments. It reads no
- * session, holds no state across a Run, and never throws: a shape it does not
- * recognize produces nothing rather than a failure, because a provider that
- * adds a content block should not be able to fail a Run.
+ * Everything in this module reads no session and never throws: a shape it does
+ * not recognize produces nothing rather than a failure, because a provider
+ * that adds a content block should not be able to fail a Run. The event
+ * translator holds only the last streamed output kind, and is created once per
+ * execution so that state cannot cross a Run boundary.
  *
  * It takes `unknown` and checks, rather than taking Pi's declared types and
  * trusting them. That is not distrust of the SDK — it is that a retained
@@ -246,6 +247,8 @@ export function piTranscriptItem(message: unknown): TranscriptItem | undefined {
 export type PiEventReading =
   /** A message the session emitted. The caller decides whether to keep it. */
   | { readonly kind: "message"; readonly message: unknown }
+  /** A changed model-output kind, already translated to one activity. */
+  | { readonly kind: "activity"; readonly observation: RunObservation }
   /** A tool call starting or finishing, already translated. */
   | { readonly kind: "tool"; readonly observations: readonly RunObservation[] }
   /** The non-retrying terminal frame, with the messages it carried. */
@@ -253,13 +256,31 @@ export type PiEventReading =
   /** Anything else Pi emits, which this adapter has no use for. */
   | { readonly kind: "other" };
 
-const IGNORED: PiEventReading = { kind: "other" };
+const IGNORED = { kind: "other" } as const;
 
-export function readPiEvent(event: unknown): PiEventReading {
+type PiTurnKind = "thinking" | "text";
+
+type RawPiEventReading =
+  | Exclude<PiEventReading, { readonly kind: "activity" }>
+  | { readonly kind: "turn"; readonly turnKind: PiTurnKind };
+
+/** Read the output kind carried by an assistant message update. */
+function piTurnKind(event: Record<string, unknown>): PiTurnKind | undefined {
+  if (event.type !== "message_update") return undefined;
+  const delta = event.assistantMessageEvent;
+  if (!isRecord(delta)) return undefined;
+  if (delta.type === "thinking_delta") return "thinking";
+  if (delta.type === "text_delta") return "text";
+  return undefined;
+}
+
+function readPiEvent(event: unknown): RawPiEventReading {
   if (!isRecord(event)) return IGNORED;
   if (event.type === "message_end" && event.message !== undefined) {
     return { kind: "message", message: event.message };
   }
+  const turnKind = piTurnKind(event);
+  if (turnKind !== undefined) return { kind: "turn", turnKind };
   if (
     event.type === "tool_execution_start" ||
     event.type === "tool_execution_end"
@@ -281,6 +302,48 @@ export function readPiEvent(event: unknown): PiEventReading {
     return { kind: "terminal", messages: event.messages };
   }
   return IGNORED;
+}
+
+export interface PiTranslator {
+  /** Translate one event from this execution, preserving its event ordering. */
+  readonly event: (event: unknown) => PiEventReading;
+}
+
+/**
+ * Build the event translator for one execution.
+ *
+ * A tool activity clears the remembered model-output kind. This makes the next
+ * delta newer than the tool even when the model resumes with the same kind it
+ * emitted before the call. Discarding this translator with the execution also
+ * makes a resumed Run's first delta new.
+ */
+export function createPiTranslator(): PiTranslator {
+  let lastTurnKind: PiTurnKind | undefined;
+
+  return {
+    event: (event) => {
+      const reading = readPiEvent(event);
+      if (reading.kind === "turn") {
+        if (reading.turnKind === lastTurnKind) return IGNORED;
+        lastTurnKind = reading.turnKind;
+        return {
+          kind: "activity",
+          observation: {
+            kind: "activity",
+            activity:
+              reading.turnKind === "thinking" ? "thinking…" : "writing…",
+          },
+        };
+      }
+      if (
+        reading.kind === "tool" &&
+        reading.observations.some((one) => one.kind === "activity")
+      ) {
+        lastTurnKind = undefined;
+      }
+      return reading;
+    },
+  };
 }
 
 /** What a tool execution event says about the call it names. */
