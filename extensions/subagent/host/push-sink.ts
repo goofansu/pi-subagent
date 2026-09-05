@@ -161,8 +161,9 @@ export interface SessionPushSink extends NotificationSink {
    *
    * Dropped rather than kept: the ids belong to a Session that has ended, and
    * a notice delivered into the next one would be about work its model never
-   * started. The counts are *not* cleared, so `/subagent diagnostics` can
-   * still say what the Session that just ended did.
+   * started. The counts are *not* cleared, so a reader after shutdown — a
+   * test, or a live smoke asserting one notice per settled Run — can still see
+   * what the Session that just ended did.
    */
   readonly unbind: () => void;
   /** A message reached the conversation. Marks a notice landed, if it is ours. */

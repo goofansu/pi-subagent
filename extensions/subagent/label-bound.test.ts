@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
  *
  * So this reads the tree. It is a source scan rather than a boundary rule
  * because the boundary checker works on imports and the host legitimately
- * imports `SubagentSupervisor` for `/subagent diagnostics`; what matters here
+ * imports `SubagentSupervisor` for the `/subagent` status; what matters here
  * is who *calls* the two operations that make a Run.
  */
 

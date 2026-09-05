@@ -7,8 +7,8 @@ import {
   DEMO_RESUMABLE_PROFILE,
   demoAnswer,
 } from "./host/demo-backends.ts";
-import { SUBAGENT_COMMAND_NAME } from "./host/diagnostics-command.ts";
 import { NOTIFICATION_MESSAGE_TYPE } from "./host/notification-message.ts";
+import { SUBAGENT_COMMAND_NAME } from "./host/subagent-command.ts";
 import { SUBAGENT_TOOL_NAMES } from "./host/tools.ts";
 import subagentV2Extension, { installSubagentV2 } from "./index.ts";
 import { hostRig, startedIds } from "./testing/host-rig.ts";

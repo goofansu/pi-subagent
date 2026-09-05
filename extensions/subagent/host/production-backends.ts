@@ -39,7 +39,6 @@ import {
   readChildDepth,
 } from "../backend/pi/index.ts";
 import type { BackendSet } from "../runtime/composition.ts";
-import type { AdapterProbe } from "./diagnostics-command.ts";
 
 /** What the set is called, for the start-up diagnostic. */
 export const PRODUCTION_BACKEND_SET_NAME = "production";
@@ -49,16 +48,26 @@ export interface ProductionBackendOptions {
   readonly claude?: ClaudeBackendOptions;
 }
 
+/**
+ * What the adapters in a set are still holding, one named block each.
+ *
+ * The key is the backend's own name, so a reading says which adapter a count
+ * belongs to. One block per backend rather than a merged total, because "which
+ * adapter is still holding something" is the only question a probe exists to
+ * answer, and a sum cannot answer it.
+ *
+ * Declared here, where the blocks are assembled, rather than anywhere that
+ * displays them: no command prints these. The live smokes read them after the
+ * Session Scope has closed, which is where "this Session leaked nothing"
+ * becomes an assertion against a real provider.
+ */
+export type AdapterProbe = Readonly<
+  Record<string, Readonly<Record<string, number>>>
+>;
+
 /** A production backend set, plus the adapter probes the live lane reads. */
 export interface ProductionBackendSet {
   readonly set: BackendSet;
-  /**
-   * What each adapter is holding, one named block per backend.
-   *
-   * One block per backend rather than a merged total, because "which adapter
-   * is still holding something" is the only question a probe exists to answer,
-   * and a sum cannot answer it.
-   */
   readonly probe: () => AdapterProbe;
 }
 
