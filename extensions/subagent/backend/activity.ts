@@ -46,8 +46,11 @@ function pathDetail(value: string): string {
   return collapsed(parent ? path.join(parent, basename) : basename);
 }
 
+/** Bound to the limit, ending in an ellipsis when something was cut. */
 function capped(value: string): string {
-  return collapsed(value).slice(0, ACTIVITY_LIMIT);
+  const text = collapsed(value);
+  if (text.length <= ACTIVITY_LIMIT) return text;
+  return `${text.slice(0, ACTIVITY_LIMIT - 1)}…`;
 }
 
 /** The latest non-blank line, treating carriage-return redraws as lines. */

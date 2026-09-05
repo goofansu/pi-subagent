@@ -86,6 +86,9 @@ export const MAX_AGENT_COLUMN_WIDTH = 16;
 /** How much room a row's tail needs before it is worth starting. */
 export const MIN_TAIL_WIDTH = 12;
 
+/** The columns a row band leaves clear at each edge. */
+export const ROW_INSET = 1;
+
 /**
  * How much of the label must survive for the activity to be shown beside it.
  *
@@ -94,7 +97,15 @@ export const MIN_TAIL_WIDTH = 12;
  * than the label's last few words, as long as enough of the label is left to
  * recognise. Below this the activity goes and the label takes the room.
  */
-export const MIN_LABEL_WIDTH = 12;
+export const MIN_LABEL_WIDTH = 24;
+
+/**
+ * How much of the activity must survive for it to be shown shortened.
+ *
+ * A shortened activity still says what kind of thing the Run is doing —
+ * `bash: npm te…` — but below this it says nothing, so the label takes the room.
+ */
+export const MIN_ACTIVITY_WIDTH = 12;
 
 /**
  * Widths shared by every visible row so each field starts in one column.
@@ -301,10 +312,12 @@ export function formatRunRow(
  *
  * The label outranks the activity. When both will not fit whole, the label is
  * shortened to make room for the activity, as long as at least
- * {@link MIN_LABEL_WIDTH} of it survives; below that the activity is dropped
- * and the label takes the room. The label is never dropped in favour of the
- * activity: a row that said only `read` would not say which Run was reading.
- * A row that is only finalizing shows its label alone.
+ * {@link MIN_LABEL_WIDTH} of it survives; past that the activity is the one
+ * shortened, to whatever is left beside that much label, as long as at least
+ * {@link MIN_ACTIVITY_WIDTH} of it survives; below that the activity is
+ * dropped and the label takes the room. The label is never dropped in favour
+ * of the activity: a row that said only `read` would not say which Run was
+ * reading. A row that is only finalizing shows its label alone.
  *
  * An exhausted hand-off (W-2) has a different tail: which Run it was and that
  * the answer is there anyway — the two facts a reader needs to type
@@ -340,13 +353,25 @@ function formatRowTail(
 
   const separator = " · ";
   if (activity) {
+    const labelMinimum = Math.min(MIN_LABEL_WIDTH, visibleWidth(label));
     const labelRoom =
       remaining - visibleWidth(separator) - visibleWidth(activity);
-    if (labelRoom >= Math.min(MIN_LABEL_WIDTH, visibleWidth(label))) {
+    if (labelRoom >= labelMinimum) {
       return (
         ROW_DELIMITER +
         theme.fg("dim", truncateToWidth(label, labelRoom, "…") + separator) +
         theme.fg("muted", theme.italic(activity))
+      );
+    }
+    const activityRoom = remaining - visibleWidth(separator) - labelMinimum;
+    if (activityRoom >= MIN_ACTIVITY_WIDTH) {
+      return (
+        ROW_DELIMITER +
+        theme.fg("dim", truncateToWidth(label, labelMinimum, "…") + separator) +
+        theme.fg(
+          "muted",
+          theme.italic(truncateToWidth(activity, activityRoom, "…")),
+        )
       );
     }
   }
@@ -472,13 +497,14 @@ export function renderRunRows(
   const ordered = orderRows(rows);
   const shown = ordered.slice(0, maxRows);
   const hidden = ordered.length - shown.length;
-  // Rows are drawn one column in from the edge, so they are fitted one short.
-  const columns = measureColumns(shown, now, width - 1);
+  // Rows are drawn one column in from each edge, so they are fitted two short
+  // and the band pads the right column, the way the left one is a space.
+  const columns = measureColumns(shown, now, width - ROW_INSET * 2);
   const lines = [
     formatHeader(rows, theme, width),
     ...shown.map((row) =>
       paintBand(
-        ` ${formatRunRow(row, theme, width - 1, now, columns)}`,
+        ` ${formatRunRow(row, theme, width - ROW_INSET * 2, now, columns)}`,
         rowBackground(row),
         theme,
         width,

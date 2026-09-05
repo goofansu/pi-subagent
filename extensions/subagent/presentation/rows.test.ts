@@ -12,6 +12,7 @@ import {
   formatRowSummary,
   formatRunRow,
   MAX_AGENT_COLUMN_WIDTH,
+  MIN_ACTIVITY_WIDTH,
   MIN_LABEL_WIDTH,
   MIN_TAIL_WIDTH,
   measureColumns,
@@ -213,26 +214,33 @@ test("reported activity joins the label in the tail", () => {
 test("the label outranks the activity: it is shortened for the activity, never dropped", () => {
   // Room for the label to be cut and still leave MIN_LABEL_WIDTH: the activity
   // stays and the label gives up its end.
-  assert.equal(MIN_LABEL_WIDTH, 12);
+  assert.equal(MIN_LABEL_WIDTH, 24);
   assert.equal(
-    row(58, {
+    row(64, {
       identity: { description: "a long label that goes on and on and on" },
       activity: "read",
     }),
-    "explore  pi  running  3 turns  a long label that g… · read",
+    "explore  pi  running  3 turns  a long label that goes on… · read",
   );
-  // An activity too long to leave that much label goes, and the label takes
-  // the room. A row that said only `read` would not say which Run was reading.
+  // An activity too long to leave that much label is the one shortened, so
+  // the row still says what kind of thing the Run is doing.
+  assert.equal(MIN_ACTIVITY_WIDTH, 12);
   assert.equal(
-    row(60, {
+    row(70, {
       identity: { description: "a long label that goes on and on and on" },
       activity: "a very long activity name here",
     }),
-    "explore  pi  running  3 turns  a long label that goes on an…",
+    "explore  pi  running  3 turns  a long label that goes … · a very long…",
   );
   // A short label is kept whole rather than cut below its own length.
   assert.equal(
     row(58, { activity: "bash: npm test" }),
+    "explore  pi  running  3 turns  look around · bash: npm te…",
+  );
+  // Below MIN_ACTIVITY_WIDTH the activity goes and the label takes the room.
+  // A row that said only `read` would not say which Run was reading.
+  assert.equal(
+    row(56, { activity: "bash: npm test" }),
     "explore  pi  running  3 turns  look around",
   );
 });
@@ -497,6 +505,22 @@ test("a band survives a full reset inside its text", () => {
   assert.ok(line.includes("\u001b[0m\u001b[44m"));
   assert.equal(visibleWidth(line), 60);
   assert.ok(line.endsWith("\u001b[49m"));
+});
+
+test("a row leaves one clear column at its right edge, as at its left", () => {
+  const rows = [
+    fixtureRow({
+      identity: {
+        description:
+          "a label long enough to be cut off by the width it is given",
+      },
+    }),
+  ];
+  const [, line = ""] = renderRunRows(rows, named, 60, FIXTURE_NOW);
+  const plain = stripVTControlCharacters(line);
+  assert.equal(visibleWidth(plain), 60);
+  assert.match(plain, /^ \S/);
+  assert.match(plain, /\S $/);
 });
 
 test("W-2: a stuck row is painted as the failure it reports, whatever its phase", () => {

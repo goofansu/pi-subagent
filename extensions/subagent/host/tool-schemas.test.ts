@@ -8,6 +8,7 @@ import {
   decodeToolInput,
   ResultInputSchema,
   ResumeInputSchema,
+  RUN_LABEL_TARGET_CHARACTERS,
   StartInputSchema,
   SteerInputSchema,
   toolParameters,
@@ -138,7 +139,7 @@ test("T1: the label's bound is stated on both description fields", () => {
     assert.match(
       document.properties.description.description ?? "",
       new RegExp(
-        `^Label for this (specific|new) Run; one line, at most ${RUN_LABEL_MAX_BYTES} bytes, shortened if longer, and never empty — an empty description is refused$`,
+        `^Label for this (specific|new) Run, shown beside its live activity: a few words, ${RUN_LABEL_TARGET_CHARACTERS} characters or fewer; one line, at most ${RUN_LABEL_MAX_BYTES} bytes, shortened if longer, and never empty — an empty description is refused$`,
       ),
     );
   }

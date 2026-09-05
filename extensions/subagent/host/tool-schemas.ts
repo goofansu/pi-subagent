@@ -63,6 +63,9 @@ const RUN_ID = RunId.annotate({
   description: "A Run id returned by agent_start or agent_resume",
 });
 
+/** How long a label should be to sit whole beside an activity in a widget row. */
+export const RUN_LABEL_TARGET_CHARACTERS = 50;
+
 /**
  * What the label's bound says to a model that reads the schema.
  *
@@ -73,8 +76,12 @@ const RUN_ID = RunId.annotate({
  * the call goes through, so nothing there invites a retry; empty is refused,
  * so the model sends a description instead of discovering the rule by being
  * refused.
+ *
+ * It also names a target well inside the bound. The widget row shows the
+ * label beside the Run's live activity and shortens the label first when both
+ * will not fit, so a label the model keeps short is one that survives whole.
  */
-const LABEL_BOUND_CLAUSE = `; one line, at most ${RUN_LABEL_MAX_BYTES} bytes, shortened if longer, and never empty — an empty description is refused`;
+const LABEL_BOUND_CLAUSE = `, shown beside its live activity: a few words, ${RUN_LABEL_TARGET_CHARACTERS} characters or fewer; one line, at most ${RUN_LABEL_MAX_BYTES} bytes, shortened if longer, and never empty — an empty description is refused`;
 
 export const StartInputSchema = Schema.Struct({
   agent: Schema.String.annotate({

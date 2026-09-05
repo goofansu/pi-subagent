@@ -423,7 +423,7 @@ test("a tool activity is capped at one widget line before observation", () => {
       toolName: "bash",
       args: { command: "x".repeat(200) },
     }),
-    { kind: "activity", activity: `bash: ${"x".repeat(114)}` },
+    { kind: "activity", activity: `bash: ${"x".repeat(113)}…` },
   );
 });
 
@@ -526,7 +526,7 @@ test("the command prefix is capped before output, then the whole activity is cap
     reading.kind === "tool" ? reading.observations[0] : undefined,
     {
       kind: "activity",
-      activity: `bash: ${"c".repeat(54)} · ${"o".repeat(57)}`,
+      activity: `bash: ${"c".repeat(54)} · ${"o".repeat(56)}…`,
     },
   );
 });

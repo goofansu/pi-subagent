@@ -410,7 +410,7 @@ test("Claude tool activity is capped before it becomes an observation", () => {
 
   assert.deepEqual(observations.at(-1), {
     kind: "activity",
-    activity: `Bash: ${"x".repeat(114)}`,
+    activity: `Bash: ${"x".repeat(113)}…`,
   });
 });
 
