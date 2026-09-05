@@ -114,11 +114,13 @@ test("admitResume answers from the adapter's own state, with no native call", as
           prompt: "and again",
         });
         const second = startedRun(resumed);
+        const afterAdmission = rig.standIn.record();
         yield* untilTerminal(rig, second.runId);
         const result = yield* rig.supervisor.result(second.runId);
         return {
           admittedWithNoExtraCall:
-            before.aborts === 0 && before.queueClears === 0,
+            afterAdmission.aborts === before.aborts &&
+            afterAdmission.queueClears === before.queueClears,
           resumedOutcome: resumed.outcome,
           output: result.outcome === "result" ? result.result.finalOutput : "",
         };
