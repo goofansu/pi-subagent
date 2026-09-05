@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect } from "effect";
+import { TestClock } from "effect/testing";
 import {
   CLAUDE_ATTACHMENT_FAILED_MESSAGE,
   CLAUDE_CAPABILITIES,
   CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE,
+  CONTROL_NOT_DELIVERED_CATEGORY,
   claudeProbeIsClear,
   MISSING_CLAUDE_RESULT_MESSAGE,
+  TURN_BOUNDARY_WAIT_MILLIS,
 } from "../../backend/claude/index.ts";
 import type { RunId, RunResult } from "../../domain/index.ts";
 import { DEFAULT_RUNTIME_POLICY } from "../../runtime/policy.ts";
@@ -680,6 +683,105 @@ test("a result frame with guidance still outstanding is a Turn boundary, not set
     value.transcript.map((item) => item.role),
     ["assistant", "user", "assistant"],
   );
+});
+
+test("silence after a Turn boundary abandons guidance and settles", async () => {
+  const { value } = await withClaudeSession(
+    {
+      testClock: true,
+      scripts: [
+        [
+          { step: "init" },
+          { step: "assistant", messageId: "msg_1", text: "the first answer" },
+          { step: "await-input" },
+          {
+            step: "result",
+            text: "the first answer",
+            correlate: "prompt",
+          },
+          { step: "hang" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(
+          yield* rig.supervisor.start(claudeRigRequest()),
+        );
+        yield* untilQueried(rig);
+        yield* rig.supervisor.steer(started.runId, {
+          type: "steer",
+          text: "guidance awaiting another turn",
+        });
+        yield* untilPushed(rig);
+        yield* quiesce();
+        yield* TestClock.adjust(TURN_BOUNDARY_WAIT_MILLIS + 1);
+        yield* untilTerminal(rig, started.runId);
+        yield* quiesce();
+        return {
+          result: resultOf(yield* rig.supervisor.result(started.runId)),
+          record: rig.standIn.record(),
+        };
+      }),
+  );
+
+  assert.equal(value.result.status, "completed");
+  assert.deepEqual(
+    value.result.diagnostics.map((diagnostic) => ({
+      category: diagnostic.category,
+      message: diagnostic.message,
+    })),
+    [
+      {
+        category: "control",
+        message: `${CONTROL_NOT_DELIVERED_CATEGORY}: [redacted]`,
+      },
+    ],
+  );
+  assert.equal(value.record.openInputs, 0);
+});
+
+test("a frame after the Turn boundary disarms its one-frame wait", async () => {
+  const { value } = await withClaudeSession(
+    {
+      testClock: true,
+      scripts: [
+        [
+          { step: "init" },
+          { step: "await-input" },
+          { step: "result", text: "first", correlate: "prompt" },
+          { step: "echo-input" },
+          { step: "await-gate", gate: "finish" },
+          { step: "result", text: "done", correlate: "awaited" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(
+          yield* rig.supervisor.start(claudeRigRequest()),
+        );
+        yield* untilQueried(rig);
+        yield* rig.supervisor.steer(started.runId, {
+          type: "steer",
+          text: "guidance answered after the boundary",
+        });
+        yield* untilPushed(rig);
+        yield* quiesce();
+        yield* TestClock.adjust(TURN_BOUNDARY_WAIT_MILLIS + 1);
+        const beforeFinish = yield* rig.repository.lookup(started.runId);
+        rig.standIn.gate("finish").release();
+        yield* untilTerminal(rig, started.runId);
+        return {
+          beforeFinish,
+          result: resultOf(yield* rig.supervisor.result(started.runId)),
+        };
+      }),
+  );
+
+  assert.equal(value.beforeFinish.state, "active");
+  assert.equal(value.result.status, "completed");
+  assert.deepEqual(value.result.diagnostics, []);
 });
 
 test("only one Control is provider-visible at a time", async () => {

@@ -41,6 +41,7 @@ import {
   type ProfileDiagnostic,
   type RunObservation,
   redactedDiagnostic,
+  runDiagnostic,
   type TranscriptItem,
   usageDelta,
 } from "../../domain/index.ts";
@@ -269,6 +270,37 @@ function createFakeBackend(
                 yield* io.emit(observation);
               }
               counters.controlFinished();
+              break;
+            }
+            case "result-then-quiet": {
+              const control = capabilities.steer
+                ? yield* io.controls.take
+                : undefined;
+              if (control !== undefined) {
+                counters.controlStarted(input.runId, control.text);
+              }
+              yield* Effect.gen(function* () {
+                // The provider has reported its result and now contributes no
+                // event capable of releasing this wait. Only the adapter's
+                // runtime-clock bound can move the execution forward.
+                yield* Effect.exit(
+                  Effect.timeout(Effect.never, step.waitMillis),
+                );
+                yield* io.emit({
+                  kind: "diagnostic",
+                  diagnostic: runDiagnostic(
+                    "control",
+                    "guidance was not delivered",
+                  ),
+                });
+              }).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    if (control !== undefined) counters.controlFinished();
+                  }),
+                ),
+              );
+              bundle = { ending: answeredEnding() };
               break;
             }
             case "cumulative-usage": {

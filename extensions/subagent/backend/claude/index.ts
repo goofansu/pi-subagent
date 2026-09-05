@@ -30,6 +30,7 @@ export {
   QUERY_START_CATEGORY,
   RESULT_ERROR_CATEGORY,
   SDK_STDERR_CATEGORY,
+  TURN_BOUNDARY_WAIT_MILLIS,
 } from "./execution.ts";
 export {
   type ClaudeInput,
