@@ -61,9 +61,8 @@ test("the widget appears with the first live Run and its row reads as the matrix
 
   const rows = rig.host.widgetLines(120);
   assert.equal(rows.length, 2);
-  // The rule names the widget and counts the Run, and nothing else.
-  assert.match(rows[0], /^─── subagents {2}1 running ─+$/);
-  assert.equal(visibleWidth(rows[0]), 120);
+  // The title names the widget and counts the Run, and nothing else.
+  assert.equal(rows[0], " subagents   1 running");
   // The row: a spinner frame, then the agent, backend, status, a counting
   // duration, the turn count, and what the Run said it is doing.
   assert.match(

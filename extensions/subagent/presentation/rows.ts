@@ -10,7 +10,7 @@
  * each line.
  *
  * ```
- * ─── subagents  2 running · 1 completed ───────────── 14.2k tokens · $0.04 ───
+ *  subagents   2 running   1 completed
  *  ⠹ explore      pi      running     12.4s  3 turns  look around · grep: x
  *  ⠹ reviewer     claude  running      8.2s  1 turn   read the diff
  *  ✓ implementer  claude  completed   1m 2s  4 turns
@@ -59,6 +59,7 @@ export interface RenderableTheme {
   bg(color: string, text: string): string;
   bold(text: string): string;
   italic(text: string): string;
+  inverse(text: string): string;
 }
 
 /**
@@ -421,23 +422,34 @@ export function formatRowSummary(rows: readonly RunRowView[]): string {
 }
 
 /**
- * The same summary for the header, each count painted in its phase's colour
- * so the rule says at a glance whether anything has gone wrong.
+ * The same summary for the header, one chip per phase.
+ *
+ * A chip is the count and the verb, padded by a cell each side, painted in
+ * the phase's colour and then inverted: the colour becomes the chip's
+ * background and the text takes the terminal's own, so `2 running` reads as
+ * a warning-coloured tag and `1 failed` as an error-coloured one. Chips are
+ * set a cell apart, and their backgrounds are what separates them.
  */
-function formatPaintedSummary(
+function formatPhaseChips(
   rows: readonly RunRowView[],
   theme: RenderableTheme,
 ): string {
   return phaseCounts(rows)
     .map(([phase, count]) =>
-      theme.fg(runPhaseTone(phase), `${count} ${runPhaseVerb(phase)}`),
+      theme.inverse(
+        theme.fg(runPhaseTone(phase), ` ${count} ${runPhaseVerb(phase)} `),
+      ),
     )
-    .join(theme.fg("dim", " · "));
+    .join(" ");
 }
 
 /**
- * The titled rule above the rows: the widget's name and its Runs counted by
- * phase, then the rule to the edge.
+ * The title line above the rows: the widget's name and one chip per phase.
+ *
+ * No rule. The editor draws its own full-width border directly beneath the
+ * widget, so a rule here was a second frame two lines above the first; the
+ * bands the rows are painted as do the separating that the rule used to. The
+ * line is set one cell in, where the rows' glyphs are.
  *
  * Deliberately no spend. A token total that left out cache reads was neither
  * what the Runs processed nor what they cost, and a cost summed across
@@ -450,12 +462,9 @@ function formatHeader(
   theme: RenderableTheme,
   width: number,
 ): string {
-  const rule = (cells: number): string =>
-    theme.fg("borderMuted", "─".repeat(Math.max(0, cells)));
-  const left = `${rule(3)} ${theme.fg("accent", theme.bold("subagents"))}  ${formatPaintedSummary(rows, theme)} `;
-  const fill = width - visibleWidth(left);
-  if (fill >= 0) return left + rule(fill);
-  return truncateToWidth(left, width, "…", true);
+  const title = ` ${theme.fg("accent", theme.bold("subagents"))}  ${formatPhaseChips(rows, theme)}`;
+  if (visibleWidth(title) <= width) return title;
+  return truncateToWidth(title, width, "…");
 }
 
 /**
@@ -495,7 +504,7 @@ function paintBand(
 /** The SGR sequence that clears every attribute, background included. */
 const FULL_RESET = "\u001b[0m";
 
-/** The whole widget: a titled rule, the rows as bands, and an overflow summary. */
+/** The whole widget: a title line, the rows as bands, and an overflow summary. */
 export function renderRunRows(
   rows: readonly RunRowView[],
   theme: RenderableTheme,

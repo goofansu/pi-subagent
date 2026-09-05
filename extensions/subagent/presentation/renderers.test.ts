@@ -26,6 +26,7 @@ const theme: RenderableTheme = {
   bg: (_color, text) => text,
   bold: (text) => text,
   italic: (text) => text,
+  inverse: (text) => text,
 };
 
 /**
@@ -40,6 +41,7 @@ const dimAware: RenderableTheme = {
   bg: (_color, text) => text,
   bold: (text) => text,
   italic: (text) => text,
+  inverse: (text) => text,
 };
 
 /** A deterministic stand-in for the host's key hint. */

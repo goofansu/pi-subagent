@@ -115,6 +115,7 @@ export const PLAIN_THEME: RenderableTheme = {
   bg: (_color, text) => text,
   bold: (text) => text,
   italic: (text) => text,
+  inverse: (text) => text,
 };
 
 type WidgetFactory = (tui: unknown, theme: unknown) => WidgetComponent;

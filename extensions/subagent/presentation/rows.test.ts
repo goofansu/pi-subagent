@@ -30,6 +30,7 @@ const theme: RenderableTheme = {
   bg: (_color, text) => text,
   bold: (text) => text,
   italic: (text) => text,
+  inverse: (text) => text,
 };
 
 /**
@@ -60,11 +61,13 @@ const paintBg = (color: string, text: string): string =>
   `\u001b[${BG[color] ?? 49}m${text}\u001b[49m`;
 const bold = (text: string): string => `\u001b[1m${text}\u001b[22m`;
 const italic = (text: string): string => `\u001b[3m${text}\u001b[23m`;
+const inverse = (text: string): string => `\u001b[7m${text}\u001b[27m`;
 const named: RenderableTheme = {
   fg: paint,
   bg: paintBg,
   bold,
   italic,
+  inverse,
 };
 const literal = (text: string): string =>
   text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -438,7 +441,7 @@ test("the widget summary counts each phase in the shared order", () => {
   );
 });
 
-test("the whole widget is a titled rule, aligned rows, and an overflow summary", () => {
+test("the whole widget is a title line, aligned rows, and an overflow summary", () => {
   const rows = [
     fixtureRow({ identity: { agent: "explore" } }),
     fixtureRow({
@@ -452,13 +455,13 @@ test("the whole widget is a titled rule, aligned rows, and an overflow summary",
   );
 
   assert.deepEqual(lines, [
-    "─── subagents  2 running ───────────────────────────────────────────────────────",
+    " subagents   2 running",
     " ⠧ explore   pi  running  12.4s  3 turns  look around",
     " ⠧ reviewer  pi  running  12.4s  1 turn   read the diff",
   ]);
 });
 
-test("the header counts each phase in its own colour, and says nothing about spend", () => {
+test("the header is the name and one inverted chip per phase, and says nothing about spend", () => {
   const rows = [
     fixtureRow({
       usage: fixtureUsage({
@@ -471,17 +474,12 @@ test("the header counts each phase in its own colour, and says nothing about spe
     fixtureRow({ phase: "failed" }),
   ];
   const [header = ""] = renderRunRows(rows, named, 100, FIXTURE_NOW);
-  assert.match(header, new RegExp(literal(paint("accent", bold("subagents")))));
-  assert.match(
+  assert.equal(
     header,
-    new RegExp(
-      literal(
-        paint("warning", "1 running") +
-          paint("dim", " · ") +
-          paint("error", "1 failed"),
-      ),
-    ),
+    ` ${paint("accent", bold("subagents"))}  ${inverse(paint("warning", " 1 running "))} ${inverse(paint("error", " 1 failed "))}`,
   );
+  // No rule: the editor's own border sits directly beneath the widget.
+  assert.doesNotMatch(header, /─/);
 
   // No token total and no cost: the first left out cache reads, and the
   // second summed backends that report at different moments. Each notice
@@ -489,11 +487,7 @@ test("the header counts each phase in its own colour, and says nothing about spe
   const plain = stripVTControlCharacters(
     renderRunRows(rows, theme, 100, FIXTURE_NOW)[0] ?? "",
   );
-  assert.equal(visibleWidth(plain), 100);
-  assert.equal(
-    plain,
-    `─── subagents  1 running · 1 failed ${"─".repeat(100 - 36)}`,
-  );
+  assert.equal(plain, " subagents   1 running   1 failed ");
   assert.doesNotMatch(plain, /tokens|\$/);
 });
 
@@ -503,10 +497,11 @@ test("the header shortens rather than wraps on a narrow terminal", () => {
     stripVTControlCharacters(
       renderRunRows(rows, theme, width, FIXTURE_NOW)[0] ?? "",
     );
-  assert.equal(at(40), `─── subagents  1 running · 1 failed ${"─".repeat(4)}`);
+  assert.equal(at(40), " subagents   1 running   1 failed ");
   assert.ok(visibleWidth(at(20)) <= 20);
-  assert.match(at(20), /^─── subagents/);
+  assert.match(at(20), /^ subagents/);
 });
+
 test("the widget caps its rows and says how many it is not showing", () => {
   const rows = Array.from({ length: 10 }, (_unused, index) =>
     fixtureRow({ identity: { agent: `agent-${index}` } }),

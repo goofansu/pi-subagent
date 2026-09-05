@@ -185,7 +185,7 @@ grants it to Claude Subagents. `tools` narrows built-in tools only. See
 Runs are listed in a widget above the editor, one line each:
 
 ```
-─── subagents  2 running · 1 completed ─────────────────────────────────────────────────────────
+ subagents   2 running   1 completed
  ⠏ explore      pi      running    12.8s  3 turns  look around · grep: getFinalOutput
  ⠏ reviewer     claude  running     8.2s  1 turn   review the delivery module
  ✓ implementer  claude  completed  1m 2s  4 turns
@@ -217,9 +217,11 @@ left, and the turn count and then the duration are dropped until the tail has
 room to be read. The glyph, agent, backend, and status
 always remain.
 
-The rule above the rows counts them by phase, each count in its phase's colour.
-It shows no token or cost total: per-Run accounting is on each completion
-notice, where the figures are labelled for what they are.
+The title line above the rows names the widget and counts its Runs by phase,
+each count as a chip in its phase's colour. There is no rule: the editor draws
+its own border directly beneath the widget, and the bands do the separating.
+The title shows no token or cost total; per-Run accounting is on each
+completion notice, where the figures are labelled for what they are.
 
 **A row lasts from `agent_start` until its completion notice reaches the
 conversation**, not until the Run settles. A Run shorter than the turn that
