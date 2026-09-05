@@ -26,19 +26,13 @@
  * bridge policy in the backend module.
  */
 
-import { type Cause, Effect, Queue, Schema, type Scope } from "effect";
+import { type Cause, Effect, Queue, type Scope } from "effect";
 import {
-  EXACT_KEYS,
+  decodeRunObservation,
   type RunObservation,
-  RunObservation as RunObservationSchema,
   runDiagnostic,
 } from "../domain/index.ts";
 import type { RuntimeCounters } from "./counters.ts";
-
-const decodeObservation = Schema.decodeUnknownResult(
-  RunObservationSchema,
-  EXACT_KEYS,
-);
 
 /** What a decode failure at the seam becomes, on the Run it happened to. */
 export function seamFailureObservation(reason: string): RunObservation {
@@ -98,7 +92,7 @@ export function makeIntake(
           counters.count("lateEvents");
           return Effect.void;
         }
-        const decoded = decodeObservation(observation);
+        const decoded = decodeRunObservation(observation);
         if (decoded._tag === "Failure") {
           counters.count("seamDecodeFailures");
           return Effect.asVoid(
@@ -141,7 +135,7 @@ export function offerWithoutWaiting(
     counters.count("lateEvents");
     return true;
   }
-  const decoded = decodeObservation(observation);
+  const decoded = decodeRunObservation(observation);
   if (decoded._tag === "Failure") {
     counters.count("seamDecodeFailures");
     const taken = Queue.offerUnsafe(

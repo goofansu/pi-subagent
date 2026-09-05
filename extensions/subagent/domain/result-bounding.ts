@@ -28,8 +28,8 @@
  */
 
 import { Schema } from "effect";
+import { boundText, byteLength } from "./bounding.ts";
 import { RunResult } from "./result.ts";
-import { boundText, byteLength } from "./text.ts";
 
 const encodeResult = Schema.encodeUnknownSync(RunResult);
 

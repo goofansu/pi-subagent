@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { byteLength } from "./bounding.ts";
 import {
   answeredEnding,
   cancelledEnding,
@@ -12,7 +13,6 @@ import {
 import { backendId, runId, subagentId } from "./ids.ts";
 import { createRunProjection, EMPTY_TRUNCATION_RECORD } from "./projection.ts";
 import { type RunIdentity, toRunResult } from "./result.ts";
-import { byteLength } from "./text.ts";
 import { EMPTY_USAGE_SNAPSHOT } from "./usage.ts";
 
 const identity: RunIdentity = {

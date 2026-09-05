@@ -12,7 +12,7 @@ import {
 } from "./endings.ts";
 import { BackendId, ControlId, RunId, SubagentId } from "./ids.ts";
 import { ResultLink, resultLink } from "./links.ts";
-import { RunObservation } from "./observations.ts";
+import { decodeRunObservation, RunObservation } from "./observations.ts";
 import { TruncationRecord } from "./projection.ts";
 import { TerminalReconciliation } from "./reconciliation.ts";
 import { RunIdentity, RunResult } from "./result.ts";
@@ -166,7 +166,7 @@ test("a stored result decodes back to a value that is deep-equal, not merely sim
 });
 
 test("an observation carrying an unlisted key does not decode", () => {
-  const decode = Schema.decodeUnknownResult(RunObservation, EXACT_KEYS);
+  const decode = decodeRunObservation;
 
   assert.equal(
     decode({ kind: "message", role: "user", parts: [], threadId: "t-1" })._tag,

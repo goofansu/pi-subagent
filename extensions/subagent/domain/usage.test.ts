@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { boundText, byteLength } from "./text.ts";
+import { boundText, byteLength } from "./bounding.ts";
 import {
   addUsageDelta,
   contextGauge,

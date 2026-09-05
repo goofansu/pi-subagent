@@ -20,11 +20,16 @@
  * runtime key walker to cover those two cases between them; the decoder covers
  * both.
  *
+ * Optional string fields use `Schema.optional`, not `optionalKey`: an adapter
+ * may naturally spread an explicit `undefined`, and that means the same thing
+ * as omission at this seam.
+ *
  * See docs/adr/0024-v2-observation-ordering.md and
  * docs/adr/0029-v2-effect-schema.md.
  */
 
 import { Schema } from "effect";
+import { EXACT_KEYS } from "./decoding.ts";
 import { RunDiagnostic } from "./diagnostics.ts";
 import { RunEnding } from "./endings.ts";
 import { ResultLink } from "./links.ts";
@@ -54,7 +59,8 @@ export const MessageObservation = Schema.Struct({
   kind: Schema.Literal("message"),
   role: MessageRole,
   parts: Schema.Array(MessagePart),
-  model: Schema.optionalKey(Schema.String),
+  /** Optional; explicit `undefined` is accepted. */
+  model: Schema.optional(Schema.String),
 });
 
 export type MessageObservation = typeof MessageObservation.Type;
@@ -70,7 +76,8 @@ export const ToolProgressObservation = Schema.Struct({
   kind: Schema.Literal("tool_progress"),
   callId: Schema.String.check(Schema.isNonEmpty()),
   status: ToolStatus,
-  outputSummary: Schema.optionalKey(Schema.String),
+  /** Bounded by `ProjectionBounds.maxTextPartBytes`; `undefined` is accepted. */
+  outputSummary: Schema.optional(Schema.String),
 });
 
 export type ToolProgressObservation = typeof ToolProgressObservation.Type;
@@ -155,6 +162,16 @@ export const RunObservation = Schema.Union([
 ]);
 
 export type RunObservation = typeof RunObservation.Type;
+
+/**
+ * The Observation union's one compiled decoder, including its exact-key rule.
+ * Both intake and the reducer use this value, so neither can decode the union
+ * under a subtly different policy.
+ */
+export const decodeRunObservation = Schema.decodeUnknownResult(
+  RunObservation,
+  EXACT_KEYS,
+);
 
 /** Narrow the union to one kind, for helpers and for type-level tests. */
 export type ObservationOfKind<K extends RunObservationKind> = Extract<

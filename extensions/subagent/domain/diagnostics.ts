@@ -9,13 +9,15 @@
  * provider value stays adapter-local.
  *
  * A diagnostic authored by the core itself — a late event, an overflowing
- * intake — has no provider text to fear, so it may carry a real message. The
- * bound applies either way, at construction, so nothing downstream has to
- * remember to apply it.
+ * intake — has no provider text to fear, so it may carry a real message.
+ * Constructors apply the same convenience bound as the reducer, while the
+ * reducer is where the invariant is enforced for every decoded observation.
  */
 
 import { Schema } from "effect";
-import { boundOneLine } from "./text.ts";
+import { boundOneLine, DIAGNOSTIC_MESSAGE_MAX_BYTES } from "./bounding.ts";
+
+export { DIAGNOSTIC_MESSAGE_MAX_BYTES } from "./bounding.ts";
 
 export const DIAGNOSTIC_CATEGORIES = [
   "backend-failure",
@@ -34,14 +36,12 @@ export const DiagnosticCategory = Schema.Literals(DIAGNOSTIC_CATEGORIES);
 
 export type DiagnosticCategory = typeof DiagnosticCategory.Type;
 
-/** Long enough to explain a failure, short enough to keep on a heap. */
-export const DIAGNOSTIC_MESSAGE_MAX_BYTES = 2048;
-
 /** What a redacted diagnostic says instead of provider text. */
 export const DIAGNOSTIC_REDACTED = "[redacted]";
 
 export const RunDiagnostic = Schema.Struct({
   category: DiagnosticCategory,
+  /** One line, bounded by `DIAGNOSTIC_MESSAGE_MAX_BYTES` at reduction. */
   message: Schema.String,
 });
 

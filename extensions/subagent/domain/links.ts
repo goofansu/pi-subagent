@@ -4,12 +4,22 @@
  * A Run often has one genuinely useful pointer into provider territory — the
  * native session file, a log, a URL a backend produced. Surfacing it must not
  * become a hole through which a provider object crosses the boundary, so a
- * link is exactly a kind, a label, and a target string, each bounded, and
- * nothing else.
+ * link is exactly a kind, a label, and a target string, each bounded by the
+ * reducer after decoding, and nothing else.
  */
 
 import { Schema } from "effect";
-import { boundOneLine, boundText } from "./text.ts";
+import {
+  boundOneLine,
+  boundText,
+  RESULT_LINK_LABEL_MAX_BYTES,
+  RESULT_LINK_TARGET_MAX_BYTES,
+} from "./bounding.ts";
+
+export {
+  RESULT_LINK_LABEL_MAX_BYTES,
+  RESULT_LINK_TARGET_MAX_BYTES,
+} from "./bounding.ts";
 
 export const RESULT_LINK_KINDS = [
   "native-session",
@@ -22,15 +32,11 @@ export const ResultLinkKind = Schema.Literals(RESULT_LINK_KINDS);
 
 export type ResultLinkKind = typeof ResultLinkKind.Type;
 
-/** One line of display text. */
-export const RESULT_LINK_LABEL_MAX_BYTES = 200;
-
-/** A path or URL, bounded well below what a terminal would show. */
-export const RESULT_LINK_TARGET_MAX_BYTES = 2048;
-
 export const ResultLink = Schema.Struct({
   kind: ResultLinkKind,
+  /** One line, bounded by `RESULT_LINK_LABEL_MAX_BYTES` at reduction. */
   label: Schema.String,
+  /** Bounded by `RESULT_LINK_TARGET_MAX_BYTES` at reduction. */
   target: Schema.String,
 });
 

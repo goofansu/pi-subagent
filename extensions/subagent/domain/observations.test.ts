@@ -1,15 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Schema } from "effect";
 import { sampleObservations } from "../testing/observation-vocabulary.ts";
-import { EXACT_KEYS } from "./decoding.ts";
 import {
+  decodeRunObservation,
   isRunObservationKind,
   RUN_OBSERVATION_KINDS,
-  RunObservation,
 } from "./observations.ts";
 
-const decode = Schema.decodeUnknownResult(RunObservation, EXACT_KEYS);
+const decode = decodeRunObservation;
 
 function reason(input: unknown): string {
   const decoded = decode(input);
@@ -80,6 +78,31 @@ test("a whole provider wire object is not an observation at all", () => {
     reason({ type: "response.delta", delta: { text: "hi" } }),
     /Expected/,
   );
+});
+
+test("explicit undefined is accepted for optional observation fields", () => {
+  const observations = [
+    {
+      kind: "message",
+      role: "assistant",
+      model: undefined,
+      parts: [{ kind: "tool_call", name: "read", callId: undefined }],
+    },
+    {
+      kind: "tool_progress",
+      callId: "call-1",
+      status: "completed",
+      outputSummary: undefined,
+    },
+    {
+      kind: "context",
+      context: { tokens: 1, window: undefined },
+    },
+  ];
+
+  for (const observation of observations) {
+    assert.equal(decode(observation)._tag, "Success", observation.kind);
+  }
 });
 
 test("the observation kind guard accepts the ten kinds and nothing else", () => {

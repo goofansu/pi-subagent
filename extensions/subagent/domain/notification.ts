@@ -39,10 +39,10 @@
  */
 
 import { Schema } from "effect";
+import { boundOneLine, byteLength } from "./bounding.ts";
 import { RunId, SubagentId } from "./ids.ts";
 import { CancellationReason, TerminalRunPhase } from "./phases.ts";
 import { RUN_LABEL_MAX_BYTES, type RunResult } from "./result.ts";
-import { boundOneLine, byteLength } from "./text.ts";
 import { transcriptItemText } from "./transcript.ts";
 import type { UsageSnapshot } from "./usage.ts";
 
