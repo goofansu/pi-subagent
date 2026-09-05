@@ -15,10 +15,10 @@ import {
  * Profile that names no backend at all, one on a Profile that names `claude` —
  * then resumes the first, steers the fourth, cancels one Run of each backend in
  * a single call, and resumes a Subagent id that no start in this Session
- * produced. Session B starts a Codex Subagent, starts a Profile that has been
- * deleted, steers a Run id belonging to Session A, and starts one more Pi
- * Subagent — so the two Sessions do not have the same backends open, which is
- * what tells the switch rule apart from one that counted the union of both.
+ * produced. Session B starts two Pi Subagents and, between them, a Profile that
+ * has been deleted and a steer of a Run id belonging to Session A — so Claude
+ * is open in Session A and nowhere else, which is what tells the switch rule
+ * apart from one that counted the union of both Sessions.
  *
  * Every timestamp sits between 12:00Z and 13:00Z on one UTC day, so the local
  * day the script derives is the same day for every entry in every time zone.
@@ -47,7 +47,7 @@ test("a Profile's frontmatter names its backend, and a Profile that names none i
   const backends = readProfileBackends(PROFILES);
   assert.equal(backends.get("explore"), "pi");
   assert.equal(backends.get("reviewer"), "claude");
-  assert.equal(backends.get("implementer"), "codex");
+  assert.equal(backends.get("implementer"), "pi");
   assert.equal(backends.get("inherited"), "pi");
   assert.equal(backends.has("not-a-profile"), false);
 });
@@ -56,7 +56,7 @@ test("a start is counted under its Profile's backend, and a resume or a steer un
   const tally = fixtureTally();
 
   assert.deepEqual(row(tally, "pi", "agent_start"), {
-    occurrences: 4,
+    occurrences: 5,
     days: 1,
   });
   assert.deepEqual(row(tally, "pi", "agent_resume"), {
@@ -76,11 +76,6 @@ test("a start is counted under its Profile's backend, and a resume or a steer un
     occurrences: 1,
     days: 1,
   });
-
-  assert.deepEqual(row(tally, "codex", "agent_start"), {
-    occurrences: 1,
-    days: 1,
-  });
 });
 
 test("one cancel call naming Runs of two backends counts once under each", () => {
@@ -92,10 +87,6 @@ test("one cancel call naming Runs of two backends counts once under each", () =>
   assert.deepEqual(row(tally, "claude", "agent_cancel"), {
     occurrences: 1,
     days: 1,
-  });
-  assert.deepEqual(row(tally, "codex", "agent_cancel"), {
-    occurrences: 0,
-    days: 0,
   });
 });
 
@@ -126,7 +117,7 @@ test("an id no start in the same Session produced is listed rather than counted"
   assert.equal(tally.unattributed.length, 3);
 
   // Nothing listed is also counted.
-  const counted = ["pi", "claude", "codex"].reduce(
+  const counted = ["pi", "claude"].reduce(
     (total, backend) =>
       total +
       row(tally, backend, "agent_start").occurrences +
@@ -134,20 +125,16 @@ test("an id no start in the same Session produced is listed rather than counted"
       row(tally, backend, "agent_steer").occurrences,
     0,
   );
-  assert.equal(counted, 4 + 1 + 1 + 1 + 1);
+  assert.equal(counted, 5 + 1 + 1 + 1);
 });
 
 test("a second Session in the same working directory on the same day is a switch, counted under the backends that Session had open", () => {
   const tally = fixtureTally();
 
-  // Session B is the switch, and it had pi and codex open. Claude was open in
+  // Session B is the switch, and it had only pi open. Claude was open in
   // Session A only, so it gets no switch: counting the union of the two
   // Sessions would let a backend record more switches than it had Sessions.
   assert.deepEqual(row(tally, "pi", "Session switch"), {
-    occurrences: 1,
-    days: 1,
-  });
-  assert.deepEqual(row(tally, "codex", "Session switch"), {
     occurrences: 1,
     days: 1,
   });
@@ -157,16 +144,12 @@ test("a second Session in the same working directory on the same day is a switch
   });
 
   // A shutdown is per Session, under the backends that Session used: Session A
-  // used pi and claude, Session B used pi and codex.
+  // used pi and claude, Session B used pi alone.
   assert.deepEqual(row(tally, "pi", "Session shutdown"), {
     occurrences: 2,
     days: 1,
   });
   assert.deepEqual(row(tally, "claude", "Session shutdown"), {
-    occurrences: 1,
-    days: 1,
-  });
-  assert.deepEqual(row(tally, "codex", "Session shutdown"), {
     occurrences: 1,
     days: 1,
   });
@@ -204,7 +187,7 @@ test("a toolCall entry with no name fails loudly, naming the file and the line",
 test("the printed tables carry soak.md's headings and columns, so they can be pasted over the old ones", () => {
   const printed = formatTally(fixtureTally());
 
-  for (const heading of ["### Pi", "### Claude", "### Codex"]) {
+  for (const heading of ["### Pi", "### Claude"]) {
     assert.ok(printed.includes(`${heading}\n`), `no ${heading} table`);
   }
   assert.ok(
@@ -215,7 +198,7 @@ test("the printed tables carry soak.md's headings and columns, so they can be pa
   assert.ok(printed.includes("| --- | --- | --- | --- |"));
   assert.ok(
     printed.includes(
-      "| `agent_start` | 4 | 1 | several, across distinct days |",
+      "| `agent_start` | 5 | 1 | several, across distinct days |",
     ),
   );
   assert.ok(

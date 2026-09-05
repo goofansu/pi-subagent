@@ -13,9 +13,7 @@
   },
   "license": "MIT",
   "scripts": {
-    "check": "npm run typecheck && npm run lint && npm test && npm run test:conformance && npm run codex:protocol:check",
-    "codex:protocol:check": "node scripts/check-codex-protocol.mjs",
-    "codex:retained-release:check": "node scripts/check-codex-retained-release.mjs",
+    "check": "npm run typecheck && npm run lint && npm test && npm run test:conformance",
     "pi:smoke": "node --import tsx scripts/pi-live-smoke.mjs",
     "pi:host-smoke": "node --import tsx scripts/pi-host-live-smoke.mjs pi",
     "claude:smoke": "node --import tsx scripts/claude-live-smoke.mjs",
@@ -23,7 +21,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "prepare": "node .husky/install.mjs",
-    "release:check": "npm run check && npm run pi:smoke && npm run pi:host-smoke && npm run claude:smoke && npm run claude:host-smoke && npm run codex:retained-release:check",
+    "release:check": "npm run check && npm run pi:smoke && npm run pi:host-smoke && npm run claude:smoke && npm run claude:host-smoke",
     "test": "node --import tsx --import ./extensions/subagent/suite-setup.ts --test \"extensions/subagent/**/*.test.ts\" \"scripts/**/*.test.mjs\" \"tools/**/*.test.ts\"",
     "test:conformance": "node --import tsx --import ./extensions/subagent/suite-setup.ts --test extensions/subagent/testing/conformance-resumable.test.ts extensions/subagent/testing/conformance-one-shot.test.ts extensions/subagent/testing/conformance-pi.test.ts extensions/subagent/testing/conformance-claude.test.ts",
     "typecheck": "tsc --noEmit"

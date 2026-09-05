@@ -1,4 +1,4 @@
-.PHONY: check conformance dev protocol-check release-gate smoke-claude smoke-pi
+.PHONY: check conformance dev release-gate smoke-claude smoke-pi
 
 # The extension in isolation: every other extension disabled, only this entry
 # point loaded, for checking the surface rather than for using it. `--offline`
@@ -12,9 +12,6 @@ dev:
 # adapters run exactly the same scenarios, and none of them skips one.
 conformance:
 	npm run test:conformance
-
-protocol-check:
-	npm run codex:protocol:check
 
 # The opt-in live gates, one target per backend: a runtime gate over the
 # adapter and a host gate through the surface a user has. All of them spend

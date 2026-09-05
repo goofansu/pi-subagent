@@ -52,14 +52,13 @@ const OPERATIONS = [...AGENT_OPERATIONS, "Session shutdown", "Session switch"];
 /**
  * The backends that always get a table, with the record's headings.
  *
- * All three are printed whether or not they were used, because a zero row is
- * the finding the per-backend gate exists to make: a tally that omitted the
+ * Both are printed whether or not they were used, because a zero row is the
+ * finding the per-backend gate exists to make: a tally that omitted the
  * backend nobody ran would read as full.
  */
 const KNOWN_BACKENDS = [
   ["pi", "Pi"],
   ["claude", "Claude"],
-  ["codex", "Codex"],
 ];
 
 /** The backend a Profile gets when it names none — `domain/ids.ts`. */
