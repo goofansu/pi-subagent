@@ -6,7 +6,7 @@
 # model. For *using* it, a plain `pi` is enough: the manifest names this entry
 # point, so an installed package loads it.
 dev:
-	pi --offline -np -nc -ns -ne -e extensions/subagent/index.ts --tools agent_start,agent_resume,agent_wait,agent_result,agent_cancel,agent_steer
+	pi --offline -np -nc -ns -ne -e extensions/subagent/index.ts --tools agent_start,agent_resume,agent_wait,agent_wait_all,agent_result,agent_cancel,agent_steer
 
 # The shared backend conformance suite: the two fake backends and both real
 # adapters run exactly the same scenarios, and none of them skips one.
