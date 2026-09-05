@@ -1,10 +1,12 @@
 /**
  * Pi's native messages and events, as Run observations. Pure, and total.
  *
- * Everything in this module is a function of its arguments. It reads no
- * session, holds no state across a Run, and never throws: a shape it does not
- * recognize produces nothing rather than a failure, because a provider that
- * adds a content block should not be able to fail a Run.
+ * Translation is total and reads no session. The event translator retains
+ * only running shell commands, keyed by call id, because Pi omits arguments
+ * from their end events; it is created per execution and retains nothing
+ * across Runs. A shape this module does not recognize produces nothing rather
+ * than a failure, because a provider that adds a content block should not be
+ * able to fail a Run.
  *
  * It takes `unknown` and checks, rather than taking Pi's declared types and
  * trusting them. That is not distrust of the SDK — it is that a retained
@@ -37,7 +39,7 @@ import {
   type TranscriptItem,
   type UsageDelta,
 } from "../../domain/index.ts";
-import { toolActivity } from "../activity.ts";
+import { finishedShellActivity, toolActivity } from "../activity.ts";
 
 /** What a confined provider diagnostic says instead of provider text. */
 export const PI_DIAGNOSTIC_REDACTED = "[redacted]";
@@ -235,10 +237,10 @@ export function piTranscriptItem(message: unknown): TranscriptItem | undefined {
 /**
  * One native session event, read once, into something with no wire in it.
  *
- * This function and {@link piMessageFacts} are the **only** consumers of Pi's
- * wire shape in the whole tree — the definition-of-done's rule for the v1
- * adapter, kept for v2's. Everything downstream branches on `kind`, so an
- * event Pi renames or re-shapes changes this file and nothing else.
+ * This module is the **only** consumer of Pi's wire shape in the whole tree —
+ * the definition-of-done's rule for the v1 adapter, kept for v2's. Everything
+ * downstream branches on `kind`, so an event Pi renames or re-shapes changes
+ * this file and nothing else.
  *
  * A message is handed on unread because what to do with it depends on Run
  * state the translator does not have: whether the brief has already been
@@ -255,6 +257,64 @@ export type PiEventReading =
   | { readonly kind: "other" };
 
 const IGNORED: PiEventReading = { kind: "other" };
+
+export interface PiEventTranslator {
+  readonly event: (event: unknown) => PiEventReading;
+}
+
+/**
+ * One Run's event translator, including shell commands remembered until end.
+ *
+ * Pi's end event carries the result and call id but not the arguments, so the
+ * command is retained from its start event. Creating this translator inside
+ * each execution keeps that provider state Run-local.
+ */
+export function createPiEventTranslator(): PiEventTranslator {
+  const shellActivities = new Map<string, string>();
+  return {
+    event: (event) => {
+      const reading = readPiEvent(event);
+      if (!isRecord(event)) return reading;
+      const callId = event.toolCallId;
+      if (typeof callId !== "string" || callId === "") return reading;
+
+      if (event.type === "tool_execution_start" && event.toolName === "bash") {
+        const activity =
+          reading.kind === "tool"
+            ? reading.observations.find((one) => one.kind === "activity")
+            : undefined;
+        if (activity?.kind === "activity" && activity.activity !== undefined) {
+          shellActivities.set(callId, activity.activity);
+        }
+        return reading;
+      }
+
+      if (event.type !== "tool_execution_end") return reading;
+      const commandActivity = shellActivities.get(callId);
+      shellActivities.delete(callId);
+      if (
+        event.toolName !== "bash" ||
+        commandActivity === undefined ||
+        reading.kind !== "tool"
+      ) {
+        return reading;
+      }
+      return {
+        kind: "tool",
+        observations: [
+          {
+            kind: "activity",
+            activity: finishedShellActivity(
+              commandActivity,
+              piShellResultText(event.result),
+            ),
+          },
+          ...reading.observations,
+        ],
+      };
+    },
+  };
+}
 
 export function readPiEvent(event: unknown): PiEventReading {
   if (!isRecord(event)) return IGNORED;
@@ -282,6 +342,24 @@ export function readPiEvent(event: unknown): PiEventReading {
     return { kind: "terminal", messages: event.messages };
   }
   return IGNORED;
+}
+
+/** Text a shell result printed, without changing progress-summary behavior. */
+function piShellResultText(result: unknown): string | undefined {
+  if (typeof result === "string") return result;
+  if (!isRecord(result)) return undefined;
+  if (typeof result.output === "string") return result.output;
+  if (!Array.isArray(result.content)) return undefined;
+  const text = result.content
+    .filter(
+      (block) =>
+        isRecord(block) &&
+        block.type === "text" &&
+        typeof block.text === "string",
+    )
+    .map((block) => (block as { readonly text: string }).text)
+    .join("\n");
+  return text === "" ? undefined : text;
 }
 
 /** What a tool execution event says about the call it names. */

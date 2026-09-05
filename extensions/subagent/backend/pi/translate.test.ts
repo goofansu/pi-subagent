@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   confined,
   confinedControl,
+  createPiEventTranslator,
   currentRunMessages,
   isPiUserText,
   messageIdentity,
@@ -322,6 +323,205 @@ test("a tool activity is capped at one widget line before observation", () => {
       args: { command: "x".repeat(200) },
     }),
     { kind: "activity", activity: `bash: ${"x".repeat(114)}` },
+  );
+});
+
+test("a finished shell command shows its last non-blank output line", () => {
+  const translator = createPiEventTranslator();
+  translator.event({
+    type: "tool_execution_start",
+    toolCallId: "call-shell",
+    toolName: "bash",
+    args: { command: "npm test" },
+  });
+
+  assert.deepEqual(
+    translator.event({
+      type: "tool_execution_end",
+      toolCallId: "call-shell",
+      toolName: "bash",
+      result: "running tests\n\n✓ 42 passing (3.1s)\n",
+      isError: false,
+    }),
+    {
+      kind: "tool",
+      observations: [
+        {
+          kind: "activity",
+          activity: "bash: npm test · ✓ 42 passing (3.1s)",
+        },
+        {
+          kind: "tool_progress",
+          callId: "call-shell",
+          status: "completed",
+          outputSummary: "running tests\n\n✓ 42 passing (3.1s)\n",
+        },
+      ],
+    },
+  );
+});
+
+test("carriage-return progress ends on its final redraw", () => {
+  const translator = createPiEventTranslator();
+  translator.event({
+    type: "tool_execution_start",
+    toolCallId: "call-progress",
+    toolName: "bash",
+    args: { command: "download" },
+  });
+
+  const reading = translator.event({
+    type: "tool_execution_end",
+    toolCallId: "call-progress",
+    toolName: "bash",
+    result: "10%\r50%\r100%\r",
+    isError: false,
+  });
+  assert.deepEqual(
+    reading.kind === "tool" ? reading.observations[0] : undefined,
+    { kind: "activity", activity: "bash: download · 100%" },
+  );
+});
+
+test("terminal escapes are stripped from a finished shell output line", () => {
+  const translator = createPiEventTranslator();
+  translator.event({
+    type: "tool_execution_start",
+    toolCallId: "call-colour",
+    toolName: "bash",
+    args: { command: "npm test" },
+  });
+
+  const reading = translator.event({
+    type: "tool_execution_end",
+    toolCallId: "call-colour",
+    toolName: "bash",
+    result: "\u001b[32m✓ 42 passing\u001b[0m",
+    isError: false,
+  });
+  assert.deepEqual(
+    reading.kind === "tool" ? reading.observations[0] : undefined,
+    { kind: "activity", activity: "bash: npm test · ✓ 42 passing" },
+  );
+});
+
+test("the command prefix is capped before output, then the whole activity is capped", () => {
+  const translator = createPiEventTranslator();
+  translator.event({
+    type: "tool_execution_start",
+    toolCallId: "call-long",
+    toolName: "bash",
+    args: { command: "c".repeat(200) },
+  });
+
+  const reading = translator.event({
+    type: "tool_execution_end",
+    toolCallId: "call-long",
+    toolName: "bash",
+    result: "o".repeat(200),
+    isError: false,
+  });
+  assert.deepEqual(
+    reading.kind === "tool" ? reading.observations[0] : undefined,
+    {
+      kind: "activity",
+      activity: `bash: ${"c".repeat(54)} · ${"o".repeat(57)}`,
+    },
+  );
+});
+
+test("a shell result with no text leaves the command alone", () => {
+  const translator = createPiEventTranslator();
+  translator.event({
+    type: "tool_execution_start",
+    toolCallId: "call-empty",
+    toolName: "bash",
+    args: { command: "npm test" },
+  });
+
+  const reading = translator.event({
+    type: "tool_execution_end",
+    toolCallId: "call-empty",
+    toolName: "bash",
+    result: undefined,
+    isError: false,
+  });
+  assert.deepEqual(
+    reading.kind === "tool" ? reading.observations[0] : undefined,
+    { kind: "activity", activity: "bash: npm test" },
+  );
+});
+
+test("a non-shell end event produces progress and no activity", () => {
+  const translator = createPiEventTranslator();
+  translator.event({
+    type: "tool_execution_start",
+    toolCallId: "call-read",
+    toolName: "read",
+    args: { path: "README.md" },
+  });
+
+  assert.deepEqual(
+    translator.event({
+      type: "tool_execution_end",
+      toolCallId: "call-read",
+      toolName: "read",
+      result: "40 lines",
+      isError: false,
+    }),
+    {
+      kind: "tool",
+      observations: [
+        {
+          kind: "tool_progress",
+          callId: "call-read",
+          status: "completed",
+          outputSummary: "40 lines",
+        },
+      ],
+    },
+  );
+});
+
+test("mid-command updates are ignored and each end can update activity only once", () => {
+  const translator = createPiEventTranslator();
+  translator.event({
+    type: "tool_execution_start",
+    toolCallId: "call-once",
+    toolName: "bash",
+    args: { command: "npm test" },
+  });
+
+  assert.deepEqual(
+    translator.event({
+      type: "tool_execution_update",
+      toolCallId: "call-once",
+      toolName: "bash",
+      args: { command: "npm test" },
+      partialResult: "still running",
+    }),
+    { kind: "other" },
+  );
+  const end = {
+    type: "tool_execution_end",
+    toolCallId: "call-once",
+    toolName: "bash",
+    result: "done",
+    isError: false,
+  };
+  const firstEnd = translator.event(end);
+  assert.deepEqual(
+    firstEnd.kind === "tool"
+      ? firstEnd.observations.filter((one) => one.kind === "activity")
+      : [],
+    [{ kind: "activity", activity: "bash: npm test · done" }],
+  );
+  const repeatedEnd = translator.event(end);
+  assert.deepEqual(
+    repeatedEnd.kind === "tool"
+      ? repeatedEnd.observations.filter((one) => one.kind === "activity")
+      : [],
+    [],
   );
 });
 

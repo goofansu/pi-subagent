@@ -40,11 +40,11 @@ import type { PiSession, PiSessionEvent } from "./session.ts";
 import {
   confined,
   confinedControl,
+  createPiEventTranslator,
   currentRunMessages,
   isPiUserText,
   piMessageObservations,
   piTerminalSnapshot,
-  readPiEvent,
   withoutInitialGoal,
 } from "./translate.ts";
 
@@ -86,6 +86,7 @@ export function runPiExecution(
     }
 
     const bridge = createCallbackBridge();
+    const translator = createPiEventTranslator();
     // Everything the listener writes and the drain loop reads. Plain mutable
     // state, because a callback cannot yield and a `Ref` it could not write.
     let terminal: TerminalReconciliation | undefined;
@@ -98,7 +99,7 @@ export function runPiExecution(
 
     const listen = (event: PiSessionEvent): void => {
       if (!bridge.accepting()) return;
-      const read = readPiEvent(event);
+      const read = translator.event(event);
       switch (read.kind) {
         case "message": {
           // Two Run-state decisions the translator cannot make for us: Pi

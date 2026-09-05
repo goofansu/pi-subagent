@@ -1,7 +1,10 @@
 import path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 
 /** One line of activity, as wide as the widget can use. */
 export const ACTIVITY_LIMIT = 120;
+/** Leave room after a finished command for the output that just changed. */
+const COMMAND_PREFIX_LIMIT = 60;
 
 type ToolDetail =
   | { readonly kind: "shell"; readonly key: string }
@@ -43,6 +46,31 @@ function pathDetail(value: string): string {
   return collapsed(parent ? path.join(parent, basename) : basename);
 }
 
+function capped(value: string): string {
+  return collapsed(value).slice(0, ACTIVITY_LIMIT);
+}
+
+/** The latest non-blank line, treating carriage-return redraws as lines. */
+function lastNonBlankLine(value: string): string | undefined {
+  const lines = stripVTControlCharacters(value).split(/\r\n|\r|\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]?.trim();
+    if (line) return collapsed(line);
+  }
+  return undefined;
+}
+
+/** A finished shell call, preserving its command while giving output room. */
+export function finishedShellActivity(
+  commandActivity: string,
+  output: string | undefined,
+): string {
+  const line = output === undefined ? undefined : lastNonBlankLine(output);
+  if (line === undefined) return capped(commandActivity);
+  const command = collapsed(commandActivity).slice(0, COMMAND_PREFIX_LIMIT);
+  return capped(`${command} · ${line}`);
+}
+
 /** A tool call's bounded `name: detail`, or its bounded bare name. */
 export function toolActivity(
   name: string,
@@ -66,5 +94,5 @@ export function toolActivity(
     if (typeof value === "string") detail = collapsed(value);
   }
   const activity = detail ? `${name}: ${detail}` : name;
-  return collapsed(activity).slice(0, ACTIVITY_LIMIT);
+  return capped(activity);
 }
