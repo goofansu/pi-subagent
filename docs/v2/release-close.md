@@ -353,12 +353,21 @@ is date, live backends, and the paste.
 ### 2. The soak's exit criteria are met
 
 Every operation on every backend at least three times across at least five
-distinct days on the Phase C build; every shutdown entry reads zero on every
-probe or a defect explains why; no open severity-1 or -2 defect; every
-severity-3 fixed or marked intentional. The tally in the record equals the
-script's output on the closing day.
+distinct days on the Phase C build; every shutdown entry reads zero on what a
+live Session should not be holding — the record's [Writing a shutdown
+entry](soak.md#writing-a-shutdown-entry) says which fields those are — or a
+defect explains why; no open severity-1 or -2 defect; every severity-3 fixed or
+marked intentional. The tally in the record equals the script's output on the
+closing day.
 
-**Status:** OPEN.
+**Status:** OPEN. **Day 1 of five is logged**: 2026-09-04, Claude only, with
+`agent_start` the only operation exercised on any backend. The tally reads Pi
+1 start, Claude 5, Codex 1, and no resume, steer or cancel anywhere. Day one
+also produced the first defect entry against the record itself: the probe rule
+above demanded zero on every field, which the procedure — read before shutdown,
+with no operation that closes a Subagent — could never deliver, so a healthy
+Session would have been filed as a severity-2 leak. Fixed in the record and
+reworded here.
 
 ### 3. The coexistence record passes
 

@@ -103,11 +103,14 @@ The report is three kinds of block and the split is the whole point:
 
 - **Counters** are things that *happened* and nobody had to be told about at
   the time. One is usually normal. Thousands is a bug.
-- **Probes** are what is *still alive*. Every field must read zero for a
-  Session with nothing in flight, and every field must read zero once a Session
-  has closed. There is one probe block per backend rather than a merged total,
-  because "which adapter is still holding something" is the only question the
-  block exists to answer and a sum cannot answer it.
+- **Probes** are what is *still alive*. Every field must read zero once a
+  Session has **closed**; with nothing in flight but the Session still up, the
+  per-Run fields must read zero and the retained ones — the widget's
+  subscription, an open Subagent's BackendAgent, and that adapter's retained
+  conversation — read what the Session is deliberately holding. There is one
+  probe block per backend rather than a merged total, because "which adapter is
+  still holding something" is the only question the block exists to answer and
+  a sum cannot answer it.
 - **Notification hand-offs** are what happened to each completion notice, by
   outcome. They come from the Session push sink rather than from the runtime,
   and they are one Session's: binding a new Session starts them over.
@@ -138,7 +141,9 @@ gone there is nothing to ask.
 
 ## The runtime probe
 
-Seven counts. Non-zero with nothing running means something leaked.
+Seven counts. Five of them non-zero with nothing running means something
+leaked; the last two are what a live Session holds on purpose, and the note
+under the table says so.
 
 | Field | What is still held | What a leak means |
 | --- | --- | --- |
@@ -209,7 +214,7 @@ one fact rather than two that can disagree.
 | `evictions` | a stored output was dropped to keep the store inside its budget | normal in a long Session. If `agent_result` is expiring output the model still wants, the Session is holding more Results than the budget allows. |
 | `lateEvents` | an observation was emitted after intake was sealed | normal: an adapter emitting from its own finalizer does this on every Run. The intake dropped it and nothing was mutated. |
 | `lateObservations` | an observation reached the reducer and the projection was already terminal | a different fact from `lateEvents`: it got further. Still a no-op. |
-| `reconciliationDifferences` | a terminal reconciliation changed something that had been streamed | one or two means streamed drift was healed, which is what reconciliation is for. Many means a backend's streaming and its terminal snapshot disagree systematically. |
+| `reconciliationDifferences` | a terminal reconciliation was **applied** — not, despite the name, that it changed anything | **one per answered Run, on every backend**, so this tracks how many Runs answered and not how much drift there was. Pi, Claude and Codex each attach a terminal snapshot to every answered Run, and `reduceRun` reports every one of them as applied whether or not a field moved — replaying the same reconciliation is a no-op by design. So a high figure means a busy Session, and there is no reading of this counter that means the backends disagree. |
 
 ## Diagnostic categories
 
@@ -223,7 +228,7 @@ from a reason a Run has no answer:
 | `transport-loss` | the connection to the provider went. **A reason.** |
 | `cleanup-escalation` | a finalizer was escalated past. **A reason** the conversation is lost. |
 | `queue-overflow` | a bridge could not hand an observation over |
-| `reconciliation-difference` | a terminal snapshot disagreed with what was streamed |
+| `reconciliation-difference` | a terminal snapshot disagreed with what was streamed. **Declared and never emitted** — nothing in the tree produces this category, so a real disagreement is currently reported by nothing. Recorded in [the soak record](v2/soak.md#defects). |
 | `late-event` | something was emitted after sealing |
 | `delivery-failure` | a Notification could not be delivered |
 | `profile` | a Profile could not be used |
