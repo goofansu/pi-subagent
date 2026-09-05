@@ -267,6 +267,24 @@ test("a notice an interrupt discarded is pushed again and lands exactly once", a
   );
 });
 
+test("a lost notice waits while Pi still holds pending messages", async (t) => {
+  const rig = hostRig(t, { hasPendingMessages: true });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const ids = await started(rig, RIG_RESUMABLE_PROFILE);
+  await rig.settled(ids.runId);
+  await rig.pump();
+  assert.equal(rig.host.sent().length, 1);
+
+  await rig.host.turnEnd({ stopReason: "aborted" });
+  await rig.host.agentSettled();
+
+  assert.equal(rig.host.sent().length, 1);
+  await rig.host.turnEnd({ stopReason: "stop" });
+  assert.equal(rig.host.sent().length, 2);
+});
+
 test("a notice that landed the first time is never sent twice", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();

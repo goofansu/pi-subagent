@@ -137,9 +137,10 @@ Presence of `output` on the value is what tells the two apart. The Result store
 stays authoritative either way.
 [ADR-0037](docs/adr/0037-a-notice-carries-a-short-output-whole.md).
 **Pushed is not landed**: Pi may hold a follow-up while the model is
-mid-turn, and if an interrupt discards it the notice is pushed again once the
-agent settles. One landing per Notification is the invariant. The six states a
-notice can be in — **handed off**, **landed**, **lost after hand-off**,
+mid-turn. Its queue may survive a non-Escape abort; when the sink reports the
+notice lost, it is re-pushed once per loss, but only after Pi no longer reports
+pending messages. One landing per Notification is the invariant. The six states
+a notice can be in — **handed off**, **landed**, **lost after hand-off**,
 **exhausted**, **consumed**, **held** — are defined under **Delivery sweep**,
 each with the one component that decides it.
 
@@ -393,9 +394,12 @@ stored Result's pin here, on the strength of having stored the Result first.
 model has it. Decided by the **Session push sink** alone, and terminal: a
 landed notice is never pushed again. See **Landing** for the mechanism.
 
-**Lost after hand-off** — a host turn was aborted while the message was queued
-and Pi discarded it. Decided by the Session push sink, from `agent_end` and
-turn-abort evidence. Re-pushed exactly once, when the parent agent settles.
+**Lost after hand-off** — a host turn was aborted before the Session push sink
+observed the queued message land. Pi may retain its follow-up queue after a
+non-Escape abort; the interactive Escape path clears it. Decided by the Session
+push sink, from `agent_end` and turn-abort evidence. Re-pushed once per loss when
+the parent settles and Pi reports no pending messages, or deferred to the next
+non-aborted turn end while Pi still holds pending follow-ups.
 
 **Exhausted** — the retry budget ran out with no hand-off accepted; three
 attempts a second apart by default. Decided by `CompletionDelivery`, from its
@@ -480,16 +484,18 @@ its own, the host facts from Pi, and one native probe per backend. A Profile's
 completion Notification into a live Pi Session as a follow-up message that
 triggers a turn. It exists because *pushed is not landed*: `CompletionDelivery`
 is done when a push succeeds, correctly, since it stored the Result first — but
-Pi queues a follow-up and an interrupted turn discards what was queued.
+Pi queues a follow-up, and an interrupted turn may retain or discard it.
 
 **Landing** — a pushed Notification actually reaching the conversation. Tracked
 by the sink through four host events: a push records the notice unlanded, a
 `message_start` carrying it marks it landed and forgets it, a turn whose stop
 reason or signal says it was aborted marks every unlanded notice lost, and
-`agent_settled` pushes each lost notice again exactly once. Exactly one landing
-per Notification is the sink's contract. The retained value is the bounded
-notice rather than a pin on the stored Result, because delivery releases that
-pin on a successful push.
+`agent_settled` re-pushes each lost notice when Pi reports no pending messages.
+When Pi still holds pending follow-ups, the sink defers that re-push to the next
+non-aborted turn end. A notice is re-pushed once per loss, so another abort may
+cause another re-push. Exactly one landing per Notification is the sink's
+contract. The retained value is the bounded notice rather than a pin on the
+stored Result, because delivery releases that pin on a successful push.
 
 Landing is not the only end. A **Completion hand-off** also resolves when its
 Run is **consumed**, the sink is told of **exhaustion** by delivery, and a

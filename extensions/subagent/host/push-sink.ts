@@ -6,9 +6,9 @@
  * correct for delivery — it stored the Result first, so a push that failed
  * cannot have lost anything. But a push that *succeeded* has not necessarily
  * reached the conversation: Pi queues a follow-up message, and an interrupted
- * turn discards what was queued. So somebody has to know the difference
- * between a message that was handed over and a message that arrived, and this
- * is it.
+ * turn may leave it queued or discard it, depending on how the turn was
+ * interrupted. So somebody has to know the difference between a message that
+ * was handed over and a message that arrived, and this is it.
  *
  * The state machine is four host events wide:
  *
@@ -21,9 +21,10 @@
  * 3. **turn end** whose stop reason was aborted, or whose signal was aborted,
  *    marks every unlanded notice *lost*. Neutral evidence rather than a guess:
  *    the sink does not decide what an interrupt is, it is told.
- * 4. **agent settled** pushes every lost notice again and clears the lost
- *    state before pushing — because a re-push may land synchronously. If that
- *    re-push is lost to another aborted turn, it may be re-pushed again.
+ * 4. **agent settled** pushes every lost notice again unless Pi still reports
+ *    pending messages. A deferred notice is pushed at the next non-aborted
+ *    turn end. Each dispatch clears the lost state before sending — because a
+ *    re-push may land synchronously — and a later loss may be re-pushed again.
  *
  * Exactly one landing per notification is this module's contract, and it is
  * tested through those four events rather than through delivery.
@@ -39,7 +40,8 @@
  * - a push for a consumed Run is **accepted and not sent**, which delivery
  *   sees as a hand-off: the host accepted the message, and the host's
  *   acceptance includes deciding not to send it;
- * - a consumed notice **lost after hand-off is not re-pushed** at settle;
+ * - a consumed notice **lost after hand-off is not re-pushed** at settle or
+ *   the next non-aborted turn end;
  * - a consumed notice Pi already holds **lands as usual**, and is counted as
  *   {@link HandoffCounts.consumedBeforeLanding}.
  *
@@ -118,6 +120,9 @@ import type { HandoffStatus } from "./widget.ts";
 /** How a notice reaches Pi. One function, so a test can supply its own. */
 export type SendNotification = (message: NotificationMessage) => void;
 
+/** Whether Pi still holds messages that can carry a lost notice forward. */
+export type HasPendingMessages = () => boolean;
+
 /** What a completed host turn says about itself, as neutral evidence. */
 export interface HostTurnEvidence {
   readonly stopReason?: string;
@@ -144,9 +149,9 @@ export interface HandoffCounts {
   readonly handOffsAccepted: number;
   /** Pushes it could not take: no Session bound, or the Session threw. */
   readonly handOffsRefused: number;
-  /** Notices an aborted turn discarded before they reached the conversation. */
+  /** Notices an aborted turn put at risk before they reached the conversation. */
   readonly lostAfterHandOff: number;
-  /** Notices handed over again when the parent settled. */
+  /** Notices handed over again after a reported loss. */
   readonly rePushes: number;
   /** Notices `message_start` carried into the conversation. */
   readonly landings: number;
@@ -186,8 +191,11 @@ const ZERO_COUNTS: HandoffCounts = {
 };
 
 export interface SessionPushSink extends NotificationSink {
-  /** Point the sink at a live Session's `sendMessage`, and start its counts. */
-  readonly bind: (send: SendNotification) => void;
+  /** Point the sink at a live Session's message surface, and start its counts. */
+  readonly bind: (
+    send: SendNotification,
+    hasPendingMessages?: HasPendingMessages,
+  ) => void;
   /**
    * Stop sending, and forget every Run this Session knew about.
    *
@@ -199,9 +207,9 @@ export interface SessionPushSink extends NotificationSink {
   readonly unbind: () => void;
   /** A message reached the conversation. Marks a notice landed, if it is ours. */
   readonly messageStarted: (message: unknown) => void;
-  /** A host turn finished. An aborted one loses every unlanded notice. */
+  /** Mark notices lost on abort, or re-dispatch prior losses after a clean turn. */
   readonly turnEnded: (evidence: HostTurnEvidence) => void;
-  /** The parent agent went idle. Every currently lost notice is pushed again. */
+  /** Re-dispatch lost notices unless Pi still reports pending messages. */
   readonly agentSettled: () => void;
   /**
    * The parent has this Run's Result: `agent_result` returned it, or a wait
@@ -277,6 +285,7 @@ interface Hold {
 
 export function createSessionPushSink(): SessionPushSink {
   let send: SendNotification | undefined;
+  let hasPendingMessages: HasPendingMessages = () => false;
   let generation = 0;
   const records = new Map<RunId, NoticeRecord>();
   const holds = new Set<Hold>();
@@ -355,6 +364,16 @@ export function createSessionPushSink(): SessionPushSink {
     }
   };
 
+  const reDispatchLost = (): void => {
+    const lost = [...records.values()].filter(
+      (record): record is NoticeRecord & { notification: RunNotification } =>
+        record.state === "lost" && record.notification !== undefined,
+    );
+    for (const record of lost) {
+      if (dispatch(record.notification) === "sent") count("rePushes");
+    }
+  };
+
   return {
     push: (notification) =>
       Effect.suspend(() => {
@@ -390,8 +409,9 @@ export function createSessionPushSink(): SessionPushSink {
         announce();
       }),
 
-    bind: (target) => {
+    bind: (target, pendingMessages = () => false) => {
       send = target;
+      hasPendingMessages = pendingMessages;
       // The counts are one Session's, so a report read during the next Session
       // is about the next Session.
       counts = ZERO_COUNTS;
@@ -399,6 +419,7 @@ export function createSessionPushSink(): SessionPushSink {
 
     unbind: () => {
       send = undefined;
+      hasPendingMessages = () => false;
       generation += 1;
       holds.clear();
       records.clear();
@@ -425,6 +446,7 @@ export function createSessionPushSink(): SessionPushSink {
         evidence.stopReason !== "aborted" &&
         evidence.signalAborted !== true
       ) {
+        reDispatchLost();
         return;
       }
       for (const [id, record] of records) {
@@ -436,13 +458,7 @@ export function createSessionPushSink(): SessionPushSink {
     },
 
     agentSettled: () => {
-      const lost = [...records.values()].filter(
-        (record): record is NoticeRecord & { notification: RunNotification } =>
-          record.state === "lost" && record.notification !== undefined,
-      );
-      for (const record of lost) {
-        if (dispatch(record.notification) === "sent") count("rePushes");
-      }
+      if (!hasPendingMessages()) reDispatchLost();
     },
 
     consumed: (runId) => {
@@ -463,7 +479,7 @@ export function createSessionPushSink(): SessionPushSink {
           state: "consumed",
         });
       } else {
-        // A lost notice was already discarded, and consumption resolves it.
+        // A lost notice needs no further dispatch once consumption resolves it.
         records.set(runId, { state: "consumed" });
       }
       announce();

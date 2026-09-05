@@ -94,6 +94,8 @@ export interface StandInHostOptions {
   }[];
   /** Make `sendMessage` throw, the way a stale Session's host does. */
   readonly sendFails?: () => boolean;
+  /** Whether Pi reports that it still holds pending messages. */
+  readonly hasPendingMessages?: boolean;
   /**
    * How often the host actually draws when a widget asks it to.
    *
@@ -230,6 +232,7 @@ export function createStandInHost(
     model: options.model,
     isProjectTrusted: () => options.projectTrusted ?? false,
     modelRegistry: { getAll: () => [...(options.models ?? [])] },
+    hasPendingMessages: () => options.hasPendingMessages ?? false,
     signal: undefined as AbortSignal | undefined,
   };
 

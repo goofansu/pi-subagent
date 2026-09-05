@@ -179,6 +179,43 @@ test("a turn that ended normally loses nothing", async () => {
   assert.deepEqual(bound.sink.unlanded(), [NOTICE.runId]);
 });
 
+test("a lost notice stays deferred while Pi reports pending messages", async () => {
+  const sink = createSessionPushSink();
+  const sent: NotificationMessage[] = [];
+  sink.bind(
+    (message) => void sent.push(message),
+    () => true,
+  );
+  await Effect.runPromise(sink.push(NOTICE));
+
+  sink.turnEnded({ stopReason: "aborted" });
+  sink.agentSettled();
+
+  assert.equal(sent.length, 1);
+  assert.equal(sink.counts().rePushes, 0);
+
+  sink.turnEnded({ stopReason: "stop" });
+
+  assert.equal(sent.length, 2);
+  assert.equal(sink.counts().rePushes, 1);
+});
+
+test("a lost notice is re-pushed at settle when Pi has no pending messages", async () => {
+  const sink = createSessionPushSink();
+  const sent: NotificationMessage[] = [];
+  sink.bind(
+    (message) => void sent.push(message),
+    () => false,
+  );
+  await Effect.runPromise(sink.push(NOTICE));
+
+  sink.turnEnded({ stopReason: "aborted" });
+  sink.agentSettled();
+
+  assert.equal(sent.length, 2);
+  assert.equal(sink.counts().rePushes, 1);
+});
+
 test("a re-pushed notice that lands is forgotten and lands exactly once", async () => {
   const bound = rig();
   await bound.push(NOTICE);
