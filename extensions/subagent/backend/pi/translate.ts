@@ -37,6 +37,7 @@ import {
   type TranscriptItem,
   type UsageDelta,
 } from "../../domain/index.ts";
+import { toolActivity } from "../activity.ts";
 
 /** What a confined provider diagnostic says instead of provider text. */
 export const PI_DIAGNOSTIC_REDACTED = "[redacted]";
@@ -325,7 +326,8 @@ export function piActivity(event: unknown): RunObservation | undefined {
   }
   const name = event.toolName;
   if (typeof name !== "string" || name === "") return undefined;
-  return { kind: "activity", activity: name };
+  const args = isRecord(event.args) ? event.args : undefined;
+  return { kind: "activity", activity: toolActivity(name, args) };
 }
 
 /**

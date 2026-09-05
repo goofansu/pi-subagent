@@ -14,6 +14,7 @@ import {
   piTerminalSnapshot,
   piToolProgress,
   piTranscriptItem,
+  readPiEvent,
   toolOutputSummary,
   withoutInitialGoal,
 } from "./translate.ts";
@@ -222,23 +223,106 @@ test("usage fields that are not whole nonnegative counts are dropped", () => {
 
 // ── Tool execution ───────────────────────────────────────────────────────────
 
-test("a tool execution start is running progress, and names the activity", () => {
+test("a shell tool execution start names its collapsed first command line", () => {
   const event = {
     type: "tool_execution_start",
     toolCallId: "call-1",
-    toolName: "read_file",
-    args: {},
+    toolName: "bash",
+    args: { command: "  git   diff --stat upstream/main  \nrm -rf ignored" },
   };
 
-  assert.deepEqual(piToolProgress(event), {
-    kind: "tool_progress",
-    callId: "call-1",
-    status: "running",
+  assert.deepEqual(readPiEvent(event), {
+    kind: "tool",
+    observations: [
+      { kind: "activity", activity: "bash: git diff --stat upstream/main" },
+      { kind: "tool_progress", callId: "call-1", status: "running" },
+    ],
   });
-  assert.deepEqual(piActivity(event), {
-    kind: "activity",
-    activity: "read_file",
-  });
+});
+
+test("path tool activities name their path and shorten absolute paths", () => {
+  const cases = [
+    ["read", "/work/presentation/rows.ts", "read: presentation/rows.ts"],
+    ["ls", "extensions/subagent", "ls: extensions/subagent"],
+    ["write", "/work/backend/activity.ts", "write: backend/activity.ts"],
+    ["edit", "CONTEXT.md", "edit: CONTEXT.md"],
+  ] as const;
+
+  for (const [toolName, path, activity] of cases) {
+    assert.deepEqual(
+      piActivity({ type: "tool_execution_start", toolName, args: { path } }),
+      { kind: "activity", activity },
+    );
+  }
+});
+
+test("pattern tool activities name the pattern", () => {
+  for (const toolName of ["grep", "find"]) {
+    assert.deepEqual(
+      piActivity({
+        type: "tool_execution_start",
+        toolName,
+        args: { pattern: "  getFinalOutput\\s+  " },
+      }),
+      { kind: "activity", activity: `${toolName}: getFinalOutput\\s+` },
+    );
+  }
+});
+
+test("an unrecognised tool uses its first string argument or its bare name", () => {
+  assert.deepEqual(
+    piActivity({
+      type: "tool_execution_start",
+      toolName: "mcp__tracker__search",
+      args: { limit: 10, query: "  open   incidents  ", after: "cursor" },
+    }),
+    { kind: "activity", activity: "mcp__tracker__search: open incidents" },
+  );
+  assert.deepEqual(
+    piActivity({
+      type: "tool_execution_start",
+      toolName: "mcp__tracker__refresh",
+      args: { limit: 10 },
+    }),
+    { kind: "activity", activity: "mcp__tracker__refresh" },
+  );
+  // An ordinary-object prototype name is still an unknown tool name, not a
+  // phantom entry in the tool-kind table.
+  assert.deepEqual(
+    piActivity({
+      type: "tool_execution_start",
+      toolName: "constructor",
+      args: { query: "open incidents" },
+    }),
+    { kind: "activity", activity: "constructor: open incidents" },
+  );
+});
+
+test("a recognised tool with no string key argument uses its bare name", () => {
+  const cases = [
+    { toolName: "bash", args: {} },
+    { toolName: "bash", args: { command: 42, fallback: "not the key" } },
+    { toolName: "read", args: { path: null } },
+    { toolName: "grep", args: "not an argument record" },
+  ];
+
+  for (const { toolName, args } of cases) {
+    assert.deepEqual(
+      piActivity({ type: "tool_execution_start", toolName, args }),
+      { kind: "activity", activity: toolName },
+    );
+  }
+});
+
+test("a tool activity is capped at one widget line before observation", () => {
+  assert.deepEqual(
+    piActivity({
+      type: "tool_execution_start",
+      toolName: "bash",
+      args: { command: "x".repeat(200) },
+    }),
+    { kind: "activity", activity: `bash: ${"x".repeat(114)}` },
+  );
 });
 
 test("a tool execution end carries the outcome and a one-line summary", () => {
