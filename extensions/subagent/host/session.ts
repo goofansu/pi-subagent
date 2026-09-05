@@ -112,7 +112,10 @@ function openSession(
  * is a host with an empty catalogue, which is a Session a Profile can still be
  * loaded into — and a diagnostic a Profile author can still be shown.
  */
-export type SessionStartContext = Pick<ExtensionContext, "ui"> & {
+export type SessionStartContext = Pick<
+  ExtensionContext,
+  "hasPendingMessages" | "ui"
+> & {
   readonly modelRegistry?: {
     getAll(): readonly { readonly provider: string; readonly id: string }[];
   };
@@ -196,11 +199,13 @@ export async function startSession(
     detach: () => wiring.sink.unbind(),
   });
 
-  wiring.sink.bind((message) =>
-    wiring.pi.sendMessage(message, {
-      deliverAs: "followUp",
-      triggerTurn: true,
-    }),
+  wiring.sink.bind(
+    (message) =>
+      wiring.pi.sendMessage(message, {
+        deliverAs: "followUp",
+        triggerTurn: true,
+      }),
+    () => ctx.hasPendingMessages(),
   );
 
   wiring.setProfiles(opened.profiles);
