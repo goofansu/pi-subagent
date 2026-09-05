@@ -45,39 +45,42 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Profile, SubagentContext } from "../../domain/index.ts";
 import { DEPTH_ENV_KEY } from "../depth.ts";
-import {
-  EFFORTS,
-  parseTools,
-  shouldAppendSystemPrompt,
-} from "../profile-fields.ts";
+import { parseTools, shouldAppendSystemPrompt } from "../profile-fields.ts";
 import { withChildResourceLoad } from "./child-load.ts";
 import type { PiSessionOptions } from "./session.ts";
 
-/** The six delegation tools a child may not have. */
+/** The seven delegation tools a child may not have. */
 export const PI_ORCHESTRATION_TOOLS = [
   "agent_start",
   "agent_resume",
   "agent_wait",
+  "agent_wait_all",
   "agent_result",
   "agent_cancel",
   "agent_steer",
 ] as const;
 
+/** Pi's native thinking levels, deliberately separate from shared efforts. */
+const PI_THINKING_LEVELS: readonly string[] = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
 /**
  * The thinking level, when the resolved effort is one Pi understands.
  *
- * The shared effort scale and Pi's thinking levels are the same seven words,
- * and this is the one place that coupling is relied on — so it is checked
- * rather than asserted. A value outside the scale is omitted instead of cast
- * through: an unrecognized level reaching the SDK would be a wrong setting
- * chosen silently, and omitting it leaves the session's own default.
+ * Pi has six native levels. The shared `off` effort deliberately omits the
+ * setting, leaving the retained session's own default; every other unknown
+ * value is omitted rather than cast through to the SDK.
  */
 function thinkingLevel(effort: string | undefined): {
   thinkingLevel?: PiSessionOptions["thinkingLevel"];
 } {
-  if (effort === undefined) return {};
-  const known: readonly string[] = EFFORTS;
-  if (!known.includes(effort)) return {};
+  if (effort === undefined || !PI_THINKING_LEVELS.includes(effort)) return {};
   return { thinkingLevel: effort as PiSessionOptions["thinkingLevel"] };
 }
 

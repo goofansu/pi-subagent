@@ -65,18 +65,21 @@ export const CLOSED_BEFORE_EXECUTION_MESSAGE =
 /**
  * What a Run says when the conversation identity could not be attached.
  *
- * One fixed message for all four ways it goes wrong — a boundary frame with no
- * identity, a malformed one, one that differs from the retained one, and a
- * Query that could not be started against a retained conversation at all —
- * because they mean the same thing to a reader: this Run could not be tied to
- * the conversation it was supposed to continue. v1 had two messages and the
- * second said nothing the first did not.
+ * One fixed message for every way a resumed Query goes wrong — a boundary
+ * frame with no identity, a malformed one, one that differs from the retained
+ * one, or a Query that could not be started at all — because they mean the
+ * same thing to a reader: this Run could not be tied to the conversation it
+ * was supposed to continue.
  *
  * Fixed rather than provider-authored, because the provider's own text about a
  * failed attachment is exactly the free-form string ADR-0024 keeps local.
  */
 export const CLAUDE_ATTACHMENT_FAILED_MESSAGE =
   "the retained Claude conversation could not be attached to this Run";
+
+/** What a fresh Run says when its init frame carries no usable identity. */
+export const CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE =
+  "the Claude query reported no usable conversation identity";
 
 /** What a Run says when the Query ended without ever reporting a result. */
 export const MISSING_CLAUDE_RESULT_MESSAGE =
@@ -398,10 +401,16 @@ export function runClaudeExecution(
         ),
     );
 
-    /** Fail the Run for an identity that cannot be attached. */
-    const failAttachment = (): void => {
+    /** Fail the Run for an identity that cannot establish its conversation. */
+    const failIdentity = (): void => {
       conversation.lose();
-      fatal = { ending: failedEnding(CLAUDE_ATTACHMENT_FAILED_MESSAGE) };
+      fatal = {
+        ending: failedEnding(
+          resumed === undefined
+            ? CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE
+            : CLAUDE_ATTACHMENT_FAILED_MESSAGE,
+        ),
+      };
       accepting = false;
       discardOutstanding();
       freeSlot();
@@ -459,7 +468,7 @@ export function runClaudeExecution(
             !isClaudeIdentity(reading.identity) ||
             (identity !== undefined && reading.identity !== identity)
           ) {
-            failAttachment();
+            failIdentity();
             break;
           }
           identity ??= reading.identity;
@@ -470,7 +479,7 @@ export function runClaudeExecution(
             !isClaudeIdentity(reading.identity) ||
             (identity !== undefined && reading.identity !== identity)
           ) {
-            failAttachment();
+            failIdentity();
             break;
           }
         }

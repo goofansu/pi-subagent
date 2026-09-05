@@ -4,6 +4,7 @@ import { Effect } from "effect";
 import {
   CLAUDE_ATTACHMENT_FAILED_MESSAGE,
   CLAUDE_CAPABILITIES,
+  CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE,
   claudeProbeIsClear,
   MISSING_CLAUDE_RESULT_MESSAGE,
 } from "../../backend/claude/index.ts";
@@ -387,7 +388,7 @@ test("an identity that differs from the retained one fails without falling back"
   assert.equal(value.again, "conversation lost");
 });
 
-test("a boundary frame with a malformed identity fails the Run", async () => {
+test("a fresh Run with a malformed init identity names that failure", async () => {
   const { value } = await withClaudeSession(
     {
       scripts: [
@@ -409,7 +410,7 @@ test("a boundary frame with a malformed identity fails the Run", async () => {
   );
 
   assert.equal(value.status, "failed");
-  assert.equal(value.errorMessage, CLAUDE_ATTACHMENT_FAILED_MESSAGE);
+  assert.equal(value.errorMessage, CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE);
 });
 
 /* ============================================================== */
