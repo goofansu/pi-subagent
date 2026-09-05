@@ -113,10 +113,10 @@ say cancelled. *Abort* is not a domain word: it is mechanism vocabulary —
 `AbortController`, `AbortSignal`, Pi's `stopReason: "aborted"` — normalised to
 cancelled inside the adapter and never shown above it.
 
-**Cancellation reason** — `requested` or `shutdown`, reported wherever a
-cancelled Run is named. The difference is not decoration: at shutdown every Run
-is cancelled without anyone asking, and a caller told plain `cancelled` would
-conclude its own request had taken effect.
+**Cancellation reason** — `requested`, `shutdown`, or `timeout`, reported
+wherever a cancelled Run is named. The difference is not decoration: at
+shutdown every Run is cancelled without anyone asking, and a caller told plain
+`cancelled` would conclude its own request had taken effect.
 
 **Result** — the authoritative immutable terminal output of one Run. It records
 the owning Subagent for orientation, is written to the Result store only when

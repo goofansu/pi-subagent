@@ -328,7 +328,7 @@ export function formatNotificationSummary(
   );
 
   const render = (label: string): string =>
-    `${agent}${theme.fg("dim", ` · ${label} · `)}${outcome} ${hint}`;
+    `${agent}${theme.fg("dim", " · ")}${theme.fg("dim", label)}${theme.fg("dim", " · ")}${outcome} ${hint}`;
   /** The label section gone entirely, rather than left as an empty gap. */
   const withoutLabel = `${agent}${theme.fg("dim", " · ")}${outcome} ${hint}`;
 

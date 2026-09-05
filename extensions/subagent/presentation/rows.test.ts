@@ -261,7 +261,9 @@ test("the label and the activity are painted apart: the activity brighter and in
   );
   assert.ok(
     line.endsWith(
-      paint("dim", "look around · ") + paint("muted", italic("bash: npm test")),
+      paint("dim", "look around") +
+        paint("dim", " · ") +
+        paint("muted", italic("bash: npm test")),
     ),
   );
   // The label alone is not italic: only the part that moves looks like it.
@@ -269,6 +271,23 @@ test("the label and the activity are painted apart: the activity brighter and in
     formatRunRow(fixtureRow(), named, 120, FIXTURE_NOW).endsWith(
       paint("dim", "look around"),
     ),
+  );
+});
+
+test("an ellipsis-shortened label keeps its separator dim", () => {
+  const line = formatRunRow(
+    fixtureRow({
+      identity: { description: "a long label that goes on and on and on" },
+      activity: "read",
+    }),
+    named,
+    64,
+    FIXTURE_NOW,
+  );
+
+  assert.match(stripVTControlCharacters(line), /… · read$/);
+  assert.ok(
+    line.includes(paint("dim", " · ") + paint("muted", italic("read"))),
   );
 });
 
