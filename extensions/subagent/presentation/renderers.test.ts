@@ -25,6 +25,7 @@ const theme: RenderableTheme = {
   fg: (_color, text) => text,
   bg: (_color, text) => text,
   bold: (text) => text,
+  italic: (text) => text,
 };
 
 /**
@@ -38,6 +39,7 @@ const dimAware: RenderableTheme = {
   fg: (color, text) => (color === "dim" ? `<dim>${text}</dim>` : text),
   bg: (_color, text) => text,
   bold: (text) => text,
+  italic: (text) => text,
 };
 
 /** A deterministic stand-in for the host's key hint. */

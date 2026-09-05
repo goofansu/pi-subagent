@@ -55,15 +55,34 @@
  * The third answer, `exhausted`, is the one the row has to *say* rather than
  * act on. Delivery's retry budget ran out, so nothing will ever land and the
  * row would otherwise sit with no explanation.
+ *
+ * ## The tick
+ *
+ * A live row spins and its duration counts, and neither is an index change.
+ * So while any row is live a ticker fiber wakes the widget once per spinner
+ * frame, and each wake is an ordinary render request through the same
+ * coalescing gate a change goes through: a tick that finds a render already
+ * pending asks for nothing. The fiber is forked when the index first shows a
+ * live Run and interrupted when it last does, so a widget showing only
+ * settled rows costs nothing between changes, and it goes with the Session
+ * Scope like everything else here.
+ *
+ * It sleeps against the runtime `Clock` rather than a timer, as the delivery
+ * retry does, because a clock is the one thing a test can replace and a timer
+ * is the one thing it cannot. Whether a row is live is a fact about the
+ * index alone — a hand-off resolving only ever removes a settled row — so the
+ * fork and the interrupt happen inside the index subscription, where there is
+ * an Effect context to do them in.
  */
 
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { Effect, type Scope, Stream } from "effect";
+import { Effect, Fiber, type Scope, Stream } from "effect";
 import { isTerminalRunPhase, type RunId } from "../domain/index.ts";
 import {
   type RenderableTheme,
   type RunRowView,
   renderRunRows,
+  SPINNER_INTERVAL_MS,
 } from "../presentation/index.ts";
 import type { RunIndex, RunSnapshot } from "../runtime/repository.ts";
 import { RunRepository } from "../runtime/repository.ts";
@@ -145,6 +164,8 @@ export interface WidgetActivity {
   readonly changes: number;
   /** How many renders the subscriber asked the host for. */
   readonly renderRequests: number;
+  /** Whether the ticker fiber is running, which it is exactly while a row is live. */
+  readonly ticking: boolean;
 }
 
 export interface ActiveWidget {
@@ -199,11 +220,48 @@ export function installActiveWidget(
      * render that has not happened yet will read the newer value anyway.
      */
     let renderPending = false;
+    /** The ticker fiber, present exactly while a shown row is live. */
+    let ticker: Fiber.Fiber<never> | undefined;
 
     const render = (theme: RenderableTheme, width: number): string[] => {
       renderPending = false;
       return [...renderRunRows(latest, theme, width, now())];
     };
+
+    /** Ask the host to draw, unless it has already been asked and not yet has. */
+    const requestDraw = (): void => {
+      if (renderPending) return;
+      renderPending = true;
+      renderRequests += 1;
+      requestRender?.();
+    };
+
+    /** One wake per spinner frame, for as long as it is left running. */
+    const ticking = Effect.forever(
+      Effect.andThen(
+        Effect.sleep(SPINNER_INTERVAL_MS),
+        Effect.sync(requestDraw),
+      ),
+    );
+
+    /**
+     * Fork the ticker when the index first shows a live Run, interrupt it
+     * when it last does. Idempotent, so the subscription calls it on every
+     * change without caring whether anything moved.
+     */
+    const syncTicker = (
+      rows: readonly RunRowView[],
+    ): Effect.Effect<void, never, Scope.Scope> =>
+      Effect.gen(function* () {
+        const live = rows.some((row) => !isTerminalRunPhase(row.phase));
+        if (live && ticker === undefined) {
+          ticker = yield* Effect.forkScoped(ticking);
+        } else if (!live && ticker !== undefined) {
+          const running = ticker;
+          ticker = undefined;
+          yield* Fiber.interrupt(running);
+        }
+      });
 
     const uninstall = (): void => {
       if (!installed) return;
@@ -239,10 +297,7 @@ export function installActiveWidget(
         install();
         return;
       }
-      if (renderPending) return;
-      renderPending = true;
-      renderRequests += 1;
-      requestRender?.();
+      requestDraw();
     };
 
     /** Re-read both sources and put the host in step with them. */
@@ -265,17 +320,26 @@ export function installActiveWidget(
     const changesStream = yield* repository.subscribe();
     yield* Effect.forkScoped(
       Stream.runForEach(changesStream, (published: RunIndex) =>
-        Effect.sync(() => {
-          changes += 1;
-          index = published;
-          refresh();
-        }),
+        // `flatMap` rather than `andThen`, so the rows the ticker is synced to
+        // are the ones this change produced rather than the ones before it.
+        Effect.flatMap(
+          Effect.sync(() => {
+            changes += 1;
+            index = published;
+            refresh();
+          }),
+          () => syncTicker(latest),
+        ),
       ),
     );
 
     return {
       rows: () => latest,
-      activity: () => ({ changes, renderRequests }),
+      activity: () => ({
+        changes,
+        renderRequests,
+        ticking: ticker !== undefined,
+      }),
     };
   });
 }

@@ -8,23 +8,39 @@ import {
   formatTokenCount,
   formatTurns,
   RUN_PHASE_DISPLAY_ORDER,
+  runPhaseBackground,
+  runPhaseGlyph,
   runPhaseTone,
   runPhaseVerb,
 } from "./status.ts";
 
-test("every Run phase has a tone, a verb, and a phrase", () => {
+test("every Run phase has a background, and it is one of Pi's tool-box three", () => {
+  assert.deepEqual(RUN_PHASES.map(runPhaseBackground), [
+    "toolPendingBg",
+    "toolPendingBg",
+    "toolSuccessBg",
+    "toolErrorBg",
+    "toolErrorBg",
+  ]);
+});
+
+test("every Run phase has a tone, a glyph, a verb, and a phrase", () => {
   assert.deepEqual([...RUN_PHASE_DISPLAY_ORDER], [...RUN_PHASES]);
   for (const phase of RUN_PHASES) {
     assert.ok(["warning", "success", "error"].includes(runPhaseTone(phase)));
+    assert.equal([...runPhaseGlyph(phase)].length, 1);
     assert.ok(runPhaseVerb(phase).length > 0);
     assert.ok(formatRunPhase({ phase, elapsedMillis: 1_000 }).length > 0);
   }
+  // Every glyph is distinct, so a column of them can be read without the word.
+  assert.equal(new Set(RUN_PHASES.map(runPhaseGlyph)).size, RUN_PHASES.length);
 });
 
 test("presentation observes phase without determining it", () => {
   // The five phrases, with the two live ones deliberately naming no duration:
-  // a live clock would need a once-a-second redraw of every row to stay
-  // honest.
+  // a phrase is written into tool results and notices, where a live figure
+  // would be stale as soon as it was read. The widget's duration column is
+  // where a live Run's time is shown.
   assert.deepEqual(
     RUN_PHASES.map((phase) => formatRunPhase({ phase, elapsedMillis: 12_400 })),
     [

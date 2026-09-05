@@ -28,6 +28,7 @@ const theme: RenderableTheme = {
   fg: (_color, text) => text,
   bg: (_color, text) => text,
   bold: (text) => text,
+  italic: (text) => text,
 };
 
 /** Render wide, so a summary line is one line rather than a wrapped one. */

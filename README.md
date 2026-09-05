@@ -185,24 +185,48 @@ grants it to Claude Subagents. `tools` narrows built-in tools only. See
 Runs are listed in a widget above the editor, one line each:
 
 ```
-─── subagents (2 running, 1 completed) ────────────────────────
- explore      pi      3 turns  running · grep: getFinalOutput
- reviewer     claude  1 turn   running · review the delivery module
- implementer  claude  4 turns  completed in 1m 2s
+─── subagents  2 running · 1 completed ─────────────────────────────────────────────────────────
+ ⠏ explore      pi      running    12.8s  3 turns  look around · grep: getFinalOutput
+ ⠏ reviewer     claude  running     8.2s  1 turn   review the delivery module
+ ✓ implementer  claude  completed  1m 2s  4 turns
 ```
 
-Each row names the backend immediately after the agent, and the agent, backend,
-turn count, and status columns align across rows. A running line ends with what
-the Run is doing right now — the backend's reported activity, or its most
-recent tool call, or the Run's description before either — and that tail is
-also what tells two Runs of one agent apart. It is the first thing dropped when
-the terminal is narrow; then turn accounting; the agent, backend, and status
+A row reads left to right in the order you ask about a Run: a glyph that says
+whether it is alive (a spinner while it runs, `◌` while it finalizes, `✓`, `✗`,
+or `⊘` once it has settled), the agent and its backend, the status word, how
+long it has been at it, how many turns it has taken, and finally what it is
+doing right now. A running row ends with its label and, in italics, the backend's
+latest reported activity; before the first report, the label alone, which is
+also what tells two Runs of one agent apart. A Run whose cancellation has been
+asked for says `cancelling` until it takes.
+
+Each row is a band across the terminal in the background your theme gives Pi's
+own tool calls: the pending colour while the Run is live, the success colour
+once it has completed, the error colour when it failed, was cancelled, or its
+notice could not be delivered. A fan-out therefore reads as what it is — tool
+calls the parent made — in whatever theme you use.
+
+The spinner turns and a live duration counts. While any Run is live the widget
+redraws once per frame; once every row has settled it stops, so a widget that
+is only waiting for a notice to land costs nothing. A settled row's duration is
+what the Run cost, and does not change however long the row waits.
+
+Every field starts in the same column on every row, and on a narrow terminal
+the whole table gives way together: the activity tail is fitted to whatever is
+left, and the turn count and then the duration are dropped until the tail has
+room to be read. The glyph, agent, backend, and status
 always remain.
+
+The rule above the rows counts them by phase, each count in its phase's colour.
+It shows no token or cost total: per-Run accounting is on each completion
+notice, where the figures are labelled for what they are.
 
 **A row lasts from `agent_start` until its completion notice reaches the
 conversation**, not until the Run settles. A Run shorter than the turn that
 started it would otherwise appear and vanish before anyone read it. A fan-out
-wider than eight Runs is summarised rather than filling the screen.
+wider than eight Runs is summarised rather than filling the screen. A settled
+Run whose notice can never be delivered leads with `!` and says so, naming its
+Run id, because `agent_result` is what takes that row away.
 
 Run ids appear in tool results and notices, where the model that acts on them
 reads them, so the widget does not repeat them: name a Run by its agent and

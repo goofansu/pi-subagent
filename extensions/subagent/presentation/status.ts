@@ -20,42 +20,66 @@ import type { RunPhase, TerminalRunPhase } from "../domain/index.ts";
 export type Tone = "warning" | "success" | "error";
 
 /**
+ * The theme backgrounds a widget row may be painted on.
+ *
+ * These are the three Pi paints its own tool calls with — pending while a call
+ * runs, then success or error — so a Run's row reads as what it is: a tool
+ * call the parent made, in the same colours as the tool calls above it.
+ */
+export type Background = "toolPendingBg" | "toolSuccessBg" | "toolErrorBg";
+
+/**
  * One row per phase: the colour, the status word, and the phrase that narrates
  * it beside a duration.
  *
- * `running` and `finalizing` name no duration. A live clock would need a
- * once-a-second redraw of every row to stay honest, and the settled phrases
- * already say what a Run cost in time once that number stops moving.
+ * `running` and `finalizing` name no duration in their *phrase*, which is
+ * what a sentence about a Run reads. The widget row shows a live duration in
+ * its own column instead, and redraws to keep it honest; a phrase that named
+ * one would be stale the moment it was written into a tool result.
  */
 const PHASE_PRESENTATION: {
   readonly [P in RunPhase]: {
     readonly tone: Tone;
+    readonly background: Background;
+    readonly glyph: string;
     readonly verb: string;
     readonly phrase: (duration: string) => string;
   };
 } = {
   running: {
     tone: "warning",
+    background: "toolPendingBg",
+    // A live Run's glyph is the spinner, which the widget draws from the
+    // instant it renders at; this is the frame a still picture shows.
+    glyph: "⠿",
     verb: "running",
     phrase: () => "running",
   },
   finalizing: {
     tone: "warning",
+    background: "toolPendingBg",
+    glyph: "◌",
     verb: "finalizing",
     phrase: () => "finalizing",
   },
   completed: {
     tone: "success",
+    background: "toolSuccessBg",
+    glyph: "✓",
     verb: "completed",
     phrase: (duration) => `completed in ${duration}`,
   },
   failed: {
     tone: "error",
+    background: "toolErrorBg",
+    glyph: "✗",
     verb: "failed",
     phrase: (duration) => `failed after ${duration}`,
   },
   cancelled: {
     tone: "error",
+    background: "toolErrorBg",
+    glyph: "⊘",
     verb: "cancelled",
     phrase: (duration) => `cancelled after ${duration}`,
   },
@@ -74,6 +98,25 @@ export function runPhaseTone(phase: RunPhase): Tone {
 /** The one word a collapsed line says about a Run in this phase. */
 export function runPhaseVerb(phase: RunPhase): string {
   return PHASE_PRESENTATION[phase].verb;
+}
+
+/**
+ * The one character a widget row leads with for a Run in this phase.
+ *
+ * Every glyph is East Asian Width *neutral*, deliberately: a terminal in a
+ * CJK locale draws an *ambiguous*-width character two cells wide while
+ * `visibleWidth` counts one, and a column that is off by one on some
+ * terminals is a column that is not aligned. The glyph is never the only
+ * encoding of the phase — the word beside it says the same thing — so a font
+ * that lacks one loses nothing a reader needed.
+ */
+export function runPhaseGlyph(phase: RunPhase): string {
+  return PHASE_PRESENTATION[phase].glyph;
+}
+
+/** The theme background a widget row for this phase is painted on. */
+export function runPhaseBackground(phase: RunPhase): Background {
+  return PHASE_PRESENTATION[phase].background;
 }
 
 /**
