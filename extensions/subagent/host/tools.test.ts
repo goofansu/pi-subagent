@@ -654,6 +654,42 @@ test("agent_wait_all honours its timeout and reports what is still running", asy
   );
 });
 
+test("agent_wait_all in flight at shutdown answers not-ready and the next Session still holds notices", async (t) => {
+  const rig = hostRig(t, {
+    resumableSteps: [
+      [
+        { step: "await-gate", gate: "finish" },
+        emitText(RIG_ANSWER),
+        { step: "complete" },
+      ],
+    ],
+  });
+  await rig.host.sessionStart();
+
+  await startedRun(rig);
+  const interruptedWait = rig.text("agent_wait_all", {});
+  await rig.pump();
+  await rig.host.sessionShutdown();
+
+  assert.equal(
+    await interruptedWait,
+    "Cannot run agent_wait_all: this Session has no subagent runtime, so " +
+      "nothing was started. That happens only while a Session is starting or " +
+      "shutting down; try again once it is ready.",
+  );
+
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  await startedRun(rig);
+  const nextWait = rig.text("agent_wait_all", {});
+  await rig.pump();
+  await rig.release("finish");
+
+  assert.match(await nextWait, new RegExp(RIG_ANSWER));
+  await rig.pump();
+  assert.deepEqual(rig.host.sent(), []);
+});
+
 test("agent_wait_all rejects an id argument, because it takes none", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();

@@ -96,6 +96,8 @@ export interface StandInHostOptions {
   readonly sendFails?: () => boolean;
   /** Whether Pi reports that it still holds pending messages. */
   readonly hasPendingMessages?: boolean;
+  /** Make a widget install throw, the way a stale Session's host does. */
+  readonly widgetInstallFails?: () => boolean;
   /**
    * How often the host actually draws when a widget asks it to.
    *
@@ -213,6 +215,9 @@ export function createStandInHost(
         widget = undefined;
         widgetClears += 1;
         return;
+      }
+      if (options.widgetInstallFails?.() === true) {
+        throw new Error("the stand-in Session refused the widget");
       }
       widgetInstalls += 1;
       widget = content(tui, PLAIN_THEME);
