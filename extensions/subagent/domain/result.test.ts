@@ -12,8 +12,32 @@ import {
 } from "./endings.ts";
 import { backendId, runId, subagentId } from "./ids.ts";
 import { createRunProjection, EMPTY_TRUNCATION_RECORD } from "./projection.ts";
-import { type RunIdentity, toRunResult } from "./result.ts";
+import {
+  boundRunLabel,
+  RUN_LABEL_MAX_BYTES,
+  type RunIdentity,
+  toRunResult,
+} from "./result.ts";
 import { EMPTY_USAGE_SNAPSHOT } from "./usage.ts";
+
+test("a collapsed Run label reports bytes removed from the original input", () => {
+  const description = `a${"\n".repeat(238)}b`;
+  assert.equal(byteLength(description), 240);
+
+  assert.deepEqual(boundRunLabel(description), {
+    label: "a b",
+    droppedBytes: 237,
+  });
+});
+
+test("a Run label cut mid-word is right-trimmed and its removed bytes are recomputed", () => {
+  const description = `${"a".repeat(RUN_LABEL_MAX_BYTES - 1)} word`;
+
+  assert.deepEqual(boundRunLabel(description), {
+    label: "a".repeat(RUN_LABEL_MAX_BYTES - 1),
+    droppedBytes: 5,
+  });
+});
 
 const identity: RunIdentity = {
   runId: runId("run-1"),

@@ -44,6 +44,15 @@ const dimAware: RenderableTheme = {
   inverse: (text) => text,
 };
 
+const dimAnsi = (text: string): string => `\u001b[2m${text}\u001b[0m`;
+const ansiDimAware: RenderableTheme = {
+  fg: (color, text) => (color === "dim" ? dimAnsi(text) : text),
+  bg: (_color, text) => text,
+  bold: (text) => text,
+  italic: (text) => text,
+  inverse: (text) => text,
+};
+
 /** A deterministic stand-in for the host's key hint. */
 const keyHintStub = (_action: unknown, description: string): string =>
   `ctrl+o ${description}`;
@@ -456,6 +465,24 @@ test("a label is capped even when the line has room to spare", () => {
     line,
     `explore · ${"a".repeat(MAX_NOTICE_LABEL_WIDTH - 1)}… · completed in 1.0s (ctrl+o to expand)`,
   );
+});
+
+test("an ellipsis-shortened notice label keeps its trailing separator dim", () => {
+  const line = formatNotificationSummary(
+    {
+      agent: "explore",
+      label: "a".repeat(200),
+      status: "completed",
+      durationMillis: 1_000,
+    },
+    ansiDimAware,
+    400,
+    false,
+    keyHintStub,
+  );
+
+  assert.match(stripVTControlCharacters(line), /… · completed/);
+  assert.ok(line.includes(`${dimAnsi(" · ")}completed`));
 });
 
 test("an expanded notice's hint offers to collapse, because one key does both", () => {

@@ -17,7 +17,7 @@
  */
 
 import { Schema } from "effect";
-import { boundOneLineText } from "./bounding.ts";
+import { boundOneLineText, byteLength } from "./bounding.ts";
 import { RunDiagnostic, runDiagnostic } from "./diagnostics.ts";
 import { type RunEnding, terminalPhaseForEnding } from "./endings.ts";
 import { BackendId, RunId, SubagentId } from "./ids.ts";
@@ -58,7 +58,11 @@ export function boundRunLabel(description: string): {
   readonly droppedBytes: number;
 } {
   const bounded = boundOneLineText(description, RUN_LABEL_MAX_BYTES);
-  return { label: bounded.text, droppedBytes: bounded.droppedBytes };
+  const label = bounded.text.trimEnd();
+  return {
+    label,
+    droppedBytes: byteLength(description) - byteLength(label),
+  };
 }
 
 /**
