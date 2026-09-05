@@ -70,6 +70,32 @@ test("a directory named like a Profile is not read as one", (t) => {
   assert.deepEqual([...discoverProfiles(dir).profiles.keys()], ["reviewer"]);
 });
 
+test("one unreadable Profile does not hide readable Profiles", (t) => {
+  const dir = profileDirectory(t, { "good.md": valid("Still available") });
+  const brokenPath = path.join(dir, "broken.md");
+  fs.symlinkSync(path.join(dir, "missing-target.md"), brokenPath);
+
+  const { profiles, diagnostics } = discoverProfiles(dir);
+
+  assert.deepEqual([...profiles.keys()], ["good"]);
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0]?.filePath, brokenPath);
+  assert.match(diagnostics[0]?.reason ?? "", /cannot be read.*ENOENT/);
+});
+
+test("a directory that cannot be read yields one diagnostic", (t) => {
+  const dir = profileDirectory(t, {});
+  const notADirectory = path.join(dir, "not-a-directory");
+  fs.writeFileSync(notADirectory, "not a directory");
+
+  const { profiles, diagnostics } = discoverProfiles(notADirectory);
+
+  assert.deepEqual(profiles, new Map());
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0]?.filePath, notADirectory);
+  assert.match(diagnostics[0]?.reason ?? "", /cannot be read.*ENOTDIR/);
+});
+
 test("an unparseable Profile is skipped and reported", (t) => {
   const dir = profileDirectory(t, {
     "good.md": valid("Fine"),
@@ -103,6 +129,13 @@ test("a Profile its backend rejects is skipped and reported", (t) => {
       "Do the thing.",
     ].join("\n"),
     "modern.md": valid("Uses the backend field", "claude"),
+    "proto.md": [
+      "---",
+      "description: Preserves a surprising field",
+      "__proto__: unexpected",
+      "---",
+      "Do the thing.",
+    ].join("\n"),
   });
 
   const standIn = (
@@ -121,6 +154,10 @@ test("a Profile its backend rejects is skipped and reported", (t) => {
     {
       filePath: path.join(dir, "legacy.md"),
       reason: `stand-in backend does not recognize field '${legacyField}'`,
+    },
+    {
+      filePath: path.join(dir, "proto.md"),
+      reason: "stand-in backend does not recognize field '__proto__'",
     },
   ]);
 });
