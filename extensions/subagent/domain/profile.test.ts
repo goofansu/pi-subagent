@@ -99,7 +99,7 @@ test("every other frontmatter field is collected unchanged and uninterpreted", (
     [
       "---",
       "description: Reviews diffs",
-      "backend: codex",
+      "backend: claude",
       "model: model-a",
       "effort: high",
       "tools: read,write",

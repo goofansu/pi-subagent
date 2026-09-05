@@ -355,7 +355,7 @@ test("the catalog validates a Profile through the backend it names", () => {
 
   assert.deepEqual(catalog.ids, ["pi"]);
   assert.equal(catalog.get(backendId("pi")), backend);
-  assert.equal(catalog.get(backendId("codex")), undefined);
+  assert.equal(catalog.get(backendId("gemini")), undefined);
   assert.deepEqual(catalog.validateProfile(profile, "/agents/x.md"), [
     { filePath: "/agents/x.md", reason: "pi saw stand-in" },
   ]);

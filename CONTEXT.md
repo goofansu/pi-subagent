@@ -10,8 +10,7 @@ Fact rather than an observation, a manager and a dispatcher rather than scopes
 — and every one of its terms is listed under [Historical
 terms](#historical-terms) with what replaced it, so a plan or a commit message
 written in the old words can still be read. The decision behind the rename is
-[ADR-0022](docs/adr/0022-v2-terminology-and-backend-field.md); the rest of the
-mapping is [the deletion ledger](docs/v2/deletion-ledger.md).
+[ADR-0022](docs/adr/0022-v2-terminology-and-backend-field.md).
 
 ## The product
 
@@ -160,9 +159,8 @@ possible.
 **Trust** — Pi's project-trust decision for the working directory, resolved by
 the Session and fixed when a Subagent is opened; the extension never derives
 its own. Applying it is each backend's policy: Pi applies it to retained SDK
-settings and resource loading; Claude and Codex do not consult it, and their
-constant bypass with the value forwarded is reserved for a future shared
-posture ([ADR-0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md)).
+settings and resource loading; Claude does not consult it, and its constant
+bypass with the value forwarded is reserved for a future shared posture.
 
 **Shutdown** — closing the Session Scope. It cancels every active Run and
 awaits its cleanup, closes every BackendAgent, drops every unlanded
@@ -174,17 +172,16 @@ Runs and has no context in which to act on their answers.
 
 ## The architecture
 
-**Backend** — the identity of Pi, Claude, or Codex. `BackendId` is its type.
+**Backend** — the identity of Pi or Claude. `BackendId` is its type.
 
 **Adapter** — the integration boundary that implements one backend. Provider
 wire objects never cross it. The word names the whole module, not one object
 inside it.
 
-**BackendAgent** — the adapter-owned retained native conversation, session, or
-process. Owned by exactly one Subagent Scope and alive for that Subagent's whole
-life. One word for three different things: the retained Pi SDK session, the
-retained Claude conversation identity, and the retained Codex App Server
-process with its ephemeral root thread.
+**BackendAgent** — the adapter-owned retained native conversation or session.
+Owned by exactly one Subagent Scope and alive for that Subagent's whole life.
+One word for two different things: the retained Pi SDK session and the retained
+Claude conversation identity.
 
 **SubagentId** — the stable logical specialist the product exposes. Minted as
 `subagent-<nonce>-<n>`.
@@ -201,7 +198,6 @@ had since taken that number. With it, a stale identifier is reported as
 unknown. Two Sessions draw the same nonce about once in 1.7 million, and share
 every identifier when they do — a weaker guarantee than a random id per Run
 would give, and the trade recorded in ADR-0031.
-[Operation semantics §5](docs/v2/operation-semantics.md).
 
 **Attempt** — adapter-internal vocabulary for native execution details and
 retries. Explicitly *not* a core product type, and it never appears in a core
@@ -363,9 +359,8 @@ been announced, delivering anything missed. It is why a lost wake-up costs one
 extra pass rather than a Notification.
 
 The five words for where a Notification has got to. Each is decided by exactly
-one component, and no component may use a word for a state it cannot observe;
-[the notification semantics](docs/v2-simplify/notification-semantics.md) is the
-table, [ADR-0033](docs/adr/0033-notification-vocabulary-pointer-and-label-bound.md)
+one component, and no component may use a word for a state it cannot observe.
+[ADR-0033](docs/adr/0033-notification-vocabulary-pointer-and-label-bound.md)
 and [ADR-0035](docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)
 are the decisions, and a boundary rule keeps *landed* **and** *consumed* out of
 `runtime/delivery.ts`.
@@ -501,89 +496,7 @@ provider and nothing else, while Pi's package is also the host API — and it
 admits the SDK nowhere outside the directory, not even in the adapter's own
 test doubles, which take the SDK's types through the aliases the adapter
 re-exports. The adapter does not know the runtime, the host, presentation, or
-the *other two adapters* exist.
-
-**Codex adapter** — everything this codebase knows about Codex, in
-`backend/codex/`. The
-child process, the App Server's JSON-RPC framing, its request and notification
-shapes, the root thread and turn identities, the Subagent-scoped reader, and
-the steering correlation all stop there. The boundary test enforces it three
-ways: `node:child_process` is admitted in that directory and nowhere else in
-the tree, nothing outside the composition root imports the directory at all,
-and the
-App Server's own vocabulary — the transport, the routing table, the protocol
-shapes, the child-process types — may not be *named* even by the composition
-root, which sees only the factory, the id, the options, and the probe. The
-adapter does not know the runtime, the host, presentation, or the other two
-adapters exist.
-
-**App Server** — `codex app-server`, the Codex CLI's headless JSON-RPC mode,
-spoken over a child process's stdin and stdout one line per frame. One Codex
-Subagent owns one of them for its life.
-
-**Root thread** — the ephemeral Codex thread a Codex BackendAgent starts at
-`open` and retains for its Subagent's life. It is the whole of what "resume"
-means for Codex: there is no `thread/resume` and no stored rollout, so a later
-Run is another Turn on the same root.
-[ADR-0021](docs/adr/0021-retained-ephemeral-codex-conversation.md).
-
-**Turn** — one unit of Codex work on a thread, named by a turn id that
-`turn/start` returns before the model does anything. One Run is exactly one
-Turn, and the turn id is the routing key every frame of that Run carries.
-
-**Subagent-scoped reader** — the one fiber that owns a Codex BackendAgent's
-stdout for its whole life, because the stream outlives every Run and the server
-issues client-bound requests between Turns that stall it if nobody answers.
-It demultiplexes frames by turn id into the active Run's intake, with a frame
-for an unknown or settled Turn reaching no Run at all. That is ADR-0023's first
-exception: for Pi and Claude "a late event cannot reach a settled Run" is true
-because the event source is gone, and for Codex it is a **routing** decision
-the adapter has to make.
-[ADR-0023](docs/adr/0023-v2-scope-ownership.md),
-[ADR-0024](docs/adr/0024-v2-observation-ordering.md).
-
-**Late frame** — a frame the reader routed nowhere, counted rather than
-dropped silently. It is what makes a Codex routing bug visible: such a bug does
-not crash, it either applies a stale frame to a live Run or loses a live one,
-so the tests assert the counter in both directions.
-
-**Loss signal** — how a Codex Run learns its conversation is over, given that
-the protocol will never say so. There are exactly two, and neither is on the
-wire: **process exit**, watched by the client that owns the child, and an
-**expired request bound** on the runtime clock, which is what a
-wedged-but-alive process produces. The M0 spike killed an App Server mid-Turn
-and found no terminal frame ever arrived and a later request neither resolved
-nor rejected.
-[ADR-0025](docs/adr/0025-v2-terminal-settlement.md).
-
-**Signal ladder** — the bounded SIGTERM-then-SIGKILL escalation a Codex
-adapter falls back on: after `turn/interrupt`, if the Turn does not report
-itself interrupted within the rung's bound, and again before the process is
-killed outright. It stands down the moment the child exits or *the Turn it was
-armed for* reports itself interrupted, which is why an ordinary cancel sends no
-signal at all. Armed **per Turn, by turn id, before the interrupt is written**,
-and the stand-down is noticed by the transport as the frame is parsed. All
-three details are load-bearing: a stand-down kept per BackendAgent would be set
-by the first cancelled Run and disarm every later one; a Run watching for its
-own confirmation would miss it, because by then the Run has settled and given
-up its routing entry; and arming after writing the interrupt would miss a
-server that answers before the arming exists.
-
-**Client message id** — the id the Codex adapter attaches to a `turn/steer`,
-and the only thing that can later confirm the guidance was read: a `user`
-observation appears when — and only when — a user-message item comes back
-carrying it. A steer already sent keeps its correlation live through
-cancellation, because the model really did read it.
-[ADR-0012](docs/adr/0012-ordered-codex-steering.md).
-
-**Conversation-cumulative usage** — Codex's `tokenUsage.total`, which is the
-running total for the whole thread rather than for the Run reporting it. A
-Run-local delta is the difference against the total the Turn started from, and
-the context gauge is `tokenUsage.last` — the last request's own occupancy —
-because the cumulative figure grows without bound and would exceed its own
-window. `turn/completed` carries no usage at all, so the last usage frame
-before it stands and nothing waits for one that will never come.
-[ADR-0027](docs/adr/0027-v2-usage-normalization.md).
+the *other adapter* exists.
 
 **Conversation identity** — the single opaque string a Claude BackendAgent
 retains for its Subagent's life. It is the whole of what "resume" means for
@@ -664,10 +577,8 @@ delegation is one level deep.
 
 **Native probe** — what an adapter is still holding, counted: for Pi, open
 native sessions, live event subscriptions, and native cleanups in flight; for
-Claude, live Queries, open input streams, and retained conversation identities;
-for Codex, live App Server processes, reader fibers, pending JSON-RPC requests,
-retained root threads, and in-flight steers.
-Deliberately outside the backend contract — a probe on the contract would be a
+Claude, live Queries, open input streams, and retained conversation
+identities. Deliberately outside the backend contract — a probe on the contract would be a
 field every adapter had to invent something for, and a number the core could
 start believing. `/subagent` prints one block per backend beside the
 runtime's own, because "which adapter is still holding something" is the only
@@ -689,8 +600,7 @@ of ours is called this.
 The 1.x implementation is deleted. Its vocabulary is recorded here so that a
 plan, an ADR, a commit message, or an exit gate written in the old words is
 still readable, and so that "what happened to X?" has an answer that is not
-`git log`. What each abstraction was replaced *by*, and why, is [the deletion
-ledger](docs/v2/deletion-ledger.md).
+`git log`. What each abstraction was replaced *by* is recorded term by term below.
 
 Terms that carried over unchanged — Agent, Profile, Subagent, Run, Resume,
 Conversation, Conversation loss, Control, Turn, Detached Run, Ending, Cancel,
@@ -700,8 +610,8 @@ above and are not repeated here.
 **Harness** — 1.x's name for a named provider integration. Replaced by
 **Backend**. The word survives in exactly one place: `AgentHarness`, Pi's own
 native abstraction, which ADR-0022 reserves. The frontmatter field `harness:`
-is replaced by `backend:` with no alias — [the migration
-note](docs/v2/profile-backend-field-migration.md).
+is replaced by `backend:` with no alias; the README's "Upgrading from 1.x"
+section is what tells a 1.x user to rename it.
 
 **Fact** — 1.x's neutral record of something a child did. Replaced by
 **Observation**, which is ordered and lossless within a Run and carries ten
@@ -747,14 +657,13 @@ re-aiming and additionally tracks **landing**.
 
 **Ingress order** — 1.x's adapter-local ordering of provider events, Controls,
 cancellation, process outcomes, and escalation in one reducer. The property
-survives as observation ordering ([ADR-0024](docs/adr/0024-v2-observation-ordering.md));
-the Codex adapter's **Subagent-scoped reader** is where the one-reducer shape
-still lives, because Codex is the backend whose Turn and steering share a
-connection.
+survives as observation ordering
+([ADR-0024](docs/adr/0024-v2-observation-ordering.md)), enforced at the
+observation intake rather than inside any one adapter.
 
 **Pi session** — 1.x's name for the retained in-process `AgentSession`. It is
 now one instance of a **BackendAgent**, which is the word for the same thing
-across all three backends.
+across both backends.
 
 **Projection** (1.x sense) — 1.x's shared mutable Run record, which four
 modules could reach ([ADR-0004](docs/adr/0004-shared-mutable-run-record.md)).

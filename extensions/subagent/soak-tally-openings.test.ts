@@ -28,12 +28,11 @@ import {
  * makes it the half that gets reworded.
  *
  * A reword would not break anything loudly. The script would stop resolving
- * every resume, steer and cancel, and the tally would arrive in
- * [the soak record](../../docs/v2/soak.md) as a quieter week. The script throws
- * rather than undercounting when it meets an opening it does not know, but that
- * happens on a soak day, once the usage it could not count has already
- * happened. This test moves the failure to `npm run check`, where a reword is
- * still an edit rather than lost evidence.
+ * every resume, steer and cancel, and the tally would read as a quieter week
+ * than the week was. The script throws rather than undercounting when it meets
+ * an opening it does not know, but that happens on a soak day, once the usage
+ * it could not count has already happened. This test moves the failure to
+ * `npm run check`, where a reword is still an edit rather than lost evidence.
  *
  * It reads in both directions, because each catches a different mistake:
  *

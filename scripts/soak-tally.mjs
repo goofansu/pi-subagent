@@ -9,8 +9,7 @@
  * three of the things a tally row needs — operation, backend, day. So the
  * tally is read out of that, and what stays manual is only what the logs
  * cannot know: the probe readings at each shutdown, and anything that went
- * wrong. See [the 2.0 close](../docs/v2/release-close.md) item E1 and
- * [the soak record](../docs/v2/soak.md).
+ * wrong.
  *
  * **Attribution.** An `agent_start` names a Profile and a Profile's
  * frontmatter names its backend, so a start attributes itself. Nothing else

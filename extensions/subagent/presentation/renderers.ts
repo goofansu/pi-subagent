@@ -276,13 +276,14 @@ export const MAX_NOTICE_LABEL_WIDTH = 48;
  * about to make a tool call; the character count told the reader nothing they
  * could act on.
  *
- * **No cost.** Cost is not backend-independent: the Codex App Server reports
- * token counts and no money, so a cost on this line would appear for every Pi
- * and Claude Run and never for a Codex one — a reader would learn the backend
- * rather than the spend, and would have no way to tell a free Run from an
- * unreported one. What the Run spent stays on the notice's accounting line,
- * where the four figures sit together and an absent cost is one absent figure
- * among four rather than the difference between two shapes of line.
+ * **No cost.** Cost is the one optional field in the usage contract: a backend
+ * reports what its provider hands it, and money is the figure a provider is
+ * likeliest not to hand over. So a cost on this line would be present on some
+ * Runs and missing on others, and a reader would have no way to tell a free
+ * Run from an unreported one. What the Run spent stays on the notice's
+ * accounting line, where the four figures sit together and an absent cost is
+ * one absent figure among four rather than the difference between two shapes
+ * of line.
  *
  * **The whole line is fitted, not just the label.** The label takes whatever
  * `width` leaves after the agent, the outcome and the hint — those are what

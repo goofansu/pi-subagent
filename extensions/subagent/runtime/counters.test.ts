@@ -26,10 +26,10 @@ test("every counter a Session reports has a class, and the record invents none",
   assert.deepEqual(classified, reported);
 });
 
-test("the three classes are the ones the debugging guide names", () => {
-  // Asserted by exhaustion rather than by spot check: a fourth class added
-  // here without a section in `docs/debugging.md` would be a class an operator
-  // reads in the health line and cannot look up.
+test("there are exactly three counter classes", () => {
+  // Asserted by exhaustion rather than by spot check: a fourth class is a
+  // fourth thing an operator reads in the health line, and it has to be named
+  // and explained here before anything can report it.
   const classes = new Set<CounterClass>(Object.values(COUNTER_CLASSES));
 
   assert.deepEqual([...classes].sort(), ["defect", "expected", "incident"]);

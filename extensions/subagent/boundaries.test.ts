@@ -37,11 +37,11 @@ import {
  */
 
 /**
- * The frontmatter field 1.x Profiles used to name `pi`, `claude`, or `codex`.
+ * The frontmatter field 1.x Profiles used to name their backend.
  *
  * The product understands only `backend`; a Profile still using this name
- * fails validation as an unrecognised field. See
- * `docs/v2/profile-backend-field-migration.md`.
+ * fails validation as an unrecognised field, and the README's "Upgrading from
+ * 1.x" section is what tells a 1.x user to rename it.
  */
 const LEGACY_BACKEND_FIELD = "harness";
 
@@ -428,7 +428,8 @@ const SECOND_SCHEMA_LIBRARY = "typebox";
  * first and cannot observe the second, so the delivery module saying "landed"
  * would be a module claiming knowledge it does not have — and the reader who
  * believed it would treat a successful push as a notice the model has read.
- * See docs/v2-simplify/notification-semantics.md §1.
+ * [ADR-0035](../../docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)
+ * is the decision.
  *
  * Inflections are covered because the confusion is in the concept and not in
  * the suffix: "the notice lands", "an unlanded push", and "on landing" all
@@ -1327,7 +1328,7 @@ test("the legacy field name is rejected in a file of any kind, not only TypeScri
   );
   write(
     "extensions/subagent/fixtures/profile.json",
-    `{ "${LEGACY_BACKEND_FIELD}": "codex" }\n`,
+    `{ "${LEGACY_BACKEND_FIELD}": "pi" }\n`,
   );
 
   assert.deepEqual(findBoundaryViolations(graph), [

@@ -52,16 +52,16 @@ test("a row carries agent, backend, turn count, status, and activity, and nothin
 });
 
 test("a row names each backend the same way", () => {
-  // Compatibility-matrix proof: the active widget row is backend-independent
-  // apart from the backend's own name. See docs/v2/compatibility-matrix.md.
+  // The active widget row is backend-independent apart from the backend's own
+  // name, so an unfamiliar name formats exactly like a familiar one.
   assert.deepEqual(
-    ["pi", "claude", "codex"].map((backend) =>
+    ["pi", "claude", "demo-one-shot"].map((backend) =>
       row(120, { identity: { backendId: backendId(backend) } }),
     ),
     [
       "explore  pi  3 turns  running · look around",
       "explore  claude  3 turns  running · look around",
-      "explore  codex  3 turns  running · look around",
+      "explore  demo-one-shot  3 turns  running · look around",
     ],
   );
 });

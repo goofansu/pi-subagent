@@ -2,12 +2,12 @@
 
 Delegate tasks to specialised subagents with isolated context windows in Pi.
 
-Each subagent is defined by a Profile that names a **backend** — `pi`,
-`claude`, or `codex` — and each backend keeps its own model, tools,
-configuration, and conversation semantics. A small Effect supervisor owns the
-lifetimes above them: it starts and stops work, normalises what each backend
-reports into one bounded read model, and delivers progress and immutable
-results through one UI.
+Each subagent is defined by a Profile that names a **backend** — `pi` or
+`claude` — and each backend keeps its own model, tools, configuration, and
+conversation semantics. A small Effect supervisor owns the lifetimes above
+them: it starts and stops work, normalises what each backend reports into one
+bounded read model, and delivers progress and immutable results through one
+UI.
 
 ## Install
 
@@ -32,9 +32,7 @@ and holding — see [Diagnostics](#diagnostics).
 
 1.x's `/agents` is **removed in 2.0**. Its flow is `/subagent profiles`, key
 for key — the filter, the prompt view and the work action are unchanged — so
-what moved is the name. The
-[compatibility matrix](docs/v2/compatibility-matrix.md) records it as the one
-public surface 2.0 removes.
+what moved is the name. It is the one public surface 2.0 removes.
 
 Delegation uses six tools. `agent_start` creates a stable, Session-scoped
 Subagent and immediately starts its first **Run**. The Run is detached from the
@@ -60,8 +58,8 @@ Subagent for orientation. A small completion notice names both identities and
 is pushed independently of the Result — delivery failure never affects
 retrieval.
 
-`agent_resume` continues the Subagent's retained conversation. All three
-backends support it. If the conversation is irrecoverably lost, resume starts
+`agent_resume` continues the Subagent's retained conversation. Both backends
+support it. If the conversation is irrecoverably lost, resume starts
 no Run and no provider work, and says to start a new Subagent instead.
 
 ### Steering an active Run
@@ -101,10 +99,10 @@ A Profile is a Markdown file named after the agent, so `implementer.md` defines
 ```markdown
 ---
 description: Implements approved plans and verifies changes
-backend: codex
-model: gpt-5.6-sol
+backend: claude
+model: sonnet
 effort: high
-tools: read, grep, find, ls
+tools: Read, Grep, Glob
 appendSystemPrompt: true
 ---
 
@@ -123,13 +121,13 @@ contribute a Profile, trusted or not.
 
 ### What each backend reads
 
-| | Pi | Claude | Codex |
-| --- | --- | --- | --- |
-| `model` | An exact id, or `provider/model-id`, checked against Pi's loaded catalogue | An SDK family alias — `fable`, `opus`, `sonnet`, `haiku` — passed through unresolved. An explicit id such as `claude-sonnet-5` is rejected | Passed through unvalidated; the App Server resolves a model name itself |
-| `effort` | Pi's thinking level, from the shared scale | Mapped to a thinking-token budget inside the adapter; `off` disables thinking | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; `off` maps to `none` |
-| `tools` | A comma-separated Pi tool list | Claude built-in tools ([reference](https://code.claude.com/docs/en/tools-reference)) | **Not recognised** — a diagnostic. A Codex thread carries its own tool set |
-| `appendSystemPrompt` | Defaults to `true`; `false` replaces Pi's instructions | Defaults to `true`, appending to Claude Code's preset; `false` replaces it | **Not recognised** — a diagnostic. The Profile prompt is composed into the first Turn's input |
-| Inherits the caller's model | Yes, when `model` is omitted | No | No |
+| | Pi | Claude |
+| --- | --- | --- |
+| `model` | An exact id, or `provider/model-id`, checked against Pi's loaded catalogue | An SDK family alias — `fable`, `opus`, `sonnet`, `haiku` — passed through unresolved. An explicit id such as `claude-sonnet-5` is rejected |
+| `effort` | Pi's thinking level, from the shared scale | Mapped to a thinking-token budget inside the adapter; `off` disables thinking |
+| `tools` | A comma-separated Pi tool list | Claude built-in tools ([reference](https://code.claude.com/docs/en/tools-reference)) |
+| `appendSystemPrompt` | Defaults to `true`; `false` replaces Pi's instructions | Defaults to `true`, appending to Claude Code's preset; `false` replaces it |
+| Inherits the caller's model | Yes, when `model` is omitted | No |
 
 For `tools`, empty segments are ignored, but a list containing only separators
 (`tools: ", ,"`) disables all tools rather than restoring defaults. An empty or
@@ -141,14 +139,11 @@ whitespace-only value is unset and uses the backend's defaults.
 | --- | --- |
 | **Pi** | One lazy in-process Pi SDK session, retained while idle. Normal resource discovery, memory-only session storage, headless binding, the parent's project-trust decision, and a Bash tool that injects the child depth per spawn without changing your environment. |
 | **Claude** | One conversation identity. Each Run is a fresh streaming Query that continues it natively; provider replay is ignored and only the new prompt and that Run's guidance are sent. |
-| **Codex** | One `codex app-server` process and one ephemeral, pathless root thread. Each Run is one Turn on that thread. The process stays alive while the Subagent is idle and closes at Session shutdown. |
 
-**Codex's root thread is process-local and is not a stored, listable rollout.**
-Losing the process loses the conversation permanently: a later resume reports
-it and directs you to a new Subagent. The adapter never respawns, attaches to a
-durable thread, or replays prior output. "Ephemeral" does not mean zero shared
-Codex-home I/O — authentication, configuration, logs, plugins, MCP startup, and
-provider-native child threads may still use shared resources.
+**A retained conversation is Session-local and is not a stored, listable
+rollout.** Losing it loses the conversation permanently: a later resume reports
+that and directs you to a new Subagent. No adapter attaches to a durable thread
+or replays prior output.
 
 **Claude children inherit your Claude Code environment.** Filesystem settings
 load as they would for the CLI, so MCP servers registered with `claude mcp add`
@@ -160,12 +155,12 @@ grants it to Claude Subagents. `tools` narrows built-in tools only. See
 
 ### Model and effort resolution
 
-| Profile says | Pi | Claude | Codex |
-| --- | --- | --- | --- |
-| neither | caller's model / caller's thinking level | SDK default / SDK default | Codex default / Codex default |
-| `effort` only | caller's model / Profile effort | SDK default / Profile budget | Codex default / Profile effort |
-| `model` only | Profile model / Pi's default thinking | Profile alias / SDK default | Profile model / Codex default |
-| both | Profile model / Profile effort | Profile alias / Profile budget | Profile model / Profile effort |
+| Profile says | Pi | Claude |
+| --- | --- | --- |
+| neither | caller's model / caller's thinking level | SDK default / SDK default |
+| `effort` only | caller's model / Profile effort | SDK default / Profile budget |
+| `model` only | Profile model / Pi's default thinking | Profile alias / SDK default |
+| both | Profile model / Profile effort | Profile alias / Profile budget |
 
 ## Watching Runs
 
@@ -175,7 +170,7 @@ Runs are listed in a widget above the editor, one line each:
 ─── subagents (2 running, 1 completed) ────────────────────────
  explore      pi      3 turns  running · grep: getFinalOutput
  reviewer     claude  1 turn   running · review the delivery module
- implementer  codex   4 turns  completed in 1m 2s
+ implementer  claude  4 turns  completed in 1m 2s
 ```
 
 Each row names the backend immediately after the agent, and the agent, backend,
@@ -212,20 +207,18 @@ counter would be the command this one replaced.
   holding a fiber, a queue, a mailbox, a waiter, a subscription, or a
   BackendAgent. One block per backend says whether that provider's handles are
   still held: for Pi, native sessions and event subscriptions; for Claude, live
-  Queries, open input streams, and retained conversation identities; for Codex,
-  live App Server processes, reader fibers, pending JSON-RPC requests, retained
-  root threads, and in-flight steers.
+  Queries, open input streams, and retained conversation identities.
 
 Every field is printed, zeroes included, and every one reads zero for a Session
-with nothing in flight. [The debugging guide](docs/debugging.md) is what each
-number means and what to do about it.
+with nothing in flight — so a probe field that is still non-zero after
+everything has settled is a handle nothing released.
 
 ## Behaviour worth knowing
 
 **Concurrency is capped.** A Session runs at most eight Runs at once and
 **rejects immediately** past that rather than queueing — nothing is started
 invisibly and nothing waits for room. A wide fan-out costs real local resources
-even while Codex Subagents are idle. Explicit cancellation is the liveness
+even while its Subagents are idle. Explicit cancellation is the liveness
 mechanism unless a default Run timeout is configured.
 
 **A Run is detached from the turn, not from the Session.** `Esc` cancels the
@@ -250,12 +243,9 @@ For Pi, project trust is [Pi's](https://pi.dev/docs/latest/security#project-trus
 the extension resolves none of its own and applies Pi's decision to the
 retained SDK's resource loader and settings.
 
-**Claude and Codex do not consult that trust flag.** Claude bypasses
-permissions unconditionally; Codex uses `approvalPolicy: "never"` and
-`sandbox: "danger-full-access"`. This is deliberate parity between the two and
-an intentional sharp edge, with the forwarded value reserved for a future
-shared posture —
-[ADR 0009](docs/adr/0009-codex-trust-posture-and-environment-inheritance.md).
+**Claude does not consult that trust flag.** Claude children bypass permissions
+unconditionally. This is an intentional sharp edge, with the forwarded value
+reserved for a future shared posture.
 
 A subagent reads files, writes files, and runs commands as far as its `tools`
 list allows, and cannot delegate further.
@@ -272,35 +262,28 @@ rows.
 each one opens with the task you delegated rather than two identifiers, and
 every one of them points at `agent_result` with the exact argument shape.
 
-**One thing breaks in your files, and it is a one-line edit per Profile.** A Profile names
-its backend with `backend:` where 1.x used `harness:`. The values are unchanged
-— `pi`, `claude`, `codex` — and the default is still `pi`, so a Profile that
-pins nothing needs no edit at all:
+**One thing breaks in your files, and it is a one-line edit per Profile.** A
+Profile names its backend with `backend:` where 1.x used `harness:`. Rename
+that one line and change nothing else — the values are unchanged and the
+default is still `pi`, so a Profile that pins no backend needs no edit at all:
 
 ```diff
  ---
  description: Implements approved plans and verifies changes
--harness: codex
-+backend: codex
+-harness: claude
++backend: claude
  ---
 ```
 
 A Profile still using `harness:` fails validation as an unrecognised field, is
-reported at Session start, and does not appear in the Profile list — so the failure is
-visible rather than silent. There is no alias and there will not be one:
-[docs/v2/profile-backend-field-migration.md](docs/v2/profile-backend-field-migration.md)
-is the migration note and
+reported at Session start, and does not appear in the Profile list — so the
+failure is visible rather than silent. There is no alias and there will not be one:
 [ADR 0022](docs/adr/0022-v2-terminology-and-backend-field.md) is the decision.
 
-**What else changed, and where it is written down.** Five behaviours differ
-deliberately, each marked in
-[the compatibility matrix](docs/v2/compatibility-matrix.md) with the decision
-behind it: a global Run capacity that rejects immediately, a distinct
-shutting-down outcome, `queue full` and `not steerable` renamed to
-`mailbox full` and `mailbox closed`, and an evicted Result answering with its
-own typed outcome. Every other wording difference between the two was compared
-once, while both existed, and classified in
-[the presentation ledger](docs/v2/presentation-ledger.md).
+**What else changed.** Four behaviours differ deliberately: a global Run
+capacity that rejects immediately, a distinct shutting-down outcome,
+`queue full` and `not steerable` renamed to `mailbox full` and
+`mailbox closed`, and an evicted Result answering with its own typed outcome.
 
 **Rolling back** is an ordinary release rollback to the last 1.x version:
 
@@ -317,7 +300,7 @@ Run crosses over, and a Run id from one is unknown to the other.
 time passes in it:
 
 ```bash
-npm run check   # typecheck, lint, the full suite, conformance, protocol pin
+npm run check   # typecheck, lint, the full suite, conformance
 ```
 
 - **typecheck and lint** across the repository.
@@ -326,54 +309,29 @@ npm run check   # typecheck, lint, the full suite, conformance, protocol pin
   lanes, the host handlers through a stand-in Pi, golden presentation, the
   import-boundary rules, and the timing lint.
 - **`npm run test:conformance`** — the shared backend conformance suite:
-  thirty-seven scenarios against both fake backends and all three real
-  adapters, behind scriptable stand-in providers. No backend skips any of them.
-- **`npm run codex:protocol:check`** — regenerates the installed `codex` CLI's
-  JSON schema and compares it **byte for byte** against the vendored snapshot
-  in `docs/codex-protocol/`, then asserts every shape the adapter consumes.
+  thirty-seven scenarios against both fake backends and both real adapters,
+  behind scriptable stand-in providers. No backend skips any of them.
 
-> **Note:** the protocol check goes red the moment the `codex` CLI is upgraded
-> past the pinned release. That is the check working. Bumping the pin is the
-> procedure in `.agents/skills/codex-upgrade/SKILL.md`, which regenerates the
-> schema, classifies every consumed hunk, and re-runs both authenticated Codex
-> gates before the pin moves.
-
-`npm run release:check` is `check` plus seven credentialed gates. They spend
+`npm run release:check` is `check` plus four credentialed gates. They spend
 provider quota and none is in `check`:
 
 ```bash
 make smoke-pi        # npm run pi:smoke && npm run pi:host-smoke
 make smoke-claude    # npm run claude:smoke && npm run claude:host-smoke
-make smoke-codex     # npm run codex:smoke && npm run codex:host-smoke
-npm run codex:retained-release:check
 ```
 
-- **six live gates**, two per backend. A *runtime* gate drives the supervisor
+- **four live gates**, two per backend. A *runtime* gate drives the supervisor
   over one real adapter through start, resume, steer, cancel, timeout, and
   shutdown, then reads every probe after the Session Scope has closed. A *host*
   gate drives the same backend through the surface a user has. Each prints an
-  exact success marker and nothing else counts as a pass. The Codex runtime
-  gate additionally proves that a second App Server can neither list nor read
-  its ephemeral root, and asks the operating system whether the whole process
-  tree is gone.
-- **the retained-release check**, a no-quota gate that verifies the pinned
-  protocol and then requires one complete human evidence record for the
-  installed CLI version, taken while Codex Desktop was open. It never
-  fabricates or infers human evidence, and refuses to pass without one:
-  [docs/codex-desktop-coexistence-release.md](docs/codex-desktop-coexistence-release.md).
+  exact success marker and nothing else counts as a pass.
 
 ## Working on this
 
 | | |
 | --- | --- |
-| [Architecture](docs/architecture.md) | How it is built, in the terms the code uses |
 | [Glossary](CONTEXT.md) | What each word means; the vocabulary is load-bearing |
-| [Contributing](docs/contributing.md) | The rules a change has to satisfy, and why |
-| [Debugging](docs/debugging.md) | Every counter, probe, and diagnostic, and what to do |
-| [Compatibility matrix](docs/v2/compatibility-matrix.md) | What each command does on each backend, and what proves it |
-| [Operation semantics](docs/v2/operation-semantics.md) | What a caller observes from each operation, in detail |
 | [ADRs](docs/adr/) | Why each decision was made, and what it cost |
-| [Deletion ledger](docs/v2/deletion-ledger.md) | What the rewrite removed, and what replaced it |
 
 ```bash
 make dev             # this extension alone, every other one disabled

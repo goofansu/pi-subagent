@@ -1,17 +1,15 @@
 /**
  * The typed public outcomes of the six model-facing operations.
  *
- * These are transcribed from `docs/v2/operation-semantics.md`, which decided
- * what a caller observes in every edge case before any of it was implemented.
- * The discriminant of each union is spelled the way that document spells the
- * outcome, including the spaces, so a reader can put the two side by side. The
- * `already <status>` rows are a template literal type, which is exactly what
- * that notation means.
+ * **These unions are the source of truth for what a caller observes.** Every
+ * edge case a public operation can answer with is a member here, spelled as
+ * prose — spaces and all — because the name is what a reader of a tool result
+ * sees. `already <status>` is a template literal type over the terminal
+ * statuses, so gaining a terminal status gains its outcomes.
  *
- * M1 defines these and nothing produces them: the supervisor produces them in
- * M2 and the host handlers render them in M3. Defining them now is what stops
- * a host handler from inventing an outcome that the semantics document never
- * agreed to.
+ * Nothing outside this file may invent an outcome: a host handler that wanted
+ * to say something new would have to add it here first, where every renderer
+ * and every formatter has to account for it.
  */
 
 import type { RunDiagnostic } from "./diagnostics.ts";

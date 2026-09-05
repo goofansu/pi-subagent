@@ -110,9 +110,9 @@ test("the list holds one item per Profile, by name and description", () => {
 });
 
 test("the list is identical whatever backend a Profile names", () => {
-  // Compatibility-matrix proof: `/agents` carries no backend-specific field.
-  // See docs/v2/compatibility-matrix.md.
-  const items = ["pi", "claude", "codex", "demo-one-shot"].map((backend) =>
+  // `/agents` carries no backend-specific field, so every backend name — the
+  // two that ship and any a demo set adds — produces the same list.
+  const items = ["pi", "claude", "demo-one-shot"].map((backend) =>
     getAgentSelectItems([profile({ backend: backendId(backend) })]),
   );
 

@@ -47,38 +47,23 @@ test("the package version is the 2.0.0 release candidate", () => {
   // Neither can be established by writing code, so neither can be established
   // by this test — what it can do is stop the marker being dropped by
   // accident, because a plain 2.0.0 asserts both.
-  //
-  // `docs/v2/m7-exit-gate.md` is the record of which of them are outstanding.
   const manifest = readPackageManifest();
 
   assert.match(manifest.version ?? "", /^2\.0\.0-rc\.\d+$/);
 });
 
-test("the README carries an upgrade notice pointing at the migration note", () => {
+test("the README carries an upgrade notice naming the new Profile field", () => {
   // The Profile field rename is the only thing a 1.x user has to do by hand,
   // and a major version that did not say so where a reader first looks would
   // be a major version that broke their Profiles silently.
   //
-  // What this asserts is the *notice and the pointer*, not the old field name:
-  // the boundary rule keeps the legacy name out of this tree, and the
-  // migration note — which is outside it — is where the rename is spelled out.
+  // What this asserts is the *notice and the new field name*, not the old one:
+  // the boundary rule keeps the legacy name out of this tree, so the README —
+  // which is outside it — is where the rename is spelled out.
   const readme = readFileSync(path.join(repositoryRoot, "README.md"), "utf8");
-  const migrationNote = path.join(
-    "docs",
-    "v2",
-    "profile-backend-field-migration.md",
-  );
 
   assert.match(readme, /^## Upgrading from 1\.x$/m);
   assert.match(readme, /`backend:`/);
-  assert.ok(
-    readme.includes(migrationNote),
-    `the README does not link ${migrationNote}`,
-  );
-  // And the note it points at exists, so the pointer is not a dead link.
-  assert.ok(
-    readFileSync(path.join(repositoryRoot, migrationNote), "utf8").length > 0,
-  );
 });
 
 test("the pinned Effect version matches the dependency and the installed package", () => {

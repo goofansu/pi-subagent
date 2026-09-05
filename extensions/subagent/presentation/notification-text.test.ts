@@ -34,11 +34,10 @@ test("N-1: a completed notice labels and quotes the preview, then points at the 
 });
 
 test("N-8: the notice is identical whichever backend ran the Run", () => {
-  // Compatibility-matrix proof: the completion Notification is derived from
-  // the neutral Result alone, so only the model string — which the Profile
-  // chooses — differs between backends.
-  // See docs/v2/compatibility-matrix.md.
-  const notices = ["pi", "claude", "codex"].map((backend) =>
+  // The completion Notification is derived from the neutral Result alone, so
+  // only the model string — which the Profile chooses — differs between
+  // backends.
+  const notices = ["pi", "claude", "demo-one-shot"].map((backend) =>
     fixtureNotification({
       finalOutput: "done",
       identity: { backendId: backendId(backend) },

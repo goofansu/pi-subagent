@@ -70,8 +70,8 @@ export const STEER = "also look left";
  *
  * `reconciliationDifferences` is deliberately **not** here. A terminal
  * reconciliation that changes something streamed is reconciliation doing its
- * job, which is what `docs/debugging.md` classifies it as; a Session with
- * thousands of them has a backend whose streaming and terminal snapshot
+ * job, and the counter is classified `expected` for that reason; a Session
+ * with thousands of them has a backend whose streaming and terminal snapshot
  * disagree systematically, and that is a rate to read rather than a zero to
  * assert.
  */

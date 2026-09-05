@@ -1,9 +1,9 @@
 /**
  * Every model-facing sentence about a Run.
  *
- * The six operation outcome unions are transcribed from
- * `docs/v2/operation-semantics.md`, and every variant of every one of them has
- * exactly one sentence here. Nothing else in v2 writes prose about a Run: the
+ * The six operation outcome unions in `domain/outcomes.ts` decide what a
+ * caller can observe, and every variant of every one of them has exactly one
+ * sentence here. Nothing else in v2 writes prose about a Run: the
  * façade maps outcomes to these functions, and the host handlers pass the
  * result through. That is what stops the same rejection reading two different
  * ways in two different places, which is what happened in v1 whenever a new

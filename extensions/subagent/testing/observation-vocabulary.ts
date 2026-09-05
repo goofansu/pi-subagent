@@ -7,8 +7,7 @@
  * provider bookkeeping however deeply it was nested. Both are gone, and what
  * replaced them is one line — decoding the observation union under
  * {@link EXACT_KEYS}, which rejects *any* unlisted key at *any* depth rather
- * than a list of the ones somebody thought of. See
- * `docs/v2/spikes/effect-schema.md`, question 1.
+ * than a list of the ones somebody thought of.
  *
  * Populating the optional fields is the point of what remains: a key-set check
  * against a minimal sample would not notice a field that only appears when it
