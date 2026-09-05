@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { byteLength } from "./bounding.ts";
 import {
   DIAGNOSTIC_CATEGORIES,
   DIAGNOSTIC_MESSAGE_MAX_BYTES,
@@ -15,7 +16,6 @@ import {
   RESULT_LINK_TARGET_MAX_BYTES,
   resultLink,
 } from "./links.ts";
-import { byteLength } from "./text.ts";
 
 test("the diagnostic categories are the ten the domain admits", () => {
   assert.deepEqual(

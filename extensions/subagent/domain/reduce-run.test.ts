@@ -7,10 +7,20 @@ import {
   lateAfterEnding,
   reorderedAtBoundary,
 } from "../testing/fixtures/observations.ts";
-import { runDiagnostic } from "./diagnostics.ts";
-import { answeredEnding, cancelledEnding, failedEnding } from "./endings.ts";
+import { byteLength } from "./bounding.ts";
+import { DIAGNOSTIC_MESSAGE_MAX_BYTES, runDiagnostic } from "./diagnostics.ts";
+import {
+  answeredEnding,
+  cancelledEnding,
+  failedEnding,
+  RUN_ENDING_MESSAGE_MAX_BYTES,
+} from "./endings.ts";
 import { backendId, runId, subagentId } from "./ids.ts";
-import { resultLink } from "./links.ts";
+import {
+  RESULT_LINK_LABEL_MAX_BYTES,
+  RESULT_LINK_TARGET_MAX_BYTES,
+  resultLink,
+} from "./links.ts";
 import { toRunNotification } from "./notification.ts";
 import type { RunObservation } from "./observations.ts";
 import {
@@ -25,7 +35,7 @@ import {
   reduceRun,
 } from "./reduce-run.ts";
 import { toRunResult } from "./result.ts";
-import { byteLength } from "./text.ts";
+import { boundResultToBytes } from "./result-bounding.ts";
 import { contextGauge, usageDelta } from "./usage.ts";
 
 /** Fold a whole sequence, keeping every report. */
@@ -530,6 +540,33 @@ test("a rejection reason never carries the value it rejected", () => {
   assert.match(reported, /Expected string[\s\S]*\["parts"\]\[0\]\["text"\]/);
 });
 
+test("observations accept explicit undefined optional fields", () => {
+  const observations: readonly RunObservation[] = [
+    {
+      kind: "message",
+      role: "assistant",
+      model: undefined,
+      parts: [{ kind: "tool_call", name: "read", callId: undefined }],
+    },
+    {
+      kind: "tool_progress",
+      callId: "c1",
+      status: "completed",
+      outputSummary: undefined,
+    },
+    { kind: "context", context: { tokens: 1, window: undefined } },
+    { kind: "reconciliation", reconciliation: { model: undefined } },
+  ];
+
+  for (const observation of observations) {
+    assert.equal(
+      reduceRun(createRunProjection(), observation).report.report,
+      "applied",
+      observation.kind,
+    );
+  }
+});
+
 test("a malformed observation after the ending is reported as late, not invalid", () => {
   const settled = fold([
     { kind: "ending", ending: answeredEnding() },
@@ -694,6 +731,94 @@ test("an over-long tool output summary is cut and recorded separately", () => {
 
   assert.equal(projection.tools[0].outputSummary, "a very l");
   assert.equal(projection.truncation.truncatedToolOutputBytes, 11);
+});
+
+test("tool output truncation describes the current replacement", () => {
+  const { projection, reports } = fold(
+    [
+      {
+        kind: "tool_progress",
+        callId: "c1",
+        status: "running",
+        outputSummary: "first summary is long",
+      },
+      {
+        kind: "tool_progress",
+        callId: "c1",
+        status: "completed",
+        outputSummary: "second summary is longer",
+      },
+    ],
+    tight,
+  );
+
+  assert.equal(projection.tools[0].outputSummary, "second s");
+  assert.equal(projection.truncation.truncatedToolOutputBytes, 16);
+  assert.equal(reports[1].report, "applied-with-truncation");
+
+  const statusOnly = reduceRun(projection, {
+    kind: "tool_progress",
+    callId: "c1",
+    status: "completed",
+  });
+  assert.equal(statusOnly.projection.truncation.truncatedToolOutputBytes, 16);
+});
+
+test("megabyte diagnostic, link, and failed-ending texts are bounded at reduction", () => {
+  const huge = "x".repeat(1_000_000);
+  const { projection, reports } = fold([
+    {
+      kind: "diagnostic",
+      diagnostic: { category: "other", message: `line 1\n${huge}` },
+    },
+    {
+      kind: "link",
+      link: { kind: "log", label: huge, target: huge },
+    },
+    {
+      kind: "ending",
+      ending: { ending: "failed", message: `line 1\n${huge}` },
+    },
+  ]);
+
+  assert.equal(
+    byteLength(projection.diagnostics[0].message),
+    DIAGNOSTIC_MESSAGE_MAX_BYTES,
+  );
+  assert.equal(
+    byteLength(projection.links[0].label),
+    RESULT_LINK_LABEL_MAX_BYTES,
+  );
+  assert.equal(
+    byteLength(projection.links[0].target),
+    RESULT_LINK_TARGET_MAX_BYTES,
+  );
+  assert.ok(projection.ending?.ending === "failed");
+  assert.equal(
+    byteLength(projection.ending.message ?? ""),
+    RUN_ENDING_MESSAGE_MAX_BYTES,
+  );
+  assert.deepEqual(
+    reports.map((report) => report.report),
+    Array(3).fill("applied-with-truncation"),
+  );
+
+  const result = toRunResult({
+    identity: {
+      runId: runId("run-test-1"),
+      subagentId: subagentId("subagent-test-1"),
+      backendId: backendId("pi"),
+      agent: "reviewer",
+      description: "bound hostile observations",
+    },
+    projection,
+    ending: projection.ending,
+    startedAt: 1,
+    settledAt: 2,
+  });
+  const stored = boundResultToBytes(result, 256 * 1024);
+  assert.equal(stored.bounded, false);
+  assert.ok(stored.bytes <= 256 * 1024);
 });
 
 test("the default bounds are generous enough that a normal Run never notices", () => {

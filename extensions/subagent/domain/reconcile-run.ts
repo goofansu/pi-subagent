@@ -20,11 +20,12 @@
 
 import { Schema } from "effect";
 import {
-  boundProjectionText,
-  boundTranscript,
+  boundList,
+  boundObservation,
   type TruncationEvent,
 } from "./bounding.ts";
 import { type RunDiagnostic, runDiagnostic } from "./diagnostics.ts";
+import type { ReconciliationObservation } from "./observations.ts";
 import {
   DEFAULT_PROJECTION_BOUNDS,
   type ProjectionBounds,
@@ -104,6 +105,15 @@ const sameTranscript = Schema.toEquivalence(Schema.Array(TranscriptItem));
 const sameTotals = Schema.toEquivalence(UsageTotals);
 const sameGauge = Schema.toEquivalence(ContextGauge);
 
+function droppedAmount(
+  dropped: readonly TruncationEvent[],
+  of: TruncationEvent["of"],
+): number {
+  return dropped
+    .filter((event) => event.of === of)
+    .reduce((total, event) => total + event.amount, 0);
+}
+
 /**
  * Apply a terminal snapshot to a projection.
  *
@@ -117,23 +127,52 @@ export function reconcileRun(
   reconciliation: TerminalReconciliation,
   bounds: ProjectionBounds = DEFAULT_PROJECTION_BOUNDS,
 ): ReconcileOutcome {
+  const bounded = boundObservation(
+    { kind: "reconciliation", reconciliation },
+    bounds,
+  );
+  const boundedReconciliation =
+    bounded.observation as ReconciliationObservation;
+  const reconciled = reconcileBoundedRun(
+    projection,
+    boundedReconciliation.reconciliation,
+    bounds,
+    bounded.dropped,
+  );
+  return {
+    ...reconciled,
+    dropped: [...bounded.dropped, ...reconciled.dropped],
+  };
+}
+
+/** Apply an already text-bounded snapshot; used by the reducer's one bound. */
+export function reconcileBoundedRun(
+  projection: RunProjection,
+  reconciliation: TerminalReconciliation,
+  bounds: ProjectionBounds,
+  textDropped: readonly TruncationEvent[],
+): ReconcileOutcome {
   const dropped: TruncationEvent[] = [];
   const changed: ReconciledField[] = [];
   let next = projection;
 
   if (reconciliation.transcript !== undefined) {
-    const replaced = boundTranscript(reconciliation.transcript, bounds);
+    const replaced = boundList(
+      reconciliation.transcript,
+      bounds.maxTranscriptItems,
+      "transcript",
+    );
     dropped.push(...replaced.dropped);
     // Bounded value against bounded value: a snapshot that carried more items
     // than fit and a stream that did are the same transcript afterwards, and
     // the truncation record the replacement rewrites is bookkeeping about the
     // bound rather than something the snapshot disagreed about.
-    if (!sameTranscript([...replaced.transcript], [...next.transcript])) {
+    if (!sameTranscript([...replaced.items], [...next.transcript])) {
       changed.push("transcript");
     }
     next = {
       ...next,
-      transcript: replaced.transcript,
+      transcript: replaced.items,
       truncation: {
         ...next.truncation,
         // Set rather than add: the snapshot supersedes every streamed item, so
@@ -141,25 +180,21 @@ export function reconcileRun(
         // the transcript that is there now. Setting is also what makes a
         // replayed reconciliation produce the same record.
         droppedTranscriptItems: replaced.droppedItems,
-        truncatedTranscriptBytes: replaced.cutBytes,
+        truncatedTranscriptBytes: droppedAmount(textDropped, "transcript-text"),
       },
     };
   }
 
   if (reconciliation.finalOutput !== undefined) {
-    const bounded = boundProjectionText(
-      reconciliation.finalOutput,
-      bounds.maxFinalOutputBytes,
-      "final-output",
-    );
-    dropped.push(...bounded.dropped);
-    if (bounded.text !== next.finalOutput) changed.push("finalOutput");
+    if (reconciliation.finalOutput !== next.finalOutput) {
+      changed.push("finalOutput");
+    }
     next = {
       ...next,
-      finalOutput: bounded.text,
+      finalOutput: reconciliation.finalOutput,
       truncation: {
         ...next.truncation,
-        truncatedOutputBytes: bounded.cutBytes,
+        truncatedOutputBytes: droppedAmount(textDropped, "final-output"),
       },
     };
   }

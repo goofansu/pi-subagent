@@ -17,13 +17,13 @@
  */
 
 import { Schema } from "effect";
+import { boundOneLineText } from "./bounding.ts";
 import { RunDiagnostic, runDiagnostic } from "./diagnostics.ts";
 import { type RunEnding, terminalPhaseForEnding } from "./endings.ts";
 import { BackendId, RunId, SubagentId } from "./ids.ts";
 import { ResultLink } from "./links.ts";
 import { CancellationReason, TerminalRunPhase } from "./phases.ts";
 import { type RunProjection, TruncationRecord } from "./projection.ts";
-import { boundOneLineText } from "./text.ts";
 import { ToolEntry, TranscriptItem } from "./transcript.ts";
 import { UsageSnapshot } from "./usage.ts";
 

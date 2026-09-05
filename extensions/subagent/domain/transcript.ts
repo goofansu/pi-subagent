@@ -47,12 +47,14 @@ export type MessageRole = typeof MessageRole.Type;
 export const MessagePart = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("text"),
+    /** Bounded by `ProjectionBounds.maxTextPartBytes` at reduction. */
     text: Schema.String,
   }),
   Schema.Struct({
     kind: Schema.Literal("tool_call"),
     name: Schema.String.check(Schema.isNonEmpty()),
-    callId: Schema.optionalKey(Schema.String),
+    /** Optional; explicit `undefined` is accepted. */
+    callId: Schema.optional(Schema.String),
   }),
 ]);
 
@@ -86,7 +88,7 @@ export type ToolEntryStatus = typeof ToolEntryStatus.Type;
 export const TranscriptItem = Schema.Struct({
   role: MessageRole,
   parts: Schema.Array(MessagePart),
-  model: Schema.optionalKey(Schema.String),
+  model: Schema.optional(Schema.String),
 });
 
 export type TranscriptItem = typeof TranscriptItem.Type;
@@ -94,8 +96,8 @@ export type TranscriptItem = typeof TranscriptItem.Type;
 export const ToolEntry = Schema.Struct({
   name: Schema.optionalKey(Schema.String),
   status: ToolEntryStatus,
-  callId: Schema.optionalKey(Schema.String),
-  outputSummary: Schema.optionalKey(Schema.String),
+  callId: Schema.optional(Schema.String),
+  outputSummary: Schema.optional(Schema.String),
 });
 
 export type ToolEntry = typeof ToolEntry.Type;

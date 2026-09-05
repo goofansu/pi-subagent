@@ -11,12 +11,15 @@
  */
 
 import { Schema } from "effect";
+import { boundOneLine, RUN_ENDING_MESSAGE_MAX_BYTES } from "./bounding.ts";
 import {
   CancellationReason,
   type SettlementEvent,
   type TerminalRunPhase,
 } from "./phases.ts";
-import { boundOneLine } from "./text.ts";
+
+export { RUN_ENDING_MESSAGE_MAX_BYTES } from "./bounding.ts";
+
 import type { ToolEntryStatus } from "./transcript.ts";
 
 export const RUN_ENDING_KINDS = ["answered", "failed", "cancelled"] as const;
@@ -25,13 +28,11 @@ export const RunEndingKind = Schema.Literals(RUN_ENDING_KINDS);
 
 export type RunEndingKind = typeof RunEndingKind.Type;
 
-/** Bound on the fallback message a failed ending may carry. */
-export const RUN_ENDING_MESSAGE_MAX_BYTES = 2048;
-
 export const RunEnding = Schema.Union([
   Schema.Struct({ ending: Schema.Literal("answered") }),
   Schema.Struct({
     ending: Schema.Literal("failed"),
+    /** One line, bounded by `RUN_ENDING_MESSAGE_MAX_BYTES` at reduction. */
     message: Schema.optionalKey(Schema.String),
   }),
   Schema.Struct({
