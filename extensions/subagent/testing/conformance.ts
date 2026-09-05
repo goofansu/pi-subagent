@@ -229,8 +229,8 @@ export interface BackendConformanceFixture {
   readonly policy?: RuntimePolicy;
   /** Issue this many starts at once instead of one. */
   readonly concurrentStarts?: number;
-  /** Shut the Session down before driving anything. */
-  readonly shutdownFirst?: boolean;
+  /** Issue this many starts after disposal has closed the Session Scope. */
+  readonly startsAfterClose?: number;
   /** Resume the Subagent while its first Run is still active. */
   readonly resumeWhileRunning?: boolean;
   /** Make the sink fail its first push, so the retry path runs. */
@@ -393,7 +393,6 @@ function runFixture(
       });
 
       if (fixture.sinkFailsOnce) sink.failNext(1);
-      if (fixture.shutdownFirst) yield* supervisor.shutdown();
 
       const startOutcomes: string[] = [];
       const runs: RunOutcome[] = [];
@@ -544,6 +543,7 @@ function runFixture(
         counters: supervisor.counters(),
         snapshots,
         expiredResults: expired,
+        supervisor,
         readProbe: () => supervisor.probe(),
       };
     }).pipe(
@@ -560,10 +560,25 @@ function runFixture(
     ),
     // The probe is read *after* the Session Scope has closed, which is the
     // only moment at which "nothing is still alive" means anything.
-  ).then(({ readProbe, ...outcome }) => ({
-    ...outcome,
-    probeAfterClose: readProbe(),
-  }));
+  ).then(async ({ supervisor, readProbe, ...outcome }) => {
+    const afterClose = await Effect.runPromise(
+      Effect.all(
+        Array.from({ length: fixture.startsAfterClose ?? 0 }, () =>
+          supervisor.start(startRequest(fixture)),
+        ),
+        { concurrency: "unbounded" },
+      ),
+    );
+    const startOutcomes = [
+      ...outcome.startOutcomes,
+      ...afterClose.map((result) => result.outcome),
+    ];
+    return {
+      ...outcome,
+      startOutcomes,
+      probeAfterClose: readProbe(),
+    };
+  });
 }
 
 /* ============================================================== */

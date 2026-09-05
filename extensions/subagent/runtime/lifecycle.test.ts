@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Deferred, Effect, Fiber, Queue } from "effect";
+import { Deferred, Effect, Fiber, Queue, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { bridgeOverflowObservations } from "../backend/native-bridge.ts";
 import { runId as makeRunId } from "../domain/index.ts";
@@ -9,6 +9,7 @@ import {
   rigRequest as request,
   startedRun,
   untilTerminal,
+  untilUnderWay,
   withSession,
 } from "../testing/session-rig.ts";
 import { createRuntimeCounters } from "./counters.ts";
@@ -419,6 +420,80 @@ test("a finalizer past the cleanup budget is escalated past, and the Run still s
 /* ============================================================== */
 /* Shutdown                                                        */
 /* ============================================================== */
+
+test("disposing the Session runs Shutdown before its work scope closes", async () => {
+  const hold = await Effect.runPromise(Deferred.make<void>());
+  const seen: Array<{
+    readonly runId: string;
+    readonly phase: string;
+    readonly reason?: string;
+  }> = [];
+  const outcome = await withSession(
+    {
+      steps: [
+        [{ step: "await-gate", gate: "hold" }],
+        [{ step: "await-gate", gate: "hold" }],
+      ],
+      gates: { hold },
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const attached = yield* Deferred.make<void>();
+        yield* (yield* rig.repository.subscribe()).pipe(
+          Stream.tap((index) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(attached, undefined);
+              for (const snapshot of index.values()) {
+                seen.push({
+                  runId: snapshot.identity.runId,
+                  phase: snapshot.phase,
+                  ...(snapshot.cancellation === undefined
+                    ? {}
+                    : { reason: snapshot.cancellation.reason }),
+                });
+              }
+            }),
+          ),
+          Stream.runDrain,
+          Effect.forkChild,
+        );
+        yield* Deferred.await(attached);
+        const first = startedRun(yield* rig.supervisor.start(request()));
+        const second = startedRun(yield* rig.supervisor.start(request()));
+        yield* untilUnderWay(rig, 1);
+        return {
+          runIds: [first.runId, second.runId],
+          store: rig.store,
+          repository: rig.repository,
+          backend: rig.backend,
+        };
+      }),
+  );
+
+  for (const runId of outcome.value.runIds) {
+    assert.ok(
+      seen.some(
+        (snapshot) =>
+          snapshot.runId === runId &&
+          snapshot.phase === "cancelled" &&
+          snapshot.reason === "shutdown",
+      ),
+      JSON.stringify(seen),
+    );
+  }
+  assert.deepEqual(await Effect.runPromise(outcome.value.store.stored()), []);
+  for (const runId of outcome.value.runIds) {
+    assert.equal(
+      (await Effect.runPromise(outcome.value.repository.lookup(runId))).state,
+      "unknown",
+    );
+  }
+  assert.equal(outcome.value.backend.counters().liveExecutions, 0);
+  assert.equal(outcome.value.backend.counters().liveSubscriptions, 0);
+  assert.equal(outcome.value.backend.counters().opens, 2);
+  assert.equal(outcome.value.backend.counters().closes, 2);
+  assert.equal(outcome.noLeaks, true);
+});
 
 test("after shutdown begins, start, resume, and steer all answer shutting down", async () => {
   const hold = await Effect.runPromise(Deferred.make<void>());

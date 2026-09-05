@@ -7,7 +7,9 @@ import {
   quiesce,
   rigRequest as request,
   startedRun,
+  until,
   untilTerminal,
+  untilUnderWay,
   withSession,
 } from "../testing/session-rig.ts";
 import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
@@ -234,6 +236,111 @@ test("a hung finalizer is escalated past, and the Session still closes cleanly",
   );
   assert.equal(outcome.value.counters.cleanupEscalations, 1);
   assert.equal(outcome.value.notifications, 1);
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("disposal escalates past an uninterruptible BackendAgent close", async () => {
+  const policy: RuntimePolicy = {
+    ...DEFAULT_RUNTIME_POLICY,
+    cleanupBudgetMillis: 2_000,
+  };
+  const closeGate = await Effect.runPromise(Deferred.make<void>());
+  const hold = await Effect.runPromise(Deferred.make<void>());
+  const trace: string[] = [];
+  const outcome = await withSession(
+    {
+      policy,
+      testClock: true,
+      trace,
+      gates: { close: closeGate, hold },
+      close: { gate: "close", uninterruptible: true },
+      steps: [[{ step: "await-gate", gate: "hold" }]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        startedRun(yield* rig.supervisor.start(request()));
+        yield* untilUnderWay(rig);
+        // This detached test-clock driver survives the body long enough to
+        // advance disposal's cleanup budget. Releasing the gate afterwards
+        // lets the deliberately detached loser finish instead of leaking into
+        // another test.
+        yield* Effect.forkDetach(
+          Effect.gen(function* () {
+            yield* until(
+              "BackendAgent close to start",
+              Effect.sync(() => trace.includes("agent-close-waiting")),
+            );
+            yield* TestClock.adjust(policy.cleanupBudgetMillis + 1);
+            yield* quiesce();
+            yield* Deferred.succeed(closeGate, undefined);
+          }),
+        );
+        return {
+          counters: rig.supervisor.counters,
+          backend: rig.backend,
+        };
+      }),
+  );
+
+  assert.equal(outcome.value.counters().cleanupEscalations, 1);
+  await Effect.runPromise(Deferred.succeed(closeGate, undefined));
+  await Effect.runPromise(quiesce());
+  assert.equal(outcome.value.backend.counters().closes, 1);
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("eight Subagents with hung cleanup close in one cleanup budget", async () => {
+  const policy: RuntimePolicy = {
+    ...DEFAULT_RUNTIME_POLICY,
+    cleanupBudgetMillis: 2_000,
+  };
+  const cleanup = await Effect.runPromise(Deferred.make<void>());
+  const hold = await Effect.runPromise(Deferred.make<void>());
+  const trace: string[] = [];
+  const steps = Array.from({ length: 8 }, () => [
+    { step: "gate-the-finalizer" as const, gate: "cleanup" },
+    { step: "await-gate" as const, gate: "hold" },
+  ]);
+  const outcome = await withSession(
+    {
+      policy,
+      testClock: true,
+      trace,
+      gates: { cleanup, hold },
+      steps,
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        for (let index = 0; index < 8; index += 1) {
+          startedRun(yield* rig.supervisor.start(request()));
+        }
+        yield* until(
+          "all executions to begin",
+          Effect.sync(() => rig.backend.counters().executionsStarted === 8),
+        );
+        const shutting = yield* Effect.forkChild(rig.supervisor.shutdown());
+        yield* until(
+          "all execution finalizers to start",
+          Effect.sync(
+            () =>
+              trace.filter((entry) => entry.startsWith("finalizer-waiting:"))
+                .length === 8,
+          ),
+        );
+        yield* TestClock.adjust(policy.cleanupBudgetMillis + 1);
+        yield* quiesce();
+        const completedWithinOneBudget = shutting.pollUnsafe() !== undefined;
+        yield* Deferred.succeed(cleanup, undefined);
+        yield* Fiber.join(shutting);
+        return {
+          completedWithinOneBudget,
+          escalations: rig.supervisor.counters().cleanupEscalations,
+        };
+      }),
+  );
+
+  assert.equal(outcome.value.completedWithinOneBudget, true);
+  assert.equal(outcome.value.escalations, 8);
   assert.equal(outcome.noLeaks, true);
 });
 

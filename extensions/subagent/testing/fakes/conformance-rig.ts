@@ -417,8 +417,7 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
         case "shutdown-rejects-new-work":
           return fixtureOf(kind, scripts(ORDINARY), {
             plans: [],
-            concurrentStarts: 1,
-            shutdownFirst: true,
+            startsAfterClose: 1,
             expected: { runs: [], startOutcomes: ["shutting down"] },
           });
 

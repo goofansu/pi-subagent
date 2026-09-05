@@ -462,8 +462,7 @@ export function claudeConformanceRig(): BackendConformanceRig {
           return claudeFixture({
             scripts: [ORDINARY],
             plans: [],
-            concurrentStarts: 1,
-            shutdownFirst: true,
+            startsAfterClose: 1,
             expected: { runs: [], startOutcomes: ["shutting down"] },
           });
 
