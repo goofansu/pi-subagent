@@ -305,7 +305,7 @@ export function runToSettlement(
     // The native execution scope, nested inside the Run Scope. It can close
     // independently — a provider turn ending is not the Run ending — but it
     // can never outlive the Run.
-    const executionScope = yield* Scope.make();
+    const executionScope = yield* Scope.fork(runScope);
     const executionFiber = yield* Effect.forkChild(
       context.agent
         .execute(context.input, { emit: intake.emit, controls: mailbox.feed })

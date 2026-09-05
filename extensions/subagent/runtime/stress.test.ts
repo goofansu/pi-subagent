@@ -306,10 +306,14 @@ test(`${SESSIONS} Sessions built and disposed in turn each leave a clear probe`,
             }),
           );
           yield* untilExecutions(rig, 2);
+          // Let the execution reach its deliberate hang so Session disposal
+          // does not interrupt it halfway through filling the bounded intake.
+          yield* quiesce();
           return {
             outcome: read.outcome,
             leftRunning: long.runId,
             counters: rig.supervisor.counters(),
+            backend: rig.backend,
           };
         }),
     );
@@ -319,6 +323,8 @@ test(`${SESSIONS} Sessions built and disposed in turn each leave a clear probe`,
     }
     assert.equal(value.outcome, "result");
     assertNothingWentWrong(value.counters);
+    assert.equal(value.backend.counters().liveExecutions, 0);
+    assert.equal(value.backend.counters().liveSubscriptions, 0);
   }
 
   assert.deepEqual(dirty, []);

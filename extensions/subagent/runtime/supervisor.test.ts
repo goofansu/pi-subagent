@@ -17,6 +17,7 @@ import {
   untilTerminal,
   withSession,
 } from "../testing/session-rig.ts";
+import { untilExecutions } from "../testing/stress-policy.ts";
 import { sessionRuntimeLayer } from "./composition.ts";
 import { probeIsClear } from "./counters.ts";
 import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
@@ -666,12 +667,14 @@ test("a Run that outlives the body is still closed by the Session Scope", async 
         handle = rig.backend;
         const started = yield* rig.supervisor.start(request());
         assert.equal(started.outcome, "started");
+        yield* untilExecutions(rig, 1);
         // Left running deliberately. Closing the Session Scope has to reach it.
       }),
   );
 
   assert.equal(handle?.counters().closes, 1);
   assert.equal(handle?.counters().liveExecutions, 0);
+  assert.equal(handle?.counters().liveSubscriptions, 0);
   assert.equal(noLeaks, true);
 });
 
