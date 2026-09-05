@@ -283,7 +283,7 @@ function piTurnKind(event: Record<string, unknown>): PiTurnKind | undefined {
  *
  * Shell commands are remembered until their end event, because Pi's end event
  * carries the result and call id but not the arguments. The model's last
- * output kind is remembered so `thinking…` and `writing…` are emitted once per
+ * output kind is remembered so `thinking…` and `responding…` are emitted once per
  * change rather than once per delta; a tool activity forgets it, which makes
  * the next delta newer than the tool even when the model resumes with the same
  * kind it emitted before the call. Creating this translator inside each
@@ -303,7 +303,7 @@ export function createPiEventTranslator(): PiEventTranslator {
             kind: "activity",
             observation: {
               kind: "activity",
-              activity: turnKind === "thinking" ? "thinking…" : "writing…",
+              activity: turnKind === "thinking" ? "thinking…" : "responding…",
             },
           };
         }

@@ -241,7 +241,7 @@ test("thinking and text deltas name their model-turn activity", () => {
   });
   assert.deepEqual(translator.event(messageUpdate("text_delta")), {
     kind: "activity",
-    observation: { kind: "activity", activity: "writing…" },
+    observation: { kind: "activity", activity: "responding…" },
   });
 });
 
@@ -302,7 +302,7 @@ test("model-turn output kind is reset across executions", () => {
   assert.equal(firstExecution.event(messageUpdate("text_delta")).kind, "other");
   assert.deepEqual(resumedExecution.event(messageUpdate("text_delta")), {
     kind: "activity",
-    observation: { kind: "activity", activity: "writing…" },
+    observation: { kind: "activity", activity: "responding…" },
   });
 });
 
@@ -312,7 +312,7 @@ test("message updates emit no message; the message still comes from message end"
 
   assert.deepEqual(translator.event(messageUpdate("text_delta")), {
     kind: "activity",
-    observation: { kind: "activity", activity: "writing…" },
+    observation: { kind: "activity", activity: "responding…" },
   });
   assert.deepEqual(translator.event({ type: "message_end", message }), {
     kind: "message",

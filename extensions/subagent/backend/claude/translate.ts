@@ -551,7 +551,7 @@ export function createClaudeTranslator(): ClaudeTranslator {
       activity = "thinking…";
     } else if (block?.type === "text") {
       kind = "writing";
-      activity = "writing…";
+      activity = "responding…";
     } else if (
       block?.type === "tool_use" &&
       typeof block.name === "string" &&

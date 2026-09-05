@@ -465,7 +465,7 @@ test("root content block starts report thinking, writing, and a bare tool name",
 
   assert.deepEqual(observations, [
     { kind: "activity", activity: "thinking…" },
-    { kind: "activity", activity: "writing…" },
+    { kind: "activity", activity: "responding…" },
     { kind: "activity", activity: "Bash" },
   ]);
 });
@@ -496,7 +496,7 @@ test("streaming activity is emitted only when its kind changes", () => {
     translate([thinking, thinking, writing, writing, tool, tool]).observations,
     [
       { kind: "activity", activity: "thinking…" },
-      { kind: "activity", activity: "writing…" },
+      { kind: "activity", activity: "responding…" },
       { kind: "activity", activity: "Read" },
     ],
   );
