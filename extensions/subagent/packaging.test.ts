@@ -43,10 +43,10 @@ test("the package manifest exposes this extension and nothing else", () => {
 
 test("the package version is 2.0.0", () => {
   // The release-candidate marker this replaces was held by two things. One was
-  // the four live gates, which have now been run on the release build; the
-  // other was a release-candidate soak, which no longer exists. Neither could
-  // be established by writing code, which is why the marker was the assertion
-  // — and why dropping it is a decision rather than an edit.
+  // the four live gates, which were run against this build and passed; the
+  // other was a release-candidate soak, whose tooling this release deleted.
+  // Neither could be established by writing code, which is why the marker was
+  // the assertion — and why dropping it was a decision rather than an edit.
   const manifest = readPackageManifest();
 
   assert.equal(manifest.version, "2.0.0");

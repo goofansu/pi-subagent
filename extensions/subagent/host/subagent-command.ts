@@ -40,16 +40,14 @@ import type { SessionHandle } from "./session-handle.ts";
 export const SUBAGENT_COMMAND_NAME = "subagent";
 
 /**
- * The way deeper.
+ * Every subcommand `/subagent` has, for the message an unknown one gets.
  *
- * A list of one, named in one place because three things read it: the status
- * line that offers it, the parser that dispatches on it, and the message an
- * unknown subcommand gets. A list rather than a constant so that a second
- * subcommand is an entry here rather than a third thing to remember to edit.
+ * A list of one. The handler dispatches on its own `case` and the status line
+ * writes its own sentence, both of which say more than a name — so this is
+ * read by {@link formatUnknownSubcommand} alone, which is the one place that
+ * needs them enumerated rather than spelled out.
  */
 export const SUBAGENT_SUBCOMMANDS = ["profiles"] as const;
-
-export type SubagentSubcommand = (typeof SUBAGENT_SUBCOMMANDS)[number];
 
 /**
  * A block of named counts, as the status reads them.

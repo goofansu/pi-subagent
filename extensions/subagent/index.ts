@@ -145,7 +145,7 @@ export function installSubagentV2(
     (id) => sink.consumed(id),
   );
   // One operator command. v1's `/agents` is gone in 2.0 and its flow is
-  // `/subagent profiles`; the matrix's `/agents` row records the removal.
+  // `/subagent profiles`, which is the one public surface 2.0 removes.
   registerSubagentCommand(pi, handle, () => profiles, agentsDir);
   pi.registerMessageRenderer(
     NOTIFICATION_MESSAGE_TYPE,

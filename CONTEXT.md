@@ -578,11 +578,13 @@ delegation is one level deep.
 **Native probe** — what an adapter is still holding, counted: for Pi, open
 native sessions, live event subscriptions, and native cleanups in flight; for
 Claude, live Queries, open input streams, and retained conversation
-identities. Deliberately outside the backend contract — a probe on the contract would be a
-field every adapter had to invent something for, and a number the core could
-start believing. `/subagent` prints one block per backend beside the
-runtime's own, because "which adapter is still holding something" is the only
-question a probe exists to answer and a merged total cannot answer it. Every
+identities. Deliberately outside the backend contract — a probe on the contract
+would be a field every adapter had to invent something for, and a number the
+core could start believing. No command prints them: the live smokes read them
+after the Session Scope has closed, which is where "this Session leaked
+nothing" becomes an assertion against a real provider. One block per backend
+rather than a merged total, because "which adapter is still holding something"
+is the only question a probe exists to answer and a sum cannot answer it. Every
 block must read zero once a Session has closed.
 
 **Callback bridge** — the buffer between Pi's synchronous event listener, which

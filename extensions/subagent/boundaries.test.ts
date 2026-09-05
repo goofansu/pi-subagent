@@ -1192,9 +1192,9 @@ export function findBoundaryViolations(
 /**
  * The files allowed to write a dynamic import the checker cannot read.
  *
- * Empty. Tree-relative when it is not: each entry would be a rule this suite
- * has stopped being able to enforce for that file, so each would need a reason
- * at rule 20 above.
+ * Empty, and entries are tree-relative paths when it is not. Each one would be
+ * a rule this suite has stopped being able to enforce for that file, so each
+ * would need a reason at rule 20 above.
  */
 const COMPUTED_IMPORT_ALLOWED: ReadonlySet<string> = new Set<string>([]);
 

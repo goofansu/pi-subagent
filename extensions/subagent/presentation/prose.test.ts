@@ -23,6 +23,7 @@ import {
   formatResumeOutcome,
   formatStartOutcome,
   formatSteerOutcome,
+  formatToolInputRejected,
   formatUnknownAgent,
   formatWaitOutcomes,
 } from "./prose.ts";
@@ -487,5 +488,28 @@ test("a start and a resume refuse an empty description in their own family's wor
     "Cannot resume subagent subagent-1: its description is empty. No Run was " +
       "started and nothing was queued. Send a one-line description of this " +
       "Run: it is the label this Run is shown under everywhere.",
+  );
+});
+
+test("a rejected tool call names the field, says nothing started, and says what to do", () => {
+  // A decode failure is a tool *outcome* rather than a throw, so this sentence
+  // is what a model sees and what a session log records. It is the one
+  // sentence here that no outcome union reaches, which is why it is asserted
+  // on its own rather than through a union's coverage check.
+  assert.equal(
+    formatToolInputRejected("agent_start", "description must be a string"),
+    "Cannot run agent_start: its arguments were not usable. description " +
+      "must be a string. Nothing was started. Correct the arguments and call " +
+      "it again.",
+  );
+
+  // The detail is the caller's, already bounded and value-free, and it is
+  // placed rather than interpreted: a formatter that reworded it would be a
+  // second opinion on what the schema said.
+  assert.equal(
+    formatToolInputRejected("agent_wait", "ids must have at least one entry"),
+    "Cannot run agent_wait: its arguments were not usable. ids must have at " +
+      "least one entry. Nothing was started. Correct the arguments and call " +
+      "it again.",
   );
 });
