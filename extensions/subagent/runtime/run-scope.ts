@@ -2,8 +2,8 @@
  * One Run's scope: what it holds, and the order it lets go in.
  *
  * A Run Scope holds a bounded observation intake, one reducer fiber, a
- * cancellation record on the repository row, a completion `Deferred` used only
- * to wake people up, a settlement coordinator, and — nested inside it — the
+ * cancellation record on the repository row, a completion `Deferred` that is
+ * the settlement barrier, a settlement coordinator, and — nested inside it — the
  * native execution scope. The nesting is the point: a provider turn may end
  * without ending the Run, but it can never outlive it (ADR-0023).
  *
@@ -18,8 +18,8 @@
  * and the instant the Run is settled are different instants, and only the
  * second one is terminal.
  *
- * The completion `Deferred` is a wake-up and nothing else. `agent_wait` and
- * completion delivery both read their answer from the Result store, because a
+ * The completion `Deferred` is the settlement barrier, not the Result value.
+ * `agent_wait` and completion delivery both read their answer from the Result store, because a
  * `Deferred` can be awaited once by each waiter but a late waiter that arrives
  * after it resolves must get the same answer as an early one. Only the store
  * can promise that.
@@ -152,7 +152,7 @@ export interface RunContext {
 export interface RunHandle {
   readonly identity: RunIdentity;
   readonly coordinator: SettlementCoordinator;
-  /** Completed when the Run is terminal. A wake-up, never the value. */
+  /** Completed when settlement is done. The barrier carries no Result value. */
   readonly completion: Deferred.Deferred<void>;
   readonly intake: ObservationIntake;
   readonly mailbox: ControlMailbox;
@@ -389,10 +389,10 @@ export function runToSettlement(
     | {
         readonly result: RunResult;
         readonly ending: Arbitration["ending"];
-        readonly settledAt: number;
       }
     | undefined;
   let recovered: SettledRun | undefined;
+  let settlementStarted = false;
 
   const settlement = Effect.gen(function* () {
     const {
@@ -428,6 +428,7 @@ export function runToSettlement(
     );
     yield* Deferred.succeed(executionFiber, running);
     const [exit] = yield* Fiber.awaitAll([running]);
+    settlementStarted = true;
 
     /* ---- the settlement path, in the roadmap's order ---- */
 
@@ -521,7 +522,7 @@ export function runToSettlement(
 
     // 9. Commit, idempotently.
     const commit = yield* store.commit(result);
-    committed = { result: commit.result, ending: decided.ending, settledAt };
+    committed = { result: commit.result, ending: decided.ending };
     if (commit.outcome === "conflict") {
       // Two different results for one Run is a defect in the runtime, not in
       // the backend. The first one stands and the attempt is counted.
@@ -560,7 +561,13 @@ export function runToSettlement(
   return settlement.pipe(
     Effect.onExit((exit) =>
       Effect.gen(function* () {
-        if (Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause)) {
+        // Interrupting native execution is the ordinary cancellation candidate
+        // above. Once that execution has ended, however, interruption is a
+        // settlement failure and must pass through the same terminal guard.
+        if (
+          Exit.isSuccess(exit) ||
+          (Cause.hasInterruptsOnly(exit.cause) && !settlementStarted)
+        ) {
           return;
         }
 
@@ -578,11 +585,6 @@ export function runToSettlement(
           // commit may delay publication, but cannot rewrite that Result or
           // the projection it came from into a different ending.
           const current = yield* Ref.get(projection);
-          yield* repository.transition(
-            identity.runId,
-            settlementEventForEnding(committed.ending),
-            committed.settledAt,
-          );
           yield* store.releasePin(identity.runId, "publication");
           yield* context.onSettled(committed.result);
           recovered = {
@@ -638,7 +640,7 @@ export function runToSettlement(
         });
         const stored = yield* Effect.exit(store.commit(fallback));
         if (Exit.isSuccess(stored)) {
-          committed = { result: stored.value.result, ending, settledAt };
+          committed = { result: stored.value.result, ending };
           yield* store.releasePin(identity.runId, "publication");
         } else {
           // Metadata-only is the same representation an eviction leaves. No
@@ -663,7 +665,15 @@ export function runToSettlement(
     // Encoding is the settlement path's typed failure. The guard has already
     // converted it to a terminal outcome; defects still retain their cause
     // after the same recovery work and interruption remains interruption.
-    Effect.catch(() => Effect.succeed(recovered as SettledRun)),
+    Effect.catch(() =>
+      Effect.suspend(() =>
+        recovered === undefined
+          ? Effect.die(
+              new Error("the settlement guard did not construct a recovery"),
+            )
+          : Effect.succeed(recovered),
+      ),
+    ),
   );
 }
 

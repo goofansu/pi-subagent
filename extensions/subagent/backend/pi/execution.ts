@@ -245,7 +245,10 @@ export function runPiExecution(
     // prompt already settled.
     let deliveries = 0;
     let nativeDeliveries = 0;
-    let deliveryFinished = Deferred.makeUnsafe<void>();
+    /** The completion owned by the one serial delivery currently in flight. */
+    let inFlightDelivery:
+      | { readonly finished: Deferred.Deferred<void> }
+      | undefined;
 
     const steerLoop = Effect.gen(function* () {
       for (;;) {
@@ -253,8 +256,8 @@ export function runPiExecution(
         if (control === undefined) return;
         if (context.isClosed()) return;
         deliveries += 1;
-        deliveryFinished = Deferred.makeUnsafe<void>();
-        const finished = deliveryFinished;
+        const delivery = { finished: Deferred.makeUnsafe<void>() };
+        inFlightDelivery = delivery;
         if (Deferred.isDoneUnsafe(settlement)) {
           yield* io
             .emit({
@@ -265,7 +268,9 @@ export function runPiExecution(
               Effect.ensuring(
                 Effect.sync(() => {
                   deliveries -= 1;
-                  Deferred.doneUnsafe(finished, Effect.void);
+                  Deferred.doneUnsafe(delivery.finished, Effect.void);
+                  if (inFlightDelivery === delivery)
+                    inFlightDelivery = undefined;
                 }),
               ),
             );
@@ -277,7 +282,8 @@ export function runPiExecution(
             Effect.sync(() => {
               deliveries -= 1;
               nativeDeliveries -= 1;
-              Deferred.doneUnsafe(finished, Effect.void);
+              Deferred.doneUnsafe(delivery.finished, Effect.void);
+              if (inFlightDelivery === delivery) inFlightDelivery = undefined;
             }),
           ),
         );
@@ -337,7 +343,8 @@ export function runPiExecution(
             diagnostic: confinedControl(STEER_REJECTED_CATEGORY),
           });
         } else {
-          yield* Deferred.await(deliveryFinished);
+          const delivery = inFlightDelivery;
+          if (delivery !== undefined) yield* Deferred.await(delivery.finished);
         }
       }
       yield* Fiber.interrupt(steering);

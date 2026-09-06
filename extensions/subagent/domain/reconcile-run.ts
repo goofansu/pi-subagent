@@ -22,6 +22,7 @@ import { Schema } from "effect";
 import {
   boundList,
   boundObservation,
+  droppedAmount,
   type TruncationEvent,
 } from "./bounding.ts";
 import { type RunDiagnostic, runDiagnostic } from "./diagnostics.ts";
@@ -104,15 +105,6 @@ export function reconciliationDifference(
 const sameTranscript = Schema.toEquivalence(Schema.Array(TranscriptItem));
 const sameTotals = Schema.toEquivalence(UsageTotals);
 const sameGauge = Schema.toEquivalence(ContextGauge);
-
-function droppedAmount(
-  dropped: readonly TruncationEvent[],
-  of: TruncationEvent["of"],
-): number {
-  return dropped
-    .filter((event) => event.of === of)
-    .reduce((total, event) => total + event.amount, 0);
-}
 
 /**
  * Apply a terminal snapshot to a projection.

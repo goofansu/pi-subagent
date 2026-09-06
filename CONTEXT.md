@@ -219,10 +219,15 @@ retries. Explicitly *not* a core product type, and it never appears in a core
 signature. It was a documented domain term in 1.x; see [Historical
 terms](#historical-terms).
 
-**Scope** — an Effect resource lifetime, nested Session → Subagent → Run →
-native execution. Closing one releases everything beneath it, in reverse
-acquisition order, which is why there is no shutdown order to write by hand.
+**Scope** — an Effect resource lifetime. The Session owns a Work scope, which
+owns Subagent and Run resources; within a Run, the native execution scope is a
+child. Closing one releases everything beneath it in reverse acquisition order.
 [ADR-0023](docs/adr/0023-v2-scope-ownership.md).
+
+**Work scope** — the child of the Session Scope that holds Subagent Scopes and
+Run, delivery, and timeout fibers. Shutdown is registered after it as a Session
+Scope finalizer, so LIFO finalization runs Shutdown before structural closure of
+the Work scope.
 
 **Observation** — the neutral record of something a backend witnessed, ordered
 and lossless within a Run.
@@ -294,10 +299,12 @@ retry budget, and an optional default Run timeout. Configuration rather than a
 service, so a test lowers a bound by spreading over the defaults.
 
 **Run Scope** — what one Run holds for its lifetime: a bounded observation
-intake, one reducer fiber, a Control mailbox, a completion `Deferred` used only
-as a wake-up, a settlement coordinator, and — nested inside it — the native
-execution scope. Closing the Run Scope releases all of them; the nested scope
-can close independently, because a provider turn may end without ending the Run.
+intake, one reducer fiber, a Control mailbox, a completion `Deferred` that is
+the settlement barrier, a settlement coordinator, and — nested inside it — the
+native execution scope. The Run handle carries the activation gate, the native
+execution scope, and the Run Scope as well as those mechanisms. Closing the Run
+Scope releases all of them; the nested scope can close independently, because a
+provider turn may end without ending the Run.
 
 **Settlement coordinator** — the per-Run thing that captures exactly one
 terminal **candidate** into a `Deferred`. Later candidates increment a
@@ -319,17 +326,20 @@ captured. Everything emitted afterwards is a counted late event and a no-op, so
 the contract's "emit never fails" holds for an adapter emitting from its own
 finalizer.
 
-**Cleanup escalation** — what happens when closing the native execution scope
-outlives the cleanup budget: a `cleanup-escalation` diagnostic on the Run, the
-BackendAgent closed by the core, its Conversation marked lost so a later resume
-is honest, and settlement continuing with the observations it has. A hung
-finalizer must not leave a Run in `finalizing` forever.
+**Cleanup escalation** — what happens when cleanup outlives its budget. For a
+native execution scope, the Run gets a `cleanup-escalation` diagnostic, the core
+closes the BackendAgent, marks its Conversation lost, and continues settlement.
+For a Subagent Scope / BackendAgent close overrun after its Run has settled,
+there is no Run to carry a diagnostic: the escalation is recorded by the
+`cleanupEscalations` counter alone. A hung finalizer must not leave a Run in
+`finalizing` forever or prevent Session closure.
 
 **Subagent records** — what the supervisor knows about each Subagent it owns,
 and the only writer of any of it: the fixed facts (id, Profile, context,
-BackendAgent, Scope) and the four things that change — the phase, the Run
-currently in flight, the fiber settling it, and whether the Conversation is
-lost. Every mutation is a call on the module, so the rule that a Subagent owns
+BackendAgent, Scope) and the three things that change — the phase, the Run
+currently in flight, and whether the Conversation is lost. Records hold no
+fiber; the attached Run handle carries its scoped resources and completion
+barrier. Every mutation is a call on the module, so the rule that a Subagent owns
 at most one active Run is asserted where the record lives rather than at each
 call site, and finding a Run's owner is an index lookup rather than a scan.
 **Not a registry** — see the historical term of that name.

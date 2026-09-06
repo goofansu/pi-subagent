@@ -162,6 +162,89 @@ test("a persistent Result encode defect fails the Run, wakes waiters, and leaves
   assert.equal(outcome.noLeaks, true);
 });
 
+test("a post-commit defect preserves the committed Result and projection", async () => {
+  const finish = await Effect.runPromise(Deferred.make<void>());
+  const outcome = await withSession(
+    {
+      steps: [
+        [emitText("committed answer"), { step: "await-gate", gate: "finish" }],
+        [emitText("next answer")],
+      ],
+      gates: { finish },
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        rig.exitNextSettlementAt("publication", "defect");
+        const first = startedRun(yield* rig.supervisor.start(request()));
+        const waiting = yield* Effect.forkChild(
+          rig.supervisor.wait([first.runId]),
+        );
+        yield* quiesce();
+        yield* Deferred.succeed(finish, undefined);
+        const [waited] = yield* Fiber.join(waiting);
+        const stored = yield* rig.supervisor.result(first.runId);
+        const snapshot = yield* rig.repository.get(first.runId);
+        const counters = rig.supervisor.counters();
+        yield* quiesce();
+        const resumed = yield* rig.supervisor.resume({
+          subagentId: first.subagentId,
+          description: "again",
+          prompt: "again",
+        });
+        return { waited, stored, snapshot, counters, resumed: resumed.outcome };
+      }),
+  );
+
+  assert.equal(outcome.value.waited.outcome, "terminal");
+  assert.equal(outcome.value.stored.outcome, "result");
+  if (outcome.value.stored.outcome === "result") {
+    assert.equal(outcome.value.stored.result.status, "completed");
+    assert.equal(outcome.value.stored.result.finalOutput, "committed answer");
+    assert.deepEqual(outcome.value.stored.result.diagnostics, []);
+  }
+  assert.equal(outcome.value.snapshot?.phase, "completed");
+  assert.match(
+    outcome.value.snapshot?.settlementDiagnostic?.message ?? "",
+    /settlement/i,
+  );
+  assert.equal(outcome.value.counters.settlementDefects, 1);
+  assert.equal(outcome.value.counters.duplicateCommits, 0);
+  assert.equal(outcome.value.counters.conflictingCommits, 0);
+  assert.equal(outcome.value.resumed, "started");
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("an interrupted settlement detaches its handle and leaves the Subagent idle", async () => {
+  const outcome = await withSession(
+    { steps: [[emitText("first answer")], [emitText("second answer")]] },
+    (rig) =>
+      Effect.gen(function* () {
+        rig.exitNextSettlementAt("commit", "interrupt");
+        const first = startedRun(yield* rig.supervisor.start(request()));
+        const [waited] = yield* rig.supervisor.wait([first.runId]);
+        yield* quiesce();
+        const snapshot = yield* rig.repository.get(first.runId);
+        const resumed = yield* rig.supervisor.resume({
+          subagentId: first.subagentId,
+          description: "again",
+          prompt: "again",
+        });
+        return {
+          waited,
+          snapshot,
+          resumed: resumed.outcome,
+          counters: rig.supervisor.counters(),
+        };
+      }),
+  );
+
+  assert.equal(outcome.value.waited.outcome, "terminal");
+  assert.equal(outcome.value.snapshot?.phase, "failed");
+  assert.equal(outcome.value.resumed, "started");
+  assert.equal(outcome.value.counters.settlementDefects, 1);
+  assert.equal(outcome.noLeaks, true);
+});
+
 test("a defect in one execution settles that Run and leaves the next one alone", async () => {
   const outcome = await withSession(
     {
@@ -299,7 +382,7 @@ test("a hung finalizer is escalated past, and the Session still closes cleanly",
   assert.equal(outcome.noLeaks, true);
 });
 
-test("disposal escalates past an uninterruptible BackendAgent close", async () => {
+test("disposal records a BackendAgent close escalation in the counter", async () => {
   const policy: RuntimePolicy = {
     ...DEFAULT_RUNTIME_POLICY,
     cleanupBudgetMillis: 2_000,
@@ -342,6 +425,8 @@ test("disposal escalates past an uninterruptible BackendAgent close", async () =
       }),
   );
 
+  // The Run has settled before its Subagent Scope closes, so this counter is
+  // the escalation record; there is no live Run on which to put a diagnostic.
   assert.equal(outcome.value.counters().cleanupEscalations, 1);
   await Effect.runPromise(Deferred.succeed(closeGate, undefined));
   await Effect.runPromise(quiesce());

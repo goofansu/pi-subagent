@@ -32,6 +32,7 @@
 import {
   boundList,
   boundObservation,
+  droppedAmount,
   type TruncationEvent,
 } from "./bounding.ts";
 import { unfinishedToolStatusForEnding } from "./endings.ts";
@@ -139,15 +140,6 @@ function withTruncation(
   patch: Partial<TruncationRecord>,
 ): RunProjection {
   return { ...projection, truncation: { ...projection.truncation, ...patch } };
-}
-
-function droppedAmount(
-  dropped: readonly TruncationEvent[],
-  of: TruncationEvent["of"],
-): number {
-  return dropped
-    .filter((event) => event.of === of)
-    .reduce((total, event) => total + event.amount, 0);
 }
 
 /**

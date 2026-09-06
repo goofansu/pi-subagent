@@ -40,7 +40,11 @@ import {
 import { CompletionDelivery } from "../runtime/delivery.ts";
 import type { RuntimePolicy } from "../runtime/policy.ts";
 import { RunRepository } from "../runtime/repository.ts";
-import { type ResultEncoder, ResultStore } from "../runtime/result-store.ts";
+import {
+  type PinHolder,
+  type ResultEncoder,
+  ResultStore,
+} from "../runtime/result-store.ts";
 import {
   type StartRequest,
   SubagentSupervisor,
@@ -88,6 +92,11 @@ export interface SessionRig {
   readonly sink: FakeNotificationSink;
   readonly backend: FakeBackendHandle;
   readonly counters: RuntimeCounters;
+  /** Inject one test-only exit at a settlement storage boundary. */
+  readonly exitNextSettlementAt: (
+    boundary: "commit" | "publication",
+    exit: "defect" | "interrupt",
+  ) => void;
 }
 
 export interface SessionRigOptions {
@@ -172,6 +181,38 @@ export function withSession<A>(
     const repository = yield* RunRepository;
     const store = yield* ResultStore;
     const delivery = yield* CompletionDelivery;
+    const exitNextSettlementAt: SessionRig["exitNextSettlementAt"] = (
+      boundary,
+      exit,
+    ) => {
+      let pending = true;
+      const injectedExit = () =>
+        exit === "defect"
+          ? Effect.die(new Error("injected settlement defect"))
+          : Effect.interrupt;
+      if (boundary === "commit") {
+        const commit = store.commit;
+        Object.defineProperty(store, "commit", {
+          configurable: true,
+          value: (...args: Parameters<typeof commit>) => {
+            if (!pending) return commit(...args);
+            pending = false;
+            return injectedExit();
+          },
+        });
+        return;
+      }
+      const releasePin = store.releasePin;
+      Object.defineProperty(store, "releasePin", {
+        configurable: true,
+        value: (runId: RunId, holder: PinHolder) => {
+          const released = releasePin(runId, holder);
+          if (!pending || holder !== "publication") return released;
+          pending = false;
+          return Effect.andThen(released, injectedExit());
+        },
+      });
+    };
     const value = yield* body({
       supervisor,
       repository,
@@ -180,6 +221,7 @@ export function withSession<A>(
       sink,
       backend,
       counters,
+      exitNextSettlementAt,
     });
     return { value, readProbe: () => supervisor.probe() };
   }).pipe(

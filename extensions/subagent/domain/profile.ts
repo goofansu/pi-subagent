@@ -86,28 +86,48 @@ function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
+interface QuoteScan {
+  readonly firstClosingQuote?: number;
+  readonly unquotedSeparators: readonly number[];
+}
+
+/** Scan quoting once for both scalar comments and inline-list separators. */
+function scanQuotes(value: string, separator?: string): QuoteScan {
+  let quote: '"' | "'" | undefined;
+  let firstClosingQuote: number | undefined;
+  const unquotedSeparators: number[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote !== undefined) {
+      if (quote === '"' && character === "\\") {
+        index += 1;
+      } else if (character === quote) {
+        if (quote === "'" && value[index + 1] === "'") index += 1;
+        else {
+          firstClosingQuote ??= index;
+          quote = undefined;
+        }
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") quote = character;
+    else if (character === separator) unquotedSeparators.push(index);
+  }
+  return {
+    ...(firstClosingQuote === undefined ? {} : { firstClosingQuote }),
+    unquotedSeparators,
+  };
+}
+
 function readQuotedScalar(value: string): string | undefined {
   const quote = value[0];
   if (quote !== '"' && quote !== "'") return undefined;
-
-  for (let index = 1; index < value.length; index += 1) {
-    if (quote === '"' && value[index] === "\\") {
-      index += 1;
-      continue;
-    }
-    if (value[index] !== quote) continue;
-    if (quote === "'" && value[index + 1] === "'") {
-      index += 1;
-      continue;
-    }
-    const trailing = value.slice(index + 1).trim();
-    if (trailing !== "" && !trailing.startsWith("#")) return undefined;
-    const inner = value.slice(1, index);
-    return quote === '"'
-      ? inner.replace(/\\"/g, '"')
-      : inner.replace(/''/g, "'");
-  }
-  return undefined;
+  const closing = scanQuotes(value).firstClosingQuote;
+  if (closing === undefined) return undefined;
+  const trailing = value.slice(closing + 1).trim();
+  if (trailing !== "" && !trailing.startsWith("#")) return undefined;
+  const inner = value.slice(1, closing);
+  return quote === '"' ? inner.replace(/\\"/g, '"') : inner.replace(/''/g, "'");
 }
 
 /** A plain scalar: quoted string, boolean, null, number, or bare text. */
@@ -135,24 +155,9 @@ function readInlineList(raw: string): unknown[] {
 
   const items: string[] = [];
   let start = 0;
-  let quote: '"' | "'" | undefined;
-  for (let index = 0; index < inner.length; index += 1) {
-    const character = inner[index];
-    if (quote !== undefined) {
-      if (quote === '"' && character === "\\") {
-        index += 1;
-      } else if (character === quote) {
-        if (quote === "'" && inner[index + 1] === "'") index += 1;
-        else quote = undefined;
-      }
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-    } else if (character === ",") {
-      items.push(inner.slice(start, index));
-      start = index + 1;
-    }
+  for (const separator of scanQuotes(inner, ",").unquotedSeparators) {
+    items.push(inner.slice(start, separator));
+    start = separator + 1;
   }
   items.push(inner.slice(start));
   return items.map((item) => readScalar(item));
@@ -160,6 +165,11 @@ function readInlineList(raw: string): unknown[] {
 
 const KEY_LINE = /^([A-Za-z0-9_.$-]+):(.*)$/;
 const FRONTMATTER_FENCE = /^---[ \t]*$/;
+
+/** A field bag where keys such as `__proto__` are ordinary own properties. */
+function emptyFields(): Record<string, unknown> {
+  return Object.create(null) as Record<string, unknown>;
+}
 
 /**
  * Split a Profile file into frontmatter fields, a body, and the problems the
@@ -171,7 +181,7 @@ function readFrontmatter(text: string): Frontmatter {
   const documentLines = normalized.split("\n");
   if (!FRONTMATTER_FENCE.test(documentLines[0])) {
     return {
-      fields: Object.create(null) as Record<string, unknown>,
+      fields: emptyFields(),
       body: normalized,
       problems: [],
     };
@@ -181,7 +191,7 @@ function readFrontmatter(text: string): Frontmatter {
   );
   if (end === -1) {
     return {
-      fields: Object.create(null) as Record<string, unknown>,
+      fields: emptyFields(),
       body: normalized,
       problems: ["frontmatter is opened with '---' but never closed"],
     };
@@ -192,7 +202,7 @@ function readFrontmatter(text: string): Frontmatter {
     .join("\n")
     .trim();
 
-  const fields = Object.create(null) as Record<string, unknown>;
+  const fields = emptyFields();
   const problems: string[] = [];
   let index = 0;
   while (index < lines.length) {
@@ -306,7 +316,7 @@ export function parseProfile(text: string, filePath: string): ProfileParse {
 
   if (diagnostics.length > 0) return { outcome: "diagnostics", diagnostics };
 
-  const backendFields = Object.create(null) as Record<string, unknown>;
+  const backendFields = emptyFields();
   for (const [field, value] of Object.entries(fields)) {
     if (field === "description" || field === "backend") continue;
     backendFields[field] = value;

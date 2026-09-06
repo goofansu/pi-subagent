@@ -446,17 +446,9 @@ const makeSupervisor = (settings: SessionSettings) =>
                 // The lease first, so LIFO gives it back after detachment.
                 yield* Effect.addFinalizer(() => lease.release());
                 yield* Effect.addFinalizer(() =>
-                  Effect.gen(function* () {
+                  Effect.sync(() => {
                     counters.released("liveRunFibers");
-                    const latest = yield* repository.lookup(
-                      handle.identity.runId,
-                    );
-                    // A settlement defect may leave the row active until the
-                    // settlement guard lands in ticket 04. Keep its handle
-                    // attached: active and handle-present remain one fact.
-                    if (latest.state === "terminal") {
-                      records.detachRun(record.id);
-                    }
+                    records.detachRun(record.id);
                   }),
                 );
                 counters.acquired("liveRunFibers");
@@ -948,20 +940,30 @@ const makeSupervisor = (settings: SessionSettings) =>
      * Resolve an already-observed active row to its current handle, or to the
      * newer non-active repository fact if settlement won between the reads.
      *
-     * Detachment only occurs after terminal publication, so an active row
-     * with no current handle is transiently a stale first read, never a state
-     * an operation has to interpret.
+     * Handle attachment precedes active publication, and detachment is a Run
+     * fiber finalizer after settlement, so active-without-handle is unreachable
+     * in a healthy runtime. The small bound protects every public operation
+     * from spinning forever if those independently stored facts are corrupted;
+     * after it, the only honest typed answer is unknown Run.
      */
+    const CURRENT_RUN_LOOKUP_YIELDS = 8;
     const currentRunAfterActive = (
       runId: RunId,
     ): Effect.Effect<CurrentRunResolution> =>
       Effect.gen(function* () {
-        const current = records.currentRun(runId);
-        if (current !== undefined) return { state: "current", current };
+        for (
+          let attempt = 0;
+          attempt < CURRENT_RUN_LOOKUP_YIELDS;
+          attempt += 1
+        ) {
+          const current = records.currentRun(runId);
+          if (current !== undefined) return { state: "current", current };
+          const latest = yield* repository.lookup(runId);
+          if (latest.state !== "active") return latest;
+          yield* Effect.yieldNow;
+        }
         const latest = yield* repository.lookup(runId);
-        if (latest.state !== "active") return latest;
-        yield* Effect.yieldNow;
-        return yield* currentRunAfterActive(runId);
+        return latest.state === "active" ? { state: "unknown" } : latest;
       });
 
     const steer = (

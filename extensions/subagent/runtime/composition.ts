@@ -132,7 +132,11 @@ interface SessionRuntimeBaseOptions {
   readonly sink: NotificationSink;
   /** Shared with the caller when a test wants to read the probe directly. */
   readonly counters?: RuntimeCounters;
-  /** Override the Result encoder for deterministic settlement fault tests. */
+  /**
+   * Test seam for deterministic pre-commit settlement faults, beside the
+   * ambient clock injection used by bounded-time tests. Production omits it;
+   * it is not a second encoding policy.
+   */
   readonly resultEncoder?: ResultEncoder;
   /**
    * What a backend needs in order to validate a Profile against this Session.

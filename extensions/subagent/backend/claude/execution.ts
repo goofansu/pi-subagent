@@ -98,8 +98,13 @@ export const QUERY_FAILED_CATEGORY = "Claude query failed";
 export const CONTROL_NOT_DELIVERED_CATEGORY =
   "Claude guidance was not delivered";
 
-/** How long silence may follow a Turn boundary with guidance outstanding. */
-export const TURN_BOUNDARY_WAIT_MILLIS = 1_000;
+/**
+ * How long silence may follow a Turn boundary with guidance outstanding.
+ *
+ * Provider time-to-first-frame is measured in seconds, so 30 seconds leaves
+ * ordinary model startup room while still giving ADR-0025 a finite bound.
+ */
+export const TURN_BOUNDARY_WAIT_MILLIS = 30_000;
 
 /** What the SDK's own stderr reports, without keeping a word of it. */
 export const SDK_STDERR_CATEGORY = "the Claude SDK reported diagnostics";

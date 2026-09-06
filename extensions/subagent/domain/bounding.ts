@@ -81,6 +81,16 @@ export interface TruncationEvent {
   readonly amount: number;
 }
 
+/** Sum the amount dropped for one bounded projection field. */
+export function droppedAmount(
+  dropped: readonly TruncationEvent[],
+  of: TruncationEvent["of"],
+): number {
+  return dropped
+    .filter((event) => event.of === of)
+    .reduce((total, event) => total + event.amount, 0);
+}
+
 export interface BoundedList<T> {
   readonly items: readonly T[];
   readonly droppedItems: number;
