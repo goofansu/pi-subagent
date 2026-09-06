@@ -208,7 +208,7 @@ the seam this whole rewrite exists to draw.
 ### 2026-09-06 — documented execution obligations
 
 The stable member set is unchanged; the contract documentation now records
-three obligations adapters already depend on:
+four obligations adapters already depend on:
 
 1. `ExecutionIO.emit` remains accepted, discarded, and counted late after the
    Run is sealed; it never fails.
@@ -216,6 +216,10 @@ three obligations adapters already depend on:
    cooperation, so every provider wait is bounded.
 3. `BackendAgent.close` may run while `execute` is in flight, while `execute`
    is never invoked twice concurrently on one BackendAgent.
+4. Interruption of an execution completes promptly. Native stop work belongs
+   in the execution scope's interruptible finalizers; after cancellation the
+   core bounds the execution's exit by the cleanup budget and escalates past an
+   adapter that does not cooperate.
 
 Execution-scope finalizers should be interruptible. The core has a cleanup
 budget and escalates beyond it, but an adapter should still cooperate with
@@ -224,4 +228,6 @@ ordinary scoped interruption rather than relying on escalation.
 The shared conformance suite now has a 38th scenario: an execution settles when
 the provider goes quiet after a result correlated to guidance. It checks the
 second obligation on every backend without adding or changing a contract
-member. The ADR-0028 shape test remains unchanged.
+member. Its 39th scenario proves that cancel returns immediately and settlement
+bounds a provider stop that does not return. The ADR-0028 shape test remains
+unchanged.

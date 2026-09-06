@@ -16,18 +16,19 @@ import {
  * two fakes and the Pi adapter pass, run against the second real provider with
  * a scriptable stand-in Query behind it. If Claude had needed the suite
  * loosened, that would have been a finding about the seam rather than a
- * finding about Claude.
+ * finding about Claude. Ticket 01 permits the ignored-stop scenario to remain
+ * a visible skip until ticket 03 supplies Claude's fixture.
  */
 
-test("the Claude backend skips nothing, though the spec allowed for skips", () => {
+test("the Claude backend visibly skips only ticket 03's ignored-stop fixture", () => {
   const rig = claudeConformanceRig();
 
   const skipped = BACKEND_CONFORMANCE_SCENARIOS.filter(
     (scenario) => rig.build(scenario) === undefined,
   );
 
-  assert.deepEqual(skipped, []);
   assert.deepEqual(skipped, [...claudeConformanceSkips()]);
+  assert.equal(skipped.length, 1);
 });
 
 runBackendConformance(claudeConformanceRig());

@@ -373,6 +373,18 @@ function createFakeBackend(
               yield* Effect.never;
               break;
             }
+            case "hang-on-stop": {
+              // Unlike `hang-in-finalizer`, this release belongs to the
+              // execution fiber itself. Interruption starts it
+              // uninterruptibly and it never returns: the Pi shape that the
+              // Run Scope must bound before native-scope cleanup begins.
+              yield* Effect.acquireUseRelease(
+                Effect.void,
+                () => Effect.never,
+                () => Effect.never,
+              );
+              break;
+            }
             case "emit-in-finalizer": {
               const late = step.observation;
               yield* Effect.acquireRelease(Effect.void, () =>

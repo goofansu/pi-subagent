@@ -29,7 +29,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect, Layer } from "effect";
+import { Effect, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import type { Backend, RunControl } from "../backend/contract.ts";
 import type {
@@ -90,6 +90,7 @@ export const RUN_CONFORMANCE_SCENARIOS = [
   "late-events-cannot-mutate-a-terminal-run",
   "a-failing-sink-cannot-strand-the-execution",
   "a-run-may-settle-with-no-observations",
+  "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop",
   "an-execution-settles-when-the-provider-goes-quiet",
   "observations-carry-no-provider-vocabulary",
   // Added in M2.
@@ -173,6 +174,10 @@ export interface ConformanceRunPlan {
   readonly waitAfterSettlement?: boolean;
   /** Advance a supplied test clock after Controls have reached the mailbox. */
   readonly advanceClockMillis?: number;
+  /** Advance the test clock only after cancel has returned. */
+  readonly advanceClockAfterCancelMillis?: number;
+  /** Attempt one resume after this Run has settled. */
+  readonly resumeAfterSettlement?: boolean;
 }
 
 /** What the suite should find. Every field is checked only if the rig gave it. */
@@ -224,6 +229,8 @@ export interface BackendConformanceFixture {
   readonly profile: Profile;
   /** Retained-resource counters, read after the Session Scope closes. */
   readonly counters: () => ResourceCountersSnapshot;
+  /** Whether this fixture's provider cooperates with execution interruption. */
+  readonly providerStopsOnRequest: boolean;
   /** One plan per Run the suite should drive. Empty means drive none. */
   readonly plans: readonly ConformanceRunPlan[];
   readonly expected: BackendConformanceExpectation;
@@ -272,6 +279,8 @@ export interface RunOutcome {
   readonly waitOutcomes: readonly string[];
   /** What `result` answered, which is not always a result. */
   readonly resultOutcome: string;
+  readonly cancelReturnedBeforeClockAdvance?: boolean;
+  readonly resumeAfterSettlement?: string;
 }
 
 /** One row of the published index, reduced to what a scenario asks about. */
@@ -471,8 +480,18 @@ function runFixture(
         }
 
         let steerAfterCancel: string | undefined;
+        let cancelReturnedBeforeClockAdvance: boolean | undefined;
         if (plan.cancel) {
-          yield* supervisor.cancel([runId]);
+          const cancelling = yield* Effect.forkChild(
+            supervisor.cancel([runId]),
+          );
+          yield* quiesce;
+          cancelReturnedBeforeClockAdvance =
+            cancelling.pollUnsafe() !== undefined;
+          yield* Fiber.join(cancelling);
+          if (plan.advanceClockAfterCancelMillis !== undefined) {
+            yield* TestClock.adjust(plan.advanceClockAfterCancelMillis);
+          }
           if (plan.steerAfterCancel) {
             const refused = yield* supervisor.steer(runId, {
               type: "steer",
@@ -501,12 +520,26 @@ function runFixture(
         yield* quiesce;
 
         const read = yield* supervisor.result(runId);
+        const resumed =
+          plan.resumeAfterSettlement && subagentId !== undefined
+            ? yield* supervisor.resume({
+                subagentId,
+                description: "conformance resume after settlement",
+                prompt: "resume after settlement",
+              })
+            : undefined;
         runs.push({
           runId,
           result: read.outcome === "result" ? read.result : NO_RESULT,
           steerOutcomes,
           floodOutcomes,
           ...(steerAfterCancel === undefined ? {} : { steerAfterCancel }),
+          ...(cancelReturnedBeforeClockAdvance === undefined
+            ? {}
+            : { cancelReturnedBeforeClockAdvance }),
+          ...(resumed === undefined
+            ? {}
+            : { resumeAfterSettlement: resumed.outcome }),
           waitOutcomes,
           resultOutcome: read.outcome,
         });
@@ -908,6 +941,35 @@ const SCENARIO_CHECKS: {
       assert.equal(run.result.finalOutput, "");
       assert.deepEqual(run.result.transcript, []);
       assert.equal(run.result.usage.turns, 0);
+    }
+  },
+  "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop": (
+    fixture,
+    outcome,
+  ) => {
+    assert.equal(outcome.runs.length, 1, "the scenario drove one Run");
+    const [run] = outcome.runs;
+    assert.equal(
+      run.cancelReturnedBeforeClockAdvance,
+      true,
+      "cancel did not return before the cleanup clock advanced",
+    );
+    assert.equal(run.result.status, "cancelled");
+    assert.equal(run.result.cancellationReason, "requested");
+    const escalationDiagnostics = run.result.diagnostics.filter(
+      (diagnostic) => diagnostic.category === "cleanup-escalation",
+    );
+    assert.equal(
+      escalationDiagnostics.length,
+      fixture.providerStopsOnRequest ? 0 : 1,
+      "cleanup-escalation diagnostics did not follow the fixture's stop behavior",
+    );
+    assert.equal(
+      outcome.counters.cleanupEscalations,
+      fixture.providerStopsOnRequest ? 0 : 1,
+    );
+    if (run.resumeAfterSettlement !== undefined) {
+      assert.equal(run.resumeAfterSettlement, "conversation lost");
     }
   },
   "an-execution-settles-when-the-provider-goes-quiet": (_fixture, outcome) => {

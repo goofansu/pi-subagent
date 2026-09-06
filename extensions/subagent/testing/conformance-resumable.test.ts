@@ -24,6 +24,7 @@ test("the scenario list is exactly the five sections, with nothing forgotten", (
     ]),
     [...BACKEND_CONFORMANCE_SCENARIOS],
   );
+  assert.equal(BACKEND_CONFORMANCE_SCENARIOS.length, 39);
   assert.equal(
     new Set(BACKEND_CONFORMANCE_SCENARIOS).size,
     BACKEND_CONFORMANCE_SCENARIOS.length,

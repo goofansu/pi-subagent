@@ -107,11 +107,14 @@ resume, new, reload, quit) cancels whatever is still running.
 carries no exit code and no provider stop vocabulary; the reducer turns it into
 a Run phase and preserves the details the observations carried.
 
-**Cancel** — request that a Run stop. *Cancelled* is the terminal phase of a
-Run stopped intentionally, and the model, the operator, and presentation all
-say cancelled. *Abort* is not a domain word: it is mechanism vocabulary —
-`AbortController`, `AbortSignal`, Pi's `stopReason: "aborted"` — normalised to
-cancelled inside the adapter and never shown above it.
+**Cancel** — request that a Run stop. The operation returns once the reason is
+recorded, the Control mailbox is closed, and execution interruption is
+requested; it never waits for the provider or for the execution fiber to exit.
+*Cancelled* is the terminal phase of a Run stopped intentionally, and the
+model, the operator, and presentation all say cancelled. *Abort* is not a
+domain word: it is mechanism vocabulary — `AbortController`, `AbortSignal`,
+Pi's `stopReason: "aborted"` — normalised to cancelled inside the adapter and
+never shown above it.
 
 **Cancellation reason** — `requested`, `shutdown`, or `timeout`, reported
 wherever a cancelled Run is named. The difference is not decoration: at
@@ -329,10 +332,13 @@ finalizer.
 **Cleanup escalation** — what happens when cleanup outlives its budget. For a
 native execution scope, the Run gets a `cleanup-escalation` diagnostic, the core
 closes the BackendAgent, marks its Conversation lost, and continues settlement.
-For a Subagent Scope / BackendAgent close overrun after its Run has settled,
-there is no Run to carry a diagnostic: the escalation is recorded by the
-`cleanupEscalations` counter alone. A hung finalizer must not leave a Run in
-`finalizing` forever or prevent Session closure.
+The same happens when a cancelled native execution does not stop within the
+budget: its fiber is abandoned, its partial output is retained, and the Run
+settles cancelled with its recorded reason. For a Subagent Scope / BackendAgent
+close overrun after its Run has settled, there is no Run to carry a diagnostic:
+the escalation is recorded by the `cleanupEscalations` counter alone. A hung
+execution or finalizer must not leave a Run in `running` or `finalizing` forever
+or prevent Session closure.
 
 **Subagent records** — what the supervisor knows about each Subagent it owns,
 and the only writer of any of it: the fixed facts (id, Profile, context,
