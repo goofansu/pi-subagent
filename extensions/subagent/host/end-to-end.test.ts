@@ -309,6 +309,54 @@ test("a settled Run sends exactly one follow-up notice that triggers a turn", as
   );
 });
 
+test("an encode defect leaves a marked row and reports one unannounceable hand-off", async (t) => {
+  const rig = hostRig(t, {
+    resultEncoder: () => {
+      throw new Error("persistent encode defect");
+    },
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const ids = await started(rig, RIG_RESUMABLE_PROFILE);
+  await rig.settled(ids.runId);
+  await rig.pump();
+
+  assert.equal(
+    rig.installation.sink.status(runId(ids.runId)),
+    "unannounceable",
+  );
+  assert.match(
+    rig.host.widgetLines(120)[1] ?? "",
+    new RegExp(`no notification · ${ids.runId} · result unavailable$`),
+  );
+
+  const said: string[] = [];
+  const command = rig.host.commands().find(({ name }) => name === "subagent");
+  assert.ok(command);
+  await command.handler("diagnostics", {
+    ui: {
+      notify: (message: string) => void said.push(message),
+      custom: async () => {},
+      editor: async () => undefined,
+    },
+    waitForIdle: async () => {},
+  } as never);
+  assert.match(said[0] ?? "", /unannounceable: 1/);
+  assert.match(said[0] ?? "", /unreadableResults: 1/);
+
+  assert.match(
+    await rig.text("agent_result", { id: ids.runId }),
+    /output itself is gone and cannot be recovered/,
+  );
+  await rig.pump();
+  assert.equal(
+    rig.installation.sink.status(runId(ids.runId)),
+    "unannounceable",
+  );
+  assert.equal(rig.host.hasWidget(), true);
+});
+
 test("a push that fails leaves the Result retrievable and unchanged", async (t) => {
   let failing = true;
   const rig = hostRig(t, { sendFails: () => failing });

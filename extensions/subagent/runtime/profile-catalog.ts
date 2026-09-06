@@ -17,7 +17,11 @@
 
 import { Context, Effect, Layer } from "effect";
 import type { BackendValidationContext } from "../backend/contract.ts";
-import type { Profile, ProfileDiagnostic } from "../domain/index.ts";
+import {
+  type Profile,
+  type ProfileDiagnostic,
+  profileNameFromPath,
+} from "../domain/index.ts";
 import { discoverProfiles, profilesDir } from "../profiles/discovery.ts";
 import { BackendCatalog } from "./backend-catalog.ts";
 
@@ -35,23 +39,6 @@ export interface ProfileCatalogApi {
   readonly diagnostics: () => readonly ProfileDiagnostic[];
   /** The diagnostics for one name, when a caller asks about a bad Profile. */
   readonly diagnosticsFor: (name: string) => readonly ProfileDiagnostic[];
-}
-
-/**
- * Which file a diagnostic is about, as a Profile name.
- *
- * A diagnostic names a path, and a caller names a Profile. Turning one into
- * the other here is what lets `agent_start` answer `invalid profile` with the
- * reasons that actually apply to the name that was asked for.
- */
-function nameOf(filePath: string): string {
-  const lastSlash = Math.max(
-    filePath.lastIndexOf("/"),
-    filePath.lastIndexOf("\\"),
-  );
-  const base = filePath.slice(lastSlash + 1);
-  const dot = base.lastIndexOf(".");
-  return dot <= 0 ? base : base.slice(0, dot);
 }
 
 export class ProfileCatalog extends Context.Service<
@@ -145,6 +132,8 @@ function fromDiscovery(discovered: {
     list: () => [...byName.values()],
     diagnostics: () => diagnostics,
     diagnosticsFor: (name) =>
-      diagnostics.filter((entry) => nameOf(entry.filePath) === name),
+      diagnostics.filter(
+        (entry) => profileNameFromPath(entry.filePath) === name,
+      ),
   };
 }

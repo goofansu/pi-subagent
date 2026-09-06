@@ -30,8 +30,17 @@ was rejected here — the objection was that a wait withheld the answer, and it
 no longer does. The hold that makes suppression real, where this entry could
 only count *consumed before landing*, is decided there too. Everything else
 this entry decided — that a hand-off resolves on landing or consumption, that
-the widget reads one three-state read model, that delivery reports exhaustion,
+the widget reads one three-state read model [qualified by the 2026-09-06
+amendment below, which adds a fourth value], that delivery reports exhaustion,
 and that consumption is recorded at the host boundary — stands.
+
+**Amended 2026-09-06.** Delivery also reports an **unannounceable** Run to the
+Session push sink when the Result store has no Result from which to build a
+notice. The sink owns that terminal hand-off state, its count, and the widget's
+fourth read-model value. This is a second report of the same kind as exhaustion,
+not a new architectural decision: delivery reports a terminal fact only it can
+observe, after releasing its pin, so the sink remains the one owner of the
+whole hand-off state and delivery still learns no host-only vocabulary.
 
 Everything from *Context* down is the text that was proposed, unchanged.
 

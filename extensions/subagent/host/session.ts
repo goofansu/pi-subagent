@@ -42,6 +42,7 @@ import type {
 import { sessionRuntimeLayer } from "../runtime/composition.ts";
 import type { RuntimePolicy } from "../runtime/policy.ts";
 import { ProfileCatalog } from "../runtime/profile-catalog.ts";
+import type { ResultEncoder } from "../runtime/result-store.ts";
 import type { SessionPushSink } from "./push-sink.ts";
 import type { SessionHandle } from "./session-handle.ts";
 import { formatAgentGuidelines } from "./tool-copy.ts";
@@ -72,6 +73,11 @@ export interface SessionWiring {
   readonly policy?: RuntimePolicy;
   /** Test seam overriding the ambient clock for deterministic host tests. */
   readonly clock?: SessionRuntimeOptions["clock"];
+  /**
+   * Test-only Result-encoding seam; composition documents why it is not a
+   * production encoding policy.
+   */
+  readonly resultEncoder?: ResultEncoder;
   /**
    * The live `agent_start` guideline array, rewritten in place per Session.
    *
@@ -168,6 +174,9 @@ export async function startSession(
       validation: { models: [...(ctx.modelRegistry?.getAll() ?? [])] },
       ...(wiring.policy === undefined ? {} : { policy: wiring.policy }),
       ...(wiring.clock === undefined ? {} : { clock: wiring.clock }),
+      ...(wiring.resultEncoder === undefined
+        ? {}
+        : { resultEncoder: wiring.resultEncoder }),
     }),
   );
 

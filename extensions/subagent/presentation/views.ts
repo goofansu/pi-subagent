@@ -21,6 +21,25 @@ import type {
   UsageSnapshot,
 } from "../domain/index.ts";
 
+/** The four completion hand-off states visible outside the Session push sink. */
+export type HandoffStatus =
+  | "pending"
+  | "resolved"
+  | "exhausted"
+  | "unannounceable";
+
+export type FailedHandoffStatus = Extract<
+  HandoffStatus,
+  "exhausted" | "unannounceable"
+>;
+
+/** Whether a completion hand-off ended without resolving. */
+export function handoffEndedBadly(
+  status: HandoffStatus | undefined,
+): status is FailedHandoffStatus {
+  return status === "exhausted" || status === "unannounceable";
+}
+
 /**
  * One live Run, as a row.
  *
@@ -51,11 +70,11 @@ export interface RunRowView {
    * is the Session push sink's, and a snapshot that carried it would be the
    * repository knowing about delivery.
    *
-   * `exhausted` is the one value there is, because it is the one a row has to
-   * explain: delivery's retry budget ran out, so nothing will ever land and
-   * this row will never leave on its own.
+   * Both values need an explanation: `exhausted` means delivery's retry
+   * budget ran out; `unannounceable` means there was no Result from which to
+   * build a notice. Either way this row will never leave on its own.
    */
-  readonly handoff?: "exhausted";
+  readonly handoff?: FailedHandoffStatus;
 }
 
 /**

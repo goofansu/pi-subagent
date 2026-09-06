@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
-import { runId as makeRunId } from "../domain/index.ts";
+import { backendId, runId as makeRunId, subagentId } from "../domain/index.ts";
 import { createFakeNotificationSink } from "../testing/fake-sink.ts";
 import {
   createFakeResumableBackend,
@@ -623,6 +623,60 @@ test("emitting after intake is sealed is a no-op that counts a late event", asyn
   if (value.again.outcome === "result") {
     assert.deepEqual(value.again.result, value.first.result);
   }
+});
+
+test("one undecodable stored entry read through agent_result counts once", async () => {
+  const { value } = await withSession(
+    {
+      steps: [[emitText("the answer")]],
+      resultEncoder: (_result, encode) => ({
+        ...(encode(_result) as Record<string, unknown>),
+        unexpected: true,
+      }),
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(request()));
+        yield* untilTerminal(rig, started.runId);
+        // Delivery reads first and discovers the stored form is undecodable.
+        for (let step = 0; step < 10; step += 1) {
+          if (rig.sink.unannounceableRuns().length > 0) break;
+          yield* Effect.yieldNow;
+        }
+        assert.deepEqual(rig.sink.unannounceableRuns(), [started.runId]);
+        const result = yield* rig.supervisor.result(started.runId);
+        return { result, counters: rig.supervisor.counters() };
+      }),
+  );
+
+  assert.equal(value.result.outcome, "ResultExpired");
+  assert.equal(value.counters.unreadableResults, 1);
+});
+
+test("a terminal Run with no Result store entry counts once", async () => {
+  const { value } = await withSession({}, (rig) =>
+    Effect.gen(function* () {
+      const id = makeRunId("run-missing-result");
+      yield* rig.repository.publish(
+        {
+          runId: id,
+          subagentId: subagentId("subagent-missing-result"),
+          backendId: backendId("fake-resumable"),
+          agent: "explore",
+          description: "missing output",
+        },
+        0,
+      );
+      yield* rig.repository.transition(id, "execution-ended");
+      yield* rig.repository.transition(id, "settled-failed", 1);
+
+      const result = yield* rig.supervisor.result(id);
+      return { result, counters: rig.supervisor.counters() };
+    }),
+  );
+
+  assert.equal(value.result.outcome, "ResultExpired");
+  assert.equal(value.counters.unreadableResults, 1);
 });
 
 test("a result for an id no Run ever had is unknown, not expired", async () => {

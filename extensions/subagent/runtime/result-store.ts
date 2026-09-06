@@ -69,6 +69,8 @@ interface StoredEntry {
   /** Commit order, so eviction can take the oldest without reading a clock. */
   readonly sequence: number;
   readonly pins: ReadonlySet<PinHolder>;
+  /** Whether this stored form has already counted as unreadable. */
+  readonly unreadableObserved?: boolean;
 }
 
 export type ResultRead =
@@ -355,29 +357,62 @@ const makeStore = (
 
     const read = (runId: RunId): Effect.Effect<ResultRead> =>
       Effect.gen(function* () {
-        const current = yield* Ref.get(state);
-        const entry = current.entries.get(runId);
-        if (!entry) return { outcome: "unknown Run", runId } as ResultRead;
-        if (entry.encoded === undefined) {
-          return {
-            outcome: "ResultExpired",
+        const observed = yield* Ref.modify(state, (current) => {
+          const entry = current.entries.get(runId);
+          if (!entry) {
+            return [
+              {
+                read: { outcome: "unknown Run", runId } as ResultRead,
+                countUnreadable: false,
+              },
+              current,
+            ];
+          }
+          if (entry.encoded === undefined) {
+            return [
+              {
+                read: {
+                  outcome: "ResultExpired",
+                  runId,
+                  subagentId: entry.subagentId,
+                  status: entry.status,
+                } as ResultRead,
+                countUnreadable: false,
+              },
+              current,
+            ];
+          }
+          const decoded = readEntry(entry);
+          if (decoded) {
+            return [
+              {
+                read: { outcome: "result", result: decoded } as ResultRead,
+                countUnreadable: false,
+              },
+              current,
+            ];
+          }
+
+          const read: ResultRead = {
+            outcome: "defect",
             runId,
-            subagentId: entry.subagentId,
-            status: entry.status,
-          } as ResultRead;
-        }
-        const decoded = readEntry(entry);
-        if (decoded)
-          return { outcome: "result", result: decoded } as ResultRead;
-        counters.count("unreadableResults");
-        return {
-          outcome: "defect",
-          runId,
-          diagnostic: runDiagnostic(
-            "other",
-            `the stored result for ${runId} does not decode`,
-          ),
-        } as ResultRead;
+            diagnostic: runDiagnostic(
+              "other",
+              `the stored result for ${runId} does not decode`,
+            ),
+          };
+          if (entry.unreadableObserved) {
+            return [{ read, countUnreadable: false }, current];
+          }
+          const entries = new Map(current.entries);
+          entries.set(runId, { ...entry, unreadableObserved: true });
+          return [
+            { read, countUnreadable: true },
+            { ...current, entries },
+          ];
+        });
+        if (observed.countUnreadable) counters.count("unreadableResults");
+        return observed.read;
       });
 
     return {

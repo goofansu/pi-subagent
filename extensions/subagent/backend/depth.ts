@@ -11,9 +11,10 @@
  * The parent's own process is depth 0. A child a Subagent spawns is depth 1,
  * and a child of *that* would be depth 2 — which admission rejects.
  *
- * A missing or unparsable value reads as 0. That is deliberate: a parent
- * launched by hand has no such variable, and a garbled one is far more likely
- * to be an unrelated environment than a real nesting the guard should trust.
+ * A depth is a whole string of decimal digits. A missing value or anything
+ * else reads as 0. That is deliberate: a parent launched by hand has no such
+ * variable, and a garbled one is far more likely to be an unrelated
+ * environment than a real nesting the guard should trust.
  */
 
 /** The environment variable carrying the child depth. Shared with v1. */
@@ -24,7 +25,8 @@ export type DepthEnvironment = Readonly<Record<string, string | undefined>>;
 
 /** The depth this process is running at. Zero unless something said so. */
 export function readChildDepth(env: DepthEnvironment = process.env): number {
-  const parsed = Number.parseInt(env[DEPTH_ENV_KEY] ?? "0", 10);
-  if (!Number.isFinite(parsed) || parsed < 0) return 0;
-  return parsed;
+  const value = env[DEPTH_ENV_KEY] ?? "0";
+  if (!/^\d+$/.test(value)) return 0;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : 0;
 }

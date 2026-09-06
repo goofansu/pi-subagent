@@ -402,7 +402,29 @@ test("consuming a Run whose notice already landed changes nothing", async () => 
   assert.equal(bound.sink.status(NOTICE.runId), "resolved");
 });
 
-// -- Exhaustion --------------------------------------------------------------
+// -- Terminal delivery reports -----------------------------------------------
+
+test("an unannounceable Run is terminal, counted once, and announced", async () => {
+  const bound = rig();
+  let told = 0;
+  bound.sink.subscribe(() => {
+    told += 1;
+  });
+
+  await Effect.runPromise(bound.sink.unannounceable(NOTICE.runId));
+  await Effect.runPromise(bound.sink.unannounceable(NOTICE.runId));
+
+  assert.equal(bound.sink.status(NOTICE.runId), "unannounceable");
+  assert.equal(bound.sink.counts().unannounceable, 1);
+  assert.equal(told, 1);
+
+  // There is no Result for retrieval to resolve and no notice to hand over.
+  bound.sink.consumed(NOTICE.runId);
+  assert.equal(await bound.push(NOTICE), "pushed");
+  assert.equal(bound.sink.status(NOTICE.runId), "unannounceable");
+  assert.deepEqual(bound.sent(), []);
+  assert.equal(bound.sink.counts().handOffsAccepted, 1);
+});
 
 test("a Run delivery gave up on reads exhausted, and consuming it resolves it", async () => {
   const bound = rig();
@@ -436,7 +458,7 @@ test("a Run the sink has never heard of is pending, which is what a row wants", 
 
 // -- Watching ----------------------------------------------------------------
 
-test("a subscriber is told about a landing, a retrieval, and an exhaustion", async () => {
+test("a subscriber is told about a landing, a retrieval, and terminal delivery reports", async () => {
   const bound = rig();
   let told = 0;
   const stop = bound.sink.subscribe(() => {
@@ -449,11 +471,12 @@ test("a subscriber is told about a landing, a retrieval, and an exhaustion", asy
   bound.landed(bound.sent()[0]);
   bound.sink.consumed(runId("run-9"));
   await Effect.runPromise(bound.sink.exhausted(runId("run-8")));
-  assert.equal(told, 3);
+  await Effect.runPromise(bound.sink.unannounceable(runId("run-7")));
+  assert.equal(told, 4);
 
   stop();
-  bound.sink.consumed(runId("run-7"));
-  assert.equal(told, 3);
+  bound.sink.consumed(runId("run-6"));
+  assert.equal(told, 4);
 });
 
 test("a throwing subscriber does not take the host event down with it", async () => {
@@ -491,6 +514,7 @@ test("every hand-off outcome is counted separately, and a bind starts them over"
   bound.landed(bound.sent()[2]);
   bound.sink.consumed(other.runId);
   await Effect.runPromise(bound.sink.exhausted(runId("run-8")));
+  await Effect.runPromise(bound.sink.unannounceable(runId("run-6")));
   bound.sink.unbind();
   await bound.push(
     fixtureNotification({ identity: { runId: runId("run-7") } }),
@@ -504,6 +528,7 @@ test("every hand-off outcome is counted separately, and a bind starts them over"
     rePushes: 2,
     landings: 1,
     exhaustions: 1,
+    unannounceable: 1,
     consumedBeforeLanding: 0,
     heldForWait: 0,
     answeredByWait: 0,
@@ -520,6 +545,7 @@ test("every hand-off outcome is counted separately, and a bind starts them over"
     rePushes: 0,
     landings: 0,
     exhaustions: 0,
+    unannounceable: 0,
     consumedBeforeLanding: 0,
     heldForWait: 0,
     answeredByWait: 0,

@@ -42,6 +42,7 @@ import {
   DEFAULT_RUNTIME_POLICY,
   type RuntimePolicy,
 } from "../runtime/policy.ts";
+import type { ResultEncoder } from "../runtime/result-store.ts";
 import { SubagentSupervisor } from "../runtime/supervisor.ts";
 import {
   createFakeOneShotBackend,
@@ -129,6 +130,8 @@ export interface HostRigOptions extends StandInHostOptions {
    * test in this lane lets real time pass.
    */
   readonly policy?: RuntimePolicy;
+  /** Override the store encoder to inject a settlement failure. */
+  readonly resultEncoder?: ResultEncoder;
   /**
    * What the resumable fake reports from `validateProfile`.
    *
@@ -343,6 +346,9 @@ export function hostRig(
           clock: TestClock.layer() as unknown as SessionRuntimeOptions["clock"],
         }
       : {}),
+    ...(options.resultEncoder === undefined
+      ? {}
+      : { resultEncoder: options.resultEncoder }),
     ...(options.adapterProbe === undefined
       ? {}
       : { probe: options.adapterProbe }),

@@ -24,6 +24,7 @@ import type {
   SessionRuntimeOptions,
 } from "./runtime/composition.ts";
 import type { RuntimePolicy } from "./runtime/policy.ts";
+import type { ResultEncoder } from "./runtime/result-store.ts";
 
 /** What the extension needs from the process it is loaded into. */
 export interface SubagentV2Options {
@@ -48,6 +49,11 @@ export interface SubagentV2Options {
   readonly policy?: RuntimePolicy;
   /** Test seam overriding the Session clock for deterministic host tests. */
   readonly clock?: SessionRuntimeOptions["clock"];
+  /**
+   * Test-only Result-encoding seam; composition documents why it is not a
+   * production encoding policy.
+   */
+  readonly resultEncoder?: ResultEncoder;
   /** Reads the wall clock. Supplied by a test so widget durations are fixed. */
   readonly now?: () => number;
   /**
@@ -146,6 +152,9 @@ export function installSubagentV2(
     agentGuidelines,
     ...(options.policy === undefined ? {} : { policy: options.policy }),
     ...(options.clock === undefined ? {} : { clock: options.clock }),
+    ...(options.resultEncoder === undefined
+      ? {}
+      : { resultEncoder: options.resultEncoder }),
     setProfiles: (loaded: readonly Profile[]) => {
       profiles = loaded;
     },

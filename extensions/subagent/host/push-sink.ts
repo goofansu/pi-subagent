@@ -88,8 +88,9 @@
  *
  * ## What the widget is told, and what it is not
  *
- * Six states live here — handed-off, lost, landed, exhausted, consumed, held —
- * and the widget sees three: `pending`, `resolved`, `exhausted`. It never learns
+ * Seven states live here — handed-off, lost, landed, exhausted, unannounceable,
+ * consumed, held — and the widget sees four: `pending`, `resolved`, `exhausted`,
+ * `unannounceable`. It never learns
  * whether *resolved* was a landing or a retrieval, because a row that stays
  * and a row that goes is the whole of what it is deciding, and a component
  * that knew more would eventually act on more.
@@ -106,6 +107,7 @@
 
 import { Effect } from "effect";
 import type { RunId, RunNotification } from "../domain/index.ts";
+import type { HandoffStatus } from "../presentation/index.ts";
 import type {
   NotificationPushFailure,
   NotificationSink,
@@ -115,7 +117,6 @@ import {
   type NotificationMessage,
   parseNotificationMessage,
 } from "./notification-message.ts";
-import type { HandoffStatus } from "./widget.ts";
 
 /** How a notice reaches Pi. One function, so a test can supply its own. */
 export type SendNotification = (message: NotificationMessage) => void;
@@ -134,9 +135,10 @@ export interface HostTurnEvidence {
  *
  * A counter that cannot tell a refused hand-off from a lost one cannot say
  * which half of the pipeline is failing, which is the only question these
- * exist to answer. The first three are about delivery reaching the host; the
- * next four are about the host reaching the conversation; the last is the
- * evidence Phase D is scheduled on.
+ * exist to answer. The first three count delivery's push calls; the next three
+ * track notices between the host and the conversation; the next two count
+ * delivery's terminal reports; `consumedBeforeLanding` records retrieval
+ * racing a landing; and the final two track waits.
  *
  * `pushesAttempted` is `handOffsAccepted` plus `handOffsRefused`: a re-push is
  * the sink's own doing and is counted as a `rePushes` rather than as a second
@@ -157,6 +159,8 @@ export interface HandoffCounts {
   readonly landings: number;
   /** Runs delivery gave up announcing, after its retry budget ran out. */
   readonly exhaustions: number;
+  /** Settled Runs for which delivery found no Result to announce. */
+  readonly unannounceable: number;
   /**
    * Landings whose Result the parent had already retrieved.
    *
@@ -185,6 +189,7 @@ const ZERO_COUNTS: HandoffCounts = {
   rePushes: 0,
   landings: 0,
   exhaustions: 0,
+  unannounceable: 0,
   consumedBeforeLanding: 0,
   heldForWait: 0,
   answeredByWait: 0,
@@ -267,7 +272,8 @@ type NoticeState =
   | "held"
   | "landed"
   | "consumed"
-  | "exhausted";
+  | "exhausted"
+  | "unannounceable";
 
 /** The one state record the sink keeps for a Run. */
 interface NoticeRecord {
@@ -314,8 +320,11 @@ export function createSessionPushSink(): SessionPushSink {
         (hold.scope === "all" || hold.scope.has(runId)),
     );
 
-  const isResolvedOrExhausted = (state: NoticeState): boolean =>
-    state === "landed" || state === "consumed" || state === "exhausted";
+  const isTerminal = (state: NoticeState): boolean =>
+    state === "landed" ||
+    state === "consumed" ||
+    state === "exhausted" ||
+    state === "unannounceable";
 
   const isAwaitingLanding = (
     record: NoticeRecord | undefined,
@@ -334,7 +343,7 @@ export function createSessionPushSink(): SessionPushSink {
    */
   const dispatch = (notification: RunNotification): DispatchResult => {
     const current = records.get(notification.runId);
-    if (current && isResolvedOrExhausted(current.state)) return "dropped";
+    if (current && isTerminal(current.state)) return "dropped";
 
     const target = send;
     if (!target) {
@@ -379,7 +388,7 @@ export function createSessionPushSink(): SessionPushSink {
       Effect.suspend(() => {
         count("pushesAttempted");
         const state = records.get(notification.runId)?.state;
-        const terminal = state !== undefined && isResolvedOrExhausted(state);
+        const terminal = state !== undefined && isTerminal(state);
         const result = dispatch(notification);
         if (terminal || result !== "dropped") {
           count("handOffsAccepted");
@@ -394,18 +403,21 @@ export function createSessionPushSink(): SessionPushSink {
     exhausted: (runId) =>
       Effect.sync(() => {
         const current = records.get(runId);
-        if (
-          current?.state === "consumed" ||
-          current?.state === "landed" ||
-          current?.state === "exhausted"
-        ) {
-          return;
-        }
+        if (current && isTerminal(current.state)) return;
         records.set(runId, {
           notification: current?.notification,
           state: "exhausted",
         });
         count("exhaustions");
+        announce();
+      }),
+
+    unannounceable: (runId) =>
+      Effect.sync(() => {
+        const current = records.get(runId);
+        if (current && isTerminal(current.state)) return;
+        records.set(runId, { state: "unannounceable" });
+        count("unannounceable");
         announce();
       }),
 
@@ -463,7 +475,13 @@ export function createSessionPushSink(): SessionPushSink {
 
     consumed: (runId) => {
       const current = records.get(runId);
-      if (current?.state === "landed" || current?.state === "consumed") return;
+      if (
+        current?.state === "landed" ||
+        current?.state === "consumed" ||
+        current?.state === "unannounceable"
+      ) {
+        return;
+      }
 
       if (current?.state === "held") {
         count("answeredByWait");
@@ -529,7 +547,8 @@ export function createSessionPushSink(): SessionPushSink {
     status: (runId) => {
       const state = records.get(runId)?.state;
       if (state === "landed" || state === "consumed") return "resolved";
-      return state === "exhausted" ? "exhausted" : "pending";
+      if (state === "exhausted") return "exhausted";
+      return state === "unannounceable" ? "unannounceable" : "pending";
     },
     subscribe: (listener) => {
       listeners.add(listener);

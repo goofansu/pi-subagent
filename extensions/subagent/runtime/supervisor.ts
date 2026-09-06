@@ -1239,11 +1239,13 @@ const makeSupervisor = (settings: SessionSettings) =>
           return { outcome: "result", result: stored.result } as const;
         }
         if (stored.outcome === "ResultExpired") return stored;
-        // A terminal Run whose entry is missing or unreadable. The output is
-        // gone either way, and `ResultExpired` is the only outcome the union
-        // has for that — so the counter is what tells a maintainer this was a
-        // defect rather than eviction doing its job.
-        counters.count("unreadableResults");
+        // The store owns decode defects: it is the seam that knows an entry
+        // existed but did not decode, and has already counted that read. The
+        // supervisor owns the one case the store cannot know — its missing
+        // entry belongs to a Run the repository says is terminal.
+        if (stored.outcome === "unknown Run") {
+          counters.count("unreadableResults");
+        }
         return {
           outcome: "ResultExpired",
           runId,
