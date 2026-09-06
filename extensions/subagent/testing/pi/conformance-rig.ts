@@ -99,6 +99,8 @@ interface PiFixtureParts
     "backend" | "profile" | "counters" | "providerStopsOnRequest"
   > {
   readonly scripts: readonly PiScript[];
+  /** Override the ordinary cooperative Pi stop for the ignored-abort fixture. */
+  readonly providerStopsOnRequest?: boolean;
   /** Hold the first observation so a late Control is admitted deterministically. */
   readonly gateLateControlDrain?: boolean;
   /** Make the session factory refuse, which is how an open fails. */
@@ -177,6 +179,7 @@ function piFixture(parts: PiFixtureParts): BackendConformanceFixture {
     scripts,
     gateLateControlDrain: gateDrain,
     openFails,
+    providerStopsOnRequest,
     profileFields,
     ...rest
   } = parts;
@@ -231,7 +234,7 @@ function piFixture(parts: PiFixtureParts): BackendConformanceFixture {
       ...(profileFields === undefined ? {} : { fields: profileFields }),
     },
     counters,
-    providerStopsOnRequest: true,
+    providerStopsOnRequest: providerStopsOnRequest ?? true,
     ...rest,
   };
 }
@@ -449,8 +452,34 @@ export function piConformanceRig(): BackendConformanceRig {
           });
 
         case "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop":
-          // Ticket 02 supplies Pi's permanent ignored-abort fixture.
-          return undefined;
+          return piFixture({
+            scripts: [
+              [
+                { step: "assistant", text: "a partial answer" },
+                { step: "ignore-abort" },
+              ],
+            ],
+            testClock: true,
+            policy: lowered({ cleanupBudgetMillis: 2_000 }),
+            plans: [
+              {
+                cancel: true,
+                advanceClockAfterCancelMillis: 2_001,
+                resumeAfterSettlement: true,
+              },
+            ],
+            expected: {
+              runs: [
+                {
+                  status: "cancelled",
+                  cancellationReason: "requested",
+                  finalOutput: "a partial answer",
+                  diagnosticCategories: ["cleanup-escalation"],
+                },
+              ],
+            },
+            providerStopsOnRequest: false,
+          });
 
         case "an-execution-settles-when-the-provider-goes-quiet":
           return piFixture({
@@ -926,11 +955,7 @@ export function piConformanceRig(): BackendConformanceRig {
   };
 }
 
-/**
- * What the Pi rig skips until its ignored-abort fixture lands in ticket 02.
- * The visible skip is ticket 01's permitted staging point, not a capability
- * exception.
- */
+/** Pi declares every capability and runs every shared scenario. */
 export function piConformanceSkips(): readonly BackendConformanceScenario[] {
-  return ["cancel-returns-immediately-and-settlement-bounds-an-ignored-stop"];
+  return [];
 }

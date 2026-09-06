@@ -24,6 +24,7 @@ test("queued SDK guidance is cleared and diagnosed once on completion", async ()
     ],
   });
   const drainGate = createGate();
+  const probe = createPiProbeCounters();
   const observations: RunObservation[] = [];
   let drainBlocked = false;
   const io: ExecutionIO = {
@@ -46,7 +47,8 @@ test("queued SDK guidance is cleared and diagnosed once on completion", async ()
             {
               session: standIn.session,
               isClosed: () => false,
-              probe: createPiProbeCounters(),
+              closeRequested: Effect.never,
+              probe,
             },
             {
               runId: runId("run-1"),
@@ -68,6 +70,10 @@ test("queued SDK guidance is cleared and diagnosed once on completion", async ()
     ),
   );
 
+  // Native work had already settled, so execution-scope closure skipped the
+  // stop finalizer. The queue clear below is completion bookkeeping, not stop.
+  assert.equal(standIn.record().aborts, 0);
+  assert.equal(probe.read().pendingCleanups, 0);
   assert.equal(standIn.record().queueClears, 1);
   assert.deepEqual(
     observations.filter(

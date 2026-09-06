@@ -11,11 +11,11 @@ import { piConformanceRig, piConformanceSkips } from "./pi/conformance-rig.ts";
  *
  * This is the seam the whole rewrite exists to prove: the same scenarios the
  * two fakes pass, run against the production adapter with a scriptable
- * stand-in session behind it. Ticket 01 permits the new ignored-stop scenario
- * to remain a visible skip until ticket 02 supplies Pi's fixture.
+ * stand-in session behind it. Pi declares every capability, so a skip would
+ * mean the shared contract had been narrowed around the adapter.
  */
 
-test("the Pi backend visibly skips only ticket 02's ignored-stop fixture", () => {
+test("the Pi backend skips nothing", () => {
   const rig = piConformanceRig();
 
   const skipped = BACKEND_CONFORMANCE_SCENARIOS.filter(
@@ -23,7 +23,7 @@ test("the Pi backend visibly skips only ticket 02's ignored-stop fixture", () =>
   );
 
   assert.deepEqual(skipped, [...piConformanceSkips()]);
-  assert.equal(skipped.length, 1);
+  assert.equal(skipped.length, 0);
 });
 
 runBackendConformance(piConformanceRig());

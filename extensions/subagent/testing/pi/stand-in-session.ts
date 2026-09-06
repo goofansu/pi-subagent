@@ -163,6 +163,8 @@ export interface StandInPiSessionOptions {
   readonly scripts: readonly PiScript[];
   /** Gates shared with the rig, created on first mention when omitted. */
   readonly gates?: Record<string, Gate>;
+  /** Test-only observation point for ordering native stop against core stages. */
+  readonly onAbort?: () => void;
 }
 
 interface StandInMessage {
@@ -481,6 +483,7 @@ export function createStandInPiSession(
       binds += 1;
     },
     async abort() {
+      options.onAbort?.();
       aborts += 1;
       abortedRun = true;
       if (speakOnAbort !== undefined) {

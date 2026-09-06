@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect, Option } from "effect";
+import { Effect, Fiber, Option } from "effect";
+import { TestClock } from "effect/testing";
 import {
   createPiBackend,
   PI_CAPABILITIES,
@@ -8,8 +9,10 @@ import {
 } from "../../backend/pi/index.ts";
 import { DEFAULT_BACKEND_ID } from "../../domain/index.ts";
 import { DEFAULT_RUNTIME_POLICY } from "../../runtime/policy.ts";
+import { RUN_STAGES } from "../../runtime/run-scope.ts";
 import {
   piRigRequest,
+  quiesce,
   until,
   untilPrompted,
   untilSteered,
@@ -178,6 +181,142 @@ test("bridge overflow fails the Run and stops native work", async () => {
   assert.equal(value.status, "failed");
   assert.ok(value.categories.includes("queue-overflow"));
   assert.ok(value.aborts >= 1, "overflow did not abort the native session");
+  assert.ok(piProbeIsClear(nativeProbeAfterClose));
+});
+
+test("ignore-abort under a cancel settles within the cleanup budget and closes cleanly", async () => {
+  const policy = { ...DEFAULT_RUNTIME_POLICY, cleanupBudgetMillis: 2_000 };
+  const { value, probeAfterClose, nativeProbeAfterClose } = await withPiSession(
+    {
+      scripts: [
+        [{ step: "assistant", text: "under way" }, { step: "ignore-abort" }],
+      ],
+      policy,
+      testClock: true,
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* untilPrompted(rig);
+        yield* quiesce();
+
+        const cancelling = yield* Effect.forkChild(
+          rig.supervisor.cancel([started.runId]),
+        );
+        yield* quiesce();
+        const cancelReturnedBeforeClockAdvance =
+          cancelling.pollUnsafe() !== undefined;
+        yield* Fiber.join(cancelling);
+        yield* until(
+          "Pi native stop to begin",
+          Effect.sync(() => rig.probe().pendingCleanups === 1),
+        );
+        yield* TestClock.adjust(policy.cleanupBudgetMillis + 1);
+        yield* untilTerminal(rig, started.runId);
+        const result = yield* rig.supervisor.result(started.runId);
+        return {
+          cancelReturnedBeforeClockAdvance,
+          result,
+          aborts: rig.standIn.record().aborts,
+          cleanupEscalations: rig.supervisor.counters().cleanupEscalations,
+        };
+      }),
+  );
+
+  assert.equal(value.cancelReturnedBeforeClockAdvance, true);
+  assert.equal(value.result.outcome, "result");
+  if (value.result.outcome === "result") {
+    assert.equal(value.result.result.status, "cancelled");
+    assert.equal(value.result.result.cancellationReason, "requested");
+    assert.equal(value.result.result.finalOutput, "under way");
+    assert.deepEqual(
+      value.result.result.diagnostics.map((diagnostic) => diagnostic.category),
+      ["cleanup-escalation"],
+    );
+  }
+  assert.equal(value.cleanupEscalations, 1);
+  assert.equal(value.aborts, 1);
+  assert.equal(probeAfterClose.openBackendAgents, 0);
+  assert.ok(piProbeIsClear(nativeProbeAfterClose));
+});
+
+test("ignore-abort under Shutdown completes within two cleanup budgets", async () => {
+  const policy = { ...DEFAULT_RUNTIME_POLICY, cleanupBudgetMillis: 2_000 };
+  const { value, probeAfterClose, nativeProbeAfterClose } = await withPiSession(
+    {
+      scripts: [[{ step: "ignore-abort" }]],
+      policy,
+      testClock: true,
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* untilPrompted(rig);
+        const shuttingDown = yield* Effect.forkChild(rig.supervisor.shutdown());
+        yield* until(
+          "Pi native stop to begin during Shutdown",
+          Effect.sync(() => rig.probe().pendingCleanups === 1),
+        );
+        yield* TestClock.adjust(policy.cleanupBudgetMillis * 2 + 1);
+        yield* quiesce();
+        const completedWithinTwoBudgets =
+          shuttingDown.pollUnsafe() !== undefined;
+        yield* Fiber.join(shuttingDown);
+        return { completedWithinTwoBudgets };
+      }),
+  );
+
+  assert.equal(value.completedWithinTwoBudgets, true);
+  assert.equal(probeAfterClose.openBackendAgents, 0);
+  assert.ok(piProbeIsClear(nativeProbeAfterClose));
+});
+
+test("a cooperative Pi hang stops inside execution-scope close", async () => {
+  const { value, nativeProbeAfterClose } = await withPiSession(
+    {
+      scripts: [[{ step: "assistant", text: "under way" }, { step: "hang" }]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* untilPrompted(rig);
+        yield* rig.supervisor.cancel([started.runId]);
+        yield* untilTerminal(rig, started.runId);
+        const result = yield* rig.supervisor.result(started.runId);
+        return {
+          result,
+          aborts: rig.standIn.record().aborts,
+          cleanupEscalations: rig.supervisor.counters().cleanupEscalations,
+          stagesAtAbort: rig.stagesAtAbort(),
+          stages: rig.supervisor.stages(),
+        };
+      }),
+  );
+
+  assert.equal(value.result.outcome, "result");
+  if (value.result.outcome === "result") {
+    assert.equal(value.result.result.status, "cancelled");
+    assert.deepEqual(value.result.result.diagnostics, []);
+  }
+  assert.equal(value.cleanupEscalations, 0);
+  assert.equal(value.aborts, 1);
+  assert.ok(
+    value.stagesAtAbort.some((stage) =>
+      stage.endsWith(RUN_STAGES.finalizingPublished),
+    ),
+    "Pi was aborted before execution-scope close began",
+  );
+  assert.ok(
+    !value.stagesAtAbort.some((stage) =>
+      stage.endsWith(RUN_STAGES.executionScopeClosed),
+    ),
+    "execution-scope close was published before Pi was aborted",
+  );
+  assert.ok(
+    value.stages.some((stage) =>
+      stage.endsWith(RUN_STAGES.executionScopeClosed),
+    ),
+  );
   assert.ok(piProbeIsClear(nativeProbeAfterClose));
 });
 
