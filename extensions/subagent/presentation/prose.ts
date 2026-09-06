@@ -26,14 +26,13 @@ import type {
   ProfileDiagnostic,
   ResultOutcome,
   ResumeOutcome,
-  RunDiagnostic,
   RunId,
   StartOutcome,
   SteerOutcome,
   SubagentId,
   WaitOutcome,
 } from "../domain/index.ts";
-import { formatResult } from "./run-card.ts";
+import { formatDiagnosticLine, formatResult } from "./run-card.ts";
 
 /**
  * The end of an exhaustive switch.
@@ -82,11 +81,6 @@ function diagnosticLines(
   return diagnostics.map(
     (diagnostic) => `- ${diagnostic.filePath}: ${diagnostic.reason}`,
   );
-}
-
-/** A backend diagnostic as one clause. The category is the useful part. */
-function describeDiagnostic(diagnostic: RunDiagnostic): string {
-  return `${diagnostic.category}: ${diagnostic.message}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -152,7 +146,7 @@ export function formatStartOutcome(
     case "backend unavailable":
       return (
         `Cannot start ${agent}: its backend could not be opened ` +
-        `(${describeDiagnostic(outcome.diagnostic)}). No Run was started and ` +
+        `(${formatDiagnosticLine(outcome.diagnostic)}). No Run was started and ` +
         "no id was handed out. Retrying may work; a different agent will work " +
         "if this backend is down."
       );
