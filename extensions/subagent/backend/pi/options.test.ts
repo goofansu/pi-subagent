@@ -282,12 +282,20 @@ test("a process with no depth variable is a parent", () => {
   assert.equal(readChildDepth({}), 0);
 });
 
-test("a garbled depth reads as a parent rather than as a nesting", () => {
-  assert.equal(readChildDepth({ [DEPTH_ENV_KEY]: "not a number" }), 0);
-  assert.equal(readChildDepth({ [DEPTH_ENV_KEY]: "-3" }), 0);
-});
+test("a depth is a whole string of decimal digits or zero", () => {
+  const cases = [
+    ["", 0],
+    ["0", 0],
+    ["3", 3],
+    ["03", 3],
+    ["3abc", 0],
+    ["-1", 0],
+    ["1.5", 0],
+    ["abc", 0],
+    [" 3", 0],
+  ] as const;
 
-test("a depth a parent set is read back", () => {
-  assert.equal(readChildDepth({ [DEPTH_ENV_KEY]: "1" }), 1);
-  assert.equal(readChildDepth({ [DEPTH_ENV_KEY]: "2" }), 2);
+  for (const [value, expected] of cases) {
+    assert.equal(readChildDepth({ [DEPTH_ENV_KEY]: value }), expected, value);
+  }
 });
