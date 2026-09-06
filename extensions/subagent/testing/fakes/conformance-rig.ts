@@ -82,10 +82,14 @@ function build(kind: FakeKind, options: FakeBackendOptions): FakeBackendHandle {
 function fixtureOf(
   kind: FakeKind,
   runScripts: readonly FakeRunScript[],
-  parts: Omit<BackendConformanceFixture, "backend" | "profile" | "counters">,
+  parts: Omit<
+    BackendConformanceFixture,
+    "backend" | "profile" | "counters" | "providerStopsOnRequest"
+  >,
   extra?: {
     readonly diagnose?: FakeBackendOptions["diagnose"];
     readonly open?: FakeBackendOptions["open"];
+    readonly providerStopsOnRequest?: boolean;
   },
 ): BackendConformanceFixture {
   const handle = build(kind, {
@@ -101,6 +105,7 @@ function fixtureOf(
     backend: handle.backend,
     profile: { ...profile, backend: handle.backend.id },
     counters: handle.counters,
+    providerStopsOnRequest: extra?.providerStopsOnRequest ?? true,
     ...parts,
   };
 }
@@ -369,6 +374,34 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
               runs: [{ status: "cancelled", cancellationReason: "requested" }],
             },
           });
+
+        case "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop":
+          return fixtureOf(
+            kind,
+            scripts([emitText("a partial answer"), { step: "hang-on-stop" }]),
+            {
+              testClock: true,
+              policy: lowered({ cleanupBudgetMillis: 2_000 }),
+              plans: [
+                {
+                  cancel: true,
+                  advanceClockAfterCancelMillis: 2_001,
+                  resumeAfterSettlement: steerable,
+                },
+              ],
+              expected: {
+                runs: [
+                  {
+                    status: "cancelled",
+                    cancellationReason: "requested",
+                    finalOutput: "a partial answer",
+                    diagnosticCategories: ["cleanup-escalation"],
+                  },
+                ],
+              },
+            },
+            { providerStopsOnRequest: false },
+          );
 
         case "an-execution-settles-when-the-provider-goes-quiet":
           return fixtureOf(

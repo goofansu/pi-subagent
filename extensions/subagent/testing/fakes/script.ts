@@ -85,6 +85,14 @@ export type FakeStep =
   /** Never finish. Only interruption ends this execution. */
   | { readonly step: "hang" }
   /**
+   * Never finish, and make the native stop release never return.
+   *
+   * This is the Pi failure shape: interruption reaches an uninterruptible
+   * release and cannot complete. The runtime must abandon the execution after
+   * its cleanup budget rather than waiting on this release forever.
+   */
+  | { readonly step: "hang-on-stop" }
+  /**
    * Emit one observation from the execution scope's finalizer.
    *
    * A real adapter does this when a provider callback lands during teardown.

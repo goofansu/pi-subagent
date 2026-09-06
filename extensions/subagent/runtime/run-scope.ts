@@ -144,6 +144,10 @@ export interface RunContext {
   readonly closeExecutionScope: (
     scope: Scope.Closeable,
   ) => Effect.Effect<RunDiagnostic | undefined>;
+  /** How long a cancelled execution may take to leave its fiber. */
+  readonly cleanupBudgetMillis: number;
+  /** Apply the same escalation used when native-scope cleanup overruns. */
+  readonly escalateCleanup: Effect.Effect<RunDiagnostic>;
   /** Called after the terminal snapshot is published. Delivery hooks in here. */
   readonly onSettled: (result: RunResult) => Effect.Effect<void>;
 }
@@ -156,10 +160,12 @@ export interface RunHandle {
   readonly completion: Deferred.Deferred<void>;
   readonly intake: ObservationIntake;
   readonly mailbox: ControlMailbox;
-  /** Filled by settlement; cancel can wait here before execution is forked. */
+  /** Filled by settlement so cancel can request execution interruption. */
   readonly executionFiber: Deferred.Deferred<
     Fiber.Fiber<TerminalBundle, never>
   >;
+  /** Completed before cancel requests interruption; settlement bounds from it. */
+  readonly stopRequested: Deferred.Deferred<void>;
   /** Everything held for this Run, already nested under its Subagent. */
   readonly runScope: Scope.Closeable;
   /** The native child that settlement closes independently first. */
@@ -303,6 +309,7 @@ function buildRunHandle<E>(
       const reports: AppliedReport[] = [];
       const executionFiber =
         yield* Deferred.make<Fiber.Fiber<TerminalBundle, never>>();
+      const stopRequested = yield* Deferred.make<void>();
 
       const executionScope = yield* Scope.fork(runScope);
       const execution = yield* prepareExecution({
@@ -317,6 +324,7 @@ function buildRunHandle<E>(
         intake,
         mailbox,
         executionFiber,
+        stopRequested,
         runScope,
         executionScope,
         activation,
@@ -402,6 +410,7 @@ export function runToSettlement(
       executionFiber,
       intake,
       mailbox,
+      stopRequested,
     } = handle;
 
     yield* Deferred.await(activation);
@@ -422,18 +431,54 @@ export function runToSettlement(
           void fiber;
         }),
     ).pipe(Scope.provide(runScope));
-    const running = yield* Effect.forkIn(
+    // Native execution is detached from every structural Scope. A provider
+    // stuck in an uninterruptible stop must not make closing the Run, its
+    // Subagent, or the Session await that abandoned fiber. The Run Scope keeps
+    // only a non-awaiting interruption finalizer for ordinary structural exit.
+    const running = yield* Effect.forkDetach(
       execution.pipe(Scope.provide(executionScope)),
+    );
+    yield* Scope.addFinalizer(
       runScope,
+      Effect.sync(() => running.interruptUnsafe()),
     );
     yield* Deferred.succeed(executionFiber, running);
-    const [exit] = yield* Fiber.awaitAll([running]);
+    if (Deferred.isDoneUnsafe(stopRequested)) running.interruptUnsafe();
+
+    // A Run may execute without a time bound. Once cancellation has requested
+    // its stop, only the cleanup budget remains. Waiting on `Fiber.await`
+    // observes the Exit without joining or supervising the native fiber.
+    const stopWon = yield* Effect.raceFirst(
+      Effect.as(Fiber.await(running), false),
+      Effect.as(Deferred.await(stopRequested), true),
+    );
+    let executionEscalation: RunDiagnostic | undefined;
+    let executionCandidate: SettlementCandidate;
+    if (!stopWon) {
+      executionCandidate = candidateOf(yield* Fiber.await(running));
+    } else {
+      running.interruptUnsafe();
+      const stopped = yield* Effect.timeoutOption(
+        Fiber.await(running),
+        context.cleanupBudgetMillis,
+      );
+      if (stopped._tag === "Some") {
+        executionCandidate = candidateOf(stopped.value);
+      } else {
+        const snapshot = yield* repository.get(identity.runId);
+        executionCandidate = {
+          source: "interruption",
+          reason: snapshot?.cancellation?.reason ?? "requested",
+        };
+        executionEscalation = yield* context.escalateCleanup;
+      }
+    }
     settlementStarted = true;
 
     /* ---- the settlement path, in the roadmap's order ---- */
 
     // 1. Capture the candidate.
-    yield* coordinator.capture(candidateOf(exit));
+    yield* coordinator.capture(executionCandidate);
     const candidate = yield* Deferred.await(coordinator.captured);
     context.trace(RUN_STAGES.candidateCaptured);
 
@@ -453,7 +498,8 @@ export function runToSettlement(
     //    bounds it by. A close that outlived its budget hands back the
     //    diagnostic saying so, and settlement carries on with what it has —
     //    a hung finalizer must not leave a Run in `finalizing` forever.
-    const escalation = yield* context.closeExecutionScope(executionScope);
+    const scopeEscalation = yield* context.closeExecutionScope(executionScope);
+    const escalation = executionEscalation ?? scopeEscalation;
     context.trace(RUN_STAGES.executionScopeClosed);
 
     // 5. Drain and reduce every accepted observation. Sealing ended the queue,

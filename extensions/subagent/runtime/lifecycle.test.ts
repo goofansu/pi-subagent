@@ -8,6 +8,7 @@ import { emitText } from "../testing/fakes/script.ts";
 import {
   rigRequest as request,
   startedRun,
+  until,
   untilTerminal,
   untilUnderWay,
   withSession,
@@ -249,6 +250,7 @@ test("cancel twice is admitted then idempotent, and after settlement it names th
             again.result.settledAt === result.result.settledAt,
           // Cancelling a Run does not close its Subagent.
           closes: rig.backend.counters().closes,
+          counters: rig.supervisor.counters(),
         };
       }),
   );
@@ -260,10 +262,73 @@ test("cancel twice is admitted then idempotent, and after settlement it names th
   if (value?.result.outcome === "result") {
     assert.equal(value.result.result.status, "cancelled");
     assert.equal(value.result.result.cancellationReason, "requested");
+    assert.deepEqual(value.result.result.diagnostics, []);
   }
   assert.equal(value?.unchanged, true);
   assert.equal(value?.closes, 0);
+  assert.equal(value?.counters.cleanupEscalations, 0);
   assert.equal(noLeaks, true);
+});
+
+test("cancel returns before a stuck native stop and settlement bounds its exit", async () => {
+  const policy: RuntimePolicy = {
+    ...DEFAULT_RUNTIME_POLICY,
+    cleanupBudgetMillis: 2_000,
+  };
+  const outcome = await withSession(
+    {
+      policy,
+      testClock: true,
+      steps: [[emitText("as far as I got"), { step: "hang-on-stop" }]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(request()));
+        yield* untilUnderWay(rig);
+        for (let step = 0; step < 10; step += 1) yield* Effect.yieldNow;
+
+        const cancelling = yield* Effect.forkChild(
+          rig.supervisor.cancel([started.runId]),
+        );
+        yield* until(
+          "cancel to return without clock advancement",
+          Effect.sync(() => cancelling.pollUnsafe() !== undefined),
+        );
+        const [cancelled] = yield* Fiber.join(cancelling);
+
+        yield* TestClock.adjust(policy.cleanupBudgetMillis + 1);
+        yield* untilTerminal(rig, started.runId);
+        const read = yield* rig.supervisor.result(started.runId);
+        const resumed = yield* rig.supervisor.resume({
+          subagentId: started.subagentId,
+          description: "again",
+          prompt: "again",
+        });
+        return {
+          cancel: cancelled.outcome,
+          read,
+          resumed: resumed.outcome,
+          counters: rig.supervisor.counters(),
+          closes: rig.backend.counters().closes,
+        };
+      }),
+  );
+
+  assert.equal(outcome.value.cancel, "admitted");
+  assert.equal(outcome.value.read.outcome, "result");
+  if (outcome.value.read.outcome === "result") {
+    assert.equal(outcome.value.read.result.status, "cancelled");
+    assert.equal(outcome.value.read.result.cancellationReason, "requested");
+    assert.equal(outcome.value.read.result.finalOutput, "as far as I got");
+    assert.deepEqual(
+      outcome.value.read.result.diagnostics.map((item) => item.category),
+      ["cleanup-escalation"],
+    );
+  }
+  assert.equal(outcome.value.counters.cleanupEscalations, 1);
+  assert.equal(outcome.value.closes, 1);
+  assert.equal(outcome.value.resumed, "conversation lost");
+  assert.equal(outcome.noLeaks, true);
 });
 
 test("cancelling an unknown Run reports it rather than pretending", async () => {
@@ -337,6 +402,54 @@ test("a Run that outlives the default timeout is cancelled with reason timeout",
   // interruption that carried it out.
   assert.equal(value.result.cancellationReason, "timeout");
   assert.equal(noLeaks, true);
+});
+
+test("the default Run timeout bounds an execution whose native stop is stuck", async () => {
+  const policy: RuntimePolicy = {
+    ...DEFAULT_RUNTIME_POLICY,
+    defaultRunTimeoutMillis: 3_000,
+    cleanupBudgetMillis: 2_000,
+  };
+
+  const outcome = await withSession(
+    {
+      policy,
+      testClock: true,
+      steps: [[emitText("partial timeout output"), { step: "hang-on-stop" }]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(request()));
+        yield* untilUnderWay(rig);
+        for (let step = 0; step < 10; step += 1) yield* Effect.yieldNow;
+        yield* TestClock.adjust(policy.defaultRunTimeoutMillis ?? 0);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust(policy.cleanupBudgetMillis + 1);
+        yield* untilTerminal(rig, started.runId);
+        return {
+          read: yield* rig.supervisor.result(started.runId),
+          counters: rig.supervisor.counters(),
+          closes: rig.backend.counters().closes,
+        };
+      }),
+  );
+
+  assert.equal(outcome.value.read.outcome, "result");
+  if (outcome.value.read.outcome === "result") {
+    assert.equal(outcome.value.read.result.status, "cancelled");
+    assert.equal(outcome.value.read.result.cancellationReason, "timeout");
+    assert.equal(
+      outcome.value.read.result.finalOutput,
+      "partial timeout output",
+    );
+    assert.deepEqual(
+      outcome.value.read.result.diagnostics.map((item) => item.category),
+      ["cleanup-escalation"],
+    );
+  }
+  assert.equal(outcome.value.counters.cleanupEscalations, 1);
+  assert.equal(outcome.value.closes, 1);
+  assert.equal(outcome.noLeaks, true);
 });
 
 test("a Run that finishes before its timeout is not cancelled by it", async () => {
@@ -496,6 +609,63 @@ test("disposing the Session runs Shutdown before its work scope closes", async (
   // Shutdown cancellation settles through arbitration; it is not a defect in
   // settlement merely because interruption is part of its mechanism.
   assert.equal(outcome.value.counters.counters().settlementDefects, 0);
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("Shutdown completes within two cleanup budgets when native stop is stuck", async () => {
+  const policy: RuntimePolicy = {
+    ...DEFAULT_RUNTIME_POLICY,
+    cleanupBudgetMillis: 2_000,
+  };
+  const seen: Array<{ readonly phase: string; readonly reason?: string }> = [];
+  const outcome = await withSession(
+    {
+      policy,
+      testClock: true,
+      steps: [[emitText("partial shutdown output"), { step: "hang-on-stop" }]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        yield* (yield* rig.repository.subscribe()).pipe(
+          Stream.tap((index) =>
+            Effect.sync(() => {
+              for (const snapshot of index.values()) {
+                seen.push({
+                  phase: snapshot.phase,
+                  ...(snapshot.cancellation === undefined
+                    ? {}
+                    : { reason: snapshot.cancellation.reason }),
+                });
+              }
+            }),
+          ),
+          Stream.runDrain,
+          Effect.forkChild,
+        );
+        startedRun(yield* rig.supervisor.start(request()));
+        yield* untilUnderWay(rig);
+        const shutting = yield* Effect.forkChild(rig.supervisor.shutdown());
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust(policy.cleanupBudgetMillis + 1);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust(policy.cleanupBudgetMillis + 1);
+        yield* until(
+          "Shutdown to complete within two cleanup budgets",
+          Effect.sync(() => shutting.pollUnsafe() !== undefined),
+        );
+        yield* Fiber.join(shutting);
+        return { counters: rig.supervisor.counters() };
+      }),
+  );
+
+  assert.ok(
+    seen.some(
+      (snapshot) =>
+        snapshot.phase === "cancelled" && snapshot.reason === "shutdown",
+    ),
+    JSON.stringify(seen),
+  );
+  assert.equal(outcome.value.counters.cleanupEscalations, 1);
   assert.equal(outcome.noLeaks, true);
 });
 

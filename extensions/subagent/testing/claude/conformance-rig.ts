@@ -114,7 +114,10 @@ function lowered(overrides: Partial<RuntimePolicy>): RuntimePolicy {
 }
 
 interface ClaudeFixtureParts
-  extends Omit<BackendConformanceFixture, "backend" | "profile" | "counters"> {
+  extends Omit<
+    BackendConformanceFixture,
+    "backend" | "profile" | "counters" | "providerStopsOnRequest"
+  > {
   readonly scripts: readonly ClaudeScript[];
   /** Make the SDK loader refuse, which is how an open fails. */
   readonly openFails?: boolean;
@@ -174,6 +177,7 @@ function claudeFixture(parts: ClaudeFixtureParts): BackendConformanceFixture {
       ...(profileFields === undefined ? {} : { fields: profileFields }),
     },
     counters,
+    providerStopsOnRequest: true,
     ...rest,
   };
 }
@@ -412,6 +416,10 @@ export function claudeConformanceRig(): BackendConformanceRig {
               runs: [{ status: "cancelled", cancellationReason: "requested" }],
             },
           });
+
+        case "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop":
+          // Ticket 03 supplies Claude's permanent ignored-abort fixture.
+          return undefined;
 
         case "an-execution-settles-when-the-provider-goes-quiet":
           return claudeFixture({
@@ -1005,17 +1013,10 @@ export function claudeConformanceRig(): BackendConformanceRig {
 }
 
 /**
- * What a Claude rig skips.
- *
- * Nothing, and the spec expected otherwise — it allowed skips "where the
- * terminal transcript snapshot capability gates a scenario". It turns out no
- * shared scenario is gated on that capability. The two that come closest are
- * `reconciliation-does-not-double-count`, which Claude satisfies by carrying
- * no usage in its snapshot at all, and `a-replayed-transcript-adds-no-usage`,
- * which is the one scenario Claude can demonstrate *literally* rather than by
- * analogy. So the skip list is empty, and the rig test asserts the empty list
- * rather than leaving it to be read off the output.
+ * What the Claude rig skips until its ignored-abort fixture lands in ticket
+ * 03. The visible skip is ticket 01's permitted staging point, not a
+ * capability exception.
  */
 export function claudeConformanceSkips(): readonly BackendConformanceScenario[] {
-  return [];
+  return ["cancel-returns-immediately-and-settlement-bounds-an-ignored-stop"];
 }

@@ -3,7 +3,7 @@
  *
  * It builds the actual adapter — the same `createPiBackend` the entry point
  * uses — with the stand-in session injected through the factory the adapter
- * already has for that purpose, and runs the shared 38-scenario suite against
+ * already has for that purpose, and runs the shared conformance suite against
  * it. Nothing about the adapter is stubbed: validation, the retained session,
  * the per-Run execution, the translation, the steering consumer, and the
  * cancellation path are all the production code.
@@ -94,7 +94,10 @@ function lowered(overrides: Partial<RuntimePolicy>): RuntimePolicy {
 }
 
 interface PiFixtureParts
-  extends Omit<BackendConformanceFixture, "backend" | "profile" | "counters"> {
+  extends Omit<
+    BackendConformanceFixture,
+    "backend" | "profile" | "counters" | "providerStopsOnRequest"
+  > {
   readonly scripts: readonly PiScript[];
   /** Hold the first observation so a late Control is admitted deterministically. */
   readonly gateLateControlDrain?: boolean;
@@ -228,6 +231,7 @@ function piFixture(parts: PiFixtureParts): BackendConformanceFixture {
       ...(profileFields === undefined ? {} : { fields: profileFields }),
     },
     counters,
+    providerStopsOnRequest: true,
     ...rest,
   };
 }
@@ -443,6 +447,10 @@ export function piConformanceRig(): BackendConformanceRig {
               runs: [{ status: "cancelled", cancellationReason: "requested" }],
             },
           });
+
+        case "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop":
+          // Ticket 02 supplies Pi's permanent ignored-abort fixture.
+          return undefined;
 
         case "an-execution-settles-when-the-provider-goes-quiet":
           return piFixture({
@@ -919,12 +927,10 @@ export function piConformanceRig(): BackendConformanceRig {
 }
 
 /**
- * What a Pi rig skips.
- *
- * Nothing. Pi declares resume, steering, and a terminal snapshot, so every
- * scenario means something for it — and an empty list is what the rig test
- * asserts, so a skip could not be introduced quietly.
+ * What the Pi rig skips until its ignored-abort fixture lands in ticket 02.
+ * The visible skip is ticket 01's permitted staging point, not a capability
+ * exception.
  */
 export function piConformanceSkips(): readonly BackendConformanceScenario[] {
-  return [];
+  return ["cancel-returns-immediately-and-settlement-bounds-an-ignored-stop"];
 }
