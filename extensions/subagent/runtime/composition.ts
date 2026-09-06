@@ -17,7 +17,7 @@
  * imported only by this module and the service definitions it wires.
  */
 
-import { Layer } from "effect";
+import { type Clock, Layer } from "effect";
 import type { Backend, BackendValidationContext } from "../backend/contract.ts";
 import type { Profile, ProfileDiagnostic } from "../domain/index.ts";
 import { BackendCatalog } from "./backend-catalog.ts";
@@ -133,9 +133,13 @@ interface SessionRuntimeBaseOptions {
   /** Shared with the caller when a test wants to read the probe directly. */
   readonly counters?: RuntimeCounters;
   /**
-   * Test seam for deterministic pre-commit settlement faults, beside the
-   * ambient clock injection used by bounded-time tests. Production omits it;
-   * it is not a second encoding policy.
+   * Test seam for deterministic bounded-time tests. Production omits it and
+   * uses the ambient clock; it is not a second runtime timing policy.
+   */
+  readonly clock?: Layer.Layer<Clock.Clock>;
+  /**
+   * Test seam for deterministic pre-commit settlement faults. Production
+   * omits it; it is not a second encoding policy.
    */
   readonly resultEncoder?: ResultEncoder;
   /**
@@ -206,7 +210,10 @@ export function sessionRuntimeLayer(
     delivery,
   );
 
-  return SubagentSupervisor.layerOf(settings).pipe(
+  const runtime = SubagentSupervisor.layerOf(settings).pipe(
     Layer.provideMerge(foundation),
   );
+  return options.clock === undefined
+    ? runtime
+    : runtime.pipe(Layer.provideMerge(options.clock));
 }

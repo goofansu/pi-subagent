@@ -165,6 +165,8 @@ export type ClaudeScriptStep =
   | { readonly step: "abandon-input" }
   /** Hang until the Query is aborted or closed. */
   | { readonly step: "hang" }
+  /** Keep the provider's frame wait pending even after abort or close. */
+  | { readonly step: "ignore-abort" }
   /** Throw from the iterator, which is how a transport dies mid-stream. */
   | { readonly step: "throw" }
   /** Make `query()` itself throw, so no Query is ever returned. */
@@ -359,6 +361,14 @@ export function createStandInClaudeQuery(
     startedOptions.push(queryOptions ?? {});
     resumes.push(queryOptions?.resume);
     const abandonInput = consumeInput(prompt);
+
+    let finished = false;
+    const finish = (): void => {
+      if (finished) return;
+      finished = true;
+      liveQueries -= 1;
+      closedQueries += 1;
+    };
 
     let stopped = false;
     const stopWaiters: (() => void)[] = [];
@@ -616,13 +626,18 @@ export function createStandInClaudeQuery(
             case "hang":
               await untilStopped();
               return;
+            case "ignore-abort":
+              // Deliberately not raced with `untilStopped`: this models a
+              // provider whose frame promise never notices its abort signal.
+              // The adapter's Effect.promise wait must still be interruptible.
+              await new Promise<void>(() => {});
+              return;
             case "throw":
               throw new Error("the stand-in Claude query broke mid-stream");
           }
         }
       } finally {
-        liveQueries -= 1;
-        closedQueries += 1;
+        finish();
       }
     }
 
@@ -632,6 +647,10 @@ export function createStandInClaudeQuery(
       close: () => {
         closes += 1;
         releaseStop();
+        // `return()` cannot pre-empt an async generator's pending await. The
+        // Query handle is nevertheless synchronously closed from the SDK
+        // client's perspective, so account for that independently.
+        finish();
         void stream.return(undefined);
       },
     };

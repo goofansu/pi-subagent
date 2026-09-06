@@ -65,6 +65,8 @@ tolerated no-op that silently overwrites.
 Cancellation requested before or during execution does not settle the Run;
 cancellation is a *request*, and the Run settles `cancelled` only when its
 execution and finalizers have finished. Cancelling twice is idempotent.
+[The 2026-09-06 amendment below qualifies this when a cancelled execution or
+finalizer outlives the cleanup budget.]
 
 A Run may settle with **no observations**. That is a valid `cancelled` (or
 `failed`) Run with empty output, not an error, and the core must never fabricate
@@ -142,3 +144,14 @@ exactly what the shared conformance battery exists to check.
 Allowing a Run to settle with no observations means presentation must have a
 sentence for it. v1 already does (`the run finished without output`), and that
 prose is reusable.
+
+## Amendment — 2026-09-06
+
+The wait for native execution immediately before step 1 is unbounded while the
+Run is running, because a Run may legitimately run without a deadline. Once a
+Cancel has requested interruption, that wait is bounded by the cleanup budget.
+If the execution does not exit, the core constructs an interruption candidate
+with the recorded Cancellation reason, applies the same Cleanup escalation as
+a hung step-2 finalizer, and continues the settlement order above unchanged.
+The abandoned execution fiber is not awaited by a later settlement step or by
+closing the Run, Subagent, or Session Scope.

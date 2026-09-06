@@ -59,6 +59,7 @@ import {
 } from "../../runtime/policy.ts";
 import type {
   BackendConformanceFixture,
+  BackendConformanceFixtureParts,
   BackendConformanceRig,
   BackendConformanceScenario,
 } from "../conformance.ts";
@@ -113,8 +114,7 @@ function lowered(overrides: Partial<RuntimePolicy>): RuntimePolicy {
   return { ...DEFAULT_RUNTIME_POLICY, ...overrides };
 }
 
-interface ClaudeFixtureParts
-  extends Omit<BackendConformanceFixture, "backend" | "profile" | "counters"> {
+interface ClaudeFixtureParts extends BackendConformanceFixtureParts {
   readonly scripts: readonly ClaudeScript[];
   /** Make the SDK loader refuse, which is how an open fails. */
   readonly openFails?: boolean;
@@ -150,6 +150,7 @@ function claudeFixture(parts: ClaudeFixtureParts): BackendConformanceFixture {
       // the provider to actually be running.
       executionsStarted: record.queries,
       liveExecutions: live.count,
+      liveExecutionFibers: live.count,
       // The Query *is* the event channel — there is no session-level
       // subscription to attach or release — so a Query still iterating is
       // what a live subscription means for Claude.
@@ -174,6 +175,7 @@ function claudeFixture(parts: ClaudeFixtureParts): BackendConformanceFixture {
       ...(profileFields === undefined ? {} : { fields: profileFields }),
     },
     counters,
+    providerStopsOnRequest: true,
     ...rest,
   };
 }
@@ -410,6 +412,42 @@ export function claudeConformanceRig(): BackendConformanceRig {
             plans: [{ cancel: true }],
             expected: {
               runs: [{ status: "cancelled", cancellationReason: "requested" }],
+            },
+          });
+
+        case "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop":
+          // The provider's frame promise ignores abort, but Effect can still
+          // interrupt the adapter's promise wait promptly. No runtime cleanup
+          // escalation is needed for this backend shape.
+          return claudeFixture({
+            scripts: [
+              [
+                { step: "init" },
+                {
+                  step: "assistant",
+                  messageId: "msg_1",
+                  text: "a partial answer",
+                },
+                { step: "ignore-abort" },
+              ],
+            ],
+            testClock: true,
+            policy: lowered({ cleanupBudgetMillis: 2_000 }),
+            plans: [
+              {
+                cancel: true,
+                advanceClockAfterCancelMillis: 2_001,
+              },
+            ],
+            expected: {
+              runs: [
+                {
+                  status: "cancelled",
+                  cancellationReason: "requested",
+                  finalOutput: "a partial answer",
+                  diagnosticCategories: [],
+                },
+              ],
             },
           });
 
@@ -1002,20 +1040,4 @@ export function claudeConformanceRig(): BackendConformanceRig {
       }
     },
   };
-}
-
-/**
- * What a Claude rig skips.
- *
- * Nothing, and the spec expected otherwise — it allowed skips "where the
- * terminal transcript snapshot capability gates a scenario". It turns out no
- * shared scenario is gated on that capability. The two that come closest are
- * `reconciliation-does-not-double-count`, which Claude satisfies by carrying
- * no usage in its snapshot at all, and `a-replayed-transcript-adds-no-usage`,
- * which is the one scenario Claude can demonstrate *literally* rather than by
- * analogy. So the skip list is empty, and the rig test asserts the empty list
- * rather than leaving it to be read off the output.
- */
-export function claudeConformanceSkips(): readonly BackendConformanceScenario[] {
-  return [];
 }

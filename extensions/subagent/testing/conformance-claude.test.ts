@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  claudeConformanceRig,
-  claudeConformanceSkips,
-} from "./claude/conformance-rig.ts";
+import { claudeConformanceRig } from "./claude/conformance-rig.ts";
 import {
   BACKEND_CONFORMANCE_SCENARIOS,
   runBackendConformance,
@@ -19,7 +16,7 @@ import {
  * finding about Claude.
  */
 
-test("the Claude backend skips nothing, though the spec allowed for skips", () => {
+test("the Claude backend skips no conformance scenario", () => {
   const rig = claudeConformanceRig();
 
   const skipped = BACKEND_CONFORMANCE_SCENARIOS.filter(
@@ -27,7 +24,6 @@ test("the Claude backend skips nothing, though the spec allowed for skips", () =
   );
 
   assert.deepEqual(skipped, []);
-  assert.deepEqual(skipped, [...claudeConformanceSkips()]);
 });
 
 runBackendConformance(claudeConformanceRig());

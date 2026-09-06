@@ -20,6 +20,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Deferred, Effect } from "effect";
+import { TestClock } from "effect/testing";
 import {
   answeredEnding,
   backendId,
@@ -27,9 +28,15 @@ import {
   type Profile,
   runId,
 } from "../domain/index.ts";
-import type { AdapterProbe } from "../host/subagent-command.ts";
+import {
+  type AdapterProbe,
+  SUBAGENT_COMMAND_NAME,
+} from "../host/subagent-command.ts";
 import { installSubagentV2, type SubagentV2Installation } from "../index.ts";
-import type { BackendSet } from "../runtime/composition.ts";
+import type {
+  BackendSet,
+  SessionRuntimeOptions,
+} from "../runtime/composition.ts";
 import { probeIsClear, type RuntimeProbe } from "../runtime/counters.ts";
 import {
   DEFAULT_RUNTIME_POLICY,
@@ -138,6 +145,8 @@ export interface HostRigOptions extends StandInHostOptions {
    * blocks in the report has nowhere else to put them.
    */
   readonly adapterProbe?: () => AdapterProbe;
+  /** Run the Session on Effect's deterministic test clock. */
+  readonly testClock?: boolean;
   /** Make the set report that this process is loading inside a child. */
   readonly childLoad?: boolean;
   /** What depth the set reports, for the nesting guard and for admission. */
@@ -185,6 +194,8 @@ export interface HostRig {
    * with no clock involved.
    */
   readonly pump: (turns?: number) => Promise<void>;
+  /** Advance Effect's test clock. Requires the `testClock` rig option. */
+  readonly advanceClock: (millis: number) => Promise<void>;
 
   /**
    * Draw the widget as though it were now this instant.
@@ -325,12 +336,20 @@ export function hostRig(
     backendSet,
     now: () => renderInstant,
     policy: options.policy ?? RIG_POLICY,
+    ...(options.testClock === true
+      ? {
+          // TestClock implements Clock; Layer's service parameter is invariant,
+          // so erase only that type-level distinction at this test boundary.
+          clock: TestClock.layer() as unknown as SessionRuntimeOptions["clock"],
+        }
+      : {}),
     ...(options.adapterProbe === undefined
       ? {}
       : { probe: options.adapterProbe }),
   });
 
   let readProbe: (() => RuntimeProbe) | undefined;
+  let controllableClock: TestClock.TestClock | undefined;
 
   const probe = async (): Promise<RuntimeProbe> => {
     const reader = await installation.handle.run(
@@ -377,6 +396,19 @@ export function hostRig(
         ),
         undefined,
       ),
+    advanceClock: async (millis) => {
+      if (controllableClock !== undefined) {
+        await Effect.runPromise(controllableClock.adjust(millis));
+        return;
+      }
+      await installation.handle.run(
+        TestClock.testClockWith((clock) => {
+          controllableClock = clock;
+          return clock.adjust(millis);
+        }),
+        undefined,
+      );
+    },
     gate,
     renderAt: (instant: number) => {
       renderInstant = instant;
@@ -387,6 +419,24 @@ export function hostRig(
     probeAfterShutdown,
     noLeaks: () => probeIsClear(probeAfterShutdown()),
   };
+}
+
+/** Run `/subagent` and return the command text an operator would read. */
+export async function subagentCommandText(
+  rig: HostRig,
+  args = "",
+): Promise<string> {
+  const command = rig.host
+    .commands()
+    .find((entry) => entry.name === SUBAGENT_COMMAND_NAME);
+  if (command === undefined) {
+    throw new Error("the /subagent command was not registered");
+  }
+  const messages: string[] = [];
+  await command.handler(args, {
+    ui: { notify: (message: string) => messages.push(message) },
+  });
+  return messages.at(-1) ?? "";
 }
 
 /**

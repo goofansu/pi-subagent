@@ -195,6 +195,7 @@ function createFakeBackend(
         throw new Error("the fake execute threw synchronously");
       }
       return Effect.gen(function* () {
+        counters.executionFiberStarted();
         // ADR-0023 exception 3: a closed scope is enforced by the backend's own
         // state, never by trusting a provider to reject work after disposal.
         if (closed) {
@@ -373,6 +374,18 @@ function createFakeBackend(
               yield* Effect.never;
               break;
             }
+            case "hang-on-stop": {
+              // Unlike `hang-in-finalizer`, this release belongs to the
+              // execution fiber itself. Interruption starts it
+              // uninterruptibly and it never returns: the Pi shape that the
+              // Run Scope must bound before native-scope cleanup begins.
+              yield* Effect.acquireUseRelease(
+                Effect.void,
+                () => Effect.never,
+                () => Effect.never,
+              );
+              break;
+            }
             case "emit-in-finalizer": {
               const late = step.observation;
               yield* Effect.acquireRelease(Effect.void, () =>
@@ -419,7 +432,9 @@ function createFakeBackend(
         // A script that named no ending answered: the observations are what it
         // had to say, and it said them all.
         return bundle ?? { ending: answeredEnding() };
-      });
+      }).pipe(
+        Effect.ensuring(Effect.sync(() => counters.executionFiberReleased())),
+      );
     };
 
     return {

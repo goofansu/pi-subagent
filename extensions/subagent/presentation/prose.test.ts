@@ -314,8 +314,9 @@ test("agent_cancel separates request, idempotence, terminal, and unknown", () =>
   assert.equal(
     formatCancelOutcomes(outcomes),
     "Cancellation requested: run-1. Each Run stops when its execution and " +
-      "cleanup finish, keeps whatever output it produced, and still sends its " +
-      "own notification. " +
+      "cleanup finish, or settles cancelled once its cleanup outlives the " +
+      "cleanup budget; it keeps whatever output it produced and still sends " +
+      "its own notification. " +
       "Already cancelling: run-2. The first request stands and this one " +
       "changed nothing. " +
       "Already finished, result kept: run-3 (completed). " +

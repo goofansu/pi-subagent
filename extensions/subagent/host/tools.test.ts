@@ -283,7 +283,8 @@ test("agent_cancel reports request admission, not terminal cancellation", async 
   assert.equal(
     await rig.text("agent_cancel", { ids: [started.runId] }),
     `Cancellation requested: ${started.runId}. Each Run stops when its ` +
-      "execution and cleanup finish, keeps whatever output it produced, and " +
+      "execution and cleanup finish, or settles cancelled once its cleanup " +
+      "outlives the cleanup budget; it keeps whatever output it produced and " +
       "still sends its own notification.",
   );
 });

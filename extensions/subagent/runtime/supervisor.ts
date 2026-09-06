@@ -53,7 +53,6 @@ import {
   Deferred,
   Effect,
   Exit,
-  Fiber,
   Layer,
   type Option,
   Scope,
@@ -495,36 +494,57 @@ const makeSupervisor = (settings: SessionSettings) =>
         );
       });
 
+    /** Count one cleanup overrun and bound any stronger close it can attempt. */
+    const countAndCloseCleanup = (
+      close: Effect.Effect<void>,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        counters.count("cleanupEscalations");
+        yield* finishesWithinCleanupBudget(close);
+      });
+
     /**
-     * Close the native execution scope, or give up on it and say so.
+     * Build one idempotent escalation for one Run.
      *
-     * A provider finalizer that never returns is a real thing — a socket that
-     * will not close, a child process that ignores its signal — and the one
-     * answer that is not acceptable is leaving the Run in `finalizing`
-     * forever. So the close is raced against the cleanup budget, and when the
-     * budget wins the core takes over: it records a `cleanup-escalation`
-     * diagnostic on the Run, closes the BackendAgent itself, marks the
-     * Conversation lost so a later resume is honest about it, and settles the
-     * Run with the observations it has.
-     *
-     * Adapter-specific forced termination is M4 to M6 work. The policy and the
-     * diagnostic are decided here.
+     * Both the cancelled-execution wait and execution-scope close use this
+     * same Effect. If both overrun, the Run still owns one incident: one
+     * counter increment, one BackendAgent close, and one diagnostic.
      */
+    const escalateRunCleanup = (
+      agent: SubagentRecord["agent"],
+      subagentId: SubagentId,
+    ): Effect.Effect<RunDiagnostic> => {
+      const diagnostic = runDiagnostic(
+        "cleanup-escalation",
+        `native cleanup did not finish within ${policy.cleanupBudgetMillis}ms; the BackendAgent was closed and its conversation is lost`,
+      );
+      let escalated = false;
+      return Effect.suspend(() => {
+        if (escalated) return Effect.succeed(diagnostic);
+        escalated = true;
+        return Effect.as(
+          Effect.gen(function* () {
+            yield* countAndCloseCleanup(agent.close());
+            records.markConversationLost(subagentId);
+          }),
+          diagnostic,
+        );
+      });
+    };
+
+    /** Record a Subagent close overrun after its Run no longer owns it. */
+    const recordSubagentCloseEscalation = (): Effect.Effect<void> =>
+      countAndCloseCleanup(Effect.void);
+
+    /** Close the native execution scope, or apply this Run's escalation. */
     const closeUnderCleanupBudget =
-      (agent: SubagentRecord["agent"], subagentId: SubagentId) =>
+      (escalate: Effect.Effect<RunDiagnostic>) =>
       (scope: Scope.Closeable): Effect.Effect<RunDiagnostic | undefined> =>
         Effect.gen(function* () {
           const closed = yield* finishesWithinCleanupBudget(
             Scope.close(scope, Exit.void),
           );
-          if (closed) return undefined;
-          counters.count("cleanupEscalations");
-          yield* finishesWithinCleanupBudget(agent.close());
-          records.markConversationLost(subagentId);
-          return runDiagnostic(
-            "cleanup-escalation",
-            `native cleanup did not finish within ${policy.cleanupBudgetMillis}ms; the BackendAgent was closed and its conversation is lost`,
-          );
+          return closed ? undefined : yield* escalate;
         });
 
     const runContextFor = ({
@@ -537,26 +557,31 @@ const makeSupervisor = (settings: SessionSettings) =>
       readonly prompt: string;
       readonly agent: SubagentRecord["agent"];
       readonly startedAt: number;
-    }): RunContext => ({
-      identity,
-      input: {
-        runId: identity.runId,
-        description: identity.description,
-        prompt,
-      },
-      agent,
-      repository,
-      store,
-      counters,
-      bounds: policy.projection,
-      observationQueueBound: policy.observationQueueBound,
-      controlBounds: policy.controls,
-      startedAt,
-      now,
-      trace: (stage) => stages.push(`${identity.runId}:${stage}`),
-      closeExecutionScope: closeUnderCleanupBudget(agent, identity.subagentId),
-      onSettled: () => settled(identity.runId),
-    });
+    }): RunContext => {
+      const escalation = escalateRunCleanup(agent, identity.subagentId);
+      return {
+        identity,
+        input: {
+          runId: identity.runId,
+          description: identity.description,
+          prompt,
+        },
+        agent,
+        repository,
+        store,
+        counters,
+        bounds: policy.projection,
+        observationQueueBound: policy.observationQueueBound,
+        controlBounds: policy.controls,
+        startedAt,
+        now,
+        trace: (stage) => stages.push(`${identity.runId}:${stage}`),
+        closeExecutionScope: closeUnderCleanupBudget(escalation),
+        cleanupBudgetMillis: policy.cleanupBudgetMillis,
+        escalateRunCleanup: escalation,
+        onSettled: () => settled(identity.runId),
+      };
+    };
 
     /**
      * The optional default timeout, as a cancellation rather than a second way
@@ -1048,7 +1073,14 @@ const makeSupervisor = (settings: SessionSettings) =>
         if (resolved.state === "current") {
           const { handle } = resolved.current;
           yield* handle.mailbox.close();
-          yield* Fiber.interrupt(yield* Deferred.await(handle.executionFiber));
+          // Settlement observes this before any interruption request. Polling
+          // the execution handle keeps cancellation independent of whether
+          // the execution fiber has been forked yet.
+          yield* Deferred.succeed(handle.stopRequested, undefined);
+          if (Deferred.isDoneUnsafe(handle.executionFiber)) {
+            const running = yield* Deferred.await(handle.executionFiber);
+            running.interruptUnsafe();
+          }
         }
         // The request was recorded before a concurrent terminal publication;
         // it remains admitted even if there is no execution left to interrupt.
@@ -1153,7 +1185,7 @@ const makeSupervisor = (settings: SessionSettings) =>
           // to try here: this Scope close is already running the BackendAgent
           // finalizer, and the record is permanently closed, so no later
           // resume needs a conversation-loss marker.
-          counters.count("cleanupEscalations");
+          yield* recordSubagentCloseEscalation();
         }
       });
 

@@ -336,3 +336,5 @@ export function quiesce(): Effect.Effect<void> {
     for (let step = 0; step < 30; step += 1) yield* Effect.yieldNow;
   });
 }
+
+export { issueCancelBeforeClockMoves } from "./backend-session.ts";

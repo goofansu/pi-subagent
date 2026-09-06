@@ -83,6 +83,8 @@ export interface PiRig extends BackendSessionServices {
   readonly probe: () => PiNativeProbe;
   /** How many native sessions the factory was asked for. */
   readonly opens: () => number;
+  /** Core settlement stages already visible when Pi received `abort()`. */
+  readonly stagesAtAbort: () => readonly string[];
 }
 
 export interface PiRigOptions {
@@ -90,6 +92,8 @@ export interface PiRigOptions {
   readonly scripts?: readonly PiScript[];
   readonly profiles?: readonly Profile[];
   readonly policy?: RuntimePolicy;
+  /** Replace the runtime clock for cleanup-budget assertions. */
+  readonly testClock?: boolean;
   /** Models the Session's catalogue holds, for Profile validation. */
   readonly models?: readonly {
     readonly provider: string;
@@ -151,7 +155,14 @@ export function withPiSession<A>(
   options: PiRigOptions,
   body: (rig: PiRig) => Effect.Effect<A, never, Scope.Scope>,
 ): Promise<PiSessionOutcome<A>> {
-  const standIn = createStandInPiSession({ scripts: options.scripts ?? [] });
+  let servicesAtAbort: BackendSessionServices | undefined;
+  let stagesAtAbort: readonly string[] = [];
+  const standIn = createStandInPiSession({
+    scripts: options.scripts ?? [],
+    onAbort: () => {
+      stagesAtAbort = servicesAtAbort?.supervisor.stages() ?? [];
+    },
+  });
   const sink = createFakeNotificationSink();
   const counters = createRuntimeCounters();
   let opens = 0;
@@ -179,16 +190,22 @@ export function withPiSession<A>(
       counters,
       ...(options.policy === undefined ? {} : { policy: options.policy }),
       ...(options.models === undefined ? {} : { models: options.models }),
+      ...(options.testClock === undefined
+        ? {}
+        : { testClock: options.testClock }),
     },
-    (services) =>
-      body({
+    (services) => {
+      servicesAtAbort = services;
+      return body({
         ...services,
         sink,
         counters,
         standIn,
         probe: handle.probe,
         opens: () => opens,
-      }),
+        stagesAtAbort: () => [...stagesAtAbort],
+      });
+    },
   ).then((outcome) => ({
     ...outcome,
     nativeProbeAfterClose: handle.probe(),
@@ -219,4 +236,8 @@ export function untilTerminal(
   return untilRunTerminal(rig.repository, runId);
 }
 
-export { quiesce, until } from "../backend-session.ts";
+export {
+  issueCancelBeforeClockMoves,
+  quiesce,
+  until,
+} from "../backend-session.ts";

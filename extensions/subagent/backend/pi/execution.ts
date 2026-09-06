@@ -12,11 +12,13 @@
  *   list carries every previous Run, and a terminal snapshot that did not
  *   subtract it would charge a resumed Run for the whole conversation.
  * - **Cancellation is interruption.** No signal is polled, no cancel object is
- *   handed around. What interruption does is stop the drain loop and run the
- *   native cleanup — as a **scope finalizer**, so the runtime's cleanup budget
- *   bounds it and an overrun escalates through M2's path rather than through
- *   Pi-specific pending state. v1 needed that bookkeeping because it had no
- *   bounded escalation; this does not.
+ *   handed around. Interruption promptly stops the execution and returns
+ *   control to settlement. Native cleanup is registered separately as an
+ *   interruptible **execution-scope finalizer**, after the event subscription,
+ *   so scope closure runs cleanup before unsubscribe under the runtime's
+ *   cleanup budget. An overrun escalates through M2's path rather than through
+ *   Pi-specific pending state; v1 needed that bookkeeping because it had no
+ *   bounded escalation, and this does not.
  * - **A terminal snapshot observed before interruption still answers.** The
  *   interrupt handler emits the snapshot and the ending it implies, so
  *   arbitration sees an announced ending and the Run reports the answer it
@@ -75,6 +77,8 @@ export interface PiExecutionContext {
   readonly session: PiSession;
   /** The adapter's own closed flag. The SDK does not defend a disposed session. */
   readonly isClosed: () => boolean;
+  /** Completes whenever the retained BackendAgent closes, by escalation or Shutdown. */
+  readonly closeRequested: Effect.Effect<void>;
   readonly probe: PiProbeCounters;
 }
 
@@ -219,6 +223,25 @@ export function runPiExecution(
           probe.released("liveSubscriptions");
         }),
     );
+    // Registered after the subscription, so LIFO scope closure stops native
+    // work while its events can still be observed, then unsubscribes. This is
+    // deliberately a scope finalizer rather than an acquire-use-release
+    // release in the execution fiber: interruption can return promptly, and
+    // the runtime's step-4 execution-scope budget owns this provider wait.
+    yield* Effect.acquireRelease(Effect.void, () =>
+      Effect.suspend(() => {
+        if (completed) return Effect.void;
+        return Effect.gen(function* () {
+          probe.acquired("pendingCleanups");
+          yield* Effect.raceFirst(
+            Effect.promise(() => stopNativeWork(session)),
+            context.closeRequested,
+          );
+        }).pipe(
+          Effect.ensuring(Effect.sync(() => probe.released("pendingCleanups"))),
+        );
+      }),
+    );
     /** What a cancelled Run still has to say before its intake is sealed. */
     let interruptAnnounced = false;
     const announceOnInterrupt = Effect.gen(function* () {
@@ -296,29 +319,13 @@ export function runPiExecution(
       yield* Effect.forkChild(
         startNativePrompt(session, input.prompt, settlement),
       );
-      const outcome = yield* Effect.acquireUseRelease(
-        Effect.void,
-        () =>
-          Deferred.await(settlement).pipe(
-            Effect.onInterrupt(() => announceOnInterrupt),
-            Effect.tap((settled) =>
-              Effect.sync(() => {
-                completed = settled.kind === "native";
-              }),
-            ),
-          ),
-        () =>
-          Effect.gen(function* () {
-            if (completed) return;
-            yield* Effect.promise(async () => {
-              probe.acquired("pendingCleanups");
-              try {
-                await stopNativeWork(session);
-              } finally {
-                probe.released("pendingCleanups");
-              }
-            });
+      const outcome = yield* Deferred.await(settlement).pipe(
+        Effect.onInterrupt(() => announceOnInterrupt),
+        Effect.tap((settled) =>
+          Effect.sync(() => {
+            completed = settled.kind === "native";
           }),
+        ),
       );
 
       if (outcome.kind === "overflow") {

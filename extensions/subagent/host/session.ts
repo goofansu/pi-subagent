@@ -34,7 +34,11 @@ import type {
 import { Effect, ManagedRuntime, Scope } from "effect";
 import type { Profile, ProfileDiagnostic } from "../domain/index.ts";
 import { formatInvalidProfilesWarning } from "../presentation/index.ts";
-import type { BackendSet, SessionServices } from "../runtime/composition.ts";
+import type {
+  BackendSet,
+  SessionRuntimeOptions,
+  SessionServices,
+} from "../runtime/composition.ts";
 import { sessionRuntimeLayer } from "../runtime/composition.ts";
 import type { RuntimePolicy } from "../runtime/policy.ts";
 import { ProfileCatalog } from "../runtime/profile-catalog.ts";
@@ -66,6 +70,8 @@ export interface SessionWiring {
   readonly agentDir: string;
   /** The bounds this Session enforces. Omitted means the defaults. */
   readonly policy?: RuntimePolicy;
+  /** Test seam overriding the ambient clock for deterministic host tests. */
+  readonly clock?: SessionRuntimeOptions["clock"];
   /**
    * The live `agent_start` guideline array, rewritten in place per Session.
    *
@@ -161,6 +167,7 @@ export async function startSession(
       // it is being loaded into.
       validation: { models: [...(ctx.modelRegistry?.getAll() ?? [])] },
       ...(wiring.policy === undefined ? {} : { policy: wiring.policy }),
+      ...(wiring.clock === undefined ? {} : { clock: wiring.clock }),
     }),
   );
 

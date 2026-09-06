@@ -3,7 +3,7 @@
  *
  * It builds the actual adapter — the same `createPiBackend` the entry point
  * uses — with the stand-in session injected through the factory the adapter
- * already has for that purpose, and runs the shared 38-scenario suite against
+ * already has for that purpose, and runs the shared conformance suite against
  * it. Nothing about the adapter is stubbed: validation, the retained session,
  * the per-Run execution, the translation, the steering consumer, and the
  * cancellation path are all the production code.
@@ -50,6 +50,7 @@ import {
 } from "../../runtime/policy.ts";
 import type {
   BackendConformanceFixture,
+  BackendConformanceFixtureParts,
   BackendConformanceRig,
   BackendConformanceScenario,
 } from "../conformance.ts";
@@ -93,9 +94,10 @@ function lowered(overrides: Partial<RuntimePolicy>): RuntimePolicy {
   return { ...DEFAULT_RUNTIME_POLICY, ...overrides };
 }
 
-interface PiFixtureParts
-  extends Omit<BackendConformanceFixture, "backend" | "profile" | "counters"> {
+interface PiFixtureParts extends BackendConformanceFixtureParts {
   readonly scripts: readonly PiScript[];
+  /** Override the ordinary cooperative Pi stop for the ignored-abort fixture. */
+  readonly providerStopsOnRequest?: boolean;
   /** Hold the first observation so a late Control is admitted deterministically. */
   readonly gateLateControlDrain?: boolean;
   /** Make the session factory refuse, which is how an open fails. */
@@ -174,6 +176,7 @@ function piFixture(parts: PiFixtureParts): BackendConformanceFixture {
     scripts,
     gateLateControlDrain: gateDrain,
     openFails,
+    providerStopsOnRequest,
     profileFields,
     ...rest
   } = parts;
@@ -228,6 +231,7 @@ function piFixture(parts: PiFixtureParts): BackendConformanceFixture {
       ...(profileFields === undefined ? {} : { fields: profileFields }),
     },
     counters,
+    providerStopsOnRequest: providerStopsOnRequest ?? true,
     ...rest,
   };
 }
@@ -442,6 +446,36 @@ export function piConformanceRig(): BackendConformanceRig {
             expected: {
               runs: [{ status: "cancelled", cancellationReason: "requested" }],
             },
+          });
+
+        case "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop":
+          return piFixture({
+            scripts: [
+              [
+                { step: "assistant", text: "a partial answer" },
+                { step: "ignore-abort" },
+              ],
+            ],
+            testClock: true,
+            policy: lowered({ cleanupBudgetMillis: 2_000 }),
+            plans: [
+              {
+                cancel: true,
+                advanceClockAfterCancelMillis: 2_001,
+                resumeAfterSettlement: true,
+              },
+            ],
+            expected: {
+              runs: [
+                {
+                  status: "cancelled",
+                  cancellationReason: "requested",
+                  finalOutput: "a partial answer",
+                  diagnosticCategories: ["cleanup-escalation"],
+                },
+              ],
+            },
+            providerStopsOnRequest: false,
           });
 
         case "an-execution-settles-when-the-provider-goes-quiet":
@@ -918,13 +952,7 @@ export function piConformanceRig(): BackendConformanceRig {
   };
 }
 
-/**
- * What a Pi rig skips.
- *
- * Nothing. Pi declares resume, steering, and a terminal snapshot, so every
- * scenario means something for it — and an empty list is what the rig test
- * asserts, so a skip could not be introduced quietly.
- */
+/** Pi declares every capability and runs every shared scenario. */
 export function piConformanceSkips(): readonly BackendConformanceScenario[] {
   return [];
 }

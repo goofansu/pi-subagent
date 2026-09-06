@@ -19,7 +19,10 @@ import { registerSubagentCommand } from "./host/subagent-command.ts";
 import { registerSubagentTools } from "./host/tools.ts";
 import type { ActiveWidget } from "./host/widget.ts";
 import { profilesDir } from "./profiles/discovery.ts";
-import type { BackendSet } from "./runtime/composition.ts";
+import type {
+  BackendSet,
+  SessionRuntimeOptions,
+} from "./runtime/composition.ts";
 import type { RuntimePolicy } from "./runtime/policy.ts";
 
 /** What the extension needs from the process it is loaded into. */
@@ -43,6 +46,8 @@ export interface SubagentV2Options {
    * able to lower it.
    */
   readonly policy?: RuntimePolicy;
+  /** Test seam overriding the Session clock for deterministic host tests. */
+  readonly clock?: SessionRuntimeOptions["clock"];
   /** Reads the wall clock. Supplied by a test so widget durations are fixed. */
   readonly now?: () => number;
   /**
@@ -140,6 +145,7 @@ export function installSubagentV2(
     agentDir: options.agentDir,
     agentGuidelines,
     ...(options.policy === undefined ? {} : { policy: options.policy }),
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
     setProfiles: (loaded: readonly Profile[]) => {
       profiles = loaded;
     },

@@ -152,9 +152,10 @@ export const CANCEL_COPY: ToolCopy = {
   description:
     "Stop Runs whose work is no longer needed by Run id; never pass a stable " +
     "Subagent id. The tool reports request admission, not terminal " +
-    "cancellation: each Run stops when its execution and cleanup finish. " +
-    "Partial output remains available through agent_result once cancellation " +
-    "settles, and cancellation does not close the owning Subagent.",
+    "cancellation: each Run stops when its execution and cleanup finish, or " +
+    "settles cancelled once its cleanup outlives the cleanup budget. It keeps " +
+    "whatever output it produced, still sends its own notification, and does " +
+    "not close the owning Subagent.",
   promptSnippet: "Stop subagents whose work is no longer needed",
 };
 
