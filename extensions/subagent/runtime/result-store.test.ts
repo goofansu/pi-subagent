@@ -433,6 +433,54 @@ test("eviction takes the oldest unpinned output and never the newest", async () 
   assert.deepEqual(surviving, ["ResultExpired", "result", "result"]);
 });
 
+test("commit order survives pin releases and duplicate commits", async () => {
+  const results = [
+    resultOf("run-1", "a".repeat(300)),
+    resultOf("run-2", "b".repeat(300)),
+    resultOf("run-3", "c".repeat(300)),
+  ];
+  const each = encodedResultBytes(results[0]);
+  const policy: RuntimePolicy = {
+    ...DEFAULT_RUNTIME_POLICY,
+    maxResultBytes: 4_000,
+    resultStoreBytes: each * 2 + 20,
+  };
+
+  const outcome = await withStore(policy, (store, counters) =>
+    Effect.gen(function* () {
+      yield* store.commit(results[0]);
+      yield* store.commit(results[1]);
+
+      // Neither updating the oldest entry's pins nor recommitting it changes
+      // its place in commit order.
+      yield* store.releasePin(results[0].runId, "publication");
+      const duplicate = yield* store.commit(results[0]);
+      yield* unpin(store, results[1].runId);
+      yield* store.releasePin(results[0].runId, "waiters");
+      yield* store.releasePin(results[0].runId, "delivery");
+      const beforePressure = yield* store.stored();
+
+      yield* store.commit(results[2]);
+      const reads = yield* Effect.forEach(results, (result) =>
+        store.read(result.runId),
+      );
+      return {
+        duplicate: duplicate.outcome,
+        beforePressure,
+        reads: reads.map((read) => read.outcome),
+        evictions: counters.counters().evictions,
+      };
+    }),
+  );
+
+  assert.deepEqual(outcome, {
+    duplicate: "duplicate",
+    beforePressure: ["run-1", "run-2"],
+    reads: ["ResultExpired", "result", "result"],
+    evictions: 1,
+  });
+});
+
 test("a pinned result is not evicted, and a younger unpinned one goes instead", () => {
   // Deliberately the opposite of oldest-first, and the reason pins exist: the
   // oldest result is the one a waiter registered at settlement is about to

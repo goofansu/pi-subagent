@@ -100,6 +100,17 @@ test("a sink that fails once is retried on the clock and delivers one notificati
         rig.sink.failNext(1);
         const started = startedRun(yield* rig.supervisor.start(request()));
         yield* untilTerminal(rig, started.runId);
+        while (rig.sink.attempts() < 1) yield* Effect.yieldNow;
+        // A pending claim is enough to deduplicate concurrent wake-ups and
+        // sweeps, before it has any terminal delivery status.
+        yield* Effect.forEach(
+          [rig.delivery.deliver(started.runId), rig.delivery.sweep()],
+          (effect) => effect,
+          { concurrency: "unbounded" },
+        );
+        assert.equal(rig.sink.attempts(), 1);
+        assert.deepEqual(yield* rig.delivery.handedOff(), []);
+        assert.deepEqual(yield* rig.delivery.exhausted(), []);
         // The retry is waiting on the runtime clock, not on real time.
         yield* TestClock.adjust(1_001);
         yield* untilHandedOff(rig, 1);

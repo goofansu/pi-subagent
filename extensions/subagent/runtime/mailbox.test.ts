@@ -170,6 +170,22 @@ test("closing twice is a no-op, because settlement may reach it twice", async ()
   assert.equal(outcome, true);
 });
 
+test("closing the Run Scope closes and discards its mailbox", async () => {
+  const counters = createRuntimeCounters();
+  const mailbox = await Effect.runPromise(
+    Effect.gen(function* () {
+      const made = yield* makeMailbox(DEFAULT_CONTROL_BOUNDS, counters);
+      yield* made.admit(steer("never delivered"));
+      return made;
+    }).pipe(Effect.scoped),
+  );
+
+  assert.equal(mailbox.isClosed(), true);
+  assert.equal(mailbox.pending(), 0);
+  assert.equal(await Effect.runPromise(mailbox.feed.take), undefined);
+  assert.equal(counters.probe().openMailboxes, 0);
+});
+
 test("a waiting take is released when the mailbox closes", async () => {
   const outcome = await withMailbox(DEFAULT_CONTROL_BOUNDS, (mailbox) =>
     Effect.gen(function* () {

@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
-import { runId as makeRunId, type RunId } from "../domain/index.ts";
+import {
+  backendId,
+  runId as makeRunId,
+  type RunId,
+  subagentId,
+} from "../domain/index.ts";
 import { emitText } from "../testing/fakes/script.ts";
 import {
   quiesce,
@@ -316,7 +321,7 @@ test("closing a Subagent immediately after start cancels and awaits its new Run"
   assert.equal(outcome.noLeaks, true);
 });
 
-test("a stale active lookup racing detachment returns terminal outcomes", async () => {
+test("terminal publication wins while the Run handle is still captured", async () => {
   const finish = await Effect.runPromise(Deferred.make<void>());
   const outcome = await withSession(
     {
@@ -333,35 +338,59 @@ test("a stale active lookup racing detachment returns terminal outcomes", async 
         let intercepted = false;
         repository.lookup = (runId) =>
           Effect.gen(function* () {
-            const captured = yield* lookup(runId);
+            const before = yield* lookup(runId);
             if (runId === run.runId && !intercepted) {
               intercepted = true;
-              assert.equal(captured.state, "active");
+              assert.equal(before.state, "active");
               yield* Deferred.succeed(finish, undefined);
               yield* until(
-                "terminal publication after the stale active read",
+                "terminal publication after the records capture",
                 Effect.map(
                   lookup(runId),
-                  (latest) => latest.state === "terminal",
+                  (known) => known.state === "terminal",
                 ),
               );
             }
-            return captured;
+            return yield* lookup(runId);
           });
 
-        const steered = yield* Effect.exit(
-          rig.supervisor.steer(run.runId, {
-            type: "steer",
-            text: "too late",
-          }),
-        );
-        return steered;
+        return yield* rig.supervisor.steer(run.runId, {
+          type: "steer",
+          text: "too late",
+        });
       }),
   );
 
-  assert.equal(outcome.value._tag, "Success");
-  if (outcome.value._tag !== "Success") return;
-  assert.equal(outcome.value.value.outcome, "already completed");
+  assert.equal(outcome.value.outcome, "already completed");
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("an active repository row without an attached Run is an invariant defect", async () => {
+  const outcome = await withSession({}, (rig) =>
+    Effect.gen(function* () {
+      const runId = makeRunId("run-orphaned-active");
+      yield* rig.repository.publish(
+        {
+          runId,
+          subagentId: subagentId("subagent-orphaned-active"),
+          backendId: backendId("fake-resumable"),
+          agent: "explore",
+          description: "orphaned active row",
+        },
+        0,
+      );
+
+      return {
+        steer: yield* Effect.exit(
+          rig.supervisor.steer(runId, { type: "steer", text: "hello" }),
+        ),
+        wait: yield* Effect.exit(rig.supervisor.wait([runId], 0)),
+      };
+    }),
+  );
+
+  assert.equal(outcome.value.steer._tag, "Failure");
+  assert.equal(outcome.value.wait._tag, "Failure");
   assert.equal(outcome.noLeaks, true);
 });
 
@@ -721,7 +750,7 @@ test("race: a start issued as the last Run completes gets a definite answer eith
 /* 10. Waiters versus settlement, abort, timeout, and eviction     */
 /* -------------------------------------------------------------- */
 
-test("a wait registers before terminal lookup and reads while its pin is held", async () => {
+test("a wait stays registered until it reads the terminal result", async () => {
   const finish = await Effect.runPromise(Deferred.make<void>());
   const outcome = await withSession(
     {
@@ -731,41 +760,23 @@ test("a wait registers before terminal lookup and reads while its pin is held", 
     (rig) =>
       Effect.gen(function* () {
         const run = startedRun(yield* rig.supervisor.start(request()));
-        const repository = rig.repository as unknown as {
-          lookup: typeof rig.repository.lookup;
-        };
-        const lookup = repository.lookup;
-        let registeredAtLookup = -1;
-        let intercepted = false;
-        repository.lookup = (runId) =>
-          Effect.gen(function* () {
-            const captured = yield* lookup(runId);
-            if (runId === run.runId && !intercepted) {
-              intercepted = true;
-              registeredAtLookup = rig.supervisor.probe().unresolvedWaiters;
-              assert.equal(captured.state, "active");
-              yield* Deferred.succeed(finish, undefined);
-              yield* until(
-                "settlement between waiter registration and lookup",
-                Effect.map(
-                  lookup(runId),
-                  (known) => known.state === "terminal",
-                ),
-              );
-            }
-            return captured;
-          });
+        const waiting = yield* Effect.forkChild(
+          rig.supervisor.wait([run.runId]),
+        );
+        yield* Effect.yieldNow;
+        const registered = rig.supervisor.probe().unresolvedWaiters;
 
-        const [waited] = yield* rig.supervisor.wait([run.runId]);
+        yield* Deferred.succeed(finish, undefined);
+        const [waited] = yield* Fiber.join(waiting);
         return {
-          registeredAtLookup,
+          registered,
           waited: waited?.outcome,
           pins: yield* rig.store.pinsOf(run.runId),
         };
       }),
   );
 
-  assert.equal(outcome.value.registeredAtLookup, 1);
+  assert.equal(outcome.value.registered, 1);
   assert.equal(outcome.value.waited, "terminal");
   assert.ok(!outcome.value.pins.includes("waiters"));
   assert.equal(outcome.noLeaks, true);

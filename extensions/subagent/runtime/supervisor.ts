@@ -583,25 +583,18 @@ const makeSupervisor = (settings: SessionSettings) =>
       };
     };
 
-    /**
-     * The optional default timeout, as a cancellation rather than a second way
-     * for a Run to end.
-     *
-     * Waiting on the Run's own completion and cancelling if it has not arrived
-     * means a timeout goes through exactly the path a user's cancel goes
-     * through, and arrives at `cancelled` with reason `timeout`. A Run that
-     * finishes first resolves the wait and this fiber does nothing.
-     */
+    /** Arm the optional default timeout through the ordinary cancel path. */
     const armDefaultTimeout = (handle: RunHandle): Effect.Effect<void> =>
       Effect.gen(function* () {
         const budget = policy.defaultRunTimeoutMillis;
         if (budget === undefined) return;
         yield* Effect.forkIn(
           Effect.gen(function* () {
-            const finished = yield* Effect.exit(
-              Effect.timeout(Deferred.await(handle.completion), budget),
+            const finished = yield* Effect.timeoutOption(
+              Deferred.await(handle.completion),
+              budget,
             );
-            if (Exit.isSuccess(finished)) return;
+            if (finished._tag === "Some") return;
             yield* cancelOne(handle.identity.runId, "timeout");
           }),
           workScope,
@@ -962,33 +955,29 @@ const makeSupervisor = (settings: SessionSettings) =>
     /* ------------------------------------------------------------ */
 
     /**
-     * Resolve an already-observed active row to its current handle, or to the
-     * newer non-active repository fact if settlement won between the reads.
+     * Resolve a Run from one records capture and the repository's current row.
      *
-     * Handle attachment precedes active publication, and detachment is a Run
-     * fiber finalizer after settlement, so active-without-handle is unreachable
-     * in a healthy runtime. The small bound protects every public operation
-     * from spinning forever if those independently stored facts are corrupted;
-     * after it, the only honest typed answer is unknown Run.
+     * Public callers receive Run IDs only after active publication, which
+     * follows handle attachment. This precondition rules out an unpublished
+     * Run attaching and publishing between the records capture and repository
+     * lookup; those two reads are not jointly atomic.
+     *
+     * Terminal publication precedes detachment, so the repository wins once
+     * terminal even while the captured handle remains attached. Under that
+     * precondition, an active row without a captured handle is an invariant
+     * violation.
      */
-    const CURRENT_RUN_LOOKUP_YIELDS = 8;
-    const currentRunAfterActive = (
+    const resolveCurrentRun = (
       runId: RunId,
     ): Effect.Effect<CurrentRunResolution> =>
       Effect.gen(function* () {
-        for (
-          let attempt = 0;
-          attempt < CURRENT_RUN_LOOKUP_YIELDS;
-          attempt += 1
-        ) {
-          const current = records.currentRun(runId);
-          if (current !== undefined) return { state: "current", current };
-          const latest = yield* repository.lookup(runId);
-          if (latest.state !== "active") return latest;
-          yield* Effect.yieldNow;
-        }
-        const latest = yield* repository.lookup(runId);
-        return latest.state === "active" ? { state: "unknown" } : latest;
+        const current = records.currentRun(runId);
+        const known = yield* repository.lookup(runId);
+        if (known.state !== "active") return known;
+        if (current !== undefined) return { state: "current", current };
+        return yield* Effect.die(
+          new Error(`${runId} is active without an attached Run handle`),
+        );
       });
 
     const steer = (
@@ -1000,18 +989,7 @@ const makeSupervisor = (settings: SessionSettings) =>
           return { outcome: "shutting down" } as const;
         }
 
-        const known = yield* repository.lookup(runId);
-        if (known.state === "unknown" || known.state === "spent") {
-          return { outcome: "unknown Run", runId } as const;
-        }
-        if (known.state === "terminal") {
-          return {
-            outcome: alreadyTerminal(known.snapshot.terminalStatus ?? "failed"),
-            runId,
-          } as const;
-        }
-
-        const resolved = yield* currentRunAfterActive(runId);
+        const resolved = yield* resolveCurrentRun(runId);
         if (resolved.state === "unknown" || resolved.state === "spent") {
           return { outcome: "unknown Run", runId } as const;
         }
@@ -1069,7 +1047,7 @@ const makeSupervisor = (settings: SessionSettings) =>
           // turn an admitted request into an error.
           return { outcome: "idempotent", runId } as const;
         }
-        const resolved = yield* currentRunAfterActive(runId);
+        const resolved = yield* resolveCurrentRun(runId);
         if (resolved.state === "current") {
           const { handle } = resolved.current;
           yield* handle.mailbox.close();
@@ -1106,14 +1084,7 @@ const makeSupervisor = (settings: SessionSettings) =>
         // this read (or any non-blocking return) releases the registration.
         const registration = waiters.register(runId);
         return Effect.gen(function* () {
-          const known = yield* repository.lookup(runId);
-          if (known.state === "unknown" || known.state === "spent") {
-            return { outcome: "unknown Run", runId } as const;
-          }
-          if (known.state === "terminal") {
-            return yield* terminalOutcomeOf(store, runId, known.snapshot);
-          }
-          const resolved = yield* currentRunAfterActive(runId);
+          const resolved = yield* resolveCurrentRun(runId);
           if (resolved.state === "unknown" || resolved.state === "spent") {
             return { outcome: "unknown Run", runId } as const;
           }
@@ -1121,16 +1092,16 @@ const makeSupervisor = (settings: SessionSettings) =>
             return yield* terminalOutcomeOf(store, runId, resolved.snapshot);
           }
           const { handle } = resolved.current;
-          const finished = yield* Effect.exit(
-            timeoutMillis === undefined
-              ? Deferred.await(handle.completion)
-              : Effect.timeout(
-                  Deferred.await(handle.completion),
-                  timeoutMillis,
-                ),
-          );
-          if (Exit.isFailure(finished)) {
-            return { outcome: "still running", runId } as const;
+          if (timeoutMillis === undefined) {
+            yield* Deferred.await(handle.completion);
+          } else {
+            const finished = yield* Effect.timeoutOption(
+              Deferred.await(handle.completion),
+              timeoutMillis,
+            );
+            if (finished._tag === "None") {
+              return { outcome: "still running", runId } as const;
+            }
           }
           const settled = yield* repository.lookup(runId);
           return settled.state === "terminal"

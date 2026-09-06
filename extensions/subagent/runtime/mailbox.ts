@@ -57,6 +57,8 @@ export function makeMailbox(
   counters: RuntimeCounters,
 ): Effect.Effect<ControlMailbox, never, import("effect").Scope.Scope> {
   return Effect.gen(function* () {
+    let closed = false;
+    let pendingBytes = 0;
     const queue = yield* Effect.acquireRelease(
       Effect.map(
         Queue.bounded<RunControl, Cause.Done>(bounds.maxPending),
@@ -65,10 +67,14 @@ export function makeMailbox(
           return made;
         },
       ),
-      () => Effect.sync(() => counters.released("openMailboxes")),
+      (made) =>
+        Effect.gen(function* () {
+          closed = true;
+          pendingBytes = 0;
+          yield* Queue.shutdown(made);
+          counters.released("openMailboxes");
+        }),
     );
-    let closed = false;
-    let pendingBytes = 0;
 
     /**
      * The whole admission decision, in one synchronous step.
@@ -105,15 +111,15 @@ export function makeMailbox(
       admit,
       feed,
       close: () =>
-        Effect.gen(function* () {
-          if (closed) return;
+        Effect.suspend(() => {
+          if (closed) return Effect.void;
           closed = true;
-          // Discard first, end second. What was admitted and never taken is
-          // gone, so it cannot reach this Run's adapter on its way out and it
-          // cannot reach the Subagent's next Run at all.
-          yield* Effect.ignore(Queue.clear(queue));
           pendingBytes = 0;
-          yield* Queue.end(queue);
+          // `shutdown` is the Queue primitive for this exact lifecycle: it
+          // atomically discards buffered Controls, rejects later offers, and
+          // releases a waiting consumer. The scope finalizer repeats it
+          // safely, since shutdown is idempotent.
+          return Effect.asVoid(Queue.shutdown(queue));
         }),
       isClosed: () => closed,
       pending: () => Queue.sizeUnsafe(queue),
