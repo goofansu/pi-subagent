@@ -23,6 +23,10 @@ say whether a notice landed, that every terminal notice carries a pointer with
 the exact argument shape, and that the Run label is bounded at admission —
 stands. The text below is what was decided on 2026-09-03 and is not rewritten.
 
+**Status note, 2026-09-06.** Delivery's own states are now four — pending,
+handed off, exhausted, and unannounceable — as recorded by
+[ADR-0035's 2026-09-06 amendment](0035-completion-hand-off-resolves-on-landing-or-consumption.md#status).
+
 **Amended in a second respect by
 [ADR-0037](0037-a-notice-carries-a-short-output-whole.md).** The pointer's
 sentence gains an inlined form for a notice that carries the output whole: it

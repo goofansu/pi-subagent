@@ -636,11 +636,14 @@ test("one undecodable stored entry read through agent_result counts once", async
     },
     (rig) =>
       Effect.gen(function* () {
-        // Keep delivery from making the first store read: this test drives the
-        // agent_result path once, so the one decode defect has one owner.
-        yield* rig.delivery.stop();
         const started = startedRun(yield* rig.supervisor.start(request()));
         yield* untilTerminal(rig, started.runId);
+        // Delivery reads first and discovers the stored form is undecodable.
+        for (let step = 0; step < 10; step += 1) {
+          if (rig.sink.unannounceableRuns().length > 0) break;
+          yield* Effect.yieldNow;
+        }
+        assert.deepEqual(rig.sink.unannounceableRuns(), [started.runId]);
         const result = yield* rig.supervisor.result(started.runId);
         return { result, counters: rig.supervisor.counters() };
       }),

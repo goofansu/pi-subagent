@@ -1104,8 +1104,9 @@ export function findBoundaryViolations(
   }
 
   // 17. Delivery does not say "landed", and does not say "consumed" either. It
-  //     knows pending, handed off, and exhausted; the Session push sink knows
-  //     the rest. This is a scan for two words rather than an import check
+  //     knows pending, handed off, exhausted, and unannounceable; the Session
+  //     push sink knows the rest. This is a scan for two words rather than an
+  //     import check
   //     because the mistake it prevents is a mistake of reading: a `handedOff`
   //     set introduced by a comment about landing — or about the model having
   //     consumed the notice — is a set whose next reader treats an accepted

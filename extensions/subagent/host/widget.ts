@@ -53,8 +53,8 @@
  * and one that knew more would eventually act on more.
  *
  * The two failed answers, `exhausted` and `unannounceable`, are ones the row
- * has to *say* rather than act on. Either nothing will ever arrive, so the row
- * would otherwise sit with no explanation.
+ * has to *say* rather than act on. Either way, nothing will ever arrive, so
+ * the row would otherwise sit with no explanation.
  *
  */
 
@@ -62,6 +62,8 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import { Effect, type Scope, Stream } from "effect";
 import { isTerminalRunPhase, type RunId } from "../domain/index.ts";
 import {
+  type HandoffStatus,
+  handoffEndedBadly,
   type RenderableTheme,
   type RunRowView,
   renderRunRows,
@@ -100,30 +102,9 @@ export function widgetRows(
     // Presentation-only, and set from a host fact the widget already reads —
     // the snapshot is untouched, which is what keeps the repository out of
     // notification state (freeze F9).
-    return handoff === "exhausted" || handoff === "unannounceable"
-      ? [{ ...snapshot, handoff }]
-      : [snapshot];
+    return handoffEndedBadly(handoff) ? [{ ...snapshot, handoff }] : [snapshot];
   });
 }
-
-/**
- * How far a Run's completion hand-off has got, in the four states anything
- * outside the Session push sink is allowed to know.
- *
- * Declared with the read model that consumes it rather than with the sink that
- * answers it, and that is the boundary rather than an accident: the widget may
- * not name the sink (rule 18), so the vocabulary of the question lives with
- * the asker and the sink satisfies it.
- *
- * A Run the sink has never heard of is `pending`, which is the answer a row
- * wants: a Run that settled a moment ago and whose notice is still in flight
- * is indistinguishable from here, and both should keep their row.
- */
-export type HandoffStatus =
-  | "pending"
-  | "resolved"
-  | "exhausted"
-  | "unannounceable";
 
 /**
  * The hand-off the widget reads, which the Session push sink supplies.

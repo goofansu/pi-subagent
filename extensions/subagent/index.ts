@@ -44,7 +44,10 @@ export interface SubagentV2Options {
    * able to lower it.
    */
   readonly policy?: RuntimePolicy;
-  /** Test-only seam for deterministic Result encoding defects. */
+  /**
+   * Test-only Result-encoding seam; composition documents why it is not a
+   * production encoding policy.
+   */
   readonly resultEncoder?: ResultEncoder;
   /** Reads the wall clock. Supplied by a test so widget durations are fixed. */
   readonly now?: () => number;

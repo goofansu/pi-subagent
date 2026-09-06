@@ -107,6 +107,7 @@
 
 import { Effect } from "effect";
 import type { RunId, RunNotification } from "../domain/index.ts";
+import type { HandoffStatus } from "../presentation/index.ts";
 import type {
   NotificationPushFailure,
   NotificationSink,
@@ -116,7 +117,6 @@ import {
   type NotificationMessage,
   parseNotificationMessage,
 } from "./notification-message.ts";
-import type { HandoffStatus } from "./widget.ts";
 
 /** How a notice reaches Pi. One function, so a test can supply its own. */
 export type SendNotification = (message: NotificationMessage) => void;
@@ -135,9 +135,10 @@ export interface HostTurnEvidence {
  *
  * A counter that cannot tell a refused hand-off from a lost one cannot say
  * which half of the pipeline is failing, which is the only question these
- * exist to answer. The first three are about delivery reaching the host; the
- * next four are about the host reaching the conversation; the last is the
- * evidence Phase D is scheduled on.
+ * exist to answer. The first three count delivery's push calls; the next three
+ * track notices between the host and the conversation; the next two count
+ * delivery's terminal reports; `consumedBeforeLanding` records retrieval
+ * racing a landing; and the final two track waits.
  *
  * `pushesAttempted` is `handOffsAccepted` plus `handOffsRefused`: a re-push is
  * the sink's own doing and is counted as a `rePushes` rather than as a second

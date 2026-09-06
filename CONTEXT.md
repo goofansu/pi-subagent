@@ -440,12 +440,13 @@ while held.
 [ADR-0036](docs/adr/0036-a-wait-delivers-the-result-it-waited-for.md).
 
 **Completion hand-off** — the whole business of getting one notice to the
-parent, from the first push to whatever ends it. It is **resolved** when the
-notice **landed** or its Run was **consumed**, whichever came first, and a
-settled Run's widget row lasts exactly that long unless the hand-off terminates
-as **exhausted** or **unannounceable**. The widget reads four states and nothing
-finer — `pending`, `resolved`, `exhausted`, `unannounceable` — and never learns
-which of the two resolved a hand-off; anything finer is the sink's alone.
+parent, from the first push to whatever ends it. It **resolves** when the notice
+**landed** or its Run was **consumed**, whichever came first, and a settled
+Run's widget row lasts exactly that long. It **ends** as **exhausted** or
+**unannounceable**: the row leaves only on a resolution and stays, marked, on
+an ending. The widget reads four states and nothing finer — `pending`,
+`resolved`, `exhausted`, `unannounceable` — and never learns which of the two
+resolved a hand-off; anything finer is the sink's alone.
 
 **Runtime probe** — the test-facing count of what is still alive: live Run
 fibers, live reducer fibers, open observation queues, open mailboxes,

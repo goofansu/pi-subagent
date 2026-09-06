@@ -67,7 +67,10 @@ export interface SessionWiring {
   readonly agentDir: string;
   /** The bounds this Session enforces. Omitted means the defaults. */
   readonly policy?: RuntimePolicy;
-  /** Test-only settlement encoding seam forwarded to the Result store. */
+  /**
+   * Test-only Result-encoding seam; composition documents why it is not a
+   * production encoding policy.
+   */
   readonly resultEncoder?: ResultEncoder;
   /**
    * The live `agent_start` guideline array, rewritten in place per Session.

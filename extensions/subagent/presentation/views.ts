@@ -21,6 +21,25 @@ import type {
   UsageSnapshot,
 } from "../domain/index.ts";
 
+/** The four completion hand-off states visible outside the Session push sink. */
+export type HandoffStatus =
+  | "pending"
+  | "resolved"
+  | "exhausted"
+  | "unannounceable";
+
+export type FailedHandoffStatus = Extract<
+  HandoffStatus,
+  "exhausted" | "unannounceable"
+>;
+
+/** Whether a completion hand-off ended without resolving. */
+export function handoffEndedBadly(
+  status: HandoffStatus | undefined,
+): status is FailedHandoffStatus {
+  return status === "exhausted" || status === "unannounceable";
+}
+
 /**
  * One live Run, as a row.
  *
@@ -55,7 +74,7 @@ export interface RunRowView {
    * budget ran out; `unannounceable` means there was no Result from which to
    * build a notice. Either way this row will never leave on its own.
    */
-  readonly handoff?: "exhausted" | "unannounceable";
+  readonly handoff?: FailedHandoffStatus;
 }
 
 /**

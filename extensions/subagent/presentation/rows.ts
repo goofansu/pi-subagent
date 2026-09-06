@@ -57,7 +57,7 @@ import {
   runPhaseVerb,
   type Tone,
 } from "./status.ts";
-import { elapsedMillis, type RunRowView } from "./views.ts";
+import { elapsedMillis, handoffEndedBadly, type RunRowView } from "./views.ts";
 
 /** The theme surface every subagent renderer uses. */
 export interface RenderableTheme {
@@ -229,7 +229,7 @@ function rowCells(row: RunRowView, now: number): RowCells {
   const phase: RunPhase = completion?.status ?? row.phase;
   const live = !isTerminalRunPhase(phase);
   const cancelling = live && row.cancellation !== undefined;
-  const handoffFailure = row.handoff !== undefined;
+  const handoffFailure = handoffEndedBadly(row.handoff);
 
   const tone: Tone = handoffFailure ? "error" : runPhaseTone(phase);
   const status = live
@@ -460,7 +460,7 @@ function formatHeader(
  * failed, and it is painted as the failure it is reporting.
  */
 export function rowBackground(row: RunRowView): string {
-  if (row.handoff !== undefined) return "toolErrorBg";
+  if (handoffEndedBadly(row.handoff)) return "toolErrorBg";
   return runPhaseBackground(row.phase);
 }
 

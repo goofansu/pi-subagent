@@ -57,7 +57,7 @@ export interface NotificationPushFailure {
  *
  * It is still an interface about delivery and nothing else. Everything the
  * host knows beyond these states is the host's vocabulary, and boundary
- * rule 19 keeps it out of this file.
+ * rule 17 keeps it out of this file.
  * [ADR-0035](../../../docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)
  * is the decision.
  */
