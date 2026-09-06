@@ -129,18 +129,11 @@ const EMPTY_STATE: StoreState = {
 };
 
 /** Reserved plus stored, which is what the budget is measured against. */
-function accountedBytes(
-  entries: ReadonlyMap<RunId, StoredEntry>,
-  reservations: ReadonlyMap<RunId, number>,
-): number {
-  let total = 0;
-  for (const size of reservations.values()) total += size;
-  for (const entry of entries.values()) total += entry.bytes;
-  return total;
-}
-
 function committedBytes(state: StoreState): number {
-  return accountedBytes(state.entries, state.reservations);
+  let total = 0;
+  for (const size of state.reservations.values()) total += size;
+  for (const entry of state.entries.values()) total += entry.bytes;
+  return total;
 }
 
 /**
@@ -151,17 +144,17 @@ function committedBytes(state: StoreState): number {
  * just-committed result is pinned, so this can never evict the newest result
  * it was called to make room for.
  *
- * Returns the bytes still accounted after every possible eviction.
+ * Owns the copy it mutates; the input state remains unchanged.
  */
 function evict(
-  entries: Map<RunId, StoredEntry>,
-  reservations: ReadonlyMap<RunId, number>,
+  state: StoreState,
   budget: number,
   counters: RuntimeCounters,
-): number {
-  let accounted = accountedBytes(entries, reservations);
-  if (accounted <= budget) return accounted;
+): StoreState {
+  let accounted = committedBytes(state);
+  if (accounted <= budget) return state;
 
+  const entries = new Map(state.entries);
   for (const [runId, entry] of entries) {
     if (entry.encoded === undefined || entry.pins.size > 0) continue;
     const { encoded: _dropped, ...kept } = entry;
@@ -170,7 +163,7 @@ function evict(
     counters.count("evictions");
     if (accounted <= budget) break;
   }
-  return accounted;
+  return { ...state, entries };
 }
 
 const makeStore = (
@@ -216,15 +209,12 @@ const makeStore = (
         // Pins are still absolute, and that is what keeps this from being a
         // way around the budget: a result being delivered or read is not
         // evictable, so a store whose every entry is pinned still refuses.
-        const entries = new Map(current.entries);
-        const accounted = evict(
-          entries,
-          current.reservations,
+        const freed = evict(
+          current,
           policy.resultStoreBytes - wanted,
           counters,
         );
-        const freed = { ...current, entries };
-        return policy.resultStoreBytes - accounted >= wanted
+        return policy.resultStoreBytes - committedBytes(freed) >= wanted
           ? take(freed)
           : [false, freed];
       });
@@ -305,10 +295,13 @@ const makeStore = (
             });
             const reservations = new Map(current.reservations);
             reservations.delete(bounded.runId);
-            evict(entries, reservations, policy.resultStoreBytes, counters);
             return [
               { outcome: "stored", result: bounded } as CommitOutcome,
-              { ...current, entries, reservations },
+              evict(
+                { ...current, entries, reservations },
+                policy.resultStoreBytes,
+                counters,
+              ),
             ];
           }),
         ),
@@ -348,8 +341,11 @@ const makeStore = (
         entries.set(runId, { ...entry, pins });
         // Releasing a pin can put the store back inside its budget's reach,
         // so this is the other moment eviction becomes possible.
-        evict(entries, current.reservations, policy.resultStoreBytes, counters);
-        return { ...current, entries };
+        return evict(
+          { ...current, entries },
+          policy.resultStoreBytes,
+          counters,
+        );
       });
 
     const read = (runId: RunId): Effect.Effect<ResultRead> =>

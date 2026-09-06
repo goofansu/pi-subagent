@@ -1,8 +1,12 @@
 /**
  * CompletionDelivery reads immutable stored Results and hands notices to the
- * host. A claim deduplicates settlement wake-ups and sweeps. Hand-off is the
- * strongest success this module can observe; the host owns what happens next.
+ * host. A claim deduplicates settlement wake-ups and sweeps.
  * Storage precedes notification, so a failed push cannot lose or alter a Result.
+ *
+ * A successful push means the host accepted the message, not that the notice
+ * reached the conversation. Only the Session push sink observes that later
+ * event, so this module has no word for it: hand-off is its strongest success.
+ *
  * See [ADR-0035](../../../docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md);
  * the boundary tests enforce the separation from host-only delivery vocabulary.
  */
