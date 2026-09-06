@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runId, subagentId } from "../domain/index.ts";
+import { emitText } from "../testing/fakes/script.ts";
 import {
   hostRig,
   RIG_ANSWER,
   RIG_ONE_SHOT_PROFILE,
+  RIG_POLICY,
   RIG_RESUMABLE_PROFILE,
   startedIds,
 } from "../testing/host-rig.ts";
@@ -44,6 +46,21 @@ async function started(
       prompt: "have a look",
     }),
   );
+}
+
+async function commandText(
+  rig: ReturnType<typeof hostRig>,
+  args: string,
+): Promise<string> {
+  const command = rig.host
+    .commands()
+    .find((entry) => entry.name === "subagent");
+  assert.ok(command, "the /subagent command was not registered");
+  const messages: string[] = [];
+  await command.handler(args, {
+    ui: { notify: (message: string) => messages.push(message) },
+  });
+  return messages.at(-1) ?? "";
 }
 
 // -- Every operation, against both fakes -------------------------------------
@@ -130,6 +147,95 @@ for (const fake of BOTH_FAKES) {
     );
   });
 }
+
+// -- Bounded cancellation at the surface ------------------------------------
+
+test("a stuck demo execution is cancelled visibly and remains inspectable", async (t) => {
+  const partial = "the part produced before the provider stuck";
+  const cleanupBudgetMillis = 2_000;
+  const rig = hostRig(t, {
+    resumableSteps: [
+      [emitText(partial), { step: "hang-on-stop" }],
+      [emitText(partial), { step: "hang-on-stop" }],
+    ],
+    testClock: true,
+    policy: { ...RIG_POLICY, cleanupBudgetMillis },
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const ids = await started(rig, RIG_RESUMABLE_PROFILE);
+  await rig.pump();
+
+  const cancel = await rig.text("agent_cancel", { ids: [ids.runId] });
+  assert.equal(
+    cancel,
+    `Cancellation requested: ${ids.runId}. Each Run stops when its execution and cleanup finish, keeps whatever output it produced, and still sends its own notification.`,
+  );
+  assert.match(rig.host.widgetLines().join("\n"), /cancelling/);
+
+  await rig.advanceClock(cleanupBudgetMillis + 1);
+  await rig.pump();
+
+  assert.match(rig.host.widgetLines().join("\n"), /cancelled/);
+  assert.match(
+    await commandText(rig, ""),
+    /Runtime: attention needed · 1 incident/,
+  );
+  assert.match(await commandText(rig, "diagnostics"), /cleanupEscalations: 1/);
+
+  const notice = rig.host.sent()[0]?.message;
+  assert.ok(notice, "the cancelled Run sent no notice");
+  await rig.host.messageStart({ role: "custom", ...notice });
+  await rig.pump();
+  assert.deepEqual(rig.host.widgetLines(), []);
+
+  const result = await rig.text("agent_result", { id: ids.runId });
+  assert.match(result, new RegExp(partial));
+  assert.match(result, /native cleanup did not finish/);
+
+  // A wait already blocked on another stuck Run is released by the same one
+  // budget advancement; it does not rely on polling agent_result afterwards.
+  const waitingIds = await started(rig, RIG_RESUMABLE_PROFILE);
+  await rig.pump();
+  await rig.text("agent_cancel", { ids: [waitingIds.runId] });
+  const waiting = rig.text("agent_wait", { ids: [waitingIds.runId] });
+  await rig.pump();
+  await rig.advanceClock(cleanupBudgetMillis + 1);
+  const waited = await waiting;
+  assert.match(waited, /cancelled/);
+  assert.match(waited, new RegExp(partial));
+});
+
+test("session shutdown abandons a stuck Run and the next Session starts cleanly", async (t) => {
+  const cleanupBudgetMillis = 2_000;
+  const rig = hostRig(t, {
+    resumableSteps: [[{ step: "hang-on-stop" }]],
+    testClock: true,
+    policy: { ...RIG_POLICY, cleanupBudgetMillis },
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  await started(rig, RIG_RESUMABLE_PROFILE);
+  await rig.pump();
+  await rig.probe();
+  // Capture the Session's TestClock before release makes the handle reject
+  // new work; its service remains controllable while disposal is in flight.
+  await rig.advanceClock(0);
+
+  const shutdown = rig.host.sessionShutdown();
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+  await rig.advanceClock(cleanupBudgetMillis + 1);
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+  await rig.advanceClock(cleanupBudgetMillis + 1);
+  await shutdown;
+  assert.equal(rig.installation.handle.isLive(), false);
+  assert.equal(rig.noLeaks(), true);
+
+  await rig.host.sessionStart();
+  assert.equal(rig.installation.handle.isLive(), true);
+  assert.deepEqual(rig.host.widgetLines(), []);
+});
 
 // -- Atomicity at the surface ------------------------------------------------
 
