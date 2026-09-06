@@ -322,6 +322,30 @@ test("a hanging Query stops when it is aborted, having produced what it had", as
   assert.equal(stand.record().liveQueries, 0);
 });
 
+test("an ignore-abort frame wait stays pending after the abort signal fires", async () => {
+  const stand = createStandInClaudeQuery({
+    scripts: [[{ step: "init" }, { step: "ignore-abort" }]],
+  });
+  const abort = new AbortController();
+  const stream = stand.query({
+    prompt: createClaudeInput(),
+    options: { abortController: abort },
+  });
+  const frames = stream[Symbol.asyncIterator]();
+
+  assert.equal((await frames.next()).done, false);
+  const pending = frames.next();
+  abort.abort();
+  const marker = Symbol("still pending");
+  assert.equal(await Promise.race([pending, Promise.resolve(marker)]), marker);
+  assert.equal(stand.record().aborts, 1);
+
+  // Closing is synchronous bookkeeping even though the provider's frame wait
+  // remains pending, matching the surface the adapter has to interrupt past.
+  stream.close();
+  assert.equal(stand.record().liveQueries, 0);
+});
+
 test("a Query aborted before it is iterated produces no frames at all", async () => {
   // The spike's shape: an abort 50 ms in gave no frames, not even the init
   // frame, so no conversation identity was ever seen for that Run.

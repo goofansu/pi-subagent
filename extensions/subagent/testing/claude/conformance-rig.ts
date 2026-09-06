@@ -418,8 +418,40 @@ export function claudeConformanceRig(): BackendConformanceRig {
           });
 
         case "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop":
-          // Ticket 03 supplies Claude's permanent ignored-abort fixture.
-          return undefined;
+          // The provider's frame promise ignores abort, but Effect can still
+          // interrupt the adapter's promise wait promptly. No runtime cleanup
+          // escalation is needed for this backend shape.
+          return claudeFixture({
+            scripts: [
+              [
+                { step: "init" },
+                {
+                  step: "assistant",
+                  messageId: "msg_1",
+                  text: "a partial answer",
+                },
+                { step: "ignore-abort" },
+              ],
+            ],
+            testClock: true,
+            policy: lowered({ cleanupBudgetMillis: 2_000 }),
+            plans: [
+              {
+                cancel: true,
+                advanceClockAfterCancelMillis: 2_001,
+              },
+            ],
+            expected: {
+              runs: [
+                {
+                  status: "cancelled",
+                  cancellationReason: "requested",
+                  finalOutput: "a partial answer",
+                  diagnosticCategories: [],
+                },
+              ],
+            },
+          });
 
         case "an-execution-settles-when-the-provider-goes-quiet":
           return claudeFixture({
@@ -1010,13 +1042,4 @@ export function claudeConformanceRig(): BackendConformanceRig {
       }
     },
   };
-}
-
-/**
- * What the Claude rig skips until its ignored-abort fixture lands in ticket
- * 03. The visible skip is ticket 01's permitted staging point, not a
- * capability exception.
- */
-export function claudeConformanceSkips(): readonly BackendConformanceScenario[] {
-  return ["cancel-returns-immediately-and-settlement-bounds-an-ignored-stop"];
 }

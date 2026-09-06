@@ -17,7 +17,7 @@
  * imported only by this module and the service definitions it wires.
  */
 
-import { Layer } from "effect";
+import { type Clock, Layer } from "effect";
 import type { Backend, BackendValidationContext } from "../backend/contract.ts";
 import type { Profile, ProfileDiagnostic } from "../domain/index.ts";
 import { BackendCatalog } from "./backend-catalog.ts";
@@ -122,6 +122,8 @@ interface SessionRuntimeBaseOptions {
       };
   readonly policy?: RuntimePolicy;
   readonly maxDelegationDepth?: number;
+  /** Override the ambient clock for deterministic host and runtime tests. */
+  readonly clock?: Layer.Layer<Clock.Clock>;
   /**
    * Where completion Notifications go. Required, and deliberately so.
    *
@@ -206,7 +208,10 @@ export function sessionRuntimeLayer(
     delivery,
   );
 
-  return SubagentSupervisor.layerOf(settings).pipe(
+  const runtime = SubagentSupervisor.layerOf(settings).pipe(
     Layer.provideMerge(foundation),
   );
+  return options.clock === undefined
+    ? runtime
+    : runtime.pipe(Layer.provideMerge(options.clock));
 }
