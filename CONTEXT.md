@@ -139,10 +139,10 @@ stays authoritative either way.
 **Pushed is not landed**: Pi may hold a follow-up while the model is
 mid-turn. Its queue may survive a non-Escape abort; when the sink reports the
 notice lost, it is re-pushed once per loss, but only after Pi no longer reports
-pending messages. One landing per Notification is the invariant. The six states
+pending messages. One landing per Notification is the invariant. The seven states
 a notice can be in — **handed off**, **landed**, **lost after hand-off**,
-**exhausted**, **consumed**, **held** — are defined under **Delivery sweep**,
-each with the one component that decides it.
+**exhausted**, **unannounceable**, **consumed**, **held** — are defined under
+**Delivery sweep**, each with the one component that decides it.
 
 **Wait** — `agent_wait` blocks until the named Runs are terminal and
 delivers each one's Result, rendered exactly as `agent_result` renders it;
@@ -388,7 +388,7 @@ succeeded or exhausted its budget.
 been announced, delivering anything missed. It is why a lost wake-up costs one
 extra pass rather than a Notification.
 
-The five words for where a Notification has got to. Each is decided by exactly
+The seven words for where a Notification has got to. Each is decided by exactly
 one component, and no component may use a word for a state it cannot observe.
 [ADR-0033](docs/adr/0033-notification-vocabulary-pointer-and-label-bound.md)
 and [ADR-0035](docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)
@@ -416,6 +416,11 @@ attempts a second apart by default. Decided by `CompletionDelivery`, from its
 own retry loop, and terminal for delivery. The stored Result is untouched, so
 `agent_result` still answers.
 
+**Unannounceable** — this Run settled and delivery found no Result to announce.
+Decided by `CompletionDelivery`, from the Result store's read, and terminal for
+the hand-off. The Session push sink records and counts the report so the widget
+can say why its row stays; `agent_result` honestly says the output is gone.
+
 **Consumed** — the parent has this Run's Result: `agent_result` returned it,
 or a wait delivered it. Decided by the **Session push sink**, told by those
 tool handlers and by nothing else: not a rejection or an expired Result, and
@@ -437,9 +442,10 @@ while held.
 **Completion hand-off** — the whole business of getting one notice to the
 parent, from the first push to whatever ends it. It is **resolved** when the
 notice **landed** or its Run was **consumed**, whichever came first, and a
-settled Run's widget row lasts exactly that long. The widget reads three states
-and nothing finer — `pending`, `resolved`, `exhausted` — and never learns which
-of the two resolved a hand-off; anything finer is the sink's alone.
+settled Run's widget row lasts exactly that long unless the hand-off terminates
+as **exhausted** or **unannounceable**. The widget reads four states and nothing
+finer — `pending`, `resolved`, `exhausted`, `unannounceable` — and never learns
+which of the two resolved a hand-off; anything finer is the sink's alone.
 
 **Runtime probe** — the test-facing count of what is still alive: live Run
 fibers, live reducer fibers, open observation queues, open mailboxes,
@@ -509,8 +515,9 @@ stored Result, because delivery releases that pin on a successful push.
 
 Landing is not the only end. A **Completion hand-off** also resolves when its
 Run is **consumed**, the sink is told of **exhaustion** by delivery, and a
-notice is **held** while a wait covers its Run, so all six states have one
-owner and a settled row can say why it is stuck.
+notice is **held** while a wait covers its Run, and is told when a Run is
+**unannounceable**, so all seven states have one owner and a settled row can say
+why it is stuck.
 
 **RunCard** — the pure presentation of one Run, built from a published index row
 (live, and therefore carrying no output) or from an immutable stored Result

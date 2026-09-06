@@ -35,11 +35,14 @@ export interface FakeNotificationSink extends NotificationSink {
    * prove the first.
    */
   readonly exhaustedRuns: () => readonly RunId[];
+  /** The Runs delivery said had no Result to announce, in report order. */
+  readonly unannounceableRuns: () => readonly RunId[];
 }
 
 export function createFakeNotificationSink(): FakeNotificationSink {
   const received: RunNotification[] = [];
   const exhaustedRuns: RunId[] = [];
+  const unannounceableRuns: RunId[] = [];
   let attempts = 0;
   let failing = 0;
   return {
@@ -59,8 +62,13 @@ export function createFakeNotificationSink(): FakeNotificationSink {
       Effect.sync(() => {
         exhaustedRuns.push(runId);
       }),
+    unannounceable: (runId) =>
+      Effect.sync(() => {
+        unannounceableRuns.push(runId);
+      }),
     received: () => [...received],
     exhaustedRuns: () => [...exhaustedRuns],
+    unannounceableRuns: () => [...unannounceableRuns],
     attempts: () => attempts,
     failNext: (count) => {
       failing = count;

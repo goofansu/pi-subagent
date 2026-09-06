@@ -171,6 +171,78 @@ test("a sink that always fails exhausts its budget, releases the pin, and leaves
   assert.equal(outcome.stored.outcome, "result");
 });
 
+test("a Run with no Result to announce is reported once after its delivery pin is released", async () => {
+  const { value: outcome } = await withSession(
+    {
+      steps: [[emitText("unencodable")]],
+      resultEncoder: () => {
+        throw new Error("persistent encode defect");
+      },
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(request()));
+        yield* untilTerminal(rig, started.runId);
+        for (;;) {
+          if (rig.sink.unannounceableRuns().length > 0) break;
+          yield* Effect.yieldNow;
+        }
+        const beforeSweep = {
+          received: rig.sink.received().length,
+          attempts: rig.sink.attempts(),
+          exhausted: rig.sink.exhaustedRuns(),
+          unannounceable: rig.sink.unannounceableRuns(),
+        };
+        yield* rig.delivery.sweep();
+        return {
+          beforeSweep,
+          afterSweep: rig.sink.unannounceableRuns(),
+          delivery: yield* rig.delivery.unannounceable(),
+          pins: yield* rig.store.pinsOf(started.runId),
+          failures: rig.counters.counters().deliveryFailures,
+          runId: started.runId,
+        };
+      }),
+  );
+
+  assert.deepEqual(outcome.beforeSweep, {
+    received: 0,
+    attempts: 0,
+    exhausted: [],
+    unannounceable: [outcome.runId],
+  });
+  assert.deepEqual(outcome.afterSweep, [outcome.runId]);
+  assert.deepEqual(outcome.delivery, [outcome.runId]);
+  assert.ok(!outcome.pins.includes("delivery"));
+  assert.equal(outcome.failures, 0);
+});
+
+test("a stopped delivery does not report a Run with no Result to announce", async () => {
+  const { value: outcome } = await withSession(
+    {
+      steps: [[emitText("unencodable")]],
+      resultEncoder: () => {
+        throw new Error("persistent encode defect");
+      },
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        yield* rig.delivery.stop();
+        const started = startedRun(yield* rig.supervisor.start(request()));
+        yield* untilTerminal(rig, started.runId);
+        return {
+          reported: rig.sink.unannounceableRuns(),
+          unannounceable: yield* rig.delivery.unannounceable(),
+          pins: yield* rig.store.pinsOf(started.runId),
+        };
+      }),
+  );
+
+  assert.deepEqual(outcome.reported, []);
+  assert.deepEqual(outcome.unannounceable, []);
+  assert.ok(!outcome.pins.includes("delivery"));
+});
+
 test("a missed wake-up is recovered by the sweep, and nothing is delivered twice", async () => {
   const { value: outcome } = await withSession(
     { steps: [[emitText("done")]] },

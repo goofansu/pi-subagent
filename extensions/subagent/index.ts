@@ -21,6 +21,7 @@ import type { ActiveWidget } from "./host/widget.ts";
 import { profilesDir } from "./profiles/discovery.ts";
 import type { BackendSet } from "./runtime/composition.ts";
 import type { RuntimePolicy } from "./runtime/policy.ts";
+import type { ResultEncoder } from "./runtime/result-store.ts";
 
 /** What the extension needs from the process it is loaded into. */
 export interface SubagentV2Options {
@@ -43,6 +44,8 @@ export interface SubagentV2Options {
    * able to lower it.
    */
   readonly policy?: RuntimePolicy;
+  /** Test-only seam for deterministic Result encoding defects. */
+  readonly resultEncoder?: ResultEncoder;
   /** Reads the wall clock. Supplied by a test so widget durations are fixed. */
   readonly now?: () => number;
   /**
@@ -140,6 +143,9 @@ export function installSubagentV2(
     agentDir: options.agentDir,
     agentGuidelines,
     ...(options.policy === undefined ? {} : { policy: options.policy }),
+    ...(options.resultEncoder === undefined
+      ? {}
+      : { resultEncoder: options.resultEncoder }),
     setProfiles: (loaded: readonly Profile[]) => {
       profiles = loaded;
     },

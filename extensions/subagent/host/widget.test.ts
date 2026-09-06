@@ -357,6 +357,7 @@ test("the widget lists Runs that are not terminal and terminal ones whose hand-o
     [runId("run-2"), snapshot("run-2", "finalizing")],
     [runId("run-3"), snapshot("run-3", "completed")],
     [runId("run-4"), snapshot("run-4", "completed")],
+    [runId("run-5"), snapshot("run-5", "completed")],
   ]);
 
   const rows = widgetRows(index, (id) =>
@@ -364,19 +365,21 @@ test("the widget lists Runs that are not terminal and terminal ones whose hand-o
       ? "resolved"
       : id === runId("run-3")
         ? "exhausted"
-        : "pending",
+        : id === runId("run-5")
+          ? "unannounceable"
+          : "pending",
   );
 
   assert.deepEqual(
     rows.map((row) => row.identity.runId),
-    ["run-1", "run-2", "run-3"],
+    ["run-1", "run-2", "run-3", "run-5"],
   );
-  // An exhausted hand-off keeps its row and is marked, because nothing is
-  // coming for it and the row has to say so. Every other row is handed over
-  // exactly as the index published it.
+  // Terminal delivery reports keep their rows marked, because nothing is
+  // coming for them and each row has to say why. Every other row is handed
+  // over exactly as the index published it.
   assert.deepEqual(
     rows.map((row) => row.handoff),
-    [undefined, undefined, "exhausted"],
+    [undefined, undefined, "exhausted", "unannounceable"],
   );
 });
 

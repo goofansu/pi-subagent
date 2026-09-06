@@ -38,6 +38,7 @@ import type { BackendSet, SessionServices } from "../runtime/composition.ts";
 import { sessionRuntimeLayer } from "../runtime/composition.ts";
 import type { RuntimePolicy } from "../runtime/policy.ts";
 import { ProfileCatalog } from "../runtime/profile-catalog.ts";
+import type { ResultEncoder } from "../runtime/result-store.ts";
 import type { SessionPushSink } from "./push-sink.ts";
 import type { SessionHandle } from "./session-handle.ts";
 import { formatAgentGuidelines } from "./tool-copy.ts";
@@ -66,6 +67,8 @@ export interface SessionWiring {
   readonly agentDir: string;
   /** The bounds this Session enforces. Omitted means the defaults. */
   readonly policy?: RuntimePolicy;
+  /** Test-only settlement encoding seam forwarded to the Result store. */
+  readonly resultEncoder?: ResultEncoder;
   /**
    * The live `agent_start` guideline array, rewritten in place per Session.
    *
@@ -161,6 +164,9 @@ export async function startSession(
       // it is being loaded into.
       validation: { models: [...(ctx.modelRegistry?.getAll() ?? [])] },
       ...(wiring.policy === undefined ? {} : { policy: wiring.policy }),
+      ...(wiring.resultEncoder === undefined
+        ? {}
+        : { resultEncoder: wiring.resultEncoder }),
     }),
   );
 
