@@ -95,6 +95,10 @@ export interface SessionRigOptions {
   readonly steps?: readonly (readonly FakeStep[])[];
   /** How the fake behaves when it is opened. */
   readonly open?: FakeOpenScript;
+  /** Violate the backend contract by throwing before returning an Effect. */
+  readonly executeThrowsSynchronously?: boolean;
+  /** Zero-based executions on which to throw before returning an Effect. */
+  readonly executeThrowsSynchronouslyAt?: readonly number[];
   readonly policy?: RuntimePolicy;
   readonly profiles?: readonly Profile[];
   readonly maxDelegationDepth?: number;
@@ -143,6 +147,14 @@ export function withSession<A>(
   const backend = create({
     scripts: scripts(...(options.steps ?? [[]])),
     ...(options.open === undefined ? {} : { open: options.open }),
+    ...(options.executeThrowsSynchronously === undefined
+      ? {}
+      : { executeThrowsSynchronously: options.executeThrowsSynchronously }),
+    ...(options.executeThrowsSynchronouslyAt === undefined
+      ? {}
+      : {
+          executeThrowsSynchronouslyAt: options.executeThrowsSynchronouslyAt,
+        }),
     ...(options.gates === undefined ? {} : { gates: options.gates }),
     ...(options.trace === undefined ? {} : { trace: options.trace }),
     ...(options.close === undefined ? {} : { close: options.close }),

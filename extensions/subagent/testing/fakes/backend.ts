@@ -75,6 +75,10 @@ export interface FakeBackendOptions {
   readonly scripts: readonly FakeRunScript[];
   /** How the fake behaves when it is opened. Succeeds unless a test says so. */
   readonly open?: FakeOpenScript;
+  /** Violate the contract by throwing before an execution Effect is returned. */
+  readonly executeThrowsSynchronously?: boolean;
+  /** Zero-based executions on which to violate the contract synchronously. */
+  readonly executeThrowsSynchronouslyAt?: readonly number[];
   /** Gates the scripts wait on, owned and completed by the test. */
   readonly gates?: Readonly<Record<string, Deferred.Deferred<void>>>;
   /** A shared ordering log. The fake appends its own lifecycle events. */
@@ -182,8 +186,14 @@ function createFakeBackend(
     const execute = (
       input: RunInput,
       io: ExecutionIO,
-    ): Effect.Effect<TerminalBundle, never, import("effect").Scope.Scope> =>
-      Effect.gen(function* () {
+    ): Effect.Effect<TerminalBundle, never, import("effect").Scope.Scope> => {
+      if (
+        options.executeThrowsSynchronously ||
+        options.executeThrowsSynchronouslyAt?.includes(runIndex)
+      ) {
+        throw new Error("the fake execute threw synchronously");
+      }
+      return Effect.gen(function* () {
         // ADR-0023 exception 3: a closed scope is enforced by the backend's own
         // state, never by trusting a provider to reject work after disposal.
         if (closed) {
@@ -378,6 +388,7 @@ function createFakeBackend(
         // had to say, and it said them all.
         return bundle ?? { ending: answeredEnding() };
       });
+    };
 
     return {
       capabilities,

@@ -26,7 +26,7 @@
  *    result reservation taken through the lease it yields.
  * 2. Open the BackendAgent inside the new Subagent Scope. A failure here is
  *    `backend unavailable` and the ids stay spent (ADR-0030).
- * 3. Publish the Run and fork its Run fiber.
+ * 3. Build and attach the Run handle, publish its row, then fork settlement.
  *
  * `start` returns after step 3, so a caller receives either ids for a Run that
  * exists or a typed rejection — never an id for work that never began.
@@ -34,8 +34,8 @@
  * **Nothing here releases the lease by hand.** Steps 1 to 3 run under one
  * Scope and a rejection among them is a *failure* of that span, so
  * `admission.admit` gives back the capacity slot and the reservation as the
- * Scope closes; once the fork has happened the Run fiber's own Scope holds the
- * lease and returns it when the Run is over, after `detachRun`. Phase C1 is
+ * Scope closes; once the fork has happened an explicit hand-over makes the Run
+ * fiber's own Scope responsible for returning it after `detachRun`. Phase C1 is
  * where the two procedural `release()` calls went, and the ordering the Phase
  * B review restored is now a consequence of Scope finalizers running
  * last-in-first-out rather than of a comment asking for it.
@@ -91,10 +91,21 @@ import type {
 import { CompletionDelivery } from "./delivery.ts";
 import type { RuntimePolicy } from "./policy.ts";
 import { ProfileCatalog } from "./profile-catalog.ts";
-import { RunRepository, type RunSnapshot } from "./repository.ts";
-import { ResultStore } from "./result-store.ts";
-import { type RunHandle, runToSettlement } from "./run-scope.ts";
 import {
+  type RunLookup,
+  RunRepository,
+  type RunSnapshot,
+} from "./repository.ts";
+import { ResultStore } from "./result-store.ts";
+import {
+  makeResumedRunHandle,
+  makeRunHandle,
+  type RunContext,
+  type RunHandle,
+  runToSettlement,
+} from "./run-scope.ts";
+import {
+  type CurrentRun,
   makeSubagentRecords,
   type SubagentRecord,
 } from "./subagent-records.ts";
@@ -167,9 +178,9 @@ interface ForkedRun {
   readonly record: SubagentRecord;
   /** Returned by the Run fiber's Scope closing, whatever ended the Run. */
   readonly lease: AdmissionLease;
-  readonly identity: RunIdentity;
-  readonly prompt: string;
-  readonly startedAt: number;
+  /** Built and attached before the active row was published. */
+  readonly handle: RunHandle;
+  readonly context: RunContext;
   /** Absent when the caller's request carried none. */
   readonly diagnostics?: AdmissionDiagnostics;
 }
@@ -240,6 +251,10 @@ type ResumeRejection = Extract<
 type ResolvedResume =
   | { readonly outcome: "resolved"; readonly record: SubagentRecord }
   | ResumeRejection;
+
+type CurrentRunResolution =
+  | { readonly state: "current"; readonly current: CurrentRun }
+  | Exclude<RunLookup, { readonly state: "active" }>;
 
 /**
  * What one Subagent is opened with: the caller's fixed facts plus its id.
@@ -416,82 +431,56 @@ const makeSupervisor = (settings: SessionSettings) =>
     const forkRun = ({
       record,
       lease,
-      identity,
-      prompt,
-      startedAt,
+      handle,
+      context,
       diagnostics: admissionDiagnostics = [],
     }: ForkedRun): Effect.Effect<void> =>
       Effect.gen(function* () {
-        const started = yield* Deferred.make<void>();
-        // Forked into the Session Scope, not into the caller's fiber. Every
-        // Run is detached from the turn that started it: `Escape` does not
-        // stop one, and only the Session ending does.
-        const fiber = yield* Effect.forkIn(
+        // Fork and lease transfer are one uninterruptible hand-over. Once the
+        // fiber exists its Scope owns release; interruption of the admitting
+        // span after this point must not return capacity out from under it.
+        yield* Effect.uninterruptible(
           Effect.gen(function* () {
-            // The lease first, so that Scope finalizers running
-            // last-in-first-out give it back *last*. The order matters and is
-            // the property the Phase B review restored: the Subagent's
-            // active-Run claim is what stops a resume being admitted, so
-            // returning it before the record was detached would let the next
-            // Run reach `attachRun` while this one still looked in flight.
-            yield* Effect.addFinalizer(() => lease.release());
-            yield* Effect.addFinalizer(() =>
-              Effect.sync(() => {
-                counters.released("liveRunFibers");
-                records.detachRun(record.id);
-              }),
+            yield* Effect.forkIn(
+              Effect.gen(function* () {
+                // The lease first, so LIFO gives it back after detachment.
+                yield* Effect.addFinalizer(() => lease.release());
+                yield* Effect.addFinalizer(() =>
+                  Effect.gen(function* () {
+                    counters.released("liveRunFibers");
+                    const latest = yield* repository.lookup(
+                      handle.identity.runId,
+                    );
+                    // A settlement defect may leave the row active until the
+                    // settlement guard lands in ticket 04. Keep its handle
+                    // attached: active and handle-present remain one fact.
+                    if (latest.state === "terminal") {
+                      records.detachRun(record.id);
+                    }
+                  }),
+                );
+                counters.acquired("liveRunFibers");
+                // Admission diagnostics enter the same intake as every other
+                // diagnostic, after publication and before activation.
+                for (const diagnostic of admissionDiagnostics) {
+                  yield* handle.intake.emit({
+                    kind: "diagnostic",
+                    diagnostic,
+                  });
+                }
+                return yield* runToSettlement(context, handle);
+              }).pipe(Effect.scoped),
+              workScope,
             );
-            counters.acquired("liveRunFibers");
-            return yield* runToSettlement(
-              {
-                identity,
-                input: {
-                  runId: identity.runId,
-                  description: identity.description,
-                  prompt,
-                },
-                agent: record.agent,
-                repository,
-                store,
-                counters,
-                bounds: policy.projection,
-                observationQueueBound: policy.observationQueueBound,
-                controlBounds: policy.controls,
-                startedAt,
-                now,
-                trace: (stage) => stages.push(`${identity.runId}:${stage}`),
-                closeExecutionScope: closeUnderCleanupBudget(record),
-                onSettled: () => settled(identity.runId),
-              },
-              (handle) =>
-                Effect.gen(function* () {
-                  records.attachRun(record.id, handle);
-                  // Emitted through the Run's own intake, before intake can
-                  // be sealed, so an admission diagnostic reaches the
-                  // projection by the path every other diagnostic takes.
-                  for (const diagnostic of admissionDiagnostics) {
-                    yield* handle.intake.emit({
-                      kind: "diagnostic",
-                      diagnostic,
-                    });
-                  }
-                  yield* Deferred.succeed(started, undefined);
-                }),
-            ).pipe(Scope.provide(record.scope));
-          }).pipe(
-            // The Run fiber's own Scope, which is what holds the lease and the
-            // detach. `runToSettlement` still runs under the *Subagent's*
-            // Scope, so the Run Scope it forks stays a child of that one and a
-            // closing Subagent still closes it.
-            Effect.scoped,
-          ),
-          workScope,
+            yield* lease.handOver();
+            // Let active-row subscribers observe publication while settlement
+            // is parked on the handle's activation gate. This replaces no
+            // ownership handshake: the complete handle is already attached.
+            yield* Effect.yieldNow;
+            yield* Deferred.succeed(handle.activation, undefined);
+          }),
         );
-        records.attachFiber(record.id, fiber);
-        // Returning only once the Run Scope exists means a caller that has an
-        // id can immediately steer, cancel, or wait on it.
-        yield* Deferred.await(started);
-        yield* armDefaultTimeout(record, identity.runId);
+        yield* armDefaultTimeout(handle);
       });
 
     /**
@@ -530,7 +519,7 @@ const makeSupervisor = (settings: SessionSettings) =>
      * diagnostic are decided here.
      */
     const closeUnderCleanupBudget =
-      (record: SubagentRecord) =>
+      (agent: SubagentRecord["agent"], subagentId: SubagentId) =>
       (scope: Scope.Closeable): Effect.Effect<RunDiagnostic | undefined> =>
         Effect.gen(function* () {
           const closed = yield* finishesWithinCleanupBudget(
@@ -538,13 +527,44 @@ const makeSupervisor = (settings: SessionSettings) =>
           );
           if (closed) return undefined;
           counters.count("cleanupEscalations");
-          yield* finishesWithinCleanupBudget(record.agent.close());
-          records.markConversationLost(record.id);
+          yield* finishesWithinCleanupBudget(agent.close());
+          records.markConversationLost(subagentId);
           return runDiagnostic(
             "cleanup-escalation",
             `native cleanup did not finish within ${policy.cleanupBudgetMillis}ms; the BackendAgent was closed and its conversation is lost`,
           );
         });
+
+    const runContextFor = ({
+      identity,
+      prompt,
+      agent,
+      startedAt,
+    }: {
+      readonly identity: RunIdentity;
+      readonly prompt: string;
+      readonly agent: SubagentRecord["agent"];
+      readonly startedAt: number;
+    }): RunContext => ({
+      identity,
+      input: {
+        runId: identity.runId,
+        description: identity.description,
+        prompt,
+      },
+      agent,
+      repository,
+      store,
+      counters,
+      bounds: policy.projection,
+      observationQueueBound: policy.observationQueueBound,
+      controlBounds: policy.controls,
+      startedAt,
+      now,
+      trace: (stage) => stages.push(`${identity.runId}:${stage}`),
+      closeExecutionScope: closeUnderCleanupBudget(agent, identity.subagentId),
+      onSettled: () => settled(identity.runId),
+    });
 
     /**
      * The optional default timeout, as a cancellation rather than a second way
@@ -555,21 +575,17 @@ const makeSupervisor = (settings: SessionSettings) =>
      * through, and arrives at `cancelled` with reason `timeout`. A Run that
      * finishes first resolves the wait and this fiber does nothing.
      */
-    const armDefaultTimeout = (
-      record: SubagentRecord,
-      runId: RunId,
-    ): Effect.Effect<void> =>
+    const armDefaultTimeout = (handle: RunHandle): Effect.Effect<void> =>
       Effect.gen(function* () {
         const budget = policy.defaultRunTimeoutMillis;
-        const handle = record.run;
-        if (budget === undefined || handle === undefined) return;
+        if (budget === undefined) return;
         yield* Effect.forkIn(
           Effect.gen(function* () {
             const finished = yield* Effect.exit(
               Effect.timeout(Deferred.await(handle.completion), budget),
             );
             if (Exit.isSuccess(finished)) return;
-            yield* cancelOne(runId, "timeout");
+            yield* cancelOne(handle.identity.runId, "timeout");
           }),
           workScope,
         );
@@ -675,13 +691,6 @@ const makeSupervisor = (settings: SessionSettings) =>
           } as const);
         }
 
-        const record = records.insert({
-          id: subagentId,
-          profile,
-          context,
-          agent: opened.agent,
-          scope: opened.scope,
-        });
         // The Subagent's active-Run claim is taken now rather than at
         // admission, because until the open succeeded there was no Subagent.
         yield* lease.bind(subagentId);
@@ -693,15 +702,46 @@ const makeSupervisor = (settings: SessionSettings) =>
           request.description,
         );
         const startedAt = yield* now;
-        yield* repository.publish(identity, startedAt);
-        yield* forkRun({
-          record,
-          lease,
+        const runContext = runContextFor({
           identity,
           prompt: request.prompt,
+          agent: opened.agent,
           startedAt,
-          diagnostics: request.diagnostics,
         });
+        yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            const handle = yield* Effect.matchEffect(
+              makeRunHandle(runContext).pipe(
+                Scope.provide(opened.scope),
+                Effect.onError(() => Scope.close(opened.scope, Exit.void)),
+              ),
+              {
+                onFailure: (diagnostic) =>
+                  Effect.fail<StartOutcome>({
+                    outcome: "backend unavailable",
+                    diagnostic,
+                  }),
+                onSuccess: Effect.succeed,
+              },
+            );
+            const record = records.insert({
+              id: subagentId,
+              profile,
+              context,
+              agent: opened.agent,
+              scope: opened.scope,
+            });
+            records.attachRun(record.id, handle);
+            yield* repository.publish(identity, startedAt);
+            yield* forkRun({
+              record,
+              lease,
+              handle,
+              context: runContext,
+              diagnostics: request.diagnostics,
+            });
+          }),
+        );
 
         return { outcome: "started", runId, subagentId } as const;
       });
@@ -845,12 +885,6 @@ const makeSupervisor = (settings: SessionSettings) =>
           return yield* Effect.fail({ outcome: "at capacity" } as const);
         }
 
-        // The Run is certain from here, so the Subagent is running from here
-        // — before it is published, and well before its Run Scope exists. A
-        // concurrent resume has to see that, because the phase check is what
-        // answers it `Subagent already running` without asking its adapter
-        // anything.
-        records.markRunning(record.id);
         const identity = runIdentityFor(
           runId,
           record.id,
@@ -858,15 +892,32 @@ const makeSupervisor = (settings: SessionSettings) =>
           request.description,
         );
         const startedAt = yield* now;
-        yield* repository.publish(identity, startedAt);
-        yield* forkRun({
-          record,
-          lease,
+        const runContext = runContextFor({
           identity,
           prompt: request.prompt,
+          agent: record.agent,
           startedAt,
-          diagnostics: request.diagnostics,
         });
+        yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            const handle = yield* makeResumedRunHandle(runContext).pipe(
+              Scope.provide(record.scope),
+            );
+            // Handle attachment and the running phase precede publication:
+            // from the first instant the repository can say active, every
+            // operation can reach this exact Run through the records module.
+            records.markRunning(record.id);
+            records.attachRun(record.id, handle);
+            yield* repository.publish(identity, startedAt);
+            yield* forkRun({
+              record,
+              lease,
+              handle,
+              context: runContext,
+              diagnostics: request.diagnostics,
+            });
+          }),
+        );
 
         return { outcome: "started", runId, subagentId: record.id } as const;
       });
@@ -893,9 +944,25 @@ const makeSupervisor = (settings: SessionSettings) =>
     /* steer                                                         */
     /* ------------------------------------------------------------ */
 
-    /** The Run Scope of a Run in flight, which lives exactly as long as it. */
-    const handleOf = (runId: RunId): RunHandle | undefined =>
-      records.byRun(runId)?.run;
+    /**
+     * Resolve an already-observed active row to its current handle, or to the
+     * newer non-active repository fact if settlement won between the reads.
+     *
+     * Detachment only occurs after terminal publication, so an active row
+     * with no current handle is transiently a stale first read, never a state
+     * an operation has to interpret.
+     */
+    const currentRunAfterActive = (
+      runId: RunId,
+    ): Effect.Effect<CurrentRunResolution> =>
+      Effect.gen(function* () {
+        const current = records.currentRun(runId);
+        if (current !== undefined) return { state: "current", current };
+        const latest = yield* repository.lookup(runId);
+        if (latest.state !== "active") return latest;
+        yield* Effect.yieldNow;
+        return yield* currentRunAfterActive(runId);
+      });
 
     const steer = (
       runId: RunId,
@@ -917,12 +984,19 @@ const makeSupervisor = (settings: SessionSettings) =>
           } as const;
         }
 
-        const record = records.byRun(runId);
-        const handle = record?.run;
-        if (!record || !handle) {
-          // Active in the index but with no live Run Scope: it is settling.
-          return { outcome: "mailbox closed", runId } as const;
+        const resolved = yield* currentRunAfterActive(runId);
+        if (resolved.state === "unknown" || resolved.state === "spent") {
+          return { outcome: "unknown Run", runId } as const;
         }
+        if (resolved.state === "terminal") {
+          return {
+            outcome: alreadyTerminal(
+              resolved.snapshot.terminalStatus ?? "failed",
+            ),
+            runId,
+          } as const;
+        }
+        const { record, handle } = resolved.current;
         // A backend that declared no steering is never called about a Control
         // at all, which is what makes `unsupported` free of provider I/O.
         if (!record.agent.capabilities.steer) {
@@ -968,11 +1042,14 @@ const makeSupervisor = (settings: SessionSettings) =>
           // turn an admitted request into an error.
           return { outcome: "idempotent", runId } as const;
         }
-        const handle = handleOf(runId);
-        if (handle) {
+        const resolved = yield* currentRunAfterActive(runId);
+        if (resolved.state === "current") {
+          const { handle } = resolved.current;
           yield* handle.mailbox.close();
-          yield* Fiber.interrupt(handle.executionFiber);
+          yield* Fiber.interrupt(yield* Deferred.await(handle.executionFiber));
         }
+        // The request was recorded before a concurrent terminal publication;
+        // it remains admitted even if there is no execution left to interrupt.
         return { outcome: "admitted", runId } as const;
       });
 
@@ -989,27 +1066,27 @@ const makeSupervisor = (settings: SessionSettings) =>
       runId: RunId,
       timeoutMillis?: number,
     ): Effect.Effect<WaitOutcome> =>
-      Effect.gen(function* () {
-        const known = yield* repository.lookup(runId);
-        if (known.state === "unknown" || known.state === "spent") {
-          return { outcome: "unknown Run", runId } as const;
-        }
-        if (known.state === "terminal") {
-          return yield* terminalOutcomeOf(store, runId, known.snapshot);
-        }
-        const handle = handleOf(runId);
-        if (!handle) return { outcome: "still running", runId } as const;
-
-        // Registered before the wait begins and released however it ends.
-        // Aborting or timing out a wait stops only that waiter: the Run
-        // continues, still settles exactly once, and still stores its result.
-        //
-        // The read is *inside* the registration, and the order is the point:
-        // the waiters' pin exists so that a registered reader finds the Result
-        // it was woken for, and a read after the release would be a read the
-        // pin never protected.
+      Effect.suspend(() => {
+        // Registration precedes even the terminal lookup. A settlement between
+        // these two operations therefore sees a waiter and keeps its pin until
+        // this read (or any non-blocking return) releases the registration.
         const registration = waiters.register(runId);
-        return yield* Effect.gen(function* () {
+        return Effect.gen(function* () {
+          const known = yield* repository.lookup(runId);
+          if (known.state === "unknown" || known.state === "spent") {
+            return { outcome: "unknown Run", runId } as const;
+          }
+          if (known.state === "terminal") {
+            return yield* terminalOutcomeOf(store, runId, known.snapshot);
+          }
+          const resolved = yield* currentRunAfterActive(runId);
+          if (resolved.state === "unknown" || resolved.state === "spent") {
+            return { outcome: "unknown Run", runId } as const;
+          }
+          if (resolved.state === "terminal") {
+            return yield* terminalOutcomeOf(store, runId, resolved.snapshot);
+          }
+          const { handle } = resolved.current;
           const finished = yield* Effect.exit(
             timeoutMillis === undefined
               ? Deferred.await(handle.completion)
@@ -1057,13 +1134,15 @@ const makeSupervisor = (settings: SessionSettings) =>
       reason: CancellationReason,
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
+        const handle = record.run;
         if (!records.markClosed(record.id)) return;
-        const runId = record.run?.identity.runId;
-        if (runId !== undefined) yield* cancelOne(runId, reason);
-        const fiber = record.runFiber;
-        // Wait for the Run Scope's finalizers and the BackendAgent's native
-        // cleanup to finish before the Subagent Scope closes them.
-        if (fiber) yield* Effect.ignore(Fiber.join(fiber));
+        if (handle !== undefined) {
+          yield* cancelOne(handle.identity.runId, reason);
+          // Completion closes over the full settlement, including Run Scope
+          // finalizers and terminal publication; no settlement fiber handle is
+          // retained or joined by the records module.
+          yield* Deferred.await(handle.completion);
+        }
         const closed = yield* finishesWithinCleanupBudget(
           Scope.close(record.scope, Exit.void),
         );
