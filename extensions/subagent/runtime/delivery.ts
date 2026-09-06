@@ -20,8 +20,9 @@
  * stored, terminal, and not in the handed-off set has not been announced.
  *
  * **A push the host accepted is not a notice the model has read**, and the
- * names here say so. Delivery knows three states — pending, handed off,
- * exhausted — and *handed off* is the strongest of them: the host took the
+ * names here say so. Delivery knows four states — pending, handed off,
+ * exhausted, unannounceable — and *handed off* is the strongest successful
+ * one: the host took the
  * message. Whether that message ever reached the conversation is the Session
  * push sink's fact and nobody else's, so this file has no word for it, and a
  * boundary rule fails the suite if the sink's vocabulary appears here. A
@@ -47,16 +48,15 @@ export interface NotificationPushFailure {
 /**
  * Where a notification goes.
  *
- * Two methods, and the second is a *report* rather than a request. `push` asks
- * the host to take a message; `exhausted` tells it that this Run's budget is
- * spent and no push will be attempted again. Delivery already knows that fact
- * — it is the branch that counts `deliveryFailures` — and the host is the only
- * component that can show it, so telling the sink is what gives the whole
- * hand-off state one owner instead of leaving a fifth state stranded in a
- * counter nobody can display.
+ * Three methods: one request and two reports. `push` asks the host to take a
+ * message; `exhausted` tells it that this Run's budget is spent; and
+ * `unannounceable` tells it that the settled Run had no Result from which a
+ * message could be built. Delivery already knows those facts, and the host is
+ * the only component that can show them, so reporting them gives the whole
+ * hand-off state one owner instead of stranding states in runtime bookkeeping.
  *
  * It is still an interface about delivery and nothing else. Everything the
- * host knows beyond these two states is the host's vocabulary, and boundary
+ * host knows beyond these states is the host's vocabulary, and boundary
  * rule 19 keeps it out of this file.
  * [ADR-0035](../../../docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)
  * is the decision.
@@ -72,6 +72,13 @@ export interface NotificationSink {
    * on, and a report that could fail would need a retry of its own.
    */
   readonly exhausted: (runId: RunId) => Effect.Effect<void>;
+  /**
+   * This Run settled, but the store has no Result from which to build a notice.
+   *
+   * Cannot fail for the same reason as {@link exhausted}: delivery has no
+   * recovery action to take from the host's answer.
+   */
+  readonly unannounceable: (runId: RunId) => Effect.Effect<void>;
 }
 
 interface DeliveryState {
@@ -87,6 +94,8 @@ interface DeliveryState {
   readonly handedOff: ReadonlySet<RunId>;
   /** Ids whose complete retry budget ran out without a hand-off. */
   readonly exhausted: ReadonlySet<RunId>;
+  /** Ids whose settled Run had no Result from which to build a notice. */
+  readonly unannounceable: ReadonlySet<RunId>;
   readonly stopped: boolean;
 }
 
@@ -94,6 +103,7 @@ const EMPTY_DELIVERY: DeliveryState = {
   claimed: new Set(),
   handedOff: new Set(),
   exhausted: new Set(),
+  unannounceable: new Set(),
   stopped: false,
 };
 
@@ -157,7 +167,16 @@ const makeDelivery = (
         if (claimed === "duplicate") return;
         const stored = yield* store.read(runId);
         if (stored.outcome !== "result") {
+          // Release first: reports are terminal bookkeeping, and the host must
+          // never be able to observe a report while delivery still pins output.
           yield* store.releasePin(runId, "delivery");
+          if (!(yield* Ref.get(state)).stopped) {
+            yield* Ref.update(state, (current) => ({
+              ...current,
+              unannounceable: new Set(current.unannounceable).add(runId),
+            }));
+            yield* sink.unannounceable(runId);
+          }
           return;
         }
         const handedOff = yield* push(toRunNotification(stored.result));
@@ -216,6 +235,9 @@ const makeDelivery = (
       /** Ids this Session gave up announcing, after exhausting the budget. */
       exhausted: (): Effect.Effect<readonly RunId[]> =>
         Effect.map(Ref.get(state), (current) => [...current.exhausted]),
+      /** Ids for which the store had no Result to announce. */
+      unannounceable: (): Effect.Effect<readonly RunId[]> =>
+        Effect.map(Ref.get(state), (current) => [...current.unannounceable]),
     };
   });
 

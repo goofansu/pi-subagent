@@ -229,9 +229,9 @@ function rowCells(row: RunRowView, now: number): RowCells {
   const phase: RunPhase = completion?.status ?? row.phase;
   const live = !isTerminalRunPhase(phase);
   const cancelling = live && row.cancellation !== undefined;
-  const exhausted = row.handoff === "exhausted";
+  const handoffFailure = row.handoff !== undefined;
 
-  const tone: Tone = exhausted ? "error" : runPhaseTone(phase);
+  const tone: Tone = handoffFailure ? "error" : runPhaseTone(phase);
   const status = live
     ? cancelling
       ? "cancelling"
@@ -241,11 +241,14 @@ function rowCells(row: RunRowView, now: number): RowCells {
         elapsedMillis: completion?.durationMillis ?? elapsedMillis(row, now),
       });
 
-  const tail: RowTail | undefined = exhausted
+  const tail: RowTail | undefined = handoffFailure
     ? {
         label: undefined,
         activity: undefined,
-        failure: `notification failed · ${row.identity.runId} · result available`,
+        failure:
+          row.handoff === "unannounceable"
+            ? `no notification · ${row.identity.runId} · result unavailable`
+            : `notification failed · ${row.identity.runId} · result available`,
       }
     : live
       ? {
@@ -319,10 +322,10 @@ export function formatRunRow(
  * of the activity: a row that said only `read` would not say which Run was
  * reading. A row that is only finalizing shows its label alone.
  *
- * An exhausted hand-off (W-2) has a different tail: which Run it was and that
- * the answer is there anyway — the two facts a reader needs to type
- * `agent_result` and be rid of the row. It is painted in the error colour
- * because it is the one tail that reports a failure.
+ * A failed hand-off has a different tail. Exhaustion says which Run it was and
+ * that the answer remains available; an unannounceable hand-off says there is
+ * no notification and no Result to retrieve. Both are painted in the error
+ * colour.
  *
  * Every other settled row has nothing to add and adds nothing.
  */
@@ -457,7 +460,7 @@ function formatHeader(
  * failed, and it is painted as the failure it is reporting.
  */
 export function rowBackground(row: RunRowView): string {
-  if (row.handoff === "exhausted") return "toolErrorBg";
+  if (row.handoff !== undefined) return "toolErrorBg";
   return runPhaseBackground(row.phase);
 }
 

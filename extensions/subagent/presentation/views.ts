@@ -51,11 +51,11 @@ export interface RunRowView {
    * is the Session push sink's, and a snapshot that carried it would be the
    * repository knowing about delivery.
    *
-   * `exhausted` is the one value there is, because it is the one a row has to
-   * explain: delivery's retry budget ran out, so nothing will ever land and
-   * this row will never leave on its own.
+   * Both values need an explanation: `exhausted` means delivery's retry
+   * budget ran out; `unannounceable` means there was no Result from which to
+   * build a notice. Either way this row will never leave on its own.
    */
-  readonly handoff?: "exhausted";
+  readonly handoff?: "exhausted" | "unannounceable";
 }
 
 /**

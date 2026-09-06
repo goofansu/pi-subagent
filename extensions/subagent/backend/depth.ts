@@ -24,7 +24,7 @@ export type DepthEnvironment = Readonly<Record<string, string | undefined>>;
 
 /** The depth this process is running at. Zero unless something said so. */
 export function readChildDepth(env: DepthEnvironment = process.env): number {
-  const parsed = Number.parseInt(env[DEPTH_ENV_KEY] ?? "0", 10);
-  if (!Number.isFinite(parsed) || parsed < 0) return 0;
-  return parsed;
+  const value = env[DEPTH_ENV_KEY] ?? "0";
+  if (!/^\d+$/.test(value)) return 0;
+  return Number.parseInt(value, 10);
 }

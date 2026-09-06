@@ -47,14 +47,14 @@
  *
  * The hand-off is the push sink's fact, so the widget is handed a read model
  * for it — one question and one subscription — and reads it without ever
- * writing it. It asks `status` and gets one of three answers, and *resolved*
+ * writing it. It asks `status` and gets one of four answers, and *resolved*
  * deliberately does not say whether it was a landing or a retrieval: a row
  * that stays and a row that goes is the whole of what this component decides,
  * and one that knew more would eventually act on more.
  *
- * The third answer, `exhausted`, is the one the row has to *say* rather than
- * act on. Delivery's retry budget ran out, so nothing will ever land and the
- * row would otherwise sit with no explanation.
+ * The two failed answers, `exhausted` and `unannounceable`, are ones the row
+ * has to *say* rather than act on. Either nothing will ever arrive, so the row
+ * would otherwise sit with no explanation.
  *
  */
 
@@ -85,8 +85,9 @@ export interface WidgetHost {
  * What the widget shows, in index order: every Run that is not terminal, plus
  * every terminal Run whose hand-off is not resolved.
  *
- * An exhausted hand-off keeps its row and is marked, because nothing is coming
- * for it and a row that will never leave on its own has to say why.
+ * An exhausted or unannounceable hand-off keeps its row and is marked, because
+ * nothing is coming for it and a row that will never leave on its own has to
+ * say why.
  */
 export function widgetRows(
   index: RunIndex,
@@ -99,14 +100,14 @@ export function widgetRows(
     // Presentation-only, and set from a host fact the widget already reads —
     // the snapshot is untouched, which is what keeps the repository out of
     // notification state (freeze F9).
-    return handoff === "exhausted"
-      ? [{ ...snapshot, handoff: "exhausted" as const }]
+    return handoff === "exhausted" || handoff === "unannounceable"
+      ? [{ ...snapshot, handoff }]
       : [snapshot];
   });
 }
 
 /**
- * How far a Run's completion hand-off has got, in the three states anything
+ * How far a Run's completion hand-off has got, in the four states anything
  * outside the Session push sink is allowed to know.
  *
  * Declared with the read model that consumes it rather than with the sink that
@@ -118,7 +119,11 @@ export function widgetRows(
  * wants: a Run that settled a moment ago and whose notice is still in flight
  * is indistinguishable from here, and both should keep their row.
  */
-export type HandoffStatus = "pending" | "resolved" | "exhausted";
+export type HandoffStatus =
+  | "pending"
+  | "resolved"
+  | "exhausted"
+  | "unannounceable";
 
 /**
  * The hand-off the widget reads, which the Session push sink supplies.

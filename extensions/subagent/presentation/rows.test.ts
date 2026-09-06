@@ -548,6 +548,12 @@ test("W-2: a stuck row is painted as the failure it reports, whatever its phase"
     "toolErrorBg",
   );
   assert.equal(
+    rowBackground(
+      fixtureRow({ phase: "completed", handoff: "unannounceable" }),
+    ),
+    "toolErrorBg",
+  );
+  assert.equal(
     rowBackground(fixtureRow({ phase: "completed" })),
     "toolSuccessBg",
   );
@@ -620,5 +626,29 @@ test("W-2: the explanation is fitted like any tail, and goes when there is no ro
   assert.equal(
     row(43, { phase: "completed", handoff: "exhausted" }),
     "explore  pi  completed in 12.4s",
+  );
+});
+
+test("an unannounceable row says the notification and Result are unavailable", () => {
+  assert.equal(
+    row(120, { phase: "completed", handoff: "unannounceable" }),
+    "explore  pi  completed in 12.4s  no notification · run-1 · result unavailable",
+  );
+  assert.equal(
+    row(60, { phase: "completed", handoff: "unannounceable" }),
+    "explore  pi  completed in 12.4s  no notification · run-1 · …",
+  );
+
+  const marked = formatRunRow(
+    fixtureRow({ phase: "completed", handoff: "unannounceable" }),
+    named,
+    120,
+    FIXTURE_NOW,
+  );
+  assert.match(marked, painted("error", "completed in 12.4s"));
+  assert.ok(
+    marked.endsWith(
+      paint("error", "no notification · run-1 · result unavailable"),
+    ),
   );
 });
