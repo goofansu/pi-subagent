@@ -46,7 +46,7 @@ export interface SubagentV2Options {
    * able to lower it.
    */
   readonly policy?: RuntimePolicy;
-  /** Overrides the Session clock for deterministic host tests. */
+  /** Test seam overriding the Session clock for deterministic host tests. */
   readonly clock?: SessionRuntimeOptions["clock"];
   /** Reads the wall clock. Supplied by a test so widget durations are fixed. */
   readonly now?: () => number;

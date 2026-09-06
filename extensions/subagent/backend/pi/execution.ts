@@ -77,7 +77,7 @@ export interface PiExecutionContext {
   readonly session: PiSession;
   /** The adapter's own closed flag. The SDK does not defend a disposed session. */
   readonly isClosed: () => boolean;
-  /** Completes when escalation closes the retained BackendAgent. */
+  /** Completes whenever the retained BackendAgent closes, by escalation or Shutdown. */
   readonly closeRequested: Effect.Effect<void>;
   readonly probe: PiProbeCounters;
 }

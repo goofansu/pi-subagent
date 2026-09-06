@@ -59,6 +59,7 @@ import {
 } from "../../runtime/policy.ts";
 import type {
   BackendConformanceFixture,
+  BackendConformanceFixtureParts,
   BackendConformanceRig,
   BackendConformanceScenario,
 } from "../conformance.ts";
@@ -113,11 +114,7 @@ function lowered(overrides: Partial<RuntimePolicy>): RuntimePolicy {
   return { ...DEFAULT_RUNTIME_POLICY, ...overrides };
 }
 
-interface ClaudeFixtureParts
-  extends Omit<
-    BackendConformanceFixture,
-    "backend" | "profile" | "counters" | "providerStopsOnRequest"
-  > {
+interface ClaudeFixtureParts extends BackendConformanceFixtureParts {
   readonly scripts: readonly ClaudeScript[];
   /** Make the SDK loader refuse, which is how an open fails. */
   readonly openFails?: boolean;
@@ -153,6 +150,7 @@ function claudeFixture(parts: ClaudeFixtureParts): BackendConformanceFixture {
       // the provider to actually be running.
       executionsStarted: record.queries,
       liveExecutions: live.count,
+      liveExecutionFibers: live.count,
       // The Query *is* the event channel — there is no session-level
       // subscription to attach or release — so a Query still iterating is
       // what a live subscription means for Claude.

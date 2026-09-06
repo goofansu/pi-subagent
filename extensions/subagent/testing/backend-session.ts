@@ -25,7 +25,7 @@
  */
 
 import type { Scope } from "effect";
-import { Effect } from "effect";
+import { Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 import type { Backend } from "../backend/contract.ts";
 import type { Profile } from "../domain/index.ts";
@@ -173,5 +173,25 @@ export function untilRunTerminal(
 export function quiesce(): Effect.Effect<void> {
   return Effect.gen(function* () {
     for (let step = 0; step < 30; step += 1) yield* Effect.yieldNow;
+  });
+}
+
+/** Issue a Cancel and prove it returned without advancing the test clock. */
+export function issueCancelBeforeClockMoves<A, E, R>(
+  cancel: Effect.Effect<A, E, R>,
+): Effect.Effect<
+  { readonly outcome: A; readonly returnedBeforeClockAdvance: boolean },
+  E,
+  R | Scope.Scope
+> {
+  return Effect.gen(function* () {
+    const cancelling = yield* Effect.forkChild(cancel);
+    yield* quiesce();
+    const returnedBeforeClockAdvance = cancelling.pollUnsafe() !== undefined;
+    if (!returnedBeforeClockAdvance) {
+      throw new Error("cancel did not return before the test clock moved");
+    }
+    const outcome = yield* Fiber.join(cancelling);
+    return { outcome, returnedBeforeClockAdvance };
   });
 }

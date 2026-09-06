@@ -65,6 +65,8 @@ tolerated no-op that silently overwrites.
 Cancellation requested before or during execution does not settle the Run;
 cancellation is a *request*, and the Run settles `cancelled` only when its
 execution and finalizers have finished. Cancelling twice is idempotent.
+[The 2026-09-06 amendment below qualifies this when a cancelled execution or
+finalizer outlives the cleanup budget.]
 
 A Run may settle with **no observations**. That is a valid `cancelled` (or
 `failed`) Run with empty output, not an error, and the core must never fabricate

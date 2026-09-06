@@ -334,8 +334,9 @@ export function formatCancelOutcomes(
   if (admitted.length > 0) {
     parts.push(
       `Cancellation requested: ${admitted.join(", ")}. Each Run stops when ` +
-        "its execution and cleanup finish, keeps whatever output it produced, " +
-        "and still sends its own notification.",
+        "its execution and cleanup finish, or settles cancelled once its cleanup " +
+        "outlives the cleanup budget; it keeps whatever output it produced and " +
+        "still sends its own notification.",
     );
   }
   if (idempotent.length > 0) {

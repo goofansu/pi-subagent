@@ -27,6 +27,7 @@ import {
 } from "../../runtime/policy.ts";
 import type {
   BackendConformanceFixture,
+  BackendConformanceFixtureParts,
   BackendConformanceRig,
   BackendConformanceScenario,
 } from "../conformance.ts";
@@ -82,10 +83,7 @@ function build(kind: FakeKind, options: FakeBackendOptions): FakeBackendHandle {
 function fixtureOf(
   kind: FakeKind,
   runScripts: readonly FakeRunScript[],
-  parts: Omit<
-    BackendConformanceFixture,
-    "backend" | "profile" | "counters" | "providerStopsOnRequest"
-  >,
+  parts: BackendConformanceFixtureParts,
   extra?: {
     readonly diagnose?: FakeBackendOptions["diagnose"];
     readonly open?: FakeBackendOptions["open"];

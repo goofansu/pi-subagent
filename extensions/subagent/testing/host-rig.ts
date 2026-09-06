@@ -28,7 +28,10 @@ import {
   type Profile,
   runId,
 } from "../domain/index.ts";
-import type { AdapterProbe } from "../host/subagent-command.ts";
+import {
+  type AdapterProbe,
+  SUBAGENT_COMMAND_NAME,
+} from "../host/subagent-command.ts";
 import { installSubagentV2, type SubagentV2Installation } from "../index.ts";
 import type {
   BackendSet,
@@ -416,6 +419,24 @@ export function hostRig(
     probeAfterShutdown,
     noLeaks: () => probeIsClear(probeAfterShutdown()),
   };
+}
+
+/** Run `/subagent` and return the command text an operator would read. */
+export async function subagentCommandText(
+  rig: HostRig,
+  args = "",
+): Promise<string> {
+  const command = rig.host
+    .commands()
+    .find((entry) => entry.name === SUBAGENT_COMMAND_NAME);
+  if (command === undefined) {
+    throw new Error("the /subagent command was not registered");
+  }
+  const messages: string[] = [];
+  await command.handler(args, {
+    ui: { notify: (message: string) => messages.push(message) },
+  });
+  return messages.at(-1) ?? "";
 }
 
 /**

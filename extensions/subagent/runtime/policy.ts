@@ -71,7 +71,10 @@ export interface RuntimePolicy {
   readonly observationQueueBound: number;
   /** How long a backend has to open before the start is rejected. */
   readonly openBudgetMillis: number;
-  /** How long native execution and BackendAgent finalizers have to close. */
+  /**
+   * How long a cancelled execution may take to exit, and native execution or
+   * BackendAgent finalizers may take to close.
+   */
   readonly cleanupBudgetMillis: number;
   readonly deliveryRetryBudget: DeliveryRetryBudget;
   /** When set, every Run is cancelled with reason `timeout` after this long. */

@@ -9,6 +9,7 @@ import {
   RIG_POLICY,
   RIG_RESUMABLE_PROFILE,
   startedIds,
+  subagentCommandText,
 } from "../testing/host-rig.ts";
 import {
   buildNotificationMessage,
@@ -46,21 +47,6 @@ async function started(
       prompt: "have a look",
     }),
   );
-}
-
-async function commandText(
-  rig: ReturnType<typeof hostRig>,
-  args: string,
-): Promise<string> {
-  const command = rig.host
-    .commands()
-    .find((entry) => entry.name === "subagent");
-  assert.ok(command, "the /subagent command was not registered");
-  const messages: string[] = [];
-  await command.handler(args, {
-    ui: { notify: (message: string) => messages.push(message) },
-  });
-  return messages.at(-1) ?? "";
 }
 
 // -- Every operation, against both fakes -------------------------------------
@@ -170,7 +156,7 @@ test("a stuck demo execution is cancelled visibly and remains inspectable", asyn
   const cancel = await rig.text("agent_cancel", { ids: [ids.runId] });
   assert.equal(
     cancel,
-    `Cancellation requested: ${ids.runId}. Each Run stops when its execution and cleanup finish, keeps whatever output it produced, and still sends its own notification.`,
+    `Cancellation requested: ${ids.runId}. Each Run stops when its execution and cleanup finish, or settles cancelled once its cleanup outlives the cleanup budget; it keeps whatever output it produced and still sends its own notification.`,
   );
   assert.match(rig.host.widgetLines().join("\n"), /cancelling/);
 
@@ -179,10 +165,13 @@ test("a stuck demo execution is cancelled visibly and remains inspectable", asyn
 
   assert.match(rig.host.widgetLines().join("\n"), /cancelled/);
   assert.match(
-    await commandText(rig, ""),
+    await subagentCommandText(rig, ""),
     /Runtime: attention needed · 1 incident/,
   );
-  assert.match(await commandText(rig, "diagnostics"), /cleanupEscalations: 1/);
+  assert.match(
+    await subagentCommandText(rig, "diagnostics"),
+    /cleanupEscalations: 1/,
+  );
 
   const notice = rig.host.sent()[0]?.message;
   assert.ok(notice, "the cancelled Run sent no notice");

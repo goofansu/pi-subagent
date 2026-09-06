@@ -236,4 +236,8 @@ export function untilTerminal(
   return untilRunTerminal(rig.repository, runId);
 }
 
-export { quiesce, until } from "../backend-session.ts";
+export {
+  issueCancelBeforeClockMoves,
+  quiesce,
+  until,
+} from "../backend-session.ts";

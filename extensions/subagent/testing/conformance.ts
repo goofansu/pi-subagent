@@ -29,7 +29,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect, Fiber, Layer } from "effect";
+import { Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import type { Backend, RunControl } from "../backend/contract.ts";
 import type {
@@ -60,6 +60,7 @@ import { RunRepository } from "../runtime/repository.ts";
 import { ResultStore } from "../runtime/result-store.ts";
 import { RUN_STAGES } from "../runtime/run-scope.ts";
 import { SubagentSupervisor } from "../runtime/supervisor.ts";
+import { issueCancelBeforeClockMoves } from "./backend-session.ts";
 import {
   createFakeNotificationSink,
   type FakeNotificationSink,
@@ -251,6 +252,12 @@ export interface BackendConformanceFixture {
   /** Replace the runtime clock for a scenario that proves a time bound. */
   readonly testClock?: boolean;
 }
+
+/** Fields supplied by every rig's fixture builder rather than each scenario. */
+export type BackendConformanceFixtureParts = Omit<
+  BackendConformanceFixture,
+  "backend" | "profile" | "counters" | "providerStopsOnRequest"
+>;
 
 /**
  * Rig-side code implements this.
@@ -482,13 +489,11 @@ function runFixture(
         let steerAfterCancel: string | undefined;
         let cancelReturnedBeforeClockAdvance: boolean | undefined;
         if (plan.cancel) {
-          const cancelling = yield* Effect.forkChild(
+          const cancellation = yield* issueCancelBeforeClockMoves(
             supervisor.cancel([runId]),
           );
-          yield* quiesce;
           cancelReturnedBeforeClockAdvance =
-            cancelling.pollUnsafe() !== undefined;
-          yield* Fiber.join(cancelling);
+            cancellation.returnedBeforeClockAdvance;
           if (plan.advanceClockAfterCancelMillis !== undefined) {
             yield* TestClock.adjust(plan.advanceClockAfterCancelMillis);
           }
@@ -968,6 +973,14 @@ const SCENARIO_CHECKS: {
       outcome.counters.cleanupEscalations,
       fixture.providerStopsOnRequest ? 0 : 1,
     );
+    const liveExecutionFibers = fixture.counters().liveExecutionFibers;
+    if (liveExecutionFibers !== undefined) {
+      assert.equal(
+        liveExecutionFibers,
+        fixture.providerStopsOnRequest ? 0 : 1,
+        "abandoned execution fibers did not follow stop behavior",
+      );
+    }
     if (run.resumeAfterSettlement !== undefined) {
       assert.equal(run.resumeAfterSettlement, "conversation lost");
     }

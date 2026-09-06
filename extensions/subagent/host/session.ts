@@ -70,7 +70,7 @@ export interface SessionWiring {
   readonly agentDir: string;
   /** The bounds this Session enforces. Omitted means the defaults. */
   readonly policy?: RuntimePolicy;
-  /** An alternate ambient clock, used by deterministic host tests. */
+  /** Test seam overriding the ambient clock for deterministic host tests. */
   readonly clock?: SessionRuntimeOptions["clock"];
   /**
    * The live `agent_start` guideline array, rewritten in place per Session.

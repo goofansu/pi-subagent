@@ -4,8 +4,8 @@
  * "Every retained resource is released" is not something a test can assert by
  * reading code, and it is exactly the property the Scope hierarchy exists to
  * guarantee. So the fakes count: how many BackendAgents were opened and
- * closed, how many executions and subscriptions are live right now, and what
- * Controls arrived in what order for which Run.
+ * closed, how many execution scopes, execution fibers, and subscriptions are
+ * live right now, and what Controls arrived in what order for which Run.
  *
  * A counter that must return to zero is a leak test that works the same way
  * for a fake and, later, for a real adapter — which is why the shared
@@ -21,6 +21,12 @@ export interface ResourceCountersSnapshot {
   readonly executionsStarted: number;
   /** Executions whose scope has not yet closed. Zero after cleanup. */
   readonly liveExecutions: number;
+  /**
+   * Execution fibers that have not returned. The fake keeps this distinct
+   * from `liveExecutions`, whose execution-scope finalizer can already have
+   * run after the runtime abandons the fiber.
+   */
+  readonly liveExecutionFibers?: number;
   /** Per-execution event subscriptions still attached. Zero after cleanup. */
   readonly liveSubscriptions: number;
   /** Every Control the backend actually received, in delivery order. */
@@ -37,6 +43,8 @@ export interface ResourceCounters {
   closed(): void;
   executionStarted(): void;
   executionReleased(): void;
+  executionFiberStarted(): void;
+  executionFiberReleased(): void;
   subscriptionAcquired(): void;
   subscriptionReleased(): void;
   controlStarted(runId: RunId, text: string): void;
@@ -48,6 +56,7 @@ export function createResourceCounters(): ResourceCounters {
   let closes = 0;
   let executionsStarted = 0;
   let liveExecutions = 0;
+  let liveExecutionFibers = 0;
   let liveSubscriptions = 0;
   let concurrentControls = 0;
   let maxConcurrentControls = 0;
@@ -60,6 +69,7 @@ export function createResourceCounters(): ResourceCounters {
       closes,
       executionsStarted,
       liveExecutions,
+      liveExecutionFibers,
       liveSubscriptions,
       controlsReceived: [...controlsReceived],
       maxConcurrentControls,
@@ -79,6 +89,12 @@ export function createResourceCounters(): ResourceCounters {
     },
     executionReleased: () => {
       liveExecutions -= 1;
+    },
+    executionFiberStarted: () => {
+      liveExecutionFibers += 1;
+    },
+    executionFiberReleased: () => {
+      liveExecutionFibers -= 1;
     },
     subscriptionAcquired: () => {
       liveSubscriptions += 1;

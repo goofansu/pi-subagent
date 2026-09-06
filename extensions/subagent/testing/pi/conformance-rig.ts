@@ -50,6 +50,7 @@ import {
 } from "../../runtime/policy.ts";
 import type {
   BackendConformanceFixture,
+  BackendConformanceFixtureParts,
   BackendConformanceRig,
   BackendConformanceScenario,
 } from "../conformance.ts";
@@ -93,11 +94,7 @@ function lowered(overrides: Partial<RuntimePolicy>): RuntimePolicy {
   return { ...DEFAULT_RUNTIME_POLICY, ...overrides };
 }
 
-interface PiFixtureParts
-  extends Omit<
-    BackendConformanceFixture,
-    "backend" | "profile" | "counters" | "providerStopsOnRequest"
-  > {
+interface PiFixtureParts extends BackendConformanceFixtureParts {
   readonly scripts: readonly PiScript[];
   /** Override the ordinary cooperative Pi stop for the ignored-abort fixture. */
   readonly providerStopsOnRequest?: boolean;

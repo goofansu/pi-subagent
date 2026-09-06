@@ -122,8 +122,6 @@ interface SessionRuntimeBaseOptions {
       };
   readonly policy?: RuntimePolicy;
   readonly maxDelegationDepth?: number;
-  /** Override the ambient clock for deterministic host and runtime tests. */
-  readonly clock?: Layer.Layer<Clock.Clock>;
   /**
    * Where completion Notifications go. Required, and deliberately so.
    *
@@ -135,9 +133,13 @@ interface SessionRuntimeBaseOptions {
   /** Shared with the caller when a test wants to read the probe directly. */
   readonly counters?: RuntimeCounters;
   /**
-   * Test seam for deterministic pre-commit settlement faults, beside the
-   * ambient clock injection used by bounded-time tests. Production omits it;
-   * it is not a second encoding policy.
+   * Test seam for deterministic bounded-time tests. Production omits it and
+   * uses the ambient clock; it is not a second runtime timing policy.
+   */
+  readonly clock?: Layer.Layer<Clock.Clock>;
+  /**
+   * Test seam for deterministic pre-commit settlement faults. Production
+   * omits it; it is not a second encoding policy.
    */
   readonly resultEncoder?: ResultEncoder;
   /**

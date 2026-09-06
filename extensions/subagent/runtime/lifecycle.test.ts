@@ -6,6 +6,8 @@ import { bridgeOverflowObservations } from "../backend/native-bridge.ts";
 import { runId as makeRunId } from "../domain/index.ts";
 import { emitText } from "../testing/fakes/script.ts";
 import {
+  issueCancelBeforeClockMoves,
+  quiesce,
   rigRequest as request,
   startedRun,
   until,
@@ -116,14 +118,14 @@ test("after cancel admission every steer is mailbox closed", async () => {
     (rig) =>
       Effect.gen(function* () {
         const started = startedRun(yield* rig.supervisor.start(request()));
-        for (let step = 0; step < 5; step += 1) yield* Effect.yieldNow;
+        yield* quiesce();
 
         const before = yield* rig.supervisor.steer(
           started.runId,
           steer("never delivered"),
         );
         const [cancelled] = yield* rig.supervisor.cancel([started.runId]);
-        for (let step = 0; step < 5; step += 1) yield* Effect.yieldNow;
+        yield* quiesce();
         const phase = (yield* rig.repository.get(started.runId))?.phase;
         const after = yield* rig.supervisor.steer(
           started.runId,
@@ -168,7 +170,7 @@ test("a Control admitted to one Run reaches neither it nor the Subagent's next R
         // Let the execution actually begin: a Subagent whose BackendAgent
         // never ran has nothing to resume, and this scenario is about a Run
         // that was under way.
-        for (let step = 0; step < 5; step += 1) yield* Effect.yieldNow;
+        yield* quiesce();
         yield* rig.supervisor.steer(started.runId, steer("never delivered"));
         yield* rig.supervisor.cancel([started.runId]);
         yield* Deferred.succeed(hold, undefined);
@@ -182,7 +184,7 @@ test("a Control admitted to one Run reaches neither it nor the Subagent's next R
         if (resumed.outcome === "started") {
           // The next Run takes from its own mailbox, which is empty and then
           // closed: nothing from the cancelled Run can be in it.
-          for (let step = 0; step < 5; step += 1) yield* Effect.yieldNow;
+          yield* quiesce();
           yield* rig.supervisor.cancel([resumed.runId]);
           yield* untilTerminal(rig, resumed.runId);
         }
@@ -285,16 +287,12 @@ test("cancel returns before a stuck native stop and settlement bounds its exit",
       Effect.gen(function* () {
         const started = startedRun(yield* rig.supervisor.start(request()));
         yield* untilUnderWay(rig);
-        for (let step = 0; step < 10; step += 1) yield* Effect.yieldNow;
+        yield* quiesce();
 
-        const cancelling = yield* Effect.forkChild(
+        const cancellation = yield* issueCancelBeforeClockMoves(
           rig.supervisor.cancel([started.runId]),
         );
-        yield* until(
-          "cancel to return without clock advancement",
-          Effect.sync(() => cancelling.pollUnsafe() !== undefined),
-        );
-        const [cancelled] = yield* Fiber.join(cancelling);
+        const [cancelled] = cancellation.outcome;
 
         yield* TestClock.adjust(policy.cleanupBudgetMillis + 1);
         yield* untilTerminal(rig, started.runId);
@@ -331,6 +329,60 @@ test("cancel returns before a stuck native stop and settlement bounds its exit",
   assert.equal(outcome.noLeaks, true);
 });
 
+test("a stuck execution and execution-scope finalizer escalate only once", async () => {
+  const policy: RuntimePolicy = {
+    ...DEFAULT_RUNTIME_POLICY,
+    cleanupBudgetMillis: 2_000,
+  };
+  const trace: string[] = [];
+  const outcome = await withSession(
+    {
+      policy,
+      testClock: true,
+      trace,
+      steps: [
+        [
+          { step: "hang-in-finalizer" },
+          emitText("partial output"),
+          { step: "hang-on-stop" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(request()));
+        yield* untilUnderWay(rig);
+        yield* quiesce();
+        yield* rig.supervisor.cancel([started.runId]);
+        yield* TestClock.adjust(policy.cleanupBudgetMillis + 1);
+        yield* until(
+          "execution-scope finalizer to start",
+          Effect.sync(() =>
+            trace.some((entry) => entry.startsWith("finalizer-hanging:")),
+          ),
+        );
+        yield* TestClock.adjust(policy.cleanupBudgetMillis + 1);
+        yield* untilTerminal(rig, started.runId);
+        return {
+          read: yield* rig.supervisor.result(started.runId),
+          counters: rig.supervisor.counters(),
+          backend: rig.backend,
+        };
+      }),
+  );
+
+  assert.equal(outcome.value.read.outcome, "result");
+  if (outcome.value.read.outcome === "result") {
+    assert.deepEqual(
+      outcome.value.read.result.diagnostics.map((item) => item.category),
+      ["cleanup-escalation"],
+    );
+  }
+  assert.equal(outcome.value.counters.cleanupEscalations, 1);
+  assert.equal(outcome.value.backend.counters().closes, 1);
+  assert.equal(outcome.noLeaks, true);
+});
+
 test("cancelling an unknown Run reports it rather than pretending", async () => {
   const { value } = await withSession({}, (rig) =>
     rig.supervisor.cancel([makeRunId("run-never")]),
@@ -352,7 +404,7 @@ test("a cancelled Run keeps the partial output it had", async () => {
       Effect.gen(function* () {
         const started = startedRun(yield* rig.supervisor.start(request()));
         // Let the first observation land before cancelling.
-        for (let step = 0; step < 5; step += 1) yield* Effect.yieldNow;
+        yield* quiesce();
         yield* rig.supervisor.cancel([started.runId]);
         yield* Deferred.succeed(hold, undefined);
         yield* untilTerminal(rig, started.runId);
@@ -421,7 +473,7 @@ test("the default Run timeout bounds an execution whose native stop is stuck", a
       Effect.gen(function* () {
         const started = startedRun(yield* rig.supervisor.start(request()));
         yield* untilUnderWay(rig);
-        for (let step = 0; step < 10; step += 1) yield* Effect.yieldNow;
+        yield* quiesce();
         yield* TestClock.adjust(policy.defaultRunTimeoutMillis ?? 0);
         yield* Effect.yieldNow;
         yield* TestClock.adjust(policy.cleanupBudgetMillis + 1);
@@ -496,7 +548,7 @@ test("a finalizer past the cleanup budget is escalated past, and the Run still s
       Effect.gen(function* () {
         const started = startedRun(yield* rig.supervisor.start(request()));
         // Let the Run reach its cleanup, then let the budget expire.
-        for (let step = 0; step < 10; step += 1) yield* Effect.yieldNow;
+        yield* quiesce();
         yield* TestClock.adjust(policy.cleanupBudgetMillis + 1);
         yield* untilTerminal(rig, started.runId);
 
@@ -721,7 +773,7 @@ test("shutdown closes a Subagent by cancel-and-await-cleanup, so its Run settles
     (rig) =>
       Effect.gen(function* () {
         const started = startedRun(yield* rig.supervisor.start(request()));
-        for (let step = 0; step < 5; step += 1) yield* Effect.yieldNow;
+        yield* quiesce();
         yield* rig.supervisor.shutdown();
         return {
           // Every local identity is forgotten, per operation semantics

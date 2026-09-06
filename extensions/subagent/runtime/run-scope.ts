@@ -4,8 +4,9 @@
  * A Run Scope holds a bounded observation intake, one reducer fiber, a
  * cancellation record on the repository row, a completion `Deferred` that is
  * the settlement barrier, a settlement coordinator, and — nested inside it — the
- * native execution scope. The nesting is the point: a provider turn may end
- * without ending the Run, but it can never outlive it (ADR-0023).
+ * native execution scope. The nesting is the ordinary case: a provider turn
+ * may end without ending the Run. An execution escalated past the cleanup
+ * budget is abandoned, however, and may outlive the Run (ADR-0023, ADR-0025).
  *
  * The settlement path is the roadmap's, in the roadmap's order, and the order
  * is what makes the user-visible invariant true:
@@ -146,8 +147,8 @@ export interface RunContext {
   ) => Effect.Effect<RunDiagnostic | undefined>;
   /** How long a cancelled execution may take to leave its fiber. */
   readonly cleanupBudgetMillis: number;
-  /** Apply the same escalation used when native-scope cleanup overruns. */
-  readonly escalateCleanup: Effect.Effect<RunDiagnostic>;
+  /** Apply this Run's one escalation, shared with native-scope cleanup. */
+  readonly escalateRunCleanup: Effect.Effect<RunDiagnostic>;
   /** Called after the terminal snapshot is published. Delivery hooks in here. */
   readonly onSettled: (result: RunResult) => Effect.Effect<void>;
 }
@@ -465,12 +466,10 @@ export function runToSettlement(
       if (stopped._tag === "Some") {
         executionCandidate = candidateOf(stopped.value);
       } else {
-        const snapshot = yield* repository.get(identity.runId);
-        executionCandidate = {
-          source: "interruption",
-          reason: snapshot?.cancellation?.reason ?? "requested",
-        };
-        executionEscalation = yield* context.escalateCleanup;
+        // Arbitration applies the recorded Cancellation reason from the
+        // snapshot it already reads below; this is only the fallback.
+        executionCandidate = { source: "interruption", reason: "requested" };
+        executionEscalation = yield* context.escalateRunCleanup;
       }
     }
     settlementStarted = true;

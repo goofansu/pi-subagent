@@ -11,6 +11,7 @@ import { DEFAULT_BACKEND_ID } from "../../domain/index.ts";
 import { DEFAULT_RUNTIME_POLICY } from "../../runtime/policy.ts";
 import { RUN_STAGES } from "../../runtime/run-scope.ts";
 import {
+  issueCancelBeforeClockMoves,
   piRigRequest,
   quiesce,
   until,
@@ -200,13 +201,11 @@ test("ignore-abort under a cancel settles within the cleanup budget and closes c
         yield* untilPrompted(rig);
         yield* quiesce();
 
-        const cancelling = yield* Effect.forkChild(
+        const cancellation = yield* issueCancelBeforeClockMoves(
           rig.supervisor.cancel([started.runId]),
         );
-        yield* quiesce();
         const cancelReturnedBeforeClockAdvance =
-          cancelling.pollUnsafe() !== undefined;
-        yield* Fiber.join(cancelling);
+          cancellation.returnedBeforeClockAdvance;
         yield* until(
           "Pi native stop to begin",
           Effect.sync(() => rig.probe().pendingCleanups === 1),

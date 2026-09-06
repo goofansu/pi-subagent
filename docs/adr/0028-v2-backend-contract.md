@@ -140,6 +140,8 @@ So `open` and `execute` both require a `Scope` in their environment, and
 releasing the scope that opened a BackendAgent closes it. The nesting is
 structural rather than remembered: a Run cannot leak its native execution,
 because the execution was acquired in a scope that closes when the Run settles.
+[The second 2026-09-06 amendment below qualifies this for an execution the core
+must abandon after its cancellation budget expires.]
 
 ### Two deliberate absences
 
@@ -208,7 +210,7 @@ the seam this whole rewrite exists to draw.
 ### 2026-09-06 — documented execution obligations
 
 The stable member set is unchanged; the contract documentation now records
-four obligations adapters already depend on:
+three obligations adapters already depend on:
 
 1. `ExecutionIO.emit` remains accepted, discarded, and counted late after the
    Run is sealed; it never fails.
@@ -216,6 +218,17 @@ four obligations adapters already depend on:
    cooperation, so every provider wait is bounded.
 3. `BackendAgent.close` may run while `execute` is in flight, while `execute`
    is never invoked twice concurrently on one BackendAgent.
+
+The shared conformance suite now has a 38th scenario: an execution settles when
+the provider goes quiet after a result correlated to guidance. It checks the
+second obligation on every backend without adding or changing a contract
+member.
+
+### 2026-09-06 — bounded cancellation
+
+The stable member set remains unchanged. This amendment adds new core behaviour
+and the corresponding fourth execution obligation:
+
 4. Interruption of an execution completes promptly. Native stop work belongs
    in the execution scope's interruptible finalizers; after cancellation the
    core bounds the execution's exit by the cleanup budget and escalates past an
@@ -225,9 +238,6 @@ Execution-scope finalizers should be interruptible. The core has a cleanup
 budget and escalates beyond it, but an adapter should still cooperate with
 ordinary scoped interruption rather than relying on escalation.
 
-The shared conformance suite now has a 38th scenario: an execution settles when
-the provider goes quiet after a result correlated to guidance. It checks the
-second obligation on every backend without adding or changing a contract
-member. Its 39th scenario proves that cancel returns immediately and settlement
-bounds a provider stop that does not return. The ADR-0028 shape test remains
-unchanged.
+The shared conformance suite's 39th scenario proves that cancel returns
+immediately and settlement bounds a provider stop that does not return. The
+ADR-0028 shape test remains unchanged.

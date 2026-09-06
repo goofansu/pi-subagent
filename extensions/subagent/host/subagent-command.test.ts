@@ -4,7 +4,7 @@ import { createClaudeProbeCounters } from "../backend/claude/index.ts";
 import { createPiProbeCounters } from "../backend/pi/index.ts";
 import { backendId } from "../domain/index.ts";
 import { createRuntimeCounters } from "../runtime/counters.ts";
-import { hostRig } from "../testing/host-rig.ts";
+import { hostRig, subagentCommandText } from "../testing/host-rig.ts";
 import { fixtureRow } from "../testing/presentation-fixtures.ts";
 import { createSessionPushSink } from "./push-sink.ts";
 import {
@@ -33,22 +33,7 @@ async function say(
   rig: ReturnType<typeof hostRig>,
   args = "",
 ): Promise<readonly string[]> {
-  const command = rig.host
-    .commands()
-    .find((entry) => entry.name === SUBAGENT_COMMAND_NAME);
-  assert.ok(command, "the subagent command was not registered");
-  const said: string[] = [];
-  await command.handler(args, {
-    ui: {
-      notify: (message: string) => {
-        said.push(message);
-      },
-      custom: async () => {},
-      editor: async () => undefined,
-    },
-    waitForIdle: async () => {},
-  } as never);
-  return said;
+  return [await subagentCommandText(rig, args)];
 }
 
 /** `/subagent diagnostics`: the report bare `/subagent` used to print. */
