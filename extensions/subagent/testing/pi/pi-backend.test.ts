@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import {
   createPiBackend,
   PI_CAPABILITIES,
@@ -10,6 +10,7 @@ import { DEFAULT_BACKEND_ID } from "../../domain/index.ts";
 import { DEFAULT_RUNTIME_POLICY } from "../../runtime/policy.ts";
 import {
   piRigRequest,
+  until,
   untilPrompted,
   untilSteered,
   untilTerminal,
@@ -114,11 +115,13 @@ test("admitResume answers from the adapter's own state, with no native call", as
           prompt: "and again",
         });
         const second = startedRun(resumed);
+        const afterAdmission = rig.standIn.record();
         yield* untilTerminal(rig, second.runId);
         const result = yield* rig.supervisor.result(second.runId);
         return {
           admittedWithNoExtraCall:
-            before.aborts === 0 && before.queueClears === 0,
+            afterAdmission.aborts === before.aborts &&
+            afterAdmission.queueClears === before.queueClears,
           resumedOutcome: resumed.outcome,
           output: result.outcome === "result" ? result.result.finalOutput : "",
         };
@@ -128,6 +131,54 @@ test("admitResume answers from the adapter's own state, with no native call", as
   assert.ok(value.admittedWithNoExtraCall);
   assert.equal(value.resumedOutcome, "started");
   assert.equal(value.output, "second");
+});
+
+test("bridge overflow fails the Run and stops native work", async () => {
+  const burst = Array.from({ length: 4098 }, (_, index) => ({
+    step: "user" as const,
+    text: `event ${index}`,
+  }));
+  const { value, nativeProbeAfterClose } = await withPiSession(
+    { scripts: [[...burst, { step: "hang" }]] },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        const stoppedPromptly = Option.isSome(
+          yield* Effect.timeoutOption(
+            until(
+              "overflow to stop native work",
+              Effect.sync(() => rig.standIn.record().aborts > 0),
+            ),
+            500,
+          ),
+        );
+        if (!stoppedPromptly) {
+          yield* rig.supervisor.cancel([started.runId]);
+        }
+        yield* untilTerminal(rig, started.runId);
+        const result = yield* rig.supervisor.result(started.runId);
+        return {
+          stoppedPromptly,
+          status: result.outcome === "result" ? result.result.status : "",
+          categories:
+            result.outcome === "result"
+              ? result.result.diagnostics.map(
+                  (diagnostic) => diagnostic.category,
+                )
+              : [],
+          aborts: rig.standIn.record().aborts,
+        };
+      }),
+  );
+
+  assert.ok(
+    value.stoppedPromptly,
+    "overflow did not stop native work promptly",
+  );
+  assert.equal(value.status, "failed");
+  assert.ok(value.categories.includes("queue-overflow"));
+  assert.ok(value.aborts >= 1, "overflow did not abort the native session");
+  assert.ok(piProbeIsClear(nativeProbeAfterClose));
 });
 
 test("a stalled native steer does not delay a cancel", async () => {

@@ -9,7 +9,7 @@ import { piConformanceRig, piConformanceSkips } from "./pi/conformance-rig.ts";
 /**
  * The shared conformance suite against the real Pi backend.
  *
- * This is the seam the whole rewrite exists to prove: the same 37 scenarios
+ * This is the seam the whole rewrite exists to prove: the same 38 scenarios
  * the two fakes pass, run against the production adapter with a scriptable
  * stand-in session behind it. A skip here would mean the suite had been
  * quietly narrowed to fit the first real provider, so the empty skip list is

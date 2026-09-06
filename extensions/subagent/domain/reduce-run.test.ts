@@ -7,9 +7,21 @@ import {
   lateAfterEnding,
   reorderedAtBoundary,
 } from "../testing/fixtures/observations.ts";
-import { runDiagnostic } from "./diagnostics.ts";
-import { answeredEnding, cancelledEnding, failedEnding } from "./endings.ts";
-import { resultLink } from "./links.ts";
+import { byteLength } from "./bounding.ts";
+import { DIAGNOSTIC_MESSAGE_MAX_BYTES, runDiagnostic } from "./diagnostics.ts";
+import {
+  answeredEnding,
+  cancelledEnding,
+  failedEnding,
+  RUN_ENDING_MESSAGE_MAX_BYTES,
+} from "./endings.ts";
+import { backendId, runId, subagentId } from "./ids.ts";
+import {
+  RESULT_LINK_LABEL_MAX_BYTES,
+  RESULT_LINK_TARGET_MAX_BYTES,
+  resultLink,
+} from "./links.ts";
+import { toRunNotification } from "./notification.ts";
 import type { RunObservation } from "./observations.ts";
 import {
   createRunProjection,
@@ -22,7 +34,8 @@ import {
   missingCallIdNote,
   reduceRun,
 } from "./reduce-run.ts";
-import { byteLength } from "./text.ts";
+import { toRunResult } from "./result.ts";
+import { boundResultToBytes } from "./result-bounding.ts";
 import { contextGauge, usageDelta } from "./usage.ts";
 
 /** Fold a whole sequence, keeping every report. */
@@ -52,6 +65,24 @@ const call = (name: string, callId?: string): RunObservation => ({
   role: "assistant",
   parts: [{ kind: "tool_call", name, ...(callId ? { callId } : {}) }],
 });
+
+function resultAndNotice(observations: readonly RunObservation[]) {
+  const { projection } = fold(observations);
+  const result = toRunResult({
+    identity: {
+      runId: runId("run-test-1"),
+      subagentId: subagentId("subagent-test-1"),
+      backendId: backendId("pi"),
+      agent: "reviewer",
+      description: "review the answer",
+    },
+    projection,
+    ending: answeredEnding(),
+    startedAt: 1,
+    settledAt: 2,
+  });
+  return { result, notice: toRunNotification(result) };
+}
 
 /* -------------------------------------------------------------- */
 /* Determinism                                                     */
@@ -111,6 +142,18 @@ test("an assistant message that only calls tools leaves the answer standing", ()
   const { projection } = fold([assistant("the answer"), call("grep", "c1")]);
 
   assert.equal(projection.finalOutput, "the answer");
+});
+
+test("whitespace-only assistant text is record-only", () => {
+  const { result, notice } = resultAndNotice([
+    assistant("  \n "),
+    { kind: "ending", ending: answeredEnding() },
+  ]);
+
+  assert.equal(result.finalOutput, "");
+  assert.equal(notice.resultAvailability, "record-only");
+  assert.equal(notice.output, undefined);
+  assert.equal(notice.preview, "");
 });
 
 test("a user message never becomes the final output", () => {
@@ -497,6 +540,33 @@ test("a rejection reason never carries the value it rejected", () => {
   assert.match(reported, /Expected string[\s\S]*\["parts"\]\[0\]\["text"\]/);
 });
 
+test("observations accept explicit undefined optional fields", () => {
+  const observations: readonly RunObservation[] = [
+    {
+      kind: "message",
+      role: "assistant",
+      model: undefined,
+      parts: [{ kind: "tool_call", name: "read", callId: undefined }],
+    },
+    {
+      kind: "tool_progress",
+      callId: "c1",
+      status: "completed",
+      outputSummary: undefined,
+    },
+    { kind: "context", context: { tokens: 1, window: undefined } },
+    { kind: "reconciliation", reconciliation: { model: undefined } },
+  ];
+
+  for (const observation of observations) {
+    assert.equal(
+      reduceRun(createRunProjection(), observation).report.report,
+      "applied",
+      observation.kind,
+    );
+  }
+});
+
 test("a malformed observation after the ending is reported as late, not invalid", () => {
   const settled = fold([
     { kind: "ending", ending: answeredEnding() },
@@ -596,20 +666,53 @@ test("an over-long text part is cut at a character boundary and recorded", () =>
   ]);
   assert.equal(byteLength("éééé"), 8);
   assert.equal(projection.truncation.truncatedTranscriptBytes, 2);
+  assert.equal(projection.finalOutput, "ééé");
   assert.ok(reports[0].report === "applied-with-truncation");
   assert.deepEqual(reports[0].dropped, [
     { of: "transcript-text", amount: 2 },
-    { of: "final-output", amount: 2 },
+    { of: "final-output", amount: 4 },
   ]);
 });
 
 test("an over-long final output is cut and recorded separately", () => {
   const { projection } = fold([assistant("abcdefgh")], tight);
 
-  // The text part bound applies first, then the tighter output bound.
   assert.equal(projection.transcript[0].parts[0].kind, "text");
   assert.equal(projection.finalOutput, "abcdef");
   assert.equal(projection.truncation.truncatedOutputBytes, 2);
+});
+
+test("the final output keeps its default 64 KiB bound through Result and notice", () => {
+  const { result, notice } = resultAndNotice([
+    assistant("x".repeat(70_000)),
+    { kind: "ending", ending: answeredEnding() },
+  ]);
+
+  assert.equal(byteLength(result.finalOutput), 65_536);
+  assert.equal(result.truncation.truncatedOutputBytes, 4_464);
+  assert.equal(result.truncation.truncatedTranscriptBytes, 53_616);
+  assert.equal(notice.output, undefined);
+  assert.equal(notice.preview.length, 500);
+});
+
+test("the inline boundary is honest end to end", () => {
+  const atBound = resultAndNotice([
+    assistant("x".repeat(16_384)),
+    { kind: "ending", ending: answeredEnding() },
+  ]);
+  const pastBound = resultAndNotice([
+    assistant("x".repeat(16_385)),
+    { kind: "ending", ending: answeredEnding() },
+  ]);
+
+  assert.equal(atBound.result.finalOutput.length, 16_384);
+  assert.equal(atBound.result.truncation.truncatedOutputBytes, 0);
+  assert.equal(atBound.notice.output?.length, 16_384);
+  assert.equal(pastBound.result.finalOutput.length, 16_385);
+  assert.equal(pastBound.result.truncation.truncatedOutputBytes, 0);
+  assert.equal(pastBound.result.truncation.truncatedTranscriptBytes, 1);
+  assert.equal(pastBound.notice.output, undefined);
+  assert.equal(pastBound.notice.preview.length, 500);
 });
 
 test("an over-long tool output summary is cut and recorded separately", () => {
@@ -628,6 +731,94 @@ test("an over-long tool output summary is cut and recorded separately", () => {
 
   assert.equal(projection.tools[0].outputSummary, "a very l");
   assert.equal(projection.truncation.truncatedToolOutputBytes, 11);
+});
+
+test("tool output truncation describes the current replacement", () => {
+  const { projection, reports } = fold(
+    [
+      {
+        kind: "tool_progress",
+        callId: "c1",
+        status: "running",
+        outputSummary: "first summary is long",
+      },
+      {
+        kind: "tool_progress",
+        callId: "c1",
+        status: "completed",
+        outputSummary: "second summary is longer",
+      },
+    ],
+    tight,
+  );
+
+  assert.equal(projection.tools[0].outputSummary, "second s");
+  assert.equal(projection.truncation.truncatedToolOutputBytes, 16);
+  assert.equal(reports[1].report, "applied-with-truncation");
+
+  const statusOnly = reduceRun(projection, {
+    kind: "tool_progress",
+    callId: "c1",
+    status: "completed",
+  });
+  assert.equal(statusOnly.projection.truncation.truncatedToolOutputBytes, 16);
+});
+
+test("megabyte diagnostic, link, and failed-ending texts are bounded at reduction", () => {
+  const huge = "x".repeat(1_000_000);
+  const { projection, reports } = fold([
+    {
+      kind: "diagnostic",
+      diagnostic: { category: "other", message: `line 1\n${huge}` },
+    },
+    {
+      kind: "link",
+      link: { kind: "log", label: huge, target: huge },
+    },
+    {
+      kind: "ending",
+      ending: { ending: "failed", message: `line 1\n${huge}` },
+    },
+  ]);
+
+  assert.equal(
+    byteLength(projection.diagnostics[0].message),
+    DIAGNOSTIC_MESSAGE_MAX_BYTES,
+  );
+  assert.equal(
+    byteLength(projection.links[0].label),
+    RESULT_LINK_LABEL_MAX_BYTES,
+  );
+  assert.equal(
+    byteLength(projection.links[0].target),
+    RESULT_LINK_TARGET_MAX_BYTES,
+  );
+  assert.ok(projection.ending?.ending === "failed");
+  assert.equal(
+    byteLength(projection.ending.message ?? ""),
+    RUN_ENDING_MESSAGE_MAX_BYTES,
+  );
+  assert.deepEqual(
+    reports.map((report) => report.report),
+    Array(3).fill("applied-with-truncation"),
+  );
+
+  const result = toRunResult({
+    identity: {
+      runId: runId("run-test-1"),
+      subagentId: subagentId("subagent-test-1"),
+      backendId: backendId("pi"),
+      agent: "reviewer",
+      description: "bound hostile observations",
+    },
+    projection,
+    ending: projection.ending,
+    startedAt: 1,
+    settledAt: 2,
+  });
+  const stored = boundResultToBytes(result, 256 * 1024);
+  assert.equal(stored.bounded, false);
+  assert.ok(stored.bytes <= 256 * 1024);
 });
 
 test("the default bounds are generous enough that a normal Run never notices", () => {

@@ -30,11 +30,11 @@ const Dropped = Schema.Finite.check(
  *
  * The byte counts are split by what they measure rather than pooled, because
  * the fields they measure are bounded differently. A transcript *accumulates*,
- * so its counts add up; the final output is *replaced* by every assistant
- * message and by reconciliation, so its count is the count for the text that
- * is there now. A pooled counter could not be both, and terminal
- * reconciliation would stop being idempotent — replaying it would add the same
- * cut a second time.
+ * so its counts add up; tool output and final output are *replaced* by their
+ * respective progress, assistant-message, and reconciliation observations, so
+ * those counts describe only the text currently shown. A pooled counter could
+ * not be both, and terminal reconciliation would stop being idempotent —
+ * replaying it would add the same cut a second time.
  */
 export const TruncationRecord = Schema.Struct({
   droppedTranscriptItems: Dropped,
@@ -43,7 +43,7 @@ export const TruncationRecord = Schema.Struct({
   droppedLinks: Dropped,
   /** Bytes cut from the text parts of the transcript as it stands. */
   truncatedTranscriptBytes: Dropped,
-  /** Bytes cut from tool output summaries. */
+  /** Bytes cut from the tool output summary currently shown. */
   truncatedToolOutputBytes: Dropped,
   /** Bytes cut from the final output as it stands. */
   truncatedOutputBytes: Dropped,

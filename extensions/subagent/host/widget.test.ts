@@ -196,6 +196,33 @@ test("a notice lost to an interrupt keeps its row until the re-push lands", asyn
   assert.equal(rig.host.hasWidget(), false);
 });
 
+test("a failed widget install is retried on the next update", async (t) => {
+  let failInstall = true;
+  const rig = hostRig(t, {
+    widgetInstallFails: () => {
+      if (!failInstall) return false;
+      failInstall = false;
+      return true;
+    },
+    resumableSteps: [
+      [{ step: "await-gate", gate: "first" }],
+      [{ step: "await-gate", gate: "second" }],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  await heldRun(rig);
+  assert.equal(rig.host.hasWidget(), false);
+
+  await heldRun(rig);
+  await rig.pump();
+
+  assert.equal(rig.host.hasWidget(), true);
+  assert.equal(rig.host.widgetInstalls(), 1);
+  assert.match(rig.host.widgetLines(80)[0] ?? "", /subagents {3}2 running/);
+});
+
 test("the widget is cleared when the Session shuts down", async (t) => {
   const rig = hostRig(t, {
     resumableSteps: [[{ step: "await-gate", gate: "hold" }]],

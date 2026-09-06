@@ -2,8 +2,8 @@
  * A scriptable stand-in for Pi's native session.
  *
  * It implements the slice of the session the adapter uses, and behaves the way
- * the M0 spike found the real one behaves — including the two things a
- * politer double would get wrong:
+ * the M0 spike and SDK inspection found the real one behaves — including the
+ * three things a politer double would get wrong:
  *
  * - **A disposed session still accepts a prompt.** The SDK does not defend
  *   itself, so a stand-in that threw would make the adapter's own closed flag
@@ -13,6 +13,9 @@
  *   leaves the session idle and resumable, so a script that is hanging stops
  *   hanging — unless it says `ignore-abort`, which is how the cleanup
  *   escalation path is reached on purpose.
+ * - **An idle steer is queued.** Pi polls its steering queue when the next
+ *   prompt starts, so guidance delivered after one prompt settles is surfaced
+ *   as a user message during the next prompt unless the queue is cleared.
  *
  * Every wait is a gate the test controls, and there is no timer anywhere in
  * this file: a suite that slept would be a suite whose failures depended on
@@ -99,6 +102,8 @@ export type PiScriptStep =
       readonly step: "await-steer";
       readonly confirm: boolean;
       readonly reject?: boolean;
+      /** Leave the native `steer` promise pending after consuming it. */
+      readonly settle?: boolean;
     }
   /** Emit the terminal frame. `willRetry` means it is not terminal after all. */
   | { readonly step: "terminal"; readonly willRetry?: boolean }
@@ -199,6 +204,7 @@ export function createStandInPiSession(
   const steers: string[] = [];
   const steersByRun = new Map<RunId, string[]>();
   const pendingSteers: PendingSteer[] = [];
+  const steeringQueue: string[] = [];
   const steerWaiters: (() => void)[] = [];
   const abortWaiters: (() => void)[] = [];
   const idleWaiters: (() => void)[] = [];
@@ -362,7 +368,7 @@ export function createStandInPiSession(
               }),
             );
           }
-          pending.settle(step.reject === true);
+          if (step.settle !== false) pending.settle(step.reject === true);
           break;
         }
         case "terminal": {
@@ -418,6 +424,19 @@ export function createStandInPiSession(
           timestamp: clock,
         }),
       );
+      // Pi's agent loop polls steering at the start of every prompt. Anything
+      // delivered while the session was idle therefore becomes part of this
+      // prompt, which is the leak the adapter must prevent.
+      for (const queued of steeringQueue.splice(0)) {
+        clock += 1;
+        emitMessage(
+          remember({
+            role: "user",
+            content: [{ type: "text", text: queued }],
+            timestamp: clock,
+          }),
+        );
+      }
       try {
         await runScript(script);
       } finally {
@@ -435,6 +454,10 @@ export function createStandInPiSession(
       concurrentSteers += 1;
       maxConcurrentSteers = Math.max(maxConcurrentSteers, concurrentSteers);
       try {
+        if (inFlight === 0) {
+          steeringQueue.push(text);
+          return;
+        }
         const rejected = await new Promise<boolean>((resolve) => {
           pendingSteers.push({ text, settle: resolve });
           for (const wake of steerWaiters.splice(0)) wake();
@@ -484,7 +507,7 @@ export function createStandInPiSession(
     },
     clearQueue() {
       queueClears += 1;
-      return { steering: [], followUp: [] };
+      return { steering: steeringQueue.splice(0), followUp: [] };
     },
     dispose() {
       // Disposal is not defended by the real SDK, and it is not defended here.

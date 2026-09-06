@@ -41,6 +41,7 @@ import {
   type ProfileDiagnostic,
   type RunObservation,
   redactedDiagnostic,
+  runDiagnostic,
   type TranscriptItem,
   usageDelta,
 } from "../../domain/index.ts";
@@ -75,10 +76,19 @@ export interface FakeBackendOptions {
   readonly scripts: readonly FakeRunScript[];
   /** How the fake behaves when it is opened. Succeeds unless a test says so. */
   readonly open?: FakeOpenScript;
+  /** Violate the contract by throwing before an execution Effect is returned. */
+  readonly executeThrowsSynchronously?: boolean;
+  /** Zero-based executions on which to violate the contract synchronously. */
+  readonly executeThrowsSynchronouslyAt?: readonly number[];
   /** Gates the scripts wait on, owned and completed by the test. */
   readonly gates?: Readonly<Record<string, Deferred.Deferred<void>>>;
   /** A shared ordering log. The fake appends its own lifecycle events. */
   readonly trace?: string[];
+  /** Hold BackendAgent close at a named gate for cleanup-budget tests. */
+  readonly close?: {
+    readonly gate: string;
+    readonly uninterruptible?: boolean;
+  };
   readonly id?: BackendId;
   /**
    * What `validateProfile` reports, so validation scenarios can vary it.
@@ -177,8 +187,14 @@ function createFakeBackend(
     const execute = (
       input: RunInput,
       io: ExecutionIO,
-    ): Effect.Effect<TerminalBundle, never, import("effect").Scope.Scope> =>
-      Effect.gen(function* () {
+    ): Effect.Effect<TerminalBundle, never, import("effect").Scope.Scope> => {
+      if (
+        options.executeThrowsSynchronously ||
+        options.executeThrowsSynchronouslyAt?.includes(runIndex)
+      ) {
+        throw new Error("the fake execute threw synchronously");
+      }
+      return Effect.gen(function* () {
         // ADR-0023 exception 3: a closed scope is enforced by the backend's own
         // state, never by trusting a provider to reject work after disposal.
         if (closed) {
@@ -264,6 +280,37 @@ function createFakeBackend(
                 yield* io.emit(observation);
               }
               counters.controlFinished();
+              break;
+            }
+            case "result-then-quiet": {
+              const control = capabilities.steer
+                ? yield* io.controls.take
+                : undefined;
+              if (control !== undefined) {
+                counters.controlStarted(input.runId, control.text);
+              }
+              yield* Effect.gen(function* () {
+                // The provider has reported its result and now contributes no
+                // event capable of releasing this wait. Only the adapter's
+                // runtime-clock bound can move the execution forward.
+                yield* Effect.exit(
+                  Effect.timeout(Effect.never, step.waitMillis),
+                );
+                yield* io.emit({
+                  kind: "diagnostic",
+                  diagnostic: runDiagnostic(
+                    "control",
+                    "guidance was not delivered",
+                  ),
+                });
+              }).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    if (control !== undefined) counters.controlFinished();
+                  }),
+                ),
+              );
+              bundle = { ending: answeredEnding() };
               break;
             }
             case "cumulative-usage": {
@@ -373,14 +420,23 @@ function createFakeBackend(
         // had to say, and it said them all.
         return bundle ?? { ending: answeredEnding() };
       });
+    };
 
     return {
       capabilities,
       admitResume,
       execute,
       close: () =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           // Idempotent: closing twice counts once and does nothing twice.
+          if (closed) return;
+          if (options.close !== undefined) {
+            trace.push("agent-close-waiting");
+            const wait = Deferred.await(gate(options.close.gate));
+            yield* options.close.uninterruptible
+              ? Effect.uninterruptible(wait)
+              : wait;
+          }
           if (closed) return;
           closed = true;
           counters.closed();

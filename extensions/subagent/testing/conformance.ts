@@ -29,7 +29,8 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
+import { TestClock } from "effect/testing";
 import type { Backend, RunControl } from "../backend/contract.ts";
 import type {
   CancellationReason,
@@ -89,6 +90,7 @@ export const RUN_CONFORMANCE_SCENARIOS = [
   "late-events-cannot-mutate-a-terminal-run",
   "a-failing-sink-cannot-strand-the-execution",
   "a-run-may-settle-with-no-observations",
+  "an-execution-settles-when-the-provider-goes-quiet",
   "observations-carry-no-provider-vocabulary",
   // Added in M2.
   "capacity-rejection-is-immediate",
@@ -169,6 +171,8 @@ export interface ConformanceRunPlan {
   readonly steerAfterCancel?: boolean;
   /** Wait on this Run only after it has already settled. */
   readonly waitAfterSettlement?: boolean;
+  /** Advance a supplied test clock after Controls have reached the mailbox. */
+  readonly advanceClockMillis?: number;
 }
 
 /** What the suite should find. Every field is checked only if the rig gave it. */
@@ -229,14 +233,16 @@ export interface BackendConformanceFixture {
   readonly policy?: RuntimePolicy;
   /** Issue this many starts at once instead of one. */
   readonly concurrentStarts?: number;
-  /** Shut the Session down before driving anything. */
-  readonly shutdownFirst?: boolean;
+  /** Issue this many starts after disposal has closed the Session Scope. */
+  readonly startsAfterClose?: number;
   /** Resume the Subagent while its first Run is still active. */
   readonly resumeWhileRunning?: boolean;
   /** Make the sink fail its first push, so the retry path runs. */
   readonly sinkFailsOnce?: boolean;
   /** After the plans, fill the store until the first result is evicted. */
   readonly evictOldest?: boolean;
+  /** Replace the runtime clock for a scenario that proves a time bound. */
+  readonly testClock?: boolean;
 }
 
 /**
@@ -325,7 +331,7 @@ function fillUntilEvicted(
       const read = yield* store.read(runId);
       if (read.outcome !== "result") return;
       const id = `filler-${index}` as RunId;
-      yield* store.commit({ ...filler, runId: id });
+      yield* store.commit({ ...filler, runId: id }).pipe(Effect.orDie);
       yield* store.releasePin(id, "publication");
       yield* store.releasePin(id, "waiters");
       yield* store.releasePin(id, "delivery");
@@ -393,7 +399,6 @@ function runFixture(
       });
 
       if (fixture.sinkFailsOnce) sink.failNext(1);
-      if (fixture.shutdownFirst) yield* supervisor.shutdown();
 
       const startOutcomes: string[] = [];
       const runs: RunOutcome[] = [];
@@ -458,6 +463,11 @@ function runFixture(
             text: `flooding ${extra}`,
           });
           floodOutcomes.push(outcome.outcome);
+        }
+
+        if (plan.advanceClockMillis !== undefined) {
+          yield* quiesce;
+          yield* TestClock.adjust(plan.advanceClockMillis);
         }
 
         let steerAfterCancel: string | undefined;
@@ -544,6 +554,7 @@ function runFixture(
         counters: supervisor.counters(),
         snapshots,
         expiredResults: expired,
+        supervisor,
         readProbe: () => supervisor.probe(),
       };
     }).pipe(
@@ -557,13 +568,29 @@ function runFixture(
         }),
       ),
       Effect.scoped,
+      Effect.provide(fixture.testClock ? TestClock.layer() : Layer.empty),
     ),
     // The probe is read *after* the Session Scope has closed, which is the
     // only moment at which "nothing is still alive" means anything.
-  ).then(({ readProbe, ...outcome }) => ({
-    ...outcome,
-    probeAfterClose: readProbe(),
-  }));
+  ).then(async ({ supervisor, readProbe, ...outcome }) => {
+    const afterClose = await Effect.runPromise(
+      Effect.all(
+        Array.from({ length: fixture.startsAfterClose ?? 0 }, () =>
+          supervisor.start(startRequest(fixture)),
+        ),
+        { concurrency: "unbounded" },
+      ),
+    );
+    const startOutcomes = [
+      ...outcome.startOutcomes,
+      ...afterClose.map((result) => result.outcome),
+    ];
+    return {
+      ...outcome,
+      startOutcomes,
+      probeAfterClose: readProbe(),
+    };
+  });
 }
 
 /* ============================================================== */
@@ -881,6 +908,23 @@ const SCENARIO_CHECKS: {
       assert.equal(run.result.finalOutput, "");
       assert.deepEqual(run.result.transcript, []);
       assert.equal(run.result.usage.turns, 0);
+    }
+  },
+  "an-execution-settles-when-the-provider-goes-quiet": (_fixture, outcome) => {
+    assert.ok(outcome.runs.length > 0, "the scenario drove no Run");
+    for (const run of outcome.runs) {
+      assert.equal(run.result.status, "completed", "silence cancelled the Run");
+      assert.equal(
+        run.result.cancellationReason,
+        undefined,
+        "the scenario must not cancel the Run",
+      );
+      assert.ok(
+        run.result.diagnostics.some(
+          (diagnostic) => diagnostic.category === "control",
+        ),
+        "the undelivered guidance was not diagnosed",
+      );
     }
   },
   "observations-carry-no-provider-vocabulary": (_fixture, outcome) => {

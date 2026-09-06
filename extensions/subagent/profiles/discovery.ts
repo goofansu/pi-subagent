@@ -60,11 +60,32 @@ export function discoverProfiles(
   const diagnostics: ProfileDiagnostic[] = [];
   if (!fs.existsSync(dir)) return { profiles, diagnostics };
 
-  for (const entry of fs.readdirSync(dir).sort()) {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir).sort();
+  } catch (error) {
+    diagnostics.push({
+      filePath: dir,
+      reason: `cannot be read: ${error instanceof Error ? error.message : String(error)}`,
+    });
+    return { profiles, diagnostics };
+  }
+
+  for (const entry of entries) {
     if (!entry.endsWith(PROFILE_FILE_EXTENSION)) continue;
     const filePath = path.join(dir, entry);
-    if (!fs.statSync(filePath).isFile()) continue;
-    const parsed = parseProfile(fs.readFileSync(filePath, "utf8"), filePath);
+    let contents: string;
+    try {
+      if (!fs.statSync(filePath).isFile()) continue;
+      contents = fs.readFileSync(filePath, "utf8");
+    } catch (error) {
+      diagnostics.push({
+        filePath,
+        reason: `cannot be read: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      continue;
+    }
+    const parsed = parseProfile(contents, filePath);
     if (parsed.outcome === "diagnostics") {
       diagnostics.push(...parsed.diagnostics);
       continue;

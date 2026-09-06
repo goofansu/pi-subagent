@@ -113,10 +113,10 @@ say cancelled. *Abort* is not a domain word: it is mechanism vocabulary —
 `AbortController`, `AbortSignal`, Pi's `stopReason: "aborted"` — normalised to
 cancelled inside the adapter and never shown above it.
 
-**Cancellation reason** — `requested` or `shutdown`, reported wherever a
-cancelled Run is named. The difference is not decoration: at shutdown every Run
-is cancelled without anyone asking, and a caller told plain `cancelled` would
-conclude its own request had taken effect.
+**Cancellation reason** — `requested`, `shutdown`, or `timeout`, reported
+wherever a cancelled Run is named. The difference is not decoration: at
+shutdown every Run is cancelled without anyone asking, and a caller told plain
+`cancelled` would conclude its own request had taken effect.
 
 **Result** — the authoritative immutable terminal output of one Run. It records
 the owning Subagent for orientation, is written to the Result store only when
@@ -137,9 +137,10 @@ Presence of `output` on the value is what tells the two apart. The Result store
 stays authoritative either way.
 [ADR-0037](docs/adr/0037-a-notice-carries-a-short-output-whole.md).
 **Pushed is not landed**: Pi may hold a follow-up while the model is
-mid-turn, and if an interrupt discards it the notice is pushed again once the
-agent settles. One landing per Notification is the invariant. The six states a
-notice can be in — **handed off**, **landed**, **lost after hand-off**,
+mid-turn. Its queue may survive a non-Escape abort; when the sink reports the
+notice lost, it is re-pushed once per loss, but only after Pi no longer reports
+pending messages. One landing per Notification is the invariant. The six states
+a notice can be in — **handed off**, **landed**, **lost after hand-off**,
 **exhausted**, **consumed**, **held** — are defined under **Delivery sweep**,
 each with the one component that decides it.
 
@@ -218,10 +219,15 @@ retries. Explicitly *not* a core product type, and it never appears in a core
 signature. It was a documented domain term in 1.x; see [Historical
 terms](#historical-terms).
 
-**Scope** — an Effect resource lifetime, nested Session → Subagent → Run →
-native execution. Closing one releases everything beneath it, in reverse
-acquisition order, which is why there is no shutdown order to write by hand.
+**Scope** — an Effect resource lifetime. The Session owns a Work scope, which
+owns Subagent and Run resources; within a Run, the native execution scope is a
+child. Closing one releases everything beneath it in reverse acquisition order.
 [ADR-0023](docs/adr/0023-v2-scope-ownership.md).
+
+**Work scope** — the child of the Session Scope that holds Subagent Scopes and
+Run, delivery, and timeout fibers. Shutdown is registered after it as a Session
+Scope finalizer, so LIFO finalization runs Shutdown before structural closure of
+the Work scope.
 
 **Observation** — the neutral record of something a backend witnessed, ordered
 and lossless within a Run.
@@ -293,10 +299,12 @@ retry budget, and an optional default Run timeout. Configuration rather than a
 service, so a test lowers a bound by spreading over the defaults.
 
 **Run Scope** — what one Run holds for its lifetime: a bounded observation
-intake, one reducer fiber, a Control mailbox, a completion `Deferred` used only
-as a wake-up, a settlement coordinator, and — nested inside it — the native
-execution scope. Closing the Run Scope releases all of them; the nested scope
-can close independently, because a provider turn may end without ending the Run.
+intake, one reducer fiber, a Control mailbox, a completion `Deferred` that is
+the settlement barrier, a settlement coordinator, and — nested inside it — the
+native execution scope. The Run handle carries the activation gate, the native
+execution scope, and the Run Scope as well as those mechanisms. Closing the Run
+Scope releases all of them; the nested scope can close independently, because a
+provider turn may end without ending the Run.
 
 **Settlement coordinator** — the per-Run thing that captures exactly one
 terminal **candidate** into a `Deferred`. Later candidates increment a
@@ -318,17 +326,20 @@ captured. Everything emitted afterwards is a counted late event and a no-op, so
 the contract's "emit never fails" holds for an adapter emitting from its own
 finalizer.
 
-**Cleanup escalation** — what happens when closing the native execution scope
-outlives the cleanup budget: a `cleanup-escalation` diagnostic on the Run, the
-BackendAgent closed by the core, its Conversation marked lost so a later resume
-is honest, and settlement continuing with the observations it has. A hung
-finalizer must not leave a Run in `finalizing` forever.
+**Cleanup escalation** — what happens when cleanup outlives its budget. For a
+native execution scope, the Run gets a `cleanup-escalation` diagnostic, the core
+closes the BackendAgent, marks its Conversation lost, and continues settlement.
+For a Subagent Scope / BackendAgent close overrun after its Run has settled,
+there is no Run to carry a diagnostic: the escalation is recorded by the
+`cleanupEscalations` counter alone. A hung finalizer must not leave a Run in
+`finalizing` forever or prevent Session closure.
 
 **Subagent records** — what the supervisor knows about each Subagent it owns,
 and the only writer of any of it: the fixed facts (id, Profile, context,
-BackendAgent, Scope) and the four things that change — the phase, the Run
-currently in flight, the fiber settling it, and whether the Conversation is
-lost. Every mutation is a call on the module, so the rule that a Subagent owns
+BackendAgent, Scope) and the three things that change — the phase, the Run
+currently in flight, and whether the Conversation is lost. Records hold no
+fiber; the attached Run handle carries its scoped resources and completion
+barrier. Every mutation is a call on the module, so the rule that a Subagent owns
 at most one active Run is asserted where the record lives rather than at each
 call site, and finding a Run's owner is an index lookup rather than a scan.
 **Not a registry** — see the historical term of that name.
@@ -393,9 +404,12 @@ stored Result's pin here, on the strength of having stored the Result first.
 model has it. Decided by the **Session push sink** alone, and terminal: a
 landed notice is never pushed again. See **Landing** for the mechanism.
 
-**Lost after hand-off** — a host turn was aborted while the message was queued
-and Pi discarded it. Decided by the Session push sink, from `agent_end` and
-turn-abort evidence. Re-pushed exactly once, when the parent agent settles.
+**Lost after hand-off** — a host turn was aborted before the Session push sink
+observed the queued message land. Pi may retain its follow-up queue after a
+non-Escape abort; the interactive Escape path clears it. Decided by the Session
+push sink, from `agent_end` and turn-abort evidence. Re-pushed once per loss when
+the parent settles and Pi reports no pending messages, or deferred to the next
+non-aborted turn end while Pi still holds pending follow-ups.
 
 **Exhausted** — the retry budget ran out with no hand-off accepted; three
 attempts a second apart by default. Decided by `CompletionDelivery`, from its
@@ -480,16 +494,18 @@ its own, the host facts from Pi, and one native probe per backend. A Profile's
 completion Notification into a live Pi Session as a follow-up message that
 triggers a turn. It exists because *pushed is not landed*: `CompletionDelivery`
 is done when a push succeeds, correctly, since it stored the Result first — but
-Pi queues a follow-up and an interrupted turn discards what was queued.
+Pi queues a follow-up, and an interrupted turn may retain or discard it.
 
 **Landing** — a pushed Notification actually reaching the conversation. Tracked
 by the sink through four host events: a push records the notice unlanded, a
 `message_start` carrying it marks it landed and forgets it, a turn whose stop
 reason or signal says it was aborted marks every unlanded notice lost, and
-`agent_settled` pushes each lost notice again exactly once. Exactly one landing
-per Notification is the sink's contract. The retained value is the bounded
-notice rather than a pin on the stored Result, because delivery releases that
-pin on a successful push.
+`agent_settled` re-pushes each lost notice when Pi reports no pending messages.
+When Pi still holds pending follow-ups, the sink defers that re-push to the next
+non-aborted turn end. A notice is re-pushed once per loss, so another abort may
+cause another re-push. Exactly one landing per Notification is the sink's
+contract. The retained value is the bounded notice rather than a pin on the
+stored Result, because delivery releases that pin on a successful push.
 
 Landing is not the only end. A **Completion hand-off** also resolves when its
 Run is **consumed**, the sink is told of **exhaustion** by delivery, and a

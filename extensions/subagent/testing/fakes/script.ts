@@ -43,6 +43,17 @@ export type FakeStep =
    */
   | { readonly step: "await-control"; readonly confirm: boolean }
   /**
+   * Model a provider result that leaves guidance outstanding, followed by no
+   * further provider event. The fake adapter waits only `waitMillis`, reports
+   * the undelivered guidance, and returns its terminal bundle. A backend that
+   * waits forever on this step strands the conformance scenario.
+   *
+   * The non-steering fake uses the same step without taking a Control: that
+   * entry point still proves the provider wait is bounded, while its declared
+   * capability continues to prevent Control admission.
+   */
+  | { readonly step: "result-then-quiet"; readonly waitMillis: number }
+  /**
    * The provider now reports these cumulative totals. The backend differences
    * them against this Run's baseline and reports the difference, which is what
    * a real adapter over a cumulative provider does.

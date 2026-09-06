@@ -155,7 +155,13 @@ function fullResult() {
     ],
     diagnostics: [runDiagnostic("control", "Pi steering was not delivered")],
     links: [resultLink("native-session", "session file", "/tmp/session.json")],
-    truncation: { droppedTranscriptItems: 4, droppedToolEntries: 1 },
+    truncation: {
+      droppedTranscriptItems: 4,
+      droppedToolEntries: 1,
+      truncatedTranscriptBytes: 53_616,
+      truncatedToolOutputBytes: 17,
+      truncatedOutputBytes: 4_464,
+    },
   });
 }
 
@@ -184,7 +190,9 @@ test("the expanded card carries every section a Run reported", () => {
     "Links:",
     "  session file (native-session): /tmp/session.json",
     "",
-    "Dropped to stay within bounds: 4 transcript items, 1 tool entries.",
+    "Dropped to stay within bounds: 4 transcript items, 1 tool entries, 53,616 bytes of transcript text, 17 bytes of tool output, 4,464 bytes of the final output.",
+    "",
+    "4,464 bytes of the final output were cut.",
     "",
     "the answer",
   ]);

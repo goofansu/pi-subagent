@@ -14,7 +14,11 @@ import {
 } from "../domain/index.ts";
 import { createRuntimeCounters, type RuntimeCounters } from "./counters.ts";
 import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
-import { PIN_HOLDERS, ResultStore } from "./result-store.ts";
+import {
+  PIN_HOLDERS,
+  type ResultEncoder,
+  ResultStore,
+} from "./result-store.ts";
 
 /**
  * The store, on its own.
@@ -57,12 +61,13 @@ function resultOf(
  * The counters are the Session's, not the store's own: a module that invented
  * its own would be a module a test had to know to ask separately.
  */
-const withStore = <A>(
+const withStore = <A, E>(
   policy: RuntimePolicy,
   body: (
     store: ResultStore["Service"],
     counters: RuntimeCounters,
-  ) => Effect.Effect<A>,
+  ) => Effect.Effect<A, E>,
+  resultEncoder?: ResultEncoder,
 ): Promise<A> => {
   const counters = createRuntimeCounters();
   return Effect.runPromise(
@@ -70,7 +75,7 @@ const withStore = <A>(
       const store = yield* ResultStore;
       return yield* body(store, counters);
     }).pipe(
-      Effect.provide(ResultStore.layerOf(policy, counters)),
+      Effect.provide(ResultStore.layerOf(policy, counters, resultEncoder)),
       Effect.scoped,
     ),
   );
@@ -212,6 +217,19 @@ test("reserving the same Run twice takes the room once", async () => {
   assert.equal(accounted, DEFAULT_RUNTIME_POLICY.maxResultBytes);
 });
 
+test("an encode throw is a typed commit failure, not a synchronous defect", async () => {
+  const failure = await withStore(
+    DEFAULT_RUNTIME_POLICY,
+    (store) => Effect.flip(store.commit(resultOf("run-1", "the answer"))),
+    () => {
+      throw new Error("secret encoder detail");
+    },
+  );
+
+  assert.equal(failure._tag, "ResultStoreEncodingFailure");
+  assert.doesNotMatch(failure.diagnostic.message, /secret encoder detail/);
+});
+
 test("committing the same result twice stores one and counts a duplicate", async () => {
   const outcome = await withStore(DEFAULT_RUNTIME_POLICY, (store, counters) =>
     Effect.gen(function* () {
@@ -237,6 +255,32 @@ test("committing the same result twice stores one and counts a duplicate", async
   assert.equal(outcome.second, "duplicate");
   assert.equal(outcome.sameValue, true);
   assert.equal(outcome.read, "the answer");
+  assert.equal(outcome.counters.duplicateCommits, 1);
+  assert.equal(outcome.counters.conflictingCommits, 0);
+});
+
+test("recommitting an evicted result counts as a duplicate, not a conflict", async () => {
+  const one = resultOf("run-1", "x".repeat(400));
+  const two = resultOf("run-2", "y".repeat(400));
+  const policy: RuntimePolicy = {
+    ...DEFAULT_RUNTIME_POLICY,
+    maxResultBytes: 4_000,
+    resultStoreBytes: encodedResultBytes(one) + 10,
+  };
+
+  const outcome = await withStore(policy, (store, counters) =>
+    Effect.gen(function* () {
+      yield* store.commit(one);
+      yield* unpin(store, one.runId);
+      yield* store.commit(two);
+      assert.equal((yield* store.read(one.runId)).outcome, "ResultExpired");
+
+      const recommitted = yield* store.commit(one);
+      return { recommitted, counters: counters.counters() };
+    }),
+  );
+
+  assert.equal(outcome.recommitted.outcome, "duplicate");
   assert.equal(outcome.counters.duplicateCommits, 1);
   assert.equal(outcome.counters.conflictingCommits, 0);
 });
@@ -292,6 +336,30 @@ test("a read decodes from the encoded form, so the round trip runs every time", 
   if (read.stored.outcome === "result") {
     assert.deepEqual(read.stored.result, read.original);
   }
+});
+
+test("an unencodable terminal Result can be recorded by id with output gone", async () => {
+  const outcome = await withStore(DEFAULT_RUNTIME_POLICY, (store, counters) =>
+    Effect.gen(function* () {
+      const result = resultOf("run-1", "unencodable", "failed");
+      yield* store.reserve(result.runId);
+      yield* store.recordOutputGone(result);
+      return {
+        read: yield* store.read(result.runId),
+        accounted: yield* store.accountedBytes(),
+        unreadable: counters.counters().unreadableResults,
+      };
+    }),
+  );
+
+  assert.deepEqual(outcome.read, {
+    outcome: "ResultExpired",
+    runId: "run-1",
+    subagentId: "subagent-1",
+    status: "failed",
+  });
+  assert.equal(outcome.accounted, 0);
+  assert.equal(outcome.unreadable, 1);
 });
 
 test("an unknown id and an evicted id get different answers", async () => {

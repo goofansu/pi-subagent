@@ -94,6 +94,16 @@ test("N-8: the notice is identical whichever backend ran the Run", () => {
   );
 });
 
+test("a whitespace-only answer is record-only and carries no output fence", () => {
+  const notice = fixtureNotification({ finalOutput: "  \n " });
+  const text = formatNotificationText(notice);
+
+  assert.equal(notice.resultAvailability, "record-only");
+  assert.equal(notice.output, undefined);
+  assert.doesNotMatch(text, /"""/);
+  assert.match(text, /No output was produced\./);
+});
+
 test("N-2: a completed Run with no output has no body, and its record is available", () => {
   // "No output was produced" is said once, by the pointer, and the body is
   // absent rather than repeating it and then promising a full result.

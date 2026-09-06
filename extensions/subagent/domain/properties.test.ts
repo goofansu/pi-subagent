@@ -2,6 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomSequence } from "../testing/fixtures/observations.ts";
 import { seeds } from "../testing/fixtures/seeded.ts";
+import {
+  byteLength,
+  DIAGNOSTIC_MESSAGE_MAX_BYTES,
+  RESULT_LINK_LABEL_MAX_BYTES,
+  RESULT_LINK_TARGET_MAX_BYTES,
+  RUN_ENDING_MESSAGE_MAX_BYTES,
+} from "./bounding.ts";
 import type { RunObservation } from "./observations.ts";
 import {
   createRunProjection,
@@ -128,6 +135,98 @@ test("every projection stays within its bounds, for every sequence", () => {
   }
 });
 
+test("every oversized observation text is bounded and reported", () => {
+  for (const seed of seeds(RUNS)) {
+    const oversized = `${seed}:${"é".repeat(3_000)}`;
+    const cases: readonly RunObservation[] = [
+      {
+        kind: "message",
+        role: "assistant",
+        parts: [{ kind: "text", text: oversized }],
+      },
+      {
+        kind: "tool_progress",
+        callId: `call-${seed}`,
+        status: "completed",
+        outputSummary: oversized,
+      },
+      { kind: "activity", activity: oversized },
+      {
+        kind: "diagnostic",
+        diagnostic: { category: "other", message: oversized },
+      },
+      {
+        kind: "link",
+        link: { kind: "log", label: oversized, target: oversized },
+      },
+      {
+        kind: "reconciliation",
+        reconciliation: {
+          transcript: [
+            {
+              role: "assistant",
+              parts: [{ kind: "text", text: oversized }],
+            },
+          ],
+          finalOutput: oversized,
+        },
+      },
+      { kind: "ending", ending: { ending: "failed", message: oversized } },
+    ];
+
+    for (const observation of cases) {
+      const step = reduceRun(createRunProjection(), observation, TIGHT_BOUNDS);
+      assert.equal(
+        step.report.report,
+        "applied-with-truncation",
+        `seed ${seed}: ${observation.kind}`,
+      );
+      const projection = step.projection;
+      assert.ok(
+        byteLength(projection.finalOutput) <= TIGHT_BOUNDS.maxFinalOutputBytes,
+      );
+      assert.ok(
+        projection.transcript.every((item) =>
+          item.parts.every(
+            (part) =>
+              part.kind !== "text" ||
+              byteLength(part.text) <= TIGHT_BOUNDS.maxTextPartBytes,
+          ),
+        ),
+      );
+      assert.ok(
+        projection.tools.every(
+          (tool) =>
+            tool.outputSummary === undefined ||
+            byteLength(tool.outputSummary) <= TIGHT_BOUNDS.maxTextPartBytes,
+        ),
+      );
+      assert.ok(
+        projection.activity === undefined ||
+          byteLength(projection.activity) <= TIGHT_BOUNDS.maxTextPartBytes,
+      );
+      assert.ok(
+        projection.diagnostics.every(
+          (diagnostic) =>
+            byteLength(diagnostic.message) <= DIAGNOSTIC_MESSAGE_MAX_BYTES,
+        ),
+      );
+      assert.ok(
+        projection.links.every(
+          (link) =>
+            byteLength(link.label) <= RESULT_LINK_LABEL_MAX_BYTES &&
+            byteLength(link.target) <= RESULT_LINK_TARGET_MAX_BYTES,
+        ),
+      );
+      assert.ok(
+        projection.ending?.ending !== "failed" ||
+          projection.ending.message === undefined ||
+          byteLength(projection.ending.message) <= RUN_ENDING_MESSAGE_MAX_BYTES,
+      );
+    }
+  }
+});
+
 test("a truncating fold always says so in its report, for every sequence", () => {
   for (const seed of seeds(RUNS)) {
     const { observations } = randomSequence(seed, 40);
@@ -137,9 +236,11 @@ test("a truncating fold always says so in its report, for every sequence", () =>
       const before = projection.truncation;
       const step = reduceRun(projection, observation, TIGHT_BOUNDS);
       projection = step.projection;
-      const changed =
-        JSON.stringify(before) !== JSON.stringify(projection.truncation);
-      if (!changed) continue;
+      const cutOrDropIncreased = Object.keys(before).some((field) => {
+        const key = field as keyof typeof before;
+        return projection.truncation[key] > before[key];
+      });
+      if (!cutOrDropIncreased) continue;
       assert.equal(
         step.report.report,
         "applied-with-truncation",

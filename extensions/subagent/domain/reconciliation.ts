@@ -25,11 +25,12 @@ import { ContextGauge, UsageTotalsPatch } from "./usage.ts";
 
 export const TerminalReconciliation = Schema.Struct({
   transcript: Schema.optionalKey(Schema.Array(TranscriptItem)),
+  /** Bounded by `ProjectionBounds.maxFinalOutputBytes` at reduction. */
   finalOutput: Schema.optionalKey(Schema.String),
   usage: Schema.optionalKey(UsageTotalsPatch),
   context: Schema.optionalKey(ContextGauge),
   turns: Schema.optionalKey(Schema.Number),
-  model: Schema.optionalKey(Schema.String),
+  model: Schema.optional(Schema.String),
 });
 
 export type TerminalReconciliation = typeof TerminalReconciliation.Type;

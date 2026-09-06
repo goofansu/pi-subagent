@@ -13,7 +13,7 @@
  * Profile, a retained BackendAgent, and a Scope that owns it for the
  * Subagent's whole life. Those four facts never change. What changes is where
  * the Subagent is — running or idle or closed — which Run it currently has,
- * which fiber is settling that Run, and whether its Conversation is gone.
+ * and whether its Conversation is gone.
  *
  * **Why the module is the only writer.** Contributing invariant 2 says one
  * Subagent owns at most one active Run. Before this module that was true
@@ -34,7 +34,7 @@
  * is the decision.
  */
 
-import type { Fiber, Scope } from "effect";
+import type { Scope } from "effect";
 import type { BackendAgent } from "../backend/contract.ts";
 import type {
   Profile,
@@ -68,8 +68,11 @@ export interface SubagentRecord extends SubagentFacts {
   readonly conversationLost: boolean;
   /** The Run currently in flight, if any. */
   readonly run?: RunHandle;
-  /** The fiber settling that Run, so a close can wait for it. */
-  readonly runFiber?: Fiber.Fiber<unknown, never>;
+}
+
+export interface CurrentRun {
+  readonly record: SubagentRecord;
+  readonly handle: RunHandle;
 }
 
 export interface SubagentRecords {
@@ -82,26 +85,22 @@ export interface SubagentRecords {
    */
   readonly insert: (facts: SubagentFacts) => SubagentRecord;
   readonly get: (id: SubagentId) => SubagentRecord | undefined;
-  /** The Subagent whose Run this is, if that Run is in flight right now. */
-  readonly byRun: (runId: RunId) => SubagentRecord | undefined;
+  /**
+   * The current Run and its owner as one fact. The returned type cannot
+   * represent an owner without its handle.
+   */
+  readonly currentRun: (runId: RunId) => CurrentRun | undefined;
   /**
    * A Run has been admitted for this Subagent, so it is running.
    *
-   * Separate from `attachRun` because the two happen at different instants
-   * and the earlier one is what a concurrent resume has to see. A Run becomes
-   * certain when its result is reserved, which is before it is published and
-   * well before its Run Scope exists — so the phase moves then, and the Run
-   * Scope is attached when there is one. A start needs no call: `insert`
-   * happens at the same point in its own sequence and starts the record
-   * running.
+   * Separate from `attachRun` because phase and handle are distinct facts the
+   * records module owns. The supervisor performs both in the admitting fiber,
+   * after the complete handle exists and before the active row is published.
+   * A start needs no call: `insert` starts its record running.
    */
   readonly markRunning: (id: SubagentId) => void;
   /** The Subagent's Run Scope now exists. A second one is a defect. */
   readonly attachRun: (id: SubagentId, handle: RunHandle) => void;
-  readonly attachFiber: (
-    id: SubagentId,
-    fiber: Fiber.Fiber<unknown, never>,
-  ) => void;
   /** The Run is over: idle, unless the Subagent was closed meanwhile. */
   readonly detachRun: (id: SubagentId) => void;
   readonly markConversationLost: (id: SubagentId) => void;
@@ -117,7 +116,6 @@ interface MutableRecord extends SubagentFacts {
   phase: SubagentPhase;
   conversationLost: boolean;
   run?: RunHandle;
-  runFiber?: Fiber.Fiber<unknown, never>;
 }
 
 export function makeSubagentRecords(): SubagentRecords {
@@ -149,9 +147,17 @@ export function makeSubagentRecords(): SubagentRecords {
       const record = records.get(id);
       if (record) record.phase = "running";
     },
-    byRun: (runId) => {
+    currentRun: (runId) => {
       const owner = owners.get(runId);
-      return owner === undefined ? undefined : records.get(owner);
+      if (owner === undefined) return undefined;
+      const record = records.get(owner);
+      const handle = record?.run;
+      if (record === undefined || handle?.identity.runId !== runId) {
+        throw new Error(
+          `the current-Run index for ${runId} does not name its attached handle`,
+        );
+      }
+      return { record, handle };
     },
     attachRun: (id, handle) => {
       // Quiet for a Subagent this module does not have, as every mutation
@@ -167,23 +173,12 @@ export function makeSubagentRecords(): SubagentRecords {
       record.run = handle;
       owners.set(handle.identity.runId, id);
     },
-    attachFiber: (id, fiber) => {
-      const record = records.get(id);
-      if (record) record.runFiber = fiber;
-    },
     detachRun: (id) => {
       const record = records.get(id);
       if (!record) return;
       const runId = record.run?.identity.runId;
       if (runId !== undefined) owners.delete(runId);
       record.run = undefined;
-      // The fiber handle deliberately stays. `closeSubagent` reads it to join
-      // the Run fiber before it closes the Subagent Scope, and it reads it
-      // *after* reading the Run — so clearing it here would make that join
-      // depend on which side of this call the close arrived on. Joining a
-      // fiber that has already finished costs nothing; skipping a join that
-      // was needed does not. The next Run's `attachFiber` replaces it.
-      //
       // A Subagent closed while its Run was settling stays closed. From the
       // instant it was marked it admits no new Run, and a late settlement
       // must not be able to hand it back.

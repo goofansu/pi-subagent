@@ -13,9 +13,9 @@ import {
  *
  * A test double is code, and one whose scripts nobody exercises is a double
  * that can drift into agreeing with the adapter rather than with Pi. Every
- * script step has a test here, and the two that matter most are the ones where
- * a politer double would be wrong: a disposed session still accepts a prompt,
- * and an abort releases work that is hanging.
+ * script step has a test here, alongside the three places a politer double
+ * would be wrong: a disposed session still accepts a prompt, an abort releases
+ * hanging work, and idle guidance is queued for the next prompt.
  */
 
 /** Collect every event one prompt emits. */
@@ -289,6 +289,24 @@ test("an unconfirmed steer is consumed silently", async () => {
   );
 });
 
+test("a prompt can finish while a consumed steer stays unsettled", async () => {
+  const { standIn } = drive([
+    { step: "await-steer", confirm: false, settle: false },
+    { step: "terminal" },
+  ]);
+
+  const prompting = standIn.session.prompt("go");
+  let steered = false;
+  void standIn.session.steer("guidance").then(() => {
+    steered = true;
+  });
+  await prompting;
+  await Promise.resolve();
+
+  assert.equal(steered, false);
+  assert.equal(standIn.session.isIdle, true);
+});
+
 test("a rejected steer is how an adapter learns delivery did not happen", async () => {
   const { standIn } = drive([
     { step: "await-steer", confirm: false, reject: true },
@@ -357,11 +375,36 @@ test("binding extensions and the shutdown emit are recorded", async () => {
   assert.equal(standIn.record().shutdownEmits, 1);
 });
 
-test("clearing the queue is recorded and answers with nothing pending", () => {
+test("a steer delivered while idle is surfaced on the next prompt", async () => {
+  const standIn = createStandInPiSession({ scripts: [[], []] });
+  const events = recorder();
+  standIn.session.subscribe(events.listen);
+
+  await standIn.session.prompt("first");
+  await standIn.session.steer("guidance delivered too late");
+  await standIn.session.prompt("second");
+
+  const userTexts = events
+    .events()
+    .map((event) => event.message as { role?: string; content?: unknown })
+    .filter((message) => message?.role === "user")
+    .map(
+      (message) =>
+        (message.content as readonly { readonly text: string }[])[0].text,
+    );
+  assert.deepEqual(userTexts, [
+    "first",
+    "second",
+    "guidance delivered too late",
+  ]);
+});
+
+test("clearing the queue returns pending idle steers and removes them", async () => {
   const { standIn } = drive([]);
 
+  await standIn.session.steer("guidance delivered too late");
   assert.deepEqual(standIn.session.clearQueue(), {
-    steering: [],
+    steering: ["guidance delivered too late"],
     followUp: [],
   });
   assert.equal(standIn.record().queueClears, 1);

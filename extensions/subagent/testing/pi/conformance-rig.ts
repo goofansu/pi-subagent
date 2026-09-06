@@ -3,7 +3,7 @@
  *
  * It builds the actual adapter — the same `createPiBackend` the entry point
  * uses — with the stand-in session injected through the factory the adapter
- * already has for that purpose, and runs the shared 37-scenario suite against
+ * already has for that purpose, and runs the shared 38-scenario suite against
  * it. Nothing about the adapter is stubbed: validation, the retained session,
  * the per-Run execution, the translation, the steering consumer, and the
  * cancellation path are all the production code.
@@ -28,6 +28,12 @@
  * suite is relaxed for Pi: every scenario runs, and none is skipped.
  */
 
+import { Effect, Fiber } from "effect";
+import type {
+  Backend,
+  BackendAgent,
+  ExecutionIO,
+} from "../../backend/contract.ts";
 import {
   createPiBackend,
   PI_DISPLAY_NAME,
@@ -49,7 +55,12 @@ import type {
 } from "../conformance.ts";
 import type { ResourceCountersSnapshot } from "../fakes/counters.ts";
 import { correlateRuns } from "./correlate.ts";
-import { createStandInPiSession, type PiScript } from "./stand-in-session.ts";
+import {
+  createGate,
+  createStandInPiSession,
+  type PiScript,
+  type StandInPiSession,
+} from "./stand-in-session.ts";
 
 /** The Profile every Pi fixture starts from: no fields, so nothing is pinned. */
 const PROFILE: Profile = {
@@ -85,14 +96,87 @@ function lowered(overrides: Partial<RuntimePolicy>): RuntimePolicy {
 interface PiFixtureParts
   extends Omit<BackendConformanceFixture, "backend" | "profile" | "counters"> {
   readonly scripts: readonly PiScript[];
+  /** Hold the first observation so a late Control is admitted deterministically. */
+  readonly gateLateControlDrain?: boolean;
   /** Make the session factory refuse, which is how an open fails. */
   readonly openFails?: boolean;
   /** Extra Profile frontmatter, for the validation scenario. */
   readonly profileFields?: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * Keep Run 1 active after its native prompt settles, without keeping Pi busy.
+ * The fixed adapter releases the held observation through its Control
+ * diagnostic; the broken adapter releases it by calling the idle SDK steer,
+ * whose queued guidance is then visible to Run 2.
+ */
+function gateLateControlDrain(
+  backend: Backend,
+  standIn: StandInPiSession,
+): Backend {
+  let gated = false;
+  return {
+    ...backend,
+    open: (profile, subagent) =>
+      Effect.map(
+        backend.open(profile, subagent),
+        (agent): BackendAgent => ({
+          ...agent,
+          execute: (input, io) => {
+            if (gated) return agent.execute(input, io);
+            gated = true;
+            const releaseDrain = createGate();
+            const firstEmitted = createGate();
+            let heldFirst = false;
+            const gatedIO: ExecutionIO = {
+              controls: io.controls,
+              emit: (observation) => {
+                if (!heldFirst && observation.kind !== "diagnostic") {
+                  heldFirst = true;
+                  return Effect.promise(() => releaseDrain.promise).pipe(
+                    Effect.andThen(io.emit(observation)),
+                    Effect.ensuring(Effect.sync(firstEmitted.release)),
+                  );
+                }
+                if (
+                  observation.kind === "diagnostic" &&
+                  observation.diagnostic.category === "control"
+                ) {
+                  releaseDrain.release();
+                  return Effect.promise(() => firstEmitted.promise).pipe(
+                    Effect.andThen(io.emit(observation)),
+                  );
+                }
+                return io.emit(observation);
+              },
+            };
+            return Effect.gen(function* () {
+              const queued = yield* Effect.forkChild(
+                Effect.gen(function* () {
+                  while (standIn.record().steers.length === 0) {
+                    yield* Effect.yieldNow;
+                  }
+                  releaseDrain.release();
+                }),
+              );
+              const bundle = yield* agent.execute(input, gatedIO);
+              yield* Fiber.interrupt(queued);
+              return bundle;
+            }).pipe(Effect.ensuring(Effect.sync(releaseDrain.release)));
+          },
+        }),
+      ),
+  };
+}
+
 function piFixture(parts: PiFixtureParts): BackendConformanceFixture {
-  const { scripts, openFails, profileFields, ...rest } = parts;
+  const {
+    scripts,
+    gateLateControlDrain: gateDrain,
+    openFails,
+    profileFields,
+    ...rest
+  } = parts;
   const standIn = createStandInPiSession({ scripts });
   const live = { count: 0 };
   let opens = 0;
@@ -128,15 +212,17 @@ function piFixture(parts: PiFixtureParts): BackendConformanceFixture {
     };
   };
 
+  const correlated = correlateRuns(handle.backend, standIn, {
+    began: () => {
+      live.count += 1;
+    },
+    ended: () => {
+      live.count -= 1;
+    },
+  });
+
   return {
-    backend: correlateRuns(handle.backend, standIn, {
-      began: () => {
-        live.count += 1;
-      },
-      ended: () => {
-        live.count -= 1;
-      },
-    }),
+    backend: gateDrain ? gateLateControlDrain(correlated, standIn) : correlated,
     profile: {
       ...PROFILE,
       ...(profileFields === undefined ? {} : { fields: profileFields }),
@@ -358,6 +444,35 @@ export function piConformanceRig(): BackendConformanceRig {
             },
           });
 
+        case "an-execution-settles-when-the-provider-goes-quiet":
+          return piFixture({
+            scripts: [
+              [
+                {
+                  step: "await-steer",
+                  confirm: false,
+                  settle: false,
+                },
+                { step: "terminal" },
+              ],
+            ],
+            plans: [
+              {
+                controls: [{ type: "steer", text: "guidance awaiting a turn" }],
+              },
+            ],
+            expected: {
+              runs: [
+                {
+                  status: "completed",
+                  steerOutcomes: ["accepted"],
+                  diagnosticCategories: ["control"],
+                },
+              ],
+              controlsReceived: ["guidance awaiting a turn"],
+            },
+          });
+
         case "observations-carry-no-provider-vocabulary":
           return piFixture({
             scripts: [
@@ -403,8 +518,7 @@ export function piConformanceRig(): BackendConformanceRig {
           return piFixture({
             scripts: [ORDINARY],
             plans: [],
-            concurrentStarts: 1,
-            shutdownFirst: true,
+            startsAfterClose: 1,
             expected: { runs: [], startOutcomes: ["shutting down"] },
           });
 
@@ -486,40 +600,35 @@ export function piConformanceRig(): BackendConformanceRig {
           });
 
         case "a-control-cannot-leak-into-the-next-run":
-          // Pi's steering consumer takes what was admitted, so the Control
-          // *is* delivered to the first Run — and the proof is that the
-          // second Run, on the same retained session, receives nothing.
+          // Both prompts finish without polling for guidance. The Control is
+          // admitted while the first execution is still draining; if the
+          // adapter hands it to settled Pi, the stand-in's idle queue surfaces
+          // it as a user message at the start of the resumed Run.
           return piFixture({
+            gateLateControlDrain: true,
             scripts: [
-              [
-                { step: "assistant", text: "first" },
-                { step: "await-steer", confirm: false },
-                { step: "hang" },
-              ],
-              [{ step: "assistant", text: "second" }, { step: "hang" }],
+              [{ step: "assistant", text: "first" }, { step: "terminal" }],
+              [{ step: "assistant", text: "second" }, { step: "terminal" }],
             ],
             plans: [
-              {
-                controls: [{ type: "steer", text: "only for the first Run" }],
-                cancel: true,
-              },
-              { cancel: true },
+              { controls: [{ type: "steer", text: "only for the first Run" }] },
+              {},
             ],
             expected: {
               runs: [
                 {
-                  status: "cancelled",
+                  status: "completed",
                   finalOutput: "first",
                   steerOutcomes: ["accepted"],
+                  diagnosticCategories: ["control"],
                 },
-                { status: "cancelled", finalOutput: "second" },
+                {
+                  status: "completed",
+                  finalOutput: "second",
+                  transcriptTexts: ["second"],
+                },
               ],
-              // Whether the first Run's consumer took the Control before the
-              // cancel reached it is a scheduling detail, not the property —
-              // so it is deliberately not asserted here. What is asserted is
-              // that the second Run, on the same retained session, received
-              // nothing. `a Control admitted to one Run is delivered only to
-              // that Run` proves the delivery side deterministically.
+              controlsReceived: [],
             },
           });
 

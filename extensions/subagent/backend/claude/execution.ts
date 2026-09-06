@@ -65,18 +65,21 @@ export const CLOSED_BEFORE_EXECUTION_MESSAGE =
 /**
  * What a Run says when the conversation identity could not be attached.
  *
- * One fixed message for all four ways it goes wrong — a boundary frame with no
- * identity, a malformed one, one that differs from the retained one, and a
- * Query that could not be started against a retained conversation at all —
- * because they mean the same thing to a reader: this Run could not be tied to
- * the conversation it was supposed to continue. v1 had two messages and the
- * second said nothing the first did not.
+ * One fixed message for every way a resumed Query goes wrong — a boundary
+ * frame with no identity, a malformed one, one that differs from the retained
+ * one, or a Query that could not be started at all — because they mean the
+ * same thing to a reader: this Run could not be tied to the conversation it
+ * was supposed to continue.
  *
  * Fixed rather than provider-authored, because the provider's own text about a
  * failed attachment is exactly the free-form string ADR-0024 keeps local.
  */
 export const CLAUDE_ATTACHMENT_FAILED_MESSAGE =
   "the retained Claude conversation could not be attached to this Run";
+
+/** What a fresh Run says when its init frame carries no usable identity. */
+export const CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE =
+  "the Claude query reported no usable conversation identity";
 
 /** What a Run says when the Query ended without ever reporting a result. */
 export const MISSING_CLAUDE_RESULT_MESSAGE =
@@ -94,6 +97,14 @@ export const QUERY_FAILED_CATEGORY = "Claude query failed";
 /** What guidance the input stream would not take reports. */
 export const CONTROL_NOT_DELIVERED_CATEGORY =
   "Claude guidance was not delivered";
+
+/**
+ * How long silence may follow a Turn boundary with guidance outstanding.
+ *
+ * Provider time-to-first-frame is measured in seconds, so 30 seconds leaves
+ * ordinary model startup room while still giving ADR-0025 a finite bound.
+ */
+export const TURN_BOUNDARY_WAIT_MILLIS = 30_000;
 
 /** What the SDK's own stderr reports, without keeping a word of it. */
 export const SDK_STDERR_CATEGORY = "the Claude SDK reported diagnostics";
@@ -157,6 +168,7 @@ export function runClaudeExecution(
     let visible: PendingControl | undefined;
     let accepting = true;
     let semanticComplete = false;
+    let awaitingTurnBoundary = false;
     let successfulResult = false;
     let sawStderr = false;
     let fatal: TerminalBundle | undefined;
@@ -398,10 +410,16 @@ export function runClaudeExecution(
         ),
     );
 
-    /** Fail the Run for an identity that cannot be attached. */
-    const failAttachment = (): void => {
+    /** Fail the Run for an identity that cannot establish its conversation. */
+    const failIdentity = (): void => {
       conversation.lose();
-      fatal = { ending: failedEnding(CLAUDE_ATTACHMENT_FAILED_MESSAGE) };
+      fatal = {
+        ending: failedEnding(
+          resumed === undefined
+            ? CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE
+            : CLAUDE_ATTACHMENT_FAILED_MESSAGE,
+        ),
+      };
       accepting = false;
       discardOutstanding();
       freeSlot();
@@ -411,7 +429,27 @@ export function runClaudeExecution(
     const body = Effect.gen(function* () {
       const steering = yield* Effect.forkChild(steerLoop);
       for (;;) {
-        const step = yield* nextFrame;
+        const step = awaitingTurnBoundary
+          ? yield* Effect.timeout(nextFrame, TURN_BOUNDARY_WAIT_MILLIS).pipe(
+              Effect.match({
+                onFailure: () => ({ step: "timeout" }) as const,
+                onSuccess: (next) => next,
+              }),
+            )
+          : yield* nextFrame;
+        if (step.step === "timeout") {
+          discardOutstanding();
+          yield* io.emit(notDelivered);
+          semanticComplete = true;
+          accepting = false;
+          freeSlot();
+          stream.close();
+          break;
+        }
+        // The Turn-boundary obligation is one bounded wait. A frame arriving
+        // within it is provider cooperation; later waits are governed by the
+        // state that frame establishes.
+        awaitingTurnBoundary = false;
         if (step.step === "done") break;
         if (step.step === "threw") {
           if (!semanticComplete) {
@@ -459,7 +497,7 @@ export function runClaudeExecution(
             !isClaudeIdentity(reading.identity) ||
             (identity !== undefined && reading.identity !== identity)
           ) {
-            failAttachment();
+            failIdentity();
             break;
           }
           identity ??= reading.identity;
@@ -470,7 +508,7 @@ export function runClaudeExecution(
             !isClaudeIdentity(reading.identity) ||
             (identity !== undefined && reading.identity !== identity)
           ) {
-            failAttachment();
+            failIdentity();
             break;
           }
         }
@@ -520,7 +558,9 @@ export function runClaudeExecution(
         }
         if (hasOutstanding()) {
           // An adapter-local Turn boundary. The Run stays active until the
-          // guidance the provider has already been given has been answered.
+          // guidance the provider has already been given has been answered,
+          // but silence after this boundary is bounded on the runtime clock.
+          awaitingTurnBoundary = true;
           continue;
         }
         semanticComplete = true;

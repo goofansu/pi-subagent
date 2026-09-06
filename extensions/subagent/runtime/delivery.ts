@@ -85,12 +85,15 @@ interface DeliveryState {
   readonly claimed: ReadonlySet<RunId>;
   /** Ids the host accepted the message for. What happens to it next is not ours. */
   readonly handedOff: ReadonlySet<RunId>;
+  /** Ids whose complete retry budget ran out without a hand-off. */
+  readonly exhausted: ReadonlySet<RunId>;
   readonly stopped: boolean;
 }
 
 const EMPTY_DELIVERY: DeliveryState = {
   claimed: new Set(),
   handedOff: new Set(),
+  exhausted: new Set(),
   stopped: false,
 };
 
@@ -109,13 +112,14 @@ const makeDelivery = (
      * The claim and the check are one atomic step, so a settlement wake-up and
      * a sweep arriving together produce one push rather than two.
      */
-    const claim = (runId: RunId): Effect.Effect<boolean> =>
+    const claim = (
+      runId: RunId,
+    ): Effect.Effect<"claimed" | "duplicate" | "stopped"> =>
       Ref.modify(state, (current) => {
-        if (current.stopped || current.claimed.has(runId)) {
-          return [false, current];
-        }
+        if (current.stopped) return ["stopped", current];
+        if (current.claimed.has(runId)) return ["duplicate", current];
         return [
-          true,
+          "claimed",
           { ...current, claimed: new Set(current.claimed).add(runId) },
         ];
       });
@@ -124,6 +128,9 @@ const makeDelivery = (
       Effect.gen(function* () {
         const { attempts, delayMillis } = policy.deliveryRetryBudget;
         for (let attempt = 1; attempt <= attempts; attempt += 1) {
+          // Stop is checked at every attempt boundary, including after a retry
+          // sleep, so shutdown cannot let one last push escape.
+          if ((yield* Ref.get(state)).stopped) return false;
           const pushed = yield* Effect.exit(sink.push(notification));
           if (pushed._tag === "Success") return true;
           // The budget is on the runtime clock, so a test advances it rather
@@ -142,7 +149,12 @@ const makeDelivery = (
      */
     const deliver = (runId: RunId): Effect.Effect<void> =>
       Effect.gen(function* () {
-        if (!(yield* claim(runId))) return;
+        const claimed = yield* claim(runId);
+        if (claimed === "stopped") {
+          yield* store.releasePin(runId, "delivery");
+          return;
+        }
+        if (claimed === "duplicate") return;
         const stored = yield* store.read(runId);
         if (stored.outcome !== "result") {
           yield* store.releasePin(runId, "delivery");
@@ -154,8 +166,12 @@ const makeDelivery = (
             ...current,
             handedOff: new Set(current.handedOff).add(runId),
           }));
-        } else {
+        } else if (!(yield* Ref.get(state)).stopped) {
           counters.count("deliveryFailures");
+          yield* Ref.update(state, (current) => ({
+            ...current,
+            exhausted: new Set(current.exhausted).add(runId),
+          }));
           // Reported, not retried: the host is the only thing that can show a
           // Run whose notice is never coming.
           yield* sink.exhausted(runId);
@@ -199,9 +215,7 @@ const makeDelivery = (
         Effect.map(Ref.get(state), (current) => [...current.handedOff]),
       /** Ids this Session gave up announcing, after exhausting the budget. */
       exhausted: (): Effect.Effect<readonly RunId[]> =>
-        Effect.map(Ref.get(state), (current) =>
-          [...current.claimed].filter((runId) => !current.handedOff.has(runId)),
-        ),
+        Effect.map(Ref.get(state), (current) => [...current.exhausted]),
     };
   });
 

@@ -80,7 +80,8 @@ export type UsageDelta = typeof UsageDelta.Type;
  */
 export const ContextGauge = Schema.Struct({
   tokens: Schema.Number,
-  window: Schema.optionalKey(Schema.Number),
+  /** Optional; explicit `undefined` is accepted. */
+  window: Schema.optional(Schema.Number),
 });
 
 export type ContextGauge = typeof ContextGauge.Type;
@@ -98,7 +99,7 @@ export type ContextGauge = typeof ContextGauge.Type;
  */
 export const UsableContextGauge = Schema.Struct({
   tokens: Count,
-  window: Schema.optionalKey(Count),
+  window: Schema.optional(Count),
 });
 
 const decodeUsableContextGauge = Schema.decodeUnknownResult(

@@ -40,7 +40,11 @@ import {
 import { CompletionDelivery } from "../runtime/delivery.ts";
 import type { RuntimePolicy } from "../runtime/policy.ts";
 import { RunRepository } from "../runtime/repository.ts";
-import { ResultStore } from "../runtime/result-store.ts";
+import {
+  type PinHolder,
+  type ResultEncoder,
+  ResultStore,
+} from "../runtime/result-store.ts";
 import {
   type StartRequest,
   SubagentSupervisor,
@@ -88,6 +92,11 @@ export interface SessionRig {
   readonly sink: FakeNotificationSink;
   readonly backend: FakeBackendHandle;
   readonly counters: RuntimeCounters;
+  /** Inject one test-only exit at a settlement storage boundary. */
+  readonly exitNextSettlementAt: (
+    boundary: "commit" | "publication",
+    exit: "defect" | "interrupt",
+  ) => void;
 }
 
 export interface SessionRigOptions {
@@ -95,13 +104,24 @@ export interface SessionRigOptions {
   readonly steps?: readonly (readonly FakeStep[])[];
   /** How the fake behaves when it is opened. */
   readonly open?: FakeOpenScript;
+  /** Violate the backend contract by throwing before returning an Effect. */
+  readonly executeThrowsSynchronously?: boolean;
+  /** Zero-based executions on which to throw before returning an Effect. */
+  readonly executeThrowsSynchronouslyAt?: readonly number[];
   readonly policy?: RuntimePolicy;
+  /** Override the store encoder to inject a settlement failure. */
+  readonly resultEncoder?: ResultEncoder;
   readonly profiles?: readonly Profile[];
   readonly maxDelegationDepth?: number;
   /** `false` builds the one-shot fake, which declares no capabilities. */
   readonly resumable?: boolean;
   readonly gates?: Record<string, Deferred.Deferred<void>>;
   readonly trace?: string[];
+  /** Hold BackendAgent close at a named gate for cleanup-budget tests. */
+  readonly close?: {
+    readonly gate: string;
+    readonly uninterruptible?: boolean;
+  };
   /** Provide a test clock, for the tests where time has to pass. */
   readonly testClock?: boolean;
 }
@@ -138,8 +158,17 @@ export function withSession<A>(
   const backend = create({
     scripts: scripts(...(options.steps ?? [[]])),
     ...(options.open === undefined ? {} : { open: options.open }),
+    ...(options.executeThrowsSynchronously === undefined
+      ? {}
+      : { executeThrowsSynchronously: options.executeThrowsSynchronously }),
+    ...(options.executeThrowsSynchronouslyAt === undefined
+      ? {}
+      : {
+          executeThrowsSynchronouslyAt: options.executeThrowsSynchronouslyAt,
+        }),
     ...(options.gates === undefined ? {} : { gates: options.gates }),
     ...(options.trace === undefined ? {} : { trace: options.trace }),
+    ...(options.close === undefined ? {} : { close: options.close }),
   });
   const sink = createFakeNotificationSink();
   const counters = createRuntimeCounters();
@@ -152,6 +181,38 @@ export function withSession<A>(
     const repository = yield* RunRepository;
     const store = yield* ResultStore;
     const delivery = yield* CompletionDelivery;
+    const exitNextSettlementAt: SessionRig["exitNextSettlementAt"] = (
+      boundary,
+      exit,
+    ) => {
+      let pending = true;
+      const injectedExit = () =>
+        exit === "defect"
+          ? Effect.die(new Error("injected settlement defect"))
+          : Effect.interrupt;
+      if (boundary === "commit") {
+        const commit = store.commit;
+        Object.defineProperty(store, "commit", {
+          configurable: true,
+          value: (...args: Parameters<typeof commit>) => {
+            if (!pending) return commit(...args);
+            pending = false;
+            return injectedExit();
+          },
+        });
+        return;
+      }
+      const releasePin = store.releasePin;
+      Object.defineProperty(store, "releasePin", {
+        configurable: true,
+        value: (runId: RunId, holder: PinHolder) => {
+          const released = releasePin(runId, holder);
+          if (!pending || holder !== "publication") return released;
+          pending = false;
+          return Effect.andThen(released, injectedExit());
+        },
+      });
+    };
     const value = yield* body({
       supervisor,
       repository,
@@ -160,6 +221,7 @@ export function withSession<A>(
       sink,
       backend,
       counters,
+      exitNextSettlementAt,
     });
     return { value, readProbe: () => supervisor.probe() };
   }).pipe(
@@ -170,6 +232,9 @@ export function withSession<A>(
         sink,
         counters,
         ...(options.policy === undefined ? {} : { policy: options.policy }),
+        ...(options.resultEncoder === undefined
+          ? {}
+          : { resultEncoder: options.resultEncoder }),
         ...(options.maxDelegationDepth === undefined
           ? {}
           : { maxDelegationDepth: options.maxDelegationDepth }),

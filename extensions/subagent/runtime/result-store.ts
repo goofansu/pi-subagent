@@ -93,6 +93,17 @@ export type ResultRead =
       readonly diagnostic: RunDiagnostic;
     };
 
+export interface ResultStoreEncodingFailure {
+  readonly _tag: "ResultStoreEncodingFailure";
+  readonly diagnostic: RunDiagnostic;
+}
+
+/** Fault-injection seam around the schema encoder; production uses `encode`. */
+export type ResultEncoder = (
+  result: RunResult,
+  encode: (result: RunResult) => unknown,
+) => unknown;
+
 export type CommitOutcome =
   | { readonly outcome: "stored"; readonly result: RunResult }
   /** The same result was already there. Nothing changed. */
@@ -155,7 +166,11 @@ function evict(
   return current;
 }
 
-const makeStore = (policy: RuntimePolicy, counters: RuntimeCounters) =>
+const makeStore = (
+  policy: RuntimePolicy,
+  counters: RuntimeCounters,
+  resultEncoder: ResultEncoder,
+) =>
   Effect.gen(function* () {
     const state = yield* Ref.make(EMPTY_STATE);
 
@@ -212,20 +227,43 @@ const makeStore = (policy: RuntimePolicy, counters: RuntimeCounters) =>
         return { ...current, reservations };
       });
 
-    const commit = (result: RunResult): Effect.Effect<CommitOutcome> =>
-      Effect.sync(() => {
+    const commit = (
+      result: RunResult,
+    ): Effect.Effect<CommitOutcome, ResultStoreEncodingFailure> =>
+      Effect.try({
         // Bounding happens outside the atomic update because it encodes, and
         // a `Ref.modify` should not do arbitrary work. The result is already
         // immutable, so nothing can change underneath.
-        const bounded = boundResultToBytes(result, policy.maxResultBytes);
-        const encoded = JSON.stringify(encodeResult(bounded.result));
-        return { bounded: bounded.result, encoded, bytes: byteLength(encoded) };
+        try: () => {
+          const bounded = boundResultToBytes(result, policy.maxResultBytes);
+          const encoded = JSON.stringify(
+            resultEncoder(bounded.result, encodeResult),
+          );
+          if (encoded === undefined)
+            throw new Error("encoder returned undefined");
+          return {
+            bounded: bounded.result,
+            encoded,
+            bytes: byteLength(encoded),
+          };
+        },
+        catch: (): ResultStoreEncodingFailure => ({
+          _tag: "ResultStoreEncodingFailure",
+          diagnostic: runDiagnostic(
+            "other",
+            "the Result could not be encoded for storage",
+          ),
+        }),
       }).pipe(
         Effect.flatMap(({ bounded, encoded, bytes }) =>
           Ref.modify(state, (current) => {
             const existing = current.entries.get(bounded.runId);
             if (existing) {
-              const same = existing.encoded === encoded;
+              // Once output was evicted there are no bytes left to compare.
+              // The id proves this is a re-commit, and immutability means it is
+              // a duplicate rather than evidence of a conflicting value.
+              const same =
+                existing.encoded === undefined || existing.encoded === encoded;
               counters.count(same ? "duplicateCommits" : "conflictingCommits");
               const stored =
                 existing.encoded === undefined
@@ -271,6 +309,32 @@ const makeStore = (policy: RuntimePolicy, counters: RuntimeCounters) =>
           }),
         ),
       );
+
+    /**
+     * Keep the terminal identity when even the failed fallback cannot encode.
+     *
+     * This is the same representation eviction leaves behind: metadata only,
+     * never an unencoded Result. Recording is idempotent and cannot replace
+     * output that a successful commit already stored.
+     */
+    const recordOutputGone = (result: RunResult): Effect.Effect<void> =>
+      Ref.update(state, (current) => {
+        if (current.entries.has(result.runId)) return current;
+        const sequence = current.sequence + 1;
+        const entries = new Map(current.entries);
+        entries.set(result.runId, {
+          runId: result.runId,
+          subagentId: result.subagentId,
+          status: result.status,
+          bytes: 0,
+          sequence,
+          pins: new Set(),
+        });
+        const reservations = new Map(current.reservations);
+        reservations.delete(result.runId);
+        counters.count("unreadableResults");
+        return { ...current, entries, reservations, sequence };
+      });
 
     const releasePin = (runId: RunId, holder: PinHolder): Effect.Effect<void> =>
       Ref.update(state, (current) => {
@@ -320,6 +384,7 @@ const makeStore = (policy: RuntimePolicy, counters: RuntimeCounters) =>
       reserve,
       release,
       commit,
+      recordOutputGone,
       releasePin,
       read,
 
@@ -383,10 +448,13 @@ export class ResultStore extends Context.Service<ResultStore, ResultStoreApi>()(
   static layerOf(
     policy: RuntimePolicy,
     counters: RuntimeCounters,
+    resultEncoder: ResultEncoder = (result, encode) => encode(result),
   ): Layer.Layer<ResultStore> {
     return Layer.effect(
       ResultStore,
-      Effect.map(makeStore(policy, counters), (api) => ResultStore.of(api)),
+      Effect.map(makeStore(policy, counters, resultEncoder), (api) =>
+        ResultStore.of(api),
+      ),
     );
   }
 }

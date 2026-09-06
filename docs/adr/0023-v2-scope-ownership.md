@@ -121,3 +121,13 @@ Session shutdown remain the liveness mechanism.
 Forbidding Layers for Subagents and Runs rules out a tempting shortcut —
 `LayerMap` keyed by `SubagentId` would build and cache a service per Subagent —
 in exchange for keeping one obvious answer to "what releases this, and when".
+
+## Amendment — 2026-09-06
+
+The Session Scope has a **Work scope** child that owns Subagent Scopes and the
+Run, delivery, and timeout fibers. Shutdown is registered after that child as a
+Session Scope finalizer. Effect's LIFO finalization therefore runs Shutdown —
+cancel, await bounded cleanup, stop delivery, and clear Session state — before
+the Work scope structurally interrupts anything left beneath it. Closing the
+Session Scope remains the operation that performs Shutdown; the intermediate
+scope makes that ordering explicit rather than changing ownership.

@@ -2,8 +2,8 @@
  * One Run's scope: what it holds, and the order it lets go in.
  *
  * A Run Scope holds a bounded observation intake, one reducer fiber, a
- * cancellation record on the repository row, a completion `Deferred` used only
- * to wake people up, a settlement coordinator, and — nested inside it — the
+ * cancellation record on the repository row, a completion `Deferred` that is
+ * the settlement barrier, a settlement coordinator, and — nested inside it — the
  * native execution scope. The nesting is the point: a provider turn may end
  * without ending the Run, but it can never outlive it (ADR-0023).
  *
@@ -18,8 +18,8 @@
  * and the instant the Run is settled are different instants, and only the
  * second one is terminal.
  *
- * The completion `Deferred` is a wake-up and nothing else. `agent_wait` and
- * completion delivery both read their answer from the Result store, because a
+ * The completion `Deferred` is the settlement barrier, not the Result value.
+ * `agent_wait` and completion delivery both read their answer from the Result store, because a
  * `Deferred` can be awaited once by each waiter but a late waiter that arrives
  * after it resolves must get the same answer as an early one. Only the store
  * can promise that.
@@ -43,6 +43,7 @@ import type {
 import {
   type AppliedReport,
   createRunProjection,
+  failedEnding,
   type ProjectionBounds,
   type RunDiagnostic,
   type RunIdentity,
@@ -151,12 +152,23 @@ export interface RunContext {
 export interface RunHandle {
   readonly identity: RunIdentity;
   readonly coordinator: SettlementCoordinator;
-  /** Completed when the Run is terminal. A wake-up, never the value. */
+  /** Completed when settlement is done. The barrier carries no Result value. */
   readonly completion: Deferred.Deferred<void>;
   readonly intake: ObservationIntake;
   readonly mailbox: ControlMailbox;
-  /** Interrupted by cancel, timeout, shutdown, and Subagent close. */
-  readonly executionFiber: Fiber.Fiber<TerminalBundle, never>;
+  /** Filled by settlement; cancel can wait here before execution is forked. */
+  readonly executionFiber: Deferred.Deferred<
+    Fiber.Fiber<TerminalBundle, never>
+  >;
+  /** Everything held for this Run, already nested under its Subagent. */
+  readonly runScope: Scope.Closeable;
+  /** The native child that settlement closes independently first. */
+  readonly executionScope: Scope.Closeable;
+  /** Opens settlement only after attachment and active-row publication. */
+  readonly activation: Deferred.Deferred<void>;
+  readonly execution: Effect.Effect<TerminalBundle, never, Scope.Scope>;
+  readonly projection: Ref.Ref<RunProjection>;
+  readonly reports: AppliedReport[];
 }
 
 /**
@@ -255,40 +267,149 @@ export interface SettledRun {
 }
 
 /**
- * Run one Run to settlement, inside the caller's Run Scope.
+ * Build the complete Run handle in the admitting fiber, before publication.
+ *
+ * Calling `execute` itself happens here, so a backend that throws instead of
+ * returning an Effect fails admission rather than stranding a start waiter.
+ */
+type RunExecution = Effect.Effect<TerminalBundle, never, Scope.Scope>;
+
+type PrepareExecution<E> = (io: {
+  readonly emit: ObservationIntake["emit"];
+  readonly controls: ControlMailbox["feed"];
+}) => Effect.Effect<RunExecution, E>;
+
+function buildRunHandle<E>(
+  context: RunContext,
+  prepareExecution: PrepareExecution<E>,
+): Effect.Effect<RunHandle, E, Scope.Scope> {
+  return Effect.gen(function* () {
+    const { counters, identity } = context;
+    const parent = yield* Effect.scope;
+    const runScope = yield* Scope.fork(parent);
+
+    return yield* Effect.gen(function* () {
+      const intake = yield* makeIntake(
+        context.observationQueueBound,
+        counters,
+      ).pipe(Scope.provide(runScope));
+      const mailbox = yield* makeMailbox(context.controlBounds, counters).pipe(
+        Scope.provide(runScope),
+      );
+      const coordinator = yield* makeCoordinator(counters);
+      const completion = yield* Deferred.make<void>();
+      const activation = yield* Deferred.make<void>();
+      const projection = yield* Ref.make(createRunProjection());
+      const reports: AppliedReport[] = [];
+      const executionFiber =
+        yield* Deferred.make<Fiber.Fiber<TerminalBundle, never>>();
+
+      const executionScope = yield* Scope.fork(runScope);
+      const execution = yield* prepareExecution({
+        emit: intake.emit,
+        controls: mailbox.feed,
+      });
+
+      return {
+        identity,
+        coordinator,
+        completion,
+        intake,
+        mailbox,
+        executionFiber,
+        runScope,
+        executionScope,
+        activation,
+        execution,
+        projection,
+        reports,
+      };
+    }).pipe(Effect.onError(() => Scope.close(runScope, Exit.void)));
+  });
+}
+
+const synchronousExecuteDiagnostic = (): RunDiagnostic =>
+  runDiagnostic("backend-failure", "the backend could not start execution");
+
+/** Build a start's handle, preserving a synchronous execute throw as admission failure. */
+export function makeRunHandle(
+  context: RunContext,
+): Effect.Effect<RunHandle, RunDiagnostic, Scope.Scope> {
+  return buildRunHandle(context, (io) =>
+    Effect.try({
+      try: () => context.agent.execute(context.input, io),
+      catch: synchronousExecuteDiagnostic,
+    }),
+  );
+}
+
+/**
+ * Build a resume's handle.
+ *
+ * Resume has no `backend unavailable` outcome: once its lease is admitted, a
+ * backend failure belongs to that new Run. A synchronous contract violation
+ * is therefore represented as the execution's defect and settles `failed` by
+ * the same arbitration path as an asynchronous backend defect.
+ */
+export function makeResumedRunHandle(
+  context: RunContext,
+): Effect.Effect<RunHandle, never, Scope.Scope> {
+  return buildRunHandle(context, (io) =>
+    Effect.matchEffect(
+      Effect.try({
+        try: () => context.agent.execute(context.input, io),
+        catch: synchronousExecuteDiagnostic,
+      }),
+      {
+        onFailure: (diagnostic) => {
+          const failedExecution: RunExecution = Effect.die(
+            new Error(diagnostic.message),
+          );
+          return Effect.succeed(failedExecution);
+        },
+        onSuccess: Effect.succeed,
+      },
+    ),
+  );
+}
+
+/**
+ * Consume an already-published Run handle and carry it through settlement.
  *
  * The caller forks this. It returns only once the Run is terminal, its result
- * is committed, and delivery has been asked to run — so a caller that joins
- * this fiber knows the Run is done in every observable sense.
+ * is committed, and delivery has been asked to run.
  */
 export function runToSettlement(
   context: RunContext,
-  onStarted: (handle: RunHandle) => Effect.Effect<void>,
-): Effect.Effect<SettledRun, never, Scope.Scope> {
-  return Effect.gen(function* () {
-    const { counters, identity, repository, store } = context;
+  handle: RunHandle,
+): Effect.Effect<SettledRun> {
+  const { counters, identity, repository, store } = context;
+  const { completion, executionScope, projection, reports, runScope } = handle;
+  let committed:
+    | {
+        readonly result: RunResult;
+        readonly ending: Arbitration["ending"];
+      }
+    | undefined;
+  let recovered: SettledRun | undefined;
+  let settlementStarted = false;
 
-    // The Run Scope proper: everything the Run holds while it is running, in
-    // a scope settlement can close *before* it commits. Forked from the
-    // caller's so that a Run fiber that dies without settling still releases
-    // all of it.
-    const runScope = yield* Scope.fork(yield* Effect.scope);
-    const intake = yield* makeIntake(
-      context.observationQueueBound,
-      counters,
-    ).pipe(Scope.provide(runScope));
-    const mailbox = yield* makeMailbox(context.controlBounds, counters).pipe(
-      Scope.provide(runScope),
-    );
-    const coordinator = yield* makeCoordinator(counters);
-    const completion = yield* Deferred.make<void>();
-    const projection = yield* Ref.make(createRunProjection());
-    const reports: AppliedReport[] = [];
+  const settlement = Effect.gen(function* () {
+    const {
+      activation,
+      coordinator,
+      execution,
+      executionFiber,
+      intake,
+      mailbox,
+    } = handle;
 
+    yield* Deferred.await(activation);
     const reducer = yield* Effect.acquireRelease(
       Effect.map(
-        Effect.forkChild(
+        Effect.forkIn(
           reducerLoop(context, intake, projection, reports, coordinator),
+          runScope,
         ),
         (fiber) => {
           counters.acquired("liveReducerFibers");
@@ -301,27 +422,13 @@ export function runToSettlement(
           void fiber;
         }),
     ).pipe(Scope.provide(runScope));
-
-    // The native execution scope, nested inside the Run Scope. It can close
-    // independently — a provider turn ending is not the Run ending — but it
-    // can never outlive the Run.
-    const executionScope = yield* Scope.make();
-    const executionFiber = yield* Effect.forkChild(
-      context.agent
-        .execute(context.input, { emit: intake.emit, controls: mailbox.feed })
-        .pipe(Scope.provide(executionScope)),
+    const running = yield* Effect.forkIn(
+      execution.pipe(Scope.provide(executionScope)),
+      runScope,
     );
-
-    yield* onStarted({
-      identity,
-      coordinator,
-      completion,
-      intake,
-      mailbox,
-      executionFiber,
-    });
-
-    const [exit] = yield* Fiber.awaitAll([executionFiber]);
+    yield* Deferred.succeed(executionFiber, running);
+    const [exit] = yield* Fiber.awaitAll([running]);
+    settlementStarted = true;
 
     /* ---- the settlement path, in the roadmap's order ---- */
 
@@ -414,8 +521,9 @@ export function runToSettlement(
     context.trace(RUN_STAGES.runScopeClosed);
 
     // 9. Commit, idempotently.
-    const committed = yield* store.commit(result);
-    if (committed.outcome === "conflict") {
+    const commit = yield* store.commit(result);
+    committed = { result: commit.result, ending: decided.ending };
+    if (commit.outcome === "conflict") {
       // Two different results for one Run is a defect in the runtime, not in
       // the backend. The first one stands and the attempt is counted.
       counters.count("duplicateSettlements");
@@ -439,16 +547,134 @@ export function runToSettlement(
     context.trace(RUN_STAGES.waitersWoken);
 
     // 12. Initiate delivery.
-    yield* context.onSettled(committed.result);
+    yield* context.onSettled(commit.result);
     context.trace(RUN_STAGES.deliveryInitiated);
 
     return {
-      result: committed.result,
+      result: commit.result,
       arbitration: decided,
       projection: folded,
       reports,
     };
   });
+
+  return settlement.pipe(
+    Effect.onExit((exit) =>
+      Effect.gen(function* () {
+        // Interrupting native execution is the ordinary cancellation candidate
+        // above. Once that execution has ended, however, interruption is a
+        // settlement failure and must pass through the same terminal guard.
+        if (
+          Exit.isSuccess(exit) ||
+          (Cause.hasInterruptsOnly(exit.cause) && !settlementStarted)
+        ) {
+          return;
+        }
+
+        counters.count("settlementDefects");
+        const diagnostic = settlementDefect(
+          "Run settlement failed after an internal runtime defect",
+        );
+        yield* repository.recordSettlementDiagnostic(
+          identity.runId,
+          diagnostic,
+        );
+
+        if (committed !== undefined) {
+          // The immutable stored Result remains authoritative. A defect after
+          // commit may delay publication, but cannot rewrite that Result or
+          // the projection it came from into a different ending.
+          const current = yield* Ref.get(projection);
+          yield* store.releasePin(identity.runId, "publication");
+          yield* context.onSettled(committed.result);
+          recovered = {
+            result: committed.result,
+            arbitration: {
+              ending: committed.ending,
+              from: "defect",
+              late: false,
+            },
+            projection: current,
+            reports,
+          };
+          return;
+        }
+
+        const ending = failedEnding(
+          "settlement failed after an internal runtime defect",
+        );
+        const current = yield* Ref.get(projection);
+        const open: RunProjection = { ...current, terminal: false };
+        delete (open as { ending?: unknown }).ending;
+        const diagnosed = reduceRun(
+          open,
+          { kind: "diagnostic", diagnostic },
+          context.bounds,
+        );
+        reports.push(diagnosed.report);
+        const ended = reduceRun(
+          diagnosed.projection,
+          { kind: "ending", ending },
+          context.bounds,
+        );
+        reports.push(ended.report);
+        yield* Ref.set(projection, ended.projection);
+
+        // Recovery still observes the Run Scope ordering before publication.
+        // The fallback commit is best-effort, but terminality is not.
+        yield* repository.transition(identity.runId, "execution-ended");
+        yield* repository.recordProjection(identity.runId, ended.projection);
+        yield* Effect.exit(context.closeExecutionScope(executionScope));
+        yield* Effect.exit(Scope.close(runScope, Exit.void));
+
+        const clock = yield* Effect.exit(context.now);
+        const settledAt = Exit.isSuccess(clock)
+          ? clock.value
+          : context.startedAt;
+        const fallback = toRunResult({
+          identity,
+          projection: ended.projection,
+          ending,
+          startedAt: context.startedAt,
+          settledAt,
+        });
+        const stored = yield* Effect.exit(store.commit(fallback));
+        if (Exit.isSuccess(stored)) {
+          committed = { result: stored.value.result, ending };
+          yield* store.releasePin(identity.runId, "publication");
+        } else {
+          // Metadata-only is the same representation an eviction leaves. No
+          // encoder bypass and no unencoded Result enter the store.
+          yield* store.recordOutputGone(fallback);
+        }
+
+        yield* repository.transition(
+          identity.runId,
+          "settled-failed",
+          settledAt,
+        );
+        yield* context.onSettled(fallback);
+        recovered = {
+          result: Exit.isSuccess(stored) ? stored.value.result : fallback,
+          arbitration: { ending, from: "defect", late: false },
+          projection: ended.projection,
+          reports,
+        };
+      }).pipe(Effect.ensuring(Deferred.succeed(completion, undefined))),
+    ),
+    // Encoding is the settlement path's typed failure. The guard has already
+    // converted it to a terminal outcome; defects still retain their cause
+    // after the same recovery work and interruption remains interruption.
+    Effect.catch(() =>
+      Effect.suspend(() =>
+        recovered === undefined
+          ? Effect.die(
+              new Error("the settlement guard did not construct a recovery"),
+            )
+          : Effect.succeed(recovered),
+      ),
+    ),
+  );
 }
 
 /** The diagnostic a Run carries when its own settlement went wrong. */

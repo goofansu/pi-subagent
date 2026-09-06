@@ -250,3 +250,12 @@ has to answer:
 passes on every rig. A test that has to change means the behaviour changed,
 which this phase forbids — so an extraction that needs a test edit goes back
 rather than taking the edit.
+
+## Amendment — 2026-09-06
+
+Subagent records hold no Run fiber. Their three changing facts are phase, the
+currently attached Run handle, and Conversation loss. The handle carries the
+activation gate, execution scope, Run Scope, and completion barrier; shutdown
+awaits that barrier, and the Run fiber's finalizer detaches the handle. This
+replaces the earlier sketch's `attachFiber` member without changing the
+one-active-Run invariant the records module owns.

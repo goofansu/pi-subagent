@@ -46,6 +46,7 @@ import {
   CLAUDE_DISPLAY_NAME,
   type ClaudeQueryLoader,
   createClaudeBackend,
+  TURN_BOUNDARY_WAIT_MILLIS,
 } from "../../backend/claude/index.ts";
 import {
   backendId,
@@ -412,6 +413,45 @@ export function claudeConformanceRig(): BackendConformanceRig {
             },
           });
 
+        case "an-execution-settles-when-the-provider-goes-quiet":
+          return claudeFixture({
+            scripts: [
+              [
+                { step: "init" },
+                {
+                  step: "assistant",
+                  messageId: "msg_1",
+                  text: "the first answer",
+                },
+                { step: "await-input" },
+                {
+                  step: "result",
+                  text: "the first answer",
+                  correlate: "prompt",
+                },
+                { step: "hang" },
+              ],
+            ],
+            testClock: true,
+            plans: [
+              {
+                controls: [{ type: "steer", text: "guidance awaiting a turn" }],
+                advanceClockMillis: TURN_BOUNDARY_WAIT_MILLIS + 1,
+              },
+            ],
+            expected: {
+              runs: [
+                {
+                  status: "completed",
+                  finalOutput: "the first answer",
+                  steerOutcomes: ["accepted"],
+                  diagnosticCategories: ["control"],
+                },
+              ],
+              controlsReceived: ["guidance awaiting a turn"],
+            },
+          });
+
         case "observations-carry-no-provider-vocabulary":
           return claudeFixture({
             scripts: [
@@ -462,8 +502,7 @@ export function claudeConformanceRig(): BackendConformanceRig {
           return claudeFixture({
             scripts: [ORDINARY],
             plans: [],
-            concurrentStarts: 1,
-            shutdownFirst: true,
+            startsAfterClose: 1,
             expected: { runs: [], startOutcomes: ["shutting down"] },
           });
 

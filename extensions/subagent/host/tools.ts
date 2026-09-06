@@ -20,7 +20,8 @@
  * ([ADR-0036](../../../docs/adr/0036-a-wait-delivers-the-result-it-waited-for.md)),
  * so before it starts waiting it tells the host to hold those Runs' notices,
  * and when it returns it records each delivered Result as consumed and
- * releases the hold; see {@link collected}.
+ * releases the hold; see {@link collected}. The hold is an Effect resource,
+ * so runtime disposal finalizes it before the Session is gone.
  */
 
 import type {
@@ -234,10 +235,10 @@ export function registerSubagentTools(
    * same instant the waiter is woken and a notice already in Pi's queue
    * cannot be taken back. Consumption is recorded *before* the hold is
    * released, so the release finds every delivered Run consumed and drops its
-   * notice rather than sending it. And the release runs however the wait
-   * ended — a timeout, an abort, a runtime that went away — because a hold
-   * that outlived its wait would keep a notice back for a parent that is no
-   * longer waiting.
+   * notice rather than sending it. The hold is acquired and released inside
+   * the runtime as a scoped Effect resource. Its finalizer therefore runs on
+   * success, timeout, abort-interruption, and runtime disposal, before disposal
+   * resolves and the Session is considered gone.
    *
    * The abort bridge is here too, and it is the same for both waits: a turn
    * that was aborted still gets an answer, and it is the answer a timeout
@@ -252,21 +253,28 @@ export function registerSubagentTools(
     answerNow: Effect.Effect<ToolResponse, never, SubagentsServices>,
     signal: AbortSignal | undefined,
   ): Promise<HostToolResult> => {
-    const release = handoff.hold(scope);
-    try {
-      const work =
-        signal === undefined
-          ? waiting
-          : Effect.raceFirst(
-              waiting,
-              Effect.flatMap(whenAborted(signal), () => answerNow),
-            );
-      const response = await handle.run(work, notReady(copy));
-      for (const id of deliveredRuns(response)) handoff.consumed(id);
-      return hostResult(response);
-    } finally {
-      release();
-    }
+    const work =
+      signal === undefined
+        ? waiting
+        : Effect.raceFirst(
+            waiting,
+            Effect.flatMap(whenAborted(signal), () => answerNow),
+          );
+    const heldWork = Effect.scoped(
+      Effect.flatMap(
+        Effect.acquireRelease(
+          Effect.sync(() => handoff.hold(scope)),
+          (release) => Effect.sync(release),
+        ),
+        () =>
+          Effect.tap(work, (response) =>
+            Effect.sync(() => {
+              for (const id of deliveredRuns(response)) handoff.consumed(id);
+            }),
+          ),
+      ),
+    );
+    return hostResult(await handle.run(heldWork, notReady(copy)));
   };
 
   const register = (

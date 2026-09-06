@@ -7,7 +7,9 @@ import {
   quiesce,
   rigRequest as request,
   startedRun,
+  until,
   untilTerminal,
+  untilUnderWay,
   withSession,
 } from "../testing/session-rig.ts";
 import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
@@ -97,6 +99,149 @@ test("a push that fails once and then lands does not disturb a second Run", asyn
   assert.equal(outcome.value.first, "result");
   assert.equal(outcome.value.second, "result");
   assert.equal(outcome.value.counters.deliveryFailures, 0);
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("a persistent Result encode defect fails the Run, wakes waiters, and leaves the Subagent idle", async () => {
+  const outcome = await withSession(
+    {
+      steps: [[emitText("first answer")], [emitText("second answer")]],
+      resultEncoder: () => {
+        throw new Error("secret encoder detail");
+      },
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const first = startedRun(yield* rig.supervisor.start(request()));
+        const [waited] = yield* rig.supervisor.wait([first.runId]);
+        const stored = yield* rig.supervisor.result(first.runId);
+        yield* quiesce();
+        const snapshot = yield* rig.repository.get(first.runId);
+        const counters = rig.supervisor.counters();
+
+        // Admission of another Run through the public operation is the
+        // observable proof that settlement returned the Subagent to idle.
+        // Session close owns that new Run; the first Run's readings above are
+        // deliberately captured before it can produce a second defect.
+        const resumed = yield* rig.supervisor.resume({
+          subagentId: first.subagentId,
+          description: "again",
+          prompt: "again",
+        });
+        return {
+          waited,
+          stored,
+          snapshot,
+          resumed: resumed.outcome,
+          counters,
+          backend: rig.backend,
+        };
+      }),
+  );
+
+  assert.equal(outcome.value.waited.outcome, "terminal");
+  assert.equal(outcome.value.snapshot?.phase, "failed");
+  assert.equal(outcome.value.snapshot?.terminalStatus, "failed");
+  assert.equal(outcome.value.stored.outcome, "ResultExpired");
+  assert.equal(outcome.value.waited.result, undefined);
+  assert.equal(outcome.value.resumed, "started");
+  assert.match(
+    outcome.value.snapshot?.settlementDiagnostic?.message ?? "",
+    /settlement/i,
+  );
+  assert.doesNotMatch(
+    outcome.value.snapshot?.settlementDiagnostic?.message ?? "",
+    /secret encoder detail/,
+  );
+  assert.equal(outcome.value.counters.settlementDefects, 1);
+  assert.equal(outcome.value.counters.unreadableResults, 1);
+  assert.equal(outcome.value.counters.duplicateCommits, 0);
+  assert.equal(outcome.value.counters.conflictingCommits, 0);
+  assert.equal(outcome.value.backend.counters().liveExecutions, 0);
+  assert.equal(outcome.value.backend.counters().liveSubscriptions, 0);
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("a post-commit defect preserves the committed Result and projection", async () => {
+  const finish = await Effect.runPromise(Deferred.make<void>());
+  const outcome = await withSession(
+    {
+      steps: [
+        [emitText("committed answer"), { step: "await-gate", gate: "finish" }],
+        [emitText("next answer")],
+      ],
+      gates: { finish },
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        rig.exitNextSettlementAt("publication", "defect");
+        const first = startedRun(yield* rig.supervisor.start(request()));
+        const waiting = yield* Effect.forkChild(
+          rig.supervisor.wait([first.runId]),
+        );
+        yield* quiesce();
+        yield* Deferred.succeed(finish, undefined);
+        const [waited] = yield* Fiber.join(waiting);
+        const stored = yield* rig.supervisor.result(first.runId);
+        const snapshot = yield* rig.repository.get(first.runId);
+        const counters = rig.supervisor.counters();
+        yield* quiesce();
+        const resumed = yield* rig.supervisor.resume({
+          subagentId: first.subagentId,
+          description: "again",
+          prompt: "again",
+        });
+        return { waited, stored, snapshot, counters, resumed: resumed.outcome };
+      }),
+  );
+
+  assert.equal(outcome.value.waited.outcome, "terminal");
+  assert.equal(outcome.value.stored.outcome, "result");
+  if (outcome.value.stored.outcome === "result") {
+    assert.equal(outcome.value.stored.result.status, "completed");
+    assert.equal(outcome.value.stored.result.finalOutput, "committed answer");
+    assert.deepEqual(outcome.value.stored.result.diagnostics, []);
+  }
+  assert.equal(outcome.value.snapshot?.phase, "completed");
+  assert.match(
+    outcome.value.snapshot?.settlementDiagnostic?.message ?? "",
+    /settlement/i,
+  );
+  assert.equal(outcome.value.counters.settlementDefects, 1);
+  assert.equal(outcome.value.counters.duplicateCommits, 0);
+  assert.equal(outcome.value.counters.conflictingCommits, 0);
+  assert.equal(outcome.value.resumed, "started");
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("an interrupted settlement detaches its handle and leaves the Subagent idle", async () => {
+  const outcome = await withSession(
+    { steps: [[emitText("first answer")], [emitText("second answer")]] },
+    (rig) =>
+      Effect.gen(function* () {
+        rig.exitNextSettlementAt("commit", "interrupt");
+        const first = startedRun(yield* rig.supervisor.start(request()));
+        const [waited] = yield* rig.supervisor.wait([first.runId]);
+        yield* quiesce();
+        const snapshot = yield* rig.repository.get(first.runId);
+        const resumed = yield* rig.supervisor.resume({
+          subagentId: first.subagentId,
+          description: "again",
+          prompt: "again",
+        });
+        return {
+          waited,
+          snapshot,
+          resumed: resumed.outcome,
+          counters: rig.supervisor.counters(),
+        };
+      }),
+  );
+
+  assert.equal(outcome.value.waited.outcome, "terminal");
+  assert.equal(outcome.value.snapshot?.phase, "failed");
+  assert.equal(outcome.value.resumed, "started");
+  assert.equal(outcome.value.counters.settlementDefects, 1);
   assert.equal(outcome.noLeaks, true);
 });
 
@@ -234,6 +379,180 @@ test("a hung finalizer is escalated past, and the Session still closes cleanly",
   );
   assert.equal(outcome.value.counters.cleanupEscalations, 1);
   assert.equal(outcome.value.notifications, 1);
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("disposal records a BackendAgent close escalation in the counter", async () => {
+  const policy: RuntimePolicy = {
+    ...DEFAULT_RUNTIME_POLICY,
+    cleanupBudgetMillis: 2_000,
+  };
+  const closeGate = await Effect.runPromise(Deferred.make<void>());
+  const hold = await Effect.runPromise(Deferred.make<void>());
+  const trace: string[] = [];
+  const outcome = await withSession(
+    {
+      policy,
+      testClock: true,
+      trace,
+      gates: { close: closeGate, hold },
+      close: { gate: "close", uninterruptible: true },
+      steps: [[{ step: "await-gate", gate: "hold" }]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        startedRun(yield* rig.supervisor.start(request()));
+        yield* untilUnderWay(rig);
+        // This detached test-clock driver survives the body long enough to
+        // advance disposal's cleanup budget. Releasing the gate afterwards
+        // lets the deliberately detached loser finish instead of leaking into
+        // another test.
+        yield* Effect.forkDetach(
+          Effect.gen(function* () {
+            yield* until(
+              "BackendAgent close to start",
+              Effect.sync(() => trace.includes("agent-close-waiting")),
+            );
+            yield* TestClock.adjust(policy.cleanupBudgetMillis + 1);
+            yield* quiesce();
+            yield* Deferred.succeed(closeGate, undefined);
+          }),
+        );
+        return {
+          counters: rig.supervisor.counters,
+          backend: rig.backend,
+        };
+      }),
+  );
+
+  // The Run has settled before its Subagent Scope closes, so this counter is
+  // the escalation record; there is no live Run on which to put a diagnostic.
+  assert.equal(outcome.value.counters().cleanupEscalations, 1);
+  await Effect.runPromise(Deferred.succeed(closeGate, undefined));
+  await Effect.runPromise(quiesce());
+  assert.equal(outcome.value.backend.counters().closes, 1);
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("eight Subagents with hung cleanup close in one cleanup budget", async () => {
+  const policy: RuntimePolicy = {
+    ...DEFAULT_RUNTIME_POLICY,
+    cleanupBudgetMillis: 2_000,
+  };
+  const cleanup = await Effect.runPromise(Deferred.make<void>());
+  const hold = await Effect.runPromise(Deferred.make<void>());
+  const trace: string[] = [];
+  const steps = Array.from({ length: 8 }, () => [
+    { step: "gate-the-finalizer" as const, gate: "cleanup" },
+    { step: "await-gate" as const, gate: "hold" },
+  ]);
+  const outcome = await withSession(
+    {
+      policy,
+      testClock: true,
+      trace,
+      gates: { cleanup, hold },
+      steps,
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        for (let index = 0; index < 8; index += 1) {
+          startedRun(yield* rig.supervisor.start(request()));
+        }
+        yield* until(
+          "all executions to begin",
+          Effect.sync(() => rig.backend.counters().executionsStarted === 8),
+        );
+        const shutting = yield* Effect.forkChild(rig.supervisor.shutdown());
+        yield* until(
+          "all execution finalizers to start",
+          Effect.sync(
+            () =>
+              trace.filter((entry) => entry.startsWith("finalizer-waiting:"))
+                .length === 8,
+          ),
+        );
+        yield* TestClock.adjust(policy.cleanupBudgetMillis + 1);
+        yield* quiesce();
+        const completedWithinOneBudget = shutting.pollUnsafe() !== undefined;
+        yield* Deferred.succeed(cleanup, undefined);
+        yield* Fiber.join(shutting);
+        return {
+          completedWithinOneBudget,
+          escalations: rig.supervisor.counters().cleanupEscalations,
+        };
+      }),
+  );
+
+  assert.equal(outcome.value.completedWithinOneBudget, true);
+  assert.equal(outcome.value.escalations, 8);
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("a backend whose execute throws synchronously fails start instead of hanging", async () => {
+  const outcome = await withSession(
+    { executeThrowsSynchronously: true },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = yield* rig.supervisor.start(request());
+        return {
+          started,
+          again: (yield* rig.supervisor.start(request())).outcome,
+          published: (yield* rig.repository.list()).length,
+          active: yield* rig.repository.activeCount(),
+          accounted: yield* rig.store.accountedBytes(),
+          backend: rig.backend.counters(),
+        };
+      }),
+  );
+
+  assert.deepEqual(outcome.value.started, {
+    outcome: "backend unavailable",
+    diagnostic: {
+      category: "backend-failure",
+      message: "the backend could not start execution",
+    },
+  });
+  assert.equal(outcome.value.again, "backend unavailable");
+  assert.equal(outcome.value.published, 0);
+  assert.equal(outcome.value.active, 0);
+  assert.equal(outcome.value.accounted, 0);
+  assert.equal(outcome.value.backend.liveExecutions, 0);
+  assert.equal(outcome.value.backend.liveSubscriptions, 0);
+  assert.equal(outcome.value.backend.opens, 2);
+  assert.equal(outcome.value.backend.closes, 2);
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("a synchronous execute throw after resume belongs to the admitted Run", async () => {
+  const outcome = await withSession(
+    {
+      executeThrowsSynchronouslyAt: [1],
+      steps: [[emitText("first")]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const first = startedRun(yield* rig.supervisor.start(request()));
+        yield* untilTerminal(rig, first.runId);
+        const resumed = startedRun(
+          yield* rig.supervisor.resume({
+            subagentId: first.subagentId,
+            description: "again",
+            prompt: "again",
+          }),
+        );
+        yield* untilTerminal(rig, resumed.runId);
+        return yield* rig.supervisor.result(resumed.runId);
+      }),
+  );
+
+  assert.equal(outcome.value.outcome, "result");
+  if (outcome.value.outcome !== "result") return;
+  assert.equal(outcome.value.result.status, "failed");
+  assert.deepEqual(
+    outcome.value.result.diagnostics.map((item) => item.category),
+    ["backend-failure"],
+  );
   assert.equal(outcome.noLeaks, true);
 });
 

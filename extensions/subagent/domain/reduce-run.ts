@@ -29,16 +29,18 @@
  * See docs/adr/0024-v2-observation-ordering.md.
  */
 
-import { Schema } from "effect";
 import {
   boundList,
-  boundParts,
-  boundProjectionText,
+  boundObservation,
+  droppedAmount,
   type TruncationEvent,
 } from "./bounding.ts";
-import { EXACT_KEYS } from "./decoding.ts";
 import { unfinishedToolStatusForEnding } from "./endings.ts";
-import { RunObservation, type RunObservationKind } from "./observations.ts";
+import {
+  decodeRunObservation,
+  type RunObservation,
+  type RunObservationKind,
+} from "./observations.ts";
 import {
   DEFAULT_PROJECTION_BOUNDS,
   type ProjectionBounds,
@@ -47,10 +49,10 @@ import {
 } from "./projection.ts";
 import {
   type ReconciledField,
-  reconcileRun,
+  reconcileBoundedRun,
   reconciliationDifference,
 } from "./reconcile-run.ts";
-import { type ToolEntry, transcriptItemText } from "./transcript.ts";
+import type { ToolEntry } from "./transcript.ts";
 import { addUsageDelta, replaceContextGauge } from "./usage.ts";
 
 /**
@@ -103,18 +105,6 @@ export function missingCallIdNote(name: string): string {
 }
 
 /**
- * The decoder every observation is checked against.
- *
- * Built once rather than per call: a decoder is a compiled schema, and
- * rebuilding it for every observation of a busy Run would be the one place
- * this fold does real work.
- */
-const decodeObservation = Schema.decodeUnknownResult(
-  RunObservation,
-  EXACT_KEYS,
-);
-
-/**
  * Why an observation cannot be reduced, or `undefined` when it can.
  *
  * The reducer checks rather than trusts, because a malformed observation is an
@@ -129,7 +119,7 @@ const decodeObservation = Schema.decodeUnknownResult(
 export function observationProblem(
   observation: RunObservation,
 ): string | undefined {
-  const decoded = decodeObservation(observation);
+  const decoded = decodeRunObservation(observation);
   return decoded._tag === "Failure" ? decoded.failure.message : undefined;
 }
 
@@ -235,16 +225,16 @@ export function reduceRun(
     };
   }
 
-  const dropped: TruncationEvent[] = [];
+  const bounded = boundObservation(observation, bounds);
+  observation = bounded.observation;
+  const dropped: TruncationEvent[] = [...bounded.dropped];
   const notes: string[] = [];
 
   switch (observation.kind) {
     case "message": {
-      const parts = boundParts(observation.parts, bounds.maxTextPartBytes);
-      dropped.push(...parts.dropped);
       const item = {
         role: observation.role,
-        parts: parts.parts,
+        parts: observation.parts,
         ...(observation.model === undefined
           ? {}
           : { model: observation.model }),
@@ -259,7 +249,7 @@ export function reduceRun(
       // Tool calls in this message join the tool projection by call id. A
       // progress observation may already have created the entry.
       let tools = projection.tools;
-      for (const part of parts.parts) {
+      for (const part of observation.parts) {
         if (part.kind !== "tool_call") continue;
         if (part.callId === undefined) {
           // Never invent an id: a made-up id could collide with a real one and
@@ -293,44 +283,31 @@ export function reduceRun(
         droppedToolEntries:
           projection.truncation.droppedToolEntries + boundedTools.droppedItems,
         truncatedTranscriptBytes:
-          projection.truncation.truncatedTranscriptBytes + parts.cutBytes,
+          projection.truncation.truncatedTranscriptBytes +
+          droppedAmount(bounded.dropped, "transcript-text"),
       });
 
-      // The final output is the most recent assistant *text*. An assistant
-      // message that only calls tools has not answered anything, so it leaves
-      // the previous answer standing.
-      const text = transcriptItemText(item);
-      if (observation.role === "assistant" && text !== "") {
-        const output = boundProjectionText(
-          text,
-          bounds.maxFinalOutputBytes,
-          "final-output",
-        );
-        dropped.push(...output.dropped);
+      // An assistant message that only calls tools has not answered anything,
+      // so it leaves the previous answer standing. The answer was bounded
+      // independently from transcript parts in the one observation step.
+      if (bounded.assistantOutput !== undefined) {
         next = withTruncation(
-          { ...next, finalOutput: output.text },
-          { truncatedOutputBytes: output.cutBytes },
+          { ...next, finalOutput: bounded.assistantOutput.text },
+          { truncatedOutputBytes: bounded.assistantOutput.cutBytes },
         );
       }
       return applied(next, dropped, notes);
     }
 
     case "tool_progress": {
-      const summary =
-        observation.outputSummary === undefined
-          ? undefined
-          : boundProjectionText(
-              observation.outputSummary,
-              bounds.maxTextPartBytes,
-              "tool-output",
-            );
-      if (summary) dropped.push(...summary.dropped);
       const callId = observation.callId;
       const tools = mergeToolEntry(projection.tools, callId, (existing) => ({
         ...existing,
         callId,
         status: observation.status,
-        ...(summary === undefined ? {} : { outputSummary: summary.text }),
+        ...(observation.outputSummary === undefined
+          ? {}
+          : { outputSummary: observation.outputSummary }),
       }));
       const kept = boundList(tools, bounds.maxToolEntries, "tools");
       dropped.push(...kept.dropped);
@@ -340,9 +317,12 @@ export function reduceRun(
           {
             droppedToolEntries:
               projection.truncation.droppedToolEntries + kept.droppedItems,
+            // A progress update replaces its summary, so this records what is
+            // missing from the summary currently shown rather than history.
             truncatedToolOutputBytes:
-              projection.truncation.truncatedToolOutputBytes +
-              (summary?.cutBytes ?? 0),
+              observation.outputSummary === undefined
+                ? projection.truncation.truncatedToolOutputBytes
+                : droppedAmount(bounded.dropped, "tool-output"),
           },
         ),
         dropped,
@@ -352,23 +332,16 @@ export function reduceRun(
 
     case "activity": {
       // Conflated and display-only: one value, replaced rather than
-      // accumulated, and cleared by the ending. So a cut to it is *reported*
-      // like any other, but it is not added to the cumulative truncation
-      // record — there is only ever one activity, and a running total of bytes
-      // cut from values that no longer exist would say nothing true.
-      const bounded =
+      // accumulated, and cleared by the ending. A cut is reported but not
+      // accumulated because earlier activity is no longer in the projection.
+      const activity =
         observation.activity === undefined || observation.activity.trim() === ""
           ? undefined
-          : boundProjectionText(
-              observation.activity,
-              bounds.maxTextPartBytes,
-              "activity",
-            );
-      if (bounded) dropped.push(...bounded.dropped);
+          : observation.activity;
       const next = { ...projection };
-      if (bounded === undefined)
+      if (activity === undefined)
         delete (next as { activity?: string }).activity;
-      else (next as { activity?: string }).activity = bounded.text;
+      else (next as { activity?: string }).activity = activity;
       return applied(next, dropped, notes);
     }
 
@@ -424,10 +397,11 @@ export function reduceRun(
       );
 
     case "reconciliation": {
-      const reconciled = reconcileRun(
+      const reconciled = reconcileBoundedRun(
         projection,
         observation.reconciliation,
         bounds,
+        bounded.dropped,
       );
       dropped.push(...reconciled.dropped);
       let next = reconciled.projection;

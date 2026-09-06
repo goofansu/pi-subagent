@@ -359,7 +359,8 @@ function formatRowTail(
     if (labelRoom >= labelMinimum) {
       return (
         ROW_DELIMITER +
-        theme.fg("dim", truncateToWidth(label, labelRoom, "…") + separator) +
+        theme.fg("dim", truncateToWidth(label, labelRoom, "…")) +
+        theme.fg("dim", separator) +
         theme.fg("muted", theme.italic(activity))
       );
     }
@@ -367,7 +368,8 @@ function formatRowTail(
     if (activityRoom >= MIN_ACTIVITY_WIDTH) {
       return (
         ROW_DELIMITER +
-        theme.fg("dim", truncateToWidth(label, labelMinimum, "…") + separator) +
+        theme.fg("dim", truncateToWidth(label, labelMinimum, "…")) +
+        theme.fg("dim", separator) +
         theme.fg(
           "muted",
           theme.italic(truncateToWidth(activity, activityRoom, "…")),

@@ -441,8 +441,7 @@ test("a label past its byte bound is collapsed to one line, cut, and recorded", 
   // And the loss is recorded on the Run, which is the other half of
   // truncate-and-record: a label silently shortened is a label a reader
   // cannot tell was shortened.
-  const removed =
-    byteLength(description.trim().replaceAll("\n", " ")) - RUN_LABEL_MAX_BYTES;
+  const removed = byteLength(description) - byteLength(result.description);
   assert.deepEqual(result.diagnostics, [labelShortenedDiagnostic(removed)]);
   assert.match(
     result.diagnostics[0].message,

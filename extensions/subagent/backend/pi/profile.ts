@@ -14,6 +14,9 @@
  *   wrote is the one passed through to the session.
  * - **The diagnostic names what the catalogue holds**, bounded, so a typo is
  *   answered with the alternatives rather than with "not found".
+ * - **`effort: off` leaves Pi's thinking level unset.** Pi has six native
+ *   thinking levels and no `off`; omitting the setting preserves the retained
+ *   session's own default instead of sending an unknown level to the SDK.
  *
  * Omitting the validation context means an empty catalogue, which is why a
  * pinned model is rejected when nothing supplied one. That is the honest

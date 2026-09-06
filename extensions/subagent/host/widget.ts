@@ -214,11 +214,15 @@ export function installActiveWidget(
       requestRender?.();
     };
 
-    const uninstall = (): void => {
-      if (!installed) return;
+    const resetInstallState = (): void => {
       installed = false;
       requestRender = undefined;
       renderPending = false;
+    };
+
+    const uninstall = (): void => {
+      if (!installed) return;
+      resetInstallState();
       try {
         host.setWidget(WIDGET_KEY, undefined);
       } catch {
@@ -229,13 +233,19 @@ export function installActiveWidget(
 
     const install = (): void => {
       installed = true;
-      host.setWidget(WIDGET_KEY, (tui, theme) => {
-        requestRender = () => tui.requestRender();
-        return {
-          render: (width: number) => render(theme, width),
-          invalidate: () => {},
-        };
-      });
+      try {
+        host.setWidget(WIDGET_KEY, (tui, theme) => {
+          requestRender = () => tui.requestRender();
+          return {
+            render: (width: number) => render(theme, width),
+            invalidate: () => {},
+          };
+        });
+      } catch {
+        // As with uninstall, a stale Session's host can throw. Leave the
+        // subscriber alive and the flag honest so its next update retries.
+        resetInstallState();
+      }
     };
 
     /** Reconcile the host with what the latest index says. */

@@ -84,6 +84,7 @@ const MUST_STAY_ZERO = [
   "unreadableResults",
   "seamDecodeFailures",
   "queueOverflows",
+  "settlementDefects",
   "lateObservations",
 ] as const satisfies readonly (keyof SupervisorCounters)[];
 

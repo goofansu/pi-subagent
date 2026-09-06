@@ -202,3 +202,26 @@ The Effect-typed contract means the domain and the backend module cannot be
 merged later without one of them changing character. That is the intended
 shape: the seam between "what the product means" and "what a resource costs" is
 the seam this whole rewrite exists to draw.
+
+## Amendments
+
+### 2026-09-06 — documented execution obligations
+
+The stable member set is unchanged; the contract documentation now records
+three obligations adapters already depend on:
+
+1. `ExecutionIO.emit` remains accepted, discarded, and counted late after the
+   Run is sealed; it never fails.
+2. `BackendAgent.execute` resolves to a terminal bundle without provider
+   cooperation, so every provider wait is bounded.
+3. `BackendAgent.close` may run while `execute` is in flight, while `execute`
+   is never invoked twice concurrently on one BackendAgent.
+
+Execution-scope finalizers should be interruptible. The core has a cleanup
+budget and escalates beyond it, but an adapter should still cooperate with
+ordinary scoped interruption rather than relying on escalation.
+
+The shared conformance suite now has a 38th scenario: an execution settles when
+the provider goes quiet after a result correlated to guidance. It checks the
+second obligation on every backend without adding or changing a contract
+member. The ADR-0028 shape test remains unchanged.
