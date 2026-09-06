@@ -152,6 +152,7 @@ function createPiBackendAgent(
 ): BackendAgent {
   let closed = false;
   let closing: Deferred.Deferred<void> | undefined;
+  const closeRequested = Deferred.makeUnsafe<void>();
 
   const admitResume = (): ResumeAdmission =>
     closed ? "conversation lost" : "admitted";
@@ -160,7 +161,16 @@ function createPiBackendAgent(
     input: RunInput,
     io: ExecutionIO,
   ): Effect.Effect<TerminalBundle, never, Scope.Scope> =>
-    runPiExecution({ session, isClosed: () => closed, probe }, input, io);
+    runPiExecution(
+      {
+        session,
+        isClosed: () => closed,
+        closeRequested: Deferred.await(closeRequested),
+        probe,
+      },
+      input,
+      io,
+    );
 
   return {
     capabilities: PI_CAPABILITIES,
@@ -175,6 +185,7 @@ function createPiBackendAgent(
       // sees a released handle.
       Effect.suspend(() => {
         closed = true;
+        Deferred.doneUnsafe(closeRequested, Effect.void);
         if (closing !== undefined) return Deferred.await(closing);
         const finished = Deferred.makeUnsafe<void>();
         closing = finished;
