@@ -331,7 +331,7 @@ function fillUntilEvicted(
       const read = yield* store.read(runId);
       if (read.outcome !== "result") return;
       const id = `filler-${index}` as RunId;
-      yield* store.commit({ ...filler, runId: id });
+      yield* store.commit({ ...filler, runId: id }).pipe(Effect.orDie);
       yield* store.releasePin(id, "publication");
       yield* store.releasePin(id, "waiters");
       yield* store.releasePin(id, "delivery");

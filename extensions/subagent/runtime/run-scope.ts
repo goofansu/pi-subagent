@@ -43,6 +43,7 @@ import type {
 import {
   type AppliedReport,
   createRunProjection,
+  failedEnding,
   type ProjectionBounds,
   type RunDiagnostic,
   type RunIdentity,
@@ -382,20 +383,25 @@ export function runToSettlement(
   context: RunContext,
   handle: RunHandle,
 ): Effect.Effect<SettledRun> {
-  return Effect.gen(function* () {
-    const { counters, identity, repository, store } = context;
+  const { counters, identity, repository, store } = context;
+  const { completion, executionScope, projection, reports, runScope } = handle;
+  let committed:
+    | {
+        readonly result: RunResult;
+        readonly ending: Arbitration["ending"];
+        readonly settledAt: number;
+      }
+    | undefined;
+  let recovered: SettledRun | undefined;
+
+  const settlement = Effect.gen(function* () {
     const {
       activation,
-      completion,
       coordinator,
       execution,
       executionFiber,
-      executionScope,
       intake,
       mailbox,
-      projection,
-      reports,
-      runScope,
     } = handle;
 
     yield* Deferred.await(activation);
@@ -514,8 +520,9 @@ export function runToSettlement(
     context.trace(RUN_STAGES.runScopeClosed);
 
     // 9. Commit, idempotently.
-    const committed = yield* store.commit(result);
-    if (committed.outcome === "conflict") {
+    const commit = yield* store.commit(result);
+    committed = { result: commit.result, ending: decided.ending, settledAt };
+    if (commit.outcome === "conflict") {
       // Two different results for one Run is a defect in the runtime, not in
       // the backend. The first one stands and the attempt is counted.
       counters.count("duplicateSettlements");
@@ -539,16 +546,125 @@ export function runToSettlement(
     context.trace(RUN_STAGES.waitersWoken);
 
     // 12. Initiate delivery.
-    yield* context.onSettled(committed.result);
+    yield* context.onSettled(commit.result);
     context.trace(RUN_STAGES.deliveryInitiated);
 
     return {
-      result: committed.result,
+      result: commit.result,
       arbitration: decided,
       projection: folded,
       reports,
     };
   });
+
+  return settlement.pipe(
+    Effect.onExit((exit) =>
+      Effect.gen(function* () {
+        if (Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause)) {
+          return;
+        }
+
+        counters.count("settlementDefects");
+        const diagnostic = settlementDefect(
+          "Run settlement failed after an internal runtime defect",
+        );
+        yield* repository.recordSettlementDiagnostic(
+          identity.runId,
+          diagnostic,
+        );
+
+        if (committed !== undefined) {
+          // The immutable stored Result remains authoritative. A defect after
+          // commit may delay publication, but cannot rewrite that Result or
+          // the projection it came from into a different ending.
+          const current = yield* Ref.get(projection);
+          yield* repository.transition(
+            identity.runId,
+            settlementEventForEnding(committed.ending),
+            committed.settledAt,
+          );
+          yield* store.releasePin(identity.runId, "publication");
+          yield* context.onSettled(committed.result);
+          recovered = {
+            result: committed.result,
+            arbitration: {
+              ending: committed.ending,
+              from: "defect",
+              late: false,
+            },
+            projection: current,
+            reports,
+          };
+          return;
+        }
+
+        const ending = failedEnding(
+          "settlement failed after an internal runtime defect",
+        );
+        const current = yield* Ref.get(projection);
+        const open: RunProjection = { ...current, terminal: false };
+        delete (open as { ending?: unknown }).ending;
+        const diagnosed = reduceRun(
+          open,
+          { kind: "diagnostic", diagnostic },
+          context.bounds,
+        );
+        reports.push(diagnosed.report);
+        const ended = reduceRun(
+          diagnosed.projection,
+          { kind: "ending", ending },
+          context.bounds,
+        );
+        reports.push(ended.report);
+        yield* Ref.set(projection, ended.projection);
+
+        // Recovery still observes the Run Scope ordering before publication.
+        // The fallback commit is best-effort, but terminality is not.
+        yield* repository.transition(identity.runId, "execution-ended");
+        yield* repository.recordProjection(identity.runId, ended.projection);
+        yield* Effect.exit(context.closeExecutionScope(executionScope));
+        yield* Effect.exit(Scope.close(runScope, Exit.void));
+
+        const clock = yield* Effect.exit(context.now);
+        const settledAt = Exit.isSuccess(clock)
+          ? clock.value
+          : context.startedAt;
+        const fallback = toRunResult({
+          identity,
+          projection: ended.projection,
+          ending,
+          startedAt: context.startedAt,
+          settledAt,
+        });
+        const stored = yield* Effect.exit(store.commit(fallback));
+        if (Exit.isSuccess(stored)) {
+          committed = { result: stored.value.result, ending, settledAt };
+          yield* store.releasePin(identity.runId, "publication");
+        } else {
+          // Metadata-only is the same representation an eviction leaves. No
+          // encoder bypass and no unencoded Result enter the store.
+          yield* store.recordOutputGone(fallback);
+        }
+
+        yield* repository.transition(
+          identity.runId,
+          "settled-failed",
+          settledAt,
+        );
+        yield* context.onSettled(fallback);
+        recovered = {
+          result: Exit.isSuccess(stored) ? stored.value.result : fallback,
+          arbitration: { ending, from: "defect", late: false },
+          projection: ended.projection,
+          reports,
+        };
+      }).pipe(Effect.ensuring(Deferred.succeed(completion, undefined))),
+    ),
+    // Encoding is the settlement path's typed failure. The guard has already
+    // converted it to a terminal outcome; defects still retain their cause
+    // after the same recovery work and interruption remains interruption.
+    Effect.catch(() => Effect.succeed(recovered as SettledRun)),
+  );
 }
 
 /** The diagnostic a Run carries when its own settlement went wrong. */

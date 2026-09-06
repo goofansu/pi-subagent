@@ -466,6 +466,7 @@ test("disposing the Session runs Shutdown before its work scope closes", async (
           store: rig.store,
           repository: rig.repository,
           backend: rig.backend,
+          counters: rig.counters,
         };
       }),
   );
@@ -492,6 +493,9 @@ test("disposing the Session runs Shutdown before its work scope closes", async (
   assert.equal(outcome.value.backend.counters().liveSubscriptions, 0);
   assert.equal(outcome.value.backend.counters().opens, 2);
   assert.equal(outcome.value.backend.counters().closes, 2);
+  // Shutdown cancellation settles through arbitration; it is not a defect in
+  // settlement merely because interruption is part of its mechanism.
+  assert.equal(outcome.value.counters.counters().settlementDefects, 0);
   assert.equal(outcome.noLeaks, true);
 });
 

@@ -40,7 +40,7 @@ import {
 import { CompletionDelivery } from "../runtime/delivery.ts";
 import type { RuntimePolicy } from "../runtime/policy.ts";
 import { RunRepository } from "../runtime/repository.ts";
-import { ResultStore } from "../runtime/result-store.ts";
+import { type ResultEncoder, ResultStore } from "../runtime/result-store.ts";
 import {
   type StartRequest,
   SubagentSupervisor,
@@ -100,6 +100,8 @@ export interface SessionRigOptions {
   /** Zero-based executions on which to throw before returning an Effect. */
   readonly executeThrowsSynchronouslyAt?: readonly number[];
   readonly policy?: RuntimePolicy;
+  /** Override the store encoder to inject a settlement failure. */
+  readonly resultEncoder?: ResultEncoder;
   readonly profiles?: readonly Profile[];
   readonly maxDelegationDepth?: number;
   /** `false` builds the one-shot fake, which declares no capabilities. */
@@ -188,6 +190,9 @@ export function withSession<A>(
         sink,
         counters,
         ...(options.policy === undefined ? {} : { policy: options.policy }),
+        ...(options.resultEncoder === undefined
+          ? {}
+          : { resultEncoder: options.resultEncoder }),
         ...(options.maxDelegationDepth === undefined
           ? {}
           : { maxDelegationDepth: options.maxDelegationDepth }),
