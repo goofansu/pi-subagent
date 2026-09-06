@@ -344,6 +344,73 @@ test("eight Subagents with hung cleanup close in one cleanup budget", async () =
   assert.equal(outcome.noLeaks, true);
 });
 
+test("a backend whose execute throws synchronously fails start instead of hanging", async () => {
+  const outcome = await withSession(
+    { executeThrowsSynchronously: true },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = yield* rig.supervisor.start(request());
+        return {
+          started,
+          again: (yield* rig.supervisor.start(request())).outcome,
+          published: (yield* rig.repository.list()).length,
+          active: yield* rig.repository.activeCount(),
+          accounted: yield* rig.store.accountedBytes(),
+          backend: rig.backend.counters(),
+        };
+      }),
+  );
+
+  assert.deepEqual(outcome.value.started, {
+    outcome: "backend unavailable",
+    diagnostic: {
+      category: "backend-failure",
+      message: "the backend could not start execution",
+    },
+  });
+  assert.equal(outcome.value.again, "backend unavailable");
+  assert.equal(outcome.value.published, 0);
+  assert.equal(outcome.value.active, 0);
+  assert.equal(outcome.value.accounted, 0);
+  assert.equal(outcome.value.backend.liveExecutions, 0);
+  assert.equal(outcome.value.backend.liveSubscriptions, 0);
+  assert.equal(outcome.value.backend.opens, 2);
+  assert.equal(outcome.value.backend.closes, 2);
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("a synchronous execute throw after resume belongs to the admitted Run", async () => {
+  const outcome = await withSession(
+    {
+      executeThrowsSynchronouslyAt: [1],
+      steps: [[emitText("first")]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const first = startedRun(yield* rig.supervisor.start(request()));
+        yield* untilTerminal(rig, first.runId);
+        const resumed = startedRun(
+          yield* rig.supervisor.resume({
+            subagentId: first.subagentId,
+            description: "again",
+            prompt: "again",
+          }),
+        );
+        yield* untilTerminal(rig, resumed.runId);
+        return yield* rig.supervisor.result(resumed.runId);
+      }),
+  );
+
+  assert.equal(outcome.value.outcome, "result");
+  if (outcome.value.outcome !== "result") return;
+  assert.equal(outcome.value.result.status, "failed");
+  assert.deepEqual(
+    outcome.value.result.diagnostics.map((item) => item.category),
+    ["backend-failure"],
+  );
+  assert.equal(outcome.noLeaks, true);
+});
+
 test("a failing open leaves the Session able to start the next Run", async () => {
   const outcome = await withSession(
     { open: { open: "fails", reason: "the provider said no" } },

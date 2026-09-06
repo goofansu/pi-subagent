@@ -155,8 +155,19 @@ export interface RunHandle {
   readonly completion: Deferred.Deferred<void>;
   readonly intake: ObservationIntake;
   readonly mailbox: ControlMailbox;
-  /** Interrupted by cancel, timeout, shutdown, and Subagent close. */
-  readonly executionFiber: Fiber.Fiber<TerminalBundle, never>;
+  /** Filled by settlement; cancel can wait here before execution is forked. */
+  readonly executionFiber: Deferred.Deferred<
+    Fiber.Fiber<TerminalBundle, never>
+  >;
+  /** Everything held for this Run, already nested under its Subagent. */
+  readonly runScope: Scope.Closeable;
+  /** The native child that settlement closes independently first. */
+  readonly executionScope: Scope.Closeable;
+  /** Opens settlement only after attachment and active-row publication. */
+  readonly activation: Deferred.Deferred<void>;
+  readonly execution: Effect.Effect<TerminalBundle, never, Scope.Scope>;
+  readonly projection: Ref.Ref<RunProjection>;
+  readonly reports: AppliedReport[];
 }
 
 /**
@@ -255,40 +266,144 @@ export interface SettledRun {
 }
 
 /**
- * Run one Run to settlement, inside the caller's Run Scope.
+ * Build the complete Run handle in the admitting fiber, before publication.
+ *
+ * Calling `execute` itself happens here, so a backend that throws instead of
+ * returning an Effect fails admission rather than stranding a start waiter.
+ */
+type RunExecution = Effect.Effect<TerminalBundle, never, Scope.Scope>;
+
+type PrepareExecution<E> = (io: {
+  readonly emit: ObservationIntake["emit"];
+  readonly controls: ControlMailbox["feed"];
+}) => Effect.Effect<RunExecution, E>;
+
+function buildRunHandle<E>(
+  context: RunContext,
+  prepareExecution: PrepareExecution<E>,
+): Effect.Effect<RunHandle, E, Scope.Scope> {
+  return Effect.gen(function* () {
+    const { counters, identity } = context;
+    const parent = yield* Effect.scope;
+    const runScope = yield* Scope.fork(parent);
+
+    return yield* Effect.gen(function* () {
+      const intake = yield* makeIntake(
+        context.observationQueueBound,
+        counters,
+      ).pipe(Scope.provide(runScope));
+      const mailbox = yield* makeMailbox(context.controlBounds, counters).pipe(
+        Scope.provide(runScope),
+      );
+      const coordinator = yield* makeCoordinator(counters);
+      const completion = yield* Deferred.make<void>();
+      const activation = yield* Deferred.make<void>();
+      const projection = yield* Ref.make(createRunProjection());
+      const reports: AppliedReport[] = [];
+      const executionFiber =
+        yield* Deferred.make<Fiber.Fiber<TerminalBundle, never>>();
+
+      const executionScope = yield* Scope.fork(runScope);
+      const execution = yield* prepareExecution({
+        emit: intake.emit,
+        controls: mailbox.feed,
+      });
+
+      return {
+        identity,
+        coordinator,
+        completion,
+        intake,
+        mailbox,
+        executionFiber,
+        runScope,
+        executionScope,
+        activation,
+        execution,
+        projection,
+        reports,
+      };
+    }).pipe(Effect.onError(() => Scope.close(runScope, Exit.void)));
+  });
+}
+
+const synchronousExecuteDiagnostic = (): RunDiagnostic =>
+  runDiagnostic("backend-failure", "the backend could not start execution");
+
+/** Build a start's handle, preserving a synchronous execute throw as admission failure. */
+export function makeRunHandle(
+  context: RunContext,
+): Effect.Effect<RunHandle, RunDiagnostic, Scope.Scope> {
+  return buildRunHandle(context, (io) =>
+    Effect.try({
+      try: () => context.agent.execute(context.input, io),
+      catch: synchronousExecuteDiagnostic,
+    }),
+  );
+}
+
+/**
+ * Build a resume's handle.
+ *
+ * Resume has no `backend unavailable` outcome: once its lease is admitted, a
+ * backend failure belongs to that new Run. A synchronous contract violation
+ * is therefore represented as the execution's defect and settles `failed` by
+ * the same arbitration path as an asynchronous backend defect.
+ */
+export function makeResumedRunHandle(
+  context: RunContext,
+): Effect.Effect<RunHandle, never, Scope.Scope> {
+  return buildRunHandle(context, (io) =>
+    Effect.matchEffect(
+      Effect.try({
+        try: () => context.agent.execute(context.input, io),
+        catch: synchronousExecuteDiagnostic,
+      }),
+      {
+        onFailure: (diagnostic) => {
+          const failedExecution: RunExecution = Effect.die(
+            new Error(diagnostic.message),
+          );
+          return Effect.succeed(failedExecution);
+        },
+        onSuccess: Effect.succeed,
+      },
+    ),
+  );
+}
+
+/**
+ * Consume an already-published Run handle and carry it through settlement.
  *
  * The caller forks this. It returns only once the Run is terminal, its result
- * is committed, and delivery has been asked to run — so a caller that joins
- * this fiber knows the Run is done in every observable sense.
+ * is committed, and delivery has been asked to run.
  */
 export function runToSettlement(
   context: RunContext,
-  onStarted: (handle: RunHandle) => Effect.Effect<void>,
-): Effect.Effect<SettledRun, never, Scope.Scope> {
+  handle: RunHandle,
+): Effect.Effect<SettledRun> {
   return Effect.gen(function* () {
     const { counters, identity, repository, store } = context;
+    const {
+      activation,
+      completion,
+      coordinator,
+      execution,
+      executionFiber,
+      executionScope,
+      intake,
+      mailbox,
+      projection,
+      reports,
+      runScope,
+    } = handle;
 
-    // The Run Scope proper: everything the Run holds while it is running, in
-    // a scope settlement can close *before* it commits. Forked from the
-    // caller's so that a Run fiber that dies without settling still releases
-    // all of it.
-    const runScope = yield* Scope.fork(yield* Effect.scope);
-    const intake = yield* makeIntake(
-      context.observationQueueBound,
-      counters,
-    ).pipe(Scope.provide(runScope));
-    const mailbox = yield* makeMailbox(context.controlBounds, counters).pipe(
-      Scope.provide(runScope),
-    );
-    const coordinator = yield* makeCoordinator(counters);
-    const completion = yield* Deferred.make<void>();
-    const projection = yield* Ref.make(createRunProjection());
-    const reports: AppliedReport[] = [];
-
+    yield* Deferred.await(activation);
     const reducer = yield* Effect.acquireRelease(
       Effect.map(
-        Effect.forkChild(
+        Effect.forkIn(
           reducerLoop(context, intake, projection, reports, coordinator),
+          runScope,
         ),
         (fiber) => {
           counters.acquired("liveReducerFibers");
@@ -301,27 +416,12 @@ export function runToSettlement(
           void fiber;
         }),
     ).pipe(Scope.provide(runScope));
-
-    // The native execution scope, nested inside the Run Scope. It can close
-    // independently — a provider turn ending is not the Run ending — but it
-    // can never outlive the Run.
-    const executionScope = yield* Scope.fork(runScope);
-    const executionFiber = yield* Effect.forkChild(
-      context.agent
-        .execute(context.input, { emit: intake.emit, controls: mailbox.feed })
-        .pipe(Scope.provide(executionScope)),
+    const running = yield* Effect.forkIn(
+      execution.pipe(Scope.provide(executionScope)),
+      runScope,
     );
-
-    yield* onStarted({
-      identity,
-      coordinator,
-      completion,
-      intake,
-      mailbox,
-      executionFiber,
-    });
-
-    const [exit] = yield* Fiber.awaitAll([executionFiber]);
+    yield* Deferred.succeed(executionFiber, running);
+    const [exit] = yield* Fiber.awaitAll([running]);
 
     /* ---- the settlement path, in the roadmap's order ---- */
 

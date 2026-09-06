@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Fiber } from "effect";
 import { Effect, Scope } from "effect";
 import type { BackendAgent } from "../backend/contract.ts";
 import {
@@ -75,17 +74,13 @@ const standInAgent = (): BackendAgent => ({
 /**
  * A Run Scope stand-in carrying the one field the records read.
  *
- * `byRun` is served by an index keyed on the handle's own Run id, so that is
+ * `currentRun` is served by an index keyed on the handle's own Run id, so that is
  * the only thing the module ever looks at. Building a real Run Scope — an
  * intake, a reducer fiber, a mailbox, a coordinator — to test a map would be
  * testing the Run Scope.
  */
 const standInHandle = (runId: RunId): RunHandle =>
   ({ identity: { runId } }) as unknown as RunHandle;
-
-/** Likewise: the records hold a fiber for `closeSubagent` and never join it. */
-const standInFiber = (): Fiber.Fiber<unknown, never> =>
-  ({}) as Fiber.Fiber<unknown, never>;
 
 /**
  * A records module with a Subagent inserted for each id given.
@@ -125,7 +120,6 @@ test("an inserted Subagent is running, has no Run, and holds its own facts", asy
   // was admitted for it, and there is no path that makes an idle one.
   assert.equal(record?.phase, "running");
   assert.equal(record?.run, undefined);
-  assert.equal(record?.runFiber, undefined);
   assert.equal(record?.conversationLost, false);
   assert.equal(record?.profile.name, "explore");
   assert.equal(record?.scope, scopes[0]);
@@ -136,15 +130,16 @@ test("attaching a Run makes it findable by Run id, and detaching makes it unfind
   const { records } = await withRecords([oneSubagent]);
 
   records.attachRun(oneSubagent, standInHandle(oneRun));
-  const owner = records.byRun(oneRun);
+  const current = records.currentRun(oneRun);
   records.detachRun(oneSubagent);
 
-  assert.equal(owner?.id, oneSubagent);
+  assert.equal(current?.record.id, oneSubagent);
+  assert.equal(current?.handle.identity.runId, oneRun);
   // Exactly what the linear scan answered, for the same reason: only an
   // in-flight Run has an owner. A settled one and an id nothing ever had are
   // the same answer here, because the question is "who is running this".
-  assert.equal(records.byRun(oneRun), undefined);
-  assert.equal(records.byRun(otherRun), undefined);
+  assert.equal(records.currentRun(oneRun), undefined);
+  assert.equal(records.currentRun(otherRun), undefined);
 });
 
 test("attaching a second Run to a Subagent that has one is a defect", async () => {
@@ -158,16 +153,14 @@ test("attaching a second Run to a Subagent that has one is a defect", async () =
     () => records.attachRun(oneSubagent, standInHandle(otherRun)),
     /already has an active Run/,
   );
-  assert.equal(records.byRun(oneRun)?.id, oneSubagent);
-  assert.equal(records.byRun(otherRun), undefined);
+  assert.equal(records.currentRun(oneRun)?.record.id, oneSubagent);
+  assert.equal(records.currentRun(otherRun), undefined);
 });
 
 test("a Subagent whose Run detaches goes idle, and one that was closed stays closed", async () => {
   const { records } = await withRecords([oneSubagent, otherSubagent]);
-  const fiber = standInFiber();
   records.attachRun(oneSubagent, standInHandle(oneRun));
   records.attachRun(otherSubagent, standInHandle(otherRun));
-  records.attachFiber(oneSubagent, fiber);
 
   records.detachRun(oneSubagent);
   // Closed first, then the Run ends: the ordering `closeSubagent` depends on,
@@ -177,11 +170,6 @@ test("a Subagent whose Run detaches goes idle, and one that was closed stays clo
 
   assert.equal(records.get(oneSubagent)?.phase, "idle");
   assert.equal(records.get(oneSubagent)?.run, undefined);
-  // The fiber handle stays, and that is deliberate: `closeSubagent` reads it
-  // to join the Run fiber, and it reads it after reading the Run — so a
-  // detach that cleared it would make the join depend on which side of the
-  // detach the close arrived on. Joining a finished fiber costs nothing.
-  assert.equal(records.get(oneSubagent)?.runFiber, fiber);
   assert.equal(records.get(otherSubagent)?.phase, "closed");
 });
 
@@ -194,11 +182,11 @@ test("a detached Subagent can take another Run, which is what resume does", asyn
   records.attachRun(oneSubagent, standInHandle(otherRun));
 
   assert.equal(records.get(oneSubagent)?.phase, "running");
-  assert.equal(records.byRun(otherRun)?.id, oneSubagent);
-  assert.equal(records.byRun(oneRun), undefined);
+  assert.equal(records.currentRun(otherRun)?.record.id, oneSubagent);
+  assert.equal(records.currentRun(oneRun), undefined);
 });
 
-test("a resumed Subagent is running from the moment its Run is admitted, before its Run Scope exists", async () => {
+test("a resumed Subagent is running before its attached Run is published", async () => {
   const { records } = await withRecords([oneSubagent]);
   records.attachRun(oneSubagent, standInHandle(oneRun));
   records.detachRun(oneSubagent);
@@ -206,18 +194,15 @@ test("a resumed Subagent is running from the moment its Run is admitted, before 
   const idle = records.get(oneSubagent)?.phase;
   records.markRunning(oneSubagent);
 
-  // This is the instant a concurrent resume has to see. It is why the phase
-  // is a separate call from `attachRun`: a Run is certain once its result is
-  // reserved, which is before it is published and well before there is a Run
-  // Scope to attach — and until the phase moves, a second resume would get
-  // past the phase check and ask the adapter a question about a Subagent that
-  // is already running.
+  // This is the instant a concurrent resume has to see. Handle construction
+  // and attachment now happen before publication, but the phase remains a
+  // separate records mutation so admission can state the transition.
   assert.equal(idle, "idle");
   assert.equal(records.get(oneSubagent)?.phase, "running");
   assert.equal(records.get(oneSubagent)?.run, undefined);
   // And it is not the same as having a Run: nothing is findable by Run id
   // until the Run Scope is attached.
-  assert.equal(records.byRun(otherRun), undefined);
+  assert.equal(records.currentRun(otherRun), undefined);
 });
 
 test("markClosed is true for the first caller only", async () => {
@@ -269,6 +254,6 @@ test("a Run detaching after the records were cleared changes nothing", async () 
   records.markConversationLost(oneSubagent);
   records.markRunning(oneSubagent);
 
-  assert.equal(records.byRun(oneRun), undefined);
+  assert.equal(records.currentRun(oneRun), undefined);
   assert.equal(records.get(oneSubagent), undefined);
 });

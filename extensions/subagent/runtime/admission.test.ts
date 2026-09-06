@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect } from "effect";
+import { Deferred, Effect, Fiber } from "effect";
 import {
   runId as makeRunId,
   subagentId as makeSubagentId,
@@ -219,6 +219,38 @@ test("a bound Subagent leaves the running set when its lease is released", async
   );
 
   assert.deepEqual(outcomes, ["already running", "admitted"]);
+});
+
+test("interrupting an admitted span after hand-over leaves capacity with the Run", async () => {
+  const store = reservations();
+  const outcomes = await withAdmission(1, store.api, (admission) =>
+    Effect.gen(function* () {
+      const handedOver = yield* Deferred.make<void>();
+      const runLeases: AdmissionLease[] = [];
+      const entered = yield* Effect.forkChild(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const runLease = leaseOf(yield* admission.admit());
+            runLeases.push(runLease);
+            yield* runLease.handOver();
+            yield* Deferred.succeed(handedOver, undefined);
+            yield* Effect.never;
+          }),
+        ),
+      );
+      yield* Deferred.await(handedOver);
+      yield* Fiber.interrupt(entered);
+      const whileRunOwnsIt = (yield* admission.acquire()).outcome;
+      const [runLease] = runLeases;
+      if (!runLease)
+        throw new Error("the admitted span did not expose its lease");
+      yield* runLease.release();
+      const afterSettlement = (yield* admission.acquire()).outcome;
+      return [whileRunOwnsIt, afterSettlement];
+    }),
+  );
+
+  assert.deepEqual(outcomes, ["at capacity", "admitted"]);
 });
 
 test("beginShutdown is true for the first caller only, and every later acquire is refused", async () => {

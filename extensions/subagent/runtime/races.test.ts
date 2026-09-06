@@ -9,6 +9,7 @@ import {
   rigRequest as request,
   type SessionRig,
   startedRun,
+  until,
   untilTerminal,
   untilUnderWay,
   withSession,
@@ -176,6 +177,234 @@ test("race: a start issued alongside shutdown either runs and settles or is refu
   assert.equal(outcome.noLeaks, true);
 });
 
+test("interrupting start after its Run fiber owns the lease does not free capacity", async () => {
+  const hold = await Effect.runPromise(Deferred.make<void>());
+  const policy: RuntimePolicy = { ...DEFAULT_RUNTIME_POLICY, maxActiveRuns: 1 };
+  const outcome = await withSession(
+    {
+      policy,
+      gates: { hold },
+      steps: [[{ step: "await-gate", gate: "hold" }]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const starting = yield* Effect.forkChild(
+          rig.supervisor.start(request()),
+        );
+        yield* until(
+          "the admitted Run to be published",
+          Effect.map(rig.repository.activeCount(), (count) => count === 1),
+        );
+        yield* Fiber.interrupt(starting);
+        const interrupted = yield* Fiber.await(starting);
+        const second = yield* rig.supervisor.start(request());
+        const [active] = yield* rig.repository.list();
+        if (active) yield* rig.supervisor.cancel([active.identity.runId]);
+        return { interrupted: interrupted._tag, second: second.outcome };
+      }),
+  );
+
+  assert.equal(outcome.value.interrupted, "Failure");
+  assert.equal(outcome.value.second, "at capacity");
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("a start can be cancelled immediately without yielding", async () => {
+  const hold = await Effect.runPromise(Deferred.make<void>());
+  const outcome = await withSession(
+    {
+      gates: { hold },
+      steps: [[{ step: "await-gate", gate: "hold" }]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const run = startedRun(yield* rig.supervisor.start(request()));
+        const [cancelled] = yield* rig.supervisor.cancel([run.runId]);
+        yield* untilTerminal(rig, run.runId);
+        const result = yield* rig.supervisor.result(run.runId);
+        return {
+          cancelled: cancelled.outcome,
+          status:
+            result.outcome === "result" ? result.result.status : undefined,
+        };
+      }),
+  );
+
+  assert.deepEqual(outcome.value, {
+    cancelled: "admitted",
+    status: "cancelled",
+  });
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("a wait started immediately after start blocks until that Run settles", async () => {
+  const hold = await Effect.runPromise(Deferred.make<void>());
+  const outcome = await withSession(
+    {
+      gates: { hold },
+      steps: [[{ step: "await-gate", gate: "hold" }, emitText("done")]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const run = startedRun(yield* rig.supervisor.start(request()));
+        const waiting = yield* Effect.forkChild(
+          rig.supervisor.wait([run.runId]),
+        );
+        yield* Effect.yieldNow;
+        const blocked = waiting.pollUnsafe() === undefined;
+        yield* Deferred.succeed(hold, undefined);
+        return { blocked, outcomes: yield* Fiber.join(waiting) };
+      }),
+  );
+
+  assert.equal(outcome.value.blocked, true);
+  assert.deepEqual(
+    outcome.value.outcomes.map((item) => item.outcome),
+    ["terminal"],
+  );
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("a steer immediately after start enters the new Run's mailbox", async () => {
+  const outcome = await withSession(
+    {
+      steps: [[{ step: "await-control", confirm: true }, emitText("done")]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const run = startedRun(yield* rig.supervisor.start(request()));
+        const steered = yield* rig.supervisor.steer(run.runId, {
+          type: "steer",
+          text: "use this",
+        });
+        yield* untilTerminal(rig, run.runId);
+        return {
+          steered: steered.outcome,
+          controls: rig.backend.counters().controlsReceived,
+        };
+      }),
+  );
+
+  assert.deepEqual(outcome.value, {
+    steered: "accepted",
+    controls: ["use this"],
+  });
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("closing a Subagent immediately after start cancels and awaits its new Run", async () => {
+  const hold = await Effect.runPromise(Deferred.make<void>());
+  const outcome = await withSession(
+    {
+      gates: { hold },
+      steps: [[{ step: "await-gate", gate: "hold" }]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const run = startedRun(yield* rig.supervisor.start(request()));
+        yield* rig.supervisor.closeSubagentById(run.subagentId);
+        const result = yield* rig.supervisor.result(run.runId);
+        return {
+          status:
+            result.outcome === "result" ? result.result.status : undefined,
+          closes: rig.backend.counters().closes,
+        };
+      }),
+  );
+
+  assert.deepEqual(outcome.value, { status: "cancelled", closes: 1 });
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("a stale active lookup racing detachment returns terminal outcomes", async () => {
+  const finish = await Effect.runPromise(Deferred.make<void>());
+  const outcome = await withSession(
+    {
+      gates: { finish },
+      steps: [[{ step: "await-gate", gate: "finish" }, emitText("done")]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const run = startedRun(yield* rig.supervisor.start(request()));
+        const repository = rig.repository as unknown as {
+          lookup: typeof rig.repository.lookup;
+        };
+        const lookup = repository.lookup;
+        let intercepted = false;
+        repository.lookup = (runId) =>
+          Effect.gen(function* () {
+            const captured = yield* lookup(runId);
+            if (runId === run.runId && !intercepted) {
+              intercepted = true;
+              assert.equal(captured.state, "active");
+              yield* Deferred.succeed(finish, undefined);
+              yield* until(
+                "terminal publication after the stale active read",
+                Effect.map(
+                  lookup(runId),
+                  (latest) => latest.state === "terminal",
+                ),
+              );
+            }
+            return captured;
+          });
+
+        const steered = yield* Effect.exit(
+          rig.supervisor.steer(run.runId, {
+            type: "steer",
+            text: "too late",
+          }),
+        );
+        return steered;
+      }),
+  );
+
+  assert.equal(outcome.value._tag, "Success");
+  if (outcome.value._tag !== "Success") return;
+  assert.equal(outcome.value.value.outcome, "already completed");
+  assert.equal(outcome.noLeaks, true);
+});
+
+test("cancel remains typed when terminal publication wins after recording", async () => {
+  const finish = await Effect.runPromise(Deferred.make<void>());
+  const outcome = await withSession(
+    {
+      gates: { finish },
+      steps: [[{ step: "await-gate", gate: "finish" }, emitText("done")]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const run = startedRun(yield* rig.supervisor.start(request()));
+        const repository = rig.repository as unknown as {
+          recordCancellation: typeof rig.repository.recordCancellation;
+        };
+        const recordCancellation = repository.recordCancellation;
+        repository.recordCancellation = (runId, reason) =>
+          Effect.gen(function* () {
+            const recorded = yield* recordCancellation(runId, reason);
+            if (runId === run.runId && recorded.outcome === "recorded") {
+              yield* Deferred.succeed(finish, undefined);
+              yield* until(
+                "terminal publication after cancellation recording",
+                Effect.map(
+                  rig.repository.lookup(runId),
+                  (latest) => latest.state === "terminal",
+                ),
+              );
+            }
+            return recorded;
+          });
+
+        return yield* Effect.exit(rig.supervisor.cancel([run.runId]));
+      }),
+  );
+
+  assert.equal(outcome.value._tag, "Success");
+  if (outcome.value._tag !== "Success") return;
+  assert.equal(outcome.value.value[0]?.outcome, "admitted");
+  assert.equal(outcome.noLeaks, true);
+});
+
 /* -------------------------------------------------------------- */
 /* 4. Steering versus terminal settlement                          */
 /* -------------------------------------------------------------- */
@@ -271,6 +500,48 @@ test("race: a resume issued as its Subagent closes never starts a Run on a close
     ),
     `resume answered '${outcome.value.resumed}'`,
   );
+});
+
+test("shutdown immediately after resume admission closes the new Run", async () => {
+  const hold = await Effect.runPromise(Deferred.make<void>());
+  const outcome = await withSession(
+    {
+      gates: { hold },
+      steps: [[emitText("first")], [{ step: "await-gate", gate: "hold" }]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const first = startedRun(yield* rig.supervisor.start(request()));
+        yield* untilTerminal(rig, first.runId);
+        const resumed = startedRun(
+          yield* rig.supervisor.resume({
+            subagentId: first.subagentId,
+            description: "again",
+            prompt: "again",
+          }),
+        );
+        yield* rig.supervisor.shutdown();
+        return {
+          forgotten: (yield* rig.repository.lookup(resumed.runId)).state,
+          backend: rig.backend.counters(),
+          probe: rig.supervisor.probe(),
+        };
+      }),
+  );
+
+  assert.equal(outcome.value.forgotten, "unknown");
+  assert.equal(outcome.value.backend.liveExecutions, 0);
+  assert.equal(outcome.value.backend.liveSubscriptions, 0);
+  assert.deepEqual(outcome.value.probe, {
+    liveRunFibers: 0,
+    liveReducerFibers: 0,
+    openObservationQueues: 0,
+    openMailboxes: 0,
+    unresolvedWaiters: 0,
+    repositorySubscriptions: 0,
+    openBackendAgents: 0,
+  });
+  assert.equal(outcome.noLeaks, true);
 });
 
 /* -------------------------------------------------------------- */
@@ -449,6 +720,56 @@ test("race: a start issued as the last Run completes gets a definite answer eith
 /* -------------------------------------------------------------- */
 /* 10. Waiters versus settlement, abort, timeout, and eviction     */
 /* -------------------------------------------------------------- */
+
+test("a wait registers before terminal lookup and reads while its pin is held", async () => {
+  const finish = await Effect.runPromise(Deferred.make<void>());
+  const outcome = await withSession(
+    {
+      gates: { finish },
+      steps: [[emitText("done"), { step: "await-gate", gate: "finish" }]],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const run = startedRun(yield* rig.supervisor.start(request()));
+        const repository = rig.repository as unknown as {
+          lookup: typeof rig.repository.lookup;
+        };
+        const lookup = repository.lookup;
+        let registeredAtLookup = -1;
+        let intercepted = false;
+        repository.lookup = (runId) =>
+          Effect.gen(function* () {
+            const captured = yield* lookup(runId);
+            if (runId === run.runId && !intercepted) {
+              intercepted = true;
+              registeredAtLookup = rig.supervisor.probe().unresolvedWaiters;
+              assert.equal(captured.state, "active");
+              yield* Deferred.succeed(finish, undefined);
+              yield* until(
+                "settlement between waiter registration and lookup",
+                Effect.map(
+                  lookup(runId),
+                  (known) => known.state === "terminal",
+                ),
+              );
+            }
+            return captured;
+          });
+
+        const [waited] = yield* rig.supervisor.wait([run.runId]);
+        return {
+          registeredAtLookup,
+          waited: waited?.outcome,
+          pins: yield* rig.store.pinsOf(run.runId),
+        };
+      }),
+  );
+
+  assert.equal(outcome.value.registeredAtLookup, 1);
+  assert.equal(outcome.value.waited, "terminal");
+  assert.ok(!outcome.value.pins.includes("waiters"));
+  assert.equal(outcome.noLeaks, true);
+});
 
 test("race: early, aborted, timed-out, and late waiters all agree about one Run", async () => {
   const finish = await Effect.runPromise(Deferred.make<void>());

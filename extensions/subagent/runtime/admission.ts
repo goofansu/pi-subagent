@@ -57,9 +57,9 @@ export type AdmissionOutcome =
  *
  * The lease is a **scoped resource**: nobody calls `release` procedurally.
  * {@link RunAdmission.admit} returns it when the admitting Scope closes on a
- * failure, and the Run fiber's own Scope returns it when the Run is over. The
- * two never both fire on one lease, and `release` is idempotent by
- * construction if they ever did.
+ * failure until {@link handOver} records that the Run owns it. The Run fiber's
+ * own Scope then returns it when the Run is over. `release` is idempotent by
+ * construction if both paths ever reach it.
  */
 export interface AdmissionLease {
   /**
@@ -81,6 +81,13 @@ export interface AdmissionLease {
    * cannot happen is admitting a Run whose result could never be stored.
    */
   readonly reserveResult: (runId: RunId) => Effect.Effect<boolean>;
+  /**
+   * Record the one-way transfer from the admitting span to the Run fiber.
+   * After this, interruption of the admitting span must not release the lease.
+   */
+  readonly handOver: () => Effect.Effect<void>;
+  /** Read by the admitting Scope's release to decide whether it still owns this lease. */
+  readonly wasHandedOver: () => boolean;
   /**
    * Give back the capacity slot, the bound Subagent, and any reservation still
    * held. Idempotent by construction.
@@ -121,9 +128,9 @@ export interface RunAdmission {
    * Run**, and from that instant the Run fiber's own Scope holds the lease, so
    * this Scope must not take it back.
    *
-   * That is why the release is conditional on the exit rather than
-   * unconditional: the two Scopes own the lease at different times, and the
-   * hand-over is exactly the moment the admitted span succeeds. Nobody has to
+   * The hand-over is explicit rather than inferred from this span's exit: an
+   * interrupt is a failure exit too, including one arriving after the Run has
+   * been forked. Nobody has to
    * remember a compensating call on either path, which is the whole point —
    * before this there were three sites that gave capacity back and each had to
    * know which half of the lease it was holding.
@@ -169,6 +176,7 @@ export function makeAdmission(
      */
     const makeLease = (claimed: SubagentId | undefined): AdmissionLease => {
       let released = false;
+      let handedOver = false;
       let bound = claimed;
       let reserved: RunId | undefined;
 
@@ -220,6 +228,14 @@ export function makeAdmission(
             reserved = runId;
             return true;
           }),
+        handOver: () =>
+          Effect.sync(() => {
+            // The Run may settle quickly enough to release before the
+            // admitting fiber records the transfer. The transfer still
+            // happened, and marking it keeps the admitting finalizer a no-op.
+            handedOver = true;
+          }),
+        wasHandedOver: () => handedOver,
         release,
       };
     };
@@ -251,7 +267,9 @@ export function makeAdmission(
       acquire,
       admit: (subagentId) =>
         Effect.acquireRelease(acquire(subagentId), (admitted, exit) =>
-          admitted.outcome === "admitted" && Exit.isFailure(exit)
+          admitted.outcome === "admitted" &&
+          Exit.isFailure(exit) &&
+          !admitted.lease.wasHandedOver()
             ? admitted.lease.release()
             : Effect.void,
         ),
