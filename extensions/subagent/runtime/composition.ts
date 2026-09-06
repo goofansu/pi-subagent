@@ -26,7 +26,7 @@ import { CompletionDelivery, type NotificationSink } from "./delivery.ts";
 import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
 import { ProfileCatalog } from "./profile-catalog.ts";
 import { RunRepository } from "./repository.ts";
-import { ResultStore } from "./result-store.ts";
+import { type ResultEncoder, ResultStore } from "./result-store.ts";
 import { type SessionSettings, SubagentSupervisor } from "./supervisor.ts";
 
 /** Every service the Session runtime provides. */
@@ -132,6 +132,8 @@ interface SessionRuntimeBaseOptions {
   readonly sink: NotificationSink;
   /** Shared with the caller when a test wants to read the probe directly. */
   readonly counters?: RuntimeCounters;
+  /** Override the Result encoder for deterministic settlement fault tests. */
+  readonly resultEncoder?: ResultEncoder;
   /**
    * What a backend needs in order to validate a Profile against this Session.
    *
@@ -182,7 +184,11 @@ export function sessionRuntimeLayer(
         )
   ).pipe(Layer.provide(backendCatalog));
 
-  const resultStore = ResultStore.layerOf(settings.policy, counters);
+  const resultStore = ResultStore.layerOf(
+    settings.policy,
+    counters,
+    options.resultEncoder,
+  );
   const delivery = CompletionDelivery.layerOf(
     settings.policy,
     options.sink,

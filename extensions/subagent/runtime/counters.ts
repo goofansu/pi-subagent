@@ -77,6 +77,8 @@ export interface SupervisorCounters {
   readonly duplicateCommits: number;
   /** A *different* result was committed for a Run that already had one. */
   readonly conflictingCommits: number;
+  /** Settlement itself exited unsuccessfully and required the exit guard. */
+  readonly settlementDefects: number;
   /** A stored output was dropped to keep the store inside its budget. */
   readonly evictions: number;
 }
@@ -124,6 +126,7 @@ export const COUNTER_CLASSES: Readonly<
   unreadableResults: "defect",
   seamDecodeFailures: "defect",
   queueOverflows: "defect",
+  settlementDefects: "defect",
   cleanupEscalations: "incident",
   deliveryFailures: "incident",
   duplicateSettlements: "expected",
@@ -147,6 +150,7 @@ const ZERO_COUNTERS: SupervisorCounters = {
   unreadableResults: 0,
   duplicateCommits: 0,
   conflictingCommits: 0,
+  settlementDefects: 0,
   evictions: 0,
 };
 

@@ -102,6 +102,66 @@ test("a push that fails once and then lands does not disturb a second Run", asyn
   assert.equal(outcome.noLeaks, true);
 });
 
+test("a persistent Result encode defect fails the Run, wakes waiters, and leaves the Subagent idle", async () => {
+  const outcome = await withSession(
+    {
+      steps: [[emitText("first answer")], [emitText("second answer")]],
+      resultEncoder: () => {
+        throw new Error("secret encoder detail");
+      },
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const first = startedRun(yield* rig.supervisor.start(request()));
+        const [waited] = yield* rig.supervisor.wait([first.runId]);
+        const stored = yield* rig.supervisor.result(first.runId);
+        yield* quiesce();
+        const snapshot = yield* rig.repository.get(first.runId);
+        const counters = rig.supervisor.counters();
+
+        // Admission of another Run through the public operation is the
+        // observable proof that settlement returned the Subagent to idle.
+        // Session close owns that new Run; the first Run's readings above are
+        // deliberately captured before it can produce a second defect.
+        const resumed = yield* rig.supervisor.resume({
+          subagentId: first.subagentId,
+          description: "again",
+          prompt: "again",
+        });
+        return {
+          waited,
+          stored,
+          snapshot,
+          resumed: resumed.outcome,
+          counters,
+          backend: rig.backend,
+        };
+      }),
+  );
+
+  assert.equal(outcome.value.waited.outcome, "terminal");
+  assert.equal(outcome.value.snapshot?.phase, "failed");
+  assert.equal(outcome.value.snapshot?.terminalStatus, "failed");
+  assert.equal(outcome.value.stored.outcome, "ResultExpired");
+  assert.equal(outcome.value.waited.result, undefined);
+  assert.equal(outcome.value.resumed, "started");
+  assert.match(
+    outcome.value.snapshot?.settlementDiagnostic?.message ?? "",
+    /settlement/i,
+  );
+  assert.doesNotMatch(
+    outcome.value.snapshot?.settlementDiagnostic?.message ?? "",
+    /secret encoder detail/,
+  );
+  assert.equal(outcome.value.counters.settlementDefects, 1);
+  assert.equal(outcome.value.counters.unreadableResults, 1);
+  assert.equal(outcome.value.counters.duplicateCommits, 0);
+  assert.equal(outcome.value.counters.conflictingCommits, 0);
+  assert.equal(outcome.value.backend.counters().liveExecutions, 0);
+  assert.equal(outcome.value.backend.counters().liveSubscriptions, 0);
+  assert.equal(outcome.noLeaks, true);
+});
+
 test("a defect in one execution settles that Run and leaves the next one alone", async () => {
   const outcome = await withSession(
     {

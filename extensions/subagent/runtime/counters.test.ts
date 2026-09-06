@@ -57,6 +57,7 @@ test("a result committed twice or differently is a defect of the runtime itself"
     "unreadableResults",
     "seamDecodeFailures",
     "queueOverflows",
+    "settlementDefects",
   ] as const) {
     assert.equal(COUNTER_CLASSES[counter], "defect", counter);
   }

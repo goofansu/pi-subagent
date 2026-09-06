@@ -45,6 +45,7 @@ import {
   EMPTY_USAGE_SNAPSHOT,
   ILLEGAL_TRANSITION,
   isTerminalRunPhase,
+  type RunDiagnostic,
   type RunId,
   type RunIdentity,
   RunId as RunIdSchema,
@@ -82,6 +83,8 @@ export interface RunSnapshot {
   readonly startedAt: number;
   /** Present exactly when the phase is terminal. */
   readonly terminalStatus?: TerminalRunPhase;
+  /** Present when the settlement exit guard had to recover this Run. */
+  readonly settlementDiagnostic?: RunDiagnostic;
   /**
    * When the Run settled. Present exactly when the phase is terminal.
    *
@@ -328,6 +331,18 @@ const make = (counters: RuntimeCounters) =>
             }
             return next;
           }),
+        ),
+
+      /** Record the diagnostic before the guard publishes terminality. */
+      recordSettlementDiagnostic: (
+        runId: RunId,
+        diagnostic: RunDiagnostic,
+      ): Effect.Effect<void> =>
+        SubscriptionRef.update(index, (current) =>
+          withRun(current, runId, (snapshot) => ({
+            ...snapshot,
+            settlementDiagnostic: diagnostic,
+          })),
         ),
 
       /**
