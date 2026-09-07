@@ -1,6 +1,12 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
-import { formatDuration, formatTurns, runPhaseVerb } from "./status.ts";
+import type { RenderableTheme } from "./rows.ts";
+import {
+  formatDuration,
+  formatTurns,
+  runPhaseTone,
+  runPhaseVerb,
+} from "./status.ts";
 
 export const HISTORY_CATEGORIES = [
   "Active",
@@ -26,6 +32,7 @@ export function historyRow(
   identity: string,
   subagentPhase?: string,
   now?: number,
+  theme?: RenderableTheme,
 ): readonly string[] {
   const clip = (text: string, columns = width) =>
     truncateToWidth(text, Math.max(0, columns), "…");
@@ -41,9 +48,19 @@ export function historyRow(
     now !== undefined && run.lastActivity
       ? ` · changed ${formatDuration(now - run.lastActivity.changedAt)} ago`
       : "";
+  const styledStatus = theme
+    ? theme.fg(
+        run.phase === "cancelled"
+          ? run.cancellationReason === "timeout"
+            ? "error"
+            : "muted"
+          : runPhaseTone(run.phase),
+        status,
+      )
+    : status;
   return [
     clip(
-      `${clip(run.profile, profileWidth)}  ${status}  ${formatTurns(run.turns)}  ${run.backend}  ${identity}`,
+      `${clip(run.profile, profileWidth)}  ${styledStatus}  ${formatTurns(run.turns)}  ${run.backend}  ${identity}`,
     ),
     clip(`Label: ${run.label}${activity ? ` · ${activity}${age}` : ""}`),
   ];

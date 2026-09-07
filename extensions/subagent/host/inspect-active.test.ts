@@ -166,7 +166,7 @@ test("multiple active refreshes preserve line offset and clamp after shorter rec
   const shorter = draw();
   assert.match(shorter.join("\n"), /short output/);
   assert.doesNotMatch(shorter.join("\n"), /full retained item|new tail/);
-  const position = /(\d+)-(\d+)\/(\d+)$/.exec(shorter.at(-1) ?? "");
+  const position = /(\d+)-(\d+)\/(\d+)/.exec(shorter.at(-1) ?? "");
   assert.ok(position);
   assert.equal(position[2], position[3], "clamped to new bottom");
   rig.host.customKey("\x1b[B");

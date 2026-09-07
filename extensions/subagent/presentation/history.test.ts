@@ -10,6 +10,7 @@ import {
 } from "../domain/index.ts";
 import { historyCategory, historyRow } from "./history.ts";
 import { inspectionLines } from "./inspection.ts";
+import type { RenderableTheme } from "./rows.ts";
 
 const run: RunSummary = {
   runId: runId("run-test-1"),
@@ -82,6 +83,46 @@ test("retained shutdown cancellation is Completed, not a presentation phase or b
   const rows = historyRow(run, 160, run.subagentId, subagent.phase).join("\n");
   assert.match(rows, /closed · cancelled \(shutdown\)/);
   assert.doesNotMatch(rows, /Completed/);
+});
+
+test("history status uses semantic theme tones without changing Label priority", () => {
+  const tones: { color: string; text: string }[] = [];
+  const theme: RenderableTheme = {
+    fg: (color, text) => {
+      tones.push({ color, text });
+      return `\x1b[33m${text}\x1b[39m`;
+    },
+    bg: (_color, text) => text,
+    bold: (text) => text,
+    italic: (text) => text,
+    inverse: (text) => text,
+  };
+  for (const [phase, cancellationReason, tone] of [
+    ["running", undefined, "warning"],
+    ["finalizing", undefined, "warning"],
+    ["completed", undefined, "success"],
+    ["failed", undefined, "error"],
+    ["cancelled", "timeout", "error"],
+    ["cancelled", "requested", "muted"],
+  ] as const) {
+    const row = { ...run, phase, cancellationReason };
+    const lines = historyRow(row, 160, row.runId, undefined, undefined, theme);
+    assert.equal(tones.at(-1)?.color, tone);
+    assert.ok(tones.at(-1)?.text.includes(phase));
+    assert.ok(lines[1].startsWith(`Label: ${row.label}`));
+    for (let width = 0; width <= 40; width += 1) {
+      const narrow = historyRow(
+        row,
+        width,
+        row.runId,
+        undefined,
+        undefined,
+        theme,
+      );
+      assert.ok(narrow.every((line) => visibleWidth(line) <= width));
+      if (width >= 24) assert.ok(narrow[1].includes(row.label));
+    }
+  }
 });
 
 test("long Unicode Profiles and activity cannot displace the Label or exceed terminal width", () => {

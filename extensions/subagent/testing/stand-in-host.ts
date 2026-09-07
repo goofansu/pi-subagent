@@ -116,6 +116,8 @@ export interface StandInHostOptions {
    * construction — and an assertion against it could not fail.
    */
   readonly renderEvery?: number;
+  /** Inject the current theme at the custom-UI boundary. */
+  readonly customTheme?: RenderableTheme;
 }
 
 /** A theme that paints nothing, so an assertion reads the text itself. */
@@ -247,7 +249,7 @@ export function createStandInHost(
         };
         custom = factory(
           customTui,
-          PLAIN_THEME,
+          options.customTheme ?? PLAIN_THEME,
           new KeybindingsManager(TUI_KEYBINDINGS),
           done,
         );

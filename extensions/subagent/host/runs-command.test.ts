@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { runId } from "../domain/index.ts";
 import {
@@ -13,6 +14,7 @@ import {
   RIG_POLICY,
   startedIds,
 } from "../testing/host-rig.ts";
+import { PLAIN_THEME } from "../testing/stand-in-host.ts";
 
 test("both lists scroll and clamp after resize, retain selected identities, and clip Unicode Labels safely", async (t) => {
   const steps: readonly FakeStep[] = [{ step: "complete" }];
@@ -262,6 +264,91 @@ test("Escape during an entry read closes immediately and late reads cannot redra
   assert.equal(rig.host.customRenderRequests(), requests);
 });
 
+test("all three levels retain a full themed surface across resize and invalidation without refreshing snapshots", async (t) => {
+  let accent = 36;
+  const themed: { color: string; text: string }[] = [];
+  const rig = hostRig(t, {
+    customTheme: {
+      ...PLAIN_THEME,
+      fg: (color, text) => {
+        themed.push({ color, text: stripVTControlCharacters(text) });
+        return `\x1b[${color === "accent" ? accent : 33}m${text}\x1b[39m`;
+      },
+      bg: (color, text) =>
+        `\x1b[${color === "selectedBg" ? 45 : 44}m${text}\x1b[49m`,
+      bold: (text) => `\x1b[1m${text}\x1b[22m`,
+    },
+    resumableSteps: [[emitText("Unicode 界 👩‍💻 é"), { step: "hang" }]],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  await start(rig, "任务 👩‍💻 café");
+  const browsing = await open(rig);
+  for (const title of ["Session Subagents", "Run history", "Run inspection"]) {
+    for (const [rows, height] of [
+      [0, 0],
+      [1, 0],
+      [2, 1],
+      [3, 2],
+      [4, 3],
+      [10, 8],
+      [13, 10],
+      [24, 19],
+    ]) {
+      for (const width of [0, 1, 2, 3, 6, 20, 80]) {
+        const lines = rig.host.customLines(width, rows);
+        assert.equal(lines.length, height);
+        assert.ok(lines.every((line) => visibleWidth(line) === width));
+        assert.ok(lines.every((line) => line.startsWith("\x1b[44m")));
+        assert.ok(lines.every((line) => !line.includes("\ufffd")));
+      }
+    }
+    const before = rig.host.customLines(80, 24);
+    const plain = before.map(stripVTControlCharacters).join("\n");
+    assert.ok(plain.includes(title));
+    assert.match(plain, /╭─+╮/);
+    assert.match(plain, /╰─+╯/);
+    if (title !== "Run inspection") {
+      assert.match(plain, /> explore/);
+      assert.match(plain, /Label: 任务 👩‍💻 café/);
+      assert.ok(
+        before.some((line) => line.includes("\x1b[45m")),
+        "selection has a background as well as a marker",
+      );
+    }
+    accent = accent === 36 ? 35 : 36;
+    rig.host.captureCustom()?.invalidate();
+    const after = rig.host.customLines(80, 24);
+    assert.notDeepEqual(after, before);
+    assert.deepEqual(
+      after.map(stripVTControlCharacters),
+      before.map(stripVTControlCharacters),
+    );
+    if (title !== "Run inspection") {
+      rig.host.customKey(ENTER);
+      await rig.pump();
+    }
+  }
+  assert.ok(
+    themed.some(({ color, text }) => color === "warning" && text === "Active"),
+  );
+  assert.ok(
+    themed.some(
+      ({ color, text }) => color === "warning" && text.includes("running"),
+    ),
+  );
+  assert.ok(
+    themed.some(
+      ({ color, text }) => color === "warning" && text === "active snapshot",
+    ),
+  );
+  for (let i = 0; i < 2; i += 1) {
+    rig.host.customKey(ESC);
+    await rig.pump();
+  }
+  await close(rig, browsing);
+});
+
 const ESC = "\x1b";
 const ENTER = "\r";
 const DOWN = "\x1b[B";
@@ -349,6 +436,17 @@ test("runs reuses no-Session response; a live empty Session opens and closes an 
     rig.host.customLines().join("\n"),
     /No Subagents in this Session/,
   );
+  const panel = rig.host.customLines(80, 24);
+  assert.equal(panel.length, 19);
+  assert.ok(panel.every((line) => visibleWidth(line) === 80));
+  assert.match(panel[0], /^╭─+╮$/);
+  assert.match(panel.at(-1) ?? "", /^╰─+╯$/);
+  assert.match(panel[1], /Session Subagents/);
+  assert.match(panel[2], /^├─+┤$/);
+  assert.match(panel.at(-3) ?? "", /^├─+┤$/);
+  assert.match(panel.at(-2) ?? "", /Esc close/);
+  assert.ok(panel.some((line) => /^│ +│$/.test(line)));
+  assert.doesNotMatch(panel.join("\n"), /1-1\/1|Enter|scroll/);
   rig.host.customKey(ENTER);
   assert.equal(rig.host.customOpen(), true);
   rig.host.customKey(ESC);

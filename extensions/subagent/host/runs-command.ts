@@ -5,15 +5,17 @@
  * SelectList item.
  */
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import {
-  matchesKey,
-  truncateToWidth,
-  wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { Effect } from "effect";
 import { inspectRun, runSummaries } from "../application/history.ts";
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
 import type { RunId, SubagentId } from "../domain/index.ts";
+import {
+  browserFooter,
+  browserPanel,
+  browserViewport,
+  padBrowserLine,
+} from "../presentation/browser-panel.ts";
 import {
   HISTORY_CATEGORIES,
   historyCategory,
@@ -297,18 +299,19 @@ export async function openRunsUi(
           render(width) {
             if (closed) return [];
             pending = false;
-            const height = Math.max(
-              3,
-              Math.floor((tui.terminal.rows || 24) * 0.8),
-            );
-            const bodyHeight = Math.max(1, height - 2);
+            const viewport = browserViewport(width, tui.terminal.rows);
+            const { contentWidth, bodyHeight } = viewport;
+            const range = (start: number, total: number) =>
+              total > bodyHeight && bodyHeight > 0
+                ? `${start + 1}-${Math.min(start + bodyHeight, total)}/${total}`
+                : "";
             if (inspectedRunId) {
-              detailPageSize = bodyHeight;
-              if (detailWidth !== width) {
+              detailPageSize = Math.max(1, bodyHeight);
+              if (detailWidth !== contentWidth) {
                 detailLines = details.flatMap((line) =>
-                  wrapTextWithAnsi(line, Math.max(1, width)),
+                  wrapTextWithAnsi(line, Math.max(1, contentWidth)),
                 );
-                detailWidth = width;
+                detailWidth = contentWidth;
               }
               detailOffset = Math.max(
                 0,
@@ -317,22 +320,41 @@ export async function openRunsUi(
                   Math.max(0, detailLines.length - bodyHeight),
                 ),
               );
-              return [
-                theme.bold(
-                  details.length
-                    ? `Run inspection · ${refreshable ? "active" : "terminal"} snapshot`
-                    : "Run inspection",
-                ),
-                ...(loading
-                  ? ["Capturing Run snapshot…"]
+              const refresh = refreshable ? "R refresh · " : "";
+              return browserPanel(
+                viewport,
+                details.length
+                  ? `Run inspection · ${theme.fg(refreshable ? "warning" : "muted", `${refreshable ? "active" : "terminal"} snapshot`)}`
+                  : "Run inspection",
+                loading
+                  ? [theme.fg("muted", "Capturing Run snapshot…")]
                   : error
-                    ? ["Result unavailable. Escape to return to Run history."]
+                    ? [
+                        theme.fg(
+                          "error",
+                          "Result unavailable. Escape to return to Run history.",
+                        ),
+                      ]
                     : detailLines.slice(
                         detailOffset,
                         detailOffset + bodyHeight,
-                      )),
-                `↑/↓ lines · ←/→ page · ${refreshable ? "R refresh · " : ""}Esc back · ${Math.min(detailOffset + 1, detailLines.length)}-${Math.min(detailOffset + bodyHeight, detailLines.length)}/${detailLines.length}`,
-              ].map((line) => truncateToWidth(line, Math.max(0, width), "…"));
+                      ),
+                browserFooter(
+                  contentWidth,
+                  loading || error
+                    ? ["Esc back"]
+                    : [
+                        `↑/↓ lines · ←/→ page · ${refresh}Esc back`,
+                        `↑↓ · ←→ · ${refresh}Esc back`,
+                        `${refresh}Esc back`,
+                        "Esc back",
+                      ],
+                  loading || error
+                    ? ""
+                    : range(detailOffset, detailLines.length),
+                ),
+                theme,
+              );
             }
             pageSize = Math.max(1, Math.floor(bodyHeight / 2));
             const lines: string[] = [];
@@ -344,18 +366,30 @@ export async function openRunsUi(
               phase?: string,
             ) => {
               if (selected) selectedLine = lines.length;
+              // On narrow terminals spend indentation on the Label instead.
+              const labelInset = width >= 32 ? "  " : "";
               const row = historyRow(
                 run,
-                Math.max(0, width - 2),
+                Math.max(0, contentWidth - labelInset.length),
                 identity,
                 phase,
                 openSubagentId ? undefined : now,
+                theme,
               );
               lines.push(
                 ...row.map((line, index) =>
                   selected
-                    ? theme.fg("accent", `${index === 0 ? "> " : "  "}${line}`)
-                    : `  ${line}`,
+                    ? theme.bg(
+                        "selectedBg",
+                        padBrowserLine(
+                          theme.fg(
+                            "accent",
+                            `${index === 0 ? "> " : labelInset}${line}`,
+                          ),
+                          contentWidth,
+                        ),
+                      )
+                    : `${index === 0 ? "  " : labelInset}${line}`,
                 ),
               );
             };
@@ -382,7 +416,16 @@ export async function openRunsUi(
                   (row) => historyCategory(row) === category,
                 );
                 if (!rows.length) continue;
-                lines.push(theme.bold(category));
+                lines.push(
+                  theme.fg(
+                    category === "Active"
+                      ? "warning"
+                      : category === "Needs attention"
+                        ? "error"
+                        : "success",
+                    theme.bold(category),
+                  ),
+                );
                 for (const row of rows)
                   append(
                     row.current ?? row.latest,
@@ -393,24 +436,48 @@ export async function openRunsUi(
                     row.phase,
                   );
               }
-              if (!overview.length) lines.push("No Subagents in this Session.");
+              if (!overview.length)
+                lines.push(
+                  theme.fg("muted", "No Subagents in this Session."),
+                  theme.fg(
+                    "dim",
+                    "Delegated work will appear here, including completed Runs.",
+                  ),
+                );
             }
             if (selectedLine < offset) offset = selectedLine;
-            if (selectedLine + 2 > offset + bodyHeight)
-              offset = Math.max(0, selectedLine + 2 - bodyHeight);
+            if (selectedLine + Math.min(2, bodyHeight) > offset + bodyHeight)
+              offset = Math.max(
+                0,
+                selectedLine + Math.min(2, bodyHeight) - bodyHeight,
+              );
             offset = Math.min(offset, Math.max(0, lines.length - bodyHeight));
-            const hint = openSubagentId
-              ? "↑/↓ scroll · Enter inspect Run · Esc back"
-              : "↑/↓ scroll · Enter Runs · Esc close";
-            return [
-              theme.bold(
-                openSubagentId
-                  ? `Run history · ${openSubagentId} · newest first`
-                  : "Session Subagents",
+            const populated =
+              !loading &&
+              !error &&
+              (openSubagentId ? runs.length > 0 : overview.length > 0);
+            const back = openSubagentId ? "Esc back" : "Esc close";
+            const enter = openSubagentId ? "Enter inspect Run" : "Enter Runs";
+            return browserPanel(
+              viewport,
+              openSubagentId
+                ? `Run history · ${openSubagentId} · newest first`
+                : "Session Subagents",
+              lines.slice(offset, offset + bodyHeight),
+              browserFooter(
+                contentWidth,
+                populated
+                  ? [
+                      `↑/↓ scroll · PgUp/PgDn · ${enter} · ${back}`,
+                      `↑↓ · ${enter} · ${back}`,
+                      `Enter open · ${back}`,
+                      back,
+                    ]
+                  : [back],
+                populated ? range(offset, lines.length) : "",
               ),
-              ...lines.slice(offset, offset + bodyHeight),
-              `${hint} · ${Math.min(offset + 1, lines.length)}-${Math.min(offset + bodyHeight, lines.length)}/${lines.length}`,
-            ].map((line) => truncateToWidth(line, Math.max(0, width), "…"));
+              theme,
+            );
           },
         };
       },
