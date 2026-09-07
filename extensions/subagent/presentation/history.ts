@@ -51,6 +51,26 @@ export function historyCategory(subagent: SubagentSummary): HistoryCategory {
     : "Completed";
 }
 
+/**
+ * How many Subagents sit in each category, counted by the one rule above.
+ *
+ * The overview's sections and its header report the same population, so they
+ * read it through the same classifier: a second count written beside this one
+ * could say a Subagent needs attention while the list files it under
+ * completed.
+ */
+export function historyCategoryCounts(
+  subagents: readonly SubagentSummary[],
+): Readonly<Record<HistoryCategory, number>> {
+  const counts: Record<HistoryCategory, number> = {
+    Active: 0,
+    "Needs attention": 0,
+    Completed: 0,
+  };
+  for (const subagent of subagents) counts[historyCategory(subagent)] += 1;
+  return counts;
+}
+
 /** Render one displayed list, including shared measurements and selection surface. */
 export function historyRows(
   runs: readonly RunSummary[],

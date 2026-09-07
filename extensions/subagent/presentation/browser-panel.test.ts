@@ -139,3 +139,62 @@ test("adaptive footer keeps complete back hints and includes ranges only when su
   assert.equal(browserFooter(9, hints, "1-6/30"), "Esc close");
   assert.equal(browserFooter(80, ["Esc close"]), "Esc close");
 });
+
+test("a multi-line header takes its rows from the body and is painted by its author", () => {
+  const header = ["first", "second", "third", "fourth"];
+  const viewport = browserViewport(40, 24, header.length);
+  assert.equal(viewport.headerHeight, 4);
+  assert.equal(viewport.bodyHeight, 17);
+  const lines = browserPanel(
+    viewport,
+    header,
+    ["body"],
+    "Esc close",
+    theme,
+  ).map(stripVTControlCharacters);
+  assert.equal(lines.length, 24);
+  assert.deepEqual(lines.slice(0, 5), [
+    ...header.map((line) => ` ${line}`.padEnd(40)),
+    " ".repeat(40),
+  ]);
+  assert.equal(lines[5], " body".padEnd(40));
+  assert.equal(lines[22], ` ${"─".repeat(38)} `);
+  assert.equal(lines[23], " Esc close".padEnd(40));
+  assert.deepEqual(
+    browserPanel(viewport, header, ["body"], "Esc close", {
+      ...theme,
+      fg: () => "painted",
+    }).map(stripVTControlCharacters)[0],
+    " first".padEnd(40),
+  );
+});
+
+test("a header too tall for the screen is shortened before the footer is", () => {
+  for (const [rows, height] of [
+    [0, 0],
+    [1, 1],
+    [2, 2],
+    [3, 3],
+    [5, 5],
+    [10, 10],
+    [13, 13],
+    [24, 24],
+  ]) {
+    const viewport = browserViewport(40, rows, 4);
+    assert.equal(
+      viewport.headerHeight + viewport.bodyHeight,
+      Math.max(0, height - (viewport.spacious ? 3 : 1)),
+    );
+    const lines = browserPanel(
+      viewport,
+      ["first", "second", "third", "fourth"],
+      [],
+      "Esc close",
+      theme,
+    );
+    assert.equal(lines.length, height, `${height} rows`);
+    for (const line of lines) assert.equal(visibleWidth(line), 40);
+    if (height > 1)
+      assert.match(stripVTControlCharacters(lines.at(-1) ?? ""), /^ Esc close/);
+  }
+});

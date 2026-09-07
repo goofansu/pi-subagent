@@ -526,8 +526,14 @@ test("runs reuses no-Session response; a live empty Session opens and closes an 
   const panel = rig.host.customLines(80, 24).map(stripVTControlCharacters);
   assert.equal(panel.length, 24);
   assert.ok(panel.every((line) => visibleWidth(line) === 80));
-  assert.match(panel[0], /^ Subagent dashboard/);
-  assert.match(panel[1], /^ +$/);
+  assert.match(panel[0], /^ ██████ {4}Subagent dashboard *$/);
+  assert.match(panel[1], /^ ██ {2}██ {4}\/work *$/);
+  assert.match(
+    panel[2],
+    /^ ████ {2}██ {2}0 active · 0 needs attention · 0 completed *$/,
+  );
+  assert.match(panel[3], /^ ██ {4}██ +$/);
+  assert.match(panel[4], /^ +$/);
   assert.match(panel.at(-2) ?? "", /^ ─+ $/);
   assert.doesNotMatch(panel.join("\n"), /[╭╮╰╯│├┤]/);
   assert.match(panel.at(-1) ?? "", /^ escape.*close/);
@@ -725,5 +731,49 @@ test("finalizing is Active; delivery failure, Conversation loss, and diagnostics
     screen(rig),
     /Needs attention|diagnostic text|notification/,
   );
+  await close(rig, browsing);
+});
+
+test("the overview header names the working directory and a live population", async (t) => {
+  const rig = hostRig(t, {
+    resumableSteps: [
+      [{ step: "fail", message: "broken" }],
+      [{ step: "complete" }],
+    ],
+    oneShotSteps: [[{ step: "await-gate", gate: "still going" }]],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  const failed = await start(rig, "went wrong");
+  await rig.settled(failed.runId);
+  const retried = await start(rig, "went wrong once");
+  await rig.settled(retried.runId);
+  await rig.settled(await resume(rig, retried.subagentId, "and then worked"));
+  const active = await start(rig, "still going", "once");
+  await rig.pump();
+  const browsing = await open(rig);
+  const header = () =>
+    rig.host.customLines(160, 60).map(stripVTControlCharacters);
+  assert.match(header()[0], /^ ██████ {4}Subagent dashboard *$/);
+  assert.match(header()[1], /^ ██ {2}██ {4}\/work *$/);
+  assert.match(
+    header()[2],
+    /^ ████ {2}██ {2}1 active · 1 needs attention · 1 completed *$/,
+  );
+  assert.match(header()[3], /^ ██ {4}██ +$/);
+  assert.match(header()[4], /^ +$/);
+  // The population is the list's own, so settling a Run moves it a category.
+  await rig.release("still going");
+  await rig.settled(active.runId);
+  await rig.pump();
+  assert.match(header()[2], /0 active · 1 needs attention · 2 completed/);
+  // The mark belongs to the overview; a deeper screen keeps its one-line title.
+  rig.host.customKey(ENTER);
+  await rig.pump();
+  assert.match(header()[0], /^ Subagent dashboard · run history/);
+  assert.doesNotMatch(header().join("\n"), /█/);
+  rig.host.customKey(ESC);
+  await rig.pump();
+  assert.match(header()[0], /^ ██████ {4}Subagent dashboard/);
   await close(rig, browsing);
 });

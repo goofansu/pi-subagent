@@ -3,6 +3,7 @@
  * uses aligned, single-line rows with selection attached to Subagent/Run IDs.
  * Public identifiers stay in inspection rather than displacing work labels.
  */
+import os from "node:os";
 import {
   type ExtensionContext,
   keyHint,
@@ -11,6 +12,12 @@ import {
 import { matchesKey } from "@earendil-works/pi-tui";
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
 import type { RunId, SubagentId } from "../domain/index.ts";
+import {
+  DASHBOARD_TITLE,
+  type DashboardIdentity,
+  dashboardBanner,
+  dashboardBannerFits,
+} from "../presentation/banner.ts";
 import {
   browserFooter,
   browserPanel,
@@ -98,6 +105,10 @@ export async function openDashboardUi(
       );
       return;
     }
+    // The working directory and the operator's home are the same for as long
+    // as this browser is open, so the header reads them once. The Subagent
+    // counts beside them are not: those come from the page.
+    const identity: DashboardIdentity = { cwd: ctx.cwd, home: os.homedir() };
     await ctx.ui.custom<void>(
       (tui, theme, keys, done) => {
         const historyPages = new Map<SubagentId, HistoryPage>();
@@ -371,7 +382,21 @@ export async function openDashboardUi(
           render(width) {
             if (closed) return [];
             pending = false;
-            const viewport = browserViewport(width, tui.terminal.rows);
+            // The header is measured before the viewport is sized, because a
+            // banner four lines tall is four rows the list does not get.
+            const measured = browserViewport(width, tui.terminal.rows);
+            const banner =
+              page.kind === "overview" && dashboardBannerFits(measured)
+                ? dashboardBanner(
+                    identity,
+                    page.status === "ready" ? page.summaries : undefined,
+                    measured.contentWidth,
+                    theme,
+                  )
+                : undefined;
+            const viewport = banner
+              ? browserViewport(width, tui.terminal.rows, banner.length)
+              : measured;
             const { contentWidth, bodyHeight } = viewport;
             const range = (start: number, total: number) =>
               total > bodyHeight && bodyHeight > 0
@@ -399,8 +424,8 @@ export async function openDashboardUi(
               return browserPanel(
                 viewport,
                 page.blocks.length
-                  ? `Subagent dashboard · run inspection · ${theme.fg(page.refreshable ? "warning" : "muted", `${page.refreshable ? "active" : "terminal"} snapshot`)}`
-                  : "Subagent dashboard · run inspection",
+                  ? `${DASHBOARD_TITLE} · run inspection · ${theme.fg(page.refreshable ? "warning" : "muted", `${page.refreshable ? "active" : "terminal"} snapshot`)}`
+                  : `${DASHBOARD_TITLE} · run inspection`,
                 page.status === "loading"
                   ? [theme.fg("muted", "Capturing run snapshot…")]
                   : page.status === "error"
@@ -444,7 +469,7 @@ export async function openDashboardUi(
               listedRuns = listPage.capture.runs;
               selectedIdentity = listPage.selectedRunId;
               capturedAt = listPage.capture.capturedAt;
-              title = `Subagent dashboard · run history${listedRuns[0] ? ` · ${listedRuns[0].profile}` : ""} · newest first`;
+              title = `${DASHBOARD_TITLE} · run history${listedRuns[0] ? ` · ${listedRuns[0].profile}` : ""} · newest first`;
               hasEntries = listedRuns.length > 0;
             } else {
               listedRuns = ordered(listPage.summaries).map(
@@ -452,7 +477,7 @@ export async function openDashboardUi(
               );
               selectedIdentity = listPage.selectedSubagentId;
               capturedAt = now;
-              title = "Subagent dashboard";
+              title = DASHBOARD_TITLE;
               hasEntries = listPage.summaries.length > 0;
             }
             const lines =
@@ -502,7 +527,7 @@ export async function openDashboardUi(
             const pageHint = rawKeyHint("←/→", "page");
             return browserPanel(
               viewport,
-              title,
+              banner ?? title,
               lines.slice(listPage.offset, listPage.offset + bodyHeight),
               browserFooter(
                 contentWidth,

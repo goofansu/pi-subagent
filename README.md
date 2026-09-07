@@ -163,6 +163,21 @@ Active work appears first, then failed or timed-out latest runs, then completed
 work. Updates follow actual changes, without a ticking activity-age clock.
 Profiles appear in run history; IDs stay in inspection.
 
+The overview is headed by the Pi mark, the working directory Runs are started
+in, and how many subagents are in each category:
+
+```text
+ ██████    Subagent dashboard
+ ██  ██    ~/code/pi-subagent
+ ████  ██  1 active · 0 needs attention · 3 completed
+ ██    ██
+```
+
+The counts follow the same categories the list is grouped by and update as work
+settles. A narrow header keeps the working directory's leaf and names only the
+categories holding something; a screen too small for the mark falls back to the
+plain title, as run history and inspection always do.
+
 Use Up/Down to move, Left/Right or Page Up/Page Down to page, Enter to open run
 history, and Escape to go back and close. Enter on any run opens a frozen snapshot
 with the Markdown-rendered answer first, followed by metadata, transcript, and
