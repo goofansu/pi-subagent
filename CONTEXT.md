@@ -306,10 +306,14 @@ service, so a test lowers a bound by spreading over the defaults.
 **Run Scope** — what one Run holds for its lifetime: a bounded observation
 intake, one reducer fiber, a Control mailbox, a completion `Deferred` that is
 the settlement barrier, a settlement coordinator, and — nested inside it — the
-native execution scope. The Run handle carries the activation gate, the native
-execution scope, and the Run Scope as well as those mechanisms. Closing the Run
-Scope releases all of them; the nested scope can close independently, because a
-provider turn may end without ending the Run.
+native execution scope. Closing the Run Scope releases all of them; the nested
+scope can close independently, because a provider turn may end without ending
+the Run. The **Run handle** holds all of that privately and publishes
+operations over it: carry the Run through settlement, open its activation gate,
+admit one Control, and **stop** it — close the mailbox, record the stop request
+and interrupt the execution however far along it is. Only the identity, the
+intake, the folded projection and the completion barrier are readable, so no
+caller can perform half a stop.
 
 **Settlement coordinator** — the per-Run thing that captures exactly one
 terminal **candidate** into a `Deferred`. Later candidates increment a
@@ -346,10 +350,11 @@ or prevent Session closure.
 and the only writer of any of it: the fixed facts (id, Profile, context,
 BackendAgent, Scope) and the three things that change — the phase, the Run
 currently in flight, and whether the Conversation is lost. Records hold no
-fiber; the attached Run handle carries its scoped resources and completion
-barrier. Every mutation is a call on the module, so the rule that a Subagent owns
-at most one active Run is asserted where the record lives rather than at each
-call site, and finding a Run's owner is an index lookup rather than a scan.
+fiber; the attached Run handle owns the Run's scoped resources and publishes
+the operations over them, including the completion barrier a shutdown awaits.
+Every mutation is a call on the module, so the rule that a Subagent owns at most
+one active Run is asserted where the record lives rather than at each call site,
+and finding a Run's owner is an index lookup rather than a scan.
 **Not a registry** — see the historical term of that name.
 [ADR-0034](docs/adr/0034-supervisor-mechanisms-admission-lease-and-subagent-records.md).
 

@@ -98,8 +98,16 @@ Native execution fiber: detached; supplied the native execution scope.
 Run Scope registers a non-awaiting interruption request for that fiber.
 ```
 
-The Run handle holds activation, settlement, projection, execution and stop-request
-mechanisms plus a completion `Deferred`: a barrier, not the Result itself.
+The Run handle publishes the stop protocol as one operation rather than the
+mechanisms it drives. Its four operations are settle, activate, admit one
+Control, and **stop** — close the Control mailbox, record the stop request and
+interrupt the execution however far along it is, in that order. The mailbox, the
+stop request and the execution fiber it interrupts are private to the settlement
+module, so the late-fork race is decided beside the loop that forks. What the
+handle still publishes is what other modules read or feed rather than drive: the
+Run's identity, the observation intake an admission diagnostic enters by, the
+folded projection the inspection capture reads, and a completion `Deferred` — a
+barrier, not the Result itself.
 The reducer fiber is Run-scoped. Native execution is not structurally joined at
 close, so escalation can abandon it; ordinary resources release in the nested scope.
 Sources: [run-scope.ts](../extensions/subagent/runtime/run-scope.ts),
@@ -175,8 +183,8 @@ present fields without double charging. Missing fields retain streamed values.
 See [reconciliation](../extensions/subagent/domain/reconcile-run.ts) and
 [ADR-0027](adr/0027-v2-usage-normalization.md).
 
-The current normal settlement order in
-[`runToSettlement`](../extensions/subagent/runtime/run-scope.ts) is:
+The current normal settlement order, in the settlement loop the handle's
+`settle` runs ([run-scope.ts](../extensions/subagent/runtime/run-scope.ts)), is:
 
 1. Await native execution exit, or bound its exit after cancellation.
 2. Capture a terminal candidate; seal intake and close the Control mailbox.
@@ -197,8 +205,9 @@ are counted, not overwritten. The settlement guard preserves committed Results;
 pre-commit faults attempt a failed fallback, then output-gone metadata if encoding
 still fails. [ADR-0025](adr/0025-v2-terminal-settlement.md).
 
-Cancel records `requested`, `shutdown` or `timeout`, closes the mailbox and
-requests interruption without awaiting the provider; settlement continues.
+Cancel records `requested`, `shutdown` or `timeout` on the row, then calls the
+handle's stop operation, which closes the mailbox and requests interruption
+without awaiting the provider; settlement continues.
 Execution/cleanup overrun triggers counted escalation, bounded BackendAgent close
 and Conversation loss; partial output can settle. Abandoned fibers or finalizers
 may outlive this boundary: terminality after escalation does not prove external

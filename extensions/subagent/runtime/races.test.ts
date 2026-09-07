@@ -107,6 +107,53 @@ test("race: a cancel that arrives after the execution returned loses to the answ
   assert.equal(outcome.value.notifications, 1);
 });
 
+/**
+ * The same pair, with the instant pinned rather than raced.
+ *
+ * Test 1 admits either winner because both happen at once. Here the execution
+ * fiber has demonstrably exited — settlement is inside the execution scope's
+ * finalizer, which is only reached after that fiber returned its bundle — so
+ * there is one right answer: the cancel is admitted, has no execution left to
+ * interrupt, and the Run settles on the answer it already gave.
+ */
+test("a cancel arriving after the execution fiber exited settles on the answer", async () => {
+  const release = await Effect.runPromise(Deferred.make<void>());
+  const trace: string[] = [];
+  const outcome = await withSession(
+    {
+      gates: { release },
+      trace,
+      steps: [
+        [
+          emitText("the answer"),
+          { step: "gate-the-finalizer", gate: "release" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const run = startedRun(yield* rig.supervisor.start(request()));
+        yield* until(
+          "the execution finalizer to wait",
+          Effect.sync(() => trace.includes(`finalizer-waiting:${run.runId}`)),
+        );
+        const [cancelled] = yield* rig.supervisor.cancel([run.runId]);
+        yield* Deferred.succeed(release, undefined);
+        yield* untilTerminal(rig, run.runId);
+        const read = yield* rig.supervisor.result(run.runId);
+        return {
+          ...(yield* settled(rig, [run.runId])),
+          cancelOutcome: cancelled.outcome,
+          status: read.outcome === "result" ? read.result.status : read.outcome,
+        };
+      }),
+  );
+
+  assertSettledCleanly(outcome, "cancel after the execution exited");
+  assert.equal(outcome.value.cancelOutcome, "admitted");
+  assert.equal(outcome.value.status, "completed");
+});
+
 /* -------------------------------------------------------------- */
 /* 2. Timeout versus complete                                      */
 /* -------------------------------------------------------------- */
