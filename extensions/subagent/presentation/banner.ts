@@ -24,9 +24,9 @@
  * The header degrades rather than clipping. A long working directory keeps its
  * leaf rather than its root, a narrow screen names only the categories holding
  * something, and a screen too small for the mark to earn its columns is given
- * the plain title instead — {@link dashboardBannerFits} is that decision, made by the caller
- * before it sizes the viewport, because the header's height changes how many
- * rows the list gets.
+ * the plain title instead — {@link dashboardBannerFits} is that decision, made
+ * by the caller from the measured screen before it splits the body, because
+ * the header's height changes how many rows the list gets.
  */
 
 import {
@@ -35,6 +35,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { SubagentSummary } from "../domain/history.ts";
+import type { BrowserScreen } from "./browser-panel.ts";
 import {
   HISTORY_CATEGORIES,
   type HistoryCategory,
@@ -130,11 +131,7 @@ export function subagentCounts(
 }
 
 /** Whether the screen has room for the mark without starving the list. */
-export function dashboardBannerFits(viewport: {
-  readonly contentWidth: number;
-  readonly height: number;
-  readonly spacious: boolean;
-}): boolean {
+export function dashboardBannerFits(viewport: BrowserScreen): boolean {
   return (
     viewport.spacious &&
     viewport.height >= MIN_BANNER_ROWS &&
