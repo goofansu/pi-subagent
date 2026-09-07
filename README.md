@@ -98,6 +98,12 @@ Multiple active Runs:
  subagents   2 running   1 completed
 ```
 
+The ambient widget does not show elapsed Run duration. As before, an active Run
+has no elapsed timer; its optional single-Run activity age describes the semantic
+summary, not the Run. Terminal Runs are now summarized instead of appearing as
+individual `completed in …` rows. Their elapsed durations remain available in
+`/subagent dashboard` history and inspection.
+
 Finalizing and requested cancellation still count as active work; cancellation
 is shown as `cancelling`. Terminal counts disappear when a completion notice
 lands or Pi receives the Result through retrieval or a wait. Notification failure

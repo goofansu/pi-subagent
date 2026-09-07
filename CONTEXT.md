@@ -447,12 +447,20 @@ while held.
 
 **Completion hand-off** — the whole business of getting one notice to the
 parent, from the first push to whatever ends it. It **resolves** when the notice
-**landed** or its Run was **consumed**, whichever came first, and a settled
-Run's widget visibility lasts exactly that long. It **ends** as **exhausted** or
-**unannounceable**: visibility ends only on a resolution and retains explicit
+**landed** or its Run was **consumed**, whichever came first, including when a
+wait delivers the Result. A settled Run contributes aggregate widget visibility
+exactly that long, never an individual terminal row. It **ends** as **exhausted**
+or **unannounceable**: visibility ends only on a resolution and retains explicit
 attention on an ending. The widget reads four states and nothing finer — `pending`,
 `resolved`, `exhausted`, `unannounceable` — and never learns which of the two
 resolved a hand-off; anything finer is the sink's alone.
+
+**Ambient widget duration** — the widget summarizes terminal Runs rather than
+showing their former individual `completed in …` rows. Active Runs had no elapsed
+timer before this adaptive presentation and still have none. A single active
+Run's optional age measures how long its displayed semantic activity summary
+has been unchanged; elapsed Run durations remain in dashboard history and
+inspection.
 
 **Runtime probe** — the test-facing count of what is still alive: live Run
 fibers, live reducer fibers, open observation queues, open mailboxes,

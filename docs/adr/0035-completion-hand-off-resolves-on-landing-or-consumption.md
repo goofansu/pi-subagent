@@ -42,6 +42,13 @@ not a new architectural decision: delivery reports a terminal fact only it can
 observe, after releasing its pin, so the sink remains the one owner of the
 whole hand-off state and delivery still learns no host-only vocabulary.
 
+**Current presentation note.** The later adaptive ambient widget represents
+terminal Runs with aggregate visibility and attention counts, not the individual
+rows described by this decision's historical text. The lifetime decision is
+unchanged: that aggregate contribution ends on landing or consumption, with
+Result-delivering waits included by ADR-0036. Individual Run durations remain in
+dashboard history and inspection rather than the ambient widget.
+
 Everything from *Context* down is the text that was proposed, unchanged.
 
 Refines [ADR-0006](0006-completion-notifications-and-result-store.md), which

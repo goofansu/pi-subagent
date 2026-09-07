@@ -321,21 +321,43 @@ test("very narrow rows keep a Profile prefix without an empty-part delimiter", (
   );
 });
 
-test("plain and styled wide text stay within every terminal-cell boundary", () => {
-  const wide = fixtureRow({
-    identity: {
-      agent: "探索探索探索探索探索探索",
-      description: "界".repeat(80),
-    },
-    activity: "読む".repeat(40),
-  });
-  for (const width of [0, 1, 2, 8, 20, 30, 46, 80, 120]) {
-    for (const paintTheme of [theme, named]) {
-      const line = formatRunRow(wide, paintTheme, width, FIXTURE_NOW);
-      assert.ok(
-        visibleWidth(line) <= width,
-        `width ${width} produced ${visibleWidth(line)} cells`,
-      );
+test("age-bearing ASCII and wide-character widgets stay within plain and styled terminal widths", () => {
+  const fixtures = [
+    fixtureRow({
+      activity: "reading source",
+      lastActivity: { summary: "reading source", changedAt: 1_000 },
+    }),
+    fixtureRow({
+      identity: {
+        agent: "探索探索探索探索探索探索",
+        description: "界".repeat(80),
+      },
+      activity: "読む資料",
+      lastActivity: { summary: "読む資料", changedAt: 1_000 },
+    }),
+  ];
+
+  for (const [fixtureIndex, fixture] of fixtures.entries()) {
+    for (const width of [0, 1, 2, 8, 20, 32, 46, 80, 120]) {
+      for (const paintTheme of [theme, named]) {
+        const lines = renderRunRows([fixture], paintTheme, width);
+        assert.equal(lines.length, 2);
+        for (const line of lines) {
+          assert.ok(
+            visibleWidth(line) <= width,
+            `fixture ${fixtureIndex}, width ${width} produced ${visibleWidth(line)} cells`,
+          );
+        }
+        if (width === 120) {
+          assert.match(
+            stripVTControlCharacters(lines[1] ?? ""),
+            /(?:reading source|読む資料) {2}12\.4s ago/,
+          );
+          if (paintTheme === named) {
+            assert.ok((lines[1] ?? "").includes("\u001b["));
+          }
+        }
+      }
     }
   }
 });

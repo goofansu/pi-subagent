@@ -17,6 +17,12 @@ rejected — the objection was that a wait withheld the answer, and it no longer
 does. ADR-0035 carries a status note pointing here; its text is otherwise
 untouched.
 
+**Current presentation note.** The later adaptive ambient widget does not show
+the individual terminal rows named in this decision's historical text. A
+Result-delivering wait still resolves the hand-off, now removing that terminal
+Run's aggregate widget contribution. Run durations remain available in dashboard
+history and inspection.
+
 Carries forward:
 
 - [ADR-0006](0006-completion-notifications-and-result-store.md) — the Result

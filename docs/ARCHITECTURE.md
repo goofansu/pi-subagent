@@ -270,8 +270,19 @@ and `agent_settled` to retry losses only when Pi reports no pending messages.
 A lost notice is redispatched once per loss. Consumption suppresses future
 sending, but cannot remove a notice already queued in Pi.
 The [widget](../extensions/subagent/host/widget.ts) sees only `pending`, `resolved`,
-`exhausted`, `unannounceable`: terminal rows leave on landing or consumption,
-not merely settlement. [ADR-0035](adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md).
+`exhausted`, `unannounceable`. Terminal Runs contribute aggregate widget
+visibility rather than individual rows; that visibility ends when the notice
+lands or the parent consumes the Result, including through a Result-delivering
+wait, not merely when the Run settles. Exhausted and unannounceable hand-offs
+retain explicit aggregate attention rather than disappearing when delivery ends.
+[ADR-0035](adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md) /
+[ADR-0036](adr/0036-a-wait-delivers-the-result-it-waited-for.md).
+
+The ambient widget intentionally presents no elapsed Run duration. Active Runs
+did not have an elapsed timer before the adaptive widget; its single-Run age is
+instead the age of the displayed semantic activity summary. Terminal Runs are
+now aggregate counts, so their former individual `completed in …` rows are not
+shown there. Run durations remain available in dashboard history and inspection.
 
 [Notifications](../extensions/subagent/domain/notification.ts) carry label, identities,
 status, accounting and availability: `complete`, `partial`, `record-only`, derived

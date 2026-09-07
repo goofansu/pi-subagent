@@ -39,6 +39,7 @@ async function heldRun(
 
 test("the widget appears with the first live Run and its row reads as the matrix says", async (t) => {
   const rig = hostRig(t, {
+    testClock: true,
     resumableSteps: [
       [
         {
@@ -64,12 +65,22 @@ test("the widget appears with the first live Run and its row reads as the matrix
   assert.equal(rows.length, 2);
   // The title names the widget and counts the Run, and nothing else.
   assert.equal(rows[0], " subagents   1 running");
-  // The row prioritizes Profile and state, then honest current activity when
-  // it has arrived; accounting, backend, and Label use sufficient space.
+  // Starting returns after the Run publication, before the backend's first
+  // activity publication is guaranteed. Accounting can race that activity too.
   assert.match(
     rows[1],
     new RegExp(
       `^ explore {2}running( {2}${RIG_ACTIVITY} {2}0\\.0s ago)? {2}(1 turn|—) {2}pi {2}look around$`,
+    ),
+  );
+
+  // Once the real repository/subscriber pipeline has published the scripted
+  // activity, the externally rendered row must include its semantic age.
+  await rig.pump();
+  assert.match(
+    rig.host.widgetLines(120)[1] ?? "",
+    new RegExp(
+      `^ explore {2}running {2}${RIG_ACTIVITY} {2}0\\.0s ago {2}(1 turn|—) {2}pi {2}look around$`,
     ),
   );
 });
