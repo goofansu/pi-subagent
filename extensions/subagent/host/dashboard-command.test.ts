@@ -16,7 +16,7 @@ import {
 } from "../testing/host-rig.ts";
 import { PLAIN_THEME } from "../testing/stand-in-host.ts";
 
-test("both lists scroll and clamp after resize, retain selected identities, and clip Unicode Labels safely", async (t) => {
+test("a history is re-entered on the Run it was left on, under the Subagent the overview kept", async (t) => {
   const steps: readonly FakeStep[] = [{ step: "complete" }];
   const rig = hostRig(t, {
     resumableSteps: Array.from({ length: 12 }, () => steps),
@@ -31,25 +31,8 @@ test("both lists scroll and clamp after resize, retain selected identities, and 
   }
   await rig.pump();
   const browsing = await open(rig);
-  assert.doesNotMatch(rig.host.customLines(80, 10).join("\n"), /任务11/);
-  for (const [next, previous] of [
-    ["\x1b[6~", "\x1b[5~"],
-    ["\x1b[C", "\x1b[D"],
-  ]) {
-    rig.host.customKey(next);
-    assert.match(rig.host.customLines(80, 10).join("\n"), /任务6/);
-    rig.host.customKey(previous);
-    assert.match(rig.host.customLines(80, 10).join("\n"), /任务0/);
-  }
   for (let i = 0; i < 11; i += 1) rig.host.customKey(DOWN);
   assert.match(rig.host.customLines(80, 10).join("\n"), /任务11/);
-  for (const width of [0, 1, 2, 8, 20, 40, 80]) {
-    const lines = rig.host.customLines(width, 10);
-    assert.ok(lines.length <= 10);
-    assert.ok(lines.every((line) => visibleWidth(line) <= width));
-    assert.ok(lines.every((line) => !line.includes("\ufffd")));
-  }
-  assert.match(rig.host.customLines(20, 10).join("\n"), /任务11/);
   const target = ids[11];
   for (let i = 1; i < 12; i += 1) {
     const id = await resume(rig, target.subagentId, `successive ${i}`);
@@ -265,6 +248,13 @@ test("configured selection bindings drive navigation and its displayed hint", as
   assert.match(screen(rig), /› second task/);
   rig.host.customKey("k");
   assert.match(screen(rig), /› first task/);
+  // The page bindings keep their default keys, and each still means its own
+  // direction: what the browser reads from a keystroke is every binding it
+  // matched, so a page key resolved as its opposite would be read as one.
+  rig.host.customKey(PAGE_DOWN);
+  assert.match(screen(rig), /› second task/);
+  rig.host.customKey(PAGE_UP);
+  assert.match(screen(rig), /› first task/);
   await close(rig, browsing);
 });
 
@@ -438,6 +428,8 @@ test("all three levels retain a full themed surface across resize and invalidati
 
 const ESC = "\x1b";
 const ENTER = "\r";
+const PAGE_UP = "\x1b[5~";
+const PAGE_DOWN = "\x1b[6~";
 const DOWN = "\x1b[B";
 const UP = "\x1b[A";
 

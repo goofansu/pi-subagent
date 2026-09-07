@@ -18,8 +18,8 @@
 import type { RunResult, TerminalRunPhase } from "../domain/index.ts";
 import { TERMINAL_RUN_PHASES } from "../domain/index.ts";
 
-/** One terminal Run a result covers. */
-export interface RunSummary {
+/** One terminal Run the collapsed line covers. */
+export interface CollectedRun {
   readonly runId: string;
   readonly agent: string;
   readonly status: TerminalRunPhase;
@@ -27,7 +27,7 @@ export interface RunSummary {
 
 /** Which Runs a collected result covers, for the collapsed line. */
 export interface CollectedRuns {
-  readonly runs: readonly RunSummary[];
+  readonly runs: readonly CollectedRun[];
   /** Runs asked for that had not finished. Only the two waits produce these. */
   readonly stillRunning?: number;
 }
@@ -38,8 +38,8 @@ export interface ResumedRun {
   readonly runId: string;
 }
 
-/** The summary for one stored Result. */
-export function summaryOf(result: RunResult): RunSummary {
+/** The collapsed line's entry for one stored Result. */
+export function collectedRunOf(result: RunResult): CollectedRun {
   return {
     runId: result.runId,
     agent: result.agent,
@@ -51,20 +51,20 @@ function isTerminalStatus(value: unknown): value is TerminalRunPhase {
   return (TERMINAL_RUN_PHASES as readonly string[]).includes(value as string);
 }
 
-function isRunSummary(value: unknown): value is RunSummary {
+function isCollectedRun(value: unknown): value is CollectedRun {
   if (typeof value !== "object" || value === null) return false;
-  const summary = value as Record<string, unknown>;
+  const run = value as Record<string, unknown>;
   return (
-    typeof summary.runId === "string" &&
-    typeof summary.agent === "string" &&
-    isTerminalStatus(summary.status)
+    typeof run.runId === "string" &&
+    typeof run.agent === "string" &&
+    isTerminalStatus(run.status)
   );
 }
 
 export function isCollectedRuns(value: unknown): value is CollectedRuns {
   if (typeof value !== "object" || value === null) return false;
   const details = value as Record<string, unknown>;
-  return Array.isArray(details.runs) && details.runs.every(isRunSummary);
+  return Array.isArray(details.runs) && details.runs.every(isCollectedRun);
 }
 
 export function isResumedRun(value: unknown): value is ResumedRun {

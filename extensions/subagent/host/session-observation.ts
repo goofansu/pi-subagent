@@ -1,27 +1,24 @@
 /**
  * The dashboard's read-only view of one Session.
  *
- * This is the whole capability the dashboard receives. Runtime publications
- * are implementation details of summary watching, and Effect execution stays
- * behind this boundary rather than being handed to the controller.
+ * This is the whole capability the dashboard receives. What it reads comes
+ * from the application module's observation seam, so the dashboard's feed and
+ * the widget's are one rule rather than two, and Effect execution stays behind
+ * this boundary rather than being handed to the controller.
  */
-import { Clock, Effect, Stream } from "effect";
+import { Effect } from "effect";
 import {
+  captureRunHistory,
+  followSubagentSummaries,
   inspectRun as inspectRunQuery,
-  runSummaries,
-  subagentSummaries,
-} from "../application/history.ts";
-import type { RunSummary, SubagentSummary } from "../domain/history.ts";
+  type RunHistoryCapture,
+} from "../application/observation.ts";
+import type { SubagentSummary } from "../domain/history.ts";
 import type { RunId, SubagentId } from "../domain/index.ts";
 import type { RunInspection } from "../domain/inspection.ts";
 import type { SessionServices } from "../runtime/composition.ts";
-import { RunRepository } from "../runtime/repository.ts";
 
-/** History rows and the one runtime instant against which they are rendered. */
-export interface RunHistoryCapture {
-  readonly runs: readonly RunSummary[];
-  readonly capturedAt: number;
-}
+export type { RunHistoryCapture } from "../application/observation.ts";
 
 /** A read-only dashboard capability bound to exactly one Session. */
 export interface SessionObservation {
@@ -89,22 +86,9 @@ export function createSessionObservation(
       .run(
         Effect.scoped(
           Effect.gen(function* () {
-            const repository = yield* RunRepository;
-            const changes = yield* repository.subscribe();
-            // Publications only invalidate the higher-level query. Sliding
-            // buffering retains one pending refresh while a query is running.
-            const invalidations = changes.pipe(
-              Stream.map(() => undefined),
-              Stream.buffer({ capacity: 1, strategy: "sliding" }),
-            );
-            yield* Effect.forkScoped(
-              Stream.runForEach(invalidations, () =>
-                Effect.gen(function* () {
-                  const summaries = yield* subagentSummaries();
-                  if (watching && !disposed) changed(summaries);
-                }),
-              ),
-            );
+            yield* followSubagentSummaries((summaries) => {
+              if (watching && !disposed) changed(summaries);
+            });
             yield* Effect.callback<void>((resume) => {
               const stop = () => resume(Effect.void);
               if (controller.signal.aborted) stop();
@@ -130,14 +114,7 @@ export function createSessionObservation(
   return {
     watchSummaries,
     captureHistory: (subagentId) =>
-      lease.run(
-        Effect.gen(function* () {
-          const capturedAt = yield* Clock.currentTimeMillis;
-          const runs = yield* runSummaries(subagentId);
-          return Object.freeze({ runs, capturedAt });
-        }),
-        undefined,
-      ),
+      lease.run(captureRunHistory(subagentId), undefined),
     inspectRun: (runId) => lease.run(inspectRunQuery(runId), undefined),
     currentInstant: lease.currentInstant,
     dispose: () => {

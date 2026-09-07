@@ -26,12 +26,7 @@
 
 import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import {
-  Markdown,
-  Text,
-  truncateToWidth,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
+import { Markdown, Text, visibleWidth } from "@earendil-works/pi-tui";
 import type { TerminalRunPhase } from "../domain/index.ts";
 import {
   type CollectedRuns,
@@ -40,6 +35,7 @@ import {
   type ResumedRun,
 } from "./details.ts";
 import type { RenderableTheme } from "./rows.ts";
+import { fitRunLine, type RunLinePolicy } from "./run-line.ts";
 import {
   formatCharacterCount,
   formatDuration,
@@ -267,6 +263,22 @@ export function renderResumeResult(
 export const MAX_NOTICE_LABEL_WIDTH = 48;
 
 /**
+ * A notice's column budgets: agent-first, with the outcome never giving.
+ *
+ * The only part of this line that gives way is the Label, so the only budget
+ * stated here is its cap. Everything else — the agent, the outcome and the
+ * hint — is declared to the fitting as columns already spent, which is what
+ * says they are not the parts that shrink: a reader who cannot see how a Run
+ * ended has no line worth having, so a terminal narrower than the fixed parts
+ * overflows rather than cutting one of them. Those columns are *measured* at
+ * the call below rather than named here, because every one of them is painted
+ * and a colour is not a column.
+ */
+export const NOTICE_RUN_LINE: RunLinePolicy = {
+  label: { cap: MAX_NOTICE_LABEL_WIDTH },
+};
+
+/**
  * The one line a collapsed completion notice shows.
  *
  * `<agent> · <label> · <verb> in <duration>`. It answers the three questions
@@ -336,16 +348,12 @@ export function formatNotificationSummary(
   // is subtracted from. Rendered and measured rather than counted: every part
   // is themed, a colour is not a column, and a delimiter left out of the
   // arithmetic is a line three columns too wide.
-  const room = Math.min(
-    MAX_NOTICE_LABEL_WIDTH,
-    width - visibleWidth(render("")),
+  const fitted = fitRunLine(
+    { label: details.label },
+    { ...NOTICE_RUN_LINE, reserved: visibleWidth(render("")) },
+    width,
   );
   // Too narrow for even one column of label: the label gives way whole, the
-  // way a widget row's turn count does, rather than leaving `· ·` behind. The
-  // outcome never gives — a reader who cannot see how a Run ended has no line
-  // worth having — so a terminal narrower than the fixed parts overflows, and
-  // that is the honest end of what fitting can do here.
-  return room < 1
-    ? withoutLabel
-    : render(truncateToWidth(details.label, room, "…"));
+  // way a widget row's turn count does, rather than leaving `· ·` behind.
+  return fitted.label === "" ? withoutLabel : render(fitted.label);
 }

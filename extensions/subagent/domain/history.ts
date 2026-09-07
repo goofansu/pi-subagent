@@ -23,6 +23,19 @@ export interface RunSummary {
   readonly settledAt?: number;
 }
 
+/**
+ * Run history rows and the one runtime instant they are rendered against.
+ *
+ * The instant travels with the rows because a history page is frozen at
+ * entry: every age it shows is relative to when it was read, and a reader
+ * that sampled the clock separately could date the rows from a different
+ * moment than the one they were taken at.
+ */
+export interface RunHistoryCapture {
+  readonly runs: readonly RunSummary[];
+  readonly capturedAt: number;
+}
+
 export interface SubagentSummary {
   readonly subagentId: SubagentId;
   readonly phase: SubagentPhase;

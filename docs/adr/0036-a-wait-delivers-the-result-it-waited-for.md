@@ -195,3 +195,18 @@ notice to arrive on its own.
 Nothing here can lose or alter a stored Result: the wait reads the store, and
 the conformance scenarios `a-notification-follows-storage` and
 `a-notification-retry-cannot-duplicate-or-alter-settlement` pass unchanged.
+
+## Amendment — 2026-09-08
+
+The wait handlers and the `agent_result` handler no longer read the delivered
+Runs off `details.runs`. The application outcome states them: `ToolResponse`
+carries a `deliveredRuns` list naming the Runs whose Result it actually handed
+back, alongside the text and the render details, and the host records
+consumption from that field alone. Every outcome states the list, and the
+empty one is how the operations that never deliver a Result say so. The
+`details` keep their single purpose —
+what the renderer draws the collapsed row from — so naming one more Run there
+is a change to a drawing and cannot resolve a Completion hand-off. Nothing
+else moves: consumption is still recorded in `host/tools.ts` and nowhere else,
+`ResultHandoff` is unchanged, and the façade still does not know a host
+surface exists.

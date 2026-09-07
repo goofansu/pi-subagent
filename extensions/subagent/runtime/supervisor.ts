@@ -104,7 +104,6 @@ import {
   makeRunHandle,
   type RunContext,
   type RunHandle,
-  runToSettlement,
 } from "./run-scope.ts";
 import {
   type CurrentRun,
@@ -182,7 +181,6 @@ interface ForkedRun {
   readonly lease: AdmissionLease;
   /** Built and attached before the active row was published. */
   readonly handle: RunHandle;
-  readonly context: RunContext;
   /** Absent when the caller's request carried none. */
   readonly diagnostics?: AdmissionDiagnostics;
 }
@@ -434,7 +432,6 @@ const makeSupervisor = (settings: SessionSettings) =>
       record,
       lease,
       handle,
-      context,
       diagnostics: admissionDiagnostics = [],
     }: ForkedRun): Effect.Effect<void> =>
       Effect.gen(function* () {
@@ -462,7 +459,7 @@ const makeSupervisor = (settings: SessionSettings) =>
                     diagnostic,
                   });
                 }
-                return yield* runToSettlement(context, handle);
+                return yield* handle.settle;
               }).pipe(Effect.scoped),
               workScope,
             );
@@ -471,7 +468,7 @@ const makeSupervisor = (settings: SessionSettings) =>
             // is parked on the handle's activation gate. This replaces no
             // ownership handshake: the complete handle is already attached.
             yield* Effect.yieldNow;
-            yield* Deferred.succeed(handle.activation, undefined);
+            yield* handle.activate;
           }),
         );
         yield* armDefaultTimeout(handle);
@@ -750,7 +747,6 @@ const makeSupervisor = (settings: SessionSettings) =>
               record,
               lease,
               handle,
-              context: runContext,
               diagnostics: request.diagnostics,
             });
           }),
@@ -929,7 +925,6 @@ const makeSupervisor = (settings: SessionSettings) =>
               record,
               lease,
               handle,
-              context: runContext,
               diagnostics: request.diagnostics,
             });
           }),
@@ -1014,7 +1009,7 @@ const makeSupervisor = (settings: SessionSettings) =>
           return { outcome: "unsupported", runId } as const;
         }
 
-        const admitted = yield* handle.mailbox.admit(control);
+        const admitted = yield* handle.admitControl(control);
         return admitted === "invalid"
           ? ({
               outcome: "invalid",
@@ -1029,7 +1024,11 @@ const makeSupervisor = (settings: SessionSettings) =>
     /* ------------------------------------------------------------ */
 
     /**
-     * Record the request, close the mailbox, and interrupt the execution.
+     * Record the cancellation reason, then ask the Run to stop.
+     *
+     * The sequencing is this module's: the reason is on the row before the
+     * stop, so arbitration reads the first recorded reason rather than the
+     * interruption's fallback. The stop itself is one operation on the handle.
      *
      * The Run fiber is deliberately *not* interrupted: it stays alive to
      * settle, because a cancelled Run still produces one immutable result with
@@ -1055,16 +1054,7 @@ const makeSupervisor = (settings: SessionSettings) =>
         }
         const resolved = yield* resolveCurrentRun(runId);
         if (resolved.state === "current") {
-          const { handle } = resolved.current;
-          yield* handle.mailbox.close();
-          // Settlement observes this before any interruption request. Polling
-          // the execution handle keeps cancellation independent of whether
-          // the execution fiber has been forked yet.
-          yield* Deferred.succeed(handle.stopRequested, undefined);
-          if (Deferred.isDoneUnsafe(handle.executionFiber)) {
-            const running = yield* Deferred.await(handle.executionFiber);
-            running.interruptUnsafe();
-          }
+          yield* resolved.current.handle.stop;
         }
         // The request was recorded before a concurrent terminal publication;
         // it remains admitted even if there is no execution left to interrupt.

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runSummaries } from "../application/history.ts";
+import { runSummaries } from "../application/observation.ts";
 import { subagentId } from "../domain/index.ts";
 import {
   emitActivity,

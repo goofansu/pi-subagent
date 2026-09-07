@@ -34,21 +34,17 @@
  * a clock; the host supplies the event instant as plain presentation input.
  */
 
-import {
-  stripTerminalSequences,
-  truncateToWidth,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { isTerminalRunPhase, type RunPhase } from "../domain/index.ts";
-import { MAX_RUN_LABEL_WIDTH } from "./labels.ts";
 import {
-  formatRunElapsed,
-  RUN_PHASE_DISPLAY_ORDER,
-  type RunPresentation,
-  resolveRunPresentation,
-  runPhaseVerb,
-  type Tone,
-} from "./status.ts";
+  fitRunLine,
+  fitToWidth,
+  MAX_RUN_LABEL_WIDTH,
+  type RunLinePolicy,
+  runLineParts,
+} from "./run-line.ts";
+import { runPresentationFromRow } from "./run-presentation.ts";
+import { RUN_PHASE_DISPLAY_ORDER, runPhaseVerb, type Tone } from "./status.ts";
 import type { FailedHandoffStatus, RunRowView } from "./views.ts";
 
 /**
@@ -77,23 +73,42 @@ const MIN_LABEL_WIDTH = 7;
 /** A shortened activity remains useful at this width (`bash: …`, for example). */
 const MIN_ACTIVITY_WIDTH = 12;
 
-/** The columns a detail row leaves clear at each edge. */
-export const ROW_INSET = 1;
+/**
+ * The widget's column budgets: label-first, with an activity floor.
+ *
+ * The Label leads and keeps a recognisable prefix; the state word gives way
+ * only when the Label would be left with nothing beside it; the activity gives
+ * way whole rather than being cut below the width at which `bash: …` still
+ * says something. Elapsed duration reserves the right edge, and is the first
+ * thing dropped when reserving it would have cost the line useful activity —
+ * a clock is the least of what this row says.
+ *
+ * The inset is the widget's own: rows are drawn one column in from each edge,
+ * so the right-aligned duration stops one column short. Nothing pads the right
+ * column, because there is no background to carry to the edge.
+ *
+ * ADR-0035's presentation note is this value. Elapsed duration belongs to the
+ * one active Run's detail line and is sampled at the instant the host supplies;
+ * terminal Runs never reach this policy at all, because
+ * {@link renderRunRows} draws them as aggregate counts instead.
+ */
+export const WIDGET_RUN_LINE: RunLinePolicy = {
+  inset: 1,
+  plain: true,
+  label: { cap: MAX_RUN_LABEL_WIDTH },
+  status: { leaves: 1, gap: ROW_DELIMITER.length },
+  activity: {
+    needs: MIN_ACTIVITY_WIDTH,
+    leaves: MIN_LABEL_WIDTH,
+    gap: ACTIVITY_DELIMITER.length,
+  },
+  duration: { gap: ROW_DELIMITER.length, yields: true },
+};
 
 interface DetailPart {
   readonly text: string;
   readonly paint: (text: string) => string;
   readonly separator?: string;
-}
-
-function partsWidth(parts: readonly DetailPart[]): number {
-  return parts.reduce(
-    (total, part, index) =>
-      total +
-      visibleWidth(part.text) +
-      (index === 0 ? 0 : visibleWidth(part.separator ?? ROW_DELIMITER)),
-    0,
-  );
 }
 
 function paintParts(parts: readonly DetailPart[]): string {
@@ -106,86 +121,15 @@ function paintParts(parts: readonly DetailPart[]): string {
     .join("");
 }
 
-/** Inputs here are plain; discard truncator resets before applying our paint. */
-function truncatePlainText(text: string, width: number): string {
-  return stripTerminalSequences(truncateToWidth(text, width, "…"));
-}
-
-interface EssentialDetail {
-  readonly label: string;
-  readonly state?: string;
-  readonly activity?: string;
-  /** Elapsed stays hidden when reported activity was unusably narrow. */
-  readonly optionalsAllowed: boolean;
-}
-
-/** Allocate only the essential plain text; painting and optional fields come later. */
-function allocateEssentialDetail(
-  row: RunRowView,
-  presentation: RunPresentation,
-  width: number,
-): EssentialDetail {
-  if (width <= 0) return { label: "", optionalsAllowed: false };
-  const label = truncatePlainText(
-    row.identity.description,
-    MAX_RUN_LABEL_WIDTH,
-  );
-  const state = presentation.status.text;
-  const stateWidth = visibleWidth(state);
-  const labelBesideState = width - stateWidth - ROW_DELIMITER.length;
-
-  // Label has first priority until its prefix and the complete state fit.
-  if (labelBesideState < 1) {
-    return {
-      label: truncatePlainText(label, width),
-      optionalsAllowed: false,
-    };
-  }
-
-  // Match history's placeholder without reviving retained tool activity.
-  const currentActivity = presentation.currentActivity ?? "—";
-
-  const activityMinimum = Math.min(
-    MIN_ACTIVITY_WIDTH,
-    visibleWidth(currentActivity),
-  );
-  const roomForLabelAndActivity = Math.max(
-    0,
-    width - stateWidth - ROW_DELIMITER.length - ACTIVITY_DELIMITER.length,
-  );
-  let labelWidth = visibleWidth(label);
-  let activityWidth = visibleWidth(currentActivity);
-  if (labelWidth + activityWidth > roomForLabelAndActivity) {
-    labelWidth = Math.min(
-      labelWidth,
-      Math.max(
-        Math.min(MIN_LABEL_WIDTH, labelWidth),
-        roomForLabelAndActivity - activityMinimum,
-      ),
-    );
-    activityWidth = Math.max(0, roomForLabelAndActivity - labelWidth);
-  }
-  if (activityWidth < activityMinimum) {
-    return {
-      label: truncatePlainText(label, labelBesideState),
-      state,
-      optionalsAllowed: false,
-    };
-  }
-  return {
-    label: truncatePlainText(label, labelWidth),
-    state,
-    activity: truncatePlainText(currentActivity, activityWidth),
-    optionalsAllowed: true,
-  };
-}
-
 /**
  * One active Run as a single width-aware line.
  *
- * Elapsed Run duration reserves the right edge with a flexible gap, provided
- * Label, state and useful current activity still fit. Finalization and cancellation
- * omit retained activity, but duration remains independent of activity.
+ * The fitting is `run-line.ts`'s under {@link WIDGET_RUN_LINE}; what is left
+ * here is the paint. What the row *says* about a Run is resolved once, in
+ * `run-presentation.ts`, so a terminal row here reads the same as the
+ * dashboard history's rather than keeping a second rule for the activity cell.
+ * The widget draws no terminal row — {@link renderRunRows} keeps only active
+ * ones — so that branch reaches this formatter through its own interface alone.
  */
 export function formatRunRow(
   row: RunRowView,
@@ -193,47 +137,27 @@ export function formatRunRow(
   width: number,
   now: number,
 ): string {
-  const presentation = resolveRunPresentation({
-    phase: row.phase,
-    cancellationRequested: row.cancellation !== undefined,
-    cancellationReason: row.cancellation?.reason,
-    activity: row.activity,
-    lastActivity: row.lastActivity,
-  });
-  const elapsed = formatRunElapsed(row, now);
-  const elapsedWidth = visibleWidth(elapsed);
-  const reserved = allocateEssentialDetail(
-    row,
-    presentation,
-    width - elapsedWidth - ROW_DELIMITER.length,
-  );
-  // Reserve duration before allocating activity, but do not replace useful
-  // activity or the complete status with a clock on very narrow terminals.
-  const showElapsed = Boolean(
-    reserved.label && reserved.state && reserved.optionalsAllowed,
-  );
-  const essential = showElapsed
-    ? reserved
-    : allocateEssentialDetail(row, presentation, width);
+  const run = runPresentationFromRow(row);
+  const fitted = fitRunLine(runLineParts(run, now), WIDGET_RUN_LINE, width);
   const parts: DetailPart[] = [];
-  if (essential.label) {
+  if (fitted.label) {
     parts.push({
-      text: essential.label,
+      text: fitted.label,
       paint: (text) => theme.fg("toolTitle", theme.bold(text)),
     });
   }
-  if (essential.state) {
+  if (fitted.status) {
     parts.push({
-      // The shared resolver supplies the word; the tone it would carry is
+      // The shared derivation supplies the word; the tone it would carry is
       // deliberately dropped here. Only running, finalizing and cancelling
       // reach this line, and none of the three is news.
-      text: essential.state,
+      text: fitted.status,
       paint: (text) => theme.fg("muted", text),
     });
   }
-  if (essential.activity) {
+  if (fitted.activity) {
     parts.push({
-      text: essential.activity,
+      text: fitted.activity,
       separator: ` ${theme.fg("dim", "·")} `,
       paint: (text) => theme.fg("muted", text),
     });
@@ -241,13 +165,12 @@ export function formatRunRow(
 
   const line =
     paintParts(parts) +
-    (showElapsed
-      ? " ".repeat(width - partsWidth(parts) - elapsedWidth) +
-        theme.fg("dim", elapsed)
-      : "");
+    (fitted.duration === undefined
+      ? ""
+      : " ".repeat(fitted.gap) + theme.fg("dim", fitted.duration));
   return visibleWidth(line) <= width
     ? line
-    : truncateToWidth(line, width, "…", true);
+    : fitToWidth(line, width, { pad: true });
 }
 
 /** How many listed Runs are in each phase, in the shared display order. */
@@ -387,14 +310,13 @@ function formatHeader(
     if (width <= 0) return "";
     return (
       theme.fg("error", "!") +
-      truncateToWidth(
+      fitToWidth(
         ` ${[...attention, ...chips.filter((chip) => !chip.attention)].map((chip) => chip.text).join(", ")}`,
         width - 1,
-        "…",
       )
     );
   }
-  return truncateToWidth(title, width, "…");
+  return fitToWidth(title, width);
 }
 
 /** Aggregate state, with detail only for exactly one nonterminal Run. */
@@ -411,13 +333,13 @@ export function renderRunRows(
   // Rows are drawn one column in from each edge, so they are fitted two short.
   // Nothing pads the right column: with no background to carry to the edge,
   // the inset is the space the right-aligned elapsed stops one short of.
+  const inset = WIDGET_RUN_LINE.inset ?? 0;
   const lines = [
     formatHeader(widgetSummary(rows), theme, width),
     ...shown.map((row) =>
-      truncateToWidth(
-        ` ${formatRunRow(row, theme, Math.max(0, width - ROW_INSET * 2), now)}`,
+      fitToWidth(
+        ` ${formatRunRow(row, theme, Math.max(0, width - inset * 2), now)}`,
         width,
-        "…",
       ),
     ),
   ];

@@ -24,27 +24,24 @@
  * The header degrades rather than clipping. A long working directory keeps its
  * leaf rather than its root, a narrow screen names only the categories holding
  * something, and a screen too small for the mark to earn its columns is given
- * the plain title instead — {@link dashboardBannerFits} is that decision, made by the caller
- * before it sizes the viewport, because the header's height changes how many
- * rows the list gets.
+ * the plain title instead — {@link dashboardBannerFits} is that decision, made
+ * by the caller from the measured screen before it splits the body, because
+ * the header's height changes how many rows the list gets.
  */
 
-import {
-  stripTerminalSequences,
-  truncateToWidth,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { SubagentSummary } from "../domain/history.ts";
+import type { BrowserScreen } from "./browser-panel.ts";
 import {
   HISTORY_CATEGORIES,
   type HistoryCategory,
   historyCategoryCounts,
 } from "./history.ts";
 import type { RenderableTheme } from "./rows.ts";
+import { fitToWidth } from "./run-line.ts";
 
-/** Every input here is plain; discard truncator resets before painting. */
-const clipPlainText = (text: string, width: number): string =>
-  stripTerminalSequences(truncateToWidth(text, Math.max(0, width), "…"));
+/** Every input here is plain, so the shared clip discards its own resets. */
+const PLAIN = { plain: true } as const;
 
 /** The browser's own name, on every one of its screens. */
 export const DASHBOARD_TITLE = "Subagent dashboard";
@@ -99,7 +96,7 @@ export function clipPath(path: string, width: number): string {
     const candidate = `…/${segments.join("/")}`;
     if (visibleWidth(candidate) <= width) return candidate;
   }
-  return clipPlainText(path, width);
+  return fitToWidth(path, width, PLAIN);
 }
 
 /**
@@ -126,15 +123,11 @@ export function subagentCounts(
   );
   return occupied !== "" && visibleWidth(occupied) <= width
     ? occupied
-    : clipPlainText(occupied === "" ? every : occupied, width);
+    : fitToWidth(occupied === "" ? every : occupied, width, PLAIN);
 }
 
 /** Whether the screen has room for the mark without starving the list. */
-export function dashboardBannerFits(viewport: {
-  readonly contentWidth: number;
-  readonly height: number;
-  readonly spacious: boolean;
-}): boolean {
+export function dashboardBannerFits(viewport: BrowserScreen): boolean {
   return (
     viewport.spacious &&
     viewport.height >= MIN_BANNER_ROWS &&
@@ -159,7 +152,7 @@ export function dashboardBanner(
 ): readonly string[] {
   const textWidth = Math.max(0, width - MARK_WIDTH - MARK_GUTTER.length);
   const details = [
-    theme.fg("accent", clipPlainText(DASHBOARD_TITLE, textWidth)),
+    theme.fg("accent", fitToWidth(DASHBOARD_TITLE, textWidth, PLAIN)),
     theme.fg(
       "muted",
       clipPath(abbreviateHome(identity.cwd, identity.home), textWidth),

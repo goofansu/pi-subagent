@@ -3,8 +3,10 @@ import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
+  browserBody,
   browserFooter,
   browserPanel,
+  browserScreen,
   browserViewport,
 } from "./browser-panel.ts";
 import type { RenderableTheme } from "./rows.ts";
@@ -138,6 +140,26 @@ test("adaptive footer keeps complete back hints and includes ranges only when su
   assert.equal(browserFooter(25, hints), "Enter open · Esc close");
   assert.equal(browserFooter(9, hints, "1-6/30"), "Esc close");
   assert.equal(browserFooter(80, ["Esc close"]), "Esc close");
+});
+
+test("a screen is measured once and split for whichever header it settles on", () => {
+  for (const rows of [0, 1, 3, 10, 13, 24, 60]) {
+    for (const width of [0, 2, 20, 31, 32, 40, 80]) {
+      const screen = browserScreen(width, rows);
+      // The facts a header height cannot change, so a caller whose header
+      // depends on them never has to measure the screen a second time.
+      for (const headerLines of [0, 1, 4, 100]) {
+        const viewport = browserViewport(width, rows, headerLines);
+        assert.deepEqual(browserBody(screen, headerLines), viewport);
+        for (const [field, value] of Object.entries(screen))
+          assert.equal(
+            viewport[field as keyof typeof screen],
+            value,
+            `${field} at ${width}x${rows} header ${headerLines}`,
+          );
+      }
+    }
+  }
 });
 
 test("a multi-line header takes its rows from the body and is painted by its author", () => {

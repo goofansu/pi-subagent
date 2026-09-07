@@ -49,14 +49,14 @@ tests/live lanes, not alternative production modes.
 | Module | Responsibility and boundary |
 | --- | --- |
 | [`index.ts`](../extensions/subagent/index.ts) | Process-level registration; builds the production backend set through the composition entry and forwards host events. Registers nothing inside a child. |
-| [`host/`](../extensions/subagent/host/) | Pi callbacks, tool decoding, runtime binding, notification transport and UI subscriptions. Tools call the façade; Session wiring and the widget also reach runtime services. |
-| [`application/`](../extensions/subagent/application/) | Stateless façade: [`subagents.ts`](../extensions/subagent/application/subagents.ts) maps tool inputs to requests and outcomes to presentation through `start`, `resume`, `steer`, `cancel`, `wait`, `waitAll`, and `result`; [`history.ts`](../extensions/subagent/application/history.ts) exposes the read-only Effect queries `subagentSummaries`, `runSummaries`, and `inspectRun`, returning plain immutable summaries or a bounded active/terminal capture. Cannot import Pi or a backend. |
+| [`host/`](../extensions/subagent/host/) | Pi callbacks, tool decoding, runtime binding, notification transport and UI subscriptions. Tools call the façade; every surface that reads a Session — widget, dashboard source, `/subagent` and its `doctor` — reads through the application module's observation seam. No host module but a composition root may name a runtime **service**, which is enforced by binding: the host still names the composition module it builds a runtime from and the `NotificationSink` its push sink implements. |
+| [`application/`](../extensions/subagent/application/) | Stateless façade: [`subagents.ts`](../extensions/subagent/application/subagents.ts) maps tool inputs to requests and outcomes to presentation through `start`, `resume`, `steer`, `cancel`, `wait`, `waitAll`, and `result`; [`observation.ts`](../extensions/subagent/application/observation.ts) is everything a host surface may read about one Session — follow published Runs, one coalescing rule, Subagent and Run summaries, one Run's inspection capture, the Session's counters and its runtime probe. A module over the existing services, not a seventh service. Cannot import Pi or a backend. |
 | [`runtime/`](../extensions/subagent/runtime/) | Admission, resource lifetimes, settlement, index publication, storage and delivery. Knows the backend contract, not either adapter, the host, application or presentation. |
 | [`domain/`](../extensions/subagent/domain/) | Schemas, transitions, bounded projections, reconciliation, usage, Results and Notifications. Pure functions; no runtime lifetimes or provider SDKs. |
 | [`backend/contract.ts`](../extensions/subagent/backend/contract.ts) | Effect-typed, provider-neutral resource and execution contract. Shared backend helpers live alongside it. |
 | [`backend/pi/`](../extensions/subagent/backend/pi/) and [`backend/claude/`](../extensions/subagent/backend/claude/) | Native construction, options, translation, execution and retained Conversation state. Neither adapter imports the runtime, host, presentation or the other adapter. |
 | [`profiles/`](../extensions/subagent/profiles/discovery.ts) | Filesystem discovery; delegates parsing to the domain and validation to a supplied callback. |
-| [`presentation/`](../extensions/subagent/presentation/) | Outcome prose, RunCards, rows and renderers. Depends on domain values and Pi display utilities, not Effect or runtime services. |
+| [`presentation/`](../extensions/subagent/presentation/) | Outcome prose, RunCards, rows, renderers, and the dashboard's [page reducer](../extensions/subagent/presentation/browser-page.ts) — one page value and one pure step from a key, a screen or an arrived capture to the next page and the lines it draws. Entered through the module's barrel. [`run-presentation.ts`](../extensions/subagent/presentation/run-presentation.ts) is the one derivation from a published index row or the domain's Run summary to what a surface says about a Run; [`run-line.ts`](../extensions/subagent/presentation/run-line.ts) is the one algebra for fitting that into a width, the one owner of the Label cap the Run surfaces share, and the one wrapper for clipping and padding a line over Pi's width primitive. The widget, the dashboard history and the notice renderer supply a policy — named column budgets — and keep only their painting; a notice's further Label cap is its own policy value. Depends on domain values and Pi display utilities, not Effect or runtime services; a reducer over a value, so no lifecycle state comes with it. |
 | [`testing/`](../extensions/subagent/testing/) | Scripted backends, native stand-ins, Session/host rigs and shared conformance scenarios. Not production orchestration. |
 
 [`boundaries.test.ts`](../extensions/subagent/boundaries.test.ts) checks these
@@ -98,8 +98,16 @@ Native execution fiber: detached; supplied the native execution scope.
 Run Scope registers a non-awaiting interruption request for that fiber.
 ```
 
-The Run handle holds activation, settlement, projection, execution and stop-request
-mechanisms plus a completion `Deferred`: a barrier, not the Result itself.
+The Run handle publishes the stop protocol as one operation rather than the
+mechanisms it drives. Its four operations are settle, activate, admit one
+Control, and **stop** — close the Control mailbox, record the stop request and
+interrupt the execution however far along it is, in that order. The mailbox, the
+stop request and the execution fiber it interrupts are private to the settlement
+module, so the late-fork race is decided beside the loop that forks. What the
+handle still publishes is what other modules read or feed rather than drive: the
+Run's identity, the observation intake an admission diagnostic enters by, the
+folded projection the inspection capture reads, and a completion `Deferred` — a
+barrier, not the Result itself.
 The reducer fiber is Run-scoped. Native execution is not structurally joined at
 close, so escalation can abandon it; ordinary resources release in the nested scope.
 Sources: [run-scope.ts](../extensions/subagent/runtime/run-scope.ts),
@@ -175,8 +183,8 @@ present fields without double charging. Missing fields retain streamed values.
 See [reconciliation](../extensions/subagent/domain/reconcile-run.ts) and
 [ADR-0027](adr/0027-v2-usage-normalization.md).
 
-The current normal settlement order in
-[`runToSettlement`](../extensions/subagent/runtime/run-scope.ts) is:
+The current normal settlement order, in the settlement loop the handle's
+`settle` runs ([run-scope.ts](../extensions/subagent/runtime/run-scope.ts)), is:
 
 1. Await native execution exit, or bound its exit after cancellation.
 2. Capture a terminal candidate; seal intake and close the Control mailbox.
@@ -197,8 +205,9 @@ are counted, not overwritten. The settlement guard preserves committed Results;
 pre-commit faults attempt a failed fallback, then output-gone metadata if encoding
 still fails. [ADR-0025](adr/0025-v2-terminal-settlement.md).
 
-Cancel records `requested`, `shutdown` or `timeout`, closes the mailbox and
-requests interruption without awaiting the provider; settlement continues.
+Cancel records `requested`, `shutdown` or `timeout` on the row, then calls the
+handle's stop operation, which closes the mailbox and requests interruption
+without awaiting the provider; settlement continues.
 Execution/cleanup overrun triggers counted escalation, bounded BackendAgent close
 and Conversation loss; partial output can settle. Abandoned fibers or finalizers
 may outlive this boundary: terminality after escalation does not prove external
@@ -254,7 +263,10 @@ and releases through finalization, so aborting one waiter affects only it.
 collection path. Already-terminal Runs are excluded from that snapshot.
 
 [Handlers](../extensions/subagent/host/tools.ts) hold notices before waiting and
-mark returned Results consumed before release. Those notices are dropped; others
+mark returned Results consumed before release, reading the Runs the application
+outcome **states** it delivered rather than inferring them from the collapsed
+row's payload, so a Run added to that row for display alone records no
+consumption. Those notices are dropped; others
 send when no covering hold remains. The all-wait holds the Session while the façade
 reads ids. Abort races only the waiter, returning an immediate collection without
 cancelling children. [ADR-0036](adr/0036-a-wait-delivers-the-result-it-waited-for.md).
@@ -279,11 +291,14 @@ retain explicit aggregate attention rather than disappearing when delivery ends.
 [ADR-0035](adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md) /
 [ADR-0036](adr/0036-a-wait-delivers-the-result-it-waited-for.md).
 
-The ambient widget intentionally presents no elapsed Run duration. Active Runs
-did not have an elapsed timer before the adaptive widget; its single-Run age is
-instead the age of the displayed semantic activity summary. Terminal Runs are
-now aggregate counts, so their former individual `completed in …` rows are not
-shown there. Run durations remain available in dashboard history and inspection.
+The ambient widget's one active Run shows its elapsed duration, sampled on Run
+publications rather than on a ticking timer or an incidental render, and
+independent of the activity beside it. Terminal Runs are aggregate counts, so
+their former individual `completed in …` rows are not shown there; their final
+durations remain in dashboard history and inspection. That lives as the
+widget's policy value in [rows.ts](../extensions/subagent/presentation/rows.ts)
+rather than as a rule inside the fitted-line module — ADR-0035's presentation
+note expressed as a value.
 
 [Notifications](../extensions/subagent/domain/notification.ts) carry label, identities,
 status, accounting and availability: `complete`, `partial`, `record-only`, derived
@@ -292,8 +307,9 @@ whole (`output` present); longer output gets a 500-byte preview. Every notice
 names the exact `agent_result` call; inlined ones say no fetch is needed.
 Storage stays authoritative. [ADR-0037](adr/0037-a-notice-carries-a-short-output-whole.md).
 
-The [Run browser](../extensions/subagent/host/runs-command.ts) opens frozen
-inspection through the application query and [runtime capture](../extensions/subagent/runtime/inspection.ts),
+The [Subagent dashboard](../extensions/subagent/host/dashboard-command.ts) opens
+frozen inspection through the application module's observation seam and
+[runtime capture](../extensions/subagent/runtime/inspection.ts),
 not the public Result tool. One synchronous capture callback reads published
 phase, already-folded bounded Projection content, known Subagent conditions and
 capture time without yielding or acquiring a lock. It clones and freezes active
@@ -376,14 +392,21 @@ The sink drops unlanded notices and holds rather than forwarding them to the
 next Session. Scope-owned widget subscriptions and UI resources are released.
 [Shutdown implementation](../extensions/subagent/runtime/supervisor.ts).
 
-The [Run browser](../extensions/subagent/host/runs-command.ts) observes lightweight
-summaries only while its overview is open. A scoped one-second runtime-clock tick
-advances ages (time since semantic activity change, not a stall heuristic).
-Repository changes and ticks share one pending draw, acknowledged by rendering;
-a slow terminal draws the latest rows rather than queued frames. History remains
-an entry/re-entry snapshot. Detachment invalidates summary readers after terminal
-publication so the actual Subagent phase becomes idle without changing settlement
-order. Neither hand-off nor Conversation loss is subscribed to for grouping.
+The [Subagent dashboard](../extensions/subagent/host/dashboard-command.ts) keeps
+only transport: Pi's custom UI surface, a key resolved against the operator's
+bindings, the asynchronous reads a step asks for, and the generation guard
+deciding which may still land. Which page an operator is on, what a key means
+there, the offset clamp, the header height and every line the panel draws are
+the [page reducer's](../extensions/subagent/presentation/browser-page.ts). It
+observes lightweight summaries only while its overview is open, and dates their
+ages from a runtime-clock instant sampled on publication and on navigation
+rather than from a timer: there is no tick, so nothing ages between the two.
+Repository changes share one pending draw, acknowledged by rendering; a slow
+terminal draws the latest rows rather than queued frames. History remains an
+entry/re-entry snapshot. Detachment
+invalidates summary readers after terminal publication so the actual Subagent
+phase becomes idle without changing settlement order. Neither hand-off nor
+Conversation loss is subscribed to for grouping.
 
 Tests are colocated. [Conformance](../extensions/subagent/testing/conformance.ts)
 runs one observable contract against resumable/one-shot fakes and Pi/Claude stand-ins,
@@ -396,6 +419,8 @@ reports both plus hand-off counts, not provider continuation identities.
 | Lifecycle races/leaks | [races](../extensions/subagent/runtime/races.test.ts), [faults](../extensions/subagent/runtime/faults.test.ts), [backpressure](../extensions/subagent/runtime/backpressure.test.ts), [stress](../extensions/subagent/runtime/stress.test.ts) |
 | Parent-visible behavior | [host end-to-end](../extensions/subagent/host/end-to-end.test.ts), [tools](../extensions/subagent/host/tools.test.ts), [push sink](../extensions/subagent/host/push-sink.test.ts) |
 | Output changes | [RunCard](../extensions/subagent/presentation/run-card.ts), [result body](../extensions/subagent/presentation/result-body.ts), [notification text](../extensions/subagent/presentation/notification-text.ts) |
+| What a row says about a Run | [Run presentation](../extensions/subagent/presentation/run-presentation.ts), [status](../extensions/subagent/presentation/status.ts) |
+| How wide a row's parts are | [Run line](../extensions/subagent/presentation/run-line.ts) and the three policy values that name its budgets |
 | Architecture changes | [boundaries](../extensions/subagent/boundaries.test.ts), [contract shape](../extensions/subagent/backend/contract.test.ts) |
 
 [Commands](../package.json): `npm run typecheck`, `npm test`, `npm run test:conformance`;
