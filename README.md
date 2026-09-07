@@ -18,11 +18,11 @@ no separate Profile installation is needed.
 
 The package also installs two skills, available from any working directory:
 
-- `/skill:implement-and-review <spec-or-tickets>` — runs an `implementer` and
+- `/skill:implement-and-review <specification>` — runs an `implementer` and
   fresh `spec-reviewer` / `standards-reviewer` pairs, revises blocking findings,
   and commits each clean unit with hooks enabled. Requires an initially clean
   working tree; stops on contract gaps or review stalemates. Herdr is not needed.
-- `/skill:herdr-implement-spec <spec>` — explicitly invoked, optional Herdr
+- `/skill:herdr-implement-spec <specification>` — explicitly invoked, optional Herdr
   orchestration of a ticket dependency graph. Ticket agents are independent
   main Pi agents in separate worktrees, each running implement-and-review with
   its own one-level Subagents. Their branches merge into a dedicated integration
@@ -176,7 +176,7 @@ The package includes five specialists in [`agents/`](agents/):
 | `explore` | Read-only codebase exploration | Pi / `opencode/claude-haiku-4-5` |
 | `implementer` | Implementation, leaving changes uncommitted for review | Pi / `openai-codex/gpt-5.6-sol` |
 | `researcher` | Cited research saved to a Markdown note | Pi / `opencode/claude-haiku-4-5` |
-| `spec-reviewer` | Findings against the caller's spec | Claude / `opus` |
+| `spec-reviewer` | Findings against the caller's specification | Claude / `opus` |
 | `standards-reviewer` | Findings against repository standards | Claude / `sonnet` |
 
 Bundled resources resolve from the installed package, independently of the

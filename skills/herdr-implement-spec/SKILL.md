@@ -4,21 +4,21 @@ description: Implement a specification in Herdr.
 disable-model-invocation: true
 ---
 
-You have been provided a spec. This spec should have tickets associated with it, describing how to implement the spec.
+You have been provided a specification. It should have tickets associated with it, describing how to implement it.
 
-The goal is a single branch implementing the entire spec, handed back ready to review.
+The goal is a single branch implementing the entire specification, handed back ready to review.
 
 The tickets are not a list of steps. They are a **task graph** with blocking relationships between them. This means there is always a **frontier** of tickets which are ready to be grabbed.
 
-**Ticket agents** are Herdr pi agents, each a main agent in its own worktree and pane, prompted with `/skill:implement-and-review <ticket>`. You orchestrate them; they implement, review, and commit their own ticket. Use the herdr skill for the commands.
+**Ticket agents** are Herdr pi agents, each a main agent in its own worktree and pane, prompted with `/skill:implement-and-review <ticket>`, each ticket being that agent's specification. You orchestrate them; they implement, review, and commit their own ticket. Use the herdr skill for the commands.
 
-Communication to and from ticket agents should be sparse. Communicate primarily through **context pointers**: to the spec, tickets, research notes, and previous commits. Don't duplicate information already available via pointers.
+Communication to and from ticket agents should be sparse. Communicate primarily through **context pointers**: to the specification, tickets, research notes, and previous commits. Don't duplicate information already available via pointers.
 
 Ticket agents run unfocused, so the user keeps their pane and every ticket on the frontier runs at once, for **maximum concurrency**.
 
 ## Steps
 
-1. Read the spec and tickets. Read enough to understand the task graph.
+1. Read the specification and its tickets. Read enough to understand the task graph.
 
 2. (optional) Use an **exploration subagent** to conduct any exploration required by the tickets - relevant codebase files or external documentation. Ensure the exploration subagent can save files - it should save its markdown notes in a directory outside the repo, so every ticket agent can be pointed at them. This lets ticket agents focus on implementation rather than exploration.
 
@@ -26,8 +26,8 @@ Ticket agents run unfocused, so the user keeps their pane and every ticket on th
 
 4. Work the frontier until every ticket is merged:
    - Start a ticket agent for each frontier ticket not yet started, all of them at once. Each gets a worktree cut from the current tip of the integration branch. Cutting from the current tip is what carries a blocker's merged work into the ticket that depends on it.
-   - Every prompt starts with `/skill:implement-and-review`, then the ticket and pointers to the spec and the exploration notes: `/skill:implement-and-review <ticket> against <spec>, notes in <notes-dir>`.
-   - Wait on the agents. A settled agent has stopped, which is a signal to look rather than proof of success: it may have ended clean, or stopped on a spec gap or a review stalemate. Read its final report, and answer or surface anything it is blocked on.
+   - Every prompt starts with `/skill:implement-and-review`, then the ticket and pointers to the specification and the exploration notes: `/skill:implement-and-review <ticket> against <specification>, notes in <notes-dir>`.
+   - Wait on the agents. A settled agent has stopped, which is a signal to look rather than proof of success: it may have ended clean, or stopped on a specification gap or a review stalemate. Read its final report, and answer or surface anything it is blocked on.
    - As each ticket finishes green, merge its branch into the integration branch, then remove its worktree and delete the ticket branch. Merge one at a time; the other ticket agents keep running.
    - Every merge grows the frontier. Start the newly-ready tickets straight away rather than waiting for the rest of the round.
 

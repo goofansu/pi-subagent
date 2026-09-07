@@ -1,6 +1,6 @@
 ---
 name: implement-and-review
-description: Implement a spec or tickets through an implementer and fresh spec and standards reviews. Use when user asks to implement-and-review a spec or tickets explicitly.
+description: Implement a specification through an implementer and fresh specification and standards reviews. Use when user asks to implement-and-review a specification explicitly.
 ---
 
 # Implement and review
@@ -9,9 +9,9 @@ description: Implement a spec or tickets through an implementer and fresh spec a
 unit → implementer ⇄ fresh spec-reviewer + standards-reviewer → commit → next unit
 ```
 
-The spec is the contract. Execute it as written. Where it is silent, contradictory,
-or wrong in a way that requires an implementation choice, stop and report the
-gap rather than choosing for the user.
+The specification is the contract. Execute it as written. Where it is silent,
+contradictory, or wrong in a way that requires an implementation choice, stop
+and report the gap rather than choosing for the user.
 
 Use the implementer's report and the two reviewer verdicts to decide the loop;
 do not form a third code-review opinion. Once a subagent Run is active, wait for
@@ -22,12 +22,12 @@ stop condition.
 
 ## Prepare
 
-Read the full spec or ticket set. Preparation is complete when the units are in
+Read the full specification. Preparation is complete when the units are in
 dependency order, every acceptance criterion is accounted for by the relevant
 unit or units, and the required repository checks are identified.
 
-Treat a single unsliced spec as one unit. Process multiple tickets one at a time
-in dependency order.
+Treat an unsliced specification as one unit. Where it is already sliced into
+several, process them one at a time in dependency order.
 
 Require `git status --short` to be empty before the first unit. Existing tracked
 or untracked work would contaminate the reviewers' `git diff HEAD` scope, so a
@@ -44,20 +44,20 @@ contribute to it. The committed tree and the new unit brief are the handoff
 source of truth.
 
 Brief a new or resumed implementer with the exact unit contract, required shared
-spec context, completed prerequisite commits, and prior reported decisions that
-constrain the unit. Save the stable Subagent ID selected for the unit and resume
-that ID for revisions.
+specification context, completed prerequisite commits, and prior reported
+decisions that constrain the unit. Save the stable Subagent ID selected for the
+unit and resume that ID for revisions.
 
 Keep only one implementation Run active because all Runs share the same working
 tree. The implementation step is complete when its report accounts for:
 
 - changes made and acceptance criteria met or unmet;
 - required checks and their results; and
-- spec gaps, deviations, and remaining risks.
+- specification gaps, deviations, and remaining risks.
 
 Return an incomplete report or failing check to the same implementer with the
-missing item or exact failure. A spec gap that requires a choice stops the
-session with the unit uncommitted.
+missing item or exact failure. A specification gap that requires a choice stops
+the session with the unit uncommitted.
 
 ### 2. Review
 
@@ -67,8 +67,8 @@ re-review.
 
 Give both reviewers the scope (`git diff HEAD` plus untracked files) and the
 latest implementer report. Give `spec-reviewer` the exact unit contract and
-required shared spec context. Let `standards-reviewer` discover the applicable
-repository standards and keep requested behavior outside its axis.
+required shared specification context. Let `standards-reviewer` discover the
+applicable repository standards and keep requested behavior outside its axis.
 
 On re-review, give each reviewer only that axis's prior findings and the
 implementer's responses. Keep the reports separate, wait for both, and decide
