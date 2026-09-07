@@ -231,7 +231,7 @@ test("run history keeps its entry-time elapsed duration until it is reread", asy
   await rig.advanceClock(50_000);
   rig.host.customKey(DOWN);
   assert.match(screen(rig), /Running.*10\.0s/);
-  assert.doesNotMatch(screen(rig), /1m/);
+  assert.doesNotMatch(stripVTControlCharacters(screen(rig)), /1m/); // Not a 256-color escape.
 
   rig.host.customKey(ESC);
   await rig.pump();
