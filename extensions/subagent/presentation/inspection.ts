@@ -56,11 +56,9 @@ export function inspectionBlocks(
   const presentation = resolveRunPresentation({
     phase: result?.status ?? summary.phase,
     cancellationRequested: cancellation !== undefined,
-    ...(cancellation === undefined ? {} : { cancellationReason: cancellation }),
-    ...(summary.activity === undefined ? {} : { activity: summary.activity }),
-    ...(summary.lastActivity === undefined
-      ? {}
-      : { lastActivity: summary.lastActivity }),
+    cancellationReason: cancellation,
+    activity: summary.activity,
+    lastActivity: summary.lastActivity,
   });
   add("heading", `Label: ${result?.description ?? summary.label}`);
   add(

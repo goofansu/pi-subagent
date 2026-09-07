@@ -22,13 +22,9 @@ const presentation = (run: RunSummary) =>
   resolveRunPresentation({
     phase: run.phase,
     cancellationRequested: run.cancellationReason !== undefined,
-    ...(run.cancellationReason === undefined
-      ? {}
-      : { cancellationReason: run.cancellationReason }),
-    ...(run.activity === undefined ? {} : { activity: run.activity }),
-    ...(run.lastActivity === undefined
-      ? {}
-      : { lastActivity: run.lastActivity }),
+    cancellationReason: run.cancellationReason,
+    activity: run.activity,
+    lastActivity: run.lastActivity,
   });
 
 const statusText = (run: RunSummary) => {

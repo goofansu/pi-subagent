@@ -185,13 +185,9 @@ export function formatRunRow(
   const presentation = resolveRunPresentation({
     phase: row.phase,
     cancellationRequested: row.cancellation !== undefined,
-    ...(row.cancellation === undefined
-      ? {}
-      : { cancellationReason: row.cancellation.reason }),
-    ...(row.activity === undefined ? {} : { activity: row.activity }),
-    ...(row.lastActivity === undefined
-      ? {}
-      : { lastActivity: row.lastActivity }),
+    cancellationReason: row.cancellation?.reason,
+    activity: row.activity,
+    lastActivity: row.lastActivity,
   });
   const elapsed = formatRunElapsed(row, now);
   const elapsedWidth = visibleWidth(elapsed);

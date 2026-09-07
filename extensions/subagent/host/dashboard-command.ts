@@ -9,6 +9,8 @@ import {
   rawKeyHint,
 } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
+import type { RunSummary, SubagentSummary } from "../domain/history.ts";
+import type { RunId, SubagentId } from "../domain/index.ts";
 import {
   browserFooter,
   browserPanel,
@@ -26,11 +28,7 @@ import {
 } from "../presentation/inspection.ts";
 import type {
   RunHistoryCapture,
-  RunId,
-  RunSummary,
   SessionObservationSource,
-  SubagentId,
-  SubagentSummary,
 } from "./session-observation.ts";
 import type { CompletionHandoffView } from "./widget.ts";
 
@@ -72,6 +70,14 @@ const emptyHistoryCapture = (): RunHistoryCapture => ({
   capturedAt: 0,
 });
 
+const createOverviewPage = (): OverviewPage => ({
+  kind: "overview",
+  status: "loading",
+  summaries: [],
+  selectedSubagentId: undefined,
+  offset: 0,
+});
+
 export async function openDashboardUi(
   handle: SessionObservationSource,
   ctx: ExtensionContext,
@@ -95,13 +101,7 @@ export async function openDashboardUi(
     await ctx.ui.custom<void>(
       (tui, theme, keys, done) => {
         const historyPages = new Map<SubagentId, HistoryPage>();
-        let overviewPage: OverviewPage = {
-          kind: "overview",
-          status: "loading",
-          summaries: [],
-          selectedSubagentId: undefined,
-          offset: 0,
-        };
+        let overviewPage = createOverviewPage();
         let page: DashboardPage = overviewPage;
         let detailPageSize = 1;
         let pageSize = 1;
@@ -133,13 +133,7 @@ export async function openDashboardUi(
           session.dispose();
           pending = false;
           historyPages.clear();
-          overviewPage = {
-            kind: "overview",
-            status: "loading",
-            summaries: [],
-            selectedSubagentId: undefined,
-            offset: 0,
-          };
+          overviewPage = createOverviewPage();
           page = overviewPage;
           redraw = undefined;
           finish = undefined;

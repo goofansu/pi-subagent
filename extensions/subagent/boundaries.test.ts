@@ -1175,7 +1175,7 @@ export function findBoundaryViolations(
   }
 
   // 20. The dashboard sees the Session through its read-only observation
-  //     interface. It may still name host and presentation types, but it may
+  //     interface. It may name domain, host, and presentation types, but it may
   //     not recover the old arbitrary Effect runner or know which application
   //     query or runtime publication implements observation.
   const dashboardFile = path.join(graph.hostRoot, "dashboard-command.ts");
@@ -1186,7 +1186,6 @@ export function findBoundaryViolations(
         isEffectPackage(specifier) ||
         (target !== undefined &&
           (isInside(target, graph.applicationRoot) ||
-            isInside(target, graph.domainRoot) ||
             isInside(target, graph.runtimeRoot)))
       ) {
         violations.add(
@@ -2365,7 +2364,7 @@ test("no file in the extension may spawn a child process", (t) => {
   ]);
 });
 
-test("the dashboard names only its observation interface and presentation, never Effect, domain, application, or runtime modules", (t) => {
+test("the dashboard may name domain types but never Effect, application queries, or runtime publications", (t) => {
   const { graph, write } = fixtureGraph(t, "dashboard-observation-boundary");
   write("extensions/subagent/index.ts", "export {};\n");
   write("extensions/subagent/domain/history.ts", "export interface Row {}\n");
@@ -2394,7 +2393,6 @@ test("the dashboard names only its observation interface and presentation, never
 
   assert.deepEqual(findBoundaryViolations(graph), [
     `${describe(path.join(graph.hostRoot, "dashboard-command.ts"))} imports ${describe(path.join(graph.applicationRoot, "history.ts"))}, and the dashboard observes through the Session-bound observation interface`,
-    `${describe(path.join(graph.hostRoot, "dashboard-command.ts"))} imports ${describe(path.join(graph.domainRoot, "history.ts"))}, and the dashboard observes through the Session-bound observation interface`,
     `${describe(path.join(graph.hostRoot, "dashboard-command.ts"))} imports ${describe(path.join(graph.runtimeRoot, "repository.ts"))}, and the dashboard observes through the Session-bound observation interface`,
     `${describe(path.join(graph.hostRoot, "dashboard-command.ts"))} imports effect, and the dashboard observes through the Session-bound observation interface`,
   ]);

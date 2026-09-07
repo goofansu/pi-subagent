@@ -17,9 +17,6 @@ import type { RunInspection } from "../domain/inspection.ts";
 import type { SessionServices } from "../runtime/composition.ts";
 import { RunRepository } from "../runtime/repository.ts";
 
-export type { RunSummary, SubagentSummary } from "../domain/history.ts";
-export type { RunId, SubagentId } from "../domain/index.ts";
-
 /** History rows and the one runtime instant against which they are rendered. */
 export interface RunHistoryCapture {
   readonly runs: readonly RunSummary[];

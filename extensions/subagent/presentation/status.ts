@@ -29,9 +29,9 @@ export type Tone = "warning" | "success" | "error" | "muted";
 export interface RunPresentationInput {
   readonly phase: RunPhase;
   readonly cancellationRequested: boolean;
-  readonly cancellationReason?: CancellationReason;
-  readonly activity?: string;
-  readonly lastActivity?: SemanticActivity;
+  readonly cancellationReason?: CancellationReason | undefined;
+  readonly activity?: string | undefined;
+  readonly lastActivity?: SemanticActivity | undefined;
 }
 
 /** The operational meaning shared by compact and detailed Run surfaces. */

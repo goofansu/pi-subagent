@@ -617,7 +617,7 @@ test("duplicate Profiles retain resolved terminal history and Resume grouping; l
 });
 
 for (const reason of ["requested", "timeout"] as const) {
-  test(`${reason} cancellation agrees across dashboard and widget through policy-driven settlement`, async (t) => {
+  test(`${reason} cancellation agrees while settling; terminal widget visibility follows hand-off`, async (t) => {
     const rig = hostRig(t, {
       testClock: true,
       policy: {
@@ -661,7 +661,23 @@ for (const reason of ["requested", "timeout"] as const) {
     const terminalDashboard = screen(rig);
     assert.match(terminalDashboard, /Cancelled/);
     assert.ok(terminalDashboard.includes(reason));
-    assert.deepEqual(rig.host.widgetLines(120), [" subagents   1 cancelled"]);
+
+    // Terminal Runs intentionally collapse into aggregate widget counts, so
+    // their reason and tone remain available in dashboard/presentation rows,
+    // not in an individual widget row. The aggregate stays only until the
+    // completion hand-off lands or the Result is consumed.
+    const terminalWidget = rig.host.widgetLines(120);
+    assert.deepEqual(terminalWidget, [" subagents   1 cancelled"]);
+    assert.doesNotMatch(terminalWidget.join("\n"), /requested|timeout/);
+    assert.deepEqual(rig.installation.sink.unlanded(), [work.runId]);
+
+    const [notice] = rig.host.sent();
+    assert.ok(notice);
+    await rig.host.messageStart({ role: "custom", ...notice.message });
+    await rig.pump();
+    assert.equal(rig.host.hasWidget(), false);
+    assert.deepEqual(rig.host.widgetLines(120), []);
+    assert.ok(screen(rig).includes(reason));
     await close(rig, browsing);
   });
 }
