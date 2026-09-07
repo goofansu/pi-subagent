@@ -1,13 +1,12 @@
 /**
- * One static, Session-owned browser. Only entry/re-entry reads; no subscriptions
- * or timers. The viewport includes category headings and two-line rows, with a
- * dedicated Label line. It therefore scrolls rendered lines while keeping
+ * A Session-owned browser: live overview, entry-only history. The viewport
+ * includes category headings and two-line rows, with a dedicated Label line. It therefore scrolls rendered lines while keeping
  * selection attached to Subagent/Run IDs rather than treating every line as a
  * SelectList item.
  */
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import { runSummaries, subagentSummaries } from "../application/history.ts";
+import { runSummaries } from "../application/history.ts";
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
 import type { RunId, SubagentId } from "../domain/index.ts";
 import {
@@ -15,6 +14,7 @@ import {
   historyCategory,
   historyRow,
 } from "../presentation/history.ts";
+import { observeOverview } from "./overview-observation.ts";
 import type { SessionHandle } from "./session-handle.ts";
 
 export async function openRunsUi(
@@ -48,12 +48,24 @@ export async function openRunsUi(
         let generation = 0;
         let offset = 0;
         let pageSize = 1;
-        let redraw: (() => void) | undefined = () => tui.requestRender();
+        // A request remains pending until render acknowledges it, not until a
+        // timer fires. Slow hosts therefore owe one frame reading the newest
+        // rows, however many repository changes or age ticks arrived meanwhile.
+        let pending = false;
+        let now = 0;
+        let stopOverview: (() => void) | undefined;
+        let redraw: (() => void) | undefined = () => {
+          if (closed || pending) return;
+          pending = true;
+          tui.requestRender();
+        };
         let finish: (() => void) | undefined = () => done(undefined);
 
         const dispose = () => {
           closed = true;
           generation += 1;
+          stopOverview?.();
+          stopOverview = undefined;
           session.dispose();
           overview = [];
           runs = [];
@@ -74,6 +86,8 @@ export async function openRunsUi(
           );
         const read = async () => {
           const version = ++generation;
+          stopOverview?.();
+          stopOverview = undefined;
           const requestedSubagentId = openSubagentId;
           loading = true;
           error = false;
@@ -96,14 +110,37 @@ export async function openRunsUi(
                 selectedRuns.set(requestedSubagentId, runs[0].runId);
               }
             } else {
-              const next = await session.run(subagentSummaries(), []);
-              if (closed || version !== generation) return;
-              overview = next;
-              if (
-                !overview.some((row) => row.subagentId === selectedSubagent)
-              ) {
-                selectedSubagent = ordered()[0]?.subagentId;
-              }
+              stopOverview = observeOverview(
+                session,
+                (next, instant) => {
+                  if (closed || version !== generation) return;
+                  overview = next;
+                  now = instant;
+                  loading = false;
+                  if (
+                    !overview.some((row) => row.subagentId === selectedSubagent)
+                  )
+                    selectedSubagent = ordered()[0]?.subagentId;
+                  redraw?.();
+                },
+                (instant) => {
+                  if (closed || version !== generation) return;
+                  now = instant;
+                  if (
+                    overview.some(
+                      (row) => (row.current ?? row.latest).lastActivity,
+                    )
+                  )
+                    redraw?.();
+                },
+                () => {
+                  if (closed || version !== generation) return;
+                  error = true;
+                  loading = false;
+                  redraw?.();
+                },
+              );
+              return;
             }
           } catch {
             if (closed || version !== generation) return;
@@ -165,6 +202,7 @@ export async function openRunsUi(
           },
           render(width) {
             if (closed) return [];
+            pending = false;
             const height = Math.max(
               3,
               Math.floor((tui.terminal.rows || 24) * 0.8),
@@ -185,6 +223,7 @@ export async function openRunsUi(
                 Math.max(0, width - 2),
                 identity,
                 phase,
+                openSubagentId ? undefined : now,
               );
               lines.push(
                 ...row.map((line, index) =>

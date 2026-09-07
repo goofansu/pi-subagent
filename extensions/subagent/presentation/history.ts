@@ -25,6 +25,7 @@ export function historyRow(
   width: number,
   identity: string,
   subagentPhase?: string,
+  now?: number,
 ): readonly string[] {
   const clip = (text: string, columns = width) =>
     truncateToWidth(text, Math.max(0, columns), "…");
@@ -32,10 +33,15 @@ export function historyRow(
     [subagentPhase, runPhaseVerb(run.phase)].filter(Boolean).join(" · ") +
     (run.cancellationReason ? ` (${run.cancellationReason})` : "");
   const profileWidth = Math.max(1, Math.floor(width / 3));
+  const activity = now === undefined ? run.activity : run.lastActivity?.summary;
+  const age =
+    now !== undefined && run.lastActivity
+      ? ` · changed ${Math.max(0, Math.floor((now - run.lastActivity.changedAt) / 1000))}s ago`
+      : "";
   return [
     clip(
       `${clip(run.profile, profileWidth)}  ${status}  ${formatTurns(run.turns)}  ${run.backend}  ${identity}`,
     ),
-    clip(`Label: ${run.label}${run.activity ? ` · ${run.activity}` : ""}`),
+    clip(`Label: ${run.label}${activity ? ` · ${activity}${age}` : ""}`),
   ];
 }

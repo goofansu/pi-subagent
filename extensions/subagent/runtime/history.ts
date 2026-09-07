@@ -51,6 +51,9 @@ export function summarizeRun(run: RunSnapshot): RunSummary {
       ? { cancellationReason: run.cancellation.reason }
       : {}),
     ...(run.activity === undefined ? {} : { activity: run.activity }),
+    ...(run.lastActivity === undefined
+      ? {}
+      : { lastActivity: run.lastActivity }),
     turns: run.usage.turns,
     startedAt: run.startedAt,
     ...(run.settledAt === undefined ? {} : { settledAt: run.settledAt }),

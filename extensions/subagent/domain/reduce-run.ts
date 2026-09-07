@@ -341,7 +341,10 @@ export function reduceRun(
       const next = { ...projection };
       if (activity === undefined)
         delete (next as { activity?: string }).activity;
-      else (next as { activity?: string }).activity = activity;
+      else {
+        (next as { activity?: string }).activity = activity;
+        (next as { lastActivity?: string }).lastActivity = activity;
+      }
       return applied(next, dropped, notes);
     }
 

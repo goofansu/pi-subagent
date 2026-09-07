@@ -450,7 +450,7 @@ const makeSupervisor = (settings: SessionSettings) =>
                   Effect.sync(() => {
                     counters.released("liveRunFibers");
                     records.detachRun(record.id);
-                  }),
+                  }).pipe(Effect.andThen(repository.invalidateSummaries())),
                 );
                 counters.acquired("liveRunFibers");
                 // Admission diagnostics enter the same intake as every other

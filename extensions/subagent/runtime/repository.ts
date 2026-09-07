@@ -30,6 +30,7 @@
  */
 
 import {
+  Clock,
   Context,
   Effect,
   Layer,
@@ -39,6 +40,7 @@ import {
   type Stream,
   SubscriptionRef,
 } from "effect";
+import type { SemanticActivity } from "../domain/history.ts";
 import {
   type CancellationReason,
   type CancellationRequest,
@@ -77,6 +79,7 @@ export interface RunSnapshot {
   readonly cancellation?: CancellationRequest;
   /** Conflated and display-only. Cleared when the Run settles. */
   readonly activity?: string;
+  readonly lastActivity?: SemanticActivity;
   readonly usage: UsageSnapshot;
   /** How many tool calls the Run has, not which ones. */
   readonly tools: number;
@@ -314,23 +317,34 @@ const make = (counters: RuntimeCounters) =>
         runId: RunId,
         projection: RunProjection,
       ): Effect.Effect<void> =>
-        SubscriptionRef.update(index, (current) =>
-          withRun(current, runId, (snapshot) => {
-            const next: RunSnapshot = {
-              ...snapshot,
-              usage: projection.usage,
-              tools: projection.tools.length,
-            };
-            // Activity is conflated *and clearable*: a backend that reported
-            // nothing is doing nothing in particular, and a stale value left on
-            // the row would read as though it still were.
-            if (projection.activity === undefined) {
-              delete (next as { activity?: string }).activity;
-            } else {
-              (next as { activity?: string }).activity = projection.activity;
-            }
-            return next;
-          }),
+        Effect.flatMap(Clock.currentTimeMillis, (now) =>
+          SubscriptionRef.update(index, (current) =>
+            withRun(current, runId, (snapshot) => {
+              const next: RunSnapshot = {
+                ...snapshot,
+                usage: projection.usage,
+                tools: projection.tools.length,
+                ...(projection.lastActivity !== undefined &&
+                projection.lastActivity !== snapshot.lastActivity?.summary
+                  ? {
+                      lastActivity: Object.freeze({
+                        summary: projection.lastActivity,
+                        changedAt: now,
+                      }),
+                    }
+                  : {}),
+              };
+              // Activity is conflated *and clearable*: a backend that reported
+              // nothing is doing nothing in particular, and a stale value left on
+              // the row would read as though it still were.
+              if (projection.activity === undefined) {
+                delete (next as { activity?: string }).activity;
+              } else {
+                (next as { activity?: string }).activity = projection.activity;
+              }
+              return next;
+            }),
+          ),
         ),
 
       /** Record the diagnostic before the guard publishes terminality. */
@@ -474,6 +488,12 @@ const make = (counters: RuntimeCounters) =>
           // something resting on the nonce not repeating.
           nonce = yield* mintSessionNonce;
         }),
+
+      /** Wake summary readers after the owning Subagent becomes idle.
+       * Run terminal publication precedes handle detachment; neither order changes.
+       */
+      invalidateSummaries: (): Effect.Effect<void> =>
+        SubscriptionRef.update(index, (current) => current),
 
       /** Every Run this Session has published, newest last. */
       list: (): Effect.Effect<readonly RunSnapshot[]> =>

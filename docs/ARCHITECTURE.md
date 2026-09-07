@@ -164,7 +164,10 @@ buffers and fails visibly on overflow rather than silently dropping evidence.
 
 One reducer fiber applies [`reduceRun`](../extensions/subagent/domain/reduce-run.ts)
 and publishes lightweight repository snapshots, not full transcripts.
-Activity is latest-value display state; terminal reduction clears it.
+Current activity is latest-value display state; terminal reduction clears it.
+The reducer separately retains the last bounded normalized activity summary.
+Repository publication stamps semantic changes with the runtime clock, retaining
+the summary and its instant through equal observations, clears and settlement.
 Tool results retain their own role; only assistant text supplies final output.
 Usage deltas add, context gauges replace, and terminal reconciliation replaces
 present fields without double charging. Missing fields retain streamed values.
@@ -328,6 +331,15 @@ clears Results/records and forgets identities. Work's structural closure follows
 The sink drops unlanded notices and holds rather than forwarding them to the
 next Session. Scope-owned widget subscriptions and UI resources are released.
 [Shutdown implementation](../extensions/subagent/runtime/supervisor.ts).
+
+The [Run browser](../extensions/subagent/host/runs-command.ts) observes lightweight
+summaries only while its overview is open. A scoped one-second runtime-clock tick
+advances ages (time since semantic activity change, not a stall heuristic).
+Repository changes and ticks share one pending draw, acknowledged by rendering;
+a slow terminal draws the latest rows rather than queued frames. History remains
+an entry/re-entry snapshot. Detachment invalidates summary readers after terminal
+publication so the actual Subagent phase becomes idle without changing settlement
+order. Neither hand-off nor Conversation loss is subscribed to for grouping.
 
 Tests are colocated. [Conformance](../extensions/subagent/testing/conformance.ts)
 runs one observable contract against resumable/one-shot fakes and Pi/Claude stand-ins,

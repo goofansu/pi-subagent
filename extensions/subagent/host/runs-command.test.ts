@@ -197,7 +197,7 @@ for (const waiting of [false, true]) {
   });
 }
 
-test("activity and Turns do not reorder the overview; only re-entry refreshes its static rows", async (t) => {
+test("activity and Turns update live without reordering; history remains entry-only", async (t) => {
   const rig = hostRig(t, {
     resumableSteps: [
       [
@@ -221,9 +221,12 @@ test("activity and Turns do not reorder the overview; only re-entry refreshes it
   const requests = rig.host.customRenderRequests();
   await rig.release("change");
   await rig.pump();
-  assert.equal(screen(rig), before);
-  assert.equal(rig.host.customRenderRequests(), requests);
-  assert.deepEqual(await rig.probe(), baseline);
+  assert.match(screen(rig), /changed activity/);
+  assert.equal(rig.host.customRenderRequests(), requests + 1);
+  assert.equal(
+    (await rig.probe()).repositorySubscriptions,
+    baseline.repositorySubscriptions + 1,
+  );
   rig.host.customKey(DOWN);
   rig.host.customKey(ENTER);
   await rig.pump();
@@ -436,19 +439,20 @@ for (const reason of ["requested", "timeout"] as const) {
     t.after(() => rig.installation.handle.release());
     const work = await start(rig, "cancel task");
     await rig.pump();
+    const browsing = await open(rig);
+    assert.match(screen(rig), /Active/);
+    assert.doesNotMatch(screen(rig), /requested|timeout/);
     if (reason === "requested")
       await rig.text("agent_cancel", { ids: [work.runId] });
     else await rig.advanceClock(100);
     await rig.pump();
-    let browsing = await open(rig);
     assert.match(screen(rig), /Active/);
     assert.doesNotMatch(screen(rig), /Needs attention|Completed/);
     assert.ok(screen(rig).includes(`(${reason})`));
-    await close(rig, browsing);
     await rig.release("cleanup");
     await rig.pump();
     await rig.settled(work.runId);
-    browsing = await open(rig);
+    await rig.pump();
     assert.match(
       screen(rig),
       reason === "timeout" ? /Needs attention/ : /Completed/,
@@ -481,10 +485,9 @@ test("finalizing is Active; delivery failure, Conversation loss, and diagnostics
   t.after(() => rig.installation.handle.release());
   const work = await start(rig, "successful task");
   await rig.pump();
-  let browsing = await open(rig);
+  const browsing = await open(rig);
   assert.match(screen(rig), /Active/);
   assert.match(screen(rig), /running · finalizing/);
-  await close(rig, browsing);
   await rig.release("cleanup");
   await rig.settled(work.runId);
   await rig.pump();
@@ -496,8 +499,8 @@ test("finalizing is Active; delivery failure, Conversation loss, and diagnostics
     }),
     /Conversation|conversation/,
   );
-  browsing = await open(rig);
   assert.match(screen(rig), /Completed/);
+  assert.match(screen(rig), /idle · completed/);
   assert.doesNotMatch(
     screen(rig),
     /Needs attention|diagnostic text|notification/,

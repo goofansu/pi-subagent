@@ -96,6 +96,8 @@ export interface RunProjection {
   readonly usage: UsageSnapshot;
   /** Conflated, display-only, and cleared by the ending. */
   readonly activity?: string;
+  /** Last bounded semantic summary, retained through clears and ending. */
+  readonly lastActivity?: string;
   readonly model?: string;
   /** The text of the most recent assistant message, unless reconciled. */
   readonly finalOutput: string;

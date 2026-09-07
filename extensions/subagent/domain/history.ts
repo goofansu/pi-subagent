@@ -2,6 +2,12 @@
 import type { BackendId, RunId, SubagentId } from "./ids.ts";
 import type { CancellationReason, RunPhase, SubagentPhase } from "./phases.ts";
 
+export interface SemanticActivity {
+  readonly summary: string;
+  /** Runtime instant when the bounded normalized summary last changed. */
+  readonly changedAt: number;
+}
+
 export interface RunSummary {
   readonly runId: RunId;
   readonly subagentId: SubagentId;
@@ -11,6 +17,7 @@ export interface RunSummary {
   readonly phase: RunPhase;
   readonly cancellationReason?: CancellationReason;
   readonly activity?: string;
+  readonly lastActivity?: SemanticActivity;
   readonly turns: number;
   readonly startedAt: number;
   readonly settledAt?: number;
