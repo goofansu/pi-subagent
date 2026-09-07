@@ -64,6 +64,38 @@ const plain = (width = 100) =>
     .map(stripVTControlCharacters)
     .join("\n");
 
+test("inspection labels current and retained last activity without substitution", () => {
+  const activityCapture: RunInspection = {
+    ...capture,
+    summary: {
+      ...capture.summary,
+      activity: "writing now",
+      lastActivity: { summary: "read earlier", changedAt: 500 },
+    },
+  };
+  const output = renderInspection(
+    inspectionBlocks(activityCapture, "pending"),
+    100,
+    PLAIN_THEME,
+  )
+    .map(stripVTControlCharacters)
+    .join("\n");
+  assert.match(output, /Current activity: writing now/);
+  assert.match(output, /Last activity: read earlier · changed 0\.5s ago/);
+
+  const retainedOnly = inspectionBlocks(
+    {
+      ...activityCapture,
+      summary: { ...activityCapture.summary, activity: undefined },
+    },
+    "pending",
+  )
+    .map((block) => block.text)
+    .join("\n");
+  assert.doesNotMatch(retainedOnly, /Current activity: read earlier/);
+  assert.match(retainedOnly, /Last activity: read earlier/);
+});
+
 test("answer precedes accounting, transcript and tool history", () => {
   const output = plain();
   assert.ok(output.indexOf("Output so far:") < output.indexOf("Metadata:"));

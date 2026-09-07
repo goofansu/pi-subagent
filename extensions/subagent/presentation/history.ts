@@ -2,7 +2,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
 import { MAX_RUN_LABEL_WIDTH } from "./labels.ts";
 import type { RenderableTheme } from "./rows.ts";
-import { formatRunElapsed, runPhaseTone } from "./status.ts";
+import { formatRunElapsed, resolveRunPresentation } from "./status.ts";
 
 export const HISTORY_CATEGORIES = [
   "Active",
@@ -16,8 +16,23 @@ export interface HistoryColumnWidths {
   readonly status: number;
 }
 
-const statusText = (run: RunSummary) =>
-  run.phase[0].toUpperCase() + run.phase.slice(1);
+const presentation = (run: RunSummary) =>
+  resolveRunPresentation({
+    phase: run.phase,
+    cancellationRequested: run.cancellationReason !== undefined,
+    ...(run.cancellationReason === undefined
+      ? {}
+      : { cancellationReason: run.cancellationReason }),
+    ...(run.activity === undefined ? {} : { activity: run.activity }),
+    ...(run.lastActivity === undefined
+      ? {}
+      : { lastActivity: run.lastActivity }),
+  });
+
+const statusText = (run: RunSummary) => {
+  const text = presentation(run).status.text;
+  return text[0].toUpperCase() + text.slice(1);
+};
 
 /** Content-sized columns shared by every row in one displayed list. */
 export function historyColumnWidths(
@@ -35,14 +50,12 @@ export function historyColumnWidths(
 /** Broken work only. Delivery, diagnostics and Conversation maintenance are not inputs. */
 export function historyCategory(subagent: SubagentSummary): HistoryCategory {
   if (subagent.current) return "Active";
-  const latest = subagent.latest;
-  return latest.phase === "failed" ||
-    (latest.phase === "cancelled" && latest.cancellationReason === "timeout")
+  return presentation(subagent.latest).executionNeedsAttention
     ? "Needs attention"
     : "Completed";
 }
 
-/** One borderless table row. Widths depend on the viewport, never on selection or content. */
+/** One borderless table row. Widths depend on viewport and supplied content-sized columns, never selection. */
 export function historyRow(
   run: RunSummary,
   width: number,
@@ -77,18 +90,16 @@ export function historyRow(
   const activityWidth = hasActivity
     ? Math.max(0, available - statusWidth - labelWidth - separators)
     : 0;
+  const resolved = presentation(run);
   const status = statusText(run);
-  const tone =
-    run.phase === "cancelled"
-      ? run.cancellationReason === "timeout"
-        ? "error"
-        : "muted"
-      : runPhaseTone(run.phase);
+  const tone = resolved.status.tone;
   // A terminal Run's last tool activity is not its result. Keep that in inspection.
   const activity =
-    run.phase === "running" || run.phase === "finalizing"
-      ? (run.activity ?? run.lastActivity?.summary ?? "—")
-      : (run.cancellationReason ?? "—");
+    run.phase === "completed" ||
+    run.phase === "failed" ||
+    run.phase === "cancelled"
+      ? (run.cancellationReason ?? "—")
+      : (resolved.currentActivity ?? "—");
   const elapsedCell = clip(formatRunElapsed(run, now), elapsedWidth);
   return clip(
     (selected ? theme.fg("accent", "› ") : "  ") +

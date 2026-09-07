@@ -14,7 +14,7 @@ import {
   formatTranscriptItem,
   formatTruncation,
 } from "./run-card.ts";
-import { formatDuration } from "./status.ts";
+import { formatDuration, resolveRunPresentation } from "./status.ts";
 import type { HandoffStatus } from "./views.ts";
 
 export interface InspectionBlock {
@@ -53,11 +53,20 @@ export function inspectionBlocks(
         ? capture.content
         : undefined;
   const cancellation = result?.cancellationReason ?? summary.cancellationReason;
+  const presentation = resolveRunPresentation({
+    phase: result?.status ?? summary.phase,
+    cancellationRequested: cancellation !== undefined,
+    ...(cancellation === undefined ? {} : { cancellationReason: cancellation }),
+    ...(summary.activity === undefined ? {} : { activity: summary.activity }),
+    ...(summary.lastActivity === undefined
+      ? {}
+      : { lastActivity: summary.lastActivity }),
+  });
   add("heading", `Label: ${result?.description ?? summary.label}`);
   add(
     "literal",
     `Profile: ${summary.profile} · backend: ${summary.backend}`,
-    `Run status: ${result?.status ?? summary.phase}${cancellation ? ` (${cancellation})` : ""}`,
+    `Run status: ${presentation.status.text}${cancellation ? ` (${cancellation})` : ""}`,
   );
 
   // The answer is the primary reason to inspect; accounting and tool history follow it.
@@ -108,10 +117,12 @@ export function inspectionBlocks(
   );
   if (subagent) add("literal", `Subagent phase: ${subagent.phase}`);
   add("literal", `Started at: ${new Date(startedAt).toISOString()}`);
-  if (summary.lastActivity)
+  if (presentation.currentActivity)
+    add("literal", `Current activity: ${presentation.currentActivity}`);
+  if (presentation.lastActivity)
     add(
       "literal",
-      `Last activity: ${summary.lastActivity.summary} · changed ${formatDuration(capture.capturedAt - summary.lastActivity.changedAt)} ago`,
+      `Last activity: ${presentation.lastActivity.summary} · changed ${formatDuration(capture.capturedAt - presentation.lastActivity.changedAt)} ago`,
     );
   if (settledAt !== undefined)
     add(

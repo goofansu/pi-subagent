@@ -26,10 +26,8 @@ test("rows align labels, statuses, activity and rightmost elapsed time without a
   const other = row({ ...run, label: "Settings", phase: "finalizing" });
   assert.equal(selected.indexOf("Running"), other.indexOf("Finalizing"));
   assert.match(selected, /Running +· Reading middleware/);
-  assert.equal(
-    selected.indexOf("Reading middleware"),
-    other.indexOf("Reading middleware"),
-  );
+  assert.doesNotMatch(other, /Reading middleware/);
+  assert.match(other, /Finalizing +· —/);
   assert.ok(selected.startsWith("› Review authentication"));
   assert.ok(selected.endsWith("1.0s"));
   assert.ok(other.endsWith("1.0s"));
@@ -55,11 +53,12 @@ test("a list sizes label and status columns to its longest visible values", () =
     ),
   );
   assert.equal(lines[0].indexOf("Finalizing"), lines[1].indexOf("Running"));
-  assert.equal(
-    lines[0].indexOf("Reading middleware"),
-    lines[1].indexOf("Reading middleware"),
+  assert.equal(lines[0].indexOf("·"), lines[1].indexOf("·"));
+  assert.match(lines[0], /^ {2}One {11}Finalizing · —/);
+  assert.match(
+    lines[1],
+    /^ {2}Longer label {2}Running {4}· Reading middleware/,
   );
-  assert.match(lines[0], /^ {2}One {11}Finalizing · Reading middleware/);
 });
 
 test("labels are capped at 40 columns in roomy subagent lists", () => {
@@ -94,7 +93,7 @@ test("terminal rows do not imply stale tool activity is the result", () => {
       activity: undefined,
       lastActivity: { summary: "Latest activity", changedAt: 0 },
     }),
-    /Latest activity/,
+    /Running +· —/,
   );
 });
 
@@ -126,14 +125,17 @@ test("elapsed time uses the supplied event time and freezes at settlement", () =
   assert.doesNotMatch(row(run, 40), /1\.0s/);
 });
 
-test("selection preserves semantic status tones", () => {
-  for (const [phase, cancellationReason, tone] of [
-    ["running", undefined, "warning"],
-    ["finalizing", undefined, "warning"],
-    ["completed", undefined, "success"],
-    ["failed", undefined, "error"],
-    ["cancelled", "timeout", "error"],
-    ["cancelled", "requested", "muted"],
+test("selection preserves resolved status text and tones", () => {
+  for (const [phase, cancellationReason, status, tone] of [
+    ["running", undefined, "running", "warning"],
+    ["running", "requested", "cancelling", "warning"],
+    ["finalizing", undefined, "finalizing", "warning"],
+    ["finalizing", "shutdown", "cancelling", "warning"],
+    ["completed", undefined, "completed", "success"],
+    ["failed", undefined, "failed", "error"],
+    ["cancelled", "timeout", "cancelled", "error"],
+    ["cancelled", "requested", "cancelled", "muted"],
+    ["cancelled", "shutdown", "cancelled", "muted"],
   ] as const) {
     const tones: { color: string; text: string }[] = [];
     const line = historyRow(
@@ -152,7 +154,7 @@ test("selection preserves semantic status tones", () => {
     assert.ok(
       tones.some(
         ({ color, text }) =>
-          color === tone && text.trim().toLowerCase() === phase,
+          color === tone && text.trim().toLowerCase() === status,
       ),
     );
     assert.equal(visibleWidth(line), 120);

@@ -39,6 +39,8 @@ import { MAX_RUN_LABEL_WIDTH } from "./labels.ts";
 import {
   formatRunElapsed,
   RUN_PHASE_DISPLAY_ORDER,
+  type RunPresentation,
+  resolveRunPresentation,
   runPhaseTone,
   runPhaseVerb,
   type Tone,
@@ -109,6 +111,7 @@ interface EssentialDetail {
 /** Allocate only the essential plain text; painting and optional fields come later. */
 function allocateEssentialDetail(
   row: RunRowView,
+  presentation: RunPresentation,
   width: number,
 ): EssentialDetail {
   if (width <= 0) return { label: "", optionalsAllowed: false };
@@ -116,8 +119,7 @@ function allocateEssentialDetail(
     row.identity.description,
     MAX_RUN_LABEL_WIDTH,
   );
-  const state =
-    row.cancellation !== undefined ? "cancelling" : runPhaseVerb(row.phase);
+  const state = presentation.status.text;
   const stateWidth = visibleWidth(state);
   const labelBesideState = width - stateWidth - ROW_DELIMITER.length;
 
@@ -130,10 +132,7 @@ function allocateEssentialDetail(
   }
 
   // Match history's placeholder without reviving retained tool activity.
-  const currentActivity =
-    row.phase === "running" && row.cancellation === undefined
-      ? row.activity || "—"
-      : "—";
+  const currentActivity = presentation.currentActivity ?? "—";
 
   const activityMinimum = Math.min(
     MIN_ACTIVITY_WIDTH,
@@ -183,10 +182,22 @@ export function formatRunRow(
   width: number,
   now: number,
 ): string {
+  const presentation = resolveRunPresentation({
+    phase: row.phase,
+    cancellationRequested: row.cancellation !== undefined,
+    ...(row.cancellation === undefined
+      ? {}
+      : { cancellationReason: row.cancellation.reason }),
+    ...(row.activity === undefined ? {} : { activity: row.activity }),
+    ...(row.lastActivity === undefined
+      ? {}
+      : { lastActivity: row.lastActivity }),
+  });
   const elapsed = formatRunElapsed(row, now);
   const elapsedWidth = visibleWidth(elapsed);
   const reserved = allocateEssentialDetail(
     row,
+    presentation,
     width - elapsedWidth - ROW_DELIMITER.length,
   );
   // Reserve duration before allocating activity, but do not replace useful
@@ -196,7 +207,7 @@ export function formatRunRow(
   );
   const essential = showElapsed
     ? reserved
-    : allocateEssentialDetail(row, width);
+    : allocateEssentialDetail(row, presentation, width);
   const parts: DetailPart[] = [];
   if (essential.label) {
     parts.push({
@@ -207,7 +218,7 @@ export function formatRunRow(
   if (essential.state) {
     parts.push({
       text: essential.state,
-      paint: (text) => theme.fg(runPhaseTone(row.phase), text),
+      paint: (text) => theme.fg(presentation.status.tone, text),
     });
   }
   if (essential.activity) {
