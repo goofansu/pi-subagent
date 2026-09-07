@@ -81,8 +81,11 @@ by naming the agent and task—the widget itself is not interactive.
 its widget row disappears. Active work appears first, then failed or timed-out
 latest Runs under **Needs attention**, then **Completed**. Use Up/Down or
 Page Up/Page Down to scroll, Enter to open Run history, and Escape to go back
-and close. Returning to a list rereads it. This browser does not inspect output,
-consume Results, or control work.
+and close. Enter on a terminal Run opens its captured Result: Up/Down scroll
+lines and Left/Right page through all retained bounded normalized content.
+Capture time and content stay fixed; reopening observes current Result expiry.
+Returning to a list rereads it. Inspection does not consume Results, change
+completion delivery, or control work. Active Run inspection is not available.
 
 ## Profiles
 

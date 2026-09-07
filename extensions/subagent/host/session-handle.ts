@@ -104,7 +104,10 @@ export function createSessionHandle(): SessionHandle {
       let bound = live;
       if (!bound) return undefined;
       let releaseUi: (() => void) | undefined = onRelease;
+      const reads = new Set<AbortController>();
       const dispose = () => {
+        for (const read of reads) read.abort();
+        reads.clear();
         bound?.observers.delete(close);
         bound = undefined;
         releaseUi = undefined;
@@ -124,11 +127,19 @@ export function createSessionHandle(): SessionHandle {
         run: async (work, whenNotReady) => {
           const current = bound;
           if (!current || live !== current) return whenNotReady;
-          const exit = await current.runtime.runPromiseExit(work);
-          if (bound !== current || live !== current) return whenNotReady;
-          if (Exit.isSuccess(exit)) return exit.value;
-          if (Cause.hasInterruptsOnly(exit.cause)) return whenNotReady;
-          throw Cause.squash(exit.cause);
+          const controller = new AbortController();
+          reads.add(controller);
+          try {
+            const exit = await current.runtime.runPromiseExit(work, {
+              signal: controller.signal,
+            });
+            if (bound !== current || live !== current) return whenNotReady;
+            if (Exit.isSuccess(exit)) return exit.value;
+            if (Cause.hasInterruptsOnly(exit.cause)) return whenNotReady;
+            throw Cause.squash(exit.cause);
+          } finally {
+            reads.delete(controller);
+          }
         },
       };
     },

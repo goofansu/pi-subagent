@@ -5,21 +5,33 @@
  * SelectList item.
  */
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
-import { runSummaries } from "../application/history.ts";
+import {
+  matchesKey,
+  truncateToWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
+import { Effect } from "effect";
+import { inspectRun, runSummaries } from "../application/history.ts";
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
-import type { RunId, SubagentId } from "../domain/index.ts";
+import {
+  isTerminalRunPhase,
+  type RunId,
+  type SubagentId,
+} from "../domain/index.ts";
 import {
   HISTORY_CATEGORIES,
   historyCategory,
   historyRow,
 } from "../presentation/history.ts";
+import { inspectionLines } from "../presentation/inspection.ts";
 import { observeOverview } from "./overview-observation.ts";
 import type { SessionHandle } from "./session-handle.ts";
+import type { CompletionHandoffView } from "./widget.ts";
 
 export async function openRunsUi(
   handle: SessionHandle,
   ctx: ExtensionCommandContext,
+  handoff: Pick<CompletionHandoffView, "status">,
 ): Promise<void> {
   let closed = false;
   let closeUi: (() => void) | undefined;
@@ -42,6 +54,12 @@ export async function openRunsUi(
         let runs: readonly RunSummary[] = [];
         let selectedSubagent: SubagentId | undefined;
         let openSubagentId: SubagentId | undefined;
+        let inspectedRunId: RunId | undefined;
+        let details: readonly string[] = [];
+        let detailLines: readonly string[] = [];
+        let detailWidth: number | undefined;
+        let detailOffset = 0;
+        let detailPageSize = 1;
         const selectedRuns = new Map<SubagentId, RunId>();
         let loading = true;
         let error = false;
@@ -69,6 +87,9 @@ export async function openRunsUi(
           session.dispose();
           overview = [];
           runs = [];
+          details = [];
+          detailLines = [];
+          inspectedRunId = undefined;
           selectedRuns.clear();
           redraw = undefined;
           finish = undefined;
@@ -89,12 +110,25 @@ export async function openRunsUi(
           stopOverview?.();
           stopOverview = undefined;
           const requestedSubagentId = openSubagentId;
+          const requestedRunId = inspectedRunId;
           loading = true;
           error = false;
           offset = 0;
           redraw?.();
           try {
-            if (requestedSubagentId) {
+            if (requestedRunId) {
+              const next = await session.run(
+                inspectRun(requestedRunId).pipe(
+                  Effect.map((capture) =>
+                    inspectionLines(capture, handoff.status(requestedRunId)),
+                  ),
+                ),
+                [],
+              );
+              if (closed || version !== generation) return;
+              details = next;
+              detailWidth = undefined;
+            } else if (requestedSubagentId) {
               const next = await session.run(
                 runSummaries(requestedSubagentId),
                 [],
@@ -158,7 +192,12 @@ export async function openRunsUi(
           handleInput(data) {
             if (closed) return;
             if (keys.matches(data, "tui.select.cancel")) {
-              if (openSubagentId) {
+              if (inspectedRunId) {
+                inspectedRunId = undefined;
+                details = [];
+                detailLines = [];
+                void read();
+              } else if (openSubagentId) {
                 openSubagentId = undefined;
                 runs = [];
                 void read();
@@ -166,10 +205,40 @@ export async function openRunsUi(
               return;
             }
             if (loading || error) return;
+            if (inspectedRunId) {
+              const delta = keys.matches(data, "tui.select.up")
+                ? -1
+                : keys.matches(data, "tui.select.down")
+                  ? 1
+                  : matchesKey(data, "left")
+                    ? -detailPageSize
+                    : matchesKey(data, "right")
+                      ? detailPageSize
+                      : 0;
+              if (delta) {
+                detailOffset = Math.max(
+                  0,
+                  Math.min(
+                    Math.max(0, detailLines.length - detailPageSize),
+                    detailOffset + delta,
+                  ),
+                );
+                redraw?.();
+              }
+              return;
+            }
             if (keys.matches(data, "tui.select.confirm")) {
               if (!openSubagentId && selectedSubagent) {
                 openSubagentId = selectedSubagent;
                 void read();
+              } else if (openSubagentId) {
+                const selected = selectedRuns.get(openSubagentId);
+                const run = runs.find((row) => row.runId === selected);
+                if (run && isTerminalRunPhase(run.phase)) {
+                  inspectedRunId = run.runId;
+                  detailOffset = 0;
+                  void read();
+                }
               }
               return;
             }
@@ -208,6 +277,34 @@ export async function openRunsUi(
               Math.floor((tui.terminal.rows || 24) * 0.8),
             );
             const bodyHeight = Math.max(1, height - 2);
+            if (inspectedRunId) {
+              detailPageSize = bodyHeight;
+              if (detailWidth !== width) {
+                detailLines = details.flatMap((line) =>
+                  wrapTextWithAnsi(line, Math.max(1, width)),
+                );
+                detailWidth = width;
+              }
+              detailOffset = Math.max(
+                0,
+                Math.min(
+                  detailOffset,
+                  Math.max(0, detailLines.length - bodyHeight),
+                ),
+              );
+              return [
+                theme.bold("Run inspection · terminal snapshot"),
+                ...(loading
+                  ? ["Capturing Result…"]
+                  : error
+                    ? ["Result unavailable. Escape to return to Run history."]
+                    : detailLines.slice(
+                        detailOffset,
+                        detailOffset + bodyHeight,
+                      )),
+                `↑/↓ lines · ←/→ page · Esc back · ${Math.min(detailOffset + 1, detailLines.length)}-${Math.min(detailOffset + bodyHeight, detailLines.length)}/${detailLines.length}`,
+              ].map((line) => truncateToWidth(line, Math.max(0, width), "…"));
+            }
             pageSize = Math.max(1, Math.floor(bodyHeight / 2));
             const lines: string[] = [];
             let selectedLine = 0;
@@ -274,7 +371,7 @@ export async function openRunsUi(
               offset = Math.max(0, selectedLine + 2 - bodyHeight);
             offset = Math.min(offset, Math.max(0, lines.length - bodyHeight));
             const hint = openSubagentId
-              ? "↑/↓ scroll · Esc back"
+              ? "↑/↓ scroll · Enter inspect terminal Run · Esc back"
               : "↑/↓ scroll · Enter Runs · Esc close";
             return [
               theme.bold(
