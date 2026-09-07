@@ -125,6 +125,20 @@ export function formatDuration(milliseconds: number): string {
   return `${hours}h ${minutes}m`;
 }
 
+/** Elapsed Run duration at a supplied event instant; terminal durations freeze. */
+export function formatRunElapsed(
+  run: {
+    readonly phase: RunPhase;
+    readonly startedAt: number;
+    readonly settledAt?: number;
+  },
+  now: number,
+): string {
+  const end =
+    run.phase === "running" || run.phase === "finalizing" ? now : run.settledAt;
+  return end === undefined ? "—" : formatDuration(end - run.startedAt);
+}
+
 /** A character count for a summary line, abbreviated once it gets long. */
 export function formatCharacterCount(characters: number): string {
   if (characters < 1_000) return `${characters} characters`;

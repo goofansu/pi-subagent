@@ -69,23 +69,19 @@ test("the widget appears with the first live Run and its row reads as the matrix
   // activity publication is guaranteed. Accounting can race that activity too.
   assert.match(
     rows[1],
-    new RegExp(
-      `^ explore {2}running( {2}${RIG_ACTIVITY} {2}0\\.0s ago)? {2}(1 turn|—) {2}pi {2}look around$`,
-    ),
+    new RegExp(`^ look around {2}running( {2}${RIG_ACTIVITY})? +0\\.0s$`),
   );
 
   // Once the real repository/subscriber pipeline has published the scripted
-  // activity, the externally rendered row must include its semantic age.
+  // activity, the externally rendered row must include it beside Run duration.
   await rig.pump();
   assert.match(
     rig.host.widgetLines(120)[1] ?? "",
-    new RegExp(
-      `^ explore {2}running {2}${RIG_ACTIVITY} {2}0\\.0s ago {2}(1 turn|—) {2}pi {2}look around$`,
-    ),
+    new RegExp(`^ look around {2}running {2}${RIG_ACTIVITY} +0\\.0s$`),
   );
 });
 
-test("semantic activity age follows retained changes and stays honest through clear and finalization", async (t) => {
+test("elapsed advances only on Run publications, independent of activity and incidental renders", async (t) => {
   const rig = hostRig(t, {
     testClock: true,
     resumableSteps: [
@@ -131,63 +127,59 @@ test("semantic activity age follows retained changes and stays honest through cl
   const started = await heldRun(rig);
   await rig.pump();
 
-  // No activity means no matching semantic timestamp and therefore no age.
-  assert.doesNotMatch(rig.host.widgetLines(120)[1] ?? "", /ago|reading/);
+  assert.match(rig.host.widgetLines(120)[1] ?? "", /running +0\.0s/);
   await rig.advanceClock(1_000);
   await rig.release("first-activity");
   await rig.pump();
-  assert.match(rig.host.widgetLines(120)[1] ?? "", /reading file {2}0\.0s ago/);
+  assert.match(rig.host.widgetLines(120)[1] ?? "", /reading file +1\.0s/);
 
   const requests = rig.host.renderRequests();
   await rig.advanceClock(12_400);
   assert.equal(rig.host.renderRequests(), requests);
-  assert.match(
-    rig.host.widgetLines(120)[1] ?? "",
-    /reading file {2}12\.4s ago/,
+  for (const width of [120, 100, 120]) {
+    assert.match(rig.host.widgetLines(width)[1] ?? "", /reading file +1\.0s/);
+  }
+  // Hand-off changes must not advance the Run-event clock either.
+  await Effect.runPromise(
+    rig.installation.sink.exhausted(runId(started.runId)),
   );
+  assert.match(rig.host.widgetLines(120)[1] ?? "", /reading file +1\.0s/);
 
-  // Re-observing the same semantic summary redraws the visible row but keeps
-  // the repository-owned changedAt instant.
+  // Equal semantic activity is still a Run publication.
   await rig.release("equal");
   await rig.pump();
-  assert.match(
-    rig.host.widgetLines(120)[1] ?? "",
-    /reading file {2}12\.4s ago/,
-  );
+  assert.match(rig.host.widgetLines(120)[1] ?? "", /reading file +13\.4s/);
 
   await rig.release("changed");
   await rig.pump();
-  assert.match(rig.host.widgetLines(120)[1] ?? "", /writing file {2}0\.0s ago/);
+  assert.match(rig.host.widgetLines(120)[1] ?? "", /writing file +13\.4s/);
   await rig.advanceClock(62_000);
-  assert.match(rig.host.widgetLines(120)[1] ?? "", /writing file {2}1m 2s ago/);
+  assert.match(rig.host.widgetLines(120)[1] ?? "", /writing file +13\.4s/);
 
   await rig.release("clear");
   await rig.pump();
   const cleared = rig.host.widgetLines(120)[1] ?? "";
   assert.doesNotMatch(cleared, /writing file|ago/);
+  assert.match(cleared, /running +1m 15s/);
 
-  // Clearing current activity does not erase or restamp the retained semantic
-  // fact; showing the same summary again resumes its original age.
+  // Restoring activity does not reset elapsed Run duration.
   await rig.release("repeat-after-clear");
   await rig.pump();
-  assert.match(rig.host.widgetLines(120)[1] ?? "", /writing file {2}1m 2s ago/);
+  assert.match(rig.host.widgetLines(120)[1] ?? "", /writing file +1m 15s/);
 
   await rig.release("restore");
   await rig.pump();
-  assert.match(
-    rig.host.widgetLines(120)[1] ?? "",
-    /packing result {2}0\.0s ago/,
-  );
+  assert.match(rig.host.widgetLines(120)[1] ?? "", /packing result +1m 15s/);
   await rig.release("finish");
   await rig.pump();
   const finalizing = rig.host.widgetLines(120)[1] ?? "";
-  assert.match(finalizing, /finalizing/);
+  assert.match(finalizing, /finalizing +1m 15s/);
   assert.doesNotMatch(finalizing, /packing result|ago/);
   await rig.release("cleanup");
   await rig.settled(started.runId);
 });
 
-test("aggregate mode has no ages or clock redraws and returning to one Run shows current semantic age", async (t) => {
+test("aggregate mode has no duration or clock redraws and returning to one Run shows sampled elapsed", async (t) => {
   const rig = hostRig(t, {
     testClock: true,
     resumableSteps: [
@@ -226,11 +218,11 @@ test("aggregate mode has no ages or clock redraws and returning to one Run shows
   await rig.settled(first.runId);
   await rig.pump();
   const single = rig.host.widgetLines(120);
-  assert.match(single[1] ?? "", /second work {2}1m 1s ago/);
+  assert.match(single[1] ?? "", /second work +1m 1s/);
   assert.doesNotMatch(single[0] ?? "", /ago/);
 });
 
-test("a Run of the one-shot backend names its own backend in the row", async (t) => {
+test("a Run of the one-shot backend omits backend and turns from detail", async (t) => {
   const rig = hostRig(t, {
     oneShotSteps: [[{ step: "await-gate", gate: "hold" }]],
   });
@@ -241,7 +233,7 @@ test("a Run of the one-shot backend names its own backend in the row", async (t)
 
   assert.match(
     rig.host.widgetLines(120)[1],
-    /^ once {2}running {2}— {2}one-shot/,
+    /^ look around {2}running +\d+\.\ds$/,
   );
 });
 
@@ -636,12 +628,12 @@ test("adaptive modes follow 0 → 1 → 2 → 1 → 0 active Runs with unresolve
   const single = rig.host.widgetLines(120);
   assert.equal(single.length, 2);
   assert.match(single[0], /1 running.*1 completed/);
-  assert.match(single[1], /once {2}running {2}newest work/);
+  assert.match(single[1], /look around {2}running {2}newest work/);
   assert.doesNotMatch(single[1], /completed/);
   const narrowSingle = rig.host.widgetLines(32);
   assert.match(narrowSingle[0], /1 running.*1 comp/);
-  assert.match(narrowSingle[1], /once {2}running {2}newest work/);
-  assert.doesNotMatch(narrowSingle[1], /one-shot|look around/);
+  assert.match(narrowSingle[1], /look ar… {2}running {2}newest work/);
+  assert.doesNotMatch(narrowSingle[1], /one-shot|once/);
   for (const line of narrowSingle) assert.ok(visibleWidth(line) <= 32);
 
   await rig.release("second");
@@ -726,7 +718,10 @@ test("finalizing and requested cancellation count as active, and visible changes
   await rig.release("first-cleanup");
   await rig.settled(first.runId);
   await rig.pump();
-  assert.match(rig.host.widgetLines(120)[1], /once.*cancelling/);
+  assert.match(
+    rig.host.widgetLines(120)[1],
+    /look around {2}cancelling +\d+\.\ds$/,
+  );
   await rig.release("second-cleanup");
   await rig.settled(second.runId);
   await rig.pump();
@@ -862,6 +857,34 @@ test("each changed aggregate hand-off fact requests a new frame after the previo
   drawChanged(
     " subagents   1 completed   1 no notification · result unavailable",
   );
+});
+
+test("cancellation publishes elapsed without activity and cleanup keeps the sampled duration", async (t) => {
+  const rig = hostRig(t, {
+    testClock: true,
+    resumableSteps: [
+      [{ step: "gate-the-finalizer", gate: "cleanup" }, { step: "hang" }],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  const started = await heldRun(rig);
+  await rig.pump();
+  await rig.advanceClock(2_400);
+  await rig.text("agent_cancel", { ids: [started.runId] });
+  await rig.pump();
+  assert.match(
+    rig.host.widgetLines(120)[1],
+    /look around {2}cancelling +2\.4s/,
+  );
+  const requests = rig.host.renderRequests();
+  await rig.advanceClock(1_000);
+  assert.match(rig.host.widgetLines(100)[1], /cancelling +2\.4s/);
+  assert.equal(rig.host.renderRequests(), requests);
+  await rig.release("cleanup");
+  await rig.settled(started.runId);
+  await rig.pump();
+  assert.deepEqual(rig.host.widgetLines(120), [" subagents   1 cancelled"]);
 });
 
 test("the widget owns one key, so a Session cannot leave two of them installed", () => {

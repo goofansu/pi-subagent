@@ -174,6 +174,7 @@ export function installActiveWidget(
      */
     let index: RunIndex = new Map();
     let latest: readonly RunRowView[] = [];
+    let sampledAt = 0;
     let aggregateKey: string | undefined;
     let changes = 0;
     let renderRequests = 0;
@@ -191,9 +192,9 @@ export function installActiveWidget(
 
     const render = (theme: RenderableTheme, width: number): string[] => {
       renderPending = false;
-      // Sample only when the host actually renders. Time passing schedules
-      // nothing; the age may remain stale until this callback runs again.
-      return [...renderRunRows(latest, theme, width, now())];
+      // Incidental renders, resizes and hand-off updates reuse the last Run
+      // publication's clock sample. Only Run events advance elapsed duration.
+      return [...renderRunRows(latest, theme, width, sampledAt)];
     };
 
     /** Ask the host to draw, unless it has already been asked and not yet has. */
@@ -290,6 +291,7 @@ export function installActiveWidget(
         Effect.sync(() => {
           changes += 1;
           index = published;
+          sampledAt = now();
           refresh();
         }),
       ),

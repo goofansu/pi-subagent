@@ -62,10 +62,12 @@ The widget above the editor adapts to the number of active Runs:
 
 - **None:** hidden unless terminal completion hand-offs remain unresolved; those
   show only compact outcome and delivery-attention counts.
-- **One:** a summary plus the active Run's Profile, state, and available
-  activity. When known and space permits, the activity is followed by how long
-  that displayed semantic summary has been unchanged. Turn count and backend
-  follow; the Label uses only room left after those more useful fields.
+- **One:** a summary plus the active Run's Label, state, available activity,
+  and elapsed Run duration only—no turn count or backend. Elapsed is aligned
+  to the right edge with the same one-cell inset as the left edge.
+  The Label uses the dashboard's 40-column cap with an ellipsis, shrinking
+  further when needed to preserve state and useful activity; no Profile or
+  duplicate trailing Label is shown.
 - **Two or more:** aggregate counts only, with no individual activity or rows.
   Hidden activity and accounting updates do not request identical redraws.
 
@@ -73,23 +75,25 @@ One active Run, alongside an unresolved completion at a wide layout:
 
 ```text
  subagents   1 running   1 completed
- explore  running  grep: getFinalOutput  12.4s ago  3 turns  pi  look around
+ look around  running  grep: getFinalOutput                  12.4s
 ```
 
-The age means “summary last changed,” not agent inactivity: repeated work can
-produce the same semantic summary without resetting it. It is omitted when the
-matching activity or timestamp is unavailable, when activity clears, and while
-the Run is finalizing or cancelling, so retained history never implies that an
-old tool is still executing. Time is sampled on widget events or actual renders,
-never by a timer; an otherwise quiet displayed age may stay unchanged until the
-next render.
+Elapsed means time since the Run started, using the same duration formatting
+as dashboard history. It remains independent of activity arriving, changing,
+or clearing, and remains available during finalization and cancellation.
+Retained activity is still hidden during finalization and cancellation.
+Time is sampled only when the Run index publishes an update, never by a timer:
+incidental renders, resizes, theme changes, and completion hand-off changes do
+not advance it. A quiet Run's displayed duration stays at the last event sample.
 
-At a 32-cell layout, the Profile, state, and useful activity remain while the
-Label, backend, accounting, and then age give way:
+Space is reserved for elapsed, with a flexible gap after the left-aligned
+Label, state, and activity. Activity truncates to preserve elapsed where feasible;
+at very narrow widths elapsed hides rather than displacing useful activity.
+At a 32-cell layout:
 
 ```text
  subagents   1 running   1 comp…
- explore  running  grep: getFi…
+ look a…  running  grep: getFi…
 ```
 
 Multiple active Runs:
@@ -98,11 +102,9 @@ Multiple active Runs:
  subagents   2 running   1 completed
 ```
 
-The ambient widget does not show elapsed Run duration. As before, an active Run
-has no elapsed timer; its optional single-Run activity age describes the semantic
-summary, not the Run. Terminal Runs are now summarized instead of appearing as
-individual `completed in …` rows. Their elapsed durations remain available in
-`/subagent dashboard` history and inspection.
+Terminal Runs are summarized instead of appearing as individual `completed in …`
+rows. Their final elapsed durations remain available in `/subagent dashboard`
+history and inspection.
 
 Finalizing and requested cancellation still count as active work; cancellation
 is shown as `cancelling`. Terminal counts disappear when a completion notice
