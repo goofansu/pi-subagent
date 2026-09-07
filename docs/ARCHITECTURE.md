@@ -301,7 +301,7 @@ whole (`output` present); longer output gets a 500-byte preview. Every notice
 names the exact `agent_result` call; inlined ones say no fetch is needed.
 Storage stays authoritative. [ADR-0037](adr/0037-a-notice-carries-a-short-output-whole.md).
 
-The [Run browser](../extensions/subagent/host/runs-command.ts) opens frozen
+The [Run browser](../extensions/subagent/host/dashboard-command.ts) opens frozen
 inspection through the application query and [runtime capture](../extensions/subagent/runtime/inspection.ts),
 not the public Result tool. One synchronous capture callback reads published
 phase, already-folded bounded Projection content, known Subagent conditions and
@@ -385,7 +385,7 @@ The sink drops unlanded notices and holds rather than forwarding them to the
 next Session. Scope-owned widget subscriptions and UI resources are released.
 [Shutdown implementation](../extensions/subagent/runtime/supervisor.ts).
 
-The [Run browser](../extensions/subagent/host/runs-command.ts) observes lightweight
+The [Run browser](../extensions/subagent/host/dashboard-command.ts) observes lightweight
 summaries only while its overview is open. A scoped one-second runtime-clock tick
 advances ages (time since semantic activity change, not a stall heuristic).
 Repository changes and ticks share one pending draw, acknowledged by rendering;
