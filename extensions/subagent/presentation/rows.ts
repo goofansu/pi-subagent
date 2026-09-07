@@ -41,14 +41,8 @@ import {
 } from "@earendil-works/pi-tui";
 import { isTerminalRunPhase, type RunPhase } from "../domain/index.ts";
 import { MAX_RUN_LABEL_WIDTH } from "./labels.ts";
-import {
-  formatRunElapsed,
-  RUN_PHASE_DISPLAY_ORDER,
-  type RunPresentation,
-  resolveRunPresentation,
-  runPhaseVerb,
-  type Tone,
-} from "./status.ts";
+import { type RunFacts, runElapsed, runFactsFromRow } from "./run-facts.ts";
+import { RUN_PHASE_DISPLAY_ORDER, runPhaseVerb, type Tone } from "./status.ts";
 import type { FailedHandoffStatus, RunRowView } from "./views.ts";
 
 /**
@@ -121,16 +115,12 @@ interface EssentialDetail {
 
 /** Allocate only the essential plain text; painting and optional fields come later. */
 function allocateEssentialDetail(
-  row: RunRowView,
-  presentation: RunPresentation,
+  facts: RunFacts,
   width: number,
 ): EssentialDetail {
   if (width <= 0) return { label: "", optionalsAllowed: false };
-  const label = truncatePlainText(
-    row.identity.description,
-    MAX_RUN_LABEL_WIDTH,
-  );
-  const state = presentation.status.text;
+  const label = truncatePlainText(facts.label, MAX_RUN_LABEL_WIDTH);
+  const state = facts.status.text;
   const stateWidth = visibleWidth(state);
   const labelBesideState = width - stateWidth - ROW_DELIMITER.length;
 
@@ -142,19 +132,16 @@ function allocateEssentialDetail(
     };
   }
 
-  // Match history's placeholder without reviving retained tool activity.
-  const currentActivity = presentation.currentActivity ?? "—";
-
   const activityMinimum = Math.min(
     MIN_ACTIVITY_WIDTH,
-    visibleWidth(currentActivity),
+    visibleWidth(facts.activity),
   );
   const roomForLabelAndActivity = Math.max(
     0,
     width - stateWidth - ROW_DELIMITER.length - ACTIVITY_DELIMITER.length,
   );
   let labelWidth = visibleWidth(label);
-  let activityWidth = visibleWidth(currentActivity);
+  let activityWidth = visibleWidth(facts.activity);
   if (labelWidth + activityWidth > roomForLabelAndActivity) {
     labelWidth = Math.min(
       labelWidth,
@@ -175,7 +162,7 @@ function allocateEssentialDetail(
   return {
     label: truncatePlainText(label, labelWidth),
     state,
-    activity: truncatePlainText(currentActivity, activityWidth),
+    activity: truncatePlainText(facts.activity, activityWidth),
     optionalsAllowed: true,
   };
 }
@@ -186,6 +173,12 @@ function allocateEssentialDetail(
  * Elapsed Run duration reserves the right edge with a flexible gap, provided
  * Label, state and useful current activity still fit. Finalization and cancellation
  * omit retained activity, but duration remains independent of activity.
+ *
+ * What the row *says* about a Run is resolved once, in `run-facts.ts`, so a
+ * terminal row here reads the same as the dashboard history's rather than
+ * keeping a second rule for the activity cell. The widget draws no terminal
+ * row — {@link renderRunRows} keeps only active ones — so that branch reaches
+ * this formatter through its own interface alone.
  */
 export function formatRunRow(
   row: RunRowView,
@@ -193,18 +186,11 @@ export function formatRunRow(
   width: number,
   now: number,
 ): string {
-  const presentation = resolveRunPresentation({
-    phase: row.phase,
-    cancellationRequested: row.cancellation !== undefined,
-    cancellationReason: row.cancellation?.reason,
-    activity: row.activity,
-    lastActivity: row.lastActivity,
-  });
-  const elapsed = formatRunElapsed(row, now);
+  const facts = runFactsFromRow(row);
+  const elapsed = runElapsed(facts, now);
   const elapsedWidth = visibleWidth(elapsed);
   const reserved = allocateEssentialDetail(
-    row,
-    presentation,
+    facts,
     width - elapsedWidth - ROW_DELIMITER.length,
   );
   // Reserve duration before allocating activity, but do not replace useful
@@ -214,7 +200,7 @@ export function formatRunRow(
   );
   const essential = showElapsed
     ? reserved
-    : allocateEssentialDetail(row, presentation, width);
+    : allocateEssentialDetail(facts, width);
   const parts: DetailPart[] = [];
   if (essential.label) {
     parts.push({
@@ -224,7 +210,7 @@ export function formatRunRow(
   }
   if (essential.state) {
     parts.push({
-      // The shared resolver supplies the word; the tone it would carry is
+      // The shared derivation supplies the word; the tone it would carry is
       // deliberately dropped here. Only running, finalizing and cancelling
       // reach this line, and none of the three is news.
       text: essential.state,

@@ -22,6 +22,7 @@ import {
   type ContextGauge,
   createRunProjection,
   EMPTY_TRUNCATION_RECORD,
+  isTerminalRunPhase,
   type ResultLink,
   type RunDiagnostic,
   type RunEnding,
@@ -101,7 +102,7 @@ export function fixtureRow(
     // terminal row does. Defaulting it to the fixture's `now` keeps every
     // golden's duration exactly what it was, while making the settled path —
     // rather than the live one — the path a terminal fixture exercises.
-    ...(phase === "completed" || phase === "failed" || phase === "cancelled"
+    ...(isTerminalRunPhase(phase)
       ? { terminalStatus: phase, settledAt: FIXTURE_NOW }
       : {}),
     ...rest,

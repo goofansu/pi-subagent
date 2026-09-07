@@ -35,5 +35,6 @@ export * from "./renderers.ts";
 export * from "./result-body.ts";
 export * from "./rows.ts";
 export * from "./run-card.ts";
+export * from "./run-facts.ts";
 export * from "./status.ts";
 export * from "./views.ts";

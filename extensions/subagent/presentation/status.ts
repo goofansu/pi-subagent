@@ -2,11 +2,12 @@
  * What a Run's phase looks and sounds like, and how numbers are written.
  *
  * Every surface that says something about a Run — a widget row, a dashboard
- * row, a tool outcome, a completion notice, a result card — reads this module.
- * The phase table supplies the baseline; the Run resolver adds cancellation
- * and activity meaning for operational surfaces. None decides what a phase
- * means locally. Adding a phase to the domain therefore fails to compile here
- * first, which is where the decision belongs.
+ * row, a tool outcome, a completion notice, a result card — reads this module,
+ * the operational surfaces through `run-facts.ts` rather than directly. The
+ * phase table supplies the baseline; the Run resolver adds cancellation and
+ * activity meaning, and `run-facts.ts` is the one caller that hands it a Run.
+ * None decides what a phase means locally. Adding a phase to the domain
+ * therefore fails to compile here first, which is where the decision belongs.
  *
  * v2 has five Run phases where v1 had four: `finalizing` is the window between
  * a backend's execution ending and the Run settling, and it exists so a
@@ -22,17 +23,18 @@
  * reads, and the only place a new phase's tone is decided.
  */
 
-import type {
-  CancellationReason,
-  RunPhase,
-  SemanticActivity,
-  TerminalRunPhase,
+import {
+  type CancellationReason,
+  isTerminalRunPhase,
+  type RunPhase,
+  type SemanticActivity,
+  type TerminalRunPhase,
 } from "../domain/index.ts";
 
 /** The theme colours presentation may select. */
 export type Tone = "warning" | "success" | "error" | "muted";
 
-/** Plain Run facts interpreted by the shared presentation policy. */
+/** The plain Run values the shared presentation policy interprets. */
 export interface RunPresentationInput {
   readonly phase: RunPhase;
   readonly cancellationRequested: boolean;
@@ -105,8 +107,7 @@ export function resolveRunPresentation(
   input: RunPresentationInput,
 ): RunPresentation {
   const cancelling =
-    input.cancellationRequested &&
-    (input.phase === "running" || input.phase === "finalizing");
+    input.cancellationRequested && !isTerminalRunPhase(input.phase);
   const timeoutCancellation =
     input.phase === "cancelled" && input.cancellationReason === "timeout";
   const ordinaryCancellation =
@@ -210,8 +211,7 @@ export function formatRunElapsed(
   },
   now: number,
 ): string {
-  const end =
-    run.phase === "running" || run.phase === "finalizing" ? now : run.settledAt;
+  const end = isTerminalRunPhase(run.phase) ? run.settledAt : now;
   return end === undefined ? "—" : formatDuration(end - run.startedAt);
 }
 

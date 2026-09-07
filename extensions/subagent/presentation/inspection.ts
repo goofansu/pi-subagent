@@ -4,7 +4,11 @@ import {
   truncateToWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type { ToolEntry, TranscriptItem } from "../domain/index.ts";
+import {
+  isTerminalRunPhase,
+  type ToolEntry,
+  type TranscriptItem,
+} from "../domain/index.ts";
 import type { RunInspection } from "../domain/inspection.ts";
 import type { RenderableTheme } from "./rows.ts";
 import {
@@ -14,7 +18,8 @@ import {
   formatTranscriptItem,
   formatTruncation,
 } from "./run-card.ts";
-import { formatDuration, resolveRunPresentation } from "./status.ts";
+import { runFactsFromSummary } from "./run-facts.ts";
+import { formatDuration } from "./status.ts";
 import type { HandoffStatus } from "./views.ts";
 
 export interface InspectionBlock {
@@ -52,19 +57,14 @@ export function inspectionBlocks(
       : capture.outcome === "active"
         ? capture.content
         : undefined;
-  const cancellation = result?.cancellationReason ?? summary.cancellationReason;
-  const presentation = resolveRunPresentation({
-    phase: result?.status ?? summary.phase,
-    cancellationRequested: cancellation !== undefined,
-    cancellationReason: cancellation,
-    activity: summary.activity,
-    lastActivity: summary.lastActivity,
-  });
-  add("heading", `Label: ${result?.description ?? summary.label}`);
+  // The stored Result is the authoritative account of a Run that has one, and
+  // `run-facts.ts` is where that preference and the Run's meaning are decided.
+  const facts = runFactsFromSummary(summary, result);
+  add("heading", `Label: ${facts.label}`);
   add(
     "literal",
     `Profile: ${summary.profile} · backend: ${summary.backend}`,
-    `Run status: ${presentation.status.text}${cancellation ? ` (${cancellation})` : ""}`,
+    `Run status: ${facts.status.text}${facts.cancellationReason ? ` (${facts.cancellationReason})` : ""}`,
   );
 
   // The answer is the primary reason to inspect; accounting and tool history follow it.
@@ -96,17 +96,15 @@ export function inspectionBlocks(
       "",
       capture.outcome === "ResultExpired"
         ? "Result expired: output is gone; retained metadata is shown below."
-        : summary.phase === "running" || summary.phase === "finalizing"
-          ? "Run unavailable: active snapshot could not be captured."
-          : "Result unavailable: the stored result is missing or unreadable.",
+        : isTerminalRunPhase(facts.phase)
+          ? "Result unavailable: the stored result is missing or unreadable."
+          : "Run unavailable: active snapshot could not be captured.",
     );
     if (capture.outcome === "unavailable" && capture.diagnostic)
       add("literal", formatDiagnosticLine(capture.diagnostic));
   }
 
   section("Metadata");
-  const startedAt = result?.startedAt ?? summary.startedAt;
-  const settledAt = result?.settledAt ?? summary.settledAt;
   add(
     "muted",
     `Run: ${capture.runId}`,
@@ -114,19 +112,19 @@ export function inspectionBlocks(
     `Captured at: ${new Date(capture.capturedAt).toISOString()}`,
   );
   if (subagent) add("literal", `Subagent phase: ${subagent.phase}`);
-  add("literal", `Started at: ${new Date(startedAt).toISOString()}`);
-  if (presentation.currentActivity)
-    add("literal", `Current activity: ${presentation.currentActivity}`);
-  if (presentation.lastActivity)
+  add("literal", `Started at: ${new Date(facts.startedAt).toISOString()}`);
+  if (facts.currentActivity)
+    add("literal", `Current activity: ${facts.currentActivity}`);
+  if (facts.lastActivity)
     add(
       "literal",
-      `Last activity: ${presentation.lastActivity.summary} · changed ${formatDuration(capture.capturedAt - presentation.lastActivity.changedAt)} ago`,
+      `Last activity: ${facts.lastActivity.summary} · changed ${formatDuration(capture.capturedAt - facts.lastActivity.changedAt)} ago`,
     );
-  if (settledAt !== undefined)
+  if (facts.settledAt !== undefined)
     add(
       "literal",
-      `Settled at: ${new Date(settledAt).toISOString()}`,
-      `Duration: ${formatDuration(Math.max(0, settledAt - startedAt))}`,
+      `Settled at: ${new Date(facts.settledAt).toISOString()}`,
+      `Duration: ${formatDuration(Math.max(0, facts.settledAt - facts.startedAt))}`,
     );
   if (subagent?.conversationLost)
     add("literal", "Conversation unavailable for resume");
