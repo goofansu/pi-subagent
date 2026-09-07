@@ -25,9 +25,11 @@ import { fileURLToPath } from "node:url";
  * question the simplification rule asks of every change.
  *
  * So this reads the tree. It is a source scan rather than a boundary rule
- * because the boundary checker works on imports and the host legitimately
- * imports `SubagentSupervisor` for `/subagent doctor`; what matters here
- * is who *calls* the two operations that make a Run.
+ * because the boundary checker works on imports and what matters here is who
+ * *calls* the two operations that make a Run. The application module has two
+ * files that legitimately name `SubagentSupervisor` — the façade and the
+ * observation seam — and only one of them may start a Run, which is a
+ * distinction no import rule can draw.
  */
 
 const treeRoot = path.dirname(fileURLToPath(import.meta.url));

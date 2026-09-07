@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Clock, Deferred, Effect, Layer } from "effect";
-import { inspectRun } from "../application/history.ts";
+import { inspectRun } from "../application/observation.ts";
 import { runId } from "../domain/index.ts";
 import type { SessionRuntimeOptions } from "../runtime/composition.ts";
 import { ResultStore } from "../runtime/result-store.ts";

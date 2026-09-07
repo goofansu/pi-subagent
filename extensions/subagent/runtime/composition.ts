@@ -17,7 +17,7 @@
  * imported only by this module and the service definitions it wires.
  */
 
-import { type Clock, Layer } from "effect";
+import { type Clock, Effect, Layer } from "effect";
 import type { Backend, BackendValidationContext } from "../backend/contract.ts";
 import type { Profile, ProfileDiagnostic } from "../domain/index.ts";
 import { BackendCatalog } from "./backend-catalog.ts";
@@ -28,6 +28,9 @@ import { ProfileCatalog } from "./profile-catalog.ts";
 import { RunRepository } from "./repository.ts";
 import { type ResultEncoder, ResultStore } from "./result-store.ts";
 import { type SessionSettings, SubagentSupervisor } from "./supervisor.ts";
+
+export type { RuntimePolicy } from "./policy.ts";
+export type { ResultEncoder } from "./result-store.ts";
 
 /** Every service the Session runtime provides. */
 export type SessionServices =
@@ -220,3 +223,26 @@ export function sessionRuntimeLayer(
     ? runtime
     : runtime.pipe(Layer.provideMerge(options.clock));
 }
+
+/**
+ * What the Profile catalog of a freshly built Session holds.
+ *
+ * Here rather than at the caller because building a runtime and asking what it
+ * loaded are the same act: the Session wiring reads this once, inside the
+ * Scope it just opened, to publish the Profiles and warn about the files it
+ * could not use. Any other read of a Session goes through the application
+ * module's observation seam, which is the only other way a host surface sees
+ * one.
+ */
+export const loadedProfiles = (): Effect.Effect<
+  {
+    readonly profiles: readonly Profile[];
+    readonly diagnostics: readonly ProfileDiagnostic[];
+  },
+  never,
+  ProfileCatalog
+> =>
+  Effect.map(ProfileCatalog, (catalog) => ({
+    profiles: catalog.list(),
+    diagnostics: catalog.diagnostics(),
+  }));

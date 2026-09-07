@@ -515,6 +515,47 @@ function isCompositionRoot(file: string, graph: BoundaryGraph): boolean {
 }
 
 /**
+ * The Session-long services, by the name each is exported under.
+ *
+ * A host module that could name one could ask it for anything: a command that
+ * named `SubagentSupervisor` could start a Run, and the façade would stop
+ * being the only way one begins. So a host surface reads a Session through the
+ * application module's observation seam, and the Session wiring reaches the
+ * runtime through the composition module that builds it — which is not
+ * reaching around a seam, it is opening one.
+ *
+ * By binding rather than by directory, because the runtime also exports things
+ * a host legitimately holds: the `NotificationSink` the push sink implements,
+ * the counter taxonomy, a policy value. Banning the directory would ban those
+ * too, and the rule would need more exceptions than it has content.
+ */
+const RUNTIME_SERVICES = new Set([
+  "BackendCatalog",
+  "ProfileCatalog",
+  "RunRepository",
+  "ResultStore",
+  "CompletionDelivery",
+  "SubagentSupervisor",
+]);
+
+/** How a service declares itself, so the list above can be checked against one. */
+const SERVICE_DECLARATION = /export class (\w+) extends Context\.Service/g;
+
+/** Every service the runtime actually declares, read from its own sources. */
+function declaredRuntimeServices(graph: BoundaryGraph): string[] {
+  const found: string[] = [];
+  for (const file of listSourceFiles(graph.runtimeRoot, {
+    includeTests: false,
+  })) {
+    const source = fs.readFileSync(file, "utf8");
+    for (const [, name] of source.matchAll(SERVICE_DECLARATION)) {
+      if (name) found.push(name);
+    }
+  }
+  return found.sort();
+}
+
+/**
  * Runtime primitives, which the domain may not name at all.
  *
  * ADR-0029 admits `Schema` into the domain because a schema declaration is a
@@ -1195,7 +1236,38 @@ export function findBoundaryViolations(
     }
   }
 
-  // 21. An edge this checker cannot see is an edge no rule above can hold.
+  // 21. No host module but the composition root names a runtime service. Four
+  //     host surfaces read this Session — the widget, the dashboard's
+  //     observation source, `/subagent doctor` and the shallow status — and
+  //     they used to reach the runtime four different ways, which is how one
+  //     rule ("coalesce publications into at most one pending refresh") came
+  //     to be written twice and differently. They read through the application
+  //     module's observation seam now, and this is what keeps a fifth surface
+  //     from being built the old way. The Session wiring keeps its edge to the
+  //     composition module, because building a runtime is not reaching around
+  //     one.
+  for (const file of [
+    ...listSourceFiles(graph.hostRoot, { includeTests: false }),
+    ...(fs.existsSync(treeEntry) ? [treeEntry] : []),
+  ]) {
+    if (isCompositionRoot(file, graph)) continue;
+    for (const edge of readNamedImports(fs.readFileSync(file, "utf8"))) {
+      const target = resolveRelativeSource(file, edge.specifier);
+      if (!target || !isInside(target, graph.runtimeRoot)) continue;
+      for (const name of edge.names) {
+        // `*` is a namespace or dynamic import, which reaches every export the
+        // module has: this checker cannot see which of them is used, so the
+        // form is a violation whatever it names. Rules 5 and 12 read the same
+        // way, for the same reason.
+        if (!RUNTIME_SERVICES.has(name) && name !== "*") continue;
+        violations.add(
+          `${describe(file)} names ${name} from ${describe(target)}, and a host module reads its Session through the observation seam`,
+        );
+      }
+    }
+  }
+
+  // 22. An edge this checker cannot see is an edge no rule above can hold.
   //     Every rule here is a rule about specifiers, so one `await import(url)`
   //     with a computed argument would let any of them be broken without
   //     failing anything — a presentation file could reach the runtime, an
@@ -1219,7 +1291,7 @@ export function findBoundaryViolations(
  *
  * Empty, and entries are tree-relative paths when it is not. Each one would be
  * a rule this suite has stopped being able to enforce for that file, so each
- * would need a reason at rule 20 above.
+ * would need a reason at rule 22 above.
  */
 const COMPUTED_IMPORT_ALLOWED: ReadonlySet<string> = new Set<string>([]);
 
@@ -1852,6 +1924,79 @@ test("a host file importing a backend or a fake is rejected unless it is the com
   ]);
 });
 
+test("the guarded service names are the ones the runtime actually declares", () => {
+  // The rule above is a denylist of names, and a denylist drifts: a seventh
+  // Session-long service would be unguarded and nothing would say so. This is
+  // what makes adding one a deliberate edit here.
+  assert.deepEqual(
+    declaredRuntimeServices(productionGraph),
+    [...RUNTIME_SERVICES].sort(),
+  );
+});
+
+test("a host file naming a runtime service is rejected unless it is the composition root", (t) => {
+  const { graph, write } = fixtureGraph(t, "host-runtime-service");
+  write("extensions/subagent/index.ts", 'import "./host/session.ts";\n');
+  write(
+    "extensions/subagent/runtime/composition.ts",
+    "export const sessionRuntimeLayer = 1;\n",
+  );
+  write(
+    "extensions/subagent/runtime/supervisor.ts",
+    "export const SubagentSupervisor = 1;\n",
+  );
+  write(
+    "extensions/subagent/runtime/repository.ts",
+    "export const RunRepository = 1;\n",
+  );
+  write("extensions/subagent/runtime/delivery.ts", "export const sink = 1;\n");
+  // The Session wiring builds a runtime through the composition module, which
+  // is the edge this rule keeps rather than the one it removes.
+  write(
+    "extensions/subagent/host/session.ts",
+    'import { sessionRuntimeLayer } from "../runtime/composition.ts";\nexport const s = sessionRuntimeLayer;\n',
+  );
+  // The push sink implements a runtime-defined interface, which is not a
+  // service and not a reach around one.
+  write(
+    "extensions/subagent/host/push-sink.ts",
+    'import { sink } from "../runtime/delivery.ts";\nexport const p = sink;\n',
+  );
+  // A composition root may name whatever it wires.
+  write(
+    "extensions/subagent/host/production-backends.ts",
+    'import { SubagentSupervisor } from "../runtime/supervisor.ts";\nexport const b = SubagentSupervisor;\n',
+  );
+
+  assert.deepEqual(findBoundaryViolations(graph), []);
+
+  // A diagnostics command reading counters straight from the supervisor: the
+  // edge this rule replaced.
+  write(
+    "extensions/subagent/host/subagent-command.ts",
+    'import { SubagentSupervisor } from "../runtime/supervisor.ts";\nexport const c = SubagentSupervisor;\n',
+  );
+  // Renaming on the way in does not hide it: the rule is about the name the
+  // module exports.
+  write(
+    "extensions/subagent/host/session-observation.ts",
+    'import { RunRepository as anything } from "../runtime/repository.ts";\nexport const o = anything;\n',
+  );
+  // Nor does taking the whole module, which reaches every service in it.
+  write(
+    "extensions/subagent/host/widget.ts",
+    'import * as everything from "../runtime/repository.ts";\nexport const w = everything;\n',
+  );
+
+  const names = (file: string, name: string, target: string) =>
+    `${describe(path.join(graph.hostRoot, file))} names ${name} from ${describe(path.join(graph.runtimeRoot, target))}, and a host module reads its Session through the observation seam`;
+  assert.deepEqual(findBoundaryViolations(graph), [
+    names("session-observation.ts", "RunRepository", "repository.ts"),
+    names("subagent-command.ts", "SubagentSupervisor", "supervisor.ts"),
+    names("widget.ts", "*", "repository.ts"),
+  ]);
+});
+
 test("the widget importing the push sink or delivery is rejected", (t) => {
   const { graph, write } = fixtureGraph(t, "widget-delivery");
   write("extensions/subagent/index.ts", "export const entry = 1;\n");
@@ -2369,8 +2514,8 @@ test("the dashboard may name domain types but never Effect, application queries,
   write("extensions/subagent/index.ts", "export {};\n");
   write("extensions/subagent/domain/history.ts", "export interface Row {}\n");
   write(
-    "extensions/subagent/application/history.ts",
-    "export const history = 1;\n",
+    "extensions/subagent/application/observation.ts",
+    "export const observation = 1;\n",
   );
   write(
     "extensions/subagent/runtime/repository.ts",
@@ -2381,18 +2526,18 @@ test("the dashboard may name domain types but never Effect, application queries,
     [
       'import { Effect } from "effect";',
       'import type { Row } from "../domain/history.ts";',
-      'import { history } from "../application/history.ts";',
+      'import { observation } from "../application/observation.ts";',
       'import { repository } from "../runtime/repository.ts";',
       "void Effect;",
       "void (undefined as Row | undefined);",
-      "void history;",
+      "void observation;",
       "void repository;",
       "",
     ].join("\n"),
   );
 
   assert.deepEqual(findBoundaryViolations(graph), [
-    `${describe(path.join(graph.hostRoot, "dashboard-command.ts"))} imports ${describe(path.join(graph.applicationRoot, "history.ts"))}, and the dashboard observes through the Session-bound observation interface`,
+    `${describe(path.join(graph.hostRoot, "dashboard-command.ts"))} imports ${describe(path.join(graph.applicationRoot, "observation.ts"))}, and the dashboard observes through the Session-bound observation interface`,
     `${describe(path.join(graph.hostRoot, "dashboard-command.ts"))} imports ${describe(path.join(graph.runtimeRoot, "repository.ts"))}, and the dashboard observes through the Session-bound observation interface`,
     `${describe(path.join(graph.hostRoot, "dashboard-command.ts"))} imports effect, and the dashboard observes through the Session-bound observation interface`,
   ]);
