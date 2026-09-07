@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { Effect } from "effect";
 import { backendId, runId, subagentId } from "../domain/index.ts";
 import type { RunIndex, RunSnapshot } from "../runtime/repository.ts";
 import {
@@ -9,6 +11,7 @@ import {
   RIG_RESUMABLE_PROFILE,
   startedIds,
 } from "../testing/host-rig.ts";
+import { PLAIN_THEME } from "../testing/stand-in-host.ts";
 import { WIDGET_KEY, widgetRows } from "./widget.ts";
 
 /**
@@ -124,7 +127,7 @@ test("a terminal Run keeps its row until its completion notice lands, and the la
   // answer is in the conversation, which is what v1 did and what the matrix
   // promises.
   assert.equal(rig.host.hasWidget(), true);
-  assert.match(rig.host.widgetLines(60)[1], /^ explore {2}pi {2}completed in /);
+  assert.deepEqual(rig.host.widgetLines(60), [" subagents   1 completed"]);
   assert.deepEqual(rig.installation.sink.unlanded(), [started.runId]);
 
   await rig.host.messageStart({
@@ -139,8 +142,8 @@ test("a terminal Run keeps its row until its completion notice lands, and the la
   assert.deepEqual(rig.host.widgetLines(), []);
 });
 
-test("a settled row says what the Run cost, and the number does not move", async (t) => {
-  const rig = hostRig(t);
+test("zero-active completion summary remains stable as time passes", async (t) => {
+  const rig = hostRig(t, { testClock: true });
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
 
@@ -148,23 +151,21 @@ test("a settled row says what the Run cost, and the number does not move", async
   await rig.settled(started.runId);
   await rig.pump();
 
-  // The Run has settled and is waiting for its notice to land, which is the
-  // whole window in which a moving number is visible to anybody.
+  // A settled Run remains in the aggregate until the hand-off resolves.
   assert.deepEqual(rig.installation.sink.unlanded(), [started.runId]);
   const settled = rig.host.widgetLines(60);
-  assert.match(settled[1], /completed/);
+  assert.deepEqual(settled, [" subagents   1 completed"]);
 
-  // Both instants are far past the Run's own, so a row measured against the
-  // draw's clock would report a second and then a minute where it had reported
-  // a moment. The row's figure is the Run's, so it reads the same every time.
-  rig.renderAt(Date.now() + 1_000);
+  // Neither an activity age nor a duration is part of the aggregate.
+  const requests = rig.host.renderRequests();
+  await rig.advanceClock(1_000);
   assert.deepEqual(rig.host.widgetLines(60), settled);
-  rig.renderAt(Date.now() + 61_000);
+  await rig.advanceClock(60_000);
   assert.deepEqual(rig.host.widgetLines(60), settled);
+  assert.equal(rig.host.renderRequests(), requests);
 
-  // And what it says is a cost, not an age: a fake Run takes milliseconds, so
-  // the figure is a sub-minute one however late the row is drawn.
-  assert.match(settled[1], /completed in \d+\.\ds/);
+  // There is no time figure in the summary.
+  assert.doesNotMatch(settled[0], /\d+\.\ds/);
 });
 
 test("a notice lost to an interrupt keeps its row until the re-push lands", async (t) => {
@@ -437,17 +438,267 @@ test("W-2: a row whose notice will never arrive says so, and retrieving the Resu
   await rig.pump();
 
   assert.equal(rig.installation.sink.status(runId(started.runId)), "exhausted");
-  const row = rig.host.widgetLines(120)[1];
-  assert.match(row, /^ explore {2}pi {2}completed in /);
-  assert.match(
-    row,
-    new RegExp(`notification failed · ${started.runId} · result available$`),
-  );
+  const lines = rig.host.widgetLines(120);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /1 completed/);
+  assert.match(lines[0], /1 notification failed/);
+  assert.doesNotMatch(lines[0], /1 failed|explore|result unavailable/);
 
   await rig.text("agent_result", { id: started.runId });
   await rig.pump();
 
   assert.equal(rig.host.hasWidget(), false);
+});
+
+test("adaptive modes follow 0 → 1 → 2 → 1 → 0 active Runs with unresolved completions summarized", async (t) => {
+  const rig = hostRig(t, {
+    resumableSteps: [[{ step: "await-gate", gate: "first" }]],
+    oneShotSteps: [
+      [
+        {
+          step: "emit",
+          observation: { kind: "activity", activity: "newest work" },
+        },
+        { step: "await-gate", gate: "second" },
+      ],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  assert.equal(rig.host.hasWidget(), false);
+  const first = await heldRun(rig);
+  assert.equal(rig.host.widgetLines(120).length, 2);
+  const second = await heldRun(rig, RIG_ONE_SHOT_PROFILE);
+  await rig.pump();
+  assert.deepEqual(rig.host.widgetLines(120), [" subagents   2 running"]);
+
+  await rig.release("first");
+  await rig.settled(first.runId);
+  await rig.pump();
+  const single = rig.host.widgetLines(120);
+  assert.equal(single.length, 2);
+  assert.match(single[0], /1 running.*1 completed/);
+  assert.match(single[1], /newest work$/);
+  assert.doesNotMatch(single[1], /completed/);
+
+  await rig.release("second");
+  await rig.settled(second.runId);
+  await rig.pump();
+  assert.deepEqual(rig.host.widgetLines(120), [" subagents   2 completed"]);
+  await rig.text("agent_result", { id: first.runId });
+  assert.deepEqual(rig.host.widgetLines(120), [" subagents   1 completed"]);
+  await rig.text("agent_wait", { ids: [second.runId] });
+  assert.equal(rig.host.hasWidget(), false);
+});
+
+test("drawn aggregate ignores alternating hidden activity and accounting but returns fresh detail", async (t) => {
+  const steps = (name: string) => [
+    { step: "await-gate" as const, gate: `${name}-update` },
+    {
+      step: "emit" as const,
+      observation: { kind: "activity" as const, activity: `${name} newest` },
+    },
+    { step: "cumulative-usage" as const, total: { input: 12, output: 4 } },
+    { step: "await-gate" as const, gate: `${name}-finish` },
+  ];
+  const rig = hostRig(t, {
+    resumableSteps: [steps("first")],
+    oneShotSteps: [steps("second")],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  const first = await heldRun(rig);
+  await heldRun(rig, RIG_ONE_SHOT_PROFILE);
+  await rig.pump();
+  const frame = rig.host.widgetLines(120); // An actual draw, not merely a pending request.
+  const requests = rig.host.renderRequests();
+  const changes = rig.installation.widget()?.activity().changes ?? 0;
+  for (const name of ["first", "second"]) {
+    await rig.release(`${name}-update`);
+    await rig.pump();
+    assert.equal(rig.host.renderRequests(), requests);
+    assert.deepEqual(rig.host.widgetLines(120), frame);
+  }
+  assert.ok((rig.installation.widget()?.activity().changes ?? 0) > changes);
+  await rig.release("first-finish");
+  await rig.settled(first.runId);
+  await rig.pump();
+  assert.match(rig.host.widgetLines(120)[1], /second newest$/);
+  assert.ok(rig.host.renderRequests() > requests);
+});
+
+test("finalizing and requested cancellation count as active, and visible changes share one pending draw", async (t) => {
+  const rig = hostRig(t, {
+    renderEvery: 0,
+    resumableSteps: [
+      [
+        { step: "gate-the-finalizer", gate: "first-cleanup" },
+        { step: "await-gate", gate: "first-end" },
+      ],
+    ],
+    oneShotSteps: [
+      [
+        { step: "gate-the-finalizer", gate: "second-cleanup" },
+        { step: "hang" },
+      ],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  const first = await heldRun(rig);
+  const second = await heldRun(rig, RIG_ONE_SHOT_PROFILE);
+  rig.host.widgetLines(120);
+  const requests = rig.host.renderRequests();
+  await rig.release("first-end");
+  await rig.pump();
+  assert.equal(rig.host.renderRequests(), requests + 1);
+  await rig.text("agent_cancel", { ids: [second.runId] });
+  await rig.pump();
+  assert.equal(rig.host.renderRequests(), requests + 1);
+  const frame = rig.host.widgetLines(120);
+  assert.equal(frame.length, 1);
+  assert.match(frame[0], /1 finalizing/);
+  assert.match(frame[0], /1 cancelling/);
+  assert.doesNotMatch(frame[0], /running|completed|look around/);
+  await rig.release("first-cleanup");
+  await rig.settled(first.runId);
+  await rig.pump();
+  assert.match(rig.host.widgetLines(120)[1], /once.*cancelling/);
+  await rig.release("second-cleanup");
+  await rig.settled(second.runId);
+  await rig.pump();
+  assert.deepEqual(rig.host.widgetLines(120), [
+    " subagents   1 completed   1 cancelled",
+  ]);
+});
+
+test("zero-active attention distinguishes failed outcomes from unavailable delivery and resolution removes only its Run", async (t) => {
+  const rig = hostRig(t, {
+    resumableSteps: [
+      [
+        { step: "await-gate", gate: "finish" },
+        { step: "fail", message: "failed work" },
+      ],
+    ],
+    oneShotSteps: [[{ step: "await-gate", gate: "finish" }]],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  const failed = await heldRun(rig);
+  const completed = await heldRun(rig, RIG_ONE_SHOT_PROFILE);
+  await rig.release("finish");
+  await rig.settled(failed.runId, completed.runId);
+  await rig.pump();
+  // Delivery reports its own fact through the real Session sink, independently
+  // of the repository's immutable Run outcome.
+  await Effect.runPromise(
+    rig.installation.sink.unannounceable(runId(completed.runId)),
+  );
+  const frame = rig.host.widgetLines(200);
+  assert.equal(frame.length, 1);
+  assert.match(frame[0], /1 completed.*1 failed/);
+  assert.match(frame[0], /1 no notification · result unavailable/);
+  assert.doesNotMatch(frame[0], /2 failed|explore|once/);
+  assert.match(rig.host.widgetLines(20)[0], /^!/);
+  // Rendering at either width did not resolve anything.
+  assert.equal(
+    rig.installation.sink.status(runId(completed.runId)),
+    "unannounceable",
+  );
+  assert.equal(rig.installation.sink.status(runId(failed.runId)), "pending");
+  await rig.text("agent_result", { id: failed.runId });
+  assert.doesNotMatch(rig.host.widgetLines(200)[0], /1 failed/);
+  assert.match(rig.host.widgetLines(200)[0], /1 completed.*no notification/);
+  await rig.host.sessionShutdown();
+  const installs = rig.host.widgetInstalls();
+  await Effect.runPromise(
+    rig.installation.sink.exhausted(runId(completed.runId)),
+  );
+  await rig.pump();
+  assert.equal(rig.host.hasWidget(), false);
+  assert.equal(rig.host.widgetInstalls(), installs);
+});
+
+test("equal aggregate updates retry failed installation and resize renders current state without a redraw request", async (t) => {
+  let failInstall = true;
+  let color = "\u001b[31m";
+  const rig = hostRig(t, {
+    customTheme: {
+      ...PLAIN_THEME,
+      fg: (_tone, text) => `${color}${text}\u001b[0m`,
+    },
+    widgetInstallFails: () => failInstall,
+    resumableSteps: [
+      [
+        { step: "await-gate", gate: "update" },
+        { step: "emit", observation: { kind: "activity", activity: "hidden" } },
+        { step: "hang" },
+      ],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  await heldRun(rig);
+  await heldRun(rig);
+  await rig.pump();
+  assert.equal(rig.host.hasWidget(), false);
+  failInstall = false;
+  await rig.release("update");
+  await rig.pump();
+  assert.equal(rig.host.hasWidget(), true);
+  assert.ok(rig.host.widgetLines(120)[0].includes("\u001b[31m"));
+  const requests = rig.host.renderRequests();
+  assert.ok(visibleWidth(rig.host.widgetLines(8)[0]) <= 8);
+  color = "\u001b[32m";
+  const themed = rig.host.widgetLines(120)[0];
+  assert.ok(themed.includes("\u001b[32m"));
+  assert.ok(!themed.includes("\u001b[31m"));
+  assert.equal(rig.host.renderRequests(), requests);
+});
+
+test("each changed aggregate hand-off fact requests a new frame after the previous draw", async (t) => {
+  const rig = hostRig(t, {
+    renderEvery: 0,
+    resumableSteps: [[{ step: "await-gate", gate: "finish" }]],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  const first = await heldRun(rig);
+  const second = await heldRun(rig);
+  const third = await heldRun(rig);
+  await rig.release("finish");
+  await rig.settled(first.runId, second.runId, third.runId);
+  await rig.pump();
+  assert.deepEqual(rig.host.widgetLines(200), [" subagents   3 completed"]);
+
+  // All Runs stay completed: attention kind/count and resolution must each
+  // invalidate an already-drawn aggregate even without an activity or phase change.
+  let requests = rig.host.renderRequests();
+  const drawChanged = (expected: string) => {
+    assert.equal(rig.host.renderRequests(), requests + 1);
+    assert.deepEqual(rig.host.widgetLines(200), [expected]);
+    requests = rig.host.renderRequests();
+  };
+  await Effect.runPromise(rig.installation.sink.exhausted(runId(first.runId)));
+  drawChanged(" subagents   3 completed   1 notification failed");
+  await Effect.runPromise(
+    rig.installation.sink.unannounceable(runId(second.runId)),
+  );
+  drawChanged(
+    " subagents   3 completed   1 notification failed   1 no notification · result unavailable",
+  );
+  await Effect.runPromise(rig.installation.sink.exhausted(runId(third.runId)));
+  drawChanged(
+    " subagents   3 completed   2 notification failed   1 no notification · result unavailable",
+  );
+  await rig.text("agent_result", { id: first.runId });
+  drawChanged(
+    " subagents   2 completed   1 notification failed   1 no notification · result unavailable",
+  );
+  await rig.text("agent_wait", { ids: [third.runId] });
+  drawChanged(
+    " subagents   1 completed   1 no notification · result unavailable",
+  );
 });
 
 test("the widget owns one key, so a Session cannot leave two of them installed", () => {

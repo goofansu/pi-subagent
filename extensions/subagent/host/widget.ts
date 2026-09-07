@@ -1,10 +1,11 @@
 /**
- * The active widget: one row per live Run, pinned above the editor.
+ * The adaptive widget, pinned above the editor: one active Run gets detail;
+ * zero or multiple active Runs get only aggregate state.
  *
  * A Run finishes after the turn that started it, so the transcript cannot show
  * it — by the time the Subagent says anything, its `agent_start` row is
- * already final and scrolled away. This widget is the only place live Runs are
- * visible, which makes it part of the feature rather than a decoration on it.
+ * already final and scrolled away. This widget provides ambient visibility;
+ * `/subagent dashboard` provides individual Runs and history.
  *
  * It is **observation-only**. It reads the repository's published index, folds
  * nothing, and holds no lifecycle state: the one thing it remembers is the
@@ -28,7 +29,9 @@
  * Rendering reads the reference. A backend reporting activity a thousand times
  * a second therefore costs a thousand cheap reference writes and as many
  * renders as the terminal can actually draw, rather than a thousand renders
- * queued behind each other.
+ * queued behind each other. In aggregate mode, unchanged presentation counts
+ * request no redraw even after a frame has been drawn. Source updates are
+ * still cached, so returning to single-Run detail shows its newest activity.
  *
  * ## Appearing and disappearing
  *
@@ -37,7 +40,7 @@
  * than closing over a snapshot, so a change is a redraw request rather than a
  * teardown and rebuild.
  *
- * A Run's row lasts from `agent_start` until its **completion hand-off is
+ * A Run's visibility lasts from `agent_start` until its **completion hand-off is
  * resolved** — its notice landed, or the parent was handed its Result by
  * `agent_result` or by a wait — and not until the Run settles. A Run shorter than the turn
  * that started it settles before anybody has looked at the widget, so a row
@@ -52,9 +55,9 @@
  * that stays and a row that goes is the whole of what this component decides,
  * and one that knew more would eventually act on more.
  *
- * The two failed answers, `exhausted` and `unannounceable`, are ones the row
- * has to *say* rather than act on. Either way, nothing will ever arrive, so
- * the row would otherwise sit with no explanation.
+ * The two failed answers, `exhausted` and `unannounceable`, contribute separate
+ * attention counts, not failed Run outcomes. The widget says what happened
+ * without acting on delivery or consuming any Result.
  *
  */
 
@@ -67,6 +70,7 @@ import {
   type RenderableTheme,
   type RunRowView,
   renderRunRows,
+  widgetSummary,
 } from "../presentation/index.ts";
 import type { RunIndex, RunSnapshot } from "../runtime/repository.ts";
 import { RunRepository } from "../runtime/repository.ts";
@@ -146,13 +150,9 @@ export interface ActiveWidget {
  * Returns a handle a test reads. The uninstall is the Scope's job: the
  * subscription and the widget itself go when the Session Scope closes, which
  * is the same close that disposes the runtime.
- *
- * `now` is a function rather than a clock read inside the renderer, because a
- * golden test needs the same rows twice and the row text carries a duration.
  */
 export function installActiveWidget(
   host: WidgetHost,
-  now: () => number,
   handoff: CompletionHandoffView,
 ): Effect.Effect<ActiveWidget, never, RunRepository | Scope.Scope> {
   return Effect.gen(function* () {
@@ -173,6 +173,7 @@ export function installActiveWidget(
      */
     let index: RunIndex = new Map();
     let latest: readonly RunRowView[] = [];
+    let aggregateKey: string | undefined;
     let changes = 0;
     let renderRequests = 0;
 
@@ -189,7 +190,7 @@ export function installActiveWidget(
 
     const render = (theme: RenderableTheme, width: number): string[] => {
       renderPending = false;
-      return [...renderRunRows(latest, theme, width, now())];
+      return [...renderRunRows(latest, theme, width)];
     };
 
     /** Ask the host to draw, unless it has already been asked and not yet has. */
@@ -235,7 +236,10 @@ export function installActiveWidget(
     };
 
     /** Reconcile the host with what the latest index says. */
-    const reconcile = (rows: readonly RunRowView[]): void => {
+    const reconcile = (
+      rows: readonly RunRowView[],
+      unchanged: boolean,
+    ): void => {
       if (rows.length === 0) {
         uninstall();
         return;
@@ -244,13 +248,26 @@ export function installActiveWidget(
         install();
         return;
       }
-      requestDraw();
+      if (!unchanged) requestDraw();
     };
 
     /** Re-read both sources and put the host in step with them. */
     const refresh = (): void => {
       latest = widgetRows(index, handoff.status);
-      reconcile(latest);
+      const activeCount = latest.filter(
+        (row) => !isTerminalRunPhase(row.phase),
+      ).length;
+      // widgetSummary is the complete Run-dependent header input. Equal chips
+      // mean equal aggregate frames at a fixed width/theme; host-driven renders
+      // still recompute their layout and paint. Single detail is never suppressed.
+      const nextKey =
+        activeCount === 1 ? undefined : JSON.stringify(widgetSummary(latest));
+      const unchanged = nextKey !== undefined && nextKey === aggregateKey;
+      aggregateKey = nextKey;
+      // Always accept source changes, even when none of their detail is drawn.
+      // Installation reconciliation runs even for equal summaries, so a failed
+      // host install can retry on the next observed update.
+      reconcile(latest, unchanged);
     };
 
     // The uninstall is registered before the subscription starts, so a Session

@@ -1,63 +1,52 @@
 /**
- * Widget rows: one live Run as a single line of a small table.
+ * Ambient widget: aggregate state and, for exactly one active Run, one detail line.
  *
  * A row reads, left to right, in the order of how much a person scanning a
  * fan-out needs each thing: *which specialist* (agent, then backend), *how is
- * it going* (the status word, with the time it took once it has settled),
- * *how much has it done* (turns), *what it is for* (the label), and finally
+ * it going* (the status word), *how much has it done* (turns),
+ * *what it is for* (the label), and finally
  * *what it is doing right now* (the latest tool call). That order is also the
- * order the fields give way in on a narrow terminal, from the right. Every
- * field starts in the same column on every row, so a reader compares Runs by
- * looking down rather than by reading each line.
+ * order the fields give way in on a narrow terminal, from the right. This
+ * existing single-row layout is retained here; detailed comparison belongs in
+ * `/subagent dashboard`, not in this ambient surface.
  *
  * ```
- *  subagents   2 running   1 completed
- *  explore      pi      running             3 turns  look around · grep: x
- *  reviewer     claude  running             1 turn   read the diff
- *  implementer  claude  completed in 1m 2s
+ *  subagents   1 running   1 completed
+ *  explore  pi  running  3 turns  look around · grep: x
  * ```
  *
  * A live row has no spinner and no clock. Its turn count moves as the Run
  * works, and that is the sign of life a reader needs; a spinner and a
  * counting duration said the same thing louder and cost a redraw several
- * times a second. A settled row says what the Run took, because that figure
- * has stopped and is worth reading, and drops its turn count, because that
- * one has stopped meaning anything. No glyph column either: the status word
- * and the band's colour already say which phase a row is in, and a mark in
- * front of the agent said it a third time.
+ * times a second. No glyph column either: the status word
+ * already says which phase a row is in, and a mark in
+ * front of the agent would repeat it.
  *
- * Each row is painted as a band across the width in the background Pi gives
- * its own tool calls — pending while the Run is live, success or error once it
- * has settled — so a fan-out reads as what it is: tool calls the parent made.
+ * The active detail is painted as a pending tool-call band. Terminal Runs
+ * contribute only counts to the widget, never individual rows.
  *
  * Deliberately no Run id and no model. The widget is read by the operator, and
  * a human names a Run by its agent and what it is doing; ids live in tool
  * results and notifications, where the model that acts on them reads them.
- * The one exception is a row that will never leave on its own (W-2), whose
- * tail names the id because the id is what gets rid of it. Deliberately no
- * tool count and no context gauge either: both were tried, and neither told
- * an operator anything they acted on.
+ * Deliberately no tool count and no context gauge either: both were tried,
+ * and neither told an operator anything they acted on.
  *
  * This module formats. It does not decide which Runs exist, when the widget
  * appears, or when it redraws — those are host concerns, and a presentation
- * module that knew them would be holding lifecycle state. It reads no clock of
- * its own: `now` is handed in, and only a settled row's figure depends on
- * time at all.
+ * module that knew them would be holding lifecycle state. Nothing here reads
+ * a clock.
  */
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { isTerminalRunPhase, type RunPhase } from "../domain/index.ts";
-import { completionViewOfSnapshot } from "./completion-view.ts";
 import {
-  formatRunPhase,
   formatTurns,
   RUN_PHASE_DISPLAY_ORDER,
-  runPhaseBackground,
   runPhaseTone,
   runPhaseVerb,
   type Tone,
 } from "./status.ts";
-import { elapsedMillis, handoffEndedBadly, type RunRowView } from "./views.ts";
+import type { FailedHandoffStatus, RunRowView } from "./views.ts";
 
 /** The theme surface every subagent renderer uses. */
 export interface RenderableTheme {
@@ -67,15 +56,6 @@ export interface RenderableTheme {
   italic(text: string): string;
   inverse(text: string): string;
 }
-
-/**
- * Rows shown before the widget starts summarising.
- *
- * Nothing caps how many Runs a model may start beyond the Session's own
- * capacity, so the widget caps itself: a fan-out that filled the editor off
- * the screen would be worse than one that said how many it was not showing.
- */
-export const MAX_WIDGET_ROWS = 8;
 
 /** Every fixed component in a row is separated by the same amount of space. */
 export const ROW_DELIMITER = "  ";
@@ -108,13 +88,7 @@ export const MIN_LABEL_WIDTH = 24;
 export const MIN_ACTIVITY_WIDTH = 12;
 
 /**
- * Widths shared by every visible row so each field starts in one column.
- *
- * `status` is measured over the *live* rows only. A settled row's status is a
- * phrase — `completed in 12.4s` — and a column sized to it would push every
- * live row's turn count a dozen cells right of its status word. A settled row
- * has nothing after its status but, on a stuck row, an explanation, so its
- * phrase overflows the column instead and nothing else has to move.
+ * The active detail's column widths, preserving the existing width policy.
  *
  * `turns` measured at zero is not drawn, because the width it was fitted to
  * had no room for it. The other three are never zero: a row is its agent,
@@ -144,25 +118,21 @@ function fixedWidth(columns: RowColumns): number {
 }
 
 /**
- * Measure the shown rows, then fit them to `width`.
+ * Measure the shown active detail, then fit its columns to `width`.
  *
- * Fitting is a widget-level decision rather than a row-level one so that
- * every row drops the same columns: a table in which one row shows a turn
- * count and the next does not is not a table. Only the turn count is
- * optional, and it goes only when the fixed part itself will not fit; the
+ * Only the turn count is optional in the retained single-row layout,
+ * and it goes only when the fixed part itself will not fit; the
  * tail is fitted to whatever is left and is the first thing to shrink.
  */
 export function measureColumns(
   rows: readonly RunRowView[],
-  now: number,
   width: number = Number.POSITIVE_INFINITY,
 ): RowColumns {
-  const cells = rows.map((row) => rowCells(row, now));
-  const live = cells.filter((c) => c.live);
+  const cells = rows.map(rowCells);
   const columns: RowColumns = {
     agent: Math.min(MAX_AGENT_COLUMN_WIDTH, widest(cells.map((c) => c.agent))),
     backend: widest(cells.map((c) => c.backend)),
-    status: widest((live.length > 0 ? live : cells).map((c) => c.status)),
+    status: widest(cells.map((c) => c.status)),
     turns: widest(cells.map((c) => c.turns)),
   };
   if (fixedWidth(columns) > width) return { ...columns, turns: 0 };
@@ -173,24 +143,9 @@ function padEnd(value: string, width: number): string {
   return value + " ".repeat(Math.max(0, width - visibleWidth(value)));
 }
 
-/**
- * Running Runs first, then everything else, each group newest last.
- *
- * What is still happening is what the reader is watching. A finalizing Run has
- * stopped talking and is only cleaning up, and a settled one is waiting for
- * its notice to land, so both sink below the ones that are still working.
- */
-export function orderRows(rows: readonly RunRowView[]): readonly RunRowView[] {
-  const running = rows.filter((row) => row.phase === "running");
-  const other = rows.filter((row) => row.phase !== "running");
-  return [...running, ...other];
-}
-
 /** The plain text of one row's cells, before padding and paint. */
 interface RowCells {
   readonly tone: Tone;
-  /** Whether the Run is still going, which decides what the row carries. */
-  readonly live: boolean;
   readonly agent: string;
   readonly backend: string;
   readonly status: string;
@@ -203,80 +158,30 @@ interface RowCells {
 interface RowTail {
   readonly label: string | undefined;
   readonly activity: string | undefined;
-  /** Painted as a failure rather than as orientation (W-2). */
-  readonly failure: string | undefined;
 }
 
-/**
- * What a row says in each cell.
- *
- * A settled row reads its status and its duration through the completion
- * view, which is the same value the result card and the notice header read;
- * that is what stops a row and a card printing two durations for one Run. Its
- * status is the phase's full phrase — `completed in 12.4s` — because the
- * figure has stopped moving and is worth reading. A live Run's status is the
- * phase's one word: its turn count is its sign of life.
- *
- * Two rows say something the phase alone does not. A running Run whose
- * cancellation has been recorded says `cancelling`, because the reader who
- * asked for that is watching for it to take. And a settled Run whose notice
- * will never arrive (W-2) is painted in the error colour whatever its phase,
- * because nothing is coming for it and a row that will never leave on its own
- * has to stand out from the ones that will.
- */
-function rowCells(row: RunRowView, now: number): RowCells {
-  const completion = completionViewOfSnapshot(row, now);
-  const phase: RunPhase = completion?.status ?? row.phase;
-  const live = !isTerminalRunPhase(phase);
-  const cancelling = live && row.cancellation !== undefined;
-  const handoffFailure = handoffEndedBadly(row.handoff);
-
-  const tone: Tone = handoffFailure ? "error" : runPhaseTone(phase);
-  const status = live
-    ? cancelling
-      ? "cancelling"
-      : runPhaseVerb(phase)
-    : formatRunPhase({
-        phase,
-        elapsedMillis: completion?.durationMillis ?? elapsedMillis(row, now),
-      });
-
-  const tail: RowTail | undefined = handoffFailure
-    ? {
-        label: undefined,
-        activity: undefined,
-        failure:
-          row.handoff === "unannounceable"
-            ? `no notification · ${row.identity.runId} · result unavailable`
-            : `notification failed · ${row.identity.runId} · result available`,
-      }
-    : live
-      ? {
-          label: row.identity.description || undefined,
-          activity: phase === "running" ? row.activity : undefined,
-          failure: undefined,
-        }
-      : undefined;
-
+/** Cells of the sole active Run; terminal Runs never enter the detail path. */
+function rowCells(row: RunRowView): RowCells {
+  const tail: RowTail = {
+    label: row.identity.description || undefined,
+    activity: row.phase === "running" ? row.activity : undefined,
+  };
   return {
-    tone,
-    live,
+    tone: runPhaseTone(row.phase),
     agent: truncateToWidth(row.identity.agent, MAX_AGENT_COLUMN_WIDTH, "…"),
     backend: row.identity.backendId,
-    status,
-    // A settled Run's turn count is history: what it did is in its Result,
-    // and the row is only waiting to leave. The count is a live row's sign of
-    // life, and means nothing once nothing is moving.
-    turns: live ? formatTurns(row.usage.turns) : "",
-    tail:
-      tail && (tail.label || tail.activity || tail.failure) ? tail : undefined,
+    status:
+      row.cancellation !== undefined ? "cancelling" : runPhaseVerb(row.phase),
+    turns: formatTurns(row.usage.turns),
+    tail: tail.label || tail.activity ? tail : undefined,
   };
 }
 
 /**
- * One Run as a single line.
+ * One active Run as a single line.
  *
- * The agent, backend, and status never give way: they are what a row *is*. The turn count is drawn when `columns` kept it, and the tail takes
+ * The agent, backend, and status never give way: they are what a row *is*.
+ * The turn count is drawn when `columns` kept it, and the tail takes
  * what is left. A row that still does not fit is cut, which only happens on a
  * terminal too narrow to read anyway.
  */
@@ -284,10 +189,9 @@ export function formatRunRow(
   row: RunRowView,
   theme: RenderableTheme,
   width: number,
-  now: number,
-  columns: RowColumns = measureColumns([row], now, width),
+  columns: RowColumns = measureColumns([row], width),
 ): string {
-  const cells = rowCells(row, now);
+  const cells = rowCells(row);
 
   const agent = theme.fg(
     "toolTitle",
@@ -321,13 +225,6 @@ export function formatRunRow(
  * dropped and the label takes the room. The label is never dropped in favour
  * of the activity: a row that said only `read` would not say which Run was
  * reading. A row that is only finalizing shows its label alone.
- *
- * A failed hand-off has a different tail. Exhaustion says which Run it was and
- * that the answer remains available; an unannounceable hand-off says there is
- * no notification and no Result to retrieve. Both are painted in the error
- * colour.
- *
- * Every other settled row has nothing to add and adds nothing.
  */
 function formatRowTail(
   tail: RowTail | undefined,
@@ -337,13 +234,6 @@ function formatRowTail(
   if (tail === undefined) return "";
   const remaining = room - ROW_DELIMITER.length;
   if (remaining < MIN_TAIL_WIDTH) return "";
-
-  if (tail.failure !== undefined) {
-    return (
-      ROW_DELIMITER +
-      theme.fg("error", truncateToWidth(tail.failure, remaining, "…"))
-    );
-  }
 
   const { label, activity } = tail;
   if (!label) {
@@ -407,25 +297,61 @@ export function formatRowSummary(rows: readonly RunRowView[]): string {
 }
 
 /**
- * The same summary for the header, one chip per phase.
- *
- * A chip is the count and the verb, padded by a cell each side, painted in
- * the phase's colour and then inverted: the colour becomes the chip's
- * background and the text takes the terminal's own, so `2 running` reads as
- * a warning-coloured tag and `1 failed` as an error-coloured one. Chips are
- * set a cell apart, and their backgrounds are what separates them.
+ * A summary chip separates Run state from exceptional hand-off attention.
+ * Chips contain only aggregate facts, so the host can compare them without
+ * depending on hidden activity, identities, or accounting.
  */
-function formatPhaseChips(
+interface SummaryChip {
+  readonly text: string;
+  readonly tone: Tone;
+  readonly attention: boolean;
+}
+
+const HANDOFF_ATTENTION: Record<FailedHandoffStatus, string> = {
+  exhausted: "notification failed",
+  unannounceable: "no notification · result unavailable",
+};
+
+/**
+ * All Run-dependent facts displayed in the aggregate header, in display order.
+ * The host compares these chips to suppress redraws: for fixed width/theme,
+ * equal chips MUST render equal headers. New displayed facts belong here,
+ * never in a separate header read of activity, accounting, identity, or time.
+ */
+export function widgetSummary(
   rows: readonly RunRowView[],
-  theme: RenderableTheme,
-): string {
-  return phaseCounts(rows)
-    .map(([phase, count]) =>
-      theme.inverse(
-        theme.fg(runPhaseTone(phase), ` ${count} ${runPhaseVerb(phase)} `),
-      ),
-    )
-    .join(" ");
+): readonly SummaryChip[] {
+  const cancelling = rows.filter(
+    (row) => !isTerminalRunPhase(row.phase) && row.cancellation !== undefined,
+  ).length;
+  const chips: SummaryChip[] = phaseCounts(
+    rows.filter(
+      (row) => isTerminalRunPhase(row.phase) || row.cancellation === undefined,
+    ),
+  ).map(([phase, count]) => ({
+    text: `${count} ${runPhaseVerb(phase)}`,
+    tone: runPhaseTone(phase),
+    attention: false,
+  }));
+  if (cancelling > 0) {
+    chips.unshift({
+      text: `${cancelling} cancelling`,
+      tone: "warning",
+      attention: false,
+    });
+  }
+  for (const [handoff, text] of Object.entries(HANDOFF_ATTENTION)) {
+    const count = rows.filter(
+      (row) => isTerminalRunPhase(row.phase) && row.handoff === handoff,
+    ).length;
+    if (count === 0) continue;
+    chips.push({
+      text: `${count} ${text}`,
+      tone: "error",
+      attention: true,
+    });
+  }
+  return chips;
 }
 
 /**
@@ -443,25 +369,32 @@ function formatPhaseChips(
  * carries its own Run's accounting, labelled for what it is.
  */
 function formatHeader(
-  rows: readonly RunRowView[],
+  chips: readonly SummaryChip[],
   theme: RenderableTheme,
   width: number,
 ): string {
-  const title = ` ${theme.fg("accent", theme.bold("subagents"))}  ${formatPhaseChips(rows, theme)}`;
+  const painted = chips
+    .map((chip) => theme.inverse(theme.fg(chip.tone, ` ${chip.text} `)))
+    .join(" ");
+  const title = ` ${theme.fg("accent", theme.bold("subagents"))}  ${painted}`;
   if (visibleWidth(title) <= width) return title;
+  const attention = chips.filter((chip) => chip.attention);
+  if (attention.length > 0) {
+    // Deliberately switch only on overflow: the full title/chips are kept at
+    // exact fit. Once they cannot fit, drop that framing and lead with plain
+    // attention text, reserving ! even when its explanation cannot fit.
+    // Ordinary success counts must not conceal delivery failure.
+    if (width <= 0) return "";
+    return (
+      theme.fg("error", "!") +
+      truncateToWidth(
+        ` ${[...attention, ...chips.filter((chip) => !chip.attention)].map((chip) => chip.text).join(", ")}`,
+        width - 1,
+        "…",
+      )
+    );
+  }
   return truncateToWidth(title, width, "…");
-}
-
-/**
- * The theme background a row is painted on.
- *
- * The phase's own, except for a settled Run whose notice will never arrive:
- * the Run may have completed, but the row is on screen because something
- * failed, and it is painted as the failure it is reporting.
- */
-export function rowBackground(row: RunRowView): string {
-  if (handoffEndedBadly(row.handoff)) return "toolErrorBg";
-  return runPhaseBackground(row.phase);
 }
 
 /**
@@ -489,35 +422,33 @@ function paintBand(
 /** The SGR sequence that clears every attribute, background included. */
 const FULL_RESET = "\u001b[0m";
 
-/** The whole widget: a title line, the rows as bands, and an overflow summary. */
+/** Aggregate state, with detail only for exactly one nonterminal Run. */
 export function renderRunRows(
   rows: readonly RunRowView[],
   theme: RenderableTheme,
   width: number,
-  now: number,
-  maxRows: number = MAX_WIDGET_ROWS,
 ): readonly string[] {
   if (rows.length === 0) return [];
 
-  const ordered = orderRows(rows);
-  const shown = ordered.slice(0, maxRows);
-  const hidden = ordered.length - shown.length;
+  const active = rows.filter((row) => !isTerminalRunPhase(row.phase));
+  const shown = active.length === 1 ? active : [];
   // Rows are drawn one column in from each edge, so they are fitted two short
   // and the band pads the right column, the way the left one is a space.
-  const columns = measureColumns(shown, now, width - ROW_INSET * 2);
+  const columns = measureColumns(shown, width - ROW_INSET * 2);
   const lines = [
-    formatHeader(rows, theme, width),
+    formatHeader(widgetSummary(rows), theme, width),
     ...shown.map((row) =>
       paintBand(
-        ` ${formatRunRow(row, theme, width - ROW_INSET * 2, now, columns)}`,
-        rowBackground(row),
+        truncateToWidth(
+          ` ${formatRunRow(row, theme, Math.max(0, width - ROW_INSET * 2), columns)}`,
+          width,
+          "…",
+        ),
+        "toolPendingBg",
         theme,
         width,
       ),
     ),
   ];
-  if (hidden > 0) {
-    lines.push(`   ${theme.fg("dim", `… and ${hidden} more`)}`);
-  }
   return lines;
 }

@@ -309,7 +309,7 @@ test("a settled Run sends exactly one follow-up notice that triggers a turn", as
   );
 });
 
-test("an encode defect leaves a marked row and reports one unannounceable hand-off", async (t) => {
+test("an encode defect retains aggregate attention and reports one unannounceable hand-off", async (t) => {
   const rig = hostRig(t, {
     resultEncoder: () => {
       throw new Error("persistent encode defect");
@@ -326,10 +326,10 @@ test("an encode defect leaves a marked row and reports one unannounceable hand-o
     rig.installation.sink.status(runId(ids.runId)),
     "unannounceable",
   );
-  assert.match(
-    rig.host.widgetLines(120)[1] ?? "",
-    new RegExp(`no notification · ${ids.runId} · result unavailable$`),
-  );
+  const lines = rig.host.widgetLines(120);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /1 no notification · result unavailable$/);
+  assert.doesNotMatch(lines[0], new RegExp(ids.runId));
 
   const said: string[] = [];
   const command = rig.host.commands().find(({ name }) => name === "subagent");

@@ -88,8 +88,6 @@ export interface SessionWiring {
   readonly agentGuidelines: string[];
   /** Publish the Profiles the live Session loaded, for `/agents` to read. */
   readonly setProfiles: (profiles: readonly Profile[]) => void;
-  /** Reads the wall clock, so the widget's durations stay testable. */
-  readonly now: () => number;
 }
 
 /** What a Session start reports back, for a test to assert on. */
@@ -102,12 +100,11 @@ export interface StartedSession {
 /** What the Session installs inside its own Scope, and reads once. */
 function openSession(
   host: WidgetHost,
-  now: () => number,
   handoff: CompletionHandoffView,
 ): Effect.Effect<StartedSession, never, SessionServices | Scope.Scope> {
   return Effect.gen(function* () {
     const catalog = yield* ProfileCatalog;
-    const widget = yield* installActiveWidget(host, now, handoff);
+    const widget = yield* installActiveWidget(host, handoff);
     return {
       widget,
       profiles: catalog.list(),
@@ -196,7 +193,7 @@ export async function startSession(
       Scope.provide(
         // A read model rather than the sink itself: the widget asks how far a
         // hand-off has got and never decides it.
-        openSession(widgetHost, wiring.now, {
+        openSession(widgetHost, {
           status: wiring.sink.status,
           subscribe: wiring.sink.subscribe,
         }),

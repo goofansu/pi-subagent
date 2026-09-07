@@ -8,20 +8,9 @@ import {
   formatTokenCount,
   formatTurns,
   RUN_PHASE_DISPLAY_ORDER,
-  runPhaseBackground,
   runPhaseTone,
   runPhaseVerb,
 } from "./status.ts";
-
-test("every Run phase has a background, and it is one of Pi's tool-box three", () => {
-  assert.deepEqual(RUN_PHASES.map(runPhaseBackground), [
-    "toolPendingBg",
-    "toolPendingBg",
-    "toolSuccessBg",
-    "toolErrorBg",
-    "toolErrorBg",
-  ]);
-});
 
 test("every Run phase has a tone, a verb, and a phrase", () => {
   assert.deepEqual([...RUN_PHASE_DISPLAY_ORDER], [...RUN_PHASES]);
@@ -35,8 +24,7 @@ test("every Run phase has a tone, a verb, and a phrase", () => {
 test("presentation observes phase without determining it", () => {
   // The five phrases, with the two live ones deliberately naming no duration:
   // a phrase is written into tool results and notices, where a live figure
-  // would be stale as soon as it was read. The widget's duration column is
-  // where a live Run's time is shown.
+  // would be stale as soon as it was read.
   assert.deepEqual(
     RUN_PHASES.map((phase) => formatRunPhase({ phase, elapsedMillis: 12_400 })),
     [

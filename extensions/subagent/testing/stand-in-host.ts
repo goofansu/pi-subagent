@@ -270,7 +270,7 @@ export function createStandInHost(
         throw new Error("the stand-in Session refused the widget");
       }
       widgetInstalls += 1;
-      widget = content(tui, PLAIN_THEME);
+      widget = content(tui, options.customTheme ?? PLAIN_THEME);
     },
   };
 

@@ -425,7 +425,7 @@ own retry loop, and terminal for delivery. The stored Result is untouched, so
 **Unannounceable** — this Run settled and delivery found no Result to announce.
 Decided by `CompletionDelivery`, from the Result store's read, and terminal for
 the hand-off. The Session push sink records and counts the report so the widget
-can say why its row stays; `agent_result` honestly says the output is gone.
+can explain its continued visibility; `agent_result` honestly says the output is gone.
 
 **Consumed** — the parent has this Run's Result: `agent_result` returned it,
 or a wait delivered it. Decided by the **Session push sink**, told by those
@@ -448,9 +448,9 @@ while held.
 **Completion hand-off** — the whole business of getting one notice to the
 parent, from the first push to whatever ends it. It **resolves** when the notice
 **landed** or its Run was **consumed**, whichever came first, and a settled
-Run's widget row lasts exactly that long. It **ends** as **exhausted** or
-**unannounceable**: the row leaves only on a resolution and stays, marked, on
-an ending. The widget reads four states and nothing finer — `pending`,
+Run's widget visibility lasts exactly that long. It **ends** as **exhausted** or
+**unannounceable**: visibility ends only on a resolution and retains explicit
+attention on an ending. The widget reads four states and nothing finer — `pending`,
 `resolved`, `exhausted`, `unannounceable` — and never learns which of the two
 resolved a hand-off; anything finer is the sink's alone.
 
@@ -523,8 +523,8 @@ stored Result, because delivery releases that pin on a successful push.
 Landing is not the only end. A **Completion hand-off** also resolves when its
 Run is **consumed**, the sink is told of **exhaustion** by delivery, and a
 notice is **held** while a wait covers its Run, and is told when a Run is
-**unannounceable**, so all seven states have one owner and a settled row can say
-why it is stuck.
+**unannounceable**, so all seven states have one owner and a settled Run's
+continued visibility has an explanation.
 
 **RunCard** — the pure presentation of one Run, built from a published index row
 (live, and therefore carrying no output) or from an immutable stored Result

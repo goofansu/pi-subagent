@@ -58,25 +58,42 @@ covering several Runs combines their results.
 
 ## Widget
 
-A widget above the editor shows each subagent's progress:
+The widget above the editor adapts to the number of active Runs:
+
+- **None:** hidden unless terminal completion hand-offs remain unresolved; those
+  show only compact outcome and delivery-attention counts.
+- **One:** a summary plus the active Run's Profile, backend, state, turn count,
+  Label, and available activity, using space as it permits.
+- **Two or more:** aggregate counts only, with no individual activity or rows.
+  Hidden activity and accounting updates do not request identical redraws.
+
+One active Run, alongside an unresolved completion:
+
+```text
+ subagents   1 running   1 completed
+ explore  pi  running  3 turns  look around · grep: getFinalOutput
+```
+
+Multiple active Runs:
 
 ```text
  subagents   2 running   1 completed
- explore      pi      running             3 turns  look around · grep: getFinalOutput
- reviewer     claude  running             1 turn   review the changes
- implementer  claude  completed in 1m 2s
 ```
 
-Each row shows the agent, backend, status, and task. Active Runs also show their
-turn count and latest activity; finished Runs show their duration.
+Finalizing and requested cancellation still count as active work; cancellation
+is shown as `cancelling`. Terminal counts disappear when a completion notice
+lands or Pi receives the Result through retrieval or a wait. Notification failure
+is separate from Run failure: `notification failed` means the Result remains
+available; `no notification · result unavailable` means no answer can be delivered.
+At narrow widths, `!` preserves delivery-attention visibility when its full
+explanation cannot fit. Resolved failures do not remain as history.
 
-Finished rows disappear once their completion notice reaches the conversation
-or Pi retrieves their result. If a notice cannot be delivered, the row stays
-visible with an explanation. Ask Pi to retrieve the result or cancel active work
-by naming the agent and task—the widget itself is not interactive.
+Use `/subagent dashboard` for individual Runs and history. Ask Pi to retrieve a
+Result or cancel active work by naming the agent and task—the widget itself is
+not interactive.
 
 `/subagent dashboard` opens a full-screen, borderless dashboard, including
-completed work after its widget row disappears. Aligned rows show the work label,
+completed work after its widget visibility ends. Aligned rows show the work label,
 status, active work's latest activity, and elapsed time at the right edge.
 Actions appear in the bottom navigation bar. Elapsed time refreshes on run events or navigation, never on
 a timer; completed runs show their final duration. Narrow views hide the time column.

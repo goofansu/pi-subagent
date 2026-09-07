@@ -54,8 +54,6 @@ export interface SubagentV2Options {
    * production encoding policy.
    */
   readonly resultEncoder?: ResultEncoder;
-  /** Reads the wall clock. Supplied by a test so widget durations are fixed. */
-  readonly now?: () => number;
   /**
    * What the live backend adapters are still holding, one block per backend,
    * for the diagnostics command.
@@ -158,7 +156,6 @@ export function installSubagentV2(
     setProfiles: (loaded: readonly Profile[]) => {
       profiles = loaded;
     },
-    now: options.now ?? (() => Date.now()),
   };
 
   const agentsDir = profilesDir(options.agentDir);
