@@ -1,7 +1,7 @@
 /**
- * The browser's navigation: one page value and one reducer over it.
+ * The dashboard's navigation: one page value and one reducer over it.
  *
- * A page is where the browser is — which of the three screens it is on, what
+ * A page is where the dashboard is — which of the three screens it is on, what
  * that screen lists, what is selected, where it is scrolled, and the terminal
  * it was last sized against. One event moves it: a key the host has already
  * resolved against the operator's bindings, the screen a render is drawing on,
@@ -36,13 +36,13 @@ import {
   dashboardBannerFits,
 } from "./banner.ts";
 import {
-  type BrowserScreen,
-  type BrowserViewport,
-  browserBody,
-  browserFooter,
-  browserPanel,
-  browserScreen,
-} from "./browser-panel.ts";
+  type DashboardScreen,
+  type DashboardViewport,
+  dashboardBody,
+  dashboardFooter,
+  dashboardPanel,
+  dashboardScreen,
+} from "./dashboard-panel.ts";
 import { HISTORY_CATEGORIES, historyCategory, historyRows } from "./history.ts";
 import {
   type InspectionBlock,
@@ -54,13 +54,13 @@ import type { RenderableTheme } from "./rows.ts";
 import type { HandoffStatus } from "./views.ts";
 
 /** Whether the read this page is showing is in flight, answered, or lost. */
-export type BrowserPageStatus = "loading" | "ready" | "error";
+export type DashboardPageStatus = "loading" | "ready" | "error";
 
-/** Which of the browser's three screens a page is. */
-export type BrowserPageKind = "overview" | "history" | "inspection";
+/** Which of the dashboard's three screens a page is. */
+export type DashboardPageKind = "overview" | "history" | "inspection";
 
 /**
- * Everything the browser knows about where it is: which page, what that page
+ * Everything the dashboard knows about where it is: which page, what that page
  * lists, what is selected, where it is scrolled, and the screen it was last
  * sized against.
  *
@@ -78,9 +78,9 @@ export type BrowserPageKind = "overview" | "history" | "inspection";
  * is what lets one render measure the screen once instead of measuring it and
  * then sizing it again.
  */
-export interface BrowserPage {
-  readonly kind: BrowserPageKind;
-  readonly status: BrowserPageStatus;
+export interface DashboardPage {
+  readonly kind: DashboardPageKind;
+  readonly status: DashboardPageStatus;
   /** The Subagent whose Runs this page lists or inspects; the overview has none. */
   readonly subagentId: SubagentId | undefined;
   /** The Run this page inspects; only an inspection has one. */
@@ -107,7 +107,7 @@ export interface BrowserPage {
   /** The painted header: the identity banner, or one accented title line. */
   readonly header: readonly string[];
   /** The screen this page was last sized against, header rows already taken. */
-  readonly viewport: BrowserViewport;
+  readonly viewport: DashboardViewport;
   /**
    * The page's own body lines, and the content width they were painted for.
    *
@@ -126,7 +126,7 @@ export interface BrowserPage {
  *
  * The host resolves the operator's bindings, because a keymap is a Session
  * service and this module may not hold one. `pageUp` and `pageDown` are those
- * configured bindings; `left`, `right` and `refresh` are keys the browser
+ * configured bindings; `left`, `right` and `refresh` are keys the dashboard
  * answers itself whatever the bindings are.
  *
  * A keystroke can mean several of these at once — an operator who binds
@@ -136,7 +136,7 @@ export interface BrowserPage {
  * does both. Deciding that here rather than at the host is what keeps a
  * rebinding from silently taking a movement away from one page.
  */
-export type BrowserKey =
+export type DashboardKey =
   | "up"
   | "down"
   | "pageUp"
@@ -154,7 +154,7 @@ export type BrowserKey =
  * arriving, one that did not answer. Nothing here is a mechanism: the host
  * decides *when* to read and this decides what the page becomes when it does.
  */
-export type BrowserPageEvent =
+export type DashboardPageEvent =
   /** The terminal a render is drawing on, before its header is chosen. */
   | {
       readonly kind: "screen";
@@ -162,7 +162,7 @@ export type BrowserPageEvent =
       readonly terminalRows: number;
     }
   /** One keystroke, as every meaning the operator's bindings gave it. */
-  | { readonly kind: "key"; readonly pressed: readonly BrowserKey[] }
+  | { readonly kind: "key"; readonly pressed: readonly DashboardKey[] }
   /** The instant the overview's Run durations are read against. */
   | { readonly kind: "sampled"; readonly instant: number }
   /** A read for this page went out. */
@@ -195,7 +195,7 @@ export type BrowserPageEvent =
  * the host's to supply and none is state: they are read on the way through and
  * never kept.
  */
-export interface BrowserPageChrome {
+export interface DashboardPageChrome {
   readonly identity: DashboardIdentity;
   readonly theme: RenderableTheme;
   /** The operator's configured selection keys, as the movement hint names them. */
@@ -215,10 +215,10 @@ export interface BrowserPageChrome {
  * The one thing a step leaves for the host: transport, never navigation.
  *
  * `read` means this page wants the asynchronous read its kind implies, `close`
- * that the browser is done, `draw` that what is on screen is stale. The host
+ * that the dashboard is done, `draw` that what is on screen is stale. The host
  * owns all three mechanisms and none of the decisions.
  */
-export type BrowserPageAsk = "nothing" | "draw" | "read" | "close";
+export type DashboardPageAsk = "nothing" | "draw" | "read" | "close";
 
 /**
  * A step: the page the event leads to, the screen it draws to, and what is
@@ -230,22 +230,22 @@ export type BrowserPageAsk = "nothing" | "draw" | "read" | "close";
  * painting here as well would paint the same page twice for every publication
  * a burst brings.
  */
-export interface BrowserPageStep {
-  readonly page: BrowserPage;
+export interface DashboardPageStep {
+  readonly page: DashboardPage;
   readonly lines: readonly string[];
-  readonly ask: BrowserPageAsk;
+  readonly ask: DashboardPageAsk;
 }
 
 /** What a page is sized against before a render has told it its screen. */
-const EMPTY_VIEWPORT = browserBody(browserScreen(0, 0));
+const EMPTY_VIEWPORT = dashboardBody(dashboardScreen(0, 0));
 
 /**
- * A browser that has just opened: the overview, with its read in flight.
+ * A dashboard that has just opened: the overview, with its read in flight.
  *
- * The instant is the overview's own, sampled at the moment the browser opened,
+ * The instant is the overview's own, sampled at the moment the dashboard opened,
  * because the ages it will draw are relative to it.
  */
-export function emptyBrowserPage(capturedAt = 0): BrowserPage {
+export function emptyDashboardPage(capturedAt = 0): DashboardPage {
   return {
     kind: "overview",
     status: "loading",
@@ -273,16 +273,16 @@ const ordered = (summaries: readonly SubagentSummary[]) =>
   );
 
 /** The Run this page's history has selected, if it has one. */
-const selectedRun = (page: BrowserPage): RunId | undefined =>
+const selectedRun = (page: DashboardPage): RunId | undefined =>
   page.subagentId === undefined
     ? undefined
     : page.selectedRuns.get(page.subagentId);
 
 /** Remember which Run this page's history has selected. */
 const selectingRun = (
-  page: BrowserPage,
+  page: DashboardPage,
   runId: RunId | undefined,
-): BrowserPage => {
+): DashboardPage => {
   if (page.subagentId === undefined || runId === undefined) return page;
   const selectedRuns = new Map(page.selectedRuns);
   selectedRuns.set(page.subagentId, runId);
@@ -290,11 +290,11 @@ const selectingRun = (
 };
 
 /** The identity the current page's selection is attached to. */
-const pageSelection = (page: BrowserPage): RunId | SubagentId | undefined =>
+const pageSelection = (page: DashboardPage): RunId | SubagentId | undefined =>
   page.kind === "history" ? selectedRun(page) : page.selectedSubagentId;
 
 /** Which of a list page's rows that identity is on, or `-1` for none of them. */
-const selectedIndex = (page: BrowserPage): number => {
+const selectedIndex = (page: DashboardPage): number => {
   const selection = pageSelection(page);
   return page.runs.findIndex((run) =>
     page.kind === "history"
@@ -322,11 +322,11 @@ const within = (value: number, last: number) =>
  * there is no last line to leave on a screen that draws none, and the next
  * screen tall enough to draw one clamps against it.
  */
-const clampedOffset = (page: BrowserPage, offset: number): number =>
+const clampedOffset = (page: DashboardPage, offset: number): number =>
   within(offset, page.lines.length - page.viewport.bodyHeight);
 
 /** How far one page-scroll key moves, on any of the three screens. */
-const pageSize = (page: BrowserPage) => Math.max(1, page.viewport.bodyHeight);
+const pageSize = (page: DashboardPage) => Math.max(1, page.viewport.bodyHeight);
 
 /**
  * What every arrival at a page has in common: a read in flight, the top of
@@ -334,10 +334,10 @@ const pageSize = (page: BrowserPage) => Math.max(1, page.viewport.bodyHeight);
  * releases its content rather than holding it behind the page in front.
  */
 const arriving = (
-  page: BrowserPage,
-  kind: BrowserPageKind,
-  named: Pick<BrowserPage, "subagentId" | "runId">,
-): BrowserPage => ({
+  page: DashboardPage,
+  kind: DashboardPageKind,
+  named: Pick<DashboardPage, "subagentId" | "runId">,
+): DashboardPage => ({
   ...page,
   ...named,
   kind,
@@ -350,7 +350,7 @@ const arriving = (
 });
 
 /** A page lists the Runs it read, never Runs carried in from another page. */
-const unlisted = (page: BrowserPage): BrowserPage => ({
+const unlisted = (page: DashboardPage): DashboardPage => ({
   ...page,
   runs: [],
   capturedAt: 0,
@@ -358,37 +358,37 @@ const unlisted = (page: BrowserPage): BrowserPage => ({
 
 /** Enter one Subagent's history from the overview, which lists no Runs of its own. */
 const enteringHistory = (
-  page: BrowserPage,
+  page: DashboardPage,
   subagentId: SubagentId,
-): BrowserPage =>
+): DashboardPage =>
   unlisted(arriving(page, "history", { subagentId, runId: undefined }));
 
 /** Inspect one Run of the history this page is on. */
-const enteringInspection = (page: BrowserPage, runId: RunId): BrowserPage =>
+const enteringInspection = (page: DashboardPage, runId: RunId): DashboardPage =>
   arriving(page, "inspection", { subagentId: page.subagentId, runId });
 
 /** Leave an inspection for the history that opened it, which still lists its Runs. */
-const leavingInspection = (page: BrowserPage): BrowserPage =>
+const leavingInspection = (page: DashboardPage): DashboardPage =>
   arriving(page, "history", {
     subagentId: page.subagentId,
     runId: undefined,
   });
 
 /** Leave a history for the overview, dropping the Runs it had listed. */
-const leavingHistory = (page: BrowserPage): BrowserPage =>
+const leavingHistory = (page: DashboardPage): DashboardPage =>
   unlisted(
     arriving(page, "overview", { subagentId: undefined, runId: undefined }),
   );
 
 /** A read is in flight: say so, and take a list back to its first row. */
-const loadingPage = (page: BrowserPage): BrowserPage => ({
+const loadingPage = (page: DashboardPage): DashboardPage => ({
   ...page,
   status: "loading",
   offset: page.kind === "inspection" ? page.offset : 0,
 });
 
 /** The read did not answer: say so rather than drawing a stale list as current. */
-const failedPage = (page: BrowserPage): BrowserPage => ({
+const failedPage = (page: DashboardPage): DashboardPage => ({
   ...page,
   status: "error",
 });
@@ -399,14 +399,14 @@ const failedPage = (page: BrowserPage): BrowserPage => ({
  * Only the overview's, and only on publication or navigation: a history or an
  * inspection is a capture, and its ages are the capture's own.
  */
-const sampledPage = (page: BrowserPage, instant: number): BrowserPage =>
+const sampledPage = (page: DashboardPage, instant: number): DashboardPage =>
   page.kind === "overview" ? { ...page, capturedAt: instant } : page;
 
 /** Take the overview's population, keeping the selected Subagent if it is still there. */
 const withSummaries = (
-  page: BrowserPage,
+  page: DashboardPage,
   summaries: readonly SubagentSummary[],
-): BrowserPage => {
+): DashboardPage => {
   const runs = ordered(summaries).map((row) => row.current ?? row.latest);
   return {
     ...page,
@@ -423,10 +423,10 @@ const withSummaries = (
 
 /** Take one Subagent's captured Runs, keeping the selected Run if it is still there. */
 const withHistory = (
-  page: BrowserPage,
+  page: DashboardPage,
   capture: RunHistoryCapture,
-): BrowserPage => {
-  const listed: BrowserPage = {
+): DashboardPage => {
+  const listed: DashboardPage = {
     ...page,
     runs: capture.runs,
     capturedAt: capture.capturedAt,
@@ -439,10 +439,10 @@ const withHistory = (
 
 /** Take one Run's frozen capture; its lines are repainted before they are read. */
 const withInspection = (
-  page: BrowserPage,
+  page: DashboardPage,
   capture: RunInspection,
   handoff: HandoffStatus,
-): BrowserPage => ({
+): DashboardPage => ({
   ...page,
   blocks: inspectionBlocks(capture, handoff),
   refreshable: capture.outcome === "active",
@@ -450,7 +450,7 @@ const withInspection = (
 });
 
 /** Move a list page's selection by rows, or by a whole page of them. */
-const movedPage = (page: BrowserPage, delta: number): BrowserPage => {
+const movedPage = (page: DashboardPage, delta: number): DashboardPage => {
   const next =
     page.runs[within(selectedIndex(page) + delta, page.runs.length - 1)];
   if (page.kind === "history")
@@ -459,13 +459,13 @@ const movedPage = (page: BrowserPage, delta: number): BrowserPage => {
 };
 
 /** Scroll an inspection's lines, never past either end of them. */
-const scrolledPage = (page: BrowserPage, delta: number): BrowserPage => ({
+const scrolledPage = (page: DashboardPage, delta: number): DashboardPage => ({
   ...page,
   offset: clampedOffset(page, page.offset + delta),
 });
 
 /** The one-line title of a page the identity banner does not head. */
-const pageTitle = (page: BrowserPage, theme: RenderableTheme): string => {
+const pageTitle = (page: DashboardPage, theme: RenderableTheme): string => {
   if (page.kind === "inspection")
     return page.blocks.length
       ? `${DASHBOARD_TITLE} · run inspection · ${theme.fg(page.refreshable ? "warning" : "muted", `${page.refreshable ? "active" : "terminal"} snapshot`)}`
@@ -486,9 +486,9 @@ const pageTitle = (page: BrowserPage, theme: RenderableTheme): string => {
  * reported a population the counts are left out rather than shown as zeroes.
  */
 const pageHeader = (
-  page: BrowserPage,
-  screen: BrowserScreen,
-  chrome: BrowserPageChrome,
+  page: DashboardPage,
+  screen: DashboardScreen,
+  chrome: DashboardPageChrome,
 ): readonly string[] =>
   page.kind === "overview" && dashboardBannerFits(screen)
     ? dashboardBanner(
@@ -501,9 +501,9 @@ const pageHeader = (
 
 /** The page's complete body, painted for the content width it now has. */
 const pageLines = (
-  page: BrowserPage,
+  page: DashboardPage,
   theme: RenderableTheme,
-): Pick<BrowserPage, "lines" | "linesWidth"> => {
+): Pick<DashboardPage, "lines" | "linesWidth"> => {
   const width = page.viewport.contentWidth;
   if (page.kind === "inspection")
     return page.linesWidth === width
@@ -548,7 +548,7 @@ const pageLines = (
  * A list follows its selection, an inspection has no selection to follow, and
  * both end in the same clamp.
  */
-const scrolledIntoView = (page: BrowserPage): BrowserPage => {
+const scrolledIntoView = (page: DashboardPage): DashboardPage => {
   const { bodyHeight } = page.viewport;
   let offset = page.offset;
   if (page.kind !== "inspection") {
@@ -568,17 +568,17 @@ const scrolledIntoView = (page: BrowserPage): BrowserPage => {
  * come before it because its own decision needs nothing the split produces.
  */
 const sizedPage = (
-  page: BrowserPage,
+  page: DashboardPage,
   width: number,
   terminalRows: number,
-  chrome: BrowserPageChrome,
-): BrowserPage => {
-  const screen = browserScreen(width, terminalRows);
+  chrome: DashboardPageChrome,
+): DashboardPage => {
+  const screen = dashboardScreen(width, terminalRows);
   const header = pageHeader(page, screen, chrome);
-  const measured: BrowserPage = {
+  const measured: DashboardPage = {
     ...page,
     header,
-    viewport: browserBody(screen, header.length),
+    viewport: dashboardBody(screen, header.length),
   };
   return scrolledIntoView({
     ...measured,
@@ -621,8 +621,8 @@ const footerLadder = (
 
 /** Draw the page. Every fact this reads is already on the value. */
 const drawPage = (
-  page: BrowserPage,
-  chrome: BrowserPageChrome,
+  page: DashboardPage,
+  chrome: DashboardPageChrome,
 ): readonly string[] => {
   const { theme } = chrome;
   const { contentWidth, bodyHeight } = page.viewport;
@@ -640,7 +640,7 @@ const drawPage = (
   const body = page.lines.slice(page.offset, page.offset + bodyHeight);
   if (page.kind === "inspection") {
     const ready = page.status === "ready";
-    return browserPanel(
+    return dashboardPanel(
       page.viewport,
       page.header,
       page.status === "loading"
@@ -648,7 +648,7 @@ const drawPage = (
         : page.status === "error"
           ? [theme.fg("error", "Result unavailable. Go back to run history.")]
           : body,
-      browserFooter(
+      dashboardFooter(
         contentWidth,
         ready
           ? footerLadder(
@@ -672,11 +672,11 @@ const drawPage = (
     page.kind === "history" ? "inspect" : "runs",
   );
   const populated = page.status === "ready" && page.runs.length > 0;
-  return browserPanel(
+  return dashboardPanel(
     page.viewport,
     page.header,
     body,
-    browserFooter(
+    dashboardFooter(
       contentWidth,
       populated
         ? footerLadder(
@@ -701,8 +701,8 @@ const drawPage = (
  * bindings that move one are not what it pages on.
  */
 const scrollDelta = (
-  page: BrowserPage,
-  pressed: readonly BrowserKey[],
+  page: DashboardPage,
+  pressed: readonly DashboardKey[],
 ): number =>
   pressed.includes("up")
     ? -1
@@ -716,8 +716,8 @@ const scrollDelta = (
 
 /** How far a keystroke moves a list's selection: one row, or a page of them. */
 const moveDelta = (
-  page: BrowserPage,
-  pressed: readonly BrowserKey[],
+  page: DashboardPage,
+  pressed: readonly DashboardKey[],
 ): number =>
   pressed.includes("up")
     ? -1
@@ -731,9 +731,9 @@ const moveDelta = (
 
 /** The page a keystroke leads to, and what the host owes it. */
 const keyed = (
-  page: BrowserPage,
-  pressed: readonly BrowserKey[],
-): Omit<BrowserPageStep, "lines"> => {
+  page: DashboardPage,
+  pressed: readonly DashboardKey[],
+): Omit<DashboardPageStep, "lines"> => {
   if (pressed.includes("cancel")) {
     if (page.kind === "overview") return { page, ask: "close" };
     return {
@@ -776,10 +776,10 @@ const keyed = (
 
 /** The page an event leads to, before it is drawn. */
 const stepped = (
-  page: BrowserPage,
-  event: BrowserPageEvent,
-  chrome: BrowserPageChrome,
-): Omit<BrowserPageStep, "lines"> => {
+  page: DashboardPage,
+  event: DashboardPageEvent,
+  chrome: DashboardPageChrome,
+): Omit<DashboardPageStep, "lines"> => {
   switch (event.kind) {
     case "screen":
       return {
@@ -826,15 +826,15 @@ const stepped = (
 /**
  * One event, one page, one step.
  *
- * The whole of the browser's navigation is here: which screen an operator is
+ * The whole of the dashboard's navigation is here: which screen an operator is
  * on, what their keys mean on it, where the selection and the scroll end up,
  * how tall the header is, and what the panel around it says.
  */
-export function reduceBrowserPage(
-  page: BrowserPage,
-  event: BrowserPageEvent,
-  chrome: BrowserPageChrome,
-): BrowserPageStep {
+export function reduceDashboardPage(
+  page: DashboardPage,
+  event: DashboardPageEvent,
+  chrome: DashboardPageChrome,
+): DashboardPageStep {
   const step = stepped(page, event, chrome);
   return {
     ...step,

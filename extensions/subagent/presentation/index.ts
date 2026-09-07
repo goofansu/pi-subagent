@@ -23,9 +23,9 @@
  */
 
 export * from "./banner.ts";
-export * from "./browser-page.ts";
-export * from "./browser-panel.ts";
 export * from "./completion-view.ts";
+export * from "./dashboard-page.ts";
+export * from "./dashboard-panel.ts";
 export * from "./details.ts";
 export * from "./history.ts";
 export * from "./inspection.ts";

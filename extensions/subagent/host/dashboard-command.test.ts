@@ -116,7 +116,7 @@ for (const view of ["overview", "history"] as const) {
 }
 
 for (const waiting of [false, true]) {
-  test(`browser observation leaves ${waiting ? "wait delivery" : "Notification and retrieval"} and Controls unchanged`, async (t) => {
+  test(`dashboard observation leaves ${waiting ? "wait delivery" : "Notification and retrieval"} and Controls unchanged`, async (t) => {
     const results = [];
     for (const browsing of [false, true]) {
       const trace: string[] = [];
@@ -139,8 +139,8 @@ for (const waiting of [false, true]) {
         ? rig.text("agent_wait", { ids: [work.runId] })
         : undefined;
       await rig.pump();
-      const browser = browsing ? await open(rig) : undefined;
-      if (browser) {
+      const dashboard = browsing ? await open(rig) : undefined;
+      if (dashboard) {
         rig.host.customKey(ENTER);
         await rig.pump();
         for (const key of [ENTER, "r", "c", "s", DOWN, UP])
@@ -150,7 +150,7 @@ for (const waiting of [false, true]) {
       await rig.settled(work.runId);
       await rig.pump();
       const waited = await waiter;
-      if (browser) {
+      if (dashboard) {
         assert.doesNotMatch(screen(rig), /the answer/); // Active capture stays frozen.
         rig.host.customKey(ESC);
         await rig.pump();
@@ -162,7 +162,7 @@ for (const waiting of [false, true]) {
         await rig.pump();
         rig.host.customKey(ESC);
         await rig.pump();
-        await close(rig, browser);
+        await close(rig, dashboard);
       }
       const handoff = rig.installation.sink.status(runId(work.runId));
       const counts = rig.installation.sink.counts();
@@ -249,7 +249,7 @@ test("configured selection bindings drive navigation and its displayed hint", as
   rig.host.customKey("k");
   assert.match(screen(rig), /› first task/);
   // The page bindings keep their default keys, and each still means its own
-  // direction: what the browser reads from a keystroke is every binding it
+  // direction: what the dashboard reads from a keystroke is every binding it
   // matched, so a page key resolved as its opposite would be read as one.
   rig.host.customKey(PAGE_DOWN);
   assert.match(screen(rig), /› second task/);

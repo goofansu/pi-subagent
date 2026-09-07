@@ -3,12 +3,12 @@ import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
-  browserBody,
-  browserFooter,
-  browserPanel,
-  browserScreen,
-  browserViewport,
-} from "./browser-panel.ts";
+  dashboardBody,
+  dashboardFooter,
+  dashboardPanel,
+  dashboardScreen,
+  dashboardViewport,
+} from "./dashboard-panel.ts";
 import type { RenderableTheme } from "./rows.ts";
 
 const theme: RenderableTheme = {
@@ -33,8 +33,8 @@ test("panel fills exact viewport bounds, even at zero/tiny sizes and with styled
     [60, 60],
   ]) {
     for (const width of [0, 1, 2, 3, 4, 5, 6, 8, 20, 80]) {
-      const viewport = browserViewport(width, rows);
-      const lines = browserPanel(
+      const viewport = dashboardViewport(width, rows);
+      const lines = dashboardPanel(
         viewport,
         "任务 👩‍💻 café é",
         [theme.fg("text", "界".repeat(100)), "", "👩‍💻 é"],
@@ -61,8 +61,8 @@ test("panel fills exact viewport bounds, even at zero/tiny sizes and with styled
 
 test("panel uses the terminal surface without borrowing a message background", () => {
   const backgrounds: string[] = [];
-  const lines = browserPanel(
-    browserViewport(40, 24),
+  const lines = dashboardPanel(
+    dashboardViewport(40, 24),
     "Title",
     ["Body"],
     "Close",
@@ -83,10 +83,10 @@ test("panel uses the terminal surface without borrowing a message background", (
 });
 
 test("borderless screen aligns title, body and bottom navigation with a quiet separator", () => {
-  const viewport = browserViewport(40, 24);
+  const viewport = dashboardViewport(40, 24);
   assert.equal(viewport.contentWidth, 38);
   assert.equal(viewport.bodyHeight, 20);
-  const lines = browserPanel(
+  const lines = dashboardPanel(
     viewport,
     "Subagent dashboard",
     ["No Subagents in this Session."],
@@ -103,8 +103,8 @@ test("borderless screen aligns title, body and bottom navigation with a quiet se
 });
 
 test("selection backgrounds reset before the gutter", () => {
-  const lines = browserPanel(
-    browserViewport(40, 24),
+  const lines = dashboardPanel(
+    dashboardViewport(40, 24),
     "Title",
     [theme.bg("selectedBg", "chosen")],
     "Esc close",
@@ -134,23 +134,23 @@ test("adaptive footer keeps complete back hints and includes ranges only when su
     "Esc close",
   ];
   assert.equal(
-    browserFooter(80, hints, "1-6/30"),
+    dashboardFooter(80, hints, "1-6/30"),
     "↑/↓ scroll · Enter Runs · Esc close · 1-6/30",
   );
-  assert.equal(browserFooter(25, hints), "Enter open · Esc close");
-  assert.equal(browserFooter(9, hints, "1-6/30"), "Esc close");
-  assert.equal(browserFooter(80, ["Esc close"]), "Esc close");
+  assert.equal(dashboardFooter(25, hints), "Enter open · Esc close");
+  assert.equal(dashboardFooter(9, hints, "1-6/30"), "Esc close");
+  assert.equal(dashboardFooter(80, ["Esc close"]), "Esc close");
 });
 
 test("a screen is measured once and split for whichever header it settles on", () => {
   for (const rows of [0, 1, 3, 10, 13, 24, 60]) {
     for (const width of [0, 2, 20, 31, 32, 40, 80]) {
-      const screen = browserScreen(width, rows);
+      const screen = dashboardScreen(width, rows);
       // The facts a header height cannot change, so a caller whose header
       // depends on them never has to measure the screen a second time.
       for (const headerLines of [0, 1, 4, 100]) {
-        const viewport = browserViewport(width, rows, headerLines);
-        assert.deepEqual(browserBody(screen, headerLines), viewport);
+        const viewport = dashboardViewport(width, rows, headerLines);
+        assert.deepEqual(dashboardBody(screen, headerLines), viewport);
         for (const [field, value] of Object.entries(screen))
           assert.equal(
             viewport[field as keyof typeof screen],
@@ -164,10 +164,10 @@ test("a screen is measured once and split for whichever header it settles on", (
 
 test("a multi-line header takes its rows from the body and is painted by its author", () => {
   const header = ["first", "second", "third", "fourth"];
-  const viewport = browserViewport(40, 24, header.length);
+  const viewport = dashboardViewport(40, 24, header.length);
   assert.equal(viewport.headerHeight, 4);
   assert.equal(viewport.bodyHeight, 17);
-  const lines = browserPanel(
+  const lines = dashboardPanel(
     viewport,
     header,
     ["body"],
@@ -183,7 +183,7 @@ test("a multi-line header takes its rows from the body and is painted by its aut
   assert.equal(lines[22], ` ${"─".repeat(38)} `);
   assert.equal(lines[23], " Esc close".padEnd(40));
   assert.deepEqual(
-    browserPanel(viewport, header, ["body"], "Esc close", {
+    dashboardPanel(viewport, header, ["body"], "Esc close", {
       ...theme,
       fg: () => "painted",
     }).map(stripVTControlCharacters)[0],
@@ -202,12 +202,12 @@ test("a header too tall for the screen is shortened before the footer is", () =>
     [13, 13],
     [24, 24],
   ]) {
-    const viewport = browserViewport(40, rows, 4);
+    const viewport = dashboardViewport(40, rows, 4);
     assert.equal(
       viewport.headerHeight + viewport.bodyHeight,
       Math.max(0, height - (viewport.spacious ? 3 : 1)),
     );
-    const lines = browserPanel(
+    const lines = dashboardPanel(
       viewport,
       ["first", "second", "third", "fourth"],
       [],

@@ -139,6 +139,42 @@ export function formatDuration(milliseconds: number): string {
   return `${hours}h ${minutes}m`;
 }
 
+/**
+ * How long a Run has been going, or how long it went for. The one rule.
+ *
+ * A live Run is measured against the supplied instant; a settled one has
+ * stopped, and is measured against the instant it stopped at, which it carries
+ * itself. That is the difference between naming what a Run cost and naming how
+ * long ago it started: a settled row stays on screen until its completion
+ * notice lands, and a duration recomputed against a later clock on every redraw
+ * climbs the whole time it waits. A widget row and a result card once disagreed
+ * about one Run for exactly that reason.
+ *
+ * `now` is optional because a terminal Run never needs it: the phase decides
+ * which instant ends the Run, and for a terminal phase that instant is the
+ * Run's own. A caller holding a stored Result therefore supplies nothing.
+ *
+ * `undefined` means the duration is not knowable — a terminal phase whose
+ * settled instant is missing, which the published row's invariant says cannot
+ * happen. It is reported rather than guessed, so that a caller with nothing to
+ * print says so instead of printing a number that climbs.
+ *
+ * Presentation still reads no clock of its own: a renderer calling `Date.now()`
+ * would produce a different string every time it was asked, which is not
+ * something a golden test can pin.
+ */
+export function runElapsedMillis(
+  run: {
+    readonly phase: RunPhase;
+    readonly startedAt: number;
+    readonly settledAt?: number;
+  },
+  now?: number,
+): number | undefined {
+  const end = isTerminalRunPhase(run.phase) ? run.settledAt : now;
+  return end === undefined ? undefined : Math.max(0, end - run.startedAt);
+}
+
 /** Elapsed Run duration at a supplied event instant; terminal durations freeze. */
 export function formatRunElapsed(
   run: {
@@ -148,8 +184,8 @@ export function formatRunElapsed(
   },
   now: number,
 ): string {
-  const end = isTerminalRunPhase(run.phase) ? run.settledAt : now;
-  return end === undefined ? "—" : formatDuration(end - run.startedAt);
+  const millis = runElapsedMillis(run, now);
+  return millis === undefined ? "—" : formatDuration(millis);
 }
 
 /** A character count for a summary line, abbreviated once it gets long. */

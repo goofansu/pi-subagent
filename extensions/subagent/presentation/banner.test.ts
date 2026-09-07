@@ -13,7 +13,7 @@ import {
   PI_MARK,
   subagentCounts,
 } from "./banner.ts";
-import { browserViewport } from "./browser-panel.ts";
+import { dashboardViewport } from "./dashboard-panel.ts";
 import type { RenderableTheme } from "./rows.ts";
 
 const theme: RenderableTheme = {
@@ -52,7 +52,7 @@ test("the mark is the logo's 4×4 grid, two columns to a pixel", () => {
   for (const row of PI_MARK) assert.equal(visibleWidth(row), 8);
 });
 
-test("the header names the browser, the working directory, and the population", () => {
+test("the header names the dashboard, the working directory, and the population", () => {
   const lines = plain(
     dashboardBanner(
       { cwd: "/Users/ada/code/pi-subagent", home: "/Users/ada" },
@@ -185,11 +185,11 @@ test("counts name every category, and only the occupied ones when narrow", () =>
 });
 
 test("the mark is drawn only where it leaves a list worth reading", () => {
-  assert.equal(dashboardBannerFits(browserViewport(80, 24)), true);
-  assert.equal(dashboardBannerFits(browserViewport(36, 12)), true);
-  assert.equal(dashboardBannerFits(browserViewport(35, 12)), false);
-  assert.equal(dashboardBannerFits(browserViewport(80, 11)), false);
-  assert.equal(dashboardBannerFits(browserViewport(80, 9)), false);
-  assert.equal(dashboardBannerFits(browserViewport(31, 24)), false);
-  assert.equal(dashboardBannerFits(browserViewport(0, 0)), false);
+  assert.equal(dashboardBannerFits(dashboardViewport(80, 24)), true);
+  assert.equal(dashboardBannerFits(dashboardViewport(36, 12)), true);
+  assert.equal(dashboardBannerFits(dashboardViewport(35, 12)), false);
+  assert.equal(dashboardBannerFits(dashboardViewport(80, 11)), false);
+  assert.equal(dashboardBannerFits(dashboardViewport(80, 9)), false);
+  assert.equal(dashboardBannerFits(dashboardViewport(31, 24)), false);
+  assert.equal(dashboardBannerFits(dashboardViewport(0, 0)), false);
 });

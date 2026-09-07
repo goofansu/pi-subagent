@@ -4,10 +4,12 @@ import { RUN_PHASES } from "../domain/index.ts";
 import {
   formatCharacterCount,
   formatDuration,
+  formatRunElapsed,
   formatRunPhase,
   formatTokenCount,
   formatTurns,
   RUN_PHASE_DISPLAY_ORDER,
+  runElapsedMillis,
   runPhaseTone,
   runPhaseVerb,
 } from "./status.ts";
@@ -80,4 +82,69 @@ test("turns use a quiet singular and plural format", () => {
   assert.equal(formatTurns(0), "—");
   assert.equal(formatTurns(1), "1 turn");
   assert.equal(formatTurns(2), "2 turns");
+});
+
+/**
+ * The one duration rule.
+ *
+ * These properties used to be proved against `completion-view.ts`'s derivation
+ * of a published row, which was one of three ways presentation measured a Run.
+ * They belong to the rule itself, so a surface that reaches it by any route is
+ * covered — which is the point of there being one.
+ */
+
+test("a live Run is measured against the supplied instant", () => {
+  for (const phase of ["running", "finalizing"] as const) {
+    assert.equal(
+      runElapsedMillis({ phase, startedAt: 1_000 }, 13_400),
+      12_400,
+      phase,
+    );
+  }
+});
+
+test("a settled Run reports what it cost, not how long ago it started", () => {
+  // The defect the rule exists to prevent: a settled row redrawn a minute later
+  // must not climb. `now` moves; the answer does not.
+  const run = {
+    phase: "completed",
+    startedAt: 1_000,
+    settledAt: 13_400,
+  } as const;
+  assert.equal(runElapsedMillis(run, 13_400), 12_400);
+  assert.equal(runElapsedMillis(run, 13_400 + 60_000), 12_400);
+});
+
+test("a terminal Run needs no instant of the draw at all", () => {
+  // What lets a caller holding a stored Result read the rule without inventing
+  // a clock reading to pass it.
+  assert.equal(
+    runElapsedMillis({
+      phase: "cancelled",
+      startedAt: 1_000,
+      settledAt: 13_400,
+    }),
+    12_400,
+  );
+});
+
+test("a duration that is not knowable is reported, not guessed", () => {
+  // A terminal phase with no settled instant is a shape the published row's
+  // invariant forbids. If it ever arrives, the answer is "unknown" rather than
+  // a number measured against the draw, which would climb on every redraw.
+  assert.equal(
+    runElapsedMillis({ phase: "failed", startedAt: 1_000 }, 99_999),
+    undefined,
+  );
+  assert.equal(
+    formatRunElapsed({ phase: "failed", startedAt: 1_000 }, 99_999),
+    "—",
+  );
+});
+
+test("a clock that runs backwards cannot produce a negative duration", () => {
+  assert.equal(
+    runElapsedMillis({ phase: "running", startedAt: 5_000 }, 1_000),
+    0,
+  );
 });

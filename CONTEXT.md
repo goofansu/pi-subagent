@@ -462,6 +462,17 @@ attention on an ending. The widget reads four states and nothing finer — `pend
 `resolved`, `exhausted`, `unannounceable` — and never learns which of the two
 resolved a hand-off; anything finer is the sink's alone.
 
+**Subagent dashboard** — the full-screen surface `/subagent` opens: an
+identity banner, a live overview of this Session's Subagents grouped by
+category, the entry-only Run history behind one of them, and a frozen
+inspection of one Run. Its navigation is one **page** value and one pure step
+over it, so where an operator is — which of the three screens, what is
+selected, where it is scrolled, and the terminal it was last sized against — is
+a value the host holds rather than state a closure keeps. The word is the
+product's: the surface is named the same in the command that opens it, the
+modules that draw it, and this glossary. Not "the Run browser" — see
+[Historical terms](#historical-terms).
+
 **Ambient widget duration** — a single active Run's elapsed time since it
 started, sampled on Run publications rather than on a ticking timer or incidental
 render, independent of activity. Terminal Runs contribute only summary counts;
@@ -707,6 +718,14 @@ above and are not repeated here.
 native abstraction, which ADR-0022 reserves. The frontmatter field `harness:`
 is replaced by `backend:` with no alias; the README's "Upgrading from 1.x"
 section is what tells a 1.x user to rename it.
+
+**Run browser** — what the full-screen surface was called while it browsed one
+Subagent's Run history, before it grew an overview, an identity banner and
+frozen inspection. Replaced by **Subagent dashboard**, which is what shipped and
+what the command has always been called. The old word outlived the rename inside
+`presentation/`, where the modules and their types said *browser* while every
+surface an operator saw said *dashboard*; it is gone from the tree, and this
+entry is here so a plan or a commit written in the old word is still readable.
 
 **Fact** — 1.x's neutral record of something a child did. Replaced by
 **Observation**, which is ordered and lossless within a Run and carries ten

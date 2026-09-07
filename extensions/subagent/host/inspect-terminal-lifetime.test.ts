@@ -80,10 +80,10 @@ for (const mode of [
       await rig.settled(work.runId);
       await rig.pump();
       // Active work sorts first. Select the terminal Subagent after it.
-      const browser = observing
+      const dashboard = observing
         ? { closed: rig.host.command("subagent", "dashboard") }
         : undefined;
-      if (browser) {
+      if (dashboard) {
         await rig.pump();
         rig.host.customKey("\x1b[B");
         rig.host.customKey(ENTER);
@@ -147,11 +147,11 @@ for (const mode of [
         assert.match(repeated, /first answer/);
         assert.match(repeated, /second answer/);
       }
-      if (browser) {
+      if (dashboard) {
         await back(rig);
         await back(rig);
         await back(rig);
-        await browser.closed;
+        await dashboard.closed;
       }
       assert.deepEqual(rig.host.userMessages(), []);
       const normalize = (value: unknown) =>
@@ -262,7 +262,7 @@ test("Conversation loss learned by ordinary Resume admission is visible without 
   const work = await start(rig);
   await rig.settled(work.runId);
   await rig.pump();
-  const browser = await history(rig);
+  const dashboard = await history(rig);
   rig.host.customKey(ENTER);
   await rig.pump();
   assert.doesNotMatch(screen(rig), /Conversation unavailable/);
@@ -283,7 +283,7 @@ test("Conversation loss learned by ordinary Resume admission is visible without 
   await back(rig);
   await back(rig);
   await back(rig);
-  await browser.closed;
+  await dashboard.closed;
 });
 
 for (const action of ["close", "shutdown", "replacement"] as const) {
@@ -332,7 +332,7 @@ for (const action of ["close", "shutdown", "replacement"] as const) {
       const baseline = await rig.probe();
       // Repeat ordinary complete captures to expose accumulating UI resources.
       for (let cycle = 0; cycle < 3; cycle += 1) {
-        const browser = await history(rig);
+        const dashboard = await history(rig);
         rig.host.customKey(ENTER);
         await rig.pump();
         assert.match(screen(rig), /the rig answered/);
@@ -340,11 +340,11 @@ for (const action of ["close", "shutdown", "replacement"] as const) {
         await back(rig);
         await back(rig);
         await back(rig);
-        await browser.closed;
+        await dashboard.closed;
         assert.deepEqual(callbacks?.render(100), []);
         assert.deepEqual(await rig.probe(), baseline);
       }
-      const browser = await history(rig);
+      const dashboard = await history(rig);
       blockNext = inFlight;
       rig.host.customKey(ENTER);
       await rig.pump();
@@ -361,7 +361,7 @@ for (const action of ["close", "shutdown", "replacement"] as const) {
         await back(rig);
       } else if (action === "replacement") await rig.host.sessionStart();
       else await rig.host.sessionShutdown();
-      await browser.closed;
+      await dashboard.closed;
       await rig.pump();
       assert.equal(
         reading,

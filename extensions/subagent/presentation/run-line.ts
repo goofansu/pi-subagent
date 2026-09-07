@@ -27,7 +27,7 @@
  * {@link fitToWidth} is the module's other job: the one wrapper over Pi's
  * width primitive. Clipping a line to a width and padding it out to fill one
  * were written five separate times across this module — once per Run surface,
- * once for the browser panel and once more for the identity banner — so a
+ * once for the dashboard panel and once more for the identity banner — so a
  * change to how a line is elided had five places to land.
  */
 

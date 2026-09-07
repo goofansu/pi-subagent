@@ -3,7 +3,7 @@ import type { RenderableTheme } from "./rows.ts";
 import { fitToWidth } from "./run-line.ts";
 
 /**
- * A screen a browser page is drawn on, before its header is chosen.
+ * A screen a dashboard page is drawn on, before its header is chosen.
  *
  * These are the facts a header height cannot change. A caller whose header
  * depends on them decides it from this — the overview's identity banner is
@@ -11,7 +11,7 @@ import { fitToWidth } from "./run-line.ts";
  * columns — and then splits the body once, rather than sizing the screen,
  * reading the answer and sizing it again.
  */
-export interface BrowserScreen {
+export interface DashboardScreen {
   readonly width: number;
   readonly height: number;
   readonly spacious: boolean;
@@ -20,16 +20,16 @@ export interface BrowserScreen {
 }
 
 /** A screen whose header's rows have been taken out of its body. */
-export interface BrowserViewport extends BrowserScreen {
+export interface DashboardViewport extends DashboardScreen {
   readonly headerHeight: number;
   readonly bodyHeight: number;
 }
 
 /** Measure the screen. Nothing here depends on how tall the header is. */
-export function browserScreen(
+export function dashboardScreen(
   width: number,
   terminalRows: number,
-): BrowserScreen {
+): DashboardScreen {
   const columns = Math.max(0, Math.floor(width));
   const height = Math.max(0, Math.floor(terminalRows));
   const inset = columns >= 32 ? 1 : 0;
@@ -51,10 +51,10 @@ export function browserScreen(
  * shortened rather than allowed to push the footer off: chrome the caller
  * cannot see is chrome it cannot scroll.
  */
-export function browserBody(
-  screen: BrowserScreen,
+export function dashboardBody(
+  screen: DashboardScreen,
   headerLines = 1,
-): BrowserViewport {
+): DashboardViewport {
   // The footer always, plus the blank line and the separator a spacious
   // screen adds around the body.
   const chrome = screen.spacious ? 3 : 1;
@@ -70,16 +70,16 @@ export function browserBody(
 }
 
 /** Shared full-screen geometry for drawing and scrolling, in one call. */
-export function browserViewport(
+export function dashboardViewport(
   width: number,
   terminalRows: number,
   headerLines = 1,
-): BrowserViewport {
-  return browserBody(browserScreen(width, terminalRows), headerLines);
+): DashboardViewport {
+  return dashboardBody(dashboardScreen(width, terminalRows), headerLines);
 }
 
 /** Prefer complete compact hints to cutting off the final (back/close) action. */
-export function browserFooter(
+export function dashboardFooter(
   width: number,
   hints: readonly string[],
   range = "",
@@ -100,8 +100,8 @@ export function browserFooter(
  * are taken as they are: a header with several tones of its own has already
  * decided them, and a second coat applied over the top would flatten them.
  */
-export function browserPanel(
-  viewport: BrowserViewport,
+export function dashboardPanel(
+  viewport: DashboardViewport,
   header: string | readonly string[],
   body: readonly string[],
   footer: string,

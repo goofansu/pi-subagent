@@ -37,12 +37,12 @@ async function inspect(rig: HostRig) {
   await rig.pump();
   return { closed };
 }
-async function close(rig: HostRig, browser: { closed: Promise<void> }) {
+async function close(rig: HostRig, dashboard: { closed: Promise<void> }) {
   for (let i = 0; i < 3; i += 1) {
     rig.host.customKey(ESC);
     await rig.pump();
   }
-  await browser.closed;
+  await dashboard.closed;
 }
 
 test("terminal inspection shows every retained transcript item and returns to the selected Run", async (t) => {
@@ -59,7 +59,7 @@ test("terminal inspection shows every retained transcript item and returns to th
   const work = await start(rig);
   await rig.settled(work.runId);
   await rig.pump();
-  const browser = await inspect(rig);
+  const dashboard = await inspect(rig);
   const text = screen(rig);
   assert.match(text, /Subagent dashboard · run inspection/);
   assert.match(text, /Captured at:/);
@@ -79,7 +79,7 @@ test("terminal inspection shows every retained transcript item and returns to th
   rig.host.customKey(ENTER);
   await rig.pump();
   assert.match(screen(rig), /Subagent dashboard · run inspection/);
-  await close(rig, browser);
+  await close(rig, dashboard);
 });
 
 test("inspection includes mixed transcript parts, every tool, normalized usage, errors, diagnostics and links", async (t) => {
@@ -152,7 +152,7 @@ test("inspection includes mixed transcript parts, every tool, normalized usage, 
   const work = await start(rig);
   await rig.settled(work.runId);
   await rig.pump();
-  const browser = await inspect(rig);
+  const dashboard = await inspect(rig);
   const text = screen(rig);
   for (const expected of [
     "mixed text",
@@ -185,7 +185,7 @@ test("inspection includes mixed transcript parts, every tool, normalized usage, 
       `second line ${i}`,
     ])
       assert.ok(text.includes(expected), expected);
-  await close(rig, browser);
+  await close(rig, dashboard);
 });
 
 for (const truncated of [false, true])
@@ -215,7 +215,7 @@ for (const truncated of [false, true])
     const work = await start(rig);
     await rig.settled(work.runId);
     await rig.pump();
-    const browser = await inspect(rig);
+    const dashboard = await inspect(rig);
     const text = screen(rig);
     assert.doesNotMatch(
       text,
@@ -228,7 +228,7 @@ for (const truncated of [false, true])
       for (let i = 2; i < 10; i += 1)
         assert.ok(text.includes(`bounded text ${i}`));
     } else assert.match(text, /Result available but empty/);
-    await close(rig, browser);
+    await close(rig, dashboard);
   });
 
 for (const reason of ["requested", "timeout"] as const)
@@ -250,7 +250,7 @@ for (const reason of ["requested", "timeout"] as const)
       await rig.text("agent_cancel", { ids: [work.runId] });
     await rig.settled(work.runId);
     await rig.pump();
-    const browser = await inspect(rig);
+    const dashboard = await inspect(rig);
     const text = screen(rig);
     assert.ok(text.includes(`Run status: cancelled (${reason})`));
     assert.match(text, /Started at: 1970-01-01T00:00:00.000Z/);
@@ -259,7 +259,7 @@ for (const reason of ["requested", "timeout"] as const)
     assert.match(text, /partial answer/);
     await rig.advanceClock(5000);
     assert.equal(screen(rig), text);
-    await close(rig, browser);
+    await close(rig, dashboard);
   });
 
 test("capture and capture time survive eviction; reopening observes current expiry and retains metadata", async (t) => {
@@ -272,7 +272,7 @@ test("capture and capture time survive eviction; reopening observes current expi
   const work = await start(rig);
   await rig.settled(work.runId);
   await rig.pump();
-  const browser = await inspect(rig);
+  const dashboard = await inspect(rig);
   const captured = screen(rig);
   assert.match(captured, /the rig answered/);
   assert.match(captured, /Captured at: 1970-01-01T00:00:00.000Z/);
@@ -294,7 +294,7 @@ test("capture and capture time survive eviction; reopening observes current expi
   assert.match(reopened, /Turns: 1/);
   assert.doesNotMatch(reopened, /the rig answered|available but empty/);
   assert.ok(reopened.includes(work.runId));
-  await close(rig, browser);
+  await close(rig, dashboard);
 });
 
 for (const outcome of ["unreadable", "unknown"] as const)

@@ -1,5 +1,5 @@
 /**
- * A Session-owned browser: live overview, entry-only history.
+ * A Session-owned dashboard: live overview, entry-only history.
  *
  * What is left here is transport. The page an operator is on, what their keys
  * mean on it, and every line the panel draws belong to the pure reducer in
@@ -14,12 +14,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
 import {
-  type BrowserKey,
-  type BrowserPageChrome,
-  type BrowserPageEvent,
   type DashboardIdentity,
-  emptyBrowserPage,
-  reduceBrowserPage,
+  type DashboardKey,
+  type DashboardPageChrome,
+  type DashboardPageEvent,
+  emptyDashboardPage,
+  reduceDashboardPage,
 } from "../presentation/index.ts";
 import type { SessionObservationSource } from "./session-observation.ts";
 import type { CompletionHandoffView } from "./widget.ts";
@@ -45,12 +45,12 @@ export async function openDashboardUi(
       return;
     }
     // The working directory and the operator's home are the same for as long
-    // as this browser is open, so the header reads them once. The Subagent
+    // as this dashboard is open, so the header reads them once. The Subagent
     // counts beside them are not: those come from the page.
     const identity: DashboardIdentity = { cwd: ctx.cwd, home: os.homedir() };
     await ctx.ui.custom<void>(
       (tui, theme, keys, done) => {
-        const chrome = (): BrowserPageChrome => ({
+        const chrome = (): DashboardPageChrome => ({
           identity,
           theme,
           moveKeys: [
@@ -59,7 +59,7 @@ export async function openDashboardUi(
           ],
           renderKeyHint: keyHint,
         });
-        let page = emptyBrowserPage(session.currentInstant());
+        let page = emptyDashboardPage(session.currentInstant());
         let generation = 0;
         // A request remains pending until render acknowledges it, not until a
         // timer fires. Slow hosts therefore owe one frame reading the newest
@@ -70,7 +70,7 @@ export async function openDashboardUi(
         let redraw: (() => void) | undefined = () => {
           if (closed) return;
           // Sample on publication/navigation, not on a timer or incidental render.
-          page = reduceBrowserPage(
+          page = reduceDashboardPage(
             page,
             { kind: "sampled", instant: session.currentInstant() },
             chrome(),
@@ -90,7 +90,7 @@ export async function openDashboardUi(
           stopRead = undefined;
           session.dispose();
           pending = false;
-          page = emptyBrowserPage();
+          page = emptyDashboardPage();
           redraw = undefined;
           finish = undefined;
           closeUi = undefined;
@@ -108,8 +108,8 @@ export async function openDashboardUi(
          * which of them a step calls for is the reducer's decision, not one
          * taken again here.
          */
-        const step = (event: BrowserPageEvent): readonly string[] => {
-          const next = reduceBrowserPage(page, event, chrome());
+        const step = (event: DashboardPageEvent): readonly string[] => {
+          const next = reduceDashboardPage(page, event, chrome());
           page = next.page;
           if (next.ask === "read") void read();
           else if (next.ask === "close") close();
@@ -174,12 +174,12 @@ export async function openDashboardUi(
          * Every meaning the operator's bindings give one keystroke.
          *
          * All of them, not the first: an operator may bind a selection key to
-         * an arrow the browser already answers, and which of the two a page
+         * an arrow the dashboard already answers, and which of the two a page
          * acts on is the page's decision rather than one taken here. The host
          * reports what was pressed; the reducer decides what it does.
          */
-        const browserKeys = (data: string): readonly BrowserKey[] => {
-          const pressed: BrowserKey[] = [];
+        const dashboardKeys = (data: string): readonly DashboardKey[] => {
+          const pressed: DashboardKey[] = [];
           if (keys.matches(data, "tui.select.cancel")) pressed.push("cancel");
           if (keys.matches(data, "tui.select.confirm")) pressed.push("confirm");
           if (keys.matches(data, "tui.select.up")) pressed.push("up");
@@ -201,7 +201,7 @@ export async function openDashboardUi(
           },
           handleInput(data) {
             if (closed) return;
-            const pressed = browserKeys(data);
+            const pressed = dashboardKeys(data);
             if (pressed.length) step({ kind: "key", pressed });
           },
           render(width) {

@@ -50,7 +50,7 @@ test("the entry point registers the seven tools, command, shortcut, and notifica
   assert.deepEqual(host.renderers(), [NOTIFICATION_MESSAGE_TYPE]);
 });
 
-test("the dashboard shortcut opens the same browser as /subagent dashboard", async (t) => {
+test("the dashboard shortcut opens the same dashboard as /subagent dashboard", async (t) => {
   const host = createStandInHost();
   const installation = installSubagentV2(host.pi, {
     agentDir: hostRig(t).agentsDir,

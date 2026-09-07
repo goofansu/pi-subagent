@@ -36,12 +36,12 @@ async function inspect(rig: HostRig) {
   await rig.pump();
   return { closed };
 }
-async function close(rig: HostRig, browser: { closed: Promise<void> }) {
+async function close(rig: HostRig, dashboard: { closed: Promise<void> }) {
   for (let i = 0; i < 3; i += 1) {
     rig.host.customKey(ESC);
     await rig.pump();
   }
-  await browser.closed;
+  await dashboard.closed;
 }
 
 test("active inspection freezes content and activity ages until explicit refresh, then follows settlement", async (t) => {
@@ -65,7 +65,7 @@ test("active inspection freezes content and activity ages until explicit refresh
   const work = await start(rig);
   await rig.pump();
   await rig.advanceClock(2000);
-  const browser = await inspect(rig);
+  const dashboard = await inspect(rig);
   const first = screen(rig);
   assert.match(first, /active snapshot/);
   assert.match(first, /Label: active Label/);
@@ -101,7 +101,7 @@ test("active inspection freezes content and activity ages until explicit refresh
   rig.host.customKey("R");
   await rig.pump();
   assert.equal(screen(rig), terminal);
-  await close(rig, browser);
+  await close(rig, dashboard);
 });
 
 test("multiple active refreshes preserve line offset and clamp after shorter reconciliation", async (t) => {
@@ -130,7 +130,7 @@ test("multiple active refreshes preserve line offset and clamp after shorter rec
   t.after(() => rig.installation.handle.release());
   await start(rig);
   await rig.pump();
-  const browser = await inspect(rig);
+  const dashboard = await inspect(rig);
   const full = screen(rig);
   for (let i = 0; i < 30; i += 1)
     assert.ok(full.includes(`full retained item ${i}`));
@@ -174,7 +174,7 @@ test("multiple active refreshes preserve line offset and clamp after shorter rec
   assert.ok(position);
   assert.equal(position[2], position[3], "clamped to new bottom");
   assert.match(screen(rig), /short output/);
-  await close(rig, browser);
+  await close(rig, dashboard);
 });
 
 for (const truncated of [false, true])
@@ -248,7 +248,7 @@ for (const truncated of [false, true])
     t.after(() => rig.installation.handle.release());
     await start(rig);
     await rig.pump();
-    const browser = await inspect(rig);
+    const dashboard = await inspect(rig);
     const text = screen(rig);
     assert.match(text, /Run status: running/);
     assert.doesNotMatch(text, /Result expired|Final output:|Settled at:/);
@@ -273,7 +273,7 @@ for (const truncated of [false, true])
       ])
         assert.ok(text.includes(value), `${value}\n${text}`);
     } else assert.match(text, /Active snapshot available but empty/);
-    await close(rig, browser);
+    await close(rig, dashboard);
   });
 
 for (const expire of [false, true])
@@ -294,7 +294,7 @@ for (const expire of [false, true])
     t.after(() => rig.installation.handle.release());
     const work = await start(rig);
     await rig.pump();
-    const browser = await inspect(rig);
+    const dashboard = await inspect(rig);
     const running = screen(rig);
     await rig.text("agent_cancel", { ids: [work.runId] });
     await rig.pump();
@@ -338,5 +338,5 @@ for (const expire of [false, true])
     await rig.pump();
     assert.match(screen(rig), /› active Label +Cancelled/);
     rig.host.customKey(ESC);
-    await browser.closed;
+    await dashboard.closed;
   });
