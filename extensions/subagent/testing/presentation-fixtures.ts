@@ -38,7 +38,7 @@ import {
   toRunResult,
   type UsageSnapshot,
 } from "../domain/index.ts";
-import type { RunRowView } from "../presentation/views.ts";
+import type { RunRowView } from "../presentation/index.ts";
 
 export const FIXTURE_IDENTITY: RunIdentity = {
   runId: runId("run-1"),

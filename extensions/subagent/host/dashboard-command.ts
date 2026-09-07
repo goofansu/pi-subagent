@@ -13,26 +13,20 @@ import { matchesKey } from "@earendil-works/pi-tui";
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
 import type { RunId, SubagentId } from "../domain/index.ts";
 import {
+  browserFooter,
+  browserPanel,
+  browserViewport,
   DASHBOARD_TITLE,
   type DashboardIdentity,
   dashboardBanner,
   dashboardBannerFits,
-} from "../presentation/banner.ts";
-import {
-  browserFooter,
-  browserPanel,
-  browserViewport,
-} from "../presentation/browser-panel.ts";
-import {
   HISTORY_CATEGORIES,
   historyCategory,
   historyRows,
-} from "../presentation/history.ts";
-import {
   type InspectionBlock,
   inspectionBlocks,
   renderInspection,
-} from "../presentation/inspection.ts";
+} from "../presentation/index.ts";
 import type {
   RunHistoryCapture,
   SessionObservationSource,

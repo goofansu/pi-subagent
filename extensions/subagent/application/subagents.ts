@@ -28,6 +28,7 @@ import {
 } from "../domain/index.ts";
 import {
   type CollectedRuns,
+  collectedRunOf,
   formatCancelOutcomes,
   formatNoActiveRuns,
   formatResult,
@@ -37,7 +38,6 @@ import {
   formatSteerOutcome,
   formatWaitOutcomes,
   type ResumedRun,
-  summaryOf,
 } from "../presentation/index.ts";
 import { ProfileCatalog } from "../runtime/profile-catalog.ts";
 import { RunRepository } from "../runtime/repository.ts";
@@ -270,7 +270,7 @@ const collect = (
     const agents = yield* agentNamesOf(runIds);
     const delivered = outcomes.flatMap((outcome) =>
       outcome.outcome === "terminal" && outcome.result !== undefined
-        ? [summaryOf(outcome.result)]
+        ? [collectedRunOf(outcome.result)]
         : [],
     );
     const stillRunning = outcomes.filter(
@@ -326,7 +326,9 @@ const result = (
     }
     return {
       text: formatResult(outcome.result),
-      details: { runs: [summaryOf(outcome.result)] } satisfies CollectedRuns,
+      details: {
+        runs: [collectedRunOf(outcome.result)],
+      } satisfies CollectedRuns,
     };
   });
 
