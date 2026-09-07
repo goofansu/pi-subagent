@@ -14,6 +14,29 @@ Ask Pi to delegate to `explore`, `implementer`, `researcher`, `spec-reviewer`,
 or `standards-reviewer`. These [profiles](#profiles) ship with the package;
 no separate Profile installation is needed.
 
+## Workflows
+
+The package also installs two skills, available from any working directory:
+
+- `/skill:implement-and-review <spec-or-tickets>` — runs an `implementer` and
+  fresh `spec-reviewer` / `standards-reviewer` pairs, revises blocking findings,
+  and commits each clean unit with hooks enabled. Requires an initially clean
+  working tree; stops on contract gaps or review stalemates. Herdr is not needed.
+- `/skill:herdr-implement-spec <spec>` — explicitly invoked, optional Herdr
+  orchestration of a ticket dependency graph. Ticket agents are independent
+  main Pi agents in separate worktrees, each running implement-and-review with
+  its own one-level Subagents. Their branches merge into a dedicated integration
+  worktree, left ready for review; the current workspace stays unchanged.
+
+The Herdr workflow requires Herdr and the external `herdr` skill for its
+commands, plus the external `code-review` skill for final integration review.
+The preserved implementer Profile references the external `tdd` skill. These
+skills and their dependencies are not installed by this package; install them
+separately when using the corresponding workflow. Neither original skill source
+repository is needed at runtime. `to-spec` and `to-tickets` are not bundled.
+Reviewer roles, commit rules, and ticket scheduling remain Profile/skill policy,
+not additional runtime execution machinery.
+
 ## Commands
 
 | Command | What it does |

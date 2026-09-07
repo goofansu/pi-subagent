@@ -9,6 +9,10 @@
   "pi": {
     "extensions": [
       "./extensions/subagent/index.ts"
+    ],
+    "skills": [
+      "./skills/implement-and-review",
+      "./skills/herdr-implement-spec"
     ]
   },
   "license": "MIT",

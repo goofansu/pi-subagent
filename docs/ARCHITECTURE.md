@@ -404,6 +404,8 @@ reports both plus hand-off counts, not provider continuation identities.
 loads the production extension through Pi from an unrelated working directory,
 verifying bundled resources, configured user overrides, diagnostics,
 Session-start discovery, and the child delegation guard without provider calls.
+It also verifies both declared orchestration skills in the packed payload and
+through Pi's normal skill loader, with an isolated home and no Herdr environment.
 For one file, run on one shell line:
 `node --import tsx --import ./extensions/subagent/suite-setup.ts --test <path.test.ts>`.
 Authenticated SDK/host smoke lanes live in [scripts/](../scripts/) and run after
