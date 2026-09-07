@@ -1174,7 +1174,29 @@ export function findBoundaryViolations(
     }
   }
 
-  // 20. An edge this checker cannot see is an edge no rule above can hold.
+  // 20. The dashboard sees the Session through its read-only observation
+  //     interface. It may still name host and presentation types, but it may
+  //     not recover the old arbitrary Effect runner or know which application
+  //     query or runtime publication implements observation.
+  const dashboardFile = path.join(graph.hostRoot, "dashboard-command.ts");
+  if (fs.existsSync(dashboardFile)) {
+    for (const specifier of specifiersOf(dashboardFile)) {
+      const target = resolveRelativeSource(dashboardFile, specifier);
+      if (
+        isEffectPackage(specifier) ||
+        (target !== undefined &&
+          (isInside(target, graph.applicationRoot) ||
+            isInside(target, graph.domainRoot) ||
+            isInside(target, graph.runtimeRoot)))
+      ) {
+        violations.add(
+          `${describe(dashboardFile)} imports ${target ? describe(target) : specifier}, and the dashboard observes through the Session-bound observation interface`,
+        );
+      }
+    }
+  }
+
+  // 21. An edge this checker cannot see is an edge no rule above can hold.
   //     Every rule here is a rule about specifiers, so one `await import(url)`
   //     with a computed argument would let any of them be broken without
   //     failing anything — a presentation file could reach the runtime, an
@@ -2340,6 +2362,41 @@ test("no file in the extension may spawn a child process", (t) => {
     `${describe(
       path.join(graph.testingRoot, "stand-in-host.ts"),
     )} imports node:child_process, and nothing in the extension may spawn a child process`,
+  ]);
+});
+
+test("the dashboard names only its observation interface and presentation, never Effect, domain, application, or runtime modules", (t) => {
+  const { graph, write } = fixtureGraph(t, "dashboard-observation-boundary");
+  write("extensions/subagent/index.ts", "export {};\n");
+  write("extensions/subagent/domain/history.ts", "export interface Row {}\n");
+  write(
+    "extensions/subagent/application/history.ts",
+    "export const history = 1;\n",
+  );
+  write(
+    "extensions/subagent/runtime/repository.ts",
+    "export const repository = 1;\n",
+  );
+  write(
+    "extensions/subagent/host/dashboard-command.ts",
+    [
+      'import { Effect } from "effect";',
+      'import type { Row } from "../domain/history.ts";',
+      'import { history } from "../application/history.ts";',
+      'import { repository } from "../runtime/repository.ts";',
+      "void Effect;",
+      "void (undefined as Row | undefined);",
+      "void history;",
+      "void repository;",
+      "",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findBoundaryViolations(graph), [
+    `${describe(path.join(graph.hostRoot, "dashboard-command.ts"))} imports ${describe(path.join(graph.applicationRoot, "history.ts"))}, and the dashboard observes through the Session-bound observation interface`,
+    `${describe(path.join(graph.hostRoot, "dashboard-command.ts"))} imports ${describe(path.join(graph.domainRoot, "history.ts"))}, and the dashboard observes through the Session-bound observation interface`,
+    `${describe(path.join(graph.hostRoot, "dashboard-command.ts"))} imports ${describe(path.join(graph.runtimeRoot, "repository.ts"))}, and the dashboard observes through the Session-bound observation interface`,
+    `${describe(path.join(graph.hostRoot, "dashboard-command.ts"))} imports effect, and the dashboard observes through the Session-bound observation interface`,
   ]);
 });
 
