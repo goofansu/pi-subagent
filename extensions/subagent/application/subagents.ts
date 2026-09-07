@@ -64,6 +64,32 @@ export interface ToolResponse {
    * sentence.
    */
   readonly details?: CollectedRuns | ResumedRun;
+  /**
+   * The Runs whose Result this response actually handed back.
+   *
+   * The host reads this to record consumption
+   * ([ADR-0035](../../../docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)):
+   * a parent that has been handed a Run's Result has nothing left for that
+   * Run's completion notice to tell it. So this is a *statement*, made by the
+   * operation that did the handing back, and not something a reader infers.
+   *
+   * It is a separate field from {@link ToolResponse.details} because the two
+   * are separate facts that happened to coincide. `details` is what the
+   * renderer draws the collapsed row from; naming one more Run there is a
+   * change to a drawing, and it must not be able to resolve a Completion
+   * hand-off that never resolved. The host used to read consumption off
+   * `details` with a type guard, which made every display change a hand-off
+   * change waiting to happen.
+   *
+   * Required rather than optional, unlike `details`, and the empty list is
+   * how the four operations that never deliver a Result say so. An absent
+   * field would read the same as an empty one at the host, and then an
+   * operation that hands a Result back and forgets to say so would draw its
+   * row correctly, pass every test that asserts text and `details`, and leave
+   * the parent to be told again about a completion it already has. Stating it
+   * everywhere makes that omission a compile error instead.
+   */
+  readonly deliveredRuns: readonly RunId[];
 }
 
 /** Every service the façade reaches. Three, and all of them read-mostly. */
@@ -164,7 +190,10 @@ const start = (
     // claims nothing, and spends no identifier, which is what the semantics
     // document requires of every rejection that admission could have made.
     if (request === undefined)
-      return { text: formatStartOutcome(input.agent, EMPTY_LABEL, available) };
+      return {
+        text: formatStartOutcome(input.agent, EMPTY_LABEL, available),
+        deliveredRuns: [],
+      };
     const supervisor = yield* SubagentSupervisor;
     const outcome = yield* supervisor.start({
       agent: input.agent,
@@ -177,7 +206,10 @@ const start = (
         ? {}
         : { parentModel: facts.parentModel }),
     });
-    return { text: formatStartOutcome(input.agent, outcome, available) };
+    return {
+      text: formatStartOutcome(input.agent, outcome, available),
+      deliveredRuns: [],
+    };
   });
 
 /** `agent_resume`. A new Run on an idle Subagent, or a typed refusal. */
@@ -187,7 +219,10 @@ const resume = (
   Effect.gen(function* () {
     const request = labelledRequest(input.description);
     if (request === undefined)
-      return { text: formatResumeOutcome(input.id, EMPTY_LABEL) };
+      return {
+        text: formatResumeOutcome(input.id, EMPTY_LABEL),
+        deliveredRuns: [],
+      };
     const supervisor = yield* SubagentSupervisor;
     const outcome = yield* supervisor.resume({
       subagentId: input.id,
@@ -196,6 +231,7 @@ const resume = (
     });
     return {
       text: formatResumeOutcome(input.id, outcome),
+      deliveredRuns: [],
       ...(outcome.outcome === "started"
         ? {
             details: {
@@ -220,7 +256,10 @@ const steer = (
       type: "steer",
       text: input.message,
     });
-    return { text: formatSteerOutcome(input.id, outcome) };
+    return {
+      text: formatSteerOutcome(input.id, outcome),
+      deliveredRuns: [],
+    };
   });
 
 /** `agent_cancel`. Answers about request admission, never about terminality. */
@@ -230,7 +269,7 @@ const cancel = (
   Effect.gen(function* () {
     const supervisor = yield* SubagentSupervisor;
     const outcomes = yield* supervisor.cancel(distinct(input.ids));
-    return { text: formatCancelOutcomes(outcomes) };
+    return { text: formatCancelOutcomes(outcomes), deliveredRuns: [] };
   });
 
 /**
@@ -243,11 +282,14 @@ const cancel = (
  * its Result, and the text renders that Result exactly as `agent_result`
  * would — so a parent that waited has the answer and nothing further to fetch.
  *
- * The `details` list only the Runs whose Result was actually returned. That
- * is the shape the `agent_result` handler already recognises a delivered
- * Result by, and the host reads it to record consumption — so a Run whose
- * output was evicted is in the text (its status still answers) and not in the
- * details (the parent was handed no Result to consume).
+ * One list of Results is read twice, for two different answers.
+ * `deliveredRuns` names the Runs whose Result actually rode back on the
+ * outcome, and it is what the host records consumption from; the `details`
+ * summarise the same Runs for the collapsed row. A Run whose output was
+ * evicted is in the text — its status still answers — and in neither, because
+ * the parent was handed no Result. The two are separate fields so that a later
+ * change to what the row shows cannot move Completion hand-off state; see
+ * {@link ToolResponse.deliveredRuns}.
  *
  * A zero timeout is the answer-now form the host uses when its turn was
  * aborted: the same reading, without waiting for it. That is why the timeout
@@ -270,7 +312,7 @@ const collect = (
     const agents = yield* agentNamesOf(runIds);
     const delivered = outcomes.flatMap((outcome) =>
       outcome.outcome === "terminal" && outcome.result !== undefined
-        ? [collectedRunOf(outcome.result)]
+        ? [outcome.result]
         : [],
     );
     const stillRunning = outcomes.filter(
@@ -278,7 +320,11 @@ const collect = (
     ).length;
     return {
       text: formatWaitOutcomes(outcomes, agents),
-      details: { runs: delivered, stillRunning } satisfies CollectedRuns,
+      details: {
+        runs: delivered.map(collectedRunOf),
+        stillRunning,
+      } satisfies CollectedRuns,
+      deliveredRuns: delivered.map((result) => result.runId),
     };
   });
 
@@ -309,6 +355,7 @@ const waitAll = (
       return {
         text: formatNoActiveRuns(),
         details: { runs: [], stillRunning: 0 } satisfies CollectedRuns,
+        deliveredRuns: [],
       };
     }
     return yield* collect(active, input.timeoutSeconds);
@@ -322,13 +369,14 @@ const result = (
     const supervisor = yield* SubagentSupervisor;
     const outcome = yield* supervisor.result(input.id);
     if (outcome.outcome !== "result") {
-      return { text: formatResultRejection(outcome) };
+      return { text: formatResultRejection(outcome), deliveredRuns: [] };
     }
     return {
       text: formatResult(outcome.result),
       details: {
         runs: [collectedRunOf(outcome.result)],
       } satisfies CollectedRuns,
+      deliveredRuns: [outcome.result.runId],
     };
   });
 
