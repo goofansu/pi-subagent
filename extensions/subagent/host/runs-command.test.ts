@@ -386,7 +386,7 @@ test("duplicate Profiles retain resolved terminal history and Resume grouping; l
   text = screen(rig);
   assert.ok(text.includes(second.subagentId));
   assert.ok(text.includes(second.runId));
-  assert.doesNotMatch(text, /Enter|inspect|private admission prompt|broken/);
+  assert.doesNotMatch(text, /private admission prompt|broken/);
   const retry = await resume(rig, second.subagentId, "retry task");
   await rig.pump();
   assert.doesNotMatch(screen(rig), /retry task/); // Static until re-entry.
@@ -413,7 +413,11 @@ test("duplicate Profiles retain resolved terminal history and Resume grouping; l
   await rig.pump();
   assert.match(screen(rig), /failed/);
   assert.match(screen(rig), /completed/);
-  rig.host.customKey(ENTER); // No inspector action in this slice.
+  rig.host.customKey(ENTER);
+  await rig.pump();
+  assert.match(screen(rig), /Run inspection/);
+  rig.host.customKey(ESC);
+  await rig.pump();
   assert.match(screen(rig), /Run history/);
   rig.host.customKey(ESC);
   await rig.pump();

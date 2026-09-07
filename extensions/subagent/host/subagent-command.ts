@@ -54,6 +54,7 @@ import { SubagentSupervisor } from "../runtime/supervisor.ts";
 import { formatNoAgentsMessage, openProfilesUi } from "./agents-command.ts";
 import { openRunsUi } from "./runs-command.ts";
 import type { SessionHandle } from "./session-handle.ts";
+import type { CompletionHandoffView } from "./widget.ts";
 
 /** The command name, unchanged from the M0 skeleton's. */
 export const SUBAGENT_COMMAND_NAME = "subagent";
@@ -332,6 +333,7 @@ export function registerSubagentCommand(
   handoffCounts: () => CountBlock,
   profiles: () => readonly Profile[],
   agentsDir: string,
+  handoff: Pick<CompletionHandoffView, "status">,
 ): void {
   pi.registerCommand(SUBAGENT_COMMAND_NAME, {
     description:
@@ -353,7 +355,7 @@ export function registerSubagentCommand(
         }
         case "runs":
           if (!handle.isLive()) ctx.ui.notify(NO_LIVE_SESSION, "info");
-          else await openRunsUi(handle, ctx);
+          else await openRunsUi(handle, ctx, handoff);
           return;
         case "profiles":
           await openProfilesUi(pi, profiles, agentsDir, ctx);

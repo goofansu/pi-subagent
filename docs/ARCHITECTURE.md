@@ -50,7 +50,7 @@ tests/live lanes, not alternative production modes.
 | --- | --- |
 | [`index.ts`](../extensions/subagent/index.ts) | Process-level registration; builds the production backend set through the composition entry and forwards host events. Registers nothing inside a child. |
 | [`host/`](../extensions/subagent/host/) | Pi callbacks, tool decoding, runtime binding, notification transport and UI subscriptions. Tools call the façade; Session wiring and the widget also reach runtime services. |
-| [`application/`](../extensions/subagent/application/) | Stateless façade: [`subagents.ts`](../extensions/subagent/application/subagents.ts) maps tool inputs to requests and outcomes to presentation through `start`, `resume`, `steer`, `cancel`, `wait`, `waitAll`, and `result`; [`history.ts`](../extensions/subagent/application/history.ts) exposes the read-only Effect queries `subagentSummaries` and `runSummaries`, returning plain immutable summaries. Cannot import Pi or a backend. |
+| [`application/`](../extensions/subagent/application/) | Stateless façade: [`subagents.ts`](../extensions/subagent/application/subagents.ts) maps tool inputs to requests and outcomes to presentation through `start`, `resume`, `steer`, `cancel`, `wait`, `waitAll`, and `result`; [`history.ts`](../extensions/subagent/application/history.ts) exposes the read-only Effect queries `subagentSummaries`, `runSummaries`, and `inspectRun`, returning plain immutable summaries or a bounded terminal capture. Cannot import Pi or a backend. |
 | [`runtime/`](../extensions/subagent/runtime/) | Admission, resource lifetimes, settlement, index publication, storage and delivery. Knows the backend contract, not either adapter, the host, application or presentation. |
 | [`domain/`](../extensions/subagent/domain/) | Schemas, transitions, bounded projections, reconciliation, usage, Results and Notifications. Pure functions; no runtime lifetimes or provider SDKs. |
 | [`backend/contract.ts`](../extensions/subagent/backend/contract.ts) | Effect-typed, provider-neutral resource and execution contract. Shared backend helpers live alongside it. |
@@ -276,6 +276,17 @@ from output/transcript evidence and status. Nonblank output up to 16 KiB travels
 whole (`output` present); longer output gets a 500-byte preview. Every notice
 names the exact `agent_result` call; inlined ones say no fetch is needed.
 Storage stays authoritative. [ADR-0037](adr/0037-a-notice-carries-a-short-output-whole.md).
+
+The [Run browser](../extensions/subagent/host/runs-command.ts) opens terminal
+inspection through the application query and [runtime capture](../extensions/subagent/runtime/inspection.ts),
+not the public Result tool. It captures the stored Result or explicit expiry /
+unavailability with retained Run metadata, usage, and known Subagent conditions.
+The host adds only the existing read-only Completion hand-off status. The
+[inspection formatter](../extensions/subagent/presentation/inspection.ts) shares
+RunCard helpers but renders all retained transcript parts and tools, without the
+compact card's recent-item cutoff. Only the current capture is retained; closing
+or leaving details releases it. A Session-bound observation lease interrupts
+in-flight reads on closure and rejects late values after Session replacement.
 
 ## Profiles, trust, depth and bounds
 

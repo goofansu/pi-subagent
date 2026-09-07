@@ -90,6 +90,7 @@ import type {
 } from "./counters.ts";
 import { CompletionDelivery } from "./delivery.ts";
 import { summarizeRun, summarizeSubagents } from "./history.ts";
+import { inspectTerminalRun } from "./inspection.ts";
 import type { RuntimePolicy } from "./policy.ts";
 import { ProfileCatalog } from "./profile-catalog.ts";
 import {
@@ -850,6 +851,9 @@ const makeSupervisor = (settings: SessionSettings) =>
       const admitted = record.agent.admitResume();
       if (admitted === "unsupported") return { outcome: "resume unsupported" };
       if (admitted === "conversation lost") {
+        // Retain loss already learned through ordinary admission. Observation
+        // may report this fact later without calling the backend to discover it.
+        records.markConversationLost(record.id);
         return { outcome: "conversation lost" };
       }
       return { outcome: "resolved", record };
@@ -1228,6 +1232,13 @@ const makeSupervisor = (settings: SessionSettings) =>
       });
 
     return {
+      inspectRun: (id: RunId) =>
+        inspectTerminalRun(id, repository, store, (subagentId) => {
+          const record = records.get(subagentId);
+          return record
+            ? { phase: record.phase, conversationLost: record.conversationLost }
+            : undefined;
+        }),
       /** Published history only, in original Subagent insertion order. */
       subagentSummaries: (): Effect.Effect<readonly SubagentSummary[]> =>
         Effect.map(repository.list(), (runs) =>

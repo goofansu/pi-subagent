@@ -152,6 +152,8 @@ export interface HostRigOptions extends StandInHostOptions {
   readonly adapterProbe?: () => AdapterProbe;
   /** Run the Session on Effect's deterministic test clock. */
   readonly testClock?: boolean;
+  /** An injected clock can gate a capture read to exercise UI disposal in flight. */
+  readonly clock?: SessionRuntimeOptions["clock"];
   /** Make the set report that this process is loading inside a child. */
   readonly childLoad?: boolean;
   /** What depth the set reports, for the nesting guard and for admission. */
@@ -351,6 +353,7 @@ export function hostRig(
           clock: TestClock.layer() as unknown as SessionRuntimeOptions["clock"],
         }
       : {}),
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
     ...(options.resultEncoder === undefined
       ? {}
       : { resultEncoder: options.resultEncoder }),

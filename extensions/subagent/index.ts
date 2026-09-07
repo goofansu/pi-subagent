@@ -184,6 +184,7 @@ export function installSubagentV2(
     () => ({ ...sink.counts() }),
     () => profiles,
     agentsDir,
+    { status: (id) => sink.status(id) },
   );
   pi.registerMessageRenderer(
     NOTIFICATION_MESSAGE_TYPE,
