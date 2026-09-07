@@ -13,6 +13,13 @@
  * surface never shows a Run as terminal while its cleanup is still running.
  * It gets its own verb and its own tone rather than borrowing `running`'s,
  * because a reader watching a row wants to know the difference.
+ *
+ * The tones here are what a phase *means*, and a surface may still decline
+ * them: the ambient widget flattens ordinary operational tones to one muted
+ * foreground, because a count an operator has already delegated does not need
+ * colour to restate the word beside it. That decision is stated at the
+ * widget's own seam. This table remains the shared meaning every other surface
+ * reads, and the only place a new phase's tone is decided.
  */
 
 import type {

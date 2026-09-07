@@ -50,6 +50,23 @@ const named: RenderableTheme = {
   italic,
   inverse,
 };
+/**
+ * Whether the instrumented theme's `bg` touched this line at all.
+ *
+ * The background *reset* counts deliberately: `named.bg` maps a token it does
+ * not name to the reset code, so counting it is what catches a renderer that
+ * painted some background this map has never heard of.
+ */
+const usesBackgroundPaint = (line: string) =>
+  Array.from({ length: 10 }, (_unused, code) => `\u001b[4${code}m`).some(
+    (code) => line.includes(code),
+  );
+
+/** The widget's standing promise: foreground paint and nothing else. */
+function assertQuietSurface(line: string, where: string) {
+  assert.ok(!usesBackgroundPaint(line), `background painting ${where}`);
+  assert.ok(!line.includes("\u001b[7m"), `inverse video ${where}`);
+}
 function row(
   width: number,
   overrides: Parameters<typeof fixtureRow>[0] = {},
@@ -199,18 +216,18 @@ test("elapsed ends at the matching one-cell right inset for plain, styled and wi
     ] as const) {
       const line = widget([fixture], 80, paintTheme)[1];
       const plain = stripVTControlCharacters(line);
-      assert.equal(plain, `${left}${" ".repeat(gap)}12.4s `);
-      assert.equal(visibleWidth(line), 80);
+      assert.equal(plain, `${left}${" ".repeat(gap)}12.4s`);
+      assert.equal(visibleWidth(line), 79);
       assert.equal(visibleWidth(plain.slice(0, plain.indexOf("12.4s"))), 74);
       assert.match(plain, /^ \S/);
-      assert.match(plain, /12\.4s $/);
+      assert.match(plain, /12\.4s$/);
     }
   }
 });
 
 test("identical inputs produce the same styled presentation", () => {
   const expected =
-    [paint("toolTitle", bold("look around")), paint("warning", "running")].join(
+    [paint("toolTitle", bold("look around")), paint("muted", "running")].join(
       ROW_DELIMITER,
     ) +
     ` ${paint("dim", "·")} ` +
@@ -270,7 +287,7 @@ test("missing or cleared running activity shows a muted nonitalic em dash placeh
       rendered,
       paint("toolTitle", bold("look around")) +
         ROW_DELIMITER +
-        paint("warning", "running") +
+        paint("muted", "running") +
         ` ${paint("dim", "·")} ` +
         paint("muted", "—") +
         " ".repeat(51) +
@@ -281,20 +298,15 @@ test("missing or cleared running activity shows a muted nonitalic em dash placeh
   }
 });
 
-test("row status text and tone follow the shared cancellation presentation", () => {
-  for (const [overrides, state, tone] of [
-    [
-      { cancellation: { reason: "requested" as const } },
-      "cancelling",
-      "warning",
-    ],
+test("row status text follows the shared cancellation presentation, flattened to one tone", () => {
+  for (const [overrides, state] of [
+    [{ cancellation: { reason: "requested" as const } }, "cancelling"],
     [
       {
         phase: "finalizing" as const,
         cancellation: { reason: "shutdown" as const },
       },
       "cancelling",
-      "warning",
     ],
     [
       {
@@ -302,7 +314,6 @@ test("row status text and tone follow the shared cancellation presentation", () 
         cancellation: { reason: "requested" as const },
       },
       "cancelled",
-      "muted",
     ],
     [
       {
@@ -310,7 +321,6 @@ test("row status text and tone follow the shared cancellation presentation", () 
         cancellation: { reason: "shutdown" as const },
       },
       "cancelled",
-      "muted",
     ],
     [
       {
@@ -318,23 +328,17 @@ test("row status text and tone follow the shared cancellation presentation", () 
         cancellation: { reason: "timeout" as const },
       },
       "cancelled",
-      "error",
     ],
   ] as const) {
-    const calls: { color: string; text: string }[] = [];
-    formatRunRow(
+    const rendered = formatRunRow(
       fixtureRow(overrides),
-      {
-        ...theme,
-        fg: (color, text) => {
-          calls.push({ color, text });
-          return text;
-        },
-      },
+      named,
       80,
       FIXTURE_NOW,
     );
-    assert.ok(calls.some((call) => call.color === tone && call.text === state));
+    assert.ok(rendered.includes(paint("muted", state)), state);
+    assert.ok(!rendered.includes(paint("warning", state)), "no warning tone");
+    assert.ok(!rendered.includes(paint("error", state)), "no error tone");
   }
 });
 
@@ -353,7 +357,7 @@ test("finalizing and cancelling show a styled placeholder rather than retained a
       formatRunRow(fixture, named, 80, FIXTURE_NOW),
       paint("toolTitle", bold("look around")) +
         ROW_DELIMITER +
-        paint("warning", state) +
+        paint("muted", state) +
         ` ${paint("dim", "·")} ` +
         paint("muted", "—") +
         " ".repeat(48) +
@@ -376,8 +380,8 @@ test("placeholder rows keep symmetric padding and fit plain, styled and wide Uni
         if (plain.includes("·")) assert.match(plain, / · —/);
         if (plain.includes("12.4s")) {
           assert.match(plain, /^ \S/);
-          assert.match(plain, /12\.4s $/);
-          assert.equal(visibleWidth(line), width);
+          assert.match(plain, /12\.4s$/);
+          assert.equal(visibleWidth(line), width - 1);
         }
       }
     }
@@ -496,7 +500,7 @@ test("unresolved terminal Runs contribute only summary beside one active Run", (
   );
 });
 
-test("the header is the name and one inverted chip per phase, and says nothing about spend", () => {
+test("the header is the name and one quiet chip per phase, and says nothing about spend", () => {
   const rows = [
     fixtureRow({
       usage: fixtureUsage({
@@ -511,7 +515,7 @@ test("the header is the name and one inverted chip per phase, and says nothing a
   const [header = ""] = widget(rows, 100, named);
   assert.equal(
     header,
-    ` ${paint("accent", bold("subagents"))}  ${inverse(paint("warning", " 1 running "))} ${inverse(paint("error", " 1 failed "))}`,
+    ` ${paint("accent", bold("subagents"))}  ${paint("muted", " 1 running ")} ${paint("error", " 1 failed ")}`,
   );
   assert.doesNotMatch(header, /─/);
   const plain = stripVTControlCharacters(widget(rows, 100)[0] ?? "");
@@ -589,29 +593,51 @@ test("exceptional summaries keep chips at exact fit and switch to plain attentio
   const cases = [
     {
       handoff: "exhausted" as const,
+      attention: "notification failed",
       width: 49,
       full: " subagents   1 completed   1 notification failed ",
       compact: "! 1 notification failed, 1 completed",
     },
     {
       handoff: "unannounceable" as const,
+      attention: "no notification · result unavailable",
       width: 66,
       full: " subagents   1 completed   1 no notification · result unavailable ",
       compact: "! 1 no notification · result unavailable, 1 completed",
     },
   ];
-  for (const { handoff, width, full, compact } of cases) {
+  for (const { handoff, attention, width, full, compact } of cases) {
     const rows = [fixtureRow({ phase: "completed", handoff })];
     for (const paintTheme of [theme, named]) {
       for (const fittingWidth of [width, width + 1]) {
         const [line] = widget(rows, fittingWidth, paintTheme);
         assert.equal(stripVTControlCharacters(line), full);
-        if (paintTheme === named)
-          assert.ok(line.includes("\u001b[7m"), "full header retains chips");
+        if (paintTheme === named) {
+          assert.ok(
+            line.includes(paint("accent", bold("subagents"))),
+            "the full header keeps its accented title",
+          );
+          assert.ok(
+            line.includes(paint("muted", " 1 completed ")),
+            "an ordinary count stays muted",
+          );
+          assert.ok(
+            line.includes(paint("error", ` 1 ${attention} `)),
+            "hand-off attention keeps the error tone",
+          );
+        }
       }
       const [overflow] = widget(rows, width - 1, paintTheme);
       assert.equal(stripVTControlCharacters(overflow), compact);
-      assert.ok(!overflow.includes("\u001b[7m"), "overflow drops chip framing");
+      assert.ok(
+        !overflow.includes(paint("accent", bold("subagents"))),
+        "overflow drops the title and its chip framing",
+      );
+      if (paintTheme === named)
+        assert.ok(
+          overflow.startsWith(paint("error", "!")),
+          "the narrow fallback keeps its error tone",
+        );
       assert.ok(visibleWidth(overflow) <= width - 1);
     }
   }
@@ -621,40 +647,90 @@ test("an empty list renders nothing at all", () => {
   assert.deepEqual(widget([], 80), []);
 });
 
-// ── Bands ────────────────────────────────────────────────────────────────────
+// ── A quiet foreground-only surface ─────────────────────────────────────────
 
-test("only the active detail is painted as a band", () => {
+test("the aggregate frame is accented, muted, and painted only in the foreground", () => {
+  const rows = [
+    fixtureRow(),
+    fixtureRow({ phase: "finalizing" }),
+    fixtureRow({ cancellation: { reason: "requested" } }),
+    fixtureRow({ phase: "completed" }),
+    fixtureRow({ phase: "cancelled" }),
+    fixtureRow({ phase: "failed" }),
+    fixtureRow({ phase: "completed", handoff: "exhausted" }),
+  ];
+  const lines = widget(rows, 200, named);
+  assert.equal(lines.length, 1, "several active Runs stay aggregate");
+  const [header = ""] = lines;
+  assert.equal(
+    header,
+    ` ${paint("accent", bold("subagents"))}  ` +
+      [
+        paint("muted", " 1 cancelling "),
+        paint("muted", " 1 running "),
+        paint("muted", " 1 finalizing "),
+        paint("muted", " 2 completed "),
+        paint("error", " 1 failed "),
+        paint("muted", " 1 cancelled "),
+        paint("error", " 1 notification failed "),
+      ].join(" "),
+  );
+  assert.equal(
+    stripVTControlCharacters(header),
+    " subagents   1 cancelling   1 running   1 finalizing   2 completed" +
+      "   1 failed   1 cancelled   1 notification failed ",
+  );
+  assertQuietSurface(header, "in the aggregate frame");
+});
+
+test("the single active Run detail is monochrome on the default background", () => {
+  const lines = widget([fixtureRow({ activity: "bash: npm test" })], 80, named);
+  assert.deepEqual(lines, [
+    ` ${paint("accent", bold("subagents"))}  ${paint("muted", " 1 running ")}`,
+    " " +
+      paint("toolTitle", bold("look around")) +
+      ROW_DELIMITER +
+      paint("muted", "running") +
+      ` ${paint("dim", "·")} ` +
+      paint("muted", "bash: npm test") +
+      " ".repeat(36) +
+      paint("dim", "12.4s"),
+  ]);
+  assert.equal(
+    stripVTControlCharacters(lines[1] ?? ""),
+    ` look around  running · bash: npm test${" ".repeat(36)}12.4s`,
+  );
+  for (const line of lines) assertQuietSurface(line, "in the detail frame");
+});
+
+test("no widget line paints a background, inverts, or draws a border", () => {
   const rows = [
     fixtureRow({ identity: { agent: "live" } }),
     fixtureRow({ identity: { agent: "done" }, phase: "completed" }),
     fixtureRow({ identity: { agent: "broke" }, phase: "failed" }),
     fixtureRow({ identity: { agent: "stopped" }, phase: "cancelled" }),
+    fixtureRow({
+      identity: { agent: "unheard" },
+      phase: "completed",
+      handoff: "exhausted",
+    }),
   ];
-  const lines = widget(rows, 60, named);
-  assert.equal(lines.length, 2);
-  assert.ok(lines[1].startsWith("\u001b[44m"), "a live row is pending");
-  for (const line of lines.slice(1)) {
-    assert.equal(visibleWidth(line), 60);
-    assert.ok(line.endsWith("\u001b[49m"));
+  for (const width of [1, 2, 20, 33, 60, 200]) {
+    const lines = widget(rows, width, named);
+    assert.ok(lines.length <= 2, `no extra line at ${width}`);
+    for (const line of lines) {
+      assertQuietSurface(line, `at width ${width}`);
+      assert.doesNotMatch(
+        stripVTControlCharacters(line),
+        /[\u2500-\u257f]/,
+        `border glyph at ${width}`,
+      );
+      assert.ok(visibleWidth(line) <= width, `width ${width}`);
+    }
   }
 });
 
-test("a band survives a full reset inside its text", () => {
-  const rows = [
-    fixtureRow({
-      identity: {
-        description:
-          "a label long enough to be cut off by the width it is given",
-      },
-    }),
-  ];
-  const [, line = ""] = widget(rows, 60, named);
-  assert.ok(line.includes("\u001b[0m\u001b[44m"));
-  assert.equal(visibleWidth(line), 60);
-  assert.ok(line.endsWith("\u001b[49m"));
-});
-
-test("a row leaves one clear column at its right edge, as at its left", () => {
+test("a row stops one column short of the right edge, as it starts one in", () => {
   const rows = [
     fixtureRow({
       identity: {
@@ -665,18 +741,7 @@ test("a row leaves one clear column at its right edge, as at its left", () => {
   ];
   const [, line = ""] = widget(rows, 60, named);
   const plain = stripVTControlCharacters(line);
-  assert.equal(visibleWidth(plain), 60);
+  assert.equal(visibleWidth(plain), 59);
   assert.match(plain, /^ \S/);
-  // Whole optional fields can leave more padding than the minimum inset.
-  assert.match(plain, /\S +$/);
-});
-
-test("the aggregate summary is not a band", () => {
-  const rows = Array.from({ length: 4 }, (_unused, index) =>
-    fixtureRow({ identity: { agent: `agent-${index}` } }),
-  );
-  const lines = widget(rows, 60, named);
-  assert.equal(lines.length, 1, "there is no overflow line");
-  for (const band of ["\u001b[44m", "\u001b[42m", "\u001b[41m"])
-    assert.ok(!(lines[0] ?? "").includes(band), "the header is painted");
+  assert.match(plain, /\S$/);
 });

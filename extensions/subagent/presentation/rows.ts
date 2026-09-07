@@ -14,8 +14,13 @@
  * latest Run-event sample, independent of activity. No glyph column either:
  * the state word already says which phase the Run is in.
  *
- * The active detail is painted as a pending tool-call band. Terminal Runs
- * contribute only counts to the widget, never individual rows.
+ * The widget is a quiet surface: borderless, painted on the terminal's default
+ * background, and monochrome apart from an accented title and the error tone
+ * kept for a failed Run or a completion hand-off that needs attention. It sits
+ * above the editor for the whole session, so ordinary progress reads as
+ * foreground text rather than a coloured block — the words already say which
+ * phase a Run is in. Terminal Runs contribute only counts to the widget,
+ * never individual rows.
  *
  * Deliberately no Run id and no model. The widget is read by the operator, and
  * a human names a Run by its agent and what it is doing; ids live in tool
@@ -41,13 +46,19 @@ import {
   RUN_PHASE_DISPLAY_ORDER,
   type RunPresentation,
   resolveRunPresentation,
-  runPhaseTone,
   runPhaseVerb,
   type Tone,
 } from "./status.ts";
 import type { FailedHandoffStatus, RunRowView } from "./views.ts";
 
-/** The theme surface every subagent renderer uses. */
+/**
+ * The theme surface every subagent renderer uses.
+ *
+ * `italic` and `inverse` have no production caller. They are kept because an
+ * instrumented theme cannot prove a renderer left slanted or inverted text
+ * alone unless it is able to produce some, and the widget's quiet-surface
+ * promise is exactly that.
+ */
 export interface RenderableTheme {
   fg(color: string, text: string): string;
   bg(color: string, text: string): string;
@@ -66,7 +77,7 @@ const MIN_LABEL_WIDTH = 7;
 /** A shortened activity remains useful at this width (`bash: …`, for example). */
 const MIN_ACTIVITY_WIDTH = 12;
 
-/** The columns a row band leaves clear at each edge. */
+/** The columns a detail row leaves clear at each edge. */
 export const ROW_INSET = 1;
 
 interface DetailPart {
@@ -213,8 +224,11 @@ export function formatRunRow(
   }
   if (essential.state) {
     parts.push({
+      // The shared resolver supplies the word; the tone it would carry is
+      // deliberately dropped here. Only running, finalizing and cancelling
+      // reach this line, and none of the three is news.
       text: essential.state,
-      paint: (text) => theme.fg(presentation.status.tone, text),
+      paint: (text) => theme.fg("muted", text),
     });
   }
   if (essential.activity) {
@@ -268,6 +282,27 @@ interface SummaryChip {
   readonly attention: boolean;
 }
 
+/**
+ * The one tone the widget paints an aggregate count in.
+ *
+ * The shared phase tones say what a phase *means*, and every other surface
+ * wants that. This one does not: an operator reads the widget out of the
+ * corner of their eye all session, and a warning-toned `2 running` was colour
+ * spent restating a word already on the line. Only a failed Run keeps its
+ * semantic tone here, because it is the one count that asks to be acted on.
+ *
+ * A table rather than a predicate, for the same reason `status.ts` keeps one:
+ * a sixth Run phase has to be given a tone here to compile, rather than
+ * falling quietly into the muted majority.
+ */
+const WIDGET_PHASE_TONE: { readonly [P in RunPhase]: Tone } = {
+  running: "muted",
+  finalizing: "muted",
+  completed: "muted",
+  failed: "error",
+  cancelled: "muted",
+};
+
 const HANDOFF_ATTENTION: Record<FailedHandoffStatus, string> = {
   exhausted: "notification failed",
   unannounceable: "no notification · result unavailable",
@@ -291,13 +326,13 @@ export function widgetSummary(
     ),
   ).map(([phase, count]) => ({
     text: `${count} ${runPhaseVerb(phase)}`,
-    tone: runPhaseTone(phase),
+    tone: WIDGET_PHASE_TONE[phase],
     attention: false,
   }));
   if (cancelling > 0) {
     chips.unshift({
       text: `${cancelling} cancelling`,
-      tone: "warning",
+      tone: "muted",
       attention: false,
     });
   }
@@ -318,10 +353,14 @@ export function widgetSummary(
 /**
  * The title line above the rows: the widget's name and one chip per phase.
  *
- * No rule. The editor draws its own full-width border directly beneath the
- * widget, so a rule here was a second frame two lines above the first; the
- * bands the rows are painted as do the separating that the rule used to. The
- * line is set one cell in, where the rows start.
+ * No rule and no border. The editor draws its own full-width border directly
+ * beneath the widget, so a rule here was a second frame two lines above the
+ * first. The line is set one cell in, where the rows start.
+ *
+ * A chip is its text with a space at each side, painted in the foreground and
+ * nothing else. Inverse video made every count a solid block of its tone,
+ * which in a high-contrast theme was the brightest thing on the screen for
+ * work the operator had already delegated and stopped watching.
  *
  * Deliberately no spend. A token total that left out cache reads was neither
  * what the Runs processed nor what they cost, and a cost summed across
@@ -335,7 +374,7 @@ function formatHeader(
   width: number,
 ): string {
   const painted = chips
-    .map((chip) => theme.inverse(theme.fg(chip.tone, ` ${chip.text} `)))
+    .map((chip) => theme.fg(chip.tone, ` ${chip.text} `))
     .join(" ");
   const title = ` ${theme.fg("accent", theme.bold("subagents"))}  ${painted}`;
   if (visibleWidth(title) <= width) return title;
@@ -358,31 +397,6 @@ function formatHeader(
   return truncateToWidth(title, width, "…");
 }
 
-/**
- * Paint one row as a band across the whole width, the way Pi paints a tool
- * call's box.
- *
- * The line is padded to `width` so the colour reaches the edge, and it is
- * painted segment by segment around any full reset the text carries — a
- * truncation leaves one behind — because a reset would otherwise switch the
- * background off for the rest of the line.
- */
-function paintBand(
-  line: string,
-  background: string,
-  theme: RenderableTheme,
-  width: number,
-): string {
-  const padded = line + " ".repeat(Math.max(0, width - visibleWidth(line)));
-  return padded
-    .split(FULL_RESET)
-    .map((segment) => theme.bg(background, segment))
-    .join(FULL_RESET);
-}
-
-/** The SGR sequence that clears every attribute, background included. */
-const FULL_RESET = "\u001b[0m";
-
 /** Aggregate state, with detail only for exactly one nonterminal Run. */
 export function renderRunRows(
   rows: readonly RunRowView[],
@@ -394,20 +408,16 @@ export function renderRunRows(
 
   const active = rows.filter((row) => !isTerminalRunPhase(row.phase));
   const shown = active.length === 1 ? active : [];
-  // Rows are drawn one column in from each edge, so they are fitted two short
-  // and the band pads the right column, the way the left one is a space.
+  // Rows are drawn one column in from each edge, so they are fitted two short.
+  // Nothing pads the right column: with no background to carry to the edge,
+  // the inset is the space the right-aligned elapsed stops one short of.
   const lines = [
     formatHeader(widgetSummary(rows), theme, width),
     ...shown.map((row) =>
-      paintBand(
-        truncateToWidth(
-          ` ${formatRunRow(row, theme, Math.max(0, width - ROW_INSET * 2), now)}`,
-          width,
-          "…",
-        ),
-        "toolPendingBg",
-        theme,
+      truncateToWidth(
+        ` ${formatRunRow(row, theme, Math.max(0, width - ROW_INSET * 2), now)}`,
         width,
+        "…",
       ),
     ),
   ];

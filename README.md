@@ -83,7 +83,14 @@ covering several Runs combines their results.
 
 ## Widget
 
-The widget above the editor adapts to the number of active Runs:
+The widget above the editor is borderless and drawn on the terminal's default
+background, relying on the editor's own border immediately beneath it. Only the
+`subagents` title is accented; ordinary counts and the active Run's state and
+activity are muted foreground text. The error tone is reserved for failed Runs
+and for completion hand-offs that need attention, so nothing else in the widget
+competes with a real problem. Every colour comes from the current Pi theme.
+
+It adapts to the number of active Runs:
 
 - **None:** hidden unless terminal completion hand-offs remain unresolved; those
   show only compact outcome and delivery-attention counts.
