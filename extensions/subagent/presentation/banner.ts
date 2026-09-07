@@ -31,7 +31,7 @@
 
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { SubagentSummary } from "../domain/history.ts";
-import type { BrowserScreen } from "./browser-panel.ts";
+import type { DashboardScreen } from "./dashboard-panel.ts";
 import {
   HISTORY_CATEGORIES,
   type HistoryCategory,
@@ -43,7 +43,7 @@ import { fitToWidth } from "./run-line.ts";
 /** Every input here is plain, so the shared clip discards its own resets. */
 const PLAIN = { plain: true } as const;
 
-/** The browser's own name, on every one of its screens. */
+/** The dashboard's own name, on every one of its screens. */
 export const DASHBOARD_TITLE = "Subagent dashboard";
 
 /** The Pi mark: its 4×4 grid, two terminal columns per pixel. */
@@ -127,7 +127,7 @@ export function subagentCounts(
 }
 
 /** Whether the screen has room for the mark without starving the list. */
-export function dashboardBannerFits(viewport: BrowserScreen): boolean {
+export function dashboardBannerFits(viewport: DashboardScreen): boolean {
   return (
     viewport.spacious &&
     viewport.height >= MIN_BANNER_ROWS &&

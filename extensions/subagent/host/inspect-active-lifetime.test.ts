@@ -59,10 +59,10 @@ for (const mode of [
       const work = await start(rig);
       const other = await start(rig, "once");
       await rig.pump();
-      const browser = observing
+      const dashboard = observing
         ? rig.host.command("subagent", "dashboard")
         : undefined;
-      if (browser) {
+      if (dashboard) {
         await rig.pump();
         await key(rig, ENTER);
         await key(rig, ENTER);
@@ -85,7 +85,7 @@ for (const mode of [
           )
         : undefined;
       await rig.pump();
-      if (browser) {
+      if (dashboard) {
         await key(rig, "R");
         assert.match(screen(rig), /real guidance/);
       }
@@ -96,7 +96,7 @@ for (const mode of [
         Effect.flatMap(ResultStore, (store) => store.pinsOf(runId(work.runId))),
         [],
       );
-      if (browser) {
+      if (dashboard) {
         assert.match(screen(rig), /active snapshot/);
         await key(rig, "R");
         assert.match(screen(rig), /terminal snapshot/);
@@ -135,9 +135,9 @@ for (const mode of [
         assert.match(waited ?? "", /partial/);
         assert.equal(rig.host.sent().length, 0);
       }
-      if (browser) {
+      if (dashboard) {
         for (let i = 0; i < 3; i += 1) await key(rig, ESC);
-        await browser;
+        await dashboard;
       }
       assert.deepEqual(rig.host.userMessages(), []);
       const result = await rig.installation.handle.run(
@@ -176,7 +176,7 @@ for (const action of ["back", "close", "shutdown", "replacement"] as const)
     "read",
     "refresh",
   ] as const)
-    test(`${action} releases active browser resources at ${depth} depth, including pending captures`, async (t) => {
+    test(`${action} releases active dashboard resources at ${depth} depth, including pending captures`, async (t) => {
       const gate = Effect.runSync(Deferred.make<void>());
       const native = Effect.runSync(Clock.Clock);
       let blockNext = false;
@@ -219,7 +219,7 @@ for (const action of ["back", "close", "shutdown", "replacement"] as const)
       await rig.pump();
       const baseline = await rig.probe();
       for (let cycle = 0; cycle < 3; cycle += 1) {
-        const browser = rig.host.command("subagent", "dashboard");
+        const dashboard = rig.host.command("subagent", "dashboard");
         await rig.pump();
         await key(rig, ENTER);
         await key(rig, ENTER);
@@ -227,11 +227,11 @@ for (const action of ["back", "close", "shutdown", "replacement"] as const)
         assert.match(screen(rig), /old active content/);
         const stale = rig.host.captureCustom();
         for (let i = 0; i < 3; i += 1) await key(rig, ESC);
-        await browser;
+        await dashboard;
         assert.deepEqual(stale?.render(100), []);
         assert.deepEqual(await rig.probe(), baseline);
       }
-      const browser = rig.host.command("subagent", "dashboard");
+      const dashboard = rig.host.command("subagent", "dashboard");
       await rig.pump();
       if (depth !== "overview") await key(rig, ENTER);
       if (["active", "read", "refresh"].includes(depth)) {
@@ -253,7 +253,7 @@ for (const action of ["back", "close", "shutdown", "replacement"] as const)
           assert.equal(
             reading,
             0,
-            "leaving capture must interrupt a pending read even while browser stays open",
+            "leaving capture must interrupt a pending read even while dashboard stays open",
           );
           assert.equal(
             (await rig.probe()).repositorySubscriptions,
@@ -262,7 +262,7 @@ for (const action of ["back", "close", "shutdown", "replacement"] as const)
         }
         while (rig.host.customOpen()) await key(rig, ESC);
       }
-      await browser;
+      await dashboard;
       await rig.pump();
       assert.equal(reading, 0);
       const requests = rig.host.customRenderRequests();
@@ -329,7 +329,7 @@ for (const expire of [false, true])
     t.after(() => rig.installation.handle.release());
     const work = await start(rig);
     await rig.pump();
-    const browser = rig.host.command("subagent", "dashboard");
+    const dashboard = rig.host.command("subagent", "dashboard");
     await rig.pump();
     await key(rig, ENTER);
     await key(rig, ENTER);
@@ -357,7 +357,7 @@ for (const expire of [false, true])
     );
     assert.doesNotMatch(terminal, /r refresh/);
     for (let i = 0; i < 3; i += 1) await key(rig, ESC);
-    await browser;
+    await dashboard;
     await rig.probe();
     await rig.host.sessionShutdown();
     assert.equal(rig.noLeaks(), true);

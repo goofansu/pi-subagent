@@ -384,7 +384,7 @@ test("an unknown subcommand names the two that exist", async (t) => {
   );
 });
 
-test("the former runs subcommand points to dashboard without opening a browser", async (t) => {
+test("the former runs subcommand points to dashboard without opening a dashboard", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
