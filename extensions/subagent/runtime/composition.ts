@@ -71,6 +71,8 @@ export interface BackendSet {
   readonly backends: readonly Backend[];
   /** Profiles the set supplies, merged under the user's own. */
   readonly profiles: readonly Profile[];
+  /** Package-relative Markdown resources, discovered when the Session opens. */
+  readonly bundledProfilesDir?: string;
   /**
    * Whether this process is loading as a child of one of the set's backends.
    *
@@ -185,6 +187,7 @@ export function sessionRuntimeLayer(
           options.profiles.agentDir,
           builtInProfiles,
           options.validation,
+          options.backendSet?.bundledProfilesDir,
         )
       : ProfileCatalog.layerOfProfiles(
           [...builtInProfiles, ...options.profiles.profiles],

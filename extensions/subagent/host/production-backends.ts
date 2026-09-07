@@ -8,10 +8,8 @@
  * imported the runtime to describe itself would be an adapter one edit away
  * from reaching the supervisor.
  *
- * **No built-in Profiles.** A Profile is the user's own specialist, read from
- * their agents directory, and which backend it names is a line in its
- * frontmatter. Inventing one here would put a specialist nobody wrote into
- * every Session's `/agents` list.
+ * Bundled Markdown Profiles are package resources. The ProfileCatalog reads
+ * and validates them at Session start, beneath whole-Profile user overrides.
  *
  * **The host facts come from Pi, and only Pi.** Whether this process is a
  * child's resource load and how deep in a delegation chain it is are questions
@@ -26,6 +24,7 @@
  * and two Sessions sharing one would share both.
  */
 
+import { fileURLToPath } from "node:url";
 import {
   CLAUDE_BACKEND_ID,
   type ClaudeBackendOptions,
@@ -68,6 +67,9 @@ export function createProductionBackendSet(
     set: {
       backends: [pi.backend, claude.backend],
       profiles: [],
+      bundledProfilesDir: fileURLToPath(
+        new URL("../../../agents/", import.meta.url),
+      ),
       isChildLoad: isChildResourceLoad,
       childDepth: () => readChildDepth(),
     },

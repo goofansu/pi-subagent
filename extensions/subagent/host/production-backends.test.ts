@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import { Effect } from "effect";
 import { createBackendCatalog } from "../backend/catalog.ts";
@@ -20,21 +23,64 @@ import { createProductionBackendSet } from "./production-backends.ts";
  * The set the extension actually ships.
  *
  * What it has to get right is small and easy to get wrong: both backends
- * present under the names Profiles write, no Profiles of its own, the two host
+ * present under the names Profiles write, bundled Markdown Profiles, the two host
  * facts answered by the one backend that can answer them, and one probe block
  * per backend rather than a merged total nobody could act on.
  */
 
-test("the production set offers both backends and no Profiles of its own", () => {
+test("the production set offers both backends", () => {
   const set = createProductionBackendSet().set;
 
   assert.deepEqual(
     set.backends.map((backend) => backend.id),
     ["pi", "claude"],
   );
-  // A Profile is the user's own specialist. Inventing one here would put a
-  // specialist nobody wrote into every Session's `/agents` list.
-  assert.deepEqual(set.profiles, []);
+});
+
+test("production discovers all five bundled specialists without a user agents directory", async (t) => {
+  const agentDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "bundled-production-"),
+  );
+  t.after(() => fs.rmSync(agentDir, { recursive: true, force: true }));
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const catalog = yield* ProfileCatalog;
+      assert.deepEqual(catalog.diagnostics(), []);
+      assert.deepEqual(
+        catalog
+          .list()
+          .map((p) => p.name)
+          .sort(),
+        [
+          "explore",
+          "implementer",
+          "researcher",
+          "spec-reviewer",
+          "standards-reviewer",
+        ],
+      );
+      assert.equal(catalog.get("spec-reviewer")?.backend, "claude");
+      assert.equal(
+        catalog.get("explore")?.fields.model,
+        "opencode/claude-haiku-4-5",
+      );
+    }).pipe(
+      Effect.provide(
+        sessionRuntimeLayer({
+          backendSet: createProductionBackendSet().set,
+          profiles: { from: "directory", agentDir },
+          validation: {
+            models: [
+              { provider: "opencode", id: "claude-haiku-4-5" },
+              { provider: "openai-codex", id: "gpt-5.6-sol" },
+            ],
+          },
+          sink: createFakeNotificationSink(),
+        }),
+      ),
+      Effect.scoped,
+    ),
+  );
 });
 
 test("the host facts come from Pi, which is the only backend that has them", (t) => {
@@ -174,7 +220,9 @@ test("a Profile naming a backend the set does not hold is a diagnostic, not a cr
   }
 });
 
-test("a Profile naming claude runs end to end through the production set", async () => {
+test("the bundled spec-reviewer runs end to end through the production set", async (t) => {
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "bundled-reviewer-"));
+  t.after(() => fs.rmSync(agentDir, { recursive: true, force: true }));
   const standIn = createStandInClaudeQuery({
     scripts: [
       [
@@ -198,7 +246,7 @@ test("a Profile naming claude runs end to end through the production set", async
       Effect.gen(function* () {
         const supervisor = yield* SubagentSupervisor;
         const started = yield* supervisor.start({
-          agent: "claude-worker",
+          agent: "spec-reviewer",
           description: "review it",
           prompt: "have a look",
           cwd: "/work",
@@ -219,7 +267,7 @@ test("a Profile naming claude runs end to end through the production set", async
         Effect.provide(
           sessionRuntimeLayer({
             backendSet: held.set,
-            profiles: { from: "list", profiles: [profileNaming("claude")] },
+            profiles: { from: "directory", agentDir },
             sink: createFakeNotificationSink(),
             counters: createRuntimeCounters(),
           }),

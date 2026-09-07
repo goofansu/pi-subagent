@@ -23,8 +23,10 @@ the Run and a body that is the agent's prompt. Generic parsing understands only
 (`model`, `effort`, `tools`, `appendSystemPrompt`) keeps one name across
 backends but is validated and interpreted by the named backend, and a field the
 backend does not recognise is a diagnostic rather than a silent pass-through.
-Named after the agent, so `explore.md` defines `explore`. Read only from user
-scope; see `getAgentDir`.
+Named after the agent, so `explore.md` defines `explore`. Bundled Profiles are
+defaults; a same-name user Profile replaces the whole default. An invalid user
+replacement disables the name instead of falling back. Project Profiles are
+not discovered.
 
 **Subagent** — a stable, Session-scoped asynchronous identity created from one
 Profile. A Subagent is **running** with exactly one active Run, **idle** with no
@@ -507,8 +509,8 @@ fake backends and one **demo Profile** per fake, so launching Pi with only the
 entry point gave a working extension with nothing to configure; it stays in the
 tree because a host test needs a deterministic backend. The **Pi set** is
 M4's, and stays for Pi's own live lane and its tests. The **production backend
-set** is M5's and is what the entry point uses: Pi and Claude, no Profiles of
-its own, the host facts from Pi, and one native probe per backend. A Profile's
+set** is what the entry point uses: Pi and Claude, five bundled specialist
+Profiles, the host facts from Pi, and one native probe per backend. A Profile's
 `backend:` field is what picks one of the two.
 
 **Session push sink** — the `NotificationSink` implementation that pushes a

@@ -225,7 +225,7 @@ export function installSubagentV2(
 /**
  * The v2 extension.
  *
- * The backend set is the **production set**: Pi and Claude, no built-in
+ * The backend set is the **production set**: Pi and Claude, bundled Markdown
  * Profiles, and the two host facts that make this process inert inside a
  * child. The demo set and the Pi-only set stay in the tree because a host test
  * and Pi's own live lane need them, but nothing ships either.

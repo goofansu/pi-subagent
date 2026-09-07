@@ -20,9 +20,9 @@ import {
 } from "../domain/index.ts";
 
 /**
- * The one directory Profiles are read from.
+ * The user directory read alongside installed package defaults.
  *
- * User scope only, deliberately. A Profile carries a system prompt, a model,
+ * No project scope, deliberately. A Profile carries a system prompt, a model,
  * and a tool list, and its description is injected into the calling model's
  * tool guidelines, so honouring repository-controlled Profiles would let a
  * checkout shape what the delegating session does and says. Nothing in a

@@ -10,7 +10,9 @@ finished. You can continue its conversation, give it guidance, or cancel its wor
 pi install https://github.com/goofansu/pi-subagent
 ```
 
-Add a [profile](#profiles), then ask Pi to delegate work to it.
+Ask Pi to delegate to `explore`, `implementer`, `researcher`, `spec-reviewer`,
+or `standards-reviewer`. These [profiles](#profiles) ship with the package;
+no separate Profile installation is needed.
 
 ## Commands
 
@@ -138,10 +140,37 @@ Inspection does not consume Results, change completion delivery, or control work
 
 ## Profiles
 
-Create Markdown files in `~/.pi/agent/agents/` (or
-`$PI_CODING_AGENT_DIR/agents/` if configured). Profiles are loaded from this user
-directory, not from individual projects. The filename is the agent name:
-`reviewer.md` defines `reviewer`.
+The package includes five specialists in [`agents/`](agents/):
+
+| Profile | Role | Backend / pinned model |
+| --- | --- | --- |
+| `explore` | Read-only codebase exploration | Pi / `opencode/claude-haiku-4-5` |
+| `implementer` | Implementation, leaving changes uncommitted for review | Pi / `openai-codex/gpt-5.6-sol` |
+| `researcher` | Cited research saved to a Markdown note | Pi / `opencode/claude-haiku-4-5` |
+| `spec-reviewer` | Findings against the caller's spec | Claude / `opus` |
+| `standards-reviewer` | Findings against repository standards | Claude / `sonnet` |
+
+Bundled resources resolve from the installed package, independently of the
+working directory. Their original prompts, models, and tool selections are
+preserved. Pinned Pi models must exist in the Session's model catalogue and
+require provider authentication to run. The researcher also expects externally
+provided `web_search` and `web_fetch` tools; these are not installed by this
+package. Claude requires its normal local setup. Herdr is not required.
+
+To add or replace a specialist, create Markdown files in `~/.pi/agent/agents/`
+(or `$PI_CODING_AGENT_DIR/agents/` if configured). No project Profiles are read.
+The filename is the agent name: `reviewer.md` defines `reviewer`.
+
+User-only and bundled-only names are available when valid. A same-name user
+file replaces the **whole Profile**, including its backend, prompt, and fields;
+omitted fields use backend defaults, never bundled values. An invalid user
+replacement **disables that name**, retaining its file diagnostic rather than
+falling back to the bundled specialist. Fix or remove the replacement and
+reload Pi to discover Profiles again. A missing user agents directory is fine.
+
+Discovery and backend validation happen at Session start, not during delegation.
+An existing Subagent keeps its fixed Profile across Runs; files are not live
+reloaded. Invalid bundled files are diagnosed just like invalid user files.
 
 ```markdown
 ---

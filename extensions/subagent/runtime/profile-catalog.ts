@@ -49,7 +49,7 @@ export class ProfileCatalog extends Context.Service<
    * Discover from a directory of Profile files.
    *
    * `agentDir` is the Pi agent directory; the Profiles live in `agents/`
-   * beneath it, user scope only, exactly as M1 decided.
+   * beneath it. No project-scope Profiles are read.
    */
   static layerOf(
     agentDir: string,
@@ -71,24 +71,40 @@ export class ProfileCatalog extends Context.Service<
      * actually reach needs the Session's own list, not a global one.
      */
     validation?: BackendValidationContext,
+    /** Installed package Markdown defaults, validated just like user files. */
+    bundledDir?: string,
   ): Layer.Layer<ProfileCatalog, never, BackendCatalog> {
     return Layer.effect(
       ProfileCatalog,
       Effect.gen(function* () {
         const backends = yield* BackendCatalog;
+        const bundled = yield* Effect.sync(() =>
+          bundledDir === undefined
+            ? { profiles: new Map<string, Profile>(), diagnostics: [] }
+            : discoverProfiles(bundledDir, (profile, filePath) =>
+                backends.validateProfile(profile, filePath, validation),
+              ),
+        );
         const discovered = yield* Effect.sync(() =>
           discoverProfiles(profilesDir(agentDir), (profile, filePath) =>
             backends.validateProfile(profile, filePath, validation),
           ),
         );
-        const merged = new Map<string, Profile>(
-          builtIn.map((profile) => [profile.name, profile]),
-        );
+        const merged = new Map<string, Profile>([
+          ...builtIn.map((profile) => [profile.name, profile] as const),
+          ...bundled.profiles,
+        ]);
+        for (const diagnostic of discovered.diagnostics) {
+          merged.delete(profileNameFromPath(diagnostic.filePath));
+        }
         for (const [name, profile] of discovered.profiles) {
           merged.set(name, profile);
         }
         return ProfileCatalog.of(
-          fromDiscovery({ ...discovered, profiles: merged }),
+          fromDiscovery({
+            profiles: merged,
+            diagnostics: [...bundled.diagnostics, ...discovered.diagnostics],
+          }),
         );
       }),
     );

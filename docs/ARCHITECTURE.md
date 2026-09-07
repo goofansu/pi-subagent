@@ -41,7 +41,7 @@ flowchart TD
 Arrows show calls/data flow, not import permission: the host implements the
 runtime-defined `NotificationSink`, without a runtime-to-host import.
 [Production composition](../extensions/subagent/host/production-backends.ts)
-selects Pi and Claude with no built-in Profiles; demo and Pi-only sets serve
+selects Pi and Claude with bundled Markdown Profiles; demo and Pi-only sets serve
 tests/live lanes, not alternative production modes.
 
 ## Modules and dependency rules
@@ -318,8 +318,16 @@ Session-bound UI lease rejects late values after Session replacement.
 
 ## Profiles, trust, depth and bounds
 
-[Discovery](../extensions/subagent/profiles/discovery.ts) reads only Markdown
-Profiles under `getAgentDir()/agents`, not checkout-controlled Profiles.
+[Discovery](../extensions/subagent/profiles/discovery.ts) reads bundled Markdown
+Profiles from the installed package's `agents/` collection and user Profiles
+under `getAgentDir()/agents` (honouring `PI_CODING_AGENT_DIR`), never
+checkout-controlled Profiles. The production backend set supplies the bundled
+resource path relative to its module, not cwd. At Session start, the
+[ProfileCatalog](../extensions/subagent/runtime/profile-catalog.ts) validates
+both sources through the backend catalog. Same-name user files replace whole
+bundled Profiles; invalid user replacements suppress the bundled name and retain
+file diagnostics, so admission cannot silently fall back. Missing user
+directories do not prevent bundled discovery. No live reload is introduced.
 Generic parsing owns `description`, `backend` (default `pi`) and prompt body;
 backends validate other fields and diagnose unknown ones.
 [ADR-0022](adr/0022-v2-terminology-and-backend-field.md).
@@ -391,7 +399,12 @@ reports both plus hand-off counts, not provider continuation identities.
 | Architecture changes | [boundaries](../extensions/subagent/boundaries.test.ts), [contract shape](../extensions/subagent/backend/contract.test.ts) |
 
 [Commands](../package.json): `npm run typecheck`, `npm test`, `npm run test:conformance`;
-`npm run check` adds lint. For one file, run on one shell line:
+`npm run check` adds lint and `npm run profiles:smoke`. The offline
+[Profile package smoke check](../scripts/bundled-profiles-smoke.mjs) packs and
+loads the production extension through Pi from an unrelated working directory,
+verifying bundled resources, configured user overrides, diagnostics,
+Session-start discovery, and the child delegation guard without provider calls.
+For one file, run on one shell line:
 `node --import tsx --import ./extensions/subagent/suite-setup.ts --test <path.test.ts>`.
 Authenticated SDK/host smoke lanes live in [scripts/](../scripts/) and run after
 checks in `npm run release:check`. Stand-ins prove local contracts, not provider
