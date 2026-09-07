@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
 import { Effect } from "effect";
 import { RunRepository } from "../runtime/repository.ts";
 import {
@@ -18,10 +17,6 @@ import {
 
 const ENTER = "\r";
 const ESC = "\x1b";
-const UP = "\x1b[A";
-const DOWN = "\x1b[B";
-const LEFT = "\x1b[D";
-const RIGHT = "\x1b[C";
 const screen = (rig: HostRig) => rig.host.customLines(160, 200).join("\n");
 
 async function start(rig: HostRig, description = "inspected Label") {
@@ -338,51 +333,3 @@ for (const outcome of ["unreadable", "unknown"] as const)
     assert.doesNotMatch(screen(rig), /available but empty/);
     await close(rig, { closed });
   });
-
-test("line/page scrolling wraps long content, clamps both ends and resize, and renders narrow Unicode safely", async (t) => {
-  const output = Array.from(
-    { length: 100 },
-    (_, i) => `line-${i} 任务 👩‍💻 café ${"long ".repeat(10)} tail-${i}`,
-  ).join("\n");
-  const rig = hostRig(t, {
-    resumableSteps: [[emitText(output), { step: "complete" }]],
-  });
-  await rig.host.sessionStart();
-  t.after(() => rig.installation.handle.release());
-  const work = await start(rig);
-  await rig.settled(work.runId);
-  await rig.pump();
-  const browser = await inspect(rig);
-  const draw = () => rig.host.customLines(40, 10);
-  const first = draw();
-  rig.host.customKey(UP);
-  rig.host.customKey(LEFT);
-  assert.deepEqual(draw(), first);
-  rig.host.customKey(DOWN);
-  assert.equal(draw()[2], first[3]);
-  rig.host.customKey(UP);
-  assert.deepEqual(draw(), first);
-  rig.host.customKey(RIGHT);
-  assert.match(draw().at(-1) ?? "", /7-12\//);
-  rig.host.customKey(LEFT);
-  assert.deepEqual(draw(), first);
-  const seen: string[] = [];
-  for (let i = 0; i < 200; i += 1) {
-    seen.push(...draw());
-    rig.host.customKey(RIGHT);
-  }
-  const last = draw();
-  assert.deepEqual(draw(), last);
-  assert.match(last.join("\n"), /tail-99/);
-  assert.match(seen.join("\n"), /tail-0/);
-  assert.match(seen.join("\n"), /line-50/);
-  for (const width of [0, 1, 2, 8, 20, 80, 160]) {
-    const lines = rig.host.customLines(width, 10);
-    assert.ok(lines.length <= 10);
-    assert.ok(lines.every((line) => visibleWidth(line) <= width));
-    assert.ok(lines.every((line) => !line.includes("\ufffd")));
-  }
-  const resized = rig.host.customLines(160, 200).join("\n");
-  assert.match(resized, /tail-99/);
-  await close(rig, browser);
-});

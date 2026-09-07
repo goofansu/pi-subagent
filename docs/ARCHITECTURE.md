@@ -56,7 +56,7 @@ tests/live lanes, not alternative production modes.
 | [`backend/contract.ts`](../extensions/subagent/backend/contract.ts) | Effect-typed, provider-neutral resource and execution contract. Shared backend helpers live alongside it. |
 | [`backend/pi/`](../extensions/subagent/backend/pi/) and [`backend/claude/`](../extensions/subagent/backend/claude/) | Native construction, options, translation, execution and retained Conversation state. Neither adapter imports the runtime, host, presentation or the other adapter. |
 | [`profiles/`](../extensions/subagent/profiles/discovery.ts) | Filesystem discovery; delegates parsing to the domain and validation to a supplied callback. |
-| [`presentation/`](../extensions/subagent/presentation/) | Outcome prose, RunCards, rows and renderers. Depends on domain values and Pi display utilities, not Effect or runtime services. |
+| [`presentation/`](../extensions/subagent/presentation/) | Outcome prose, RunCards, rows, renderers and the [Run browser's page reducer](../extensions/subagent/presentation/browser-page.ts) — one page value and one pure step from a key, a screen or an arrived capture to the next page and the lines it draws. Depends on domain values and Pi display utilities, not Effect or runtime services; a reducer over a value, so no lifecycle state comes with it. |
 | [`testing/`](../extensions/subagent/testing/) | Scripted backends, native stand-ins, Session/host rigs and shared conformance scenarios. Not production orchestration. |
 
 [`boundaries.test.ts`](../extensions/subagent/boundaries.test.ts) checks these
@@ -385,14 +385,20 @@ The sink drops unlanded notices and holds rather than forwarding them to the
 next Session. Scope-owned widget subscriptions and UI resources are released.
 [Shutdown implementation](../extensions/subagent/runtime/supervisor.ts).
 
-The [Run browser](../extensions/subagent/host/dashboard-command.ts) observes lightweight
-summaries only while its overview is open. A scoped one-second runtime-clock tick
-advances ages (time since semantic activity change, not a stall heuristic).
-Repository changes and ticks share one pending draw, acknowledged by rendering;
-a slow terminal draws the latest rows rather than queued frames. History remains
-an entry/re-entry snapshot. Detachment invalidates summary readers after terminal
-publication so the actual Subagent phase becomes idle without changing settlement
-order. Neither hand-off nor Conversation loss is subscribed to for grouping.
+The [Run browser](../extensions/subagent/host/dashboard-command.ts) keeps only
+transport: Pi's custom UI surface, a key resolved against the operator's
+bindings, the asynchronous reads a step asks for, and the generation guard
+deciding which may still land. Which page an operator is on, what a key means
+there, the offset clamp, the header height and every line the panel draws are
+the [page reducer's](../extensions/subagent/presentation/browser-page.ts). It
+observes lightweight summaries only while its overview is open. A scoped
+one-second runtime-clock tick advances ages (time since semantic activity
+change, not a stall heuristic). Repository changes and ticks share one pending
+draw, acknowledged by rendering; a slow terminal draws the latest rows rather
+than queued frames. History remains an entry/re-entry snapshot. Detachment
+invalidates summary readers after terminal publication so the actual Subagent
+phase becomes idle without changing settlement order. Neither hand-off nor
+Conversation loss is subscribed to for grouping.
 
 Tests are colocated. [Conformance](../extensions/subagent/testing/conformance.ts)
 runs one observable contract against resumable/one-shot fakes and Pi/Claude stand-ins,

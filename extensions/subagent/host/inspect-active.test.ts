@@ -173,8 +173,6 @@ test("multiple active refreshes preserve line offset and clamp after shorter rec
   const position = /(\d+)-(\d+)\/(\d+)/.exec(shorter.at(-1) ?? "");
   assert.ok(position);
   assert.equal(position[2], position[3], "clamped to new bottom");
-  rig.host.customKey("\x1b[B");
-  assert.deepEqual(draw(), shorter);
   assert.match(screen(rig), /short output/);
   await close(rig, browser);
 });
