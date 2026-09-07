@@ -25,6 +25,7 @@ test("rows align labels, statuses, activity and rightmost elapsed time without a
   const selected = row(run, 120, true);
   const other = row({ ...run, label: "Settings", phase: "finalizing" });
   assert.equal(selected.indexOf("Running"), other.indexOf("Finalizing"));
+  assert.match(selected, /Running +· Reading middleware/);
   assert.equal(
     selected.indexOf("Reading middleware"),
     other.indexOf("Reading middleware"),
@@ -39,6 +40,14 @@ test("rows align labels, statuses, activity and rightmost elapsed time without a
   );
   assert.equal(visibleWidth(selected), 120);
   assert.equal(visibleWidth(other), 120);
+});
+
+test("labels are capped at 40 columns in roomy subagent lists", () => {
+  const line = stripVTControlCharacters(
+    row({ ...run, label: "a".repeat(80) }, 160),
+  );
+  assert.match(line, /^ {2}a{39}… {2}Running/);
+  assert.doesNotMatch(line, /a{40}/);
 });
 
 test("terminal rows do not imply stale tool activity is the result", () => {

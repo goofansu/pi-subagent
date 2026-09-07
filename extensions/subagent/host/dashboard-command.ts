@@ -78,6 +78,7 @@ export async function openDashboardUi(
         let pending = false;
         let clock: Clock.Clock | undefined;
         let now = 0;
+        let historyCapturedAt = 0;
         let stopOverview: (() => void) | undefined;
         let stopRead: (() => void) | undefined;
         let redraw: (() => void) | undefined = () => {
@@ -120,6 +121,14 @@ export async function openDashboardUi(
         const ordered = () =>
           HISTORY_CATEGORIES.flatMap((category) =>
             overview.filter((row) => historyCategory(row) === category),
+          );
+        const movementHint = () =>
+          rawKeyHint(
+            [
+              ...keys.getKeys("tui.select.up"),
+              ...keys.getKeys("tui.select.down"),
+            ].join("/"),
+            "move",
           );
         const read = async () => {
           const version = ++generation;
@@ -167,6 +176,7 @@ export async function openDashboardUi(
               );
               if (closed || version !== generation) return;
               runs = next;
+              historyCapturedAt = clock?.currentTimeMillisUnsafe() ?? now;
               if (
                 !runs.some(
                   (run) => run.runId === selectedRuns.get(requestedSubagentId),
@@ -332,7 +342,7 @@ export async function openDashboardUi(
                 ? `${rawKeyHint("r", "refresh")} · `
                 : "";
               const back = keyHint("tui.select.cancel", "back");
-              const scroll = rawKeyHint("↑/↓", "move");
+              const scroll = movementHint();
               const page = rawKeyHint("←/→", "page");
               return browserPanel(
                 viewport,
@@ -378,7 +388,13 @@ export async function openDashboardUi(
             let selectedLine = 0;
             const append = (run: RunSummary, selected: boolean) => {
               if (selected) selectedLine = lines.length;
-              const row = historyRow(run, contentWidth, theme, selected, now);
+              const row = historyRow(
+                run,
+                contentWidth,
+                theme,
+                selected,
+                openSubagentId ? historyCapturedAt : now,
+              );
               lines.push(
                 selected
                   ? theme.bg("selectedBg", padBrowserLine(row, contentWidth))
@@ -419,7 +435,7 @@ export async function openDashboardUi(
               "tui.select.cancel",
               openSubagentId ? "back" : "close",
             );
-            const scroll = rawKeyHint("↑/↓", "move");
+            const scroll = movementHint();
             const page = rawKeyHint("←/→", "page");
             return browserPanel(
               viewport,

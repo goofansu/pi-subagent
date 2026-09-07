@@ -23,6 +23,7 @@
 import { type ExtensionAPI, initTheme } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
+  type KeybindingsConfig,
   KeybindingsManager,
   TUI_KEYBINDINGS,
 } from "@earendil-works/pi-tui";
@@ -121,6 +122,8 @@ export interface StandInHostOptions {
   readonly renderEvery?: number;
   /** Inject the current theme at the custom-UI boundary. */
   readonly customTheme?: RenderableTheme;
+  /** Inject configured TUI bindings at the custom-UI boundary. */
+  readonly customKeybindings?: KeybindingsConfig;
 }
 
 /** A theme that paints nothing, so an assertion reads the text itself. */
@@ -253,7 +256,10 @@ export function createStandInHost(
         custom = factory(
           customTui,
           options.customTheme ?? PLAIN_THEME,
-          new KeybindingsManager(TUI_KEYBINDINGS),
+          new KeybindingsManager(
+            TUI_KEYBINDINGS,
+            options.customKeybindings ?? {},
+          ),
           done,
         );
       }),

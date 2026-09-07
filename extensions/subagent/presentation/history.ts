@@ -41,15 +41,16 @@ export function historyRow(
     columns - (elapsedWidth ? elapsedWidth + 2 : 0),
   );
   const statusWidth = available >= 24 ? 10 : 0;
-  const activityWidth = available >= 50 ? Math.floor(available * 0.45) : 0;
-  const labelWidth = Math.max(
-    0,
-    available -
-      statusWidth -
-      activityWidth -
-      (statusWidth ? 2 : 0) -
-      (activityWidth ? 2 : 0),
+  const hasActivity = available >= 50;
+  const separators = (statusWidth ? 2 : 0) + (hasActivity ? 3 : 0);
+  const preferredActivityWidth = hasActivity ? Math.floor(available * 0.45) : 0;
+  const labelWidth = Math.min(
+    40,
+    Math.max(0, available - statusWidth - preferredActivityWidth - separators),
   );
+  const activityWidth = hasActivity
+    ? Math.max(0, available - statusWidth - labelWidth - separators)
+    : 0;
   const status = run.phase[0].toUpperCase() + run.phase.slice(1);
   const tone =
     run.phase === "cancelled"
@@ -72,7 +73,7 @@ export function historyRow(
       theme.fg(selected ? "accent" : "text", cell(run.label, labelWidth)) +
       (statusWidth ? `  ${theme.fg(tone, cell(status, statusWidth))}` : "") +
       (activityWidth
-        ? `  ${theme.fg("muted", cell(activity, activityWidth))}`
+        ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", cell(activity, activityWidth))}`
         : "") +
       (elapsedWidth
         ? `  ${theme.fg("dim", " ".repeat(Math.max(0, elapsedWidth - visibleWidth(elapsedCell))) + elapsedCell)}`
