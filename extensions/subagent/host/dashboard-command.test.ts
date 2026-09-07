@@ -268,7 +268,7 @@ test("configured selection bindings drive navigation and its displayed hint", as
   await close(rig, browsing);
 });
 
-test("activity and Turns update live without reordering; history remains entry-only", async (t) => {
+test("activity updates live without reordering, turns and Profile names are absent from compact rows, history is entry-only", async (t) => {
   const rig = hostRig(t, {
     resumableSteps: [
       [
