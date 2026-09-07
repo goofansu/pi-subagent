@@ -7,7 +7,7 @@
  * listed Profiles, and nothing said which to type first. So bare `/subagent`
  * is now a **shallow status**: how many Profiles, how many Runs and in what
  * phase, whether the runtime noticed anything, one line per Profile, and the
- * two subcommands that go deeper. The counters moved to
+ * subcommands that go deeper. The counters moved to
  * `/subagent diagnostics`, unchanged, zeroes included; the Profile list is
  * `/subagent profiles`, which is the same flow `/agents` opens.
  *
@@ -52,20 +52,25 @@ import {
 import { RunRepository } from "../runtime/repository.ts";
 import { SubagentSupervisor } from "../runtime/supervisor.ts";
 import { formatNoAgentsMessage, openProfilesUi } from "./agents-command.ts";
+import { openRunsUi } from "./runs-command.ts";
 import type { SessionHandle } from "./session-handle.ts";
 
 /** The command name, unchanged from the M0 skeleton's. */
 export const SUBAGENT_COMMAND_NAME = "subagent";
 
 /**
- * The two ways deeper, in the order an operator wants them.
+ * The ways deeper, in the order an operator wants them.
  *
  * Read by {@link formatUnknownSubcommand} alone: the handler dispatches on its
  * own `case` and the status line writes its own sentence, both of which say
  * more than a name. This is the one place that needs them enumerated rather
  * than spelled out.
  */
-export const SUBAGENT_SUBCOMMANDS = ["profiles", "diagnostics"] as const;
+export const SUBAGENT_SUBCOMMANDS = [
+  "runs",
+  "profiles",
+  "diagnostics",
+] as const;
 
 /**
  * A block of named counts.
@@ -253,9 +258,10 @@ function profileLines(profiles: readonly Profile[]): readonly string[] {
   );
 }
 
-/** The two ways deeper, each with what it is for. */
+/** The ways deeper, each with what it is for. */
 function subcommandLines(): readonly string[] {
   return [
+    "/subagent runs — browse Session Subagents and Run history",
     "/subagent profiles — list Profiles and read their prompts",
     "/subagent diagnostics — runtime counters and cleanup probes",
   ];
@@ -328,7 +334,8 @@ export function registerSubagentCommand(
   agentsDir: string,
 ): void {
   pi.registerCommand(SUBAGENT_COMMAND_NAME, {
-    description: "Subagent status, Profiles, and runtime diagnostics.",
+    description:
+      "Subagent status, Run history, Profiles, and runtime diagnostics.",
     handler: async (args, ctx) => {
       const subcommand = args.trim().split(/\s+/, 1)[0] ?? "";
       switch (subcommand) {
@@ -344,6 +351,10 @@ export function registerSubagentCommand(
           );
           return;
         }
+        case "runs":
+          if (!handle.isLive()) ctx.ui.notify(NO_LIVE_SESSION, "info");
+          else await openRunsUi(handle, ctx);
+          return;
         case "profiles":
           await openProfilesUi(pi, profiles, agentsDir, ctx);
           return;

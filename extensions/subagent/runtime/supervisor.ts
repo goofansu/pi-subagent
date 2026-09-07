@@ -62,6 +62,7 @@ import type {
   BackendOpenFailure,
   RunControl,
 } from "../backend/contract.ts";
+import type { RunSummary, SubagentSummary } from "../domain/history.ts";
 import {
   alreadyTerminal,
   type CancellationReason,
@@ -88,6 +89,7 @@ import type {
   SupervisorCounters,
 } from "./counters.ts";
 import { CompletionDelivery } from "./delivery.ts";
+import { summarizeRun, summarizeSubagents } from "./history.ts";
 import type { RuntimePolicy } from "./policy.ts";
 import { ProfileCatalog } from "./profile-catalog.ts";
 import {
@@ -1226,6 +1228,24 @@ const makeSupervisor = (settings: SessionSettings) =>
       });
 
     return {
+      /** Published history only, in original Subagent insertion order. */
+      subagentSummaries: (): Effect.Effect<readonly SubagentSummary[]> =>
+        Effect.map(repository.list(), (runs) =>
+          summarizeSubagents(
+            runs,
+            records.all().map(({ id, phase }) => ({ id, phase })),
+          ),
+        ),
+      /** Newest first by publication, independent of widget row removal. */
+      runSummaries: (id: SubagentId): Effect.Effect<readonly RunSummary[]> =>
+        Effect.map(repository.list(), (runs) =>
+          Object.freeze(
+            runs
+              .filter((run) => run.identity.subagentId === id)
+              .reverse()
+              .map(summarizeRun),
+          ),
+        ),
       start,
       resume,
       steer,

@@ -113,6 +113,8 @@ export const RIG_POLICY: RuntimePolicy = {
 export interface HostRigOptions extends StandInHostOptions {
   /** One script per resumable Run, consumed in order. */
   readonly resumableSteps?: readonly (readonly FakeStep[])[];
+  /** Delay or refuse opens without changing the real admission path. */
+  readonly resumableOpen?: FakeBackendOptions["open"];
   /** One script per one-shot Run, consumed in order. */
   readonly oneShotSteps?: readonly (readonly FakeStep[])[];
   /** Profiles the backend set supplies. Defaults to one per fake. */
@@ -309,6 +311,9 @@ export function hostRig(
 
   const resumable = createFakeResumableBackend({
     scripts: perRun(options.resumableSteps),
+    ...(options.resumableOpen === undefined
+      ? {}
+      : { open: options.resumableOpen }),
     id: DEFAULT_BACKEND_ID,
     gates,
     ...(options.trace === undefined ? {} : { trace: options.trace }),

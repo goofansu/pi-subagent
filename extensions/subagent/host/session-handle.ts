@@ -41,7 +41,16 @@ export interface SessionBinding {
   readonly detach: () => void;
 }
 
+/** A Session-bound reader, invalidated before that Session starts disposal. */
+export interface SessionObservation {
+  readonly run: SessionHandle["run"];
+  /** Release the Session callback on ordinary UI closure. */
+  readonly dispose: () => void;
+}
+
 export interface SessionHandle {
+  /** Lease a UI reader to this binding, never to a later Session. */
+  readonly observe: (onRelease: () => void) => SessionObservation | undefined;
   /**
    * Install a Session's runtime, disposing whatever was installed before.
    *
@@ -67,12 +76,17 @@ export interface SessionHandle {
 }
 
 export function createSessionHandle(): SessionHandle {
-  let live: SessionBinding | undefined;
+  let live:
+    | (SessionBinding & { readonly observers: Set<() => void> })
+    | undefined;
 
   const release = async (): Promise<void> => {
     const going = live;
     live = undefined;
     if (!going) return;
+    // UI leases close before runtime disposal can clear history or await cleanup.
+    for (const close of [...going.observers]) close();
+    going.observers.clear();
     try {
       going.detach();
     } catch {
@@ -86,9 +100,41 @@ export function createSessionHandle(): SessionHandle {
   };
 
   return {
+    observe: (onRelease) => {
+      let bound = live;
+      if (!bound) return undefined;
+      let releaseUi: (() => void) | undefined = onRelease;
+      const dispose = () => {
+        bound?.observers.delete(close);
+        bound = undefined;
+        releaseUi = undefined;
+      };
+      const close = () => {
+        const callback = releaseUi;
+        dispose();
+        try {
+          callback?.();
+        } catch {
+          /* A replaced host may already be gone. */
+        }
+      };
+      bound.observers.add(close);
+      return {
+        dispose,
+        run: async (work, whenNotReady) => {
+          const current = bound;
+          if (!current || live !== current) return whenNotReady;
+          const exit = await current.runtime.runPromiseExit(work);
+          if (bound !== current || live !== current) return whenNotReady;
+          if (Exit.isSuccess(exit)) return exit.value;
+          if (Cause.hasInterruptsOnly(exit.cause)) return whenNotReady;
+          throw Cause.squash(exit.cause);
+        },
+      };
+    },
     bind: async (binding) => {
       await release();
-      live = binding;
+      live = { ...binding, observers: new Set() };
     },
     release,
     isLive: () => live !== undefined,

@@ -18,6 +18,7 @@ ask Pi to delegate work to it.
 | Command | What it does |
 | --- | --- |
 | `/subagent` | Shows a summary of available profiles and current work. |
+| `/subagent runs` | Browse this Session's Subagents and newest-first Run history (read-only). |
 | `/subagent profiles` | Browse profiles, read their prompts, and assign a task. |
 | `/subagent diagnostics` | Shows troubleshooting information when something goes wrong. |
 
@@ -75,6 +76,13 @@ Finished rows disappear once their completion notice reaches the conversation
 or Pi retrieves their result. If a notice cannot be delivered, the row stays
 visible with an explanation. Ask Pi to retrieve the result or cancel active work
 by naming the agent and task—the widget itself is not interactive.
+
+`/subagent runs` opens a static history browser, including completed work after
+its widget row disappears. Active work appears first, then failed or timed-out
+latest Runs under **Needs attention**, then **Completed**. Use Up/Down or
+Page Up/Page Down to scroll, Enter to open Run history, and Escape to go back
+and close. Returning to a list rereads it. This browser does not inspect output,
+consume Results, or control work.
 
 ## Profiles
 

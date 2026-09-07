@@ -21,6 +21,11 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  type Component,
+  KeybindingsManager,
+  TUI_KEYBINDINGS,
+} from "@earendil-works/pi-tui";
 import type { RenderableTheme } from "../presentation/index.ts";
 
 /** One registered tool, as the host holds it. */
@@ -141,6 +146,14 @@ export interface StandInHost {
     options?: { readonly signal?: AbortSignal },
   ) => Promise<StandInToolResult>;
   readonly commands: () => readonly StandInCommand[];
+  readonly command: (name: string, args?: string) => Promise<void>;
+  readonly customLines: (width?: number, rows?: number) => readonly string[];
+  readonly customKey: (data: string) => void;
+  readonly customOpen: () => boolean;
+  /** Retain host callbacks to exercise late invocations after disposal. */
+  readonly captureCustom: () => Component | undefined;
+  readonly customDisposals: () => number;
+  readonly customRenderRequests: () => number;
   readonly renderers: () => readonly string[];
   /** Which host events the extension subscribed to, in order. */
   readonly subscribed: () => readonly string[];
@@ -206,7 +219,39 @@ export function createStandInHost(
     },
   };
 
+  let custom: (Component & { dispose?(): void }) | undefined;
+  let customDisposals = 0;
+  let customRenderRequests = 0;
+  const customTui = {
+    terminal: { rows: 24 },
+    requestRender: () => {
+      customRenderRequests += 1;
+    },
+  };
   const ui = {
+    custom: (
+      factory: (
+        tui: unknown,
+        theme: unknown,
+        keys: unknown,
+        done: () => void,
+      ) => Component,
+    ) =>
+      new Promise<void>((resolve) => {
+        const done = () => {
+          const closing = custom;
+          custom = undefined;
+          closing?.dispose?.();
+          if (closing) customDisposals += 1;
+          resolve();
+        };
+        custom = factory(
+          customTui,
+          PLAIN_THEME,
+          new KeybindingsManager(TUI_KEYBINDINGS),
+          done,
+        );
+      }),
     notify: (message: string, level = "info") => {
       notices.push({ message, level });
     },
@@ -232,6 +277,8 @@ export function createStandInHost(
    * vary it per call would be testing a host that does not exist.
    */
   const ctx = {
+    mode: "tui",
+    hasUI: true,
     cwd: options.cwd ?? "/work",
     ui,
     model: options.model,
@@ -303,6 +350,20 @@ export function createStandInHost(
         ctx,
       ),
     commands: () => [...commands],
+    command: async (name, args = "") => {
+      const command = commands.find((entry) => entry.name === name);
+      if (!command) throw new Error(`unknown command: ${name}`);
+      await command.handler(args, ctx);
+    },
+    customLines: (width = 100, rows = 24) => {
+      customTui.terminal.rows = rows;
+      return custom?.render(width) ?? [];
+    },
+    customKey: (data) => custom?.handleInput?.(data),
+    customOpen: () => custom !== undefined,
+    captureCustom: () => custom,
+    customDisposals: () => customDisposals,
+    customRenderRequests: () => customRenderRequests,
     renderers: () => [...renderers],
     subscribed: () => [...subscribed],
     sent: () => [...sent],

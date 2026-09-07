@@ -211,6 +211,7 @@ test("C-1: the status names every Profile with the backend it names", () => {
       "  explore   pi",
       "  reviewer  claude",
       "",
+      "/subagent runs — browse Session Subagents and Run history",
       "/subagent profiles — list Profiles and read their prompts",
       "/subagent diagnostics — runtime counters and cleanup probes",
     ].join("\n"),
@@ -386,7 +387,7 @@ test("C-2: /subagent profiles opens the Profile flow", async (t) => {
   assert.deepEqual(notices, []);
 });
 
-test("an unknown subcommand names the two that exist", async (t) => {
+test("an unknown subcommand names the three that exist", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
@@ -396,7 +397,7 @@ test("an unknown subcommand names the two that exist", async (t) => {
   ]);
   assert.equal(
     formatUnknownSubcommand("counters"),
-    '/subagent has no "counters". Try /subagent profiles or /subagent diagnostics.',
+    '/subagent has no "counters". Try /subagent runs or /subagent profiles or /subagent diagnostics.',
   );
 });
 
