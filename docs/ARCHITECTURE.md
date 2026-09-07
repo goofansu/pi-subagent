@@ -288,11 +288,14 @@ retain explicit aggregate attention rather than disappearing when delivery ends.
 [ADR-0035](adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md) /
 [ADR-0036](adr/0036-a-wait-delivers-the-result-it-waited-for.md).
 
-The ambient widget intentionally presents no elapsed Run duration. Active Runs
-did not have an elapsed timer before the adaptive widget; its single-Run age is
-instead the age of the displayed semantic activity summary. Terminal Runs are
-now aggregate counts, so their former individual `completed in …` rows are not
-shown there. Run durations remain available in dashboard history and inspection.
+The ambient widget's one active Run shows its elapsed duration, sampled on Run
+publications rather than on a ticking timer or an incidental render, and
+independent of the activity beside it. Terminal Runs are aggregate counts, so
+their former individual `completed in …` rows are not shown there; their final
+durations remain in dashboard history and inspection. That lives as the
+widget's policy value in [rows.ts](../extensions/subagent/presentation/rows.ts)
+rather than as a rule inside the fitted-line module — ADR-0035's presentation
+note expressed as a value.
 
 [Notifications](../extensions/subagent/domain/notification.ts) carry label, identities,
 status, accounting and availability: `complete`, `partial`, `record-only`, derived
@@ -301,8 +304,9 @@ whole (`output` present); longer output gets a 500-byte preview. Every notice
 names the exact `agent_result` call; inlined ones say no fetch is needed.
 Storage stays authoritative. [ADR-0037](adr/0037-a-notice-carries-a-short-output-whole.md).
 
-The [Run browser](../extensions/subagent/host/dashboard-command.ts) opens frozen
-inspection through the application query and [runtime capture](../extensions/subagent/runtime/inspection.ts),
+The [Subagent dashboard](../extensions/subagent/host/dashboard-command.ts) opens
+frozen inspection through the application module's observation seam and
+[runtime capture](../extensions/subagent/runtime/inspection.ts),
 not the public Result tool. One synchronous capture callback reads published
 phase, already-folded bounded Projection content, known Subagent conditions and
 capture time without yielding or acquiring a lock. It clones and freezes active
@@ -385,17 +389,18 @@ The sink drops unlanded notices and holds rather than forwarding them to the
 next Session. Scope-owned widget subscriptions and UI resources are released.
 [Shutdown implementation](../extensions/subagent/runtime/supervisor.ts).
 
-The [Run browser](../extensions/subagent/host/dashboard-command.ts) keeps only
-transport: Pi's custom UI surface, a key resolved against the operator's
+The [Subagent dashboard](../extensions/subagent/host/dashboard-command.ts) keeps
+only transport: Pi's custom UI surface, a key resolved against the operator's
 bindings, the asynchronous reads a step asks for, and the generation guard
 deciding which may still land. Which page an operator is on, what a key means
 there, the offset clamp, the header height and every line the panel draws are
 the [page reducer's](../extensions/subagent/presentation/browser-page.ts). It
-observes lightweight summaries only while its overview is open. A scoped
-one-second runtime-clock tick advances ages (time since semantic activity
-change, not a stall heuristic). Repository changes and ticks share one pending
-draw, acknowledged by rendering; a slow terminal draws the latest rows rather
-than queued frames. History remains an entry/re-entry snapshot. Detachment
+observes lightweight summaries only while its overview is open, and dates their
+ages from a runtime-clock instant sampled on publication and on navigation
+rather than from a timer: there is no tick, so nothing ages between the two.
+Repository changes share one pending draw, acknowledged by rendering; a slow
+terminal draws the latest rows rather than queued frames. History remains an
+entry/re-entry snapshot. Detachment
 invalidates summary readers after terminal publication so the actual Subagent
 phase becomes idle without changing settlement order. Neither hand-off nor
 Conversation loss is subscribed to for grouping.

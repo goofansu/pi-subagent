@@ -493,14 +493,38 @@ was bound, so a Session switch cannot leave two alive; running against no
 runtime returns a text outcome rather than throwing, because a tool call can
 arrive between Sessions.
 
-**Façade** — `Subagents`, the six functions the host handlers call and the only
-caller of the supervisor from outside the runtime. Each maps a decoded tool
-input plus the Session facts to a supervisor request and hands the outcome to
-presentation. It has no fields and holds no state; lifecycle stays in the
+**Façade** — `Subagents`, the seven functions the host handlers call and the
+only thing outside the runtime that *starts* a Run: `application/subagents.ts`
+is the only production caller of the supervisor's `start` and `resume`, which
+is what makes an empty Run Label impossible rather than merely refused in one
+place, and `label-bound.test.ts` scans the tree to keep it so. Reading a
+Session is a different act with its own seam beside this one — the
+**observation seam** names the supervisor too and can start nothing. Each maps
+a decoded tool input plus the Session facts to a supervisor request and hands
+the outcome to presentation. It has no fields and holds no state; lifecycle stays in the
 runtime and prose stays in presentation. It exists because the implementation
 this replaced had one orchestrator talking to lifecycle, presentation, and
 delivery directly, and once three callers could reach one mutable Run record,
 no single place knew what a Run looked like.
+
+**Observation seam** — `application/observation.ts`: everything a host surface
+may read about one Session, plus how to be told it changed. Follow published
+Runs under **one** coalescing rule, read Subagent and Run summaries, capture
+one Run's inspection, read the Session's counters and its runtime probe. The
+widget, the dashboard's observation source and `/subagent` with its `doctor`
+read through it and nothing else, which is a boundary rule rather than a
+convention: no host module but a composition root may name a runtime service.
+A module over the existing services and not a seventh one — no Layer, nothing
+Session-long, no state — so the lifetime question stays in the caller's Scope.
+It exists because "coalesce publications into at most one pending refresh" had
+been written twice, differently, at two host surfaces.
+
+The word is used here in its ordinary sense — watching a Session — and not for
+the **Observation** above, which is one neutral record a backend witnessed.
+Nothing that crosses this seam is an observation in that sense, and the same
+loose reading is what `host/session-observation.ts` and the dashboard's
+navigation-owned *observation lease* mean by it. The strict noun belongs to the
+backend seam; on the host side the word names the act of watching.
 
 **Backend set** — the value a Session is built from: a name, the backends that
 exist, the Profiles they ship, and two host facts only a backend can answer —
