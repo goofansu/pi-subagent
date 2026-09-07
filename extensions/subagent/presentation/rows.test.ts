@@ -281,6 +281,63 @@ test("missing or cleared running activity shows a muted nonitalic em dash placeh
   }
 });
 
+test("row status text and tone follow the shared cancellation presentation", () => {
+  for (const [overrides, state, tone] of [
+    [
+      { cancellation: { reason: "requested" as const } },
+      "cancelling",
+      "warning",
+    ],
+    [
+      {
+        phase: "finalizing" as const,
+        cancellation: { reason: "shutdown" as const },
+      },
+      "cancelling",
+      "warning",
+    ],
+    [
+      {
+        phase: "cancelled" as const,
+        cancellation: { reason: "requested" as const },
+      },
+      "cancelled",
+      "muted",
+    ],
+    [
+      {
+        phase: "cancelled" as const,
+        cancellation: { reason: "shutdown" as const },
+      },
+      "cancelled",
+      "muted",
+    ],
+    [
+      {
+        phase: "cancelled" as const,
+        cancellation: { reason: "timeout" as const },
+      },
+      "cancelled",
+      "error",
+    ],
+  ] as const) {
+    const calls: { color: string; text: string }[] = [];
+    formatRunRow(
+      fixtureRow(overrides),
+      {
+        ...theme,
+        fg: (color, text) => {
+          calls.push({ color, text });
+          return text;
+        },
+      },
+      80,
+      FIXTURE_NOW,
+    );
+    assert.ok(calls.some((call) => call.color === tone && call.text === state));
+  }
+});
+
 test("finalizing and cancelling show a styled placeholder rather than retained activity", () => {
   for (const [fixture, state] of [
     [fixtureRow({ phase: "finalizing", activity: "old work" }), "finalizing"],

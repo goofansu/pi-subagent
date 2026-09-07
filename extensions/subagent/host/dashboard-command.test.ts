@@ -617,7 +617,7 @@ test("duplicate Profiles retain resolved terminal history and Resume grouping; l
 });
 
 for (const reason of ["requested", "timeout"] as const) {
-  test(`${reason} cancellation stays Active through settling and shows the recorded reason at terminality`, async (t) => {
+  test(`${reason} cancellation agrees across dashboard and widget through policy-driven settlement`, async (t) => {
     const rig = hostRig(t, {
       testClock: true,
       policy: {
@@ -625,7 +625,11 @@ for (const reason of ["requested", "timeout"] as const) {
         ...(reason === "timeout" ? { defaultRunTimeoutMillis: 100 } : {}),
       },
       resumableSteps: [
-        [{ step: "gate-the-finalizer", gate: "cleanup" }, { step: "hang" }],
+        [
+          emitActivity("old activity"),
+          { step: "gate-the-finalizer", gate: "cleanup" },
+          { step: "hang" },
+        ],
       ],
     });
     await rig.host.sessionStart();
@@ -639,15 +643,25 @@ for (const reason of ["requested", "timeout"] as const) {
       await rig.text("agent_cancel", { ids: [work.runId] });
     else await rig.advanceClock(100);
     await rig.pump();
-    assert.match(screen(rig), /Running|Finalizing/);
-    assert.doesNotMatch(screen(rig), /Needs attention|Completed/);
+    const cancellingDashboard = screen(rig);
+    assert.match(cancellingDashboard, /Cancelling +· —/);
+    assert.doesNotMatch(cancellingDashboard, /old activity/);
+    assert.doesNotMatch(cancellingDashboard, /Needs attention|Completed/);
+    const cancellingWidget = rig.host.widgetLines(120);
+    assert.match(
+      cancellingWidget[1] ?? "",
+      /cancel task {2}cancelling · — +\d+\.\ds$/,
+    );
+    assert.doesNotMatch(cancellingWidget.join("\n"), /old activity/);
 
     await rig.release("cleanup");
     await rig.pump();
     await rig.settled(work.runId);
     await rig.pump();
-    assert.match(screen(rig), /Cancelled/);
-    assert.ok(screen(rig).includes(reason));
+    const terminalDashboard = screen(rig);
+    assert.match(terminalDashboard, /Cancelled/);
+    assert.ok(terminalDashboard.includes(reason));
+    assert.deepEqual(rig.host.widgetLines(120), [" subagents   1 cancelled"]);
     await close(rig, browsing);
   });
 }

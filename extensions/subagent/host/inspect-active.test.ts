@@ -305,7 +305,7 @@ for (const expire of [false, true])
     await rig.pump();
     const finalizing = screen(rig);
     assert.match(finalizing, /active snapshot/);
-    assert.match(finalizing, /Run status: finalizing \(requested\)/);
+    assert.match(finalizing, /Run status: cancelling \(requested\)/);
     assert.match(finalizing, /partial content/);
     await rig.release("cleanup");
     await rig.settled(work.runId);
