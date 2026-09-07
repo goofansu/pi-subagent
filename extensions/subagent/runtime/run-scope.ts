@@ -38,6 +38,7 @@ import {
 } from "effect";
 import type {
   BackendAgent,
+  RunControl,
   RunInput,
   TerminalBundle,
 } from "../backend/contract.ts";
@@ -62,7 +63,11 @@ import {
   type SettlementCandidate,
 } from "./arbitration.ts";
 import type { RuntimeCounters } from "./counters.ts";
-import { type ControlMailbox, makeMailbox } from "./mailbox.ts";
+import {
+  type ControlMailbox,
+  type MailboxAdmission,
+  makeMailbox,
+} from "./mailbox.ts";
 import { makeIntake, type ObservationIntake } from "./observation-intake.ts";
 import type { ControlBounds } from "./policy.ts";
 import type { RunRepository } from "./repository.ts";
@@ -153,29 +158,113 @@ export interface RunContext {
   readonly onSettled: (result: RunResult) => Effect.Effect<void>;
 }
 
-/** What one Run fiber leaves behind for the supervisor and for tests. */
-export interface RunHandle {
-  readonly identity: RunIdentity;
+/**
+ * The execution this Run runs, once the backend has prepared it.
+ *
+ * It carries no error channel: a backend failure is a `failed` ending, not a
+ * failed Effect (ADR-0028).
+ */
+type RunExecution = Effect.Effect<TerminalBundle, never, Scope.Scope>;
+
+/**
+ * The stop request, and the execution fiber it interrupts.
+ *
+ * A stop can arrive on either side of the fork: before the settlement loop has
+ * an execution fiber at all, or after it has one — including after that fiber
+ * has already exited, where interrupting is a no-op and the Run settles on the
+ * candidate it had already captured. Whichever of the two is second does the
+ * interrupting, which is why both halves of that question live here, beside
+ * the loop that forks, rather than one of them in a caller.
+ */
+interface ExecutionStop {
+  /** Completed by {@link request}. Settlement bounds its wait from it. */
+  readonly requested: Deferred.Deferred<void>;
+  /** Take the forked execution, interrupting it if a stop already arrived. */
+  readonly hold: (
+    fiber: Fiber.Fiber<TerminalBundle, never>,
+  ) => Effect.Effect<void>;
+  /** Record the stop, and interrupt the execution if it has been forked. */
+  readonly request: Effect.Effect<void>;
+}
+
+function makeExecutionStop(): Effect.Effect<ExecutionStop> {
+  return Effect.map(Deferred.make<void>(), (requested) => {
+    let running: Fiber.Fiber<TerminalBundle, never> | undefined;
+    return {
+      requested,
+      hold: (fiber) =>
+        Effect.sync(() => {
+          running = fiber;
+          if (Deferred.isDoneUnsafe(requested)) fiber.interruptUnsafe();
+        }),
+      request: Effect.gen(function* () {
+        yield* Deferred.succeed(requested, undefined);
+        running?.interruptUnsafe();
+      }),
+    };
+  });
+}
+
+/** Everything one Run's settlement loop drives, private to this module. */
+interface RunResources {
   readonly coordinator: SettlementCoordinator;
   /** Completed when settlement is done. The barrier carries no Result value. */
   readonly completion: Deferred.Deferred<void>;
   readonly intake: ObservationIntake;
   readonly mailbox: ControlMailbox;
-  /** Filled by settlement so cancel can request execution interruption. */
-  readonly executionFiber: Deferred.Deferred<
-    Fiber.Fiber<TerminalBundle, never>
-  >;
-  /** Completed before cancel requests interruption; settlement bounds from it. */
-  readonly stopRequested: Deferred.Deferred<void>;
+  readonly stop: ExecutionStop;
   /** Everything held for this Run, already nested under its Subagent. */
   readonly runScope: Scope.Closeable;
   /** The native child that settlement closes independently first. */
   readonly executionScope: Scope.Closeable;
   /** Opens settlement only after attachment and active-row publication. */
   readonly activation: Deferred.Deferred<void>;
-  readonly execution: Effect.Effect<TerminalBundle, never, Scope.Scope>;
+  readonly execution: RunExecution;
   readonly projection: Ref.Ref<RunProjection>;
   readonly reports: AppliedReport[];
+}
+
+/**
+ * What one Run fiber leaves behind for the supervisor and for tests.
+ *
+ * The stop protocol is an operation here rather than the three mechanisms it
+ * drives: a caller can start this Run's settlement, open its gate, offer it a
+ * Control and stop it, but it cannot close the mailbox without recording the
+ * request, or interrupt an execution without closing the mailbox, because
+ * there is nothing here to do either half with. What remains published is what
+ * other modules read rather than drive — the intake an admission diagnostic
+ * enters by, the folded projection an inspection capture reads, and the
+ * settlement barrier a waiter awaits.
+ */
+export interface RunHandle {
+  readonly identity: RunIdentity;
+  /** Completed when settlement is done. The barrier carries no Result value. */
+  readonly completion: Deferred.Deferred<void>;
+  readonly intake: ObservationIntake;
+  /** What the inspection capture reads, folded, without yielding. */
+  readonly projection: Ref.Ref<RunProjection>;
+  /** Offer one Control to this Run's bounded mailbox. Never blocks. */
+  readonly admitControl: (
+    control: RunControl,
+  ) => Effect.Effect<MailboxAdmission>;
+  /**
+   * Stop this Run: close the Control mailbox, record the stop request, and
+   * interrupt the execution however far along it is, in that order.
+   *
+   * Not the Run fiber, which stays alive to settle (ADR-0025). Idempotent, and
+   * admitted whether or not an execution exists yet to interrupt.
+   */
+  readonly stop: Effect.Effect<void>;
+  /** Open the activation gate, after attachment and active-row publication. */
+  readonly activate: Effect.Effect<void>;
+  /**
+   * Carry this Run through settlement. The caller forks it, exactly once.
+   *
+   * It returns only once the Run is terminal, its Result is committed, and
+   * delivery has been asked to run. A second fork would run a second
+   * settlement over resources the first one has already sealed and closed.
+   */
+  readonly settle: Effect.Effect<SettledRun>;
 }
 
 /**
@@ -279,8 +368,6 @@ export interface SettledRun {
  * Calling `execute` itself happens here, so a backend that throws instead of
  * returning an Effect fails admission rather than stranding a start waiter.
  */
-type RunExecution = Effect.Effect<TerminalBundle, never, Scope.Scope>;
-
 type PrepareExecution<E> = (io: {
   readonly emit: ObservationIntake["emit"];
   readonly controls: ControlMailbox["feed"];
@@ -308,9 +395,7 @@ function buildRunHandle<E>(
       const activation = yield* Deferred.make<void>();
       const projection = yield* Ref.make(createRunProjection());
       const reports: AppliedReport[] = [];
-      const executionFiber =
-        yield* Deferred.make<Fiber.Fiber<TerminalBundle, never>>();
-      const stopRequested = yield* Deferred.make<void>();
+      const stop = yield* makeExecutionStop();
 
       const executionScope = yield* Scope.fork(runScope);
       const execution = yield* prepareExecution({
@@ -318,20 +403,34 @@ function buildRunHandle<E>(
         controls: mailbox.feed,
       });
 
-      return {
-        identity,
+      const resources: RunResources = {
         coordinator,
         completion,
         intake,
         mailbox,
-        executionFiber,
-        stopRequested,
+        stop,
         runScope,
         executionScope,
         activation,
         execution,
         projection,
         reports,
+      };
+
+      return {
+        identity,
+        completion,
+        intake,
+        projection,
+        admitControl: mailbox.admit,
+        stop: Effect.gen(function* () {
+          yield* mailbox.close();
+          yield* stop.request;
+        }),
+        activate: Effect.asVoid(Deferred.succeed(activation, undefined)),
+        // Suspended, so the settlement loop's own bookkeeping belongs to the
+        // fiber that runs it rather than to the fiber that built the handle.
+        settle: Effect.suspend(() => runToSettlement(context, resources)),
       };
     }).pipe(Effect.onError(() => Scope.close(runScope, Exit.void)));
   });
@@ -383,17 +482,19 @@ export function makeResumedRunHandle(
 }
 
 /**
- * Consume an already-published Run handle and carry it through settlement.
+ * Carry an already-published Run through settlement.
  *
- * The caller forks this. It returns only once the Run is terminal, its result
- * is committed, and delivery has been asked to run.
+ * Reached through the handle's `settle`, which is what the supervisor forks.
+ * It returns only once the Run is terminal, its result is committed, and
+ * delivery has been asked to run.
  */
-export function runToSettlement(
+function runToSettlement(
   context: RunContext,
-  handle: RunHandle,
+  resources: RunResources,
 ): Effect.Effect<SettledRun> {
   const { counters, identity, repository, store } = context;
-  const { completion, executionScope, projection, reports, runScope } = handle;
+  const { completion, executionScope, projection, reports, runScope } =
+    resources;
   let committed:
     | {
         readonly result: RunResult;
@@ -404,15 +505,8 @@ export function runToSettlement(
   let settlementStarted = false;
 
   const settlement = Effect.gen(function* () {
-    const {
-      activation,
-      coordinator,
-      execution,
-      executionFiber,
-      intake,
-      mailbox,
-      stopRequested,
-    } = handle;
+    const { activation, coordinator, execution, intake, mailbox, stop } =
+      resources;
 
     yield* Deferred.await(activation);
     const reducer = yield* Effect.acquireRelease(
@@ -443,15 +537,17 @@ export function runToSettlement(
       runScope,
       Effect.sync(() => running.interruptUnsafe()),
     );
-    yield* Deferred.succeed(executionFiber, running);
-    if (Deferred.isDoneUnsafe(stopRequested)) running.interruptUnsafe();
+    // A stop already requested is applied to the fiber the instant the stop
+    // protocol is given it, so a cancel that arrived before this fork is not
+    // waiting on an execution nobody told to stop.
+    yield* stop.hold(running);
 
     // A Run may execute without a time bound. Once cancellation has requested
     // its stop, only the cleanup budget remains. Waiting on `Fiber.await`
     // observes the Exit without joining or supervising the native fiber.
     const stopWon = yield* Effect.raceFirst(
       Effect.as(Fiber.await(running), false),
-      Effect.as(Deferred.await(stopRequested), true),
+      Effect.as(Deferred.await(stop.requested), true),
     );
     let executionEscalation: RunDiagnostic | undefined;
     let executionCandidate: SettlementCandidate;
