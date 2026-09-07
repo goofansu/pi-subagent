@@ -140,6 +140,25 @@ export function withBackendSession<A>(
 }
 
 /**
+ * How long a test waits for a backend to react before calling it stuck.
+ *
+ * A rig bound, not a product one: nothing in the domain says how quickly a
+ * backend must react, so this number's only job is to stop a deadlocked fixture
+ * spinning to {@link until}'s step cap. It is therefore sized for the slowest
+ * machine the suite runs on rather than the fastest.
+ *
+ * That distinction cost a red lane. The one wall-clock wait in the suite was
+ * 500ms, which is many times what the work takes on a developer's machine and
+ * not always enough on a loaded two-core CI runner: `until` spins on
+ * `Effect.yieldNow`, so the waiter competes for the same core as the work it is
+ * waiting for, and a burst large enough to overflow the bridge is exactly when
+ * that competition is worst. The assertion it guards is about *whether* a
+ * backend reacts on its own, never about how fast, so a number that encoded one
+ * machine's speed was measuring the runner rather than the code.
+ */
+export const REACTION_DEADLINE_MILLIS = 5_000;
+
+/**
  * Spin until something is true, or give up and say what was waited for.
  *
  * Bounded deliberately: a test whose fixture deadlocks should fail with the

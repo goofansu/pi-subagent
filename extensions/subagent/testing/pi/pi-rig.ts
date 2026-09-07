@@ -239,5 +239,6 @@ export function untilTerminal(
 export {
   issueCancelBeforeClockMoves,
   quiesce,
+  REACTION_DEADLINE_MILLIS,
   until,
 } from "../backend-session.ts";

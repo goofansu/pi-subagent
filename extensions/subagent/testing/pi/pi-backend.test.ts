@@ -14,6 +14,7 @@ import {
   issueCancelBeforeClockMoves,
   piRigRequest,
   quiesce,
+  REACTION_DEADLINE_MILLIS,
   until,
   untilPrompted,
   untilSteered,
@@ -153,7 +154,7 @@ test("bridge overflow fails the Run and stops native work", async () => {
               "overflow to stop native work",
               Effect.sync(() => rig.standIn.record().aborts > 0),
             ),
-            500,
+            REACTION_DEADLINE_MILLIS,
           ),
         );
         if (!stoppedPromptly) {
