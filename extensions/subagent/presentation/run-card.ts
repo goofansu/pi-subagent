@@ -41,10 +41,11 @@ import { formatResultBody } from "./result-body.ts";
 import {
   formatRunPhase,
   formatTokenCount,
+  runElapsedMillis,
   runPhaseTone,
   type Tone,
 } from "./status.ts";
-import { elapsedMillis, type RunRowView } from "./views.ts";
+import type { RunRowView } from "./views.ts";
 
 /**
  * How many transcript items the expanded card shows.
@@ -249,7 +250,12 @@ export function runCard(source: RunCardSource): RunCard {
       backendId: row.identity.backendId,
       status: formatRunPhase({
         phase: row.phase,
-        elapsedMillis: elapsedMillis(row, now),
+        // A published row carries its settled instant exactly when its phase is
+        // terminal, so the policy answers for every row this can be given. The
+        // zero is for the shape the invariant forbids, and is deliberately not
+        // a clock reading: a duration that climbs would be a worse lie than a
+        // duration that is plainly wrong.
+        elapsedMillis: runElapsedMillis(row, now) ?? 0,
       }),
       tone: runPhaseTone(row.phase),
       ...(accounting === undefined ? {} : { accounting }),
