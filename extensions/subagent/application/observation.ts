@@ -33,7 +33,11 @@
  */
 
 import { Clock, Effect, type Scope, Stream } from "effect";
-import type { RunSummary, SubagentSummary } from "../domain/history.ts";
+import type {
+  RunHistoryCapture,
+  RunSummary,
+  SubagentSummary,
+} from "../domain/history.ts";
 import type { RunId, SubagentId } from "../domain/index.ts";
 import type { RunInspection } from "../domain/inspection.ts";
 import {
@@ -50,6 +54,7 @@ import {
 import { SubagentSupervisor } from "../runtime/supervisor.ts";
 
 export type {
+  RunHistoryCapture,
   RunIndex,
   RunSnapshot,
   RuntimeProbe,
@@ -233,20 +238,7 @@ export const runSummaries = (
     supervisor.runSummaries(id),
   );
 
-/** Run history rows and the one runtime instant they are rendered against. */
-export interface RunHistoryCapture {
-  readonly runs: readonly RunSummary[];
-  readonly capturedAt: number;
-}
-
-/**
- * Capture one Subagent's Run history as a single value.
- *
- * The instant travels with the rows because a history page is frozen at
- * entry: every age it shows is relative to when it was read, and a reader
- * that sampled the clock separately could date the rows from a different
- * moment than the one they were taken at.
- */
+/** Capture one Subagent's Run history as a single value. */
 export const captureRunHistory = (
   id: SubagentId,
 ): Effect.Effect<RunHistoryCapture, never, SubagentSupervisor> =>
