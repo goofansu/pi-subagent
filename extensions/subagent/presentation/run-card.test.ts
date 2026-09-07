@@ -13,7 +13,27 @@ import {
   fixtureRow,
   fixtureUsage,
 } from "../testing/presentation-fixtures.ts";
-import { RECENT_TRANSCRIPT_ITEMS, runCard, runCardLines } from "./run-card.ts";
+import {
+  formatToolEntry,
+  formatToolStatus,
+  RECENT_TRANSCRIPT_ITEMS,
+  runCard,
+  runCardLines,
+} from "./run-card.ts";
+
+test("shared tool status preserves unnamed fallback and compact output formatting", () => {
+  for (const name of [undefined, "read"]) {
+    const entry = {
+      name,
+      status: "completed",
+      outputSummary: "  first\nsecond  ",
+    } as const;
+    const status = `${name ?? "(unnamed tool)"} — completed`;
+    assert.equal(formatToolStatus(entry), status);
+    assert.equal(formatToolEntry(entry), `${status}: first\nsecond`);
+    assert.equal(formatToolEntry({ ...entry, outputSummary: "  " }), status);
+  }
+});
 
 test("a live card comes from a snapshot and carries no output", () => {
   const card = runCard({

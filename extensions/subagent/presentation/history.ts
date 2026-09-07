@@ -1,6 +1,6 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
-import { formatTurns, runPhaseVerb } from "./status.ts";
+import { formatDuration, formatTurns, runPhaseVerb } from "./status.ts";
 
 export const HISTORY_CATEGORIES = [
   "Active",
@@ -33,10 +33,13 @@ export function historyRow(
     [subagentPhase, runPhaseVerb(run.phase)].filter(Boolean).join(" · ") +
     (run.cancellationReason ? ` (${run.cancellationReason})` : "");
   const profileWidth = Math.max(1, Math.floor(width / 3));
-  const activity = now === undefined ? run.activity : run.lastActivity?.summary;
+  const activity =
+    now === undefined
+      ? (run.activity ?? run.lastActivity?.summary)
+      : run.lastActivity?.summary;
   const age =
     now !== undefined && run.lastActivity
-      ? ` · changed ${Math.max(0, Math.floor((now - run.lastActivity.changedAt) / 1000))}s ago`
+      ? ` · changed ${formatDuration(now - run.lastActivity.changedAt)} ago`
       : "";
   return [
     clip(

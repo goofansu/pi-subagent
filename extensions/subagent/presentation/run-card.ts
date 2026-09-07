@@ -122,13 +122,17 @@ export function formatTranscriptItem(item: TranscriptItem): string {
   return `${item.role}: ${said}`;
 }
 
+/** Tool identity and outcome, shared by compact and full inspection views. */
+export function formatToolStatus(entry: ToolEntry): string {
+  return `${entry.name ?? "(unnamed tool)"} — ${entry.status}`;
+}
+
 /** One tool entry as a line: what it was, how it went, what it said. */
 export function formatToolEntry(entry: ToolEntry): string {
   const summary = entry.outputSummary?.trim();
-  return [
-    `${entry.name ?? "(unnamed tool)"} — ${entry.status}`,
-    ...(summary ? [`: ${summary}`] : []),
-  ].join("");
+  return [formatToolStatus(entry), ...(summary ? [`: ${summary}`] : [])].join(
+    "",
+  );
 }
 
 /** One diagnostic as a line: the category, then what it said. */

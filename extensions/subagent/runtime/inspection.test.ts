@@ -4,6 +4,7 @@ import { Clock, Deferred, Effect, Fiber } from "effect";
 import { answeredEnding } from "../domain/index.ts";
 import type { RunInspection } from "../domain/inspection.ts";
 import { emitText, emitToolCall } from "../testing/fakes/script.ts";
+import { fixtureResult } from "../testing/presentation-fixtures.ts";
 import {
   quiesce,
   rigRequest,
@@ -13,6 +14,69 @@ import {
   withSession,
 } from "../testing/session-rig.ts";
 import { DEFAULT_RUNTIME_POLICY } from "./policy.ts";
+
+test("unreadable inspection discovers the same one-time defect as later parent and delivery reads", async () => {
+  const schedule = (inspect: boolean) =>
+    withSession(
+      {
+        resultEncoder: (result, encode) => ({
+          ...(encode(result) as Record<string, unknown>),
+          unexpected: true,
+        }),
+      },
+      (rig) =>
+        Effect.gen(function* () {
+          // Publish/store without auto-delivery so inspection deterministically reads first.
+          const result = fixtureResult();
+          yield* rig.repository.publish(
+            {
+              runId: result.runId,
+              subagentId: result.subagentId,
+              backendId: result.backendId,
+              agent: result.agent,
+              description: result.description,
+            },
+            result.startedAt,
+          );
+          yield* rig.store.commit(result).pipe(Effect.orDie);
+          yield* rig.repository.transition(result.runId, "execution-ended");
+          yield* rig.repository.transition(
+            result.runId,
+            "settled-answered",
+            result.settledAt,
+          );
+          assert.equal(rig.supervisor.counters().unreadableResults, 0);
+          if (inspect) {
+            const first = yield* rig.supervisor.inspectRun(result.runId);
+            assert.equal(first.outcome, "unavailable");
+            if (first.outcome === "unavailable")
+              assert.match(first.diagnostic?.message ?? "", /does not decode/);
+            assert.equal(
+              (yield* rig.supervisor.inspectRun(result.runId)).outcome,
+              "unavailable",
+            );
+            assert.equal(rig.supervisor.counters().unreadableResults, 1);
+            assert.equal(rig.sink.unannounceableRuns().length, 0);
+            assert.equal(rig.supervisor.probe().unresolvedWaiters, 0);
+          }
+          const parent = yield* rig.supervisor.result(result.runId);
+          assert.equal(parent.outcome, "ResultExpired");
+          assert.deepEqual(yield* rig.supervisor.result(result.runId), parent);
+          yield* rig.delivery.deliver(result.runId);
+          assert.equal(rig.supervisor.counters().unreadableResults, 1);
+          return {
+            parent,
+            counters: rig.supervisor.counters(),
+            unannounceable: rig.sink.unannounceableRuns(),
+          };
+        }),
+    );
+  const baseline = await schedule(false);
+  const observed = await schedule(true);
+  assert.deepEqual(observed.value, baseline.value);
+  assert.equal(baseline.noLeaks, true);
+  assert.equal(observed.noLeaks, true);
+});
 
 function assertPlainFrozen(value: unknown): void {
   if (value === null || typeof value !== "object") {

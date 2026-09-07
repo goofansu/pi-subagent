@@ -69,7 +69,7 @@ test("active inspection freezes content and activity ages until explicit refresh
   assert.match(first, /Label: active Label/);
   assert.match(first, /Run status: running/);
   assert.match(first, /first content/);
-  assert.match(first, /Last activity: reading files · changed 2s ago/);
+  assert.match(first, /Last activity: reading files · changed 2\.0s ago/);
   assert.match(first, /Captured at: 1970-01-01T00:00:02.000Z/);
   assert.match(first, /R refresh/);
   const requests = rig.host.customRenderRequests();
@@ -82,7 +82,7 @@ test("active inspection freezes content and activity ages until explicit refresh
   await rig.pump();
   const second = screen(rig);
   assert.match(second, /second content/);
-  assert.match(second, /Last activity: writing report · changed 3s ago/);
+  assert.match(second, /Last activity: writing report · changed 3\.0s ago/);
   assert.match(second, /Captured at: 1970-01-01T00:00:05.000Z/);
   await rig.release("finish");
   await rig.settled(work.runId);

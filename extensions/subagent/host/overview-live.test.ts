@@ -60,31 +60,31 @@ test("semantic activity survives equal normalized/bounded observations, clears a
   const baseline = await rig.probe();
   const browsing = rig.host.command("subagent", "runs");
   await rig.pump();
-  assert.match(screen(rig), /reading file · changed 0s ago/);
+  assert.match(screen(rig), /reading file · changed 0\.0s ago/);
   const requests = rig.host.customRenderRequests();
   await rig.advanceClock(500);
   assert.equal(rig.host.customRenderRequests(), requests);
   await rig.advanceClock(500);
   await rig.pump();
   assert.equal(rig.host.customRenderRequests(), requests + 1);
-  assert.match(screen(rig), /reading file · changed 1s ago/);
+  assert.match(screen(rig), /reading file · changed 1\.0s ago/);
   for (const gate of ["equal", "clear", "repeat"]) {
     await rig.release(gate);
     await rig.pump();
     await rig.advanceClock(1000);
     await rig.pump();
   }
-  assert.match(screen(rig), /reading file · changed 4s ago/);
+  assert.match(screen(rig), /reading file · changed 4\.0s ago/);
   assert.match(rig.host.customLines(20).join("\n"), /任务 Label/);
   await rig.release("new");
   await rig.pump();
-  assert.match(screen(rig), /writing file · changed 0s ago/);
+  assert.match(screen(rig), /writing file · changed 0\.0s ago/);
   await rig.advanceClock(2000);
   await rig.release("finish");
   await rig.settled(work.runId);
   await rig.pump();
   assert.match(screen(rig), /Completed/);
-  assert.match(screen(rig), /writing file · changed 2s ago/);
+  assert.match(screen(rig), /writing file · changed 2\.0s ago/);
   const rows = await rig.installation.handle.run(
     runSummaries(subagentId(work.subagentId)),
     [],
@@ -108,7 +108,7 @@ test("semantic activity survives equal normalized/bounded observations, clears a
   assert.equal(rig.host.customRenderRequests(), historyRequests);
   rig.host.customKey(ESC);
   await rig.pump();
-  assert.match(screen(rig), /writing file · changed 7s ago/);
+  assert.match(screen(rig), /writing file · changed 7\.0s ago/);
   rig.host.customKey(ESC);
   await browsing;
   await rig.pump();

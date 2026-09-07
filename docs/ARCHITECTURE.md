@@ -287,7 +287,12 @@ phase, already-folded bounded Projection content, known Subagent conditions and
 capture time without yielding or acquiring a lock. It clones and freezes active
 content, never exposing the Projection reference or treating its ending flag as
 Run terminality. Once terminal publication is observed, only the authoritative
-store supplies a Result or explicit expiry/unavailability. Full transcripts never
+store supplies a Result or explicit expiry/unavailability. Inspection retains the
+store's existing diagnostics policy: the first read of an unreadable Result counts
+`unreadableResults` once, whether inspection, delivery or parent retrieval reads
+first. Later reads do not count it again. Observation may advance discovery of
+that defect, but never consumes a Result or changes Completion hand-off state.
+Full transcripts never
 enter the continuously published repository.
 The host adds only the existing read-only Completion hand-off status. The
 [inspection formatter](../extensions/subagent/presentation/inspection.ts) shares

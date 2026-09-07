@@ -3,7 +3,7 @@ import type { RunInspection } from "../domain/inspection.ts";
 import {
   formatDiagnosticLine,
   formatResultLinkLine,
-  formatToolEntry,
+  formatToolStatus,
   formatTranscriptItem,
   formatTruncation,
 } from "./run-card.ts";
@@ -35,7 +35,7 @@ export function inspectionLines(
     `Started at: ${new Date(startedAt).toISOString()}`,
     ...(summary.lastActivity
       ? [
-          `Last activity: ${summary.lastActivity.summary} · changed ${Math.max(0, Math.floor((capture.capturedAt - summary.lastActivity.changedAt) / 1000))}s ago`,
+          `Last activity: ${summary.lastActivity.summary} · changed ${formatDuration(capture.capturedAt - summary.lastActivity.changedAt)} ago`,
         ]
       : []),
     ...(settledAt === undefined
@@ -116,7 +116,7 @@ function transcriptLines(item: TranscriptItem): readonly string[] {
 }
 function toolLines(entry: ToolEntry): readonly string[] {
   return [
-    formatToolEntry({ ...entry, outputSummary: undefined }),
+    formatToolStatus(entry),
     ...(entry.callId === undefined ? [] : [`callId: ${entry.callId}`]),
     ...(entry.outputSummary === undefined ? [] : [entry.outputSummary]),
   ];
