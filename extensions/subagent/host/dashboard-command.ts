@@ -22,6 +22,7 @@ import {
 import {
   HISTORY_CATEGORIES,
   historyCategory,
+  historyColumnWidths,
   historyRow,
 } from "../presentation/history.ts";
 import {
@@ -385,6 +386,10 @@ export async function openDashboardUi(
               openSubagentId ? "inspect" : "runs",
             );
             const lines: string[] = [];
+            const listedRuns = openSubagentId
+              ? runs
+              : ordered().map((row) => row.current ?? row.latest);
+            const preferredColumns = historyColumnWidths(listedRuns);
             let selectedLine = 0;
             const append = (run: RunSummary, selected: boolean) => {
               if (selected) selectedLine = lines.length;
@@ -394,6 +399,7 @@ export async function openDashboardUi(
                 theme,
                 selected,
                 openSubagentId ? historyCapturedAt : now,
+                preferredColumns,
               );
               lines.push(
                 selected
@@ -405,15 +411,12 @@ export async function openDashboardUi(
             else if (error)
               lines.push("History unavailable. Go back or close.");
             else if (openSubagentId) {
-              for (const run of runs)
+              for (const run of listedRuns)
                 append(run, run.runId === selectedRuns.get(openSubagentId));
               if (!runs.length) lines.push("No runs available.");
             } else {
-              for (const row of ordered())
-                append(
-                  row.current ?? row.latest,
-                  row.subagentId === selectedSubagent,
-                );
+              for (const run of listedRuns)
+                append(run, run.subagentId === selectedSubagent);
               if (!overview.length)
                 lines.push(
                   theme.fg("muted", "No subagents in this session."),

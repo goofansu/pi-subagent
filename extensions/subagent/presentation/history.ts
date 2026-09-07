@@ -10,6 +10,27 @@ export const HISTORY_CATEGORIES = [
 ] as const;
 export type HistoryCategory = (typeof HISTORY_CATEGORIES)[number];
 
+export interface HistoryColumnWidths {
+  readonly label: number;
+  readonly status: number;
+}
+
+const statusText = (run: RunSummary) =>
+  run.phase[0].toUpperCase() + run.phase.slice(1);
+
+/** Content-sized columns shared by every row in one displayed list. */
+export function historyColumnWidths(
+  runs: readonly RunSummary[],
+): HistoryColumnWidths {
+  return {
+    label: Math.min(
+      40,
+      Math.max(0, ...runs.map((run) => visibleWidth(run.label))),
+    ),
+    status: Math.max(0, ...runs.map((run) => visibleWidth(statusText(run)))),
+  };
+}
+
 /** Broken work only. Delivery, diagnostics and Conversation maintenance are not inputs. */
 export function historyCategory(subagent: SubagentSummary): HistoryCategory {
   if (subagent.current) return "Active";
@@ -27,6 +48,7 @@ export function historyRow(
   theme: RenderableTheme,
   selected: boolean,
   now: number,
+  preferredColumns: HistoryColumnWidths = { label: 40, status: 10 },
 ): string {
   const clip = (text: string, columns: number) =>
     truncateToWidth(text, Math.max(0, columns), "…");
@@ -40,18 +62,18 @@ export function historyRow(
     0,
     columns - (elapsedWidth ? elapsedWidth + 2 : 0),
   );
-  const statusWidth = available >= 24 ? 10 : 0;
+  const statusWidth = available >= 24 ? preferredColumns.status : 0;
   const hasActivity = available >= 50;
   const separators = (statusWidth ? 2 : 0) + (hasActivity ? 3 : 0);
   const preferredActivityWidth = hasActivity ? Math.floor(available * 0.45) : 0;
   const labelWidth = Math.min(
-    40,
+    preferredColumns.label,
     Math.max(0, available - statusWidth - preferredActivityWidth - separators),
   );
   const activityWidth = hasActivity
     ? Math.max(0, available - statusWidth - labelWidth - separators)
     : 0;
-  const status = run.phase[0].toUpperCase() + run.phase.slice(1);
+  const status = statusText(run);
   const tone =
     run.phase === "cancelled"
       ? run.cancellationReason === "timeout"

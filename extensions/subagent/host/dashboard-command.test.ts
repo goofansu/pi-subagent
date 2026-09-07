@@ -260,7 +260,7 @@ test("configured selection bindings drive navigation and its displayed hint", as
   const footer = stripVTControlCharacters(screen(rig)).split("\n").at(-1) ?? "";
   assert.match(footer, /k\/j move/);
   assert.doesNotMatch(footer, /up\/down move/);
-  assert.match(screen(rig), /› first task/);
+  assert.match(screen(rig), /› first task {3}Running/);
   rig.host.customKey("j");
   assert.match(screen(rig), /› second task/);
   rig.host.customKey("k");
