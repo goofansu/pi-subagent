@@ -4,7 +4,7 @@
  * Public identifiers stay in inspection rather than displacing work labels.
  */
 import {
-  type ExtensionCommandContext,
+  type ExtensionContext,
   keyHint,
   rawKeyHint,
 } from "@earendil-works/pi-coding-agent";
@@ -36,7 +36,7 @@ import type { CompletionHandoffView } from "./widget.ts";
 
 export async function openDashboardUi(
   handle: SessionHandle,
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   handoff: Pick<CompletionHandoffView, "status">,
 ): Promise<void> {
   let closed = false;

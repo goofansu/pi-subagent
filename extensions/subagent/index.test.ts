@@ -8,7 +8,10 @@ import {
   demoAnswer,
 } from "./host/demo-backends.ts";
 import { NOTIFICATION_MESSAGE_TYPE } from "./host/notification-message.ts";
-import { SUBAGENT_COMMAND_NAME } from "./host/subagent-command.ts";
+import {
+  SUBAGENT_COMMAND_NAME,
+  SUBAGENT_DASHBOARD_SHORTCUT,
+} from "./host/subagent-command.ts";
 import { SUBAGENT_TOOL_NAMES } from "./host/tools.ts";
 import subagentV2Extension, { installSubagentV2 } from "./index.ts";
 import { hostRig, startedIds } from "./testing/host-rig.ts";
@@ -23,7 +26,7 @@ import { createStandInHost, resultText } from "./testing/stand-in-host.ts";
  * the host tests' business.
  */
 
-test("the entry point registers the seven tools, its one command, and the notification renderer", () => {
+test("the entry point registers the seven tools, command, shortcut, and notification renderer", () => {
   const host = createStandInHost();
 
   installSubagentV2(host.pi, {
@@ -40,7 +43,26 @@ test("the entry point registers the seven tools, its one command, and the notifi
     host.commands().map((command) => command.name),
     [SUBAGENT_COMMAND_NAME],
   );
+  assert.deepEqual(
+    host.shortcuts().map(({ shortcut }) => shortcut),
+    [SUBAGENT_DASHBOARD_SHORTCUT],
+  );
   assert.deepEqual(host.renderers(), [NOTIFICATION_MESSAGE_TYPE]);
+});
+
+test("the dashboard shortcut opens the same browser as /subagent dashboard", async (t) => {
+  const host = createStandInHost();
+  const installation = installSubagentV2(host.pi, {
+    agentDir: hostRig(t).agentsDir,
+    backendSet: createDemoBackendSet,
+  });
+  await host.sessionStart();
+  t.after(() => installation.handle.release());
+
+  const browsing = host.shortcut(SUBAGENT_DASHBOARD_SHORTCUT);
+  assert.equal(host.customOpen(), true);
+  host.customKey("\x1b");
+  await browsing;
 });
 
 test("the entry point subscribes to the two Session events and the three landing events", () => {

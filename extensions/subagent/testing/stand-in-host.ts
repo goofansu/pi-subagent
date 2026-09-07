@@ -73,6 +73,12 @@ export interface StandInCommand {
   readonly handler: (args: string, ctx: unknown) => Promise<void> | void;
 }
 
+export interface StandInShortcut {
+  readonly shortcut: string;
+  readonly description?: string;
+  readonly handler: (ctx: unknown) => Promise<void> | void;
+}
+
 export interface SentMessage {
   readonly message: {
     readonly customType?: string;
@@ -155,6 +161,8 @@ export interface StandInHost {
   ) => Promise<StandInToolResult>;
   readonly commands: () => readonly StandInCommand[];
   readonly command: (name: string, args?: string) => Promise<void>;
+  readonly shortcuts: () => readonly StandInShortcut[];
+  readonly shortcut: (shortcut: string) => Promise<void>;
   readonly customLines: (width?: number, rows?: number) => readonly string[];
   readonly customKey: (data: string) => void;
   readonly customOpen: () => boolean;
@@ -201,6 +209,7 @@ export function createStandInHost(
 ): StandInHost {
   const tools: StandInTool[] = [];
   const commands: StandInCommand[] = [];
+  const shortcuts: StandInShortcut[] = [];
   const renderers: string[] = [];
   const subscribed: string[] = [];
   const sent: SentMessage[] = [];
@@ -312,6 +321,12 @@ export function createStandInHost(
     registerCommand(name: string, definition: Omit<StandInCommand, "name">) {
       commands.push({ name, ...definition });
     },
+    registerShortcut(
+      shortcut: string,
+      definition: Omit<StandInShortcut, "shortcut">,
+    ) {
+      shortcuts.push({ shortcut, ...definition });
+    },
     registerMessageRenderer(customType: string) {
       renderers.push(customType);
     },
@@ -365,6 +380,12 @@ export function createStandInHost(
       const command = commands.find((entry) => entry.name === name);
       if (!command) throw new Error(`unknown command: ${name}`);
       await command.handler(args, ctx);
+    },
+    shortcuts: () => [...shortcuts],
+    shortcut: async (wanted) => {
+      const shortcut = shortcuts.find((entry) => entry.shortcut === wanted);
+      if (!shortcut) throw new Error(`unknown shortcut: ${wanted}`);
+      await shortcut.handler(ctx);
     },
     customLines: (width = 100, rows = 24) => {
       customTui.terminal.rows = rows;

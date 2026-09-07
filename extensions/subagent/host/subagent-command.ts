@@ -40,6 +40,7 @@
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
+  ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Effect } from "effect";
 import type { Profile } from "../domain/index.ts";
@@ -56,6 +57,9 @@ import type { CompletionHandoffView } from "./widget.ts";
 
 /** The command name, unchanged from the M0 skeleton's. */
 export const SUBAGENT_COMMAND_NAME = "subagent";
+
+/** The direct keyboard route to `/subagent dashboard`. */
+export const SUBAGENT_DASHBOARD_SHORTCUT = "alt+shift+.";
 
 /**
  * The ways deeper, in the order an operator wants them.
@@ -322,7 +326,7 @@ export function formatUnknownSubcommand(subcommand: string): string {
  * error.
  */
 export function registerSubagentCommand(
-  pi: Pick<ExtensionAPI, "registerCommand">,
+  pi: Pick<ExtensionAPI, "registerCommand" | "registerShortcut">,
   handle: SessionHandle,
   adapterProbe: () => AdapterProbe | undefined,
   /**
@@ -338,6 +342,10 @@ export function registerSubagentCommand(
   agentsDir: string,
   handoff: Pick<CompletionHandoffView, "status">,
 ): void {
+  pi.registerShortcut("alt+shift+.", {
+    description: "Open Subagent dashboard.",
+    handler: (ctx) => openDashboard(handle, ctx, handoff),
+  });
   pi.registerCommand(SUBAGENT_COMMAND_NAME, {
     description: "Subagent dashboard, status, and runtime troubleshooting.",
     handler: async (args, ctx) => {
@@ -356,8 +364,7 @@ export function registerSubagentCommand(
           return;
         }
         case "dashboard":
-          if (!handle.isLive()) ctx.ui.notify(NO_LIVE_SESSION, "info");
-          else await openDashboardUi(handle, ctx, handoff);
+          await openDashboard(handle, ctx, handoff);
           return;
         case "doctor":
           reportDiagnostics(
@@ -372,6 +379,16 @@ export function registerSubagentCommand(
       }
     },
   });
+}
+
+/** Open the dashboard through either its slash command or keyboard shortcut. */
+async function openDashboard(
+  handle: SessionHandle,
+  ctx: ExtensionContext,
+  handoff: Pick<CompletionHandoffView, "status">,
+): Promise<void> {
+  if (!handle.isLive()) ctx.ui.notify(NO_LIVE_SESSION, "info");
+  else await openDashboardUi(handle, ctx, handoff);
 }
 
 /** Read the live Session's contribution to the status, or nothing. */

@@ -104,8 +104,8 @@ export interface SubagentV2Installation {
  *
  * - the process-level state the registrations close over — the session handle,
  *   the push sink, the live guideline array, and the live Profile list;
- * - the registrations themselves: seven tools, one command, one message
- *   renderer;
+ * - the registrations themselves: seven tools, one command, one shortcut,
+ *   one message renderer;
  * - the two Session events that build and dispose a runtime;
  * - the three host events that drive notification landing.
  *
@@ -173,8 +173,9 @@ export function installSubagentV2(
     // neither can push anything.
     { consumed: (id) => sink.consumed(id), hold: (scope) => sink.hold(scope) },
   );
-  // One operator command. v1's `/agents` and the Profile browser are gone;
-  // Profiles remain visible in the status and available to the agent tools.
+  // One operator command and its direct dashboard shortcut. v1's `/agents`
+  // and the Profile browser are gone; Profiles remain visible in the status
+  // and available to the agent tools.
   registerSubagentCommand(
     pi,
     handle,
