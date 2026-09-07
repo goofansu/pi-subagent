@@ -263,7 +263,10 @@ and releases through finalization, so aborting one waiter affects only it.
 collection path. Already-terminal Runs are excluded from that snapshot.
 
 [Handlers](../extensions/subagent/host/tools.ts) hold notices before waiting and
-mark returned Results consumed before release. Those notices are dropped; others
+mark returned Results consumed before release, reading the Runs the application
+outcome **states** it delivered rather than inferring them from the collapsed
+row's payload, so a Run added to that row for display alone records no
+consumption. Those notices are dropped; others
 send when no covering hold remains. The all-wait holds the Session while the façade
 reads ids. Abort races only the waiter, returning an immediate collection without
 cancelling children. [ADR-0036](adr/0036-a-wait-delivers-the-result-it-waited-for.md).
