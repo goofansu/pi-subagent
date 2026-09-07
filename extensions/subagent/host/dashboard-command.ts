@@ -9,10 +9,6 @@ import {
   rawKeyHint,
 } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
-import { Clock, Effect } from "effect";
-import { inspectRun, runSummaries } from "../application/history.ts";
-import type { RunSummary, SubagentSummary } from "../domain/history.ts";
-import type { RunId, SubagentId } from "../domain/index.ts";
 import {
   browserFooter,
   browserPanel,
@@ -30,12 +26,17 @@ import {
   inspectionBlocks,
   renderInspection,
 } from "../presentation/inspection.ts";
-import { observeOverview } from "./overview-observation.ts";
-import type { SessionHandle } from "./session-handle.ts";
+import type {
+  RunId,
+  RunSummary,
+  SessionObservationSource,
+  SubagentId,
+  SubagentSummary,
+} from "./session-observation.ts";
 import type { CompletionHandoffView } from "./widget.ts";
 
 export async function openDashboardUi(
-  handle: SessionHandle,
+  handle: SessionObservationSource,
   ctx: ExtensionContext,
   handoff: Pick<CompletionHandoffView, "status">,
 ): Promise<void> {
@@ -75,17 +76,16 @@ export async function openDashboardUi(
         let pageSize = 1;
         // A request remains pending until render acknowledges it, not until a
         // timer fires. Slow hosts therefore owe one frame reading the newest
-        // rows, however many repository changes arrived meanwhile.
+        // rows, however many observed changes arrived meanwhile.
         let pending = false;
-        let clock: Clock.Clock | undefined;
-        let now = 0;
+        let now = session.currentInstant();
         let historyCapturedAt = 0;
         let stopOverview: (() => void) | undefined;
         let stopRead: (() => void) | undefined;
         let redraw: (() => void) | undefined = () => {
           if (closed) return;
           // Sample on publication/navigation, not on a timer or incidental render.
-          now = clock?.currentTimeMillisUnsafe() ?? now;
+          now = session.currentInstant();
           if (pending) return;
           pending = true;
           tui.requestRender();
@@ -102,7 +102,6 @@ export async function openDashboardUi(
           session.dispose();
           refreshable = false;
           pending = false;
-          clock = undefined;
           overview = [];
           runs = [];
           details = [];
@@ -148,36 +147,20 @@ export async function openDashboardUi(
           offset = 0;
           redraw?.();
           try {
-            if (!clock) {
-              const nextClock = await reader.run(Clock.Clock, undefined);
-              if (closed || version !== generation) return;
-              clock = nextClock;
-            }
             if (requestedRunId) {
-              const next = await reader.run(
-                inspectRun(requestedRunId).pipe(
-                  Effect.map((capture) => ({
-                    lines: inspectionBlocks(
-                      capture,
-                      handoff.status(requestedRunId),
-                    ),
-                    refreshable: capture.outcome === "active",
-                  })),
-                ),
-                { lines: [], refreshable: false },
+              const capture = await reader.inspectRun(requestedRunId);
+              if (closed || version !== generation || !capture) return;
+              details = inspectionBlocks(
+                capture,
+                handoff.status(requestedRunId),
               );
-              if (closed || version !== generation) return;
-              details = next.lines;
-              refreshable = next.refreshable;
+              refreshable = capture.outcome === "active";
               detailWidth = undefined;
             } else if (requestedSubagentId) {
-              const next = await reader.run(
-                runSummaries(requestedSubagentId),
-                [],
-              );
-              if (closed || version !== generation) return;
-              runs = next;
-              historyCapturedAt = clock?.currentTimeMillisUnsafe() ?? now;
+              const capture = await reader.captureHistory(requestedSubagentId);
+              if (closed || version !== generation || !capture) return;
+              runs = capture.runs;
+              historyCapturedAt = capture.capturedAt;
               if (
                 !runs.some(
                   (run) => run.runId === selectedRuns.get(requestedSubagentId),
@@ -187,8 +170,7 @@ export async function openDashboardUi(
                 selectedRuns.set(requestedSubagentId, runs[0].runId);
               }
             } else {
-              stopOverview = observeOverview(
-                session,
+              stopOverview = session.watchSummaries(
                 (next) => {
                   if (closed || version !== generation) return;
                   overview = next;

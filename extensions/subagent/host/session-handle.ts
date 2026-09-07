@@ -26,10 +26,19 @@
 
 import { Cause, type Effect, Exit, type ManagedRuntime } from "effect";
 import type { SessionServices } from "../runtime/composition.ts";
+import {
+  createSessionObservation,
+  type SessionObservation,
+  type SessionObservationSource,
+} from "./session-observation.ts";
+
+export type { SessionObservation } from "./session-observation.ts";
 
 /** The managed runtime one Session owns, with its host-side installs. */
 export interface SessionBinding {
   readonly runtime: ManagedRuntime.ManagedRuntime<SessionServices, never>;
+  /** Synchronous read of this Session's ambient runtime instant. */
+  readonly currentInstant: () => number;
   /**
    * Undo the host-side installs this Session made.
    *
@@ -41,14 +50,7 @@ export interface SessionBinding {
   readonly detach: () => void;
 }
 
-/** A Session-bound reader, invalidated before that Session starts disposal. */
-export interface SessionObservation {
-  readonly run: SessionHandle["run"];
-  /** Release the Session callback on ordinary UI closure. */
-  readonly dispose: () => void;
-}
-
-export interface SessionHandle {
+export interface SessionHandle extends SessionObservationSource {
   /** Lease a UI reader to this binding, never to a later Session. */
   readonly observe: (onRelease: () => void) => SessionObservation | undefined;
   /**
@@ -122,8 +124,15 @@ export function createSessionHandle(): SessionHandle {
         }
       };
       bound.observers.add(close);
-      return {
+      let lastInstant = bound.currentInstant();
+      return createSessionObservation({
         dispose,
+        currentInstant: () => {
+          const current = bound;
+          if (!current || live !== current) return lastInstant;
+          lastInstant = current.currentInstant();
+          return lastInstant;
+        },
         run: async (work, whenNotReady) => {
           const current = bound;
           if (!current || live !== current) return whenNotReady;
@@ -141,7 +150,7 @@ export function createSessionHandle(): SessionHandle {
             reads.delete(controller);
           }
         },
-      };
+      });
     },
     bind: async (binding) => {
       await release();

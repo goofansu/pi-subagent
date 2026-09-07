@@ -97,11 +97,15 @@ export interface StartedSession {
   readonly widget: ActiveWidget;
 }
 
+interface OpenedSession extends StartedSession {
+  readonly currentInstant: () => number;
+}
+
 /** What the Session installs inside its own Scope, and reads once. */
 function openSession(
   host: WidgetHost,
   handoff: CompletionHandoffView,
-): Effect.Effect<StartedSession, never, SessionServices | Scope.Scope> {
+): Effect.Effect<OpenedSession, never, SessionServices | Scope.Scope> {
   return Effect.gen(function* () {
     const catalog = yield* ProfileCatalog;
     const clock = yield* Clock.Clock;
@@ -114,6 +118,7 @@ function openSession(
       widget,
       profiles: catalog.list(),
       diagnostics: catalog.diagnostics(),
+      currentInstant: clock.currentTimeMillisUnsafe,
     };
   });
 }
@@ -192,7 +197,7 @@ export async function startSession(
   // never failing, so this is about a defect — a host context that throws, an
   // unreadable Profile directory — and the alternative is a runtime nothing
   // holds and nothing can ever close.
-  let opened: StartedSession;
+  let opened: OpenedSession;
   try {
     opened = await runtime.runPromise(
       Scope.provide(
@@ -212,6 +217,7 @@ export async function startSession(
 
   await wiring.handle.bind({
     runtime,
+    currentInstant: opened.currentInstant,
     // The sink lives in Pi's message surface rather than in the Scope, so it
     // is the one thing disposal cannot reach and the one thing detached here.
     detach: () => wiring.sink.unbind(),
