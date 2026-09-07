@@ -69,10 +69,154 @@ test("the widget appears with the first live Run and its row reads as the matrix
   assert.match(
     rows[1],
     new RegExp(
-      `^ explore {2}running( {2}${RIG_ACTIVITY})? {2}(1 turn|—) {2}pi {2}look around$`,
+      `^ explore {2}running( {2}${RIG_ACTIVITY} {2}0\\.0s ago)? {2}(1 turn|—) {2}pi {2}look around$`,
     ),
   );
-  assert.doesNotMatch(rows[1] ?? "", /\d\.\ds/);
+});
+
+test("semantic activity age follows retained changes and stays honest through clear and finalization", async (t) => {
+  const rig = hostRig(t, {
+    testClock: true,
+    resumableSteps: [
+      [
+        { step: "await-gate", gate: "first-activity" },
+        {
+          step: "emit",
+          observation: { kind: "activity", activity: "reading file" },
+        },
+        { step: "await-gate", gate: "equal" },
+        {
+          step: "emit",
+          observation: { kind: "activity", activity: "reading file" },
+        },
+        { step: "await-gate", gate: "changed" },
+        {
+          step: "emit",
+          observation: { kind: "activity", activity: "writing file" },
+        },
+        { step: "await-gate", gate: "clear" },
+        {
+          step: "emit",
+          observation: { kind: "activity", activity: undefined },
+        },
+        { step: "await-gate", gate: "repeat-after-clear" },
+        {
+          step: "emit",
+          observation: { kind: "activity", activity: "writing file" },
+        },
+        { step: "await-gate", gate: "restore" },
+        {
+          step: "emit",
+          observation: { kind: "activity", activity: "packing result" },
+        },
+        { step: "gate-the-finalizer", gate: "cleanup" },
+        { step: "await-gate", gate: "finish" },
+        { step: "complete" },
+      ],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  const started = await heldRun(rig);
+  await rig.pump();
+
+  // No activity means no matching semantic timestamp and therefore no age.
+  assert.doesNotMatch(rig.host.widgetLines(120)[1] ?? "", /ago|reading/);
+  await rig.advanceClock(1_000);
+  await rig.release("first-activity");
+  await rig.pump();
+  assert.match(rig.host.widgetLines(120)[1] ?? "", /reading file {2}0\.0s ago/);
+
+  const requests = rig.host.renderRequests();
+  await rig.advanceClock(12_400);
+  assert.equal(rig.host.renderRequests(), requests);
+  assert.match(
+    rig.host.widgetLines(120)[1] ?? "",
+    /reading file {2}12\.4s ago/,
+  );
+
+  // Re-observing the same semantic summary redraws the visible row but keeps
+  // the repository-owned changedAt instant.
+  await rig.release("equal");
+  await rig.pump();
+  assert.match(
+    rig.host.widgetLines(120)[1] ?? "",
+    /reading file {2}12\.4s ago/,
+  );
+
+  await rig.release("changed");
+  await rig.pump();
+  assert.match(rig.host.widgetLines(120)[1] ?? "", /writing file {2}0\.0s ago/);
+  await rig.advanceClock(62_000);
+  assert.match(rig.host.widgetLines(120)[1] ?? "", /writing file {2}1m 2s ago/);
+
+  await rig.release("clear");
+  await rig.pump();
+  const cleared = rig.host.widgetLines(120)[1] ?? "";
+  assert.doesNotMatch(cleared, /writing file|ago/);
+
+  // Clearing current activity does not erase or restamp the retained semantic
+  // fact; showing the same summary again resumes its original age.
+  await rig.release("repeat-after-clear");
+  await rig.pump();
+  assert.match(rig.host.widgetLines(120)[1] ?? "", /writing file {2}1m 2s ago/);
+
+  await rig.release("restore");
+  await rig.pump();
+  assert.match(
+    rig.host.widgetLines(120)[1] ?? "",
+    /packing result {2}0\.0s ago/,
+  );
+  await rig.release("finish");
+  await rig.pump();
+  const finalizing = rig.host.widgetLines(120)[1] ?? "";
+  assert.match(finalizing, /finalizing/);
+  assert.doesNotMatch(finalizing, /packing result|ago/);
+  await rig.release("cleanup");
+  await rig.settled(started.runId);
+});
+
+test("aggregate mode has no ages or clock redraws and returning to one Run shows current semantic age", async (t) => {
+  const rig = hostRig(t, {
+    testClock: true,
+    resumableSteps: [
+      [
+        {
+          step: "emit",
+          observation: { kind: "activity", activity: "first work" },
+        },
+        { step: "await-gate", gate: "first-finish" },
+      ],
+    ],
+    oneShotSteps: [
+      [
+        {
+          step: "emit",
+          observation: { kind: "activity", activity: "second work" },
+        },
+        { step: "await-gate", gate: "second-finish" },
+      ],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  const first = await heldRun(rig);
+  await rig.advanceClock(1_000);
+  await heldRun(rig, RIG_ONE_SHOT_PROFILE);
+  await rig.pump();
+  assert.deepEqual(rig.host.widgetLines(120), [" subagents   2 running"]);
+  const requests = rig.host.renderRequests();
+
+  await rig.advanceClock(61_000);
+  assert.equal(rig.host.renderRequests(), requests);
+  assert.deepEqual(rig.host.widgetLines(120), [" subagents   2 running"]);
+
+  await rig.release("first-finish");
+  await rig.settled(first.runId);
+  await rig.pump();
+  const single = rig.host.widgetLines(120);
+  assert.match(single[1] ?? "", /second work {2}1m 1s ago/);
+  assert.doesNotMatch(single[0] ?? "", /ago/);
 });
 
 test("a Run of the one-shot backend names its own backend in the row", async (t) => {

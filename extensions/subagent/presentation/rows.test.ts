@@ -3,14 +3,18 @@ import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { backendId } from "../domain/index.ts";
-import { fixtureRow, fixtureUsage } from "../testing/presentation-fixtures.ts";
+import {
+  FIXTURE_NOW,
+  fixtureRow,
+  fixtureUsage,
+} from "../testing/presentation-fixtures.ts";
 import {
   formatRowSummary,
   formatRunRow,
   MAX_PROFILE_WIDTH,
   type RenderableTheme,
   ROW_DELIMITER,
-  renderRunRows,
+  renderRunRows as renderRunRowsAtTime,
 } from "./rows.ts";
 
 /** A theme that paints nothing, so a golden test reads the text itself. */
@@ -58,10 +62,18 @@ const named: RenderableTheme = {
   italic,
   inverse,
 };
-function row(width: number, overrides = {}): string {
+function row(width: number, overrides = {}, now = FIXTURE_NOW): string {
   return stripVTControlCharacters(
-    formatRunRow(fixtureRow(overrides), theme, width),
+    formatRunRow(fixtureRow(overrides), theme, width, now),
   ).trimEnd();
+}
+
+function renderRunRows(
+  rows: Parameters<typeof renderRunRowsAtTime>[0],
+  paintTheme: RenderableTheme,
+  width: number,
+): readonly string[] {
+  return renderRunRowsAtTime(rows, paintTheme, width, FIXTURE_NOW);
 }
 
 // ── One active Run ──────────────────────────────────────────────────────────
@@ -75,6 +87,70 @@ test("wide detail prioritizes Profile, state, and activity before accounting, ba
     "explore  running  bash: npm test  3 turns  pi  look around",
   );
   assert.doesNotMatch(line, /\d\.\ds|run-1|subagent-1/);
+});
+
+test("semantic activity age uses shared nonnegative second and minute duration vocabulary", () => {
+  const active = {
+    activity: "bash: npm test",
+    lastActivity: { summary: "bash: npm test", changedAt: 1_000 },
+  };
+
+  assert.equal(
+    row(120, active, 13_449),
+    "explore  running  bash: npm test  12.4s ago  3 turns  pi  look around",
+  );
+  assert.equal(
+    row(120, active, 63_000),
+    "explore  running  bash: npm test  1m 2s ago  3 turns  pi  look around",
+  );
+  assert.equal(
+    row(120, active, 500),
+    "explore  running  bash: npm test  0.0s ago  3 turns  pi  look around",
+  );
+});
+
+test("age follows activity in width priority and blocks lower-priority metadata when it cannot fit", () => {
+  const active = {
+    activity: "bash: npm test",
+    lastActivity: { summary: "bash: npm test", changedAt: 1_000 },
+  };
+
+  assert.equal(
+    row(52, active, 13_400),
+    "explore  running  bash: npm test  12.4s ago  3 turns",
+  );
+  assert.equal(
+    row(43, active, 13_400),
+    "explore  running  bash: npm test  12.4s ago",
+  );
+  assert.equal(row(42, active, 13_400), "explore  running  bash: npm test");
+});
+
+test("age is omitted unless its matching current activity is visible", () => {
+  const retained = {
+    summary: "bash: npm test",
+    changedAt: 1_000,
+  };
+  assert.equal(
+    row(120, { lastActivity: retained }, 13_400),
+    "explore  running  3 turns  pi  look around",
+  );
+  assert.equal(
+    row(120, { activity: "bash: other", lastActivity: retained }, 13_400),
+    "explore  running  bash: other  3 turns  pi  look around",
+  );
+  assert.equal(
+    row(
+      120,
+      {
+        phase: "finalizing",
+        activity: "bash: npm test",
+        lastActivity: retained,
+      },
+      13_400,
+    ),
+    "explore  finalizing  3 turns  pi  look around",
+  );
 });
 
 test("optional fields drop without displacing useful activity", () => {
@@ -181,11 +257,13 @@ test("identical inputs produce the same exact styled presentation", () => {
     fixtureRow({ activity: "bash: npm test" }),
     named,
     120,
+    FIXTURE_NOW,
   );
   const second = formatRunRow(
     fixtureRow({ activity: "bash: npm test" }),
     named,
     120,
+    FIXTURE_NOW,
   );
   const expected = [
     paint("toolTitle", bold("explore")),
@@ -215,17 +293,28 @@ test("very narrow rows keep a Profile prefix without an empty-part delimiter", (
       fixtureRow({ activity: "bash: npm test" }),
       named,
       width,
+      FIXTURE_NOW,
     );
     assert.equal(stripVTControlCharacters(styled), plain);
     assert.ok(!plain.startsWith(ROW_DELIMITER));
     assert.ok(visibleWidth(styled) <= width);
   }
   assert.equal(
-    formatRunRow(fixtureRow({ activity: "bash: npm test" }), named, 1),
+    formatRunRow(
+      fixtureRow({ activity: "bash: npm test" }),
+      named,
+      1,
+      FIXTURE_NOW,
+    ),
     paint("toolTitle", bold("…")),
   );
   assert.equal(
-    formatRunRow(fixtureRow({ activity: "bash: npm test" }), named, 10),
+    formatRunRow(
+      fixtureRow({ activity: "bash: npm test" }),
+      named,
+      10,
+      FIXTURE_NOW,
+    ),
     [paint("toolTitle", bold("…")), paint("warning", "running")].join(
       ROW_DELIMITER,
     ),
@@ -242,7 +331,7 @@ test("plain and styled wide text stay within every terminal-cell boundary", () =
   });
   for (const width of [0, 1, 2, 8, 20, 30, 46, 80, 120]) {
     for (const paintTheme of [theme, named]) {
-      const line = formatRunRow(wide, paintTheme, width);
+      const line = formatRunRow(wide, paintTheme, width, FIXTURE_NOW);
       assert.ok(
         visibleWidth(line) <= width,
         `width ${width} produced ${visibleWidth(line)} cells`,

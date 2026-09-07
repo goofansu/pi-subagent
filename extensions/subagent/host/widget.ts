@@ -154,6 +154,7 @@ export interface ActiveWidget {
 export function installActiveWidget(
   host: WidgetHost,
   handoff: CompletionHandoffView,
+  now: () => number,
 ): Effect.Effect<ActiveWidget, never, RunRepository | Scope.Scope> {
   return Effect.gen(function* () {
     const repository = yield* RunRepository;
@@ -190,7 +191,9 @@ export function installActiveWidget(
 
     const render = (theme: RenderableTheme, width: number): string[] => {
       renderPending = false;
-      return [...renderRunRows(latest, theme, width)];
+      // Sample only when the host actually renders. Time passing schedules
+      // nothing; the age may remain stale until this callback runs again.
+      return [...renderRunRows(latest, theme, width, now())];
     };
 
     /** Ask the host to draw, unless it has already been asked and not yet has. */

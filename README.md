@@ -63,8 +63,9 @@ The widget above the editor adapts to the number of active Runs:
 - **None:** hidden unless terminal completion hand-offs remain unresolved; those
   show only compact outcome and delivery-attention counts.
 - **One:** a summary plus the active Run's Profile, state, and available
-  activity. Turn count and backend follow when space permits; the Label uses
-  only room left after those more useful fields.
+  activity. When known and space permits, the activity is followed by how long
+  that displayed semantic summary has been unchanged. Turn count and backend
+  follow; the Label uses only room left after those more useful fields.
 - **Two or more:** aggregate counts only, with no individual activity or rows.
   Hidden activity and accounting updates do not request identical redraws.
 
@@ -72,11 +73,19 @@ One active Run, alongside an unresolved completion at a wide layout:
 
 ```text
  subagents   1 running   1 completed
- explore  running  grep: getFinalOutput  3 turns  pi  look around
+ explore  running  grep: getFinalOutput  12.4s ago  3 turns  pi  look around
 ```
 
+The age means “summary last changed,” not agent inactivity: repeated work can
+produce the same semantic summary without resetting it. It is omitted when the
+matching activity or timestamp is unavailable, when activity clears, and while
+the Run is finalizing or cancelling, so retained history never implies that an
+old tool is still executing. Time is sampled on widget events or actual renders,
+never by a timer; an otherwise quiet displayed age may stay unchanged until the
+next render.
+
 At a 32-cell layout, the Profile, state, and useful activity remain while the
-Label, backend, and then accounting give way:
+Label, backend, accounting, and then age give way:
 
 ```text
  subagents   1 running   1 comp…

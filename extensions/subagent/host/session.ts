@@ -31,7 +31,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Effect, ManagedRuntime, Scope } from "effect";
+import { Clock, Effect, ManagedRuntime, Scope } from "effect";
 import type { Profile, ProfileDiagnostic } from "../domain/index.ts";
 import { formatInvalidProfilesWarning } from "../presentation/index.ts";
 import type {
@@ -104,7 +104,12 @@ function openSession(
 ): Effect.Effect<StartedSession, never, SessionServices | Scope.Scope> {
   return Effect.gen(function* () {
     const catalog = yield* ProfileCatalog;
-    const widget = yield* installActiveWidget(host, handoff);
+    const clock = yield* Clock.Clock;
+    const widget = yield* installActiveWidget(
+      host,
+      handoff,
+      clock.currentTimeMillisUnsafe,
+    );
     return {
       widget,
       profiles: catalog.list(),

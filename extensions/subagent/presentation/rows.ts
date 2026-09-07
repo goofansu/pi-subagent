@@ -2,8 +2,9 @@
  * Ambient widget: aggregate state and, for exactly one active Run, one detail line.
  *
  * A single active Run reads in priority order: *which Profile*, *what state*,
- * and *what useful activity*. Existing turn accounting and backend follow only
- * when those essentials fit. The Label is supplementary and uses space left
+ * and *what useful activity*. When the current activity has its retained
+ * semantic timestamp, its age follows; existing turn accounting and backend
+ * come later. The Label is supplementary and uses space left
  * after them, so orientation never replaces all useful activity.
  *
  * ```
@@ -11,9 +12,10 @@
  *  explore  running  grep: x  3 turns  pi  look around
  * ```
  *
- * A live row has no spinner or clock. No glyph column either: the state word
- * already says which phase the Run is in, and a mark before the Profile would
- * repeat it.
+ * A live row has no spinner or ticking clock. Its optional age is the time
+ * since the displayed semantic summary changed, sampled only when the host
+ * renders. No glyph column either: the state word already says which phase the
+ * Run is in, and a mark before the Profile would repeat it.
  *
  * The active detail is painted as a pending tool-call band. Terminal Runs
  * contribute only counts to the widget, never individual rows.
@@ -27,7 +29,7 @@
  * This module formats. It does not decide which Runs exist, when the widget
  * appears, or when it redraws — those are host concerns, and a presentation
  * module that knew them would be holding lifecycle state. Nothing here reads
- * a clock.
+ * a clock; the host supplies the render instant as plain presentation input.
  */
 
 import {
@@ -37,6 +39,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { isTerminalRunPhase, type RunPhase } from "../domain/index.ts";
 import {
+  formatDuration,
   formatTurns,
   RUN_PHASE_DISPLAY_ORDER,
   runPhaseTone,
@@ -174,15 +177,16 @@ function allocateEssentialDetail(
  * One active Run as a single width-aware line.
  *
  * Profile, state, and honest current activity are allocated first. A long
- * Profile is capped and can shrink further to preserve useful activity. Turns
- * and backend are appended only when the complete essential presentation fits;
- * Label uses only the final remainder. Finalization and cancellation omit
- * retained activity because it no longer describes something executing now.
+ * Profile is capped and can shrink further to preserve useful activity. The
+ * matching semantic age follows activity, before turns and backend; Label uses
+ * only the final remainder. Finalization and cancellation omit retained
+ * activity and age because they no longer describe something executing now.
  */
 export function formatRunRow(
   row: RunRowView,
   theme: RenderableTheme,
   width: number,
+  now: number,
 ): string {
   const essential = allocateEssentialDetail(row, width);
   const parts: DetailPart[] = [];
@@ -211,8 +215,26 @@ export function formatRunRow(
     parts.push(part);
     return true;
   };
+  // Pair age only with the current semantic summary it describes. A retained
+  // summary after clear/finalization is history, not evidence that its tool is
+  // still executing. If a real age cannot fit, lower-priority metadata does
+  // not jump ahead of it.
+  const retainedActivity = row.lastActivity;
+  const activityAge =
+    essential.activity !== undefined &&
+    retainedActivity !== undefined &&
+    row.activity === retainedActivity.summary
+      ? `${formatDuration(now - retainedActivity.changedAt)} ago`
+      : undefined;
+  const ageShown =
+    activityAge === undefined ||
+    appendWhole({
+      text: activityAge,
+      paint: (text) => theme.fg("dim", text),
+    });
   const accountingShown =
     essential.optionalsAllowed &&
+    ageShown &&
     appendWhole({
       text: formatTurns(row.usage.turns),
       paint: (text) => theme.fg("dim", text),
@@ -391,6 +413,7 @@ export function renderRunRows(
   rows: readonly RunRowView[],
   theme: RenderableTheme,
   width: number,
+  now: number,
 ): readonly string[] {
   if (rows.length === 0) return [];
 
@@ -403,7 +426,7 @@ export function renderRunRows(
     ...shown.map((row) =>
       paintBand(
         truncateToWidth(
-          ` ${formatRunRow(row, theme, Math.max(0, width - ROW_INSET * 2))}`,
+          ` ${formatRunRow(row, theme, Math.max(0, width - ROW_INSET * 2), now)}`,
           width,
           "…",
         ),

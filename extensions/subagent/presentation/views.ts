@@ -17,6 +17,7 @@ import type {
   CancellationRequest,
   RunIdentity,
   RunPhase,
+  SemanticActivity,
   TerminalRunPhase,
   UsageSnapshot,
 } from "../domain/index.ts";
@@ -54,6 +55,8 @@ export interface RunRowView {
   readonly cancellation?: CancellationRequest;
   /** Conflated and display-only. Absent once the Run settles. */
   readonly activity?: string;
+  /** The retained semantic summary and the instant that summary last changed. */
+  readonly lastActivity?: SemanticActivity;
   readonly usage: UsageSnapshot;
   /** How many tool calls the Run has, not which ones. */
   readonly tools: number;
