@@ -75,7 +75,7 @@ One active Run, alongside an unresolved completion at a wide layout:
 
 ```text
  subagents   1 running   1 completed
- look around  running  grep: getFinalOutput                  12.4s
+ look around  running · grep: getFinalOutput                 12.4s
 ```
 
 Elapsed means time since the Run started, using the same duration formatting
@@ -87,13 +87,17 @@ incidental renders, resizes, theme changes, and completion hand-off changes do
 not advance it. A quiet Run's displayed duration stays at the last event sample.
 
 Space is reserved for elapsed, with a flexible gap after the left-aligned
-Label, state, and activity. Activity truncates to preserve elapsed where feasible;
+Label, state, and activity. A dim `·` separates status from muted, non-italic
+activity. When no current activity is displayed, including during finalization
+or cancellation, `· —` appears instead, matching the dashboard placeholder
+without reviving retained activity. The separator and placeholder hide together
+if too narrow. Activity truncates to preserve elapsed where feasible;
 at very narrow widths elapsed hides rather than displacing useful activity.
-At a 32-cell layout:
+At a 33-cell layout:
 
 ```text
  subagents   1 running   1 comp…
- look a…  running  grep: getFi…
+ look a…  running · grep: getFi…
 ```
 
 Multiple active Runs:

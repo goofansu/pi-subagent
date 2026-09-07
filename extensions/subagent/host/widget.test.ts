@@ -69,7 +69,7 @@ test("the widget appears with the first live Run and its row reads as the matrix
   // activity publication is guaranteed. Accounting can race that activity too.
   assert.match(
     rows[1],
-    new RegExp(`^ look around {2}running( {2}${RIG_ACTIVITY})? +0\\.0s$`),
+    new RegExp(`^ look around {2}running · (${RIG_ACTIVITY}|—) +0\\.0s$`),
   );
 
   // Once the real repository/subscriber pipeline has published the scripted
@@ -77,7 +77,7 @@ test("the widget appears with the first live Run and its row reads as the matrix
   await rig.pump();
   assert.match(
     rig.host.widgetLines(120)[1] ?? "",
-    new RegExp(`^ look around {2}running {2}${RIG_ACTIVITY} +0\\.0s$`),
+    new RegExp(`^ look around {2}running · ${RIG_ACTIVITY} +0\\.0s$`),
   );
 });
 
@@ -127,7 +127,7 @@ test("elapsed advances only on Run publications, independent of activity and inc
   const started = await heldRun(rig);
   await rig.pump();
 
-  assert.match(rig.host.widgetLines(120)[1] ?? "", /running +0\.0s/);
+  assert.match(rig.host.widgetLines(120)[1] ?? "", /running · — +0\.0s/);
   await rig.advanceClock(1_000);
   await rig.release("first-activity");
   await rig.pump();
@@ -160,7 +160,7 @@ test("elapsed advances only on Run publications, independent of activity and inc
   await rig.pump();
   const cleared = rig.host.widgetLines(120)[1] ?? "";
   assert.doesNotMatch(cleared, /writing file|ago/);
-  assert.match(cleared, /running +1m 15s/);
+  assert.match(cleared, /running · — +1m 15s/);
 
   // Restoring activity does not reset elapsed Run duration.
   await rig.release("repeat-after-clear");
@@ -173,7 +173,7 @@ test("elapsed advances only on Run publications, independent of activity and inc
   await rig.release("finish");
   await rig.pump();
   const finalizing = rig.host.widgetLines(120)[1] ?? "";
-  assert.match(finalizing, /finalizing +1m 15s/);
+  assert.match(finalizing, /finalizing · — +1m 15s/);
   assert.doesNotMatch(finalizing, /packing result|ago/);
   await rig.release("cleanup");
   await rig.settled(started.runId);
@@ -233,7 +233,7 @@ test("a Run of the one-shot backend omits backend and turns from detail", async 
 
   assert.match(
     rig.host.widgetLines(120)[1],
-    /^ look around {2}running +\d+\.\ds$/,
+    /^ look around {2}running · — +\d+\.\ds$/,
   );
 });
 
@@ -431,7 +431,7 @@ test("a burst of index changes coalesces into one render request per draw", asyn
   // And the conflation is not lossy: the row shows the latest state.
   assert.match(
     rig.host.widgetLines(80)[1],
-    new RegExp(`running {2}step ${BURST - 1}`),
+    new RegExp(`running · step ${BURST - 1}`),
   );
 });
 
@@ -481,7 +481,7 @@ test("a slow subscriber still renders the latest state after the burst", async (
   await heldRun(rig);
   await rig.pump();
 
-  assert.match(rig.host.widgetLines(80)[1], /running {2}last/);
+  assert.match(rig.host.widgetLines(80)[1], /running · last/);
 });
 
 test("the widget lists Runs that are not terminal and terminal ones whose hand-off is unresolved", () => {
@@ -628,11 +628,11 @@ test("adaptive modes follow 0 → 1 → 2 → 1 → 0 active Runs with unresolve
   const single = rig.host.widgetLines(120);
   assert.equal(single.length, 2);
   assert.match(single[0], /1 running.*1 completed/);
-  assert.match(single[1], /look around {2}running {2}newest work/);
+  assert.match(single[1], /look around {2}running · newest work/);
   assert.doesNotMatch(single[1], /completed/);
   const narrowSingle = rig.host.widgetLines(32);
   assert.match(narrowSingle[0], /1 running.*1 comp/);
-  assert.match(narrowSingle[1], /look ar… {2}running {2}newest work/);
+  assert.match(narrowSingle[1], /look a… {2}running · newest work/);
   assert.doesNotMatch(narrowSingle[1], /one-shot|once/);
   for (const line of narrowSingle) assert.ok(visibleWidth(line) <= 32);
 
@@ -678,7 +678,7 @@ test("drawn aggregate ignores alternating hidden activity and accounting but ret
   await rig.release("first-finish");
   await rig.settled(first.runId);
   await rig.pump();
-  assert.match(rig.host.widgetLines(120)[1], /running {2}second newest/);
+  assert.match(rig.host.widgetLines(120)[1], /running · second newest/);
   assert.ok(rig.host.renderRequests() > requests);
 });
 
@@ -720,7 +720,7 @@ test("finalizing and requested cancellation count as active, and visible changes
   await rig.pump();
   assert.match(
     rig.host.widgetLines(120)[1],
-    /look around {2}cancelling +\d+\.\ds$/,
+    /look around {2}cancelling · — +\d+\.\ds$/,
   );
   await rig.release("second-cleanup");
   await rig.settled(second.runId);
@@ -875,11 +875,11 @@ test("cancellation publishes elapsed without activity and cleanup keeps the samp
   await rig.pump();
   assert.match(
     rig.host.widgetLines(120)[1],
-    /look around {2}cancelling +2\.4s/,
+    /look around {2}cancelling · — +2\.4s/,
   );
   const requests = rig.host.renderRequests();
   await rig.advanceClock(1_000);
-  assert.match(rig.host.widgetLines(100)[1], /cancelling +2\.4s/);
+  assert.match(rig.host.widgetLines(100)[1], /cancelling · — +2\.4s/);
   assert.equal(rig.host.renderRequests(), requests);
   await rig.release("cleanup");
   await rig.settled(started.runId);

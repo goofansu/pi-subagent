@@ -7,7 +7,7 @@
  *
  * ```
  *  subagents   1 running   1 completed
- *  look around  running  grep: x                       12.4s
+ *  look around  running · grep: x                      12.4s
  * ```
  *
  * A live row has no spinner or ticking clock. Elapsed time uses the host's
@@ -54,8 +54,9 @@ export interface RenderableTheme {
   inverse(text: string): string;
 }
 
-/** Every fixed component in a row is separated by the same amount of space. */
+/** Label and status are separated by two spaces. */
 export const ROW_DELIMITER = "  ";
+const ACTIVITY_DELIMITER = " · ";
 
 /** A recognisable Label prefix retained before shortening activity. */
 const MIN_LABEL_WIDTH = 7;
@@ -69,18 +70,27 @@ export const ROW_INSET = 1;
 interface DetailPart {
   readonly text: string;
   readonly paint: (text: string) => string;
+  readonly separator?: string;
 }
 
 function partsWidth(parts: readonly DetailPart[]): number {
-  if (parts.length === 0) return 0;
-  return (
-    parts.reduce((total, part) => total + visibleWidth(part.text), 0) +
-    ROW_DELIMITER.length * (parts.length - 1)
+  return parts.reduce(
+    (total, part, index) =>
+      total +
+      visibleWidth(part.text) +
+      (index === 0 ? 0 : visibleWidth(part.separator ?? ROW_DELIMITER)),
+    0,
   );
 }
 
 function paintParts(parts: readonly DetailPart[]): string {
-  return parts.map((part) => part.paint(part.text)).join(ROW_DELIMITER);
+  return parts
+    .map(
+      (part, index) =>
+        (index === 0 ? "" : (part.separator ?? ROW_DELIMITER)) +
+        part.paint(part.text),
+    )
+    .join("");
 }
 
 /** Inputs here are plain; discard truncator resets before applying our paint. */
@@ -119,17 +129,11 @@ function allocateEssentialDetail(
     };
   }
 
+  // Match history's placeholder without reviving retained tool activity.
   const currentActivity =
     row.phase === "running" && row.cancellation === undefined
-      ? row.activity
-      : undefined;
-  if (currentActivity === undefined) {
-    return {
-      label: truncatePlainText(label, labelBesideState),
-      state,
-      optionalsAllowed: true,
-    };
-  }
+      ? row.activity || "—"
+      : "—";
 
   const activityMinimum = Math.min(
     MIN_ACTIVITY_WIDTH,
@@ -137,7 +141,7 @@ function allocateEssentialDetail(
   );
   const roomForLabelAndActivity = Math.max(
     0,
-    width - stateWidth - ROW_DELIMITER.length * 2,
+    width - stateWidth - ROW_DELIMITER.length - ACTIVITY_DELIMITER.length,
   );
   let labelWidth = visibleWidth(label);
   let activityWidth = visibleWidth(currentActivity);
@@ -209,7 +213,8 @@ export function formatRunRow(
   if (essential.activity) {
     parts.push({
       text: essential.activity,
-      paint: (text) => theme.fg("muted", theme.italic(text)),
+      separator: ` ${theme.fg("dim", "·")} `,
+      paint: (text) => theme.fg("muted", text),
     });
   }
 
