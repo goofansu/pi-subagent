@@ -31,10 +31,9 @@ import type {
 import { Effect } from "effect";
 import type { SubagentsServices, ToolResponse } from "../application/index.ts";
 import { type SessionFacts, Subagents } from "../application/index.ts";
-import { type RunId, runId } from "../domain/index.ts";
+import type { RunId } from "../domain/index.ts";
 import {
   formatSessionNotReady,
-  isCollectedRuns,
   renderCollectedResult,
   renderResumeResult,
   renderStartCall,
@@ -106,6 +105,16 @@ function hostResult(response: ToolResponse): HostToolResult {
 }
 
 /**
+ * A tool result that is a sentence and nothing else.
+ *
+ * What a decode failure answers with: no row to draw and no Result handed
+ * back, said rather than left out — see {@link ToolResponse.deliveredRuns}.
+ */
+function hostSentence(text: string): HostToolResult {
+  return hostResult({ text, deliveredRuns: [] });
+}
+
+/**
  * The facts a Run inherits, read from the live Session at execute time.
  *
  * Read now rather than at Session start, because the model and the thinking
@@ -139,28 +148,6 @@ function sessionFactsOf(
           },
         }),
   };
-}
-
-/**
- * The Runs whose Result a response delivered.
- *
- * `Subagents.result` answers `{ text, details: { runs: [summary] } }` only for
- * a Result it actually returned, and the two waits list in `runs` exactly the
- * Runs whose Result rode back on the outcome; every rejection, every
- * still-running entry, and every evicted output answers outside that list. So
- * the handler can recognise a delivered Result without the application
- * learning that a host surface exists, which is the whole reason consumption
- * is recorded here.
- *
- * Read through `isCollectedRuns`, the presentation guard the collapsed line
- * already uses, rather than through a cast: the shape is `CollectedRuns` and
- * saying so is what makes a change to it a compile error here instead of a
- * silently missing consumption.
- */
-function deliveredRuns(response: ToolResponse): readonly RunId[] {
-  const { details } = response;
-  if (!isCollectedRuns(details)) return [];
-  return details.runs.map((run) => runId(run.runId));
 }
 
 /**
@@ -226,7 +213,20 @@ export function registerSubagentTools(
   /** What every handler answers with when there is no live runtime. */
   const notReady = (copy: ToolCopy): ToolResponse => ({
     text: formatSessionNotReady(copy.name),
+    deliveredRuns: [],
   });
+
+  /**
+   * Record every Result this response says it handed back.
+   *
+   * The one reader of {@link ToolResponse.deliveredRuns}, called from the two
+   * waits and from `agent_result` — the three operations that can hand a
+   * Result back. Every other response states an empty list, so there is no
+   * shape here to recognise and nothing to fall back to.
+   */
+  const recordDelivered = (response: ToolResponse): void => {
+    for (const id of response.deliveredRuns) handoff.consumed(id);
+  };
 
   /**
    * Run a wait and hand its delivered Results over.
@@ -268,9 +268,7 @@ export function registerSubagentTools(
         ),
         () =>
           Effect.tap(work, (response) =>
-            Effect.sync(() => {
-              for (const id of deliveredRuns(response)) handoff.consumed(id);
-            }),
+            Effect.sync(() => recordDelivered(response)),
           ),
       ),
     );
@@ -317,7 +315,7 @@ export function registerSubagentTools(
       ctx: ExtensionContext,
     ): Promise<HostToolResult> {
       const input = decodeStart(params);
-      if (!input.decoded) return hostResult({ text: input.text });
+      if (!input.decoded) return hostSentence(input.text);
       // Deliberately no signal. The turn's cancellation must not reach a
       // detached Run: the point of starting one is that it outlives the turn.
       return hostResult(
@@ -342,7 +340,7 @@ export function registerSubagentTools(
       params: unknown,
     ): Promise<HostToolResult> {
       const input = decodeResume(params);
-      if (!input.decoded) return hostResult({ text: input.text });
+      if (!input.decoded) return hostSentence(input.text);
       return hostResult(
         await handle.run(Subagents.resume(input.value), notReady(RESUME_COPY)),
       );
@@ -363,7 +361,7 @@ export function registerSubagentTools(
       signal: AbortSignal | undefined,
     ): Promise<HostToolResult> {
       const input = decodeWait(params);
-      if (!input.decoded) return hostResult({ text: input.text });
+      if (!input.decoded) return hostSentence(input.text);
       return collected(
         WAIT_COPY,
         input.value.ids,
@@ -388,7 +386,7 @@ export function registerSubagentTools(
       signal: AbortSignal | undefined,
     ): Promise<HostToolResult> {
       const input = decodeWaitAll(params);
-      if (!input.decoded) return hostResult({ text: input.text });
+      if (!input.decoded) return hostSentence(input.text);
       // The ids this wait covers are read off the index inside the façade, so
       // the hold has to cover every Run: a hold on a list the handler does not
       // yet have would be a hold on nothing.
@@ -415,18 +413,18 @@ export function registerSubagentTools(
       params: unknown,
     ): Promise<HostToolResult> {
       const input = decodeResult(params);
-      if (!input.decoded) return hostResult({ text: input.text });
+      if (!input.decoded) return hostSentence(input.text);
       const response = await handle.run(
         Subagents.result(input.value),
         notReady(RESULT_COPY),
       );
       // The parent now has the answer, so its completion notice has nothing
-      // left to tell it. Recognised by the shape the façade answers a
-      // *returned Result* with and no other: every rejection — `not yet
-      // terminal`, an unknown id, an expired Result — answers with text
-      // alone. If that shape ever changes, the tools test for consumption is
-      // what fails.
-      for (const id of deliveredRuns(response)) handoff.consumed(id);
+      // left to tell it. Read off the field the façade states it in, and off
+      // nothing else: every rejection — `not yet terminal`, an unknown id, an
+      // expired Result — names no Run there, and a Run that appears only in
+      // the details the collapsed row is drawn from is a drawing rather than
+      // a hand-off.
+      recordDelivered(response);
       return hostResult(response);
     },
   });
@@ -443,7 +441,7 @@ export function registerSubagentTools(
       params: unknown,
     ): Promise<HostToolResult> {
       const input = decodeCancel(params);
-      if (!input.decoded) return hostResult({ text: input.text });
+      if (!input.decoded) return hostSentence(input.text);
       // Cancellation requests do not claim delivery: each Run still stores its
       // terminal result and still sends its own cancellation notification.
       return hostResult(
@@ -465,7 +463,7 @@ export function registerSubagentTools(
       params: unknown,
     ): Promise<HostToolResult> {
       const input = decodeSteer(params);
-      if (!input.decoded) return hostResult({ text: input.text });
+      if (!input.decoded) return hostSentence(input.text);
       return hostResult(
         await handle.run(Subagents.steer(input.value), notReady(STEER_COPY)),
       );

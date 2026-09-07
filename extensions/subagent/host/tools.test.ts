@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { ToolResponse } from "../application/index.ts";
 import { runId } from "../domain/index.ts";
 import { installSubagentV2 } from "../index.ts";
 import { emitText } from "../testing/fakes/script.ts";
@@ -10,9 +11,14 @@ import {
   RIG_RESUMABLE_PROFILE,
   startedIds,
 } from "../testing/host-rig.ts";
-import { createStandInHost } from "../testing/stand-in-host.ts";
+import {
+  createStandInHost,
+  type StandInHost,
+} from "../testing/stand-in-host.ts";
 import { STRESS_POLICY } from "../testing/stress-policy.ts";
 import { createDemoBackendSet } from "./demo-backends.ts";
+import { createSessionHandle, type SessionHandle } from "./session-handle.ts";
+import { registerSubagentTools } from "./tools.ts";
 
 /**
  * Every public operation, driven through the registered handler.
@@ -22,6 +28,12 @@ import { createDemoBackendSet } from "./demo-backends.ts";
  * supervisor, the repository, or the store: if a rule is real it is visible at
  * the surface, and if it is not visible at the surface it is not a rule a user
  * or a model can rely on.
+ *
+ * One section is deliberately not that shape, and is separated for it. *The
+ * stated delivery* drives the handlers over an application outcome the test
+ * wrote rather than over a live Session, because the case it covers — a
+ * collapsed row naming a Run the outcome did not hand back — is one the real
+ * façade cannot produce. Everything else here builds a `hostRig`.
  */
 
 /** Start a Session and start one Run on the named Profile. */
@@ -776,9 +788,9 @@ test("a rejected agent_result tells the host nothing", async (t) => {
 
   const started = await startedRun(rig);
 
-  // `not yet terminal` and an unknown id both answer with text alone, which is
-  // the shape the handler recognises success by. Neither is a Result the
-  // parent now has.
+  // `not yet terminal` and an unknown id both name no delivered Run, which is
+  // what the handler records consumption from. Neither is a Result the parent
+  // now has.
   await rig.text("agent_result", { id: started.runId });
   await rig.text("agent_result", { id: "run-never" });
 
@@ -814,6 +826,71 @@ test("a Result the store evicted tells the host nothing either", async (t) => {
     /its output was evicted/,
   );
   assert.equal(rig.installation.sink.status(runId(first.runId)), "pending");
+});
+
+// ── The stated delivery ──────────────────────────────────────────────────────
+
+/**
+ * A session handle that answers every call with one response a test wrote.
+ *
+ * Every other test here drives the real façade, and the real façade cannot
+ * produce the case the next one needs: a response whose collapsed line names a
+ * Run that its stated delivery does not. Keeping those two apart is what the
+ * stated field bought, so the divergence has to be built by hand.
+ */
+function handleAnswering(response: ToolResponse): SessionHandle {
+  // `run` is generic in the answer it gives back; this one always gives back
+  // the response the test wrote, which no signature can say.
+  return { ...createSessionHandle(), run: async () => response as never };
+}
+
+/** The seven handlers, with nothing behind them but one canned response. */
+function handlersOver(response: ToolResponse): {
+  readonly host: StandInHost;
+  /** Every Run the handlers recorded as consumed, in order. */
+  readonly consumed: readonly string[];
+} {
+  const host = createStandInHost();
+  const consumed: string[] = [];
+  registerSubagentTools(host.pi, handleAnswering(response), [], () => 0, {
+    consumed: (id) => consumed.push(id),
+    hold: () => () => undefined,
+  });
+  return { host, consumed };
+}
+
+test("a Run on the collapsed line alone is not recorded as consumed", async () => {
+  const drawn = {
+    runId: "run-drawn",
+    agent: "explore",
+    status: "completed",
+  } as const;
+  const collapsedOnly = handlersOver({
+    text: "the answer",
+    // Drawn in the row, and stated as handed back by nothing.
+    details: { runs: [drawn] },
+    deliveredRuns: [],
+  });
+
+  const result = await collapsedOnly.host.call("agent_result", {
+    id: drawn.runId,
+  });
+
+  // The row still draws the Run — this is a display change and it displays —
+  // and no Completion hand-off moved.
+  assert.deepEqual(result.details, { runs: [drawn] });
+  assert.deepEqual(collapsedOnly.consumed, []);
+});
+
+test("the stated delivery records consumption with no collapsed line at all", async () => {
+  const statedOnly = handlersOver({
+    text: "the answer",
+    deliveredRuns: [runId("run-handed-back")],
+  });
+
+  await statedOnly.host.call("agent_result", { id: "run-handed-back" });
+
+  assert.deepEqual(statedOnly.consumed, ["run-handed-back"]);
 });
 
 // ── The teardown race ────────────────────────────────────────────────────────
