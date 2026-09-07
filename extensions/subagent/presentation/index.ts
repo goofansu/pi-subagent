@@ -10,10 +10,25 @@
  * That rule is what makes the presentation layer testable with exact strings
  * and what keeps state out of it: v1's dispatcher ended up owning presentation
  * state because presentation could reach the thing that owned lifecycle.
+ *
+ * This barrel is the module's one interface: every file in the module is
+ * exported here, and every consumer outside `presentation/` enters through it
+ * rather than naming a file by path. A consumer that reached a file by path
+ * would be building against an implementation detail, and the next surface
+ * would find a precedent for it.
+ *
+ * Unlike the import restriction above, that is a convention and not a checked
+ * rule: no boundary rule rejects a consumer reaching past this file, so a new
+ * presentation file belongs in the list below when it is written.
  */
 
+export * from "./banner.ts";
+export * from "./browser-panel.ts";
 export * from "./completion-view.ts";
 export * from "./details.ts";
+export * from "./history.ts";
+export * from "./inspection.ts";
+export * from "./labels.ts";
 export * from "./notification-text.ts";
 export * from "./prose.ts";
 export * from "./renderers.ts";
