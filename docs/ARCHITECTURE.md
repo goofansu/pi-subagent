@@ -399,7 +399,8 @@ reports both plus hand-off counts, not provider continuation identities.
 | Architecture changes | [boundaries](../extensions/subagent/boundaries.test.ts), [contract shape](../extensions/subagent/backend/contract.test.ts) |
 
 [Commands](../package.json): `npm run typecheck`, `npm test`, `npm run test:conformance`;
-`npm run check` adds lint and `npm run profiles:smoke`. The offline
+`npm run check` adds lint and `npm run profiles:smoke`. GitHub Actions runs this
+same check for every pull request and every push to `main`. The offline
 [Profile package smoke check](../scripts/bundled-profiles-smoke.mjs) packs and
 loads the production extension through Pi from an unrelated working directory,
 verifying bundled resources, configured user overrides, diagnostics,
