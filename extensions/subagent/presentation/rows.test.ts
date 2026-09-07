@@ -148,6 +148,27 @@ test("elapsed remains through absent, cleared, mismatched, finalizing and cancel
   }
 });
 
+test("a terminal row reads the shared activity rule rather than a second one", () => {
+  // The widget itself draws no terminal row, but this formatter is public and
+  // resolves a Run through the same derivation the dashboard history does, so
+  // a stopped Run says why it stopped on both surfaces or on neither.
+  assert.equal(
+    row(
+      120,
+      { phase: "cancelled", cancellation: { reason: "timeout" } },
+      99_000,
+    ),
+    "look around  cancelled · timeout  12.4s",
+  );
+  assert.deepEqual(
+    widget(
+      [fixtureRow({ phase: "cancelled", cancellation: { reason: "timeout" } })],
+      80,
+    ).map((line) => stripVTControlCharacters(line).trimEnd()),
+    [" subagents   1 cancelled"],
+  );
+});
+
 test("labels share history's 40-column ellipsis cap including wide Unicode", () => {
   for (const [label, expected] of [
     ["L".repeat(40), "L".repeat(40)],
