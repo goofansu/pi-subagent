@@ -43,14 +43,15 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Effect } from "effect";
-import type { Profile } from "../domain/index.ts";
-import { formatRowSummary, type RunRowView } from "../presentation/index.ts";
 import {
   COUNTER_CLASSES,
+  publishedRuns,
+  runtimeProbe,
   type SupervisorCounter,
-} from "../runtime/counters.ts";
-import { RunRepository } from "../runtime/repository.ts";
-import { SubagentSupervisor } from "../runtime/supervisor.ts";
+  sessionCounters,
+} from "../application/observation.ts";
+import type { Profile } from "../domain/index.ts";
+import { formatRowSummary, type RunRowView } from "../presentation/index.ts";
 import { openDashboardUi } from "./dashboard-command.ts";
 import type { SessionHandle } from "./session-handle.ts";
 import type { CompletionHandoffView } from "./widget.ts";
@@ -406,12 +407,14 @@ async function readLiveSession(
 ): Promise<LiveSessionStatus | undefined> {
   return handle.run<LiveSessionStatus | undefined>(
     Effect.gen(function* () {
-      const supervisor = yield* SubagentSupervisor;
-      const repository = yield* RunRepository;
       return {
-        runs: yield* repository.list(),
-        counters: { ...supervisor.counters() },
-        probe: { ...supervisor.probe() },
+        runs: yield* publishedRuns(),
+        // Widened into the structural blocks the report prints. The seam
+        // returns the runtime's own typed records; the report is keyed by
+        // name so that a counter added to either appears without this file
+        // naming it, and the spread is where the two views meet.
+        counters: { ...(yield* sessionCounters()) },
+        probe: { ...(yield* runtimeProbe()) },
       };
     }),
     undefined,

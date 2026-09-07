@@ -36,13 +36,12 @@ import type { Profile, ProfileDiagnostic } from "../domain/index.ts";
 import { formatInvalidProfilesWarning } from "../presentation/index.ts";
 import type {
   BackendSet,
+  ResultEncoder,
+  RuntimePolicy,
   SessionRuntimeOptions,
   SessionServices,
 } from "../runtime/composition.ts";
-import { sessionRuntimeLayer } from "../runtime/composition.ts";
-import type { RuntimePolicy } from "../runtime/policy.ts";
-import { ProfileCatalog } from "../runtime/profile-catalog.ts";
-import type { ResultEncoder } from "../runtime/result-store.ts";
+import { loadedProfiles, sessionRuntimeLayer } from "../runtime/composition.ts";
 import type { SessionPushSink } from "./push-sink.ts";
 import type { SessionHandle } from "./session-handle.ts";
 import { formatAgentGuidelines } from "./tool-copy.ts";
@@ -107,7 +106,7 @@ function openSession(
   handoff: CompletionHandoffView,
 ): Effect.Effect<OpenedSession, never, SessionServices | Scope.Scope> {
   return Effect.gen(function* () {
-    const catalog = yield* ProfileCatalog;
+    const catalog = yield* loadedProfiles();
     const clock = yield* Clock.Clock;
     const widget = yield* installActiveWidget(
       host,
@@ -116,8 +115,8 @@ function openSession(
     );
     return {
       widget,
-      profiles: catalog.list(),
-      diagnostics: catalog.diagnostics(),
+      profiles: catalog.profiles,
+      diagnostics: catalog.diagnostics,
       currentInstant: clock.currentTimeMillisUnsafe,
     };
   });

@@ -7,31 +7,32 @@
  * already final and scrolled away. This widget provides ambient visibility;
  * `/subagent dashboard` provides individual Runs and history.
  *
- * It is **observation-only**. It reads the repository's published index, folds
- * nothing, and holds no lifecycle state: the one thing it remembers is the
- * latest index it was handed, and that is a cache rather than state, because
- * throwing it away and re-reading would produce the same rows.
+ * It is **observation-only**. It follows the Session's published Runs through
+ * the application module's observation seam, folds nothing, and holds no
+ * lifecycle state: the one thing it remembers is the latest index it was
+ * handed, and that is a cache rather than state, because throwing it away and
+ * re-reading would produce the same rows.
  *
- * ## Coalescing is the consumer's job
+ * ## Coalescing is the seam's rule, and this is the widget's share of it
  *
- * The M2 exit gate left this decision to its first real consumer, and this is
- * it. The published *snapshot* is conflated — a row holds one activity value,
+ * The published *snapshot* is conflated — a row holds one activity value,
  * replaced rather than appended, so a hundred progress updates grow the index
- * by nothing. The change *stream* is not: `SubscriptionRef.changes` delivers
- * one element per change however far behind a subscriber is, and the
- * repository's `subscribe` reads the current index at each delivery, so a slow
- * subscriber is never handed a stale value but is still handed one element per
- * change.
+ * by nothing. The change *stream* is not: every publication is delivered, with
+ * the index as it is at that moment, so a slow subscriber is never handed a
+ * stale value but is still handed one delivery per change.
  *
- * So the subscriber here keeps only the latest index in a reference and asks
- * the host to render **at most once per change batch**: a render request is
- * armed, and further changes arriving before the host renders re-arm nothing.
- * Rendering reads the reference. A backend reporting activity a thousand times
- * a second therefore costs a thousand cheap reference writes and as many
- * renders as the terminal can actually draw, rather than a thousand renders
- * queued behind each other. In aggregate mode, unchanged presentation counts
- * request no redraw even after a frame has been drawn. Source updates are
- * still cached, so returning to single-Run detail shows its newest activity.
+ * So the subscriber here keeps only the latest index in a variable and asks
+ * the host to render **at most once per change batch**, through the seam's
+ * pending-refresh latch: a render is asked for, and further changes arriving
+ * before the host draws re-arm nothing. Rendering reads the variable. A
+ * backend reporting activity a thousand times a second therefore costs a
+ * thousand cheap writes and as many renders as the terminal can actually draw,
+ * rather than a thousand renders queued behind each other. The dashboard's
+ * feed throttles its summary query with the same latch, which is why the two
+ * surfaces cannot drift apart in how they throttle. In aggregate mode,
+ * unchanged presentation counts request no redraw even after a frame has been
+ * drawn. Source updates are still cached, so returning to single-Run detail
+ * shows its newest activity.
  *
  * ## Appearing and disappearing
  *
@@ -62,7 +63,14 @@
  */
 
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { Effect, type Scope, Stream } from "effect";
+import { Effect, type Scope } from "effect";
+import {
+  followPublishedRuns,
+  type ObservationServices,
+  pendingRefresh,
+  type RunIndex,
+  type RunSnapshot,
+} from "../application/observation.ts";
 import { isTerminalRunPhase, type RunId } from "../domain/index.ts";
 import {
   type HandoffStatus,
@@ -72,8 +80,6 @@ import {
   renderRunRows,
   widgetSummary,
 } from "../presentation/index.ts";
-import type { RunIndex, RunSnapshot } from "../runtime/repository.ts";
-import { RunRepository } from "../runtime/repository.ts";
 
 /** The widget key this extension owns in Pi's widget map. */
 export const WIDGET_KEY = "subagent-runs";
@@ -150,14 +156,18 @@ export interface ActiveWidget {
  * Returns a handle a test reads. The uninstall is the Scope's job: the
  * subscription and the widget itself go when the Session Scope closes, which
  * is the same close that disposes the runtime.
+ *
+ * The requirement is the seam's whole union rather than the one service the
+ * follow actually needs, because naming that service here is exactly the edge
+ * the boundary rule removes — and asking for more than it uses costs a caller
+ * that already holds every one of them nothing.
  */
 export function installActiveWidget(
   host: WidgetHost,
   handoff: CompletionHandoffView,
   now: () => number,
-): Effect.Effect<ActiveWidget, never, RunRepository | Scope.Scope> {
+): Effect.Effect<ActiveWidget, never, ObservationServices | Scope.Scope> {
   return Effect.gen(function* () {
-    const repository = yield* RunRepository;
     /**
      * The latest index and the rows it produced, as plain variables.
      *
@@ -182,33 +192,31 @@ export function installActiveWidget(
     let installed = false;
     let requestRender: (() => void) | undefined;
     /**
-     * Whether a render has been asked for and not yet performed.
+     * The draw this widget has asked for and not yet been given.
      *
-     * This one boolean is the whole coalescing mechanism: while it is set, a
-     * further change updates the reference and asks for nothing, because a
-     * render that has not happened yet will read the newer value anyway.
+     * The coalescing rule itself is the observation seam's, and this is the
+     * whole of the widget's share in it: a change arriving before the host has
+     * drawn updates the cache and asks for nothing, because the draw that has
+     * not happened yet will read the newer value anyway. The dashboard's feed
+     * throttles its summary query with the same latch, which is what makes
+     * "the two surfaces coalesce alike" a fact rather than a coincidence.
      */
-    let renderPending = false;
+    const draw = pendingRefresh(() => {
+      renderRequests += 1;
+      requestRender?.();
+    });
 
     const render = (theme: RenderableTheme, width: number): string[] => {
-      renderPending = false;
+      draw.done();
       // Incidental renders, resizes and hand-off updates reuse the last Run
       // publication's clock sample. Only Run events advance elapsed duration.
       return [...renderRunRows(latest, theme, width, sampledAt)];
     };
 
-    /** Ask the host to draw, unless it has already been asked and not yet has. */
-    const requestDraw = (): void => {
-      if (renderPending) return;
-      renderPending = true;
-      renderRequests += 1;
-      requestRender?.();
-    };
-
     const resetInstallState = (): void => {
       installed = false;
       requestRender = undefined;
-      renderPending = false;
+      draw.done();
     };
 
     const uninstall = (): void => {
@@ -252,7 +260,7 @@ export function installActiveWidget(
         install();
         return;
       }
-      if (!unchanged) requestDraw();
+      if (!unchanged) draw.request();
     };
 
     /** Re-read both sources and put the host in step with them. */
@@ -285,17 +293,12 @@ export function installActiveWidget(
     const stopWatchingHandoffs = handoff.subscribe(refresh);
     yield* Effect.addFinalizer(() => Effect.sync(stopWatchingHandoffs));
 
-    const changesStream = yield* repository.subscribe();
-    yield* Effect.forkScoped(
-      Stream.runForEach(changesStream, (published: RunIndex) =>
-        Effect.sync(() => {
-          changes += 1;
-          index = published;
-          sampledAt = now();
-          refresh();
-        }),
-      ),
-    );
+    yield* followPublishedRuns((published: RunIndex) => {
+      changes += 1;
+      index = published;
+      sampledAt = now();
+      refresh();
+    });
 
     return {
       rows: () => latest,
