@@ -57,6 +57,19 @@ test("panel fills exact viewport bounds, even at zero/tiny sizes and with styled
   }
 });
 
+test("panel uses the theme's neutral surface rather than its custom-message background", () => {
+  const backgrounds: string[] = [];
+  browserPanel(browserViewport(40, 24), "Title", ["Body"], "Close", {
+    ...theme,
+    bg: (color, text) => {
+      backgrounds.push(color);
+      return theme.bg(color, text);
+    },
+  });
+  assert.ok(backgrounds.length > 0);
+  assert.deepEqual([...new Set(backgrounds)], ["userMessageBg"]);
+});
+
 test("normal panel reserves distinct header/footer rows and fills blank body rows", () => {
   const viewport = browserViewport(40, 24);
   assert.equal(viewport.contentWidth, 36);

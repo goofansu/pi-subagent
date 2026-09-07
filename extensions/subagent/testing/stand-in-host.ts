@@ -20,13 +20,16 @@
  * where an Effect is run. No production module does either.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, initTheme } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   KeybindingsManager,
   TUI_KEYBINDINGS,
 } from "@earendil-works/pi-tui";
 import type { RenderableTheme } from "../presentation/index.ts";
+
+// Pi initializes this before rendering keyHint/rawKeyHint in custom components.
+initTheme(undefined, false);
 
 /** One registered tool, as the host holds it. */
 export interface StandInTool {

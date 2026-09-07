@@ -4,7 +4,11 @@
  * selection attached to Subagent/Run IDs rather than treating every line as a
  * SelectList item.
  */
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import {
+  type ExtensionCommandContext,
+  keyHint,
+  rawKeyHint,
+} from "@earendil-works/pi-coding-agent";
 import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { Effect } from "effect";
 import { inspectRun, runSummaries } from "../application/history.ts";
@@ -273,9 +277,11 @@ export async function openRunsUi(
               ? -1
               : keys.matches(data, "tui.select.down")
                 ? 1
-                : keys.matches(data, "tui.select.pageUp")
+                : keys.matches(data, "tui.select.pageUp") ||
+                    matchesKey(data, "left")
                   ? -pageSize
-                  : keys.matches(data, "tui.select.pageDown")
+                  : keys.matches(data, "tui.select.pageDown") ||
+                      matchesKey(data, "right")
                     ? pageSize
                     : 0;
             if (!delta) return;
@@ -320,19 +326,30 @@ export async function openRunsUi(
                   Math.max(0, detailLines.length - bodyHeight),
                 ),
               );
-              const refresh = refreshable ? "R refresh · " : "";
+              const refresh = refreshable
+                ? `${rawKeyHint("r", "refresh")} · `
+                : "";
+              const back = keyHint("tui.select.cancel", "back");
+              const scroll = rawKeyHint(
+                [
+                  ...keys.getKeys("tui.select.up"),
+                  ...keys.getKeys("tui.select.down"),
+                ].join("/"),
+                "lines",
+              );
+              const page = rawKeyHint("←/→", "page");
               return browserPanel(
                 viewport,
                 details.length
                   ? `Run inspection · ${theme.fg(refreshable ? "warning" : "muted", `${refreshable ? "active" : "terminal"} snapshot`)}`
                   : "Run inspection",
                 loading
-                  ? [theme.fg("muted", "Capturing Run snapshot…")]
+                  ? [theme.fg("muted", "Capturing run snapshot…")]
                   : error
                     ? [
                         theme.fg(
                           "error",
-                          "Result unavailable. Escape to return to Run history.",
+                          "Result unavailable. Go back to run history.",
                         ),
                       ]
                     : detailLines.slice(
@@ -342,12 +359,12 @@ export async function openRunsUi(
                 browserFooter(
                   contentWidth,
                   loading || error
-                    ? ["Esc back"]
+                    ? [back]
                     : [
-                        `↑/↓ lines · ←/→ page · ${refresh}Esc back`,
-                        `↑↓ · ←→ · ${refresh}Esc back`,
-                        `${refresh}Esc back`,
-                        "Esc back",
+                        `${scroll} · ${page} · ${refresh}${back}`,
+                        `${page} · ${refresh}${back}`,
+                        `${refresh}${back}`,
+                        back,
                       ],
                   loading || error
                     ? ""
@@ -395,7 +412,7 @@ export async function openRunsUi(
             };
             if (loading) lines.push("Loading history…");
             else if (error)
-              lines.push("History unavailable. Escape to go back or close.");
+              lines.push("History unavailable. Go back or close.");
             else if (openSubagentId) {
               for (const run of runs)
                 append(
@@ -403,7 +420,7 @@ export async function openRunsUi(
                   run.runId === selectedRuns.get(openSubagentId),
                   run.runId,
                 );
-              if (!runs.length) lines.push("No Runs available.");
+              if (!runs.length) lines.push("No runs available.");
             } else {
               const counts = new Map<string, number>();
               for (const row of overview)
@@ -438,10 +455,10 @@ export async function openRunsUi(
               }
               if (!overview.length)
                 lines.push(
-                  theme.fg("muted", "No Subagents in this Session."),
+                  theme.fg("muted", "No subagents in this session."),
                   theme.fg(
                     "dim",
-                    "Delegated work will appear here, including completed Runs.",
+                    "Delegated work will appear here, including completed runs.",
                   ),
                 );
             }
@@ -456,21 +473,35 @@ export async function openRunsUi(
               !loading &&
               !error &&
               (openSubagentId ? runs.length > 0 : overview.length > 0);
-            const back = openSubagentId ? "Esc back" : "Esc close";
-            const enter = openSubagentId ? "Enter inspect Run" : "Enter Runs";
+            const back = keyHint(
+              "tui.select.cancel",
+              openSubagentId ? "back" : "close",
+            );
+            const enter = keyHint(
+              "tui.select.confirm",
+              openSubagentId ? "inspect run" : "runs",
+            );
+            const scroll = rawKeyHint(
+              [
+                ...keys.getKeys("tui.select.up"),
+                ...keys.getKeys("tui.select.down"),
+              ].join("/"),
+              "scroll",
+            );
+            const page = rawKeyHint("←/→", "page");
             return browserPanel(
               viewport,
               openSubagentId
                 ? `Run history · ${openSubagentId} · newest first`
-                : "Session Subagents",
+                : "Session subagents",
               lines.slice(offset, offset + bodyHeight),
               browserFooter(
                 contentWidth,
                 populated
                   ? [
-                      `↑/↓ scroll · PgUp/PgDn · ${enter} · ${back}`,
-                      `↑↓ · ${enter} · ${back}`,
-                      `Enter open · ${back}`,
+                      `${scroll} · ${page} · ${enter} · ${back}`,
+                      `${scroll} · ${enter} · ${back}`,
+                      `${keyHint("tui.select.confirm", "open")} · ${back}`,
                       back,
                     ]
                   : [back],

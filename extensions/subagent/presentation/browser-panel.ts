@@ -84,7 +84,7 @@ export function browserPanel(
     padBrowserLine(line, width)
       // biome-ignore lint/suspicious/noControlCharactersInRegex: SGR background resets are terminal formatting.
       .split(/(\x1b\[(?:0|49)?m)/)
-      .map((part) => theme.bg("customMessageBg", part))
+      .map((part) => theme.bg("userMessageBg", part))
       .join(""),
   );
 }

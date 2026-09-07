@@ -231,7 +231,7 @@ for (const condition of [
     assert.match(
       captured,
       condition === "Conversation loss"
-        ? /Conversation unavailable for Resume/
+        ? /Conversation unavailable for resume/
         : condition === "exhausted"
           ? /notification failed \(exhausted\)/
           : /Completion hand-off: unannounceable/,
@@ -277,7 +277,7 @@ test("Conversation loss learned by ordinary Resume admission is visible without 
   await back(rig);
   rig.host.customKey(ENTER);
   await rig.pump();
-  assert.match(screen(rig), /Conversation unavailable for Resume/);
+  assert.match(screen(rig), /Conversation unavailable for resume/);
   assert.match(screen(rig), /Run status: completed/);
   assert.deepEqual(rig.resumable.counters(), controls);
   await back(rig);
@@ -351,7 +351,7 @@ for (const action of ["close", "shutdown", "replacement"] as const) {
       assert.equal(reading, inFlight ? 1 : 0);
       assert.match(
         screen(rig),
-        inFlight ? /Capturing Run snapshot/ : /the rig answered/,
+        inFlight ? /Capturing run snapshot/ : /the rig answered/,
       );
       const callbacks = rig.host.captureCustom();
       assert.ok(callbacks);
@@ -384,7 +384,7 @@ for (const action of ["close", "shutdown", "replacement"] as const) {
       if (action !== "replacement") await rig.host.sessionStart();
       const fresh = rig.host.command("subagent", "runs");
       await rig.pump();
-      assert.match(screen(rig), /No Subagents in this Session/);
+      assert.match(screen(rig), /No subagents in this session/);
       assert.doesNotMatch(screen(rig), /old explore Label|the rig answered/);
       await back(rig);
       await fresh;

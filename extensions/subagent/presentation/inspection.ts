@@ -20,7 +20,7 @@ export function inspectionLines(
     `Captured at: ${new Date(capture.capturedAt).toISOString()}`,
   ];
   if (capture.outcome === "unknown Run")
-    return [...lines, "Unknown/unavailable Run in this Session."];
+    return [...lines, "Unknown/unavailable run in this session."];
   const { summary, subagent } = capture;
   const result = capture.outcome === "result" ? capture.result : undefined;
   const startedAt = result?.startedAt ?? summary.startedAt;
@@ -45,7 +45,7 @@ export function inspectionLines(
           `Duration: ${formatDuration(Math.max(0, settledAt - startedAt))}`,
         ]),
     ...(subagent?.conversationLost
-      ? ["Conversation unavailable for Resume"]
+      ? ["Conversation unavailable for resume"]
       : []),
     ...(handoff === "exhausted"
       ? ["Completion hand-off: notification failed (exhausted)"]
@@ -60,7 +60,7 @@ export function inspectionLines(
     "Usage:",
     `Turns: ${usage.turns}`,
     ...Object.entries(usage.totals).map(([name, count]) => `${name}: ${count}`),
-    `context tokens: ${usage.context.tokens}${usage.context.window === undefined ? "" : ` / ${usage.context.window}`}`,
+    `Context tokens: ${usage.context.tokens}${usage.context.window === undefined ? "" : ` / ${usage.context.window}`}`,
   );
   if (capture.outcome !== "result" && capture.outcome !== "active") {
     lines.push(
@@ -69,7 +69,7 @@ export function inspectionLines(
         ? "Result expired: output is gone; retained metadata is shown above."
         : summary.phase === "running" || summary.phase === "finalizing"
           ? "Run unavailable: active snapshot could not be captured."
-          : "Result unavailable: the stored Result is missing or unreadable.",
+          : "Result unavailable: the stored result is missing or unreadable.",
     );
     if (capture.outcome === "unavailable" && capture.diagnostic)
       lines.push(formatDiagnosticLine(capture.diagnostic));
@@ -110,14 +110,14 @@ function transcriptLines(item: TranscriptItem): readonly string[] {
     ...item.parts.map((part) =>
       part.kind === "text"
         ? part.text
-        : `${formatTranscriptItem({ role: item.role, parts: [part] })}${part.callId === undefined ? "" : ` · callId: ${part.callId}`}`,
+        : `${formatTranscriptItem({ role: item.role, parts: [part] })}${part.callId === undefined ? "" : ` · call ID: ${part.callId}`}`,
     ),
   ];
 }
 function toolLines(entry: ToolEntry): readonly string[] {
   return [
     formatToolStatus(entry),
-    ...(entry.callId === undefined ? [] : [`callId: ${entry.callId}`]),
+    ...(entry.callId === undefined ? [] : [`Call ID: ${entry.callId}`]),
     ...(entry.outputSummary === undefined ? [] : [entry.outputSummary]),
   ];
 }

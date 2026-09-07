@@ -32,10 +32,15 @@ test("both lists scroll and clamp after resize, retain selected identities, and 
   await rig.pump();
   const browsing = await open(rig);
   assert.doesNotMatch(rig.host.customLines(80, 10).join("\n"), /任务11/);
-  rig.host.customKey("\x1b[6~");
-  assert.match(rig.host.customLines(80, 10).join("\n"), /任务3/);
-  rig.host.customKey("\x1b[5~");
-  assert.match(rig.host.customLines(80, 10).join("\n"), /任务0/);
+  for (const [next, previous] of [
+    ["\x1b[6~", "\x1b[5~"],
+    ["\x1b[C", "\x1b[D"],
+  ]) {
+    rig.host.customKey(next);
+    assert.match(rig.host.customLines(80, 10).join("\n"), /任务3/);
+    rig.host.customKey(previous);
+    assert.match(rig.host.customLines(80, 10).join("\n"), /任务0/);
+  }
   for (let i = 0; i < 11; i += 1) rig.host.customKey(DOWN);
   assert.match(rig.host.customLines(80, 10).join("\n"), /任务11/);
   for (const width of [0, 1, 2, 8, 20, 40, 80]) {
@@ -120,7 +125,7 @@ for (const view of ["overview", "history"] as const) {
       await rig.pump();
       assert.equal(rig.host.customRenderRequests(), requests);
       const fresh = await open(rig);
-      assert.match(screen(rig), /No Subagents in this Session/);
+      assert.match(screen(rig), /No subagents in this session/);
       assert.doesNotMatch(screen(rig), /old Session task/);
       await close(rig, fresh);
     });
@@ -284,7 +289,7 @@ test("all three levels retain a full themed surface across resize and invalidati
   t.after(() => rig.installation.handle.release());
   await start(rig, "任务 👩‍💻 café");
   const browsing = await open(rig);
-  for (const title of ["Session Subagents", "Run history", "Run inspection"]) {
+  for (const title of ["Session subagents", "Run history", "Run inspection"]) {
     for (const [rows, height] of [
       [0, 0],
       [1, 0],
@@ -409,7 +414,7 @@ test("overview follows publication rather than numeric ID allocation; failed ope
     prompt: "try",
   });
   const empty = await open(refused);
-  assert.match(screen(refused), /No Subagents in this Session/);
+  assert.match(screen(refused), /No subagents in this session/);
   await close(refused, empty);
 });
 
@@ -434,19 +439,19 @@ test("runs reuses no-Session response; a live empty Session opens and closes an 
   assert.equal(rig.host.customOpen(), true);
   assert.match(
     rig.host.customLines().join("\n"),
-    /No Subagents in this Session/,
+    /No subagents in this session/,
   );
   const panel = rig.host.customLines(80, 24);
   assert.equal(panel.length, 19);
   assert.ok(panel.every((line) => visibleWidth(line) === 80));
   assert.match(panel[0], /^╭─+╮$/);
   assert.match(panel.at(-1) ?? "", /^╰─+╯$/);
-  assert.match(panel[1], /Session Subagents/);
+  assert.match(panel[1], /Session subagents/);
   assert.match(panel[2], /^├─+┤$/);
   assert.match(panel.at(-3) ?? "", /^├─+┤$/);
-  assert.match(panel.at(-2) ?? "", /Esc close/);
+  assert.match(panel.at(-2) ?? "", /escape.*close/);
   assert.ok(panel.some((line) => /^│ +│$/.test(line)));
-  assert.doesNotMatch(panel.join("\n"), /1-1\/1|Enter|scroll/);
+  assert.doesNotMatch(panel.join("\n"), /1-1\/1|enter|scroll/);
   rig.host.customKey(ENTER);
   assert.equal(rig.host.customOpen(), true);
   rig.host.customKey(ESC);

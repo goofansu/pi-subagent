@@ -173,7 +173,7 @@ test("inspection includes mixed transcript parts, every tool, normalized usage, 
     "cacheWrite: 7",
     "cost: 0.125",
     "Turns: 3",
-    "context tokens: 181 / 1000",
+    "Context tokens: 181 / 1000",
     "captured diagnostic",
     "https://example.com/report",
     "final answer",
@@ -332,8 +332,8 @@ for (const outcome of ["unreadable", "unknown"] as const)
     assert.match(
       screen(rig),
       outcome === "unknown"
-        ? /Unknown\/unavailable Run/
-        : /stored Result is missing or unreadable/,
+        ? /Unknown\/unavailable run/
+        : /stored result is missing or unreadable/,
     );
     assert.doesNotMatch(screen(rig), /available but empty/);
     await close(rig, { closed });

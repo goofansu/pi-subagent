@@ -146,7 +146,7 @@ test("bursts and clock ticks keep one pending draw while the host is slow; the e
   t.after(() => rig.installation.handle.release());
   const browsing = rig.host.command("subagent", "runs");
   await rig.pump();
-  assert.match(screen(rig), /No Subagents/);
+  assert.match(screen(rig), /No subagents/);
   await start(rig, "first Label");
   await start(rig, "second Label");
   await rig.pump();

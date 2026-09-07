@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { stripVTControlCharacters } from "node:util";
 import {
   emitActivity,
   emitText,
@@ -15,7 +16,8 @@ import {
 
 const ENTER = "\r";
 const ESC = "\x1b";
-const screen = (rig: HostRig) => rig.host.customLines(160, 200).join("\n");
+const screen = (rig: HostRig) =>
+  stripVTControlCharacters(rig.host.customLines(160, 200).join("\n"));
 async function start(rig: HostRig) {
   return startedIds(
     await rig.text("agent_start", {
@@ -71,7 +73,7 @@ test("active inspection freezes content and activity ages until explicit refresh
   assert.match(first, /first content/);
   assert.match(first, /Last activity: reading files · changed 2\.0s ago/);
   assert.match(first, /Captured at: 1970-01-01T00:00:02.000Z/);
-  assert.match(first, /R refresh/);
+  assert.match(first, /r refresh/);
   const requests = rig.host.customRenderRequests();
   await rig.release("more");
   await rig.pump();
@@ -94,7 +96,7 @@ test("active inspection freezes content and activity ages until explicit refresh
   assert.match(terminal, /terminal snapshot/);
   assert.match(terminal, /Run status: completed/);
   assert.match(terminal, /authoritative answer/);
-  assert.doesNotMatch(terminal, /R refresh/);
+  assert.doesNotMatch(terminal, /r refresh/);
   await rig.advanceClock(2000);
   rig.host.customKey("R");
   await rig.pump();
@@ -325,7 +327,7 @@ for (const expire of [false, true])
       terminal,
       expire ? /Result expired: output is gone/ : /partial content/,
     );
-    assert.doesNotMatch(terminal, /R refresh/);
+    assert.doesNotMatch(terminal, /r refresh/);
     rig.host.customKey(ESC);
     await rig.pump();
     assert.ok(screen(rig).includes(work.runId));

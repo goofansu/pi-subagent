@@ -280,7 +280,7 @@ for (const action of ["back", "close", "shutdown", "replacement"] as const)
       if (action !== "replacement") await rig.host.sessionStart();
       const fresh = rig.host.command("subagent", "runs");
       await rig.pump();
-      assert.match(screen(rig), /No Subagents in this Session/);
+      assert.match(screen(rig), /No subagents in this session/);
       assert.doesNotMatch(screen(rig), /old active content/);
       await key(rig, ESC);
       await fresh;
@@ -337,7 +337,7 @@ for (const expire of [false, true])
     blockNext = true;
     await key(rig, "R");
     assert.equal(reading, true);
-    assert.match(screen(rig), /Capturing Run snapshot/);
+    assert.match(screen(rig), /Capturing run snapshot/);
     await rig.release("finish");
     await rig.settled(work.runId);
     await rig.pump();
@@ -346,7 +346,7 @@ for (const expire of [false, true])
       await rig.settled(other.runId);
       await rig.pump();
     }
-    assert.match(screen(rig), /Capturing Run snapshot/);
+    assert.match(screen(rig), /Capturing run snapshot/);
     await Effect.runPromise(Deferred.succeed(gate, undefined));
     await rig.pump();
     const terminal = screen(rig);
@@ -355,7 +355,7 @@ for (const expire of [false, true])
       terminal,
       expire ? /Result expired: output is gone/ : /authoritative answer/,
     );
-    assert.doesNotMatch(terminal, /R refresh/);
+    assert.doesNotMatch(terminal, /r refresh/);
     for (let i = 0; i < 3; i += 1) await key(rig, ESC);
     await browser;
     await rig.probe();
