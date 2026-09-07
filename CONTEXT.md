@@ -638,7 +638,7 @@ native sessions, live event subscriptions, and native cleanups in flight; for
 Claude, live Queries, open input streams, and retained conversation
 identities. Deliberately outside the backend contract — a probe on the contract
 would be a field every adapter had to invent something for, and a number the
-core could start believing. `/subagent diagnostics` prints one block per
+core could start believing. `/subagent doctor` prints one block per
 backend beside the runtime's own, because "which adapter is still holding
 something" is the only question a probe exists to answer and a merged total
 cannot answer it. Every block must read zero once a Session has closed.

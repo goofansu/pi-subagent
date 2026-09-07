@@ -35,8 +35,7 @@ test("the entry point registers the seven tools, its one command, and the notifi
     host.tools().map((tool) => tool.name),
     [...SUBAGENT_TOOL_NAMES],
   );
-  // One command, not two: v1's `/agents` is removed in 2.0 and its flow is
-  // `/subagent profiles`.
+  // One command, not two: v1's `/agents` and the Profile browser are gone.
   assert.deepEqual(
     host.commands().map((command) => command.name),
     [SUBAGENT_COMMAND_NAME],

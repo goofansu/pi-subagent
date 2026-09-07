@@ -173,8 +173,8 @@ export function installSubagentV2(
     // neither can push anything.
     { consumed: (id) => sink.consumed(id), hold: (scope) => sink.hold(scope) },
   );
-  // One operator command. v1's `/agents` is gone in 2.0 and its flow is
-  // `/subagent profiles`, which is the one public surface 2.0 removes.
+  // One operator command. v1's `/agents` and the Profile browser are gone;
+  // Profiles remain visible in the status and available to the agent tools.
   registerSubagentCommand(
     pi,
     handle,

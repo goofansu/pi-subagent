@@ -368,7 +368,7 @@ order. Neither hand-off nor Conversation loss is subscribed to for grouping.
 Tests are colocated. [Conformance](../extensions/subagent/testing/conformance.ts)
 runs one observable contract against resumable/one-shot fakes and Pi/Claude stand-ins,
 with capability-aware skips and post-close leak assertions. Runtime and native
-probes distinguish ownership; [`/subagent diagnostics`](../extensions/subagent/host/subagent-command.ts)
+probes distinguish ownership; [`/subagent doctor`](../extensions/subagent/host/subagent-command.ts)
 reports both plus hand-off counts, not provider continuation identities.
 
 | Investigating | Start here |

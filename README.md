@@ -10,8 +10,7 @@ finished. You can continue its conversation, give it guidance, or cancel its wor
 pi install https://github.com/goofansu/pi-subagent
 ```
 
-Add a [profile](#profiles), then use `/subagent profiles` to give it a task, or
-ask Pi to delegate work to it.
+Add a [profile](#profiles), then ask Pi to delegate work to it.
 
 ## Commands
 
@@ -19,8 +18,7 @@ ask Pi to delegate work to it.
 | --- | --- |
 | `/subagent` | Shows a summary of available profiles and current work. |
 | `/subagent dashboard` | Open the Subagent dashboard: live subagents and newest-first run history (read-only). |
-| `/subagent profiles` | Browse profiles, read their prompts, and assign a task. |
-| `/subagent diagnostics` | Shows troubleshooting information when something goes wrong. |
+| `/subagent doctor` | Shows troubleshooting information when something goes wrong. |
 
 ## Tools
 

@@ -7,9 +7,8 @@
  * listed Profiles, and nothing said which to type first. So bare `/subagent`
  * is now a **shallow status**: how many Profiles, how many Runs and in what
  * phase, whether the runtime noticed anything, one line per Profile, and the
- * subcommands that go deeper. The counters moved to
- * `/subagent diagnostics`, unchanged, zeroes included; the Profile list is
- * `/subagent profiles`, which is the same flow `/agents` opens.
+ * subcommands that go deeper. The counters moved to `/subagent doctor`,
+ * unchanged and with zeroes included.
  *
  * Nothing is summarised twice. The status counts Runs through the shared phase
  * vocabulary, so a status line and a widget row use one set of words.
@@ -51,7 +50,6 @@ import {
 } from "../runtime/counters.ts";
 import { RunRepository } from "../runtime/repository.ts";
 import { SubagentSupervisor } from "../runtime/supervisor.ts";
-import { formatNoAgentsMessage, openProfilesUi } from "./agents-command.ts";
 import { openDashboardUi } from "./dashboard-command.ts";
 import type { SessionHandle } from "./session-handle.ts";
 import type { CompletionHandoffView } from "./widget.ts";
@@ -62,16 +60,15 @@ export const SUBAGENT_COMMAND_NAME = "subagent";
 /**
  * The ways deeper, in the order an operator wants them.
  *
- * Read by {@link formatUnknownSubcommand} alone: the handler dispatches on its
- * own `case` and the status line writes its own sentence, both of which say
- * more than a name. This is the one place that needs them enumerated rather
- * than spelled out.
+ * Read by the status menu and {@link formatUnknownSubcommand}; the handler
+ * dispatches on its own `case` so its control flow stays explicit.
  */
-export const SUBAGENT_SUBCOMMANDS = [
-  "dashboard",
-  "profiles",
-  "diagnostics",
+const SUBAGENT_COMMANDS = [
+  { name: "dashboard", description: "open Subagent dashboard" },
+  { name: "doctor", description: "runtime counters and cleanup probes" },
 ] as const;
+
+export const SUBAGENT_SUBCOMMANDS = SUBAGENT_COMMANDS.map(({ name }) => name);
 
 /**
  * A block of named counts.
@@ -79,7 +76,7 @@ export const SUBAGENT_SUBCOMMANDS = [
  * Deliberately structural. The command reports whatever the runtime and the
  * live adapter are counting; naming the fields here would mean a counter added
  * to either could be added without appearing, which is the one failure a
- * diagnostics command must not have.
+ * doctor command must not have.
  */
 export type CountBlock = Readonly<Record<string, number>>;
 
@@ -91,7 +88,7 @@ export type CountBlock = Readonly<Record<string, number>>;
  */
 export type AdapterProbe = Readonly<Record<string, CountBlock>>;
 
-/** What one Session's diagnostics read, gathered before they are formatted. */
+/** What one Session's doctor report reads before it is formatted. */
 export interface SessionDiagnostics {
   readonly counters: CountBlock;
   readonly probe: CountBlock;
@@ -197,7 +194,7 @@ const REPORTED_CLASSES = ["defect", "incident", UNCLASSIFIED] as const;
  * quietly reading as a symptom.
  *
  * Expected counters therefore never appear here at all. They are in
- * `/subagent diagnostics`, where a maintainer chasing a number wants them.
+ * `/subagent doctor`, where a maintainer chasing a number wants them.
  *
  * A name this host does not recognise is {@link UNCLASSIFIED} and is named in
  * the line: the counter block is structural so that a counter cannot be added
@@ -224,7 +221,7 @@ export function formatRuntimeHealth(session: LiveSessionStatus): string {
   });
   return raised.length === 0
     ? `Runtime: healthy · ${held}`
-    : `Runtime: attention needed · ${raised.join(" · ")} · ${held} — /subagent diagnostics`;
+    : `Runtime: attention needed · ${raised.join(" · ")} · ${held} — /subagent doctor`;
 }
 
 /** How much of one class the block holds, by looking each name up. */
@@ -240,6 +237,11 @@ function countOfClass(block: CountBlock, wanted: string): number {
 
 function sum(block: CountBlock): number {
   return Object.values(block).reduce((total, value) => total + value, 0);
+}
+
+/** Where to put a Profile when none are configured. */
+function formatNoProfilesMessage(agentsDir: string): string {
+  return `No subagents are configured. Add a Profile to ${agentsDir}.`;
 }
 
 /** `2 Profiles` / `1 Profile` / `no Profiles`, so the line reads as English. */
@@ -259,13 +261,14 @@ function profileLines(profiles: readonly Profile[]): readonly string[] {
   );
 }
 
-/** The ways deeper, each with what it is for. */
+/** The ways deeper, with their descriptions aligned for scanning. */
 function subcommandLines(): readonly string[] {
-  return [
-    "/subagent dashboard — open Subagent dashboard",
-    "/subagent profiles — list Profiles and read their prompts",
-    "/subagent diagnostics — runtime counters and cleanup probes",
-  ];
+  const width = Math.max(
+    ...SUBAGENT_COMMANDS.map(({ name }) => `/subagent ${name}`.length),
+  );
+  return SUBAGENT_COMMANDS.map(({ name, description }) =>
+    `/subagent ${name}`.padEnd(width).concat(` — ${description}`),
+  );
 }
 
 /**
@@ -292,7 +295,7 @@ export function formatSubagentStatus(status: SubagentStatus): string {
   ];
   sections.push(
     profiles.length === 0
-      ? formatNoAgentsMessage(status.agentsDir)
+      ? formatNoProfilesMessage(status.agentsDir)
       : profileLines(profiles).join("\n"),
   );
   sections.push(subcommandLines().join("\n"));
@@ -319,7 +322,7 @@ export function formatUnknownSubcommand(subcommand: string): string {
  * error.
  */
 export function registerSubagentCommand(
-  pi: Pick<ExtensionAPI, "registerCommand" | "sendUserMessage">,
+  pi: Pick<ExtensionAPI, "registerCommand">,
   handle: SessionHandle,
   adapterProbe: () => AdapterProbe | undefined,
   /**
@@ -336,8 +339,7 @@ export function registerSubagentCommand(
   handoff: Pick<CompletionHandoffView, "status">,
 ): void {
   pi.registerCommand(SUBAGENT_COMMAND_NAME, {
-    description:
-      "Subagent dashboard, status, profiles, and runtime diagnostics.",
+    description: "Subagent dashboard, status, and runtime troubleshooting.",
     handler: async (args, ctx) => {
       const subcommand = args.trim().split(/\s+/, 1)[0] ?? "";
       switch (subcommand) {
@@ -357,10 +359,7 @@ export function registerSubagentCommand(
           if (!handle.isLive()) ctx.ui.notify(NO_LIVE_SESSION, "info");
           else await openDashboardUi(handle, ctx, handoff);
           return;
-        case "profiles":
-          await openProfilesUi(pi, profiles, agentsDir, ctx);
-          return;
-        case "diagnostics":
+        case "doctor":
           reportDiagnostics(
             await readLiveSession(handle),
             adapterProbe,
@@ -402,7 +401,7 @@ async function readLiveSession(
   );
 }
 
-/** The counters-and-probes report, exactly as bare `/subagent` once printed. */
+/** The counters-and-probes report shown by `/subagent doctor`. */
 function reportDiagnostics(
   session: LiveSessionStatus | undefined,
   adapterProbe: () => AdapterProbe | undefined,

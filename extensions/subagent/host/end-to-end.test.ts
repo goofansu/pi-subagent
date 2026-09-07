@@ -169,7 +169,7 @@ test("a stuck demo execution is cancelled visibly and remains inspectable", asyn
     /Runtime: attention needed · 1 incident/,
   );
   assert.match(
-    await subagentCommandText(rig, "diagnostics"),
+    await subagentCommandText(rig, "doctor"),
     /cleanupEscalations: 1/,
   );
 
@@ -334,7 +334,7 @@ test("an encode defect leaves a marked row and reports one unannounceable hand-o
   const said: string[] = [];
   const command = rig.host.commands().find(({ name }) => name === "subagent");
   assert.ok(command);
-  await command.handler("diagnostics", {
+  await command.handler("doctor", {
     ui: {
       notify: (message: string) => void said.push(message),
       custom: async () => {},

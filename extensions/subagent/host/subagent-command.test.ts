@@ -36,8 +36,8 @@ async function say(
   return [await subagentCommandText(rig, args)];
 }
 
-/** `/subagent diagnostics`: the report bare `/subagent` used to print. */
-const report = (rig: ReturnType<typeof hostRig>) => say(rig, "diagnostics");
+/** `/subagent doctor`: the report bare `/subagent` used to print. */
+const report = (rig: ReturnType<typeof hostRig>) => say(rig, "doctor");
 
 test("the report names every runtime counter, every probe field, and every hand-off outcome", async (t) => {
   const rig = hostRig(t);
@@ -173,8 +173,9 @@ test("C-1: bare /subagent prints the shallow status and no counters", async (t) 
 
   assert.match(text, /^Subagents: \d+ Profiles? · no Runs$/m);
   assert.match(text, /^Runtime: healthy · \d+ held$/m);
-  assert.match(text, /^\/subagent profiles — /m);
-  assert.match(text, /^\/subagent diagnostics — /m);
+  assert.match(text, /^\/subagent dashboard — /m);
+  assert.match(text, /^\/subagent doctor {4}— /m);
+  assert.doesNotMatch(text, /^\/subagent profiles\b/m);
   // The counters are one level down, and a status that printed them would be
   // the command this one replaced.
   for (const counter of Object.keys(createRuntimeCounters().counters())) {
@@ -212,8 +213,7 @@ test("C-1: the status names every Profile with the backend it names", () => {
       "  reviewer  claude",
       "",
       "/subagent dashboard — open Subagent dashboard",
-      "/subagent profiles — list Profiles and read their prompts",
-      "/subagent diagnostics — runtime counters and cleanup probes",
+      "/subagent doctor    — runtime counters and cleanup probes",
     ].join("\n"),
   );
 });
@@ -255,7 +255,8 @@ test("a Session with no runtime says so and still says where to put a Profile", 
 
   assert.match(text, /^No subagent Session is running\.$/m);
   assert.match(text, /Add a Profile to /);
-  assert.match(text, /^\/subagent profiles — /m);
+  assert.match(text, /^\/subagent dashboard — /m);
+  assert.match(text, /^\/subagent doctor {4}— /m);
 });
 
 test("health is a verdict on what was noticed and a count of what is held", () => {
@@ -281,7 +282,7 @@ test("health is a verdict on what was noticed and a count of what is held", () =
       counters: { lateEvents: 2, queueOverflows: 1 },
       probe: { liveRunFibers: 1 },
     }),
-    "Runtime: attention needed · 1 defect · 1 held — /subagent diagnostics",
+    "Runtime: attention needed · 1 defect · 1 held — /subagent doctor",
   );
 });
 
@@ -313,7 +314,7 @@ test("C-3: the health line names the non-zero classes, worst first", () => {
       counters: { deliveryFailures: 1, lateEvents: 9 },
       probe: {},
     }),
-    "Runtime: attention needed · 1 incident · 0 held — /subagent diagnostics",
+    "Runtime: attention needed · 1 incident · 0 held — /subagent doctor",
   );
   assert.equal(
     formatRuntimeHealth({
@@ -326,7 +327,7 @@ test("C-3: the health line names the non-zero classes, worst first", () => {
       },
       probe: { liveRunFibers: 4 },
     }),
-    "Runtime: attention needed · 1 defect · 2 incidents · 4 held — /subagent diagnostics",
+    "Runtime: attention needed · 1 defect · 2 incidents · 4 held — /subagent doctor",
   );
 });
 
@@ -340,7 +341,7 @@ test("C-3: a counter the host does not recognise is named rather than ignored", 
       counters: { somethingNobodyClassified: 1, lateEvents: 3 },
       probe: {},
     }),
-    "Runtime: attention needed · 1 unclassified · 0 held — /subagent diagnostics",
+    "Runtime: attention needed · 1 unclassified · 0 held — /subagent doctor",
   );
 });
 
@@ -359,35 +360,17 @@ test("C-2: /subagent is the only command, and /agents is gone", async (t) => {
   );
 });
 
-test("C-2: /subagent profiles opens the Profile flow", async (t) => {
+test("C-2: the former profiles subcommand is gone", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
 
-  let selectors = 0;
-  const notices: string[] = [];
-  const ctx = {
-    ui: {
-      notify: (message: string) => void notices.push(message),
-      custom: async () => {
-        selectors += 1;
-      },
-      editor: async () => undefined,
-    },
-    waitForIdle: async () => {},
-  } as never;
-  const command = rig.host
-    .commands()
-    .find((entry) => entry.name === SUBAGENT_COMMAND_NAME);
-  await command?.handler("profiles", ctx);
-
-  // The selector opened and nothing was notified: the Profiles are loaded, so
-  // "where to put one" would be the wrong answer.
-  assert.equal(selectors, 1);
-  assert.deepEqual(notices, []);
+  assert.deepEqual(await say(rig, "profiles"), [
+    formatUnknownSubcommand("profiles"),
+  ]);
 });
 
-test("an unknown subcommand names the three that exist", async (t) => {
+test("an unknown subcommand names the two that exist", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
@@ -397,7 +380,7 @@ test("an unknown subcommand names the three that exist", async (t) => {
   ]);
   assert.equal(
     formatUnknownSubcommand("counters"),
-    '/subagent has no "counters". Try /subagent dashboard or /subagent profiles or /subagent diagnostics.',
+    '/subagent has no "counters". Try /subagent dashboard or /subagent doctor.',
   );
 });
 
