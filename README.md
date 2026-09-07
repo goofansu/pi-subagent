@@ -79,7 +79,9 @@ by naming the agent and task—the widget itself is not interactive.
 
 `/subagent dashboard` opens a full-screen, borderless dashboard, including
 completed work after its widget row disappears. Aligned rows show the work label,
-status, and active work's latest activity, with actions at the selected row's end.
+status, active work's latest activity, and elapsed time at the right edge.
+Actions appear in the bottom navigation bar. Elapsed time refreshes on run events or navigation, never on
+a timer; completed runs show their final duration. Narrow views hide the time column.
 Active work appears first, then failed or timed-out latest runs, then completed
 work. Updates follow actual changes, without a ticking activity-age clock.
 Profiles appear in run history; IDs stay in inspection.

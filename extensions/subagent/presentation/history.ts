@@ -1,7 +1,7 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
 import type { RenderableTheme } from "./rows.ts";
-import { runPhaseTone } from "./status.ts";
+import { formatDuration, runPhaseTone } from "./status.ts";
 
 export const HISTORY_CATEGORIES = [
   "Active",
@@ -25,8 +25,8 @@ export function historyRow(
   run: RunSummary,
   width: number,
   theme: RenderableTheme,
-  action: string,
   selected: boolean,
+  now: number,
 ): string {
   const clip = (text: string, columns: number) =>
     truncateToWidth(text, Math.max(0, columns), "…");
@@ -35,8 +35,11 @@ export function historyRow(
     return clipped + " ".repeat(Math.max(0, columns - visibleWidth(clipped)));
   };
   const columns = Math.max(0, width - 2);
-  const actionWidth = width >= 60 ? visibleWidth(action) + 2 : 0;
-  const available = Math.max(0, columns - actionWidth);
+  const elapsedWidth = width >= 80 ? 8 : 0;
+  const available = Math.max(
+    0,
+    columns - (elapsedWidth ? elapsedWidth + 2 : 0),
+  );
   const statusWidth = available >= 24 ? 10 : 0;
   const activityWidth = available >= 50 ? Math.floor(available * 0.45) : 0;
   const labelWidth = Math.max(
@@ -59,6 +62,11 @@ export function historyRow(
     run.phase === "running" || run.phase === "finalizing"
       ? (run.activity ?? run.lastActivity?.summary ?? "—")
       : (run.cancellationReason ?? "—");
+  const end =
+    run.phase === "running" || run.phase === "finalizing" ? now : run.settledAt;
+  const elapsed =
+    end === undefined ? "—" : formatDuration(Math.max(0, end - run.startedAt));
+  const elapsedCell = clip(elapsed, elapsedWidth);
   return clip(
     (selected ? theme.fg("accent", "› ") : "  ") +
       theme.fg(selected ? "accent" : "text", cell(run.label, labelWidth)) +
@@ -66,8 +74,8 @@ export function historyRow(
       (activityWidth
         ? `  ${theme.fg("muted", cell(activity, activityWidth))}`
         : "") +
-      (actionWidth
-        ? `  ${selected ? action : " ".repeat(actionWidth - 2)}`
+      (elapsedWidth
+        ? `  ${theme.fg("dim", " ".repeat(Math.max(0, elapsedWidth - visibleWidth(elapsedCell))) + elapsedCell)}`
         : ""),
     width,
   );

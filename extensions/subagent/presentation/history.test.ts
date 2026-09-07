@@ -19,9 +19,9 @@ const run: RunSummary = {
   startedAt: 0,
 };
 const row = (value: RunSummary, width = 120, selected = false) =>
-  historyRow(value, width, PLAIN_THEME, "enter runs", selected);
+  historyRow(value, width, PLAIN_THEME, selected, 1000);
 
-test("rows align labels, statuses, activity and trailing actions without technical metadata", () => {
+test("rows align labels, statuses, activity and rightmost elapsed time without actions or technical metadata", () => {
   const selected = row(run, 120, true);
   const other = row({ ...run, label: "Settings", phase: "finalizing" });
   assert.equal(selected.indexOf("Running"), other.indexOf("Finalizing"));
@@ -30,8 +30,9 @@ test("rows align labels, statuses, activity and trailing actions without technic
     other.indexOf("Reading middleware"),
   );
   assert.ok(selected.startsWith("› Review authentication"));
-  assert.ok(selected.endsWith("enter runs"));
-  assert.doesNotMatch(other, /enter runs/);
+  assert.ok(selected.endsWith("1.0s"));
+  assert.ok(other.endsWith("1.0s"));
+  assert.doesNotMatch(selected + other, /enter/);
   assert.doesNotMatch(
     selected,
     /explore|run-test|subagent-test|turns|Label:|changed .* ago/,
@@ -60,7 +61,7 @@ test("terminal rows do not imply stale tool activity is the result", () => {
   );
 });
 
-test("responsive rows drop actions and activity before status and never split Unicode", () => {
+test("responsive rows drop elapsed time and activity before status and never split Unicode", () => {
   const unicode = {
     ...run,
     label: "任务 café 👩‍💻 é".repeat(20),
@@ -74,6 +75,18 @@ test("responsive rows drop actions and activity before status and never split Un
   const narrow = row(run, 40, true);
   assert.match(narrow, /Review authentication.*Running/);
   assert.doesNotMatch(narrow, /Reading middleware|enter runs/);
+});
+
+test("elapsed time uses the supplied event time and freezes at settlement", () => {
+  const render = (value: RunSummary, now: number) =>
+    historyRow(value, 120, PLAIN_THEME, false, now);
+  assert.match(render(run, 1500), /1\.5s/);
+  assert.match(render(run, 61000), /1m 1s/);
+  const completed = { ...run, phase: "completed" as const, settledAt: 2500 };
+  assert.equal(render(completed, 3000), render(completed, 90000));
+  assert.match(render(completed, 90000), /2\.5s/);
+  assert.match(render({ ...run, startedAt: 5000 }, 1000), /0\.0s/);
+  assert.doesNotMatch(row(run, 40), /1\.0s/);
 });
 
 test("selection preserves semantic status tones", () => {
@@ -96,8 +109,8 @@ test("selection preserves semantic status tones", () => {
           return `\x1b[33m${text}\x1b[39m`;
         },
       },
-      "enter inspect",
       true,
+      1000,
     );
     assert.ok(
       tones.some(
@@ -106,7 +119,7 @@ test("selection preserves semantic status tones", () => {
       ),
     );
     assert.equal(visibleWidth(line), 120);
-    assert.match(stripVTControlCharacters(line), /enter inspect$/);
+    assert.doesNotMatch(stripVTControlCharacters(line), /enter/);
   }
 });
 

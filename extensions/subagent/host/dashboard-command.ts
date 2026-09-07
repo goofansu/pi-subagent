@@ -9,7 +9,7 @@ import {
   rawKeyHint,
 } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
-import { Effect } from "effect";
+import { Clock, Effect } from "effect";
 import { inspectRun, runSummaries } from "../application/history.ts";
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
 import type { RunId, SubagentId } from "../domain/index.ts";
@@ -76,10 +76,15 @@ export async function openDashboardUi(
         // timer fires. Slow hosts therefore owe one frame reading the newest
         // rows, however many repository changes arrived meanwhile.
         let pending = false;
+        let clock: Clock.Clock | undefined;
+        let now = 0;
         let stopOverview: (() => void) | undefined;
         let stopRead: (() => void) | undefined;
         let redraw: (() => void) | undefined = () => {
-          if (closed || pending) return;
+          if (closed) return;
+          // Sample on publication/navigation, not on a timer or incidental render.
+          now = clock?.currentTimeMillisUnsafe() ?? now;
+          if (pending) return;
           pending = true;
           tui.requestRender();
         };
@@ -95,6 +100,7 @@ export async function openDashboardUi(
           session.dispose();
           refreshable = false;
           pending = false;
+          clock = undefined;
           overview = [];
           runs = [];
           details = [];
@@ -132,6 +138,11 @@ export async function openDashboardUi(
           offset = 0;
           redraw?.();
           try {
+            if (!clock) {
+              const nextClock = await reader.run(Clock.Clock, undefined);
+              if (closed || version !== generation) return;
+              clock = nextClock;
+            }
             if (requestedRunId) {
               const next = await reader.run(
                 inspectRun(requestedRunId).pipe(
@@ -367,7 +378,7 @@ export async function openDashboardUi(
             let selectedLine = 0;
             const append = (run: RunSummary, selected: boolean) => {
               if (selected) selectedLine = lines.length;
-              const row = historyRow(run, contentWidth, theme, enter, selected);
+              const row = historyRow(run, contentWidth, theme, selected, now);
               lines.push(
                 selected
                   ? theme.bg("selectedBg", padBrowserLine(row, contentWidth))
@@ -420,15 +431,9 @@ export async function openDashboardUi(
                 contentWidth,
                 populated
                   ? [
-                      ...(contentWidth >= 60
-                        ? [
-                            `${scroll} · ${page} · ${back}`,
-                            `${scroll} · ${back}`,
-                          ]
-                        : [
-                            `${scroll} · ${enter} · ${back}`,
-                            `${enter} · ${back}`,
-                          ]),
+                      `${scroll} · ${page} · ${enter} · ${back}`,
+                      `${scroll} · ${enter} · ${back}`,
+                      `${enter} · ${back}`,
                       back,
                     ]
                   : [back],

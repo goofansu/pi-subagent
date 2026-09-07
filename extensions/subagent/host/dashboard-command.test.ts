@@ -327,9 +327,9 @@ test("all three levels retain a full themed surface across resize and invalidati
         .split("\n")
         .find((line) => line.includes("› 任务"));
       assert.ok(selectedRow);
-      assert.match(selectedRow, /enter (runs|inspect) +$/);
+      assert.doesNotMatch(selectedRow, /enter/);
       assert.doesNotMatch(selectedRow, /explore|run-|subagent-|Label:/);
-      assert.doesNotMatch(plain.split("\n").at(-1) ?? "", /enter/);
+      assert.match(plain.split("\n").at(-1) ?? "", /enter (runs|inspect)/);
       if (title === "Subagent dashboard") assert.doesNotMatch(plain, /explore/);
       else
         assert.match(

@@ -27,6 +27,62 @@ const start = async (rig: HostRig, description: string) =>
     }),
   );
 
+test("elapsed time refreshes on publication and navigation, never on idle renders or clock ticks", async (t) => {
+  const rig = hostRig(t, {
+    testClock: true,
+    resumableSteps: [
+      [
+        emitActivity("reading"),
+        { step: "await-gate", gate: "change" },
+        emitActivity("writing"),
+        { step: "await-gate", gate: "finish" },
+        { step: "complete" },
+      ],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  const work = await start(rig, "elapsed Label");
+  await rig.pump();
+  const browsing = rig.host.command("subagent", "dashboard");
+  await rig.pump();
+  const initial = screen(rig);
+  assert.match(initial, /0\.0s/);
+  const requests = rig.host.customRenderRequests();
+  await rig.advanceClock(1500);
+  assert.equal(rig.host.customRenderRequests(), requests);
+  assert.equal(screen(rig), initial);
+  await rig.release("change");
+  await rig.pump();
+  assert.match(screen(rig), /1\.5s/);
+  const keys = ["\x1b[B", "\x1b[A", "\x1b[C", "\x1b[D", "\x1b[6~", "\x1b[5~"];
+  for (const [i, key] of keys.entries()) {
+    const before = screen(rig);
+    const draws = rig.host.customRenderRequests();
+    await rig.advanceClock(1000);
+    assert.equal(rig.host.customRenderRequests(), draws);
+    assert.equal(screen(rig), before);
+    rig.host.customKey(key);
+    assert.ok(screen(rig).includes(`${i + 2}.5s`));
+  }
+  await rig.release("finish");
+  await rig.settled(work.runId);
+  await rig.pump();
+  const terminal = screen(rig);
+  assert.match(terminal, /Completed/);
+  assert.match(terminal, /7\.5s/);
+  await rig.advanceClock(10000);
+  rig.host.customKey("\x1b[B");
+  assert.equal(screen(rig), terminal);
+  rig.host.customKey(ENTER);
+  await rig.pump();
+  assert.match(screen(rig), /7\.5s/);
+  rig.host.customKey(ESC);
+  await rig.pump();
+  rig.host.customKey(ESC);
+  await browsing;
+});
+
 test("semantic activity survives equal observations, clears and settlement without clock-driven redraws", async (t) => {
   const rig = hostRig(t, {
     testClock: true,
