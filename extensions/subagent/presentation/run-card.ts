@@ -166,7 +166,9 @@ function formatByteCount(amount: number): string {
  * A bounded projection is honest about being bounded, and this is where that
  * honesty reaches a reader. Silence means nothing was dropped.
  */
-export function formatTruncation(result: RunResult): string | undefined {
+export function formatTruncation(
+  result: Pick<RunResult, "truncation">,
+): string | undefined {
   const dropped: string[] = [];
   const { truncation } = result;
   if (truncation.droppedTranscriptItems > 0) {

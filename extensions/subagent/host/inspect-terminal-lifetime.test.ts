@@ -351,7 +351,7 @@ for (const action of ["close", "shutdown", "replacement"] as const) {
       assert.equal(reading, inFlight ? 1 : 0);
       assert.match(
         screen(rig),
-        inFlight ? /Capturing Result/ : /the rig answered/,
+        inFlight ? /Capturing Run snapshot/ : /the rig answered/,
       );
       const callbacks = rig.host.captureCustom();
       assert.ok(callbacks);

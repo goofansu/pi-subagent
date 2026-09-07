@@ -77,15 +77,18 @@ or Pi retrieves their result. If a notice cannot be delivered, the row stays
 visible with an explanation. Ask Pi to retrieve the result or cancel active work
 by naming the agent and task—the widget itself is not interactive.
 
-`/subagent runs` opens a static history browser, including completed work after
+`/subagent runs` opens a live overview, including completed work after
 its widget row disappears. Active work appears first, then failed or timed-out
 latest Runs under **Needs attention**, then **Completed**. Use Up/Down or
 Page Up/Page Down to scroll, Enter to open Run history, and Escape to go back
-and close. Enter on a terminal Run opens its captured Result: Up/Down scroll
-lines and Left/Right page through all retained bounded normalized content.
-Capture time and content stay fixed; reopening observes current Result expiry.
-Returning to a list rereads it. Inspection does not consume Results, change
-completion delivery, or control work. Active Run inspection is not available.
+and close. Enter on any Run opens a frozen snapshot: Up/Down scroll lines and
+Left/Right page through all retained bounded normalized content. For running or
+finalizing work, **R** captures newer content and preserves or clamps your scroll
+position. Refresh after settlement shows the stored Result or explains its expiry.
+Terminal snapshots need no refresh; reopening observes current availability.
+Capture time, content, and activity ages stay fixed while reading. Escape rereads
+history, then returns to the current live overview with the same selected identity.
+Inspection does not consume Results, change completion delivery, or control work.
 
 ## Profiles
 

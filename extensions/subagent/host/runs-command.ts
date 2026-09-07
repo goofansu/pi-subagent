@@ -13,11 +13,7 @@ import {
 import { Effect } from "effect";
 import { inspectRun, runSummaries } from "../application/history.ts";
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
-import {
-  isTerminalRunPhase,
-  type RunId,
-  type SubagentId,
-} from "../domain/index.ts";
+import type { RunId, SubagentId } from "../domain/index.ts";
 import {
   HISTORY_CATEGORIES,
   historyCategory,
@@ -55,6 +51,7 @@ export async function openRunsUi(
         let selectedSubagent: SubagentId | undefined;
         let openSubagentId: SubagentId | undefined;
         let inspectedRunId: RunId | undefined;
+        let refreshable = false;
         let details: readonly string[] = [];
         let detailLines: readonly string[] = [];
         let detailWidth: number | undefined;
@@ -72,6 +69,7 @@ export async function openRunsUi(
         let pending = false;
         let now = 0;
         let stopOverview: (() => void) | undefined;
+        let stopRead: (() => void) | undefined;
         let redraw: (() => void) | undefined = () => {
           if (closed || pending) return;
           pending = true;
@@ -84,7 +82,11 @@ export async function openRunsUi(
           generation += 1;
           stopOverview?.();
           stopOverview = undefined;
+          stopRead?.();
+          stopRead = undefined;
           session.dispose();
+          refreshable = false;
+          pending = false;
           overview = [];
           runs = [];
           details = [];
@@ -107,6 +109,12 @@ export async function openRunsUi(
           );
         const read = async () => {
           const version = ++generation;
+          stopRead?.();
+          // Entry/refresh reads belong to this navigation, not merely the UI.
+          // Escape interrupts them immediately without touching Run execution.
+          const reader = handle.observe(() => {});
+          if (!reader) return;
+          stopRead = reader.dispose;
           stopOverview?.();
           stopOverview = undefined;
           const requestedSubagentId = openSubagentId;
@@ -117,19 +125,24 @@ export async function openRunsUi(
           redraw?.();
           try {
             if (requestedRunId) {
-              const next = await session.run(
+              const next = await reader.run(
                 inspectRun(requestedRunId).pipe(
-                  Effect.map((capture) =>
-                    inspectionLines(capture, handoff.status(requestedRunId)),
-                  ),
+                  Effect.map((capture) => ({
+                    lines: inspectionLines(
+                      capture,
+                      handoff.status(requestedRunId),
+                    ),
+                    refreshable: capture.outcome === "active",
+                  })),
                 ),
-                [],
+                { lines: [], refreshable: false },
               );
               if (closed || version !== generation) return;
-              details = next;
+              details = next.lines;
+              refreshable = next.refreshable;
               detailWidth = undefined;
             } else if (requestedSubagentId) {
-              const next = await session.run(
+              const next = await reader.run(
                 runSummaries(requestedSubagentId),
                 [],
               );
@@ -179,6 +192,9 @@ export async function openRunsUi(
           } catch {
             if (closed || version !== generation) return;
             error = true;
+          } finally {
+            reader.dispose();
+            if (stopRead === reader.dispose) stopRead = undefined;
           }
           loading = false;
           redraw?.();
@@ -194,6 +210,7 @@ export async function openRunsUi(
             if (keys.matches(data, "tui.select.cancel")) {
               if (inspectedRunId) {
                 inspectedRunId = undefined;
+                refreshable = false;
                 details = [];
                 detailLines = [];
                 void read();
@@ -206,6 +223,13 @@ export async function openRunsUi(
             }
             if (loading || error) return;
             if (inspectedRunId) {
+              if (
+                refreshable &&
+                (matchesKey(data, "r") || matchesKey(data, "shift+r"))
+              ) {
+                void read();
+                return;
+              }
               const delta = keys.matches(data, "tui.select.up")
                 ? -1
                 : keys.matches(data, "tui.select.down")
@@ -234,7 +258,8 @@ export async function openRunsUi(
               } else if (openSubagentId) {
                 const selected = selectedRuns.get(openSubagentId);
                 const run = runs.find((row) => row.runId === selected);
-                if (run && isTerminalRunPhase(run.phase)) {
+                if (run) {
+                  refreshable = false;
                   inspectedRunId = run.runId;
                   detailOffset = 0;
                   void read();
@@ -293,16 +318,20 @@ export async function openRunsUi(
                 ),
               );
               return [
-                theme.bold("Run inspection · terminal snapshot"),
+                theme.bold(
+                  details.length
+                    ? `Run inspection · ${refreshable ? "active" : "terminal"} snapshot`
+                    : "Run inspection",
+                ),
                 ...(loading
-                  ? ["Capturing Result…"]
+                  ? ["Capturing Run snapshot…"]
                   : error
                     ? ["Result unavailable. Escape to return to Run history."]
                     : detailLines.slice(
                         detailOffset,
                         detailOffset + bodyHeight,
                       )),
-                `↑/↓ lines · ←/→ page · Esc back · ${Math.min(detailOffset + 1, detailLines.length)}-${Math.min(detailOffset + bodyHeight, detailLines.length)}/${detailLines.length}`,
+                `↑/↓ lines · ←/→ page · ${refreshable ? "R refresh · " : ""}Esc back · ${Math.min(detailOffset + 1, detailLines.length)}-${Math.min(detailOffset + bodyHeight, detailLines.length)}/${detailLines.length}`,
               ].map((line) => truncateToWidth(line, Math.max(0, width), "…"));
             }
             pageSize = Math.max(1, Math.floor(bodyHeight / 2));
@@ -371,7 +400,7 @@ export async function openRunsUi(
               offset = Math.max(0, selectedLine + 2 - bodyHeight);
             offset = Math.min(offset, Math.max(0, lines.length - bodyHeight));
             const hint = openSubagentId
-              ? "↑/↓ scroll · Enter inspect terminal Run · Esc back"
+              ? "↑/↓ scroll · Enter inspect Run · Esc back"
               : "↑/↓ scroll · Enter Runs · Esc close";
             return [
               theme.bold(

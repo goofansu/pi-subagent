@@ -161,11 +161,15 @@ for (const waiting of [false, true]) {
       await rig.pump();
       const waited = await waiter;
       if (browser) {
+        assert.doesNotMatch(screen(rig), /the answer/); // Active capture stays frozen.
         rig.host.customKey(ESC);
         await rig.pump();
+        assert.doesNotMatch(screen(rig), /the answer/); // History carries no output.
         rig.host.customKey(ENTER);
         await rig.pump();
-        assert.doesNotMatch(screen(rig), /the answer/);
+        assert.match(screen(rig), /the answer/); // Reopening reads the terminal Result.
+        rig.host.customKey(ESC);
+        await rig.pump();
         rig.host.customKey(ESC);
         await rig.pump();
         await close(rig, browser);

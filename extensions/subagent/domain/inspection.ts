@@ -2,6 +2,7 @@ import type { RunDiagnostic } from "./diagnostics.ts";
 import type { RunSummary } from "./history.ts";
 import type { RunId } from "./ids.ts";
 import type { SubagentPhase } from "./phases.ts";
+import type { RunProjection } from "./projection.ts";
 import type { RunResult } from "./result.ts";
 import type { UsageSnapshot } from "./usage.ts";
 
@@ -21,14 +22,30 @@ interface KnownCapture extends Capture {
   readonly subagent?: SubagentInspectionSummary;
 }
 
+/** Bounded normalized output only; no Projection ending flag or resources. */
+export type ActiveRunContent = Pick<
+  RunProjection,
+  | "transcript"
+  | "tools"
+  | "diagnostics"
+  | "links"
+  | "model"
+  | "finalOutput"
+  | "truncation"
+> & { readonly errorMessage?: string };
+
 /** One capture, never a Result-store pin or a reference to live resources. */
 export type RunInspection =
   | (Capture & { readonly outcome: "unknown Run" })
   | (KnownCapture & {
-      readonly outcome: "RunNotTerminal" | "ResultExpired";
+      readonly outcome: "ResultExpired";
     })
   | (KnownCapture & {
       readonly outcome: "unavailable";
       readonly diagnostic?: RunDiagnostic;
+    })
+  | (KnownCapture & {
+      readonly outcome: "active";
+      readonly content: ActiveRunContent;
     })
   | (KnownCapture & { readonly outcome: "result"; readonly result: RunResult });

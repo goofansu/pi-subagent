@@ -90,7 +90,7 @@ import type {
 } from "./counters.ts";
 import { CompletionDelivery } from "./delivery.ts";
 import { summarizeRun, summarizeSubagents } from "./history.ts";
-import { inspectTerminalRun } from "./inspection.ts";
+import { captureRunInspection } from "./inspection.ts";
 import type { RuntimePolicy } from "./policy.ts";
 import { ProfileCatalog } from "./profile-catalog.ts";
 import {
@@ -1233,12 +1233,7 @@ const makeSupervisor = (settings: SessionSettings) =>
 
     return {
       inspectRun: (id: RunId) =>
-        inspectTerminalRun(id, repository, store, (subagentId) => {
-          const record = records.get(subagentId);
-          return record
-            ? { phase: record.phase, conversationLost: record.conversationLost }
-            : undefined;
-        }),
+        captureRunInspection(id, repository, store, records),
       /** Published history only, in original Subagent insertion order. */
       subagentSummaries: (): Effect.Effect<readonly SubagentSummary[]> =>
         Effect.map(repository.list(), (runs) =>

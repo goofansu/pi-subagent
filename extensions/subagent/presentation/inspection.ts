@@ -33,6 +33,11 @@ export function inspectionLines(
     `Run status: ${result?.status ?? summary.phase}${cancellation ? ` (${cancellation})` : ""}`,
     ...(subagent ? [`Subagent phase: ${subagent.phase}`] : []),
     `Started at: ${new Date(startedAt).toISOString()}`,
+    ...(summary.lastActivity
+      ? [
+          `Last activity: ${summary.lastActivity.summary} · changed ${Math.max(0, Math.floor((capture.capturedAt - summary.lastActivity.changedAt) / 1000))}s ago`,
+        ]
+      : []),
     ...(settledAt === undefined
       ? []
       : [
@@ -57,20 +62,21 @@ export function inspectionLines(
     ...Object.entries(usage.totals).map(([name, count]) => `${name}: ${count}`),
     `context tokens: ${usage.context.tokens}${usage.context.window === undefined ? "" : ` / ${usage.context.window}`}`,
   );
-  if (capture.outcome !== "result") {
+  if (capture.outcome !== "result" && capture.outcome !== "active") {
     lines.push(
       "",
       capture.outcome === "ResultExpired"
         ? "Result expired: output is gone; retained metadata is shown above."
-        : capture.outcome === "RunNotTerminal"
-          ? "Run is not terminal; terminal Result unavailable."
+        : summary.phase === "running" || summary.phase === "finalizing"
+          ? "Run unavailable: active snapshot could not be captured."
           : "Result unavailable: the stored Result is missing or unreadable.",
     );
     if (capture.outcome === "unavailable" && capture.diagnostic)
       lines.push(formatDiagnosticLine(capture.diagnostic));
     return lines;
   }
-  const stored = capture.result;
+  const stored =
+    capture.outcome === "result" ? capture.result : capture.content;
   const section = (title: string, values: readonly string[]) => {
     if (values.length) lines.push("", `${title}:`, ...values);
   };
@@ -83,12 +89,17 @@ export function inspectionLines(
   section("Links", stored.links.map(formatResultLinkLine));
   const truncation = formatTruncation(stored);
   if (truncation) section("Truncation", [truncation]);
-  section("Final output", [
-    stored.finalOutput || "No final output was produced.",
+  section(capture.outcome === "active" ? "Output so far" : "Final output", [
+    stored.finalOutput ||
+      (capture.outcome === "active"
+        ? "No output produced yet."
+        : "No final output was produced."),
   ]);
   if (!stored.finalOutput && stored.transcript.length === 0)
     lines.push(
-      "Result available but empty: no output or transcript was retained.",
+      capture.outcome === "active"
+        ? "Active snapshot available but empty: no output or transcript retained yet."
+        : "Result available but empty: no output or transcript was retained.",
     );
   return lines;
 }
