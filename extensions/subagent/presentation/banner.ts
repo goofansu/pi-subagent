@@ -29,11 +29,7 @@
  * the header's height changes how many rows the list gets.
  */
 
-import {
-  stripTerminalSequences,
-  truncateToWidth,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { SubagentSummary } from "../domain/history.ts";
 import type { BrowserScreen } from "./browser-panel.ts";
 import {
@@ -42,10 +38,10 @@ import {
   historyCategoryCounts,
 } from "./history.ts";
 import type { RenderableTheme } from "./rows.ts";
+import { fitToWidth } from "./run-line.ts";
 
-/** Every input here is plain; discard truncator resets before painting. */
-const clipPlainText = (text: string, width: number): string =>
-  stripTerminalSequences(truncateToWidth(text, Math.max(0, width), "…"));
+/** Every input here is plain, so the shared clip discards its own resets. */
+const PLAIN = { plain: true } as const;
 
 /** The browser's own name, on every one of its screens. */
 export const DASHBOARD_TITLE = "Subagent dashboard";
@@ -100,7 +96,7 @@ export function clipPath(path: string, width: number): string {
     const candidate = `…/${segments.join("/")}`;
     if (visibleWidth(candidate) <= width) return candidate;
   }
-  return clipPlainText(path, width);
+  return fitToWidth(path, width, PLAIN);
 }
 
 /**
@@ -127,7 +123,7 @@ export function subagentCounts(
   );
   return occupied !== "" && visibleWidth(occupied) <= width
     ? occupied
-    : clipPlainText(occupied === "" ? every : occupied, width);
+    : fitToWidth(occupied === "" ? every : occupied, width, PLAIN);
 }
 
 /** Whether the screen has room for the mark without starving the list. */
@@ -156,7 +152,7 @@ export function dashboardBanner(
 ): readonly string[] {
   const textWidth = Math.max(0, width - MARK_WIDTH - MARK_GUTTER.length);
   const details = [
-    theme.fg("accent", clipPlainText(DASHBOARD_TITLE, textWidth)),
+    theme.fg("accent", fitToWidth(DASHBOARD_TITLE, textWidth, PLAIN)),
     theme.fg(
       "muted",
       clipPath(abbreviateHome(identity.cwd, identity.home), textWidth),

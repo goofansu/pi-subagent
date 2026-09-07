@@ -1,10 +1,28 @@
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+/**
+ * The dashboard history's table of Runs: one borderless row each.
+ *
+ * The fitting is `run-line.ts`'s under {@link historyRunLine}; what is left
+ * here is the paint and the grouping. The policy is content-sized shared
+ * columns — a list measures its own widest Label and status word once, so the
+ * rows below each other line up — with a selection prefix at the left and a
+ * duration once the screen is wide enough to spend eight columns on one.
+ */
+
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
 import type { RunId, SubagentId } from "../domain/index.ts";
-import { padBrowserLine } from "./browser-panel.ts";
-import { MAX_RUN_LABEL_WIDTH } from "./labels.ts";
 import type { RenderableTheme } from "./rows.ts";
-import { type RunFacts, runElapsed, runFactsFromSummary } from "./run-facts.ts";
+import {
+  fitRunLine,
+  fitToWidth,
+  MAX_RUN_LABEL_WIDTH,
+  type RunLinePolicy,
+  runLineColumn,
+  runLineParts,
+} from "./run-line.ts";
+import {
+  type RunPresentation,
+  runPresentationFromSummary,
+} from "./run-presentation.ts";
 
 export const HISTORY_CATEGORIES = [
   "Active",
@@ -19,24 +37,81 @@ export interface HistoryColumnWidths {
 }
 
 /** A table column reads as a heading; the shared status word does not. */
-const statusText = (facts: RunFacts) =>
-  facts.status.text[0].toUpperCase() + facts.status.text.slice(1);
+const statusText = (run: RunPresentation) =>
+  run.status.text[0].toUpperCase() + run.status.text.slice(1);
 
 /** Content-sized columns shared by every row in one displayed list. */
-function historyColumnWidths(facts: readonly RunFacts[]): HistoryColumnWidths {
+function historyColumnWidths(
+  runs: readonly RunPresentation[],
+): HistoryColumnWidths {
   return {
-    label: Math.min(
+    label: runLineColumn(
+      runs.map((run) => run.label),
       MAX_RUN_LABEL_WIDTH,
-      Math.max(0, ...facts.map((run) => visibleWidth(run.label))),
     ),
-    status: Math.max(0, ...facts.map((run) => visibleWidth(statusText(run)))),
+    status: runLineColumn(runs.map(statusText)),
   };
 }
+
+/**
+ * The history's column budgets: content-sized shared columns.
+ *
+ * The two columns a list measured for itself are fixed here, so every row pads
+ * to them rather than sizing to its own text; the selection prefix is columns
+ * the table has already spent. The status word appears once the row has 24
+ * columns to share and the activity once it has 50 — below those a clipped
+ * fragment of either says less than the Label alone. Elapsed duration takes a
+ * fixed eight columns above 80, which is where a row can afford them.
+ */
+export function historyRunLine(columns: HistoryColumnWidths): RunLinePolicy {
+  return {
+    reserved: UNSELECTED_PREFIX.length,
+    padded: true,
+    label: { column: columns.label },
+    status: {
+      column: columns.status,
+      gate: STATUS_GATE,
+      gap: STATUS_DELIMITER.length,
+    },
+    activity: {
+      share: ACTIVITY_SHARE,
+      gate: ACTIVITY_GATE,
+      gap: ACTIVITY_DELIMITER.length,
+    },
+    duration: {
+      column: ELAPSED_WIDTH,
+      minLineWidth: ELAPSED_MIN_LINE_WIDTH,
+      gap: DURATION_DELIMITER.length,
+    },
+  };
+}
+
+/** The selection prefix `› `, and the blank that stands in its place. */
+const SELECTED_PREFIX = "› ";
+const UNSELECTED_PREFIX = "  ";
+
+/** The Label and the status word are separated by two spaces. */
+const STATUS_DELIMITER = "  ";
+/** The status word and the activity, by a dim dot. */
+const ACTIVITY_DELIMITER = " · ";
+/** The activity and the elapsed duration, by two spaces again. */
+const DURATION_DELIMITER = "  ";
+
+/** Elapsed duration takes this fixed column, once the row can afford it. */
+const ELAPSED_WIDTH = 8;
+const ELAPSED_MIN_LINE_WIDTH = 80;
+
+/** Below these a clipped fragment says less than the Label alone. */
+const STATUS_GATE = 24;
+const ACTIVITY_GATE = 50;
+
+/** The activity holds back this fraction of the row before the Label sizes. */
+const ACTIVITY_SHARE = 0.45;
 
 /** Broken work only. Delivery, diagnostics and Conversation maintenance are not inputs. */
 export function historyCategory(subagent: SubagentSummary): HistoryCategory {
   if (subagent.current) return "Active";
-  return runFactsFromSummary(subagent.latest).executionNeedsAttention
+  return runPresentationFromSummary(subagent.latest).executionNeedsAttention
     ? "Needs attention"
     : "Completed";
 }
@@ -70,26 +145,29 @@ export function historyRows(
   capturedAt: number,
 ): string[] {
   // One resolution per Run: the shared column widths and the rows they size
-  // read the same facts rather than deriving each Run's meaning three times.
+  // read the same presentation rather than deriving each Run's meaning three
+  // times.
   const resolved = runs.map((run) => ({
     run,
-    facts: runFactsFromSummary(run),
+    presentation: runPresentationFromSummary(run),
   }));
   const preferredColumns = historyColumnWidths(
-    resolved.map(({ facts }) => facts),
+    resolved.map(({ presentation }) => presentation),
   );
-  return resolved.map(({ run, facts }) => {
+  return resolved.map(({ run, presentation }) => {
     const selected =
       run.runId === selectedIdentity || run.subagentId === selectedIdentity;
     const row = paintHistoryRow(
-      facts,
+      presentation,
       width,
       theme,
       selected,
       capturedAt,
       preferredColumns,
     );
-    return selected ? theme.bg("selectedBg", padBrowserLine(row, width)) : row;
+    return selected
+      ? theme.bg("selectedBg", fitToWidth(row, width, { pad: true }))
+      : row;
   });
 }
 
@@ -106,7 +184,7 @@ export function historyRow(
   },
 ): string {
   return paintHistoryRow(
-    runFactsFromSummary(run),
+    runPresentationFromSummary(run),
     width,
     theme,
     selected,
@@ -117,50 +195,30 @@ export function historyRow(
 
 /** Paint one already-resolved Run into the columns its list settled on. */
 function paintHistoryRow(
-  facts: RunFacts,
+  run: RunPresentation,
   width: number,
   theme: RenderableTheme,
   selected: boolean,
   now: number,
   preferredColumns: HistoryColumnWidths,
 ): string {
-  const clip = (text: string, columns: number) =>
-    truncateToWidth(text, Math.max(0, columns), "…");
-  const cell = (text: string, columns: number) => {
-    const clipped = clip(text, columns);
-    return clipped + " ".repeat(Math.max(0, columns - visibleWidth(clipped)));
-  };
-  const columns = Math.max(0, width - 2);
-  const elapsedWidth = width >= 80 ? 8 : 0;
-  const available = Math.max(
-    0,
-    columns - (elapsedWidth ? elapsedWidth + 2 : 0),
+  const fitted = fitRunLine(
+    { ...runLineParts(run, now), status: statusText(run) },
+    historyRunLine(preferredColumns),
+    width,
   );
-  const statusWidth = available >= 24 ? preferredColumns.status : 0;
-  const hasActivity = available >= 50;
-  const separators = (statusWidth ? 2 : 0) + (hasActivity ? 3 : 0);
-  const preferredActivityWidth = hasActivity ? Math.floor(available * 0.45) : 0;
-  const labelWidth = Math.min(
-    preferredColumns.label,
-    Math.max(0, available - statusWidth - preferredActivityWidth - separators),
-  );
-  const activityWidth = hasActivity
-    ? Math.max(0, available - statusWidth - labelWidth - separators)
-    : 0;
-  const status = statusText(facts);
-  const elapsedCell = clip(runElapsed(facts, now), elapsedWidth);
-  return clip(
-    (selected ? theme.fg("accent", "› ") : "  ") +
-      theme.fg(selected ? "accent" : "text", cell(facts.label, labelWidth)) +
-      (statusWidth
-        ? `  ${theme.fg(facts.status.tone, cell(status, statusWidth))}`
-        : "") +
-      (activityWidth
-        ? ` ${theme.fg("dim", "·")} ${theme.fg("muted", cell(facts.activity, activityWidth))}`
-        : "") +
-      (elapsedWidth
-        ? `  ${theme.fg("dim", " ".repeat(Math.max(0, elapsedWidth - visibleWidth(elapsedCell))) + elapsedCell)}`
-        : ""),
+  return fitToWidth(
+    (selected ? theme.fg("accent", SELECTED_PREFIX) : UNSELECTED_PREFIX) +
+      theme.fg(selected ? "accent" : "text", fitted.label) +
+      (fitted.status === undefined
+        ? ""
+        : `${STATUS_DELIMITER}${theme.fg(run.status.tone, fitted.status)}`) +
+      (fitted.activity === undefined
+        ? ""
+        : ` ${theme.fg("dim", "·")} ${theme.fg("muted", fitted.activity)}`) +
+      (fitted.duration === undefined
+        ? ""
+        : `${" ".repeat(fitted.gap)}${theme.fg("dim", fitted.duration)}`),
     width,
   );
 }

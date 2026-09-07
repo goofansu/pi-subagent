@@ -1,5 +1,6 @@
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { RenderableTheme } from "./rows.ts";
+import { fitToWidth } from "./run-line.ts";
 
 /**
  * A screen a browser page is drawn on, before its header is chosen.
@@ -77,12 +78,6 @@ export function browserViewport(
   return browserBody(browserScreen(width, terminalRows), headerLines);
 }
 
-/** Clip by display cells before padding, including ANSI and wide graphemes. */
-export function padBrowserLine(text: string, width: number): string {
-  const clipped = truncateToWidth(text, Math.max(0, width), "…");
-  return clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped)));
-}
-
 /** Prefer complete compact hints to cutting off the final (back/close) action. */
 export function browserFooter(
   width: number,
@@ -117,7 +112,9 @@ export function browserPanel(
   const heading =
     typeof header === "string" ? [theme.fg("accent", header)] : header;
   const row = (text: string) =>
-    " ".repeat(inset) + padBrowserLine(text, contentWidth) + " ".repeat(inset);
+    " ".repeat(inset) +
+    fitToWidth(text, contentWidth, { pad: true }) +
+    " ".repeat(inset);
   const lines =
     height === 1
       ? [row(heading[0] ?? "")]
@@ -136,5 +133,7 @@ export function browserPanel(
         ];
   // Use the terminal's default surface, like Pi's dashboard overlays. Padding
   // covers the underlying transcript; resets isolate nested selection colors.
-  return lines.map((line) => `\x1b[49m${padBrowserLine(line, width)}\x1b[49m`);
+  return lines.map(
+    (line) => `\x1b[49m${fitToWidth(line, width, { pad: true })}\x1b[49m`,
+  );
 }
