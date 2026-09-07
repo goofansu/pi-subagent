@@ -55,7 +55,7 @@ Two words for one thing, deliberately, and this is which is which. The field a
 *caller* fills in is `description`, because that is what the tool schema has
 always called it and a model that learned the name keeps it. Every surface that
 *shows* it calls it the label: the notice's header, the collapsed transcript
-line, the widget's activity tail. The value is the same string everywhere,
+line, the widget's leading detail. The value is the same string everywhere,
 because the bound is applied once and every reader downstream reads what
 admission stored.
 [ADR-0033](docs/adr/0033-notification-vocabulary-pointer-and-label-bound.md).
@@ -457,12 +457,10 @@ attention on an ending. The widget reads four states and nothing finer — `pend
 `resolved`, `exhausted`, `unannounceable` — and never learns which of the two
 resolved a hand-off; anything finer is the sink's alone.
 
-**Ambient widget duration** — the widget summarizes terminal Runs rather than
-showing their former individual `completed in …` rows. Active Runs had no elapsed
-timer before this adaptive presentation and still have none. A single active
-Run's optional age measures how long its displayed semantic activity summary
-has been unchanged; elapsed Run durations remain in dashboard history and
-inspection.
+**Ambient widget duration** — a single active Run's elapsed time since it
+started, sampled on Run publications rather than on a ticking timer or incidental
+render, independent of activity. Terminal Runs contribute only summary counts;
+their final durations remain in dashboard history and inspection.
 
 **Runtime probe** — the test-facing count of what is still alive: live Run
 fibers, live reducer fibers, open observation queues, open mailboxes,

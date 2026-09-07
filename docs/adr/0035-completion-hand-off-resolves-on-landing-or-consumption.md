@@ -46,8 +46,11 @@ whole hand-off state and delivery still learns no host-only vocabulary.
 terminal Runs with aggregate visibility and attention counts, not the individual
 rows described by this decision's historical text. The lifetime decision is
 unchanged: that aggregate contribution ends on landing or consumption, with
-Result-delivering waits included by ADR-0036. Individual Run durations remain in
-dashboard history and inspection rather than the ambient widget.
+Result-delivering waits included by ADR-0036. Terminal Run durations remain in
+dashboard history and inspection. Single-active-Run ambient detail now shows
+elapsed Run duration sampled on Run publications, independent of activity;
+incidental renders and hand-off changes do not advance its clock. This replaces
+the earlier activity-age presentation without changing the lifetime decision.
 
 Everything from *Context* down is the text that was proposed, unchanged.
 

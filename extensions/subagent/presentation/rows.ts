@@ -1,21 +1,18 @@
 /**
  * Ambient widget: aggregate state and, for exactly one active Run, one detail line.
  *
- * A single active Run reads in priority order: *which Profile*, *what state*,
- * and *what useful activity*. When the current activity has its retained
- * semantic timestamp, its age follows; existing turn accounting and backend
- * come later. The Label is supplementary and uses space left
- * after them, so orientation never replaces all useful activity.
+ * A single active Run reads in priority order: Label, state, useful activity,
+ * elapsed Run duration. Duration is right-aligned; Labels share history's
+ * 40-column cap and shrink further to preserve useful activity.
  *
  * ```
  *  subagents   1 running   1 completed
- *  explore  running  grep: x  3 turns  pi  look around
+ *  look around  running · grep: x                      12.4s
  * ```
  *
- * A live row has no spinner or ticking clock. Its optional age is the time
- * since the displayed semantic summary changed, sampled only when the host
- * renders. No glyph column either: the state word already says which phase the
- * Run is in, and a mark before the Profile would repeat it.
+ * A live row has no spinner or ticking clock. Elapsed time uses the host's
+ * latest Run-event sample, independent of activity. No glyph column either:
+ * the state word already says which phase the Run is in.
  *
  * The active detail is painted as a pending tool-call band. Terminal Runs
  * contribute only counts to the widget, never individual rows.
@@ -29,7 +26,7 @@
  * This module formats. It does not decide which Runs exist, when the widget
  * appears, or when it redraws — those are host concerns, and a presentation
  * module that knew them would be holding lifecycle state. Nothing here reads
- * a clock; the host supplies the render instant as plain presentation input.
+ * a clock; the host supplies the event instant as plain presentation input.
  */
 
 import {
@@ -38,9 +35,9 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { isTerminalRunPhase, type RunPhase } from "../domain/index.ts";
+import { MAX_RUN_LABEL_WIDTH } from "./labels.ts";
 import {
-  formatDuration,
-  formatTurns,
+  formatRunElapsed,
   RUN_PHASE_DISPLAY_ORDER,
   runPhaseTone,
   runPhaseVerb,
@@ -57,20 +54,15 @@ export interface RenderableTheme {
   inverse(text: string): string;
 }
 
-/** Every fixed component in a row is separated by the same amount of space. */
+/** Label and status are separated by two spaces. */
 export const ROW_DELIMITER = "  ";
+const ACTIVITY_DELIMITER = " · ";
 
-/** Keep Profile names from consuming state and activity. */
-export const MAX_PROFILE_WIDTH = 16;
-
-/** A recognisable Profile prefix retained before shortening activity. */
-const MIN_PROFILE_WIDTH = 7;
+/** A recognisable Label prefix retained before shortening activity. */
+const MIN_LABEL_WIDTH = 7;
 
 /** A shortened activity remains useful at this width (`bash: …`, for example). */
 const MIN_ACTIVITY_WIDTH = 12;
-
-/** A supplementary Label is not shown as an unrecognisable fragment. */
-const MIN_LABEL_WIDTH = 8;
 
 /** The columns a row band leaves clear at each edge. */
 export const ROW_INSET = 1;
@@ -78,18 +70,27 @@ export const ROW_INSET = 1;
 interface DetailPart {
   readonly text: string;
   readonly paint: (text: string) => string;
+  readonly separator?: string;
 }
 
 function partsWidth(parts: readonly DetailPart[]): number {
-  if (parts.length === 0) return 0;
-  return (
-    parts.reduce((total, part) => total + visibleWidth(part.text), 0) +
-    ROW_DELIMITER.length * (parts.length - 1)
+  return parts.reduce(
+    (total, part, index) =>
+      total +
+      visibleWidth(part.text) +
+      (index === 0 ? 0 : visibleWidth(part.separator ?? ROW_DELIMITER)),
+    0,
   );
 }
 
 function paintParts(parts: readonly DetailPart[]): string {
-  return parts.map((part) => part.paint(part.text)).join(ROW_DELIMITER);
+  return parts
+    .map(
+      (part, index) =>
+        (index === 0 ? "" : (part.separator ?? ROW_DELIMITER)) +
+        part.paint(part.text),
+    )
+    .join("");
 }
 
 /** Inputs here are plain; discard truncator resets before applying our paint. */
@@ -98,10 +99,10 @@ function truncatePlainText(text: string, width: number): string {
 }
 
 interface EssentialDetail {
-  readonly profile: string;
+  readonly label: string;
   readonly state?: string;
   readonly activity?: string;
-  /** Lower-priority fields stay gone when reported activity was unusably narrow. */
+  /** Elapsed stays hidden when reported activity was unusably narrow. */
   readonly optionalsAllowed: boolean;
 }
 
@@ -110,63 +111,59 @@ function allocateEssentialDetail(
   row: RunRowView,
   width: number,
 ): EssentialDetail {
-  if (width <= 0) return { profile: "", optionalsAllowed: false };
-  const profile = truncatePlainText(row.identity.agent, MAX_PROFILE_WIDTH);
+  if (width <= 0) return { label: "", optionalsAllowed: false };
+  const label = truncatePlainText(
+    row.identity.description,
+    MAX_RUN_LABEL_WIDTH,
+  );
   const state =
     row.cancellation !== undefined ? "cancelling" : runPhaseVerb(row.phase);
   const stateWidth = visibleWidth(state);
-  const profileBesideState = width - stateWidth - ROW_DELIMITER.length;
+  const labelBesideState = width - stateWidth - ROW_DELIMITER.length;
 
-  // Profile has first priority. Until a prefix and the complete state can both
-  // fit, show only that prefix rather than an empty cell plus a delimiter.
-  if (profileBesideState < 1) {
+  // Label has first priority until its prefix and the complete state fit.
+  if (labelBesideState < 1) {
     return {
-      profile: truncatePlainText(profile, width),
+      label: truncatePlainText(label, width),
       optionalsAllowed: false,
     };
   }
 
+  // Match history's placeholder without reviving retained tool activity.
   const currentActivity =
     row.phase === "running" && row.cancellation === undefined
-      ? row.activity
-      : undefined;
-  if (currentActivity === undefined) {
-    return {
-      profile: truncatePlainText(profile, profileBesideState),
-      state,
-      optionalsAllowed: true,
-    };
-  }
+      ? row.activity || "—"
+      : "—";
 
   const activityMinimum = Math.min(
     MIN_ACTIVITY_WIDTH,
     visibleWidth(currentActivity),
   );
-  const roomForProfileAndActivity = Math.max(
+  const roomForLabelAndActivity = Math.max(
     0,
-    width - stateWidth - ROW_DELIMITER.length * 2,
+    width - stateWidth - ROW_DELIMITER.length - ACTIVITY_DELIMITER.length,
   );
-  let profileWidth = visibleWidth(profile);
+  let labelWidth = visibleWidth(label);
   let activityWidth = visibleWidth(currentActivity);
-  if (profileWidth + activityWidth > roomForProfileAndActivity) {
-    profileWidth = Math.min(
-      profileWidth,
+  if (labelWidth + activityWidth > roomForLabelAndActivity) {
+    labelWidth = Math.min(
+      labelWidth,
       Math.max(
-        Math.min(MIN_PROFILE_WIDTH, profileWidth),
-        roomForProfileAndActivity - activityMinimum,
+        Math.min(MIN_LABEL_WIDTH, labelWidth),
+        roomForLabelAndActivity - activityMinimum,
       ),
     );
-    activityWidth = Math.max(0, roomForProfileAndActivity - profileWidth);
+    activityWidth = Math.max(0, roomForLabelAndActivity - labelWidth);
   }
   if (activityWidth < activityMinimum) {
     return {
-      profile: truncatePlainText(profile, profileBesideState),
+      label: truncatePlainText(label, labelBesideState),
       state,
       optionalsAllowed: false,
     };
   }
   return {
-    profile: truncatePlainText(profile, profileWidth),
+    label: truncatePlainText(label, labelWidth),
     state,
     activity: truncatePlainText(currentActivity, activityWidth),
     optionalsAllowed: true,
@@ -176,11 +173,9 @@ function allocateEssentialDetail(
 /**
  * One active Run as a single width-aware line.
  *
- * Profile, state, and honest current activity are allocated first. A long
- * Profile is capped and can shrink further to preserve useful activity. The
- * matching semantic age follows activity, before turns and backend; Label uses
- * only the final remainder. Finalization and cancellation omit retained
- * activity and age because they no longer describe something executing now.
+ * Elapsed Run duration reserves the right edge with a flexible gap, provided
+ * Label, state and useful current activity still fit. Finalization and cancellation
+ * omit retained activity, but duration remains independent of activity.
  */
 export function formatRunRow(
   row: RunRowView,
@@ -188,11 +183,24 @@ export function formatRunRow(
   width: number,
   now: number,
 ): string {
-  const essential = allocateEssentialDetail(row, width);
+  const elapsed = formatRunElapsed(row, now);
+  const elapsedWidth = visibleWidth(elapsed);
+  const reserved = allocateEssentialDetail(
+    row,
+    width - elapsedWidth - ROW_DELIMITER.length,
+  );
+  // Reserve duration before allocating activity, but do not replace useful
+  // activity or the complete status with a clock on very narrow terminals.
+  const showElapsed = Boolean(
+    reserved.label && reserved.state && reserved.optionalsAllowed,
+  );
+  const essential = showElapsed
+    ? reserved
+    : allocateEssentialDetail(row, width);
   const parts: DetailPart[] = [];
-  if (essential.profile) {
+  if (essential.label) {
     parts.push({
-      text: essential.profile,
+      text: essential.label,
       paint: (text) => theme.fg("toolTitle", theme.bold(text)),
     });
   }
@@ -205,57 +213,17 @@ export function formatRunRow(
   if (essential.activity) {
     parts.push({
       text: essential.activity,
-      paint: (text) => theme.fg("muted", theme.italic(text)),
+      separator: ` ${theme.fg("dim", "·")} `,
+      paint: (text) => theme.fg("muted", text),
     });
   }
 
-  const appendWhole = (part: DetailPart): boolean => {
-    const candidate = [...parts, part];
-    if (partsWidth(candidate) > width) return false;
-    parts.push(part);
-    return true;
-  };
-  // Pair age only with the current semantic summary it describes. A retained
-  // summary after clear/finalization is history, not evidence that its tool is
-  // still executing. If a real age cannot fit, lower-priority metadata does
-  // not jump ahead of it.
-  const retainedActivity = row.lastActivity;
-  const activityAge =
-    essential.activity !== undefined &&
-    retainedActivity !== undefined &&
-    row.activity === retainedActivity.summary
-      ? `${formatDuration(now - retainedActivity.changedAt)} ago`
-      : undefined;
-  const ageShown =
-    activityAge === undefined ||
-    appendWhole({
-      text: activityAge,
-      paint: (text) => theme.fg("dim", text),
-    });
-  const accountingShown =
-    essential.optionalsAllowed &&
-    ageShown &&
-    appendWhole({
-      text: formatTurns(row.usage.turns),
-      paint: (text) => theme.fg("dim", text),
-    });
-  const backendShown =
-    accountingShown &&
-    appendWhole({
-      text: row.identity.backendId,
-      paint: (text) => theme.fg("dim", text),
-    });
-
-  const label = row.identity.description;
-  const labelRoom = width - partsWidth(parts) - ROW_DELIMITER.length;
-  if (backendShown && label && labelRoom >= MIN_LABEL_WIDTH) {
-    parts.push({
-      text: truncatePlainText(label, labelRoom),
-      paint: (text) => theme.fg("dim", text),
-    });
-  }
-
-  const line = paintParts(parts);
+  const line =
+    paintParts(parts) +
+    (showElapsed
+      ? " ".repeat(width - partsWidth(parts) - elapsedWidth) +
+        theme.fg("dim", elapsed)
+      : "");
   return visibleWidth(line) <= width
     ? line
     : truncateToWidth(line, width, "…", true);

@@ -1,7 +1,8 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
+import { MAX_RUN_LABEL_WIDTH } from "./labels.ts";
 import type { RenderableTheme } from "./rows.ts";
-import { formatDuration, runPhaseTone } from "./status.ts";
+import { formatRunElapsed, runPhaseTone } from "./status.ts";
 
 export const HISTORY_CATEGORIES = [
   "Active",
@@ -24,7 +25,7 @@ export function historyColumnWidths(
 ): HistoryColumnWidths {
   return {
     label: Math.min(
-      40,
+      MAX_RUN_LABEL_WIDTH,
       Math.max(0, ...runs.map((run) => visibleWidth(run.label))),
     ),
     status: Math.max(0, ...runs.map((run) => visibleWidth(statusText(run)))),
@@ -48,7 +49,10 @@ export function historyRow(
   theme: RenderableTheme,
   selected: boolean,
   now: number,
-  preferredColumns: HistoryColumnWidths = { label: 40, status: 10 },
+  preferredColumns: HistoryColumnWidths = {
+    label: MAX_RUN_LABEL_WIDTH,
+    status: 10,
+  },
 ): string {
   const clip = (text: string, columns: number) =>
     truncateToWidth(text, Math.max(0, columns), "…");
@@ -85,11 +89,7 @@ export function historyRow(
     run.phase === "running" || run.phase === "finalizing"
       ? (run.activity ?? run.lastActivity?.summary ?? "—")
       : (run.cancellationReason ?? "—");
-  const end =
-    run.phase === "running" || run.phase === "finalizing" ? now : run.settledAt;
-  const elapsed =
-    end === undefined ? "—" : formatDuration(Math.max(0, end - run.startedAt));
-  const elapsedCell = clip(elapsed, elapsedWidth);
+  const elapsedCell = clip(formatRunElapsed(run, now), elapsedWidth);
   return clip(
     (selected ? theme.fg("accent", "› ") : "  ") +
       theme.fg(selected ? "accent" : "text", cell(run.label, labelWidth)) +
