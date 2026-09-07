@@ -5,23 +5,30 @@
  * detail row, the dashboard history's table row, frozen inspection — each read
  * one of two published shapes: the repository's index row ({@link RunRowView})
  * or the domain's Run summary ({@link RunSummary}). The two carry the same
- * facts under different field names, so each surface used to assemble the
- * shared resolver's input itself, and the assemblies drifted. The dashboard
- * history listed the terminal Run phases inline while the widget asked the
- * domain, so a sixth phase would have been adapted in one surface and misfiled
- * in the other with nothing failing.
+ * values under different field names, so each surface used to assemble the
+ * resolver's input itself, and the assemblies drifted. The dashboard history
+ * listed the terminal Run phases inline while the widget asked the domain, so
+ * a sixth phase would have been adapted in one surface and misfiled in the
+ * other with nothing failing.
  *
  * This module is the one derivation. A surface names the shape it holds and
  * gets back everything it needs to describe the Run: the Label, the status
  * word and its tone, the one activity cell, why the Run was cancelled, and the
  * instants an elapsed duration is read between. Whether a phase is terminal is
- * the domain's question: it is asked here for the facts resolved here, and the
- * phase the answer was given for is published, so a surface with a further
- * question of its own asks it of the same value rather than of a shape a
- * stored Result has since overtaken.
+ * the domain's question: it is asked here for the presentation resolved here,
+ * and the phase the answer was given for is published, so a surface with a
+ * further question of its own asks it of the same value rather than of a shape
+ * a stored Result has since overtaken.
+ *
+ * The phase policy the resolution reads — which word a phase gets, and in what
+ * tone — stays in `status.ts`, which is where a sixth Run phase still has to be
+ * given one before this compiles. What is decided here is what a cancellation
+ * then does to that answer, and what the whole of it means for a Run in front
+ * of a reader.
  *
  * Meaning only. How wide a Label may be, which columns a surface can afford,
- * and what any of it is painted in stay with the surface that draws it.
+ * and what any of it is painted in belong to `run-line.ts` and the surface
+ * that draws it.
  */
 
 import {
@@ -34,8 +41,9 @@ import {
 } from "../domain/index.ts";
 import {
   formatRunElapsed,
-  type RunPresentation,
-  resolveRunPresentation,
+  runPhaseTone,
+  runPhaseVerb,
+  type Tone,
 } from "./status.ts";
 import type { RunRowView } from "./views.ts";
 
@@ -43,13 +51,16 @@ import type { RunRowView } from "./views.ts";
 const NO_ACTIVITY = "—";
 
 /** Everything a surface needs in order to describe one Run. */
-export interface RunFacts {
+export interface RunPresentation {
   /** The Run's Label: one line saying what this Run was given to do. */
   readonly label: string;
-  /** The phase these facts were resolved for, by the authoritative account. */
+  /** The phase this presentation was resolved for, by the authoritative account. */
   readonly phase: RunPhase;
   /** The status word and the tone the shared phase policy gives it. */
-  readonly status: RunPresentation["status"];
+  readonly status: {
+    readonly text: string;
+    readonly tone: Tone;
+  };
   /**
    * The one activity cell, under one rule for every surface.
    *
@@ -74,7 +85,7 @@ export interface RunFacts {
 }
 
 /** The fields both published shapes carry, under one set of names. */
-interface RunFactsSource {
+interface RunPresentationInput {
   readonly label: string;
   readonly phase: RunPhase;
   readonly cancellationReason?: CancellationReason | undefined;
@@ -84,39 +95,56 @@ interface RunFactsSource {
   readonly settledAt?: number | undefined;
 }
 
-function resolve(run: RunFactsSource): RunFacts {
-  const presentation = resolveRunPresentation({
-    phase: run.phase,
-    cancellationRequested: run.cancellationReason !== undefined,
-    cancellationReason: run.cancellationReason,
-    activity: run.activity,
-    lastActivity: run.lastActivity,
-  });
+/**
+ * Interpret phase, cancellation and activity once for every Run surface.
+ *
+ * Current activity is deliberately not recovered from retained last activity:
+ * one says what is happening now and the other is historical context. A
+ * recorded reason is what says a cancellation was requested, so a Run cannot
+ * be shown as cancelling without one, or as carrying a reason nobody asked for.
+ */
+function resolve(run: RunPresentationInput): RunPresentation {
+  const terminal = isTerminalRunPhase(run.phase);
+  const cancelling = run.cancellationReason !== undefined && !terminal;
+  const ordinaryCancellation =
+    run.phase === "cancelled" &&
+    (run.cancellationReason === "requested" ||
+      run.cancellationReason === "shutdown");
+  const currentActivity =
+    run.phase === "running" &&
+    run.cancellationReason === undefined &&
+    run.activity?.trim()
+      ? run.activity
+      : undefined;
+
   return {
     label: run.label,
     phase: run.phase,
-    status: presentation.status,
+    status: cancelling
+      ? { text: "cancelling", tone: "warning" }
+      : {
+          text: runPhaseVerb(run.phase),
+          tone: ordinaryCancellation ? "muted" : runPhaseTone(run.phase),
+        },
     activity:
-      (isTerminalRunPhase(run.phase)
-        ? run.cancellationReason
-        : presentation.currentActivity) ?? NO_ACTIVITY,
+      (terminal ? run.cancellationReason : currentActivity) ?? NO_ACTIVITY,
     ...(run.cancellationReason === undefined
       ? {}
       : { cancellationReason: run.cancellationReason }),
-    ...(presentation.currentActivity === undefined
+    ...(currentActivity === undefined ? {} : { currentActivity }),
+    ...(run.lastActivity === undefined
       ? {}
-      : { currentActivity: presentation.currentActivity }),
-    ...(presentation.lastActivity === undefined
-      ? {}
-      : { lastActivity: presentation.lastActivity }),
-    executionNeedsAttention: presentation.executionNeedsAttention,
+      : { lastActivity: run.lastActivity }),
+    executionNeedsAttention:
+      run.phase === "failed" ||
+      (run.phase === "cancelled" && run.cancellationReason === "timeout"),
     startedAt: run.startedAt,
     ...(run.settledAt === undefined ? {} : { settledAt: run.settledAt }),
   };
 }
 
 /** One Run as the published index publishes it: what the ambient widget holds. */
-export function runFactsFromRow(row: RunRowView): RunFacts {
+export function runPresentationFromRow(row: RunRowView): RunPresentation {
   return resolve({
     label: row.identity.description,
     phase: row.phase,
@@ -136,10 +164,10 @@ export function runFactsFromRow(row: RunRowView): RunFacts {
  * authoritative: it is the immutable value settlement produced, while the
  * summary is a live index entry the capture may have raced.
  */
-export function runFactsFromSummary(
+export function runPresentationFromSummary(
   run: RunSummary,
   result?: RunResult,
-): RunFacts {
+): RunPresentation {
   return resolve({
     label: result?.description ?? run.label,
     phase: result?.status ?? run.phase,
@@ -154,11 +182,11 @@ export function runFactsFromSummary(
 /**
  * Elapsed Run duration at the instant a surface is drawing at.
  *
- * Read separately from {@link RunFacts} because what a Run *means* does not
- * depend on when it is read and how long it has been going does. A surface
+ * Read separately from {@link RunPresentation} because what a Run *means* does
+ * not depend on when it is read and how long it has been going does. A surface
  * that only files a Run by what it means would otherwise have to invent a
  * drawing instant to get an answer out of the derivation.
  */
-export function runElapsed(facts: RunFacts, now: number): string {
-  return formatRunElapsed(facts, now);
+export function runElapsed(run: RunPresentation, now: number): string {
+  return formatRunElapsed(run, now);
 }

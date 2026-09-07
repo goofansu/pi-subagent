@@ -1,9 +1,5 @@
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import {
-  Markdown,
-  truncateToWidth,
-  wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+import { Markdown, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import {
   isTerminalRunPhase,
   type ToolEntry,
@@ -18,7 +14,8 @@ import {
   formatTranscriptItem,
   formatTruncation,
 } from "./run-card.ts";
-import { runFactsFromSummary } from "./run-facts.ts";
+import { fitToWidth } from "./run-line.ts";
+import { runPresentationFromSummary } from "./run-presentation.ts";
 import { formatDuration } from "./status.ts";
 import type { HandoffStatus } from "./views.ts";
 
@@ -58,13 +55,14 @@ export function inspectionBlocks(
         ? capture.content
         : undefined;
   // The stored Result is the authoritative account of a Run that has one, and
-  // `run-facts.ts` is where that preference and the Run's meaning are decided.
-  const facts = runFactsFromSummary(summary, result);
-  add("heading", `Label: ${facts.label}`);
+  // `run-presentation.ts` is where that preference and the Run's meaning are
+  // decided.
+  const run = runPresentationFromSummary(summary, result);
+  add("heading", `Label: ${run.label}`);
   add(
     "literal",
     `Profile: ${summary.profile} · backend: ${summary.backend}`,
-    `Run status: ${facts.status.text}${facts.cancellationReason ? ` (${facts.cancellationReason})` : ""}`,
+    `Run status: ${run.status.text}${run.cancellationReason ? ` (${run.cancellationReason})` : ""}`,
   );
 
   // The answer is the primary reason to inspect; accounting and tool history follow it.
@@ -96,7 +94,7 @@ export function inspectionBlocks(
       "",
       capture.outcome === "ResultExpired"
         ? "Result expired: output is gone; retained metadata is shown below."
-        : isTerminalRunPhase(facts.phase)
+        : isTerminalRunPhase(run.phase)
           ? "Result unavailable: the stored result is missing or unreadable."
           : "Run unavailable: active snapshot could not be captured.",
     );
@@ -112,19 +110,19 @@ export function inspectionBlocks(
     `Captured at: ${new Date(capture.capturedAt).toISOString()}`,
   );
   if (subagent) add("literal", `Subagent phase: ${subagent.phase}`);
-  add("literal", `Started at: ${new Date(facts.startedAt).toISOString()}`);
-  if (facts.currentActivity)
-    add("literal", `Current activity: ${facts.currentActivity}`);
-  if (facts.lastActivity)
+  add("literal", `Started at: ${new Date(run.startedAt).toISOString()}`);
+  if (run.currentActivity)
+    add("literal", `Current activity: ${run.currentActivity}`);
+  if (run.lastActivity)
     add(
       "literal",
-      `Last activity: ${facts.lastActivity.summary} · changed ${formatDuration(capture.capturedAt - facts.lastActivity.changedAt)} ago`,
+      `Last activity: ${run.lastActivity.summary} · changed ${formatDuration(capture.capturedAt - run.lastActivity.changedAt)} ago`,
     );
-  if (facts.settledAt !== undefined)
+  if (run.settledAt !== undefined)
     add(
       "literal",
-      `Settled at: ${new Date(facts.settledAt).toISOString()}`,
-      `Duration: ${formatDuration(Math.max(0, facts.settledAt - facts.startedAt))}`,
+      `Settled at: ${new Date(run.settledAt).toISOString()}`,
+      `Duration: ${formatDuration(Math.max(0, run.settledAt - run.startedAt))}`,
     );
   if (subagent?.conversationLost)
     add("literal", "Conversation unavailable for resume");
@@ -194,7 +192,7 @@ export function renderInspection(
             : theme.fg("text", block.text);
       return wrapTextWithAnsi(text, Math.max(1, width));
     })
-    .map((line) => truncateToWidth(line, Math.max(0, width), "…"));
+    .map((line) => fitToWidth(line, width));
 }
 
 function transcriptBlocks(item: TranscriptItem): readonly InspectionBlock[] {

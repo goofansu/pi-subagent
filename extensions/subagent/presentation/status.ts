@@ -3,11 +3,12 @@
  *
  * Every surface that says something about a Run — a widget row, a dashboard
  * row, a tool outcome, a completion notice, a result card — reads this module,
- * the operational surfaces through `run-facts.ts` rather than directly. The
- * phase table supplies the baseline; the Run resolver adds cancellation and
- * activity meaning, and `run-facts.ts` is the one caller that hands it a Run.
- * None decides what a phase means locally. Adding a phase to the domain
- * therefore fails to compile here first, which is where the decision belongs.
+ * the operational surfaces through `run-presentation.ts` rather than directly.
+ * The table below is the baseline: one word and one tone per phase, and none
+ * decided locally. What a *cancellation* then does to that word and that tone
+ * is the resolution's, in `run-presentation.ts`, because it is a fact about a
+ * Run rather than about a phase. Adding a phase to the domain fails to compile
+ * here first, which is where the decision belongs.
  *
  * v2 has five Run phases where v1 had four: `finalizing` is the window between
  * a backend's execution ending and the Run settling, and it exists so a
@@ -24,36 +25,13 @@
  */
 
 import {
-  type CancellationReason,
   isTerminalRunPhase,
   type RunPhase,
-  type SemanticActivity,
   type TerminalRunPhase,
 } from "../domain/index.ts";
 
 /** The theme colours presentation may select. */
 export type Tone = "warning" | "success" | "error" | "muted";
-
-/** The plain Run values the shared presentation policy interprets. */
-export interface RunPresentationInput {
-  readonly phase: RunPhase;
-  readonly cancellationRequested: boolean;
-  readonly cancellationReason?: CancellationReason | undefined;
-  readonly activity?: string | undefined;
-  readonly lastActivity?: SemanticActivity | undefined;
-}
-
-/** The operational meaning shared by compact and detailed Run surfaces. */
-export interface RunPresentation {
-  readonly status: {
-    readonly text: string;
-    readonly tone: Tone;
-  };
-  readonly currentActivity?: string;
-  readonly lastActivity?: SemanticActivity;
-  /** Execution outcome only. Delivery and Conversation maintenance are not inputs. */
-  readonly executionNeedsAttention: boolean;
-}
 
 /**
  * One row per phase: the colour, the status word, and the phrase that narrates
@@ -96,47 +74,6 @@ const PHASE_PRESENTATION: {
     phrase: (duration) => `cancelled after ${duration}`,
   },
 };
-
-/**
- * Interpret phase, cancellation and activity once for every Run surface.
- *
- * Current activity is deliberately not recovered from retained last activity:
- * one says what is happening now and the other is historical context.
- */
-export function resolveRunPresentation(
-  input: RunPresentationInput,
-): RunPresentation {
-  const cancelling =
-    input.cancellationRequested && !isTerminalRunPhase(input.phase);
-  const timeoutCancellation =
-    input.phase === "cancelled" && input.cancellationReason === "timeout";
-  const ordinaryCancellation =
-    input.phase === "cancelled" &&
-    (input.cancellationReason === "requested" ||
-      input.cancellationReason === "shutdown");
-  const activity =
-    input.phase === "running" &&
-    !input.cancellationRequested &&
-    input.activity?.trim()
-      ? input.activity
-      : undefined;
-
-  return {
-    status: cancelling
-      ? { text: "cancelling", tone: "warning" }
-      : {
-          text: PHASE_PRESENTATION[input.phase].verb,
-          tone: ordinaryCancellation
-            ? "muted"
-            : PHASE_PRESENTATION[input.phase].tone,
-        },
-    ...(activity === undefined ? {} : { currentActivity: activity }),
-    ...(input.lastActivity === undefined
-      ? {}
-      : { lastActivity: input.lastActivity }),
-    executionNeedsAttention: input.phase === "failed" || timeoutCancellation,
-  };
-}
 
 /** Phase order used by widget summaries, so two Sessions read the same way. */
 export const RUN_PHASE_DISPLAY_ORDER = Object.freeze(

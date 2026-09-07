@@ -56,7 +56,7 @@ tests/live lanes, not alternative production modes.
 | [`backend/contract.ts`](../extensions/subagent/backend/contract.ts) | Effect-typed, provider-neutral resource and execution contract. Shared backend helpers live alongside it. |
 | [`backend/pi/`](../extensions/subagent/backend/pi/) and [`backend/claude/`](../extensions/subagent/backend/claude/) | Native construction, options, translation, execution and retained Conversation state. Neither adapter imports the runtime, host, presentation or the other adapter. |
 | [`profiles/`](../extensions/subagent/profiles/discovery.ts) | Filesystem discovery; delegates parsing to the domain and validation to a supplied callback. |
-| [`presentation/`](../extensions/subagent/presentation/) | Outcome prose, RunCards, rows and renderers, entered through the module's barrel. [`run-facts.ts`](../extensions/subagent/presentation/run-facts.ts) is the one derivation from a published index row or the domain's Run summary to what a surface says about a Run. Depends on domain values and Pi display utilities, not Effect or runtime services. |
+| [`presentation/`](../extensions/subagent/presentation/) | Outcome prose, RunCards, rows and renderers, entered through the module's barrel. [`run-presentation.ts`](../extensions/subagent/presentation/run-presentation.ts) is the one derivation from a published index row or the domain's Run summary to what a surface says about a Run; [`run-line.ts`](../extensions/subagent/presentation/run-line.ts) is the one algebra for fitting that into a width, the one owner of the Label cap the Run surfaces share, and the one wrapper for clipping and padding a line over Pi's width primitive. The widget, the dashboard history and the notice renderer supply a policy — named column budgets — and keep only their painting; a notice's further Label cap is its own policy value. Depends on domain values and Pi display utilities, not Effect or runtime services. |
 | [`testing/`](../extensions/subagent/testing/) | Scripted backends, native stand-ins, Session/host rigs and shared conformance scenarios. Not production orchestration. |
 
 [`boundaries.test.ts`](../extensions/subagent/boundaries.test.ts) checks these
@@ -405,7 +405,8 @@ reports both plus hand-off counts, not provider continuation identities.
 | Lifecycle races/leaks | [races](../extensions/subagent/runtime/races.test.ts), [faults](../extensions/subagent/runtime/faults.test.ts), [backpressure](../extensions/subagent/runtime/backpressure.test.ts), [stress](../extensions/subagent/runtime/stress.test.ts) |
 | Parent-visible behavior | [host end-to-end](../extensions/subagent/host/end-to-end.test.ts), [tools](../extensions/subagent/host/tools.test.ts), [push sink](../extensions/subagent/host/push-sink.test.ts) |
 | Output changes | [RunCard](../extensions/subagent/presentation/run-card.ts), [result body](../extensions/subagent/presentation/result-body.ts), [notification text](../extensions/subagent/presentation/notification-text.ts) |
-| What a row says about a Run | [Run facts](../extensions/subagent/presentation/run-facts.ts), [status](../extensions/subagent/presentation/status.ts) |
+| What a row says about a Run | [Run presentation](../extensions/subagent/presentation/run-presentation.ts), [status](../extensions/subagent/presentation/status.ts) |
+| How wide a row's parts are | [Run line](../extensions/subagent/presentation/run-line.ts) and the three policy values that name its budgets |
 | Architecture changes | [boundaries](../extensions/subagent/boundaries.test.ts), [contract shape](../extensions/subagent/backend/contract.test.ts) |
 
 [Commands](../package.json): `npm run typecheck`, `npm test`, `npm run test:conformance`;

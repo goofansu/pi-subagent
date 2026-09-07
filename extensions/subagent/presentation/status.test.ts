@@ -1,11 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  CANCELLATION_REASONS,
-  type CancellationReason,
-  RUN_PHASES,
-  type RunPhase,
-} from "../domain/index.ts";
+import { RUN_PHASES } from "../domain/index.ts";
 import {
   formatCharacterCount,
   formatDuration,
@@ -13,7 +8,6 @@ import {
   formatTokenCount,
   formatTurns,
   RUN_PHASE_DISPLAY_ORDER,
-  resolveRunPresentation,
   runPhaseTone,
   runPhaseVerb,
 } from "./status.ts";
@@ -48,100 +42,6 @@ test("presentation observes phase without determining it", () => {
 test("finalizing is its own phase rather than borrowing running's word", () => {
   assert.notEqual(runPhaseVerb("finalizing"), runPhaseVerb("running"));
   assert.equal(runPhaseTone("finalizing"), "warning");
-});
-
-test("the Run presentation resolver covers every phase, cancellation-request and reason combination", () => {
-  const expected = (
-    phase: RunPhase,
-    cancellationRequested: boolean,
-    cancellationReason: CancellationReason,
-  ) => {
-    if (
-      cancellationRequested &&
-      (phase === "running" || phase === "finalizing")
-    )
-      return { text: "cancelling", tone: "warning", attention: false };
-    if (phase === "cancelled")
-      return cancellationReason === "timeout"
-        ? { text: "cancelled", tone: "error", attention: true }
-        : { text: "cancelled", tone: "muted", attention: false };
-    const byPhase = {
-      running: { text: "running", tone: "warning", attention: false },
-      finalizing: { text: "finalizing", tone: "warning", attention: false },
-      completed: { text: "completed", tone: "success", attention: false },
-      failed: { text: "failed", tone: "error", attention: true },
-    } as const;
-    return byPhase[phase];
-  };
-
-  for (const phase of RUN_PHASES)
-    for (const cancellationRequested of [false, true])
-      for (const cancellationReason of CANCELLATION_REASONS) {
-        const lastActivity = { summary: "retained work", changedAt: 100 };
-        const presentation = resolveRunPresentation({
-          phase,
-          cancellationRequested,
-          cancellationReason,
-          activity: "current work",
-          lastActivity,
-        });
-        const wanted = expected(
-          phase,
-          cancellationRequested,
-          cancellationReason,
-        );
-        assert.deepEqual(presentation.status, {
-          text: wanted.text,
-          tone: wanted.tone,
-        });
-        assert.equal(presentation.executionNeedsAttention, wanted.attention);
-        assert.equal(
-          presentation.currentActivity,
-          phase === "running" && !cancellationRequested
-            ? "current work"
-            : undefined,
-        );
-        assert.equal(presentation.lastActivity, lastActivity);
-      }
-});
-
-test("current and last activity remain separate presentation facts", () => {
-  const lastActivity = { summary: "retained work", changedAt: 100 };
-  assert.deepEqual(
-    resolveRunPresentation({
-      phase: "running",
-      cancellationRequested: false,
-      activity: "current work",
-      lastActivity,
-    }),
-    {
-      status: { text: "running", tone: "warning" },
-      currentActivity: "current work",
-      lastActivity,
-      executionNeedsAttention: false,
-    },
-  );
-  for (const input of [
-    { phase: "running" as const, cancellationRequested: true, activity: "old" },
-    {
-      phase: "finalizing" as const,
-      cancellationRequested: false,
-      activity: "old",
-    },
-    { phase: "running" as const, cancellationRequested: false, activity: "  " },
-  ]) {
-    const presentation = resolveRunPresentation({ ...input, lastActivity });
-    assert.equal(presentation.currentActivity, undefined);
-    assert.equal(presentation.lastActivity, lastActivity);
-  }
-  assert.equal(
-    resolveRunPresentation({
-      phase: "running",
-      cancellationRequested: false,
-      lastActivity,
-    }).currentActivity,
-    undefined,
-  );
 });
 
 test("formatDuration reports tenths, then minutes, then hours", () => {

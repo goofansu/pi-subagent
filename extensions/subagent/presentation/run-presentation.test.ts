@@ -18,11 +18,11 @@ import {
   fixtureRow,
 } from "../testing/presentation-fixtures.ts";
 import {
-  type RunFacts,
+  type RunPresentation,
   runElapsed,
-  runFactsFromRow,
-  runFactsFromSummary,
-} from "./run-facts.ts";
+  runPresentationFromRow,
+  runPresentationFromSummary,
+} from "./run-presentation.ts";
 
 /** The Run summary the fixture row describes, field for field. */
 function fixtureSummary(overrides: Partial<RunSummary> = {}): RunSummary {
@@ -47,11 +47,11 @@ function bothShapes(
   phase: RunPhase,
   cancellationReason?: CancellationReason,
   activity?: string,
-): readonly (readonly [string, RunFacts])[] {
+): readonly (readonly [string, RunPresentation])[] {
   return [
     [
       "published index row",
-      runFactsFromRow(
+      runPresentationFromRow(
         fixtureRow({
           phase,
           ...(cancellationReason === undefined
@@ -63,7 +63,7 @@ function bothShapes(
     ],
     [
       "domain Run summary",
-      runFactsFromSummary(
+      runPresentationFromSummary(
         fixtureSummary({
           phase,
           ...(cancellationReason === undefined ? {} : { cancellationReason }),
@@ -74,7 +74,7 @@ function bothShapes(
   ];
 }
 
-test("both source shapes resolve one Run to the same facts, in every phase", () => {
+test("both source shapes resolve one Run the same way, in every phase", () => {
   for (const phase of RUN_PHASES) {
     for (const cancellationReason of [undefined, ...CANCELLATION_REASONS]) {
       const [[, row], [, summary]] = bothShapes(
@@ -87,30 +87,50 @@ test("both source shapes resolve one Run to the same facts, in every phase", () 
   }
 });
 
-test("every Run phase gets a status word, and a cancellation in flight says cancelling", () => {
+test("every phase and reason resolves to one status word in one tone", () => {
+  // The whole matrix, spelled out rather than derived: a phase table read
+  // twice proves nothing, and the tones are what a reader acts on. A recorded
+  // reason is what says a cancellation was requested, so the phases that are
+  // not yet terminal read `cancelling` whichever reason it was.
+  const expected = (
+    phase: RunPhase,
+    reason: CancellationReason | undefined,
+  ): { readonly text: string; readonly tone: string } => {
+    if (reason !== undefined && !isTerminalRunPhase(phase))
+      return { text: "cancelling", tone: "warning" };
+    if (phase === "cancelled")
+      return reason === "timeout" || reason === undefined
+        ? { text: "cancelled", tone: "error" }
+        : { text: "cancelled", tone: "muted" };
+    return {
+      text: phase,
+      tone: {
+        running: "warning",
+        finalizing: "warning",
+        completed: "success",
+        failed: "error",
+      }[phase],
+    };
+  };
+
   for (const phase of RUN_PHASES)
-    for (const [shape, facts] of bothShapes(phase)) {
-      assert.equal(facts.phase, phase, shape);
-      assert.equal(facts.status.text, phase, `${shape} ${phase}`);
-      assert.ok(facts.status.tone.length > 0);
-      assert.equal(facts.cancellationReason, undefined);
-    }
-  for (const phase of RUN_PHASES)
-    for (const [shape, facts] of bothShapes(phase, "requested")) {
-      assert.equal(
-        facts.status.text,
-        isTerminalRunPhase(phase) ? phase : "cancelling",
-        `${shape} ${phase}`,
-      );
-      assert.equal(facts.cancellationReason, "requested");
-    }
+    for (const reason of [undefined, ...CANCELLATION_REASONS])
+      for (const [shape, presentation] of bothShapes(phase, reason)) {
+        assert.equal(presentation.phase, phase, shape);
+        assert.deepEqual(
+          presentation.status,
+          expected(phase, reason),
+          `${shape} ${phase} ${reason}`,
+        );
+        assert.equal(presentation.cancellationReason, reason);
+      }
 });
 
 test("a live Run's activity is what it is doing; a terminal Run's is why it stopped", () => {
   for (const phase of RUN_PHASES)
-    for (const [shape, facts] of bothShapes(phase, undefined, "grep: x"))
+    for (const [shape, presentation] of bothShapes(phase, undefined, "grep: x"))
       assert.equal(
-        facts.activity,
+        presentation.activity,
         phase === "running" ? "grep: x" : "—",
         `${shape} ${phase}`,
       );
@@ -118,9 +138,9 @@ test("a live Run's activity is what it is doing; a terminal Run's is why it stop
   // terminal Run's retained tool activity is history, not its result.
   for (const reason of CANCELLATION_REASONS)
     for (const phase of RUN_PHASES)
-      for (const [shape, facts] of bothShapes(phase, reason, "grep: x"))
+      for (const [shape, presentation] of bothShapes(phase, reason, "grep: x"))
         assert.equal(
-          facts.activity,
+          presentation.activity,
           isTerminalRunPhase(phase) ? reason : "—",
           `${shape} ${phase} ${reason}`,
         );
@@ -128,33 +148,48 @@ test("a live Run's activity is what it is doing; a terminal Run's is why it stop
 
 test("current activity stays separate from the retained summary", () => {
   const lastActivity = { summary: "read earlier", changedAt: 100 };
-  for (const [shape, facts] of [
+  for (const [shape, presentation] of [
     [
       "published index row",
-      runFactsFromRow(fixtureRow({ activity: "writing now", lastActivity })),
+      runPresentationFromRow(
+        fixtureRow({ activity: "writing now", lastActivity }),
+      ),
     ],
     [
       "domain Run summary",
-      runFactsFromSummary(
+      runPresentationFromSummary(
         fixtureSummary({ activity: "writing now", lastActivity }),
       ),
     ],
   ] as const) {
-    assert.equal(facts.currentActivity, "writing now", shape);
-    assert.deepEqual(facts.lastActivity, lastActivity, shape);
+    assert.equal(presentation.currentActivity, "writing now", shape);
+    assert.deepEqual(presentation.lastActivity, lastActivity, shape);
   }
   assert.equal(
-    runFactsFromRow(fixtureRow({ lastActivity })).currentActivity,
+    runPresentationFromRow(fixtureRow({ lastActivity })).currentActivity,
     undefined,
   );
+  // Only a running, uncancelled Run is doing something now. Blank activity is
+  // nothing rather than something, and the retained summary never stands in.
+  for (const overrides of [
+    { activity: "old", cancellation: { reason: "requested" as const } },
+    { activity: "old", phase: "finalizing" as const },
+    { activity: "  " },
+  ]) {
+    const presentation = runPresentationFromRow(
+      fixtureRow({ ...overrides, lastActivity }),
+    );
+    assert.equal(presentation.currentActivity, undefined);
+    assert.deepEqual(presentation.lastActivity, lastActivity);
+  }
 });
 
 test("only a failed Run and a timed-out cancellation ask for attention", () => {
   for (const phase of RUN_PHASES)
     for (const reason of [undefined, ...CANCELLATION_REASONS])
-      for (const [shape, facts] of bothShapes(phase, reason))
+      for (const [shape, presentation] of bothShapes(phase, reason))
         assert.equal(
-          facts.executionNeedsAttention,
+          presentation.executionNeedsAttention,
           phase === "failed" || (phase === "cancelled" && reason === "timeout"),
           `${shape} ${phase} ${reason}`,
         );
@@ -166,40 +201,52 @@ test("elapsed time runs to the instant it is read at and freezes at settlement",
   const late = FIXTURE_NOW + 60_000;
   for (const phase of RUN_PHASES) {
     const expected = isTerminalRunPhase(phase) ? "12.4s" : "1m 12s";
-    for (const [shape, facts] of bothShapes(phase)) {
-      assert.equal(facts.startedAt, FIXTURE_STARTED_AT, `${shape} ${phase}`);
+    for (const [shape, presentation] of bothShapes(phase)) {
       assert.equal(
-        facts.settledAt !== undefined,
+        presentation.startedAt,
+        FIXTURE_STARTED_AT,
+        `${shape} ${phase}`,
+      );
+      assert.equal(
+        presentation.settledAt !== undefined,
         isTerminalRunPhase(phase),
         `${shape} settles exactly when terminal: ${phase}`,
       );
       assert.equal(
-        runElapsed(facts, FIXTURE_NOW),
+        runElapsed(presentation, FIXTURE_NOW),
         "12.4s",
         `${shape} ${phase}`,
       );
-      assert.equal(runElapsed(facts, late), expected, `${shape} ${phase} late`);
+      assert.equal(
+        runElapsed(presentation, late),
+        expected,
+        `${shape} ${phase} late`,
+      );
     }
   }
   // A terminal Run with no settlement instant has no duration to report.
-  for (const facts of [
-    runFactsFromRow(fixtureRow({ phase: "completed", settledAt: undefined })),
-    runFactsFromSummary({
+  for (const presentation of [
+    runPresentationFromRow(
+      fixtureRow({ phase: "completed", settledAt: undefined }),
+    ),
+    runPresentationFromSummary({
       ...fixtureSummary({ phase: "completed" }),
       settledAt: undefined,
     }),
   ])
-    assert.equal(runElapsed(facts, FIXTURE_NOW), "—");
+    assert.equal(runElapsed(presentation, FIXTURE_NOW), "—");
 });
 
 test("the Label comes from whichever shape carries it", () => {
   assert.equal(
-    runFactsFromRow(fixtureRow({ identity: { description: "read the diff" } }))
-      .label,
+    runPresentationFromRow(
+      fixtureRow({ identity: { description: "read the diff" } }),
+    ).label,
     "read the diff",
   );
   assert.equal(
-    runFactsFromSummary(fixtureSummary({ label: "read the diff" })).label,
+    runPresentationFromSummary(fixtureSummary({ label: "read the diff" }))
+      .label,
     "read the diff",
   );
 });
@@ -210,21 +257,21 @@ test("a stored Result outranks the summary the capture raced", () => {
     label: "stale label",
     activity: "bash: npm test",
   });
-  const facts = runFactsFromSummary(
+  const presentation = runPresentationFromSummary(
     summary,
     fixtureResult({
       identity: { description: "settled label" },
       settledAt: FIXTURE_NOW,
     }),
   );
-  assert.equal(facts.label, "settled label");
-  assert.equal(facts.phase, "completed");
-  assert.equal(facts.status.text, "completed");
-  assert.equal(facts.activity, "—");
-  assert.equal(facts.settledAt, FIXTURE_NOW);
-  assert.equal(runElapsed(facts, FIXTURE_NOW + 60_000), "12.4s");
+  assert.equal(presentation.label, "settled label");
+  assert.equal(presentation.phase, "completed");
+  assert.equal(presentation.status.text, "completed");
+  assert.equal(presentation.activity, "—");
+  assert.equal(presentation.settledAt, FIXTURE_NOW);
+  assert.equal(runElapsed(presentation, FIXTURE_NOW + 60_000), "12.4s");
   // Without the Result, the same summary still reads as the live index says.
-  const live = runFactsFromSummary(summary);
+  const live = runPresentationFromSummary(summary);
   assert.equal(live.phase, "running");
   assert.equal(live.label, "stale label");
   assert.equal(live.activity, "bash: npm test");
