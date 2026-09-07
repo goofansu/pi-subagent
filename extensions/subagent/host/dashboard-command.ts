@@ -4,7 +4,7 @@
  * Public identifiers stay in inspection rather than displacing work labels.
  */
 import {
-  type ExtensionCommandContext,
+  type ExtensionContext,
   keyHint,
   rawKeyHint,
 } from "@earendil-works/pi-coding-agent";
@@ -22,6 +22,7 @@ import {
 import {
   HISTORY_CATEGORIES,
   historyCategory,
+  historyColumnWidths,
   historyRow,
 } from "../presentation/history.ts";
 import {
@@ -35,7 +36,7 @@ import type { CompletionHandoffView } from "./widget.ts";
 
 export async function openDashboardUi(
   handle: SessionHandle,
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   handoff: Pick<CompletionHandoffView, "status">,
 ): Promise<void> {
   let closed = false;
@@ -78,6 +79,7 @@ export async function openDashboardUi(
         let pending = false;
         let clock: Clock.Clock | undefined;
         let now = 0;
+        let historyCapturedAt = 0;
         let stopOverview: (() => void) | undefined;
         let stopRead: (() => void) | undefined;
         let redraw: (() => void) | undefined = () => {
@@ -120,6 +122,14 @@ export async function openDashboardUi(
         const ordered = () =>
           HISTORY_CATEGORIES.flatMap((category) =>
             overview.filter((row) => historyCategory(row) === category),
+          );
+        const movementHint = () =>
+          rawKeyHint(
+            [
+              ...keys.getKeys("tui.select.up"),
+              ...keys.getKeys("tui.select.down"),
+            ].join("/"),
+            "move",
           );
         const read = async () => {
           const version = ++generation;
@@ -167,6 +177,7 @@ export async function openDashboardUi(
               );
               if (closed || version !== generation) return;
               runs = next;
+              historyCapturedAt = clock?.currentTimeMillisUnsafe() ?? now;
               if (
                 !runs.some(
                   (run) => run.runId === selectedRuns.get(requestedSubagentId),
@@ -332,7 +343,7 @@ export async function openDashboardUi(
                 ? `${rawKeyHint("r", "refresh")} · `
                 : "";
               const back = keyHint("tui.select.cancel", "back");
-              const scroll = rawKeyHint("↑/↓", "move");
+              const scroll = movementHint();
               const page = rawKeyHint("←/→", "page");
               return browserPanel(
                 viewport,
@@ -375,10 +386,21 @@ export async function openDashboardUi(
               openSubagentId ? "inspect" : "runs",
             );
             const lines: string[] = [];
+            const listedRuns = openSubagentId
+              ? runs
+              : ordered().map((row) => row.current ?? row.latest);
+            const preferredColumns = historyColumnWidths(listedRuns);
             let selectedLine = 0;
             const append = (run: RunSummary, selected: boolean) => {
               if (selected) selectedLine = lines.length;
-              const row = historyRow(run, contentWidth, theme, selected, now);
+              const row = historyRow(
+                run,
+                contentWidth,
+                theme,
+                selected,
+                openSubagentId ? historyCapturedAt : now,
+                preferredColumns,
+              );
               lines.push(
                 selected
                   ? theme.bg("selectedBg", padBrowserLine(row, contentWidth))
@@ -389,15 +411,12 @@ export async function openDashboardUi(
             else if (error)
               lines.push("History unavailable. Go back or close.");
             else if (openSubagentId) {
-              for (const run of runs)
+              for (const run of listedRuns)
                 append(run, run.runId === selectedRuns.get(openSubagentId));
               if (!runs.length) lines.push("No runs available.");
             } else {
-              for (const row of ordered())
-                append(
-                  row.current ?? row.latest,
-                  row.subagentId === selectedSubagent,
-                );
+              for (const run of listedRuns)
+                append(run, run.subagentId === selectedSubagent);
               if (!overview.length)
                 lines.push(
                   theme.fg("muted", "No subagents in this session."),
@@ -419,7 +438,7 @@ export async function openDashboardUi(
               "tui.select.cancel",
               openSubagentId ? "back" : "close",
             );
-            const scroll = rawKeyHint("↑/↓", "move");
+            const scroll = movementHint();
             const page = rawKeyHint("←/→", "page");
             return browserPanel(
               viewport,

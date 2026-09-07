@@ -208,6 +208,66 @@ for (const waiting of [false, true]) {
   });
 }
 
+test("run history keeps its entry-time elapsed duration until it is reread", async (t) => {
+  const rig = hostRig(t, {
+    testClock: true,
+    resumableSteps: [
+      [{ step: "await-gate", gate: "finish" }, { step: "complete" }],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  const work = await start(rig, "timed task");
+  await rig.pump();
+  await rig.advanceClock(10_000);
+  const browsing = await open(rig);
+  rig.host.customKey(ENTER);
+  await rig.pump();
+  assert.match(screen(rig), /Running.*10\.0s/);
+
+  await rig.release("finish");
+  await rig.settled(work.runId);
+  await rig.pump();
+  await rig.advanceClock(50_000);
+  rig.host.customKey(DOWN);
+  assert.match(screen(rig), /Running.*10\.0s/);
+  assert.doesNotMatch(screen(rig), /1m/);
+
+  rig.host.customKey(ESC);
+  await rig.pump();
+  rig.host.customKey(ENTER);
+  await rig.pump();
+  assert.match(screen(rig), /Completed.*10\.0s/);
+  rig.host.customKey(ESC);
+  await rig.pump();
+  await close(rig, browsing);
+});
+
+test("configured selection bindings drive navigation and its displayed hint", async (t) => {
+  const rig = hostRig(t, {
+    customKeybindings: {
+      "tui.select.up": "k",
+      "tui.select.down": "j",
+    },
+    resumableSteps: [[{ step: "hang" }], [{ step: "hang" }]],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  await start(rig, "first task");
+  await start(rig, "second task");
+  await rig.pump();
+  const browsing = await open(rig);
+  const footer = stripVTControlCharacters(screen(rig)).split("\n").at(-1) ?? "";
+  assert.match(footer, /k\/j move/);
+  assert.doesNotMatch(footer, /up\/down move/);
+  assert.match(screen(rig), /› first task {3}Running/);
+  rig.host.customKey("j");
+  assert.match(screen(rig), /› second task/);
+  rig.host.customKey("k");
+  assert.match(screen(rig), /› first task/);
+  await close(rig, browsing);
+});
+
 test("activity and Turns update live without reordering; history remains entry-only", async (t) => {
   const rig = hostRig(t, {
     resumableSteps: [
@@ -317,7 +377,7 @@ test("all three levels retain a full themed surface across resize and invalidati
     const before = rig.host.customLines(80, 24);
     const plain = before.map(stripVTControlCharacters).join("\n");
     assert.ok(plain.includes(title));
-    assert.match(plain.split("\n").at(-1) ?? "", /↑\/↓ move/);
+    assert.match(plain.split("\n").at(-1) ?? "", /up\/down move/);
     assert.doesNotMatch(plain, /[╭╮╰╯│├┤]/);
     assert.match(plain.split("\n").at(-2) ?? "", /^ ─+ $/);
     if (title !== "Subagent dashboard · run inspection") {

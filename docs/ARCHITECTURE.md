@@ -117,8 +117,9 @@ to the Run fiber's finalizers, after detachment. [ADR-0034](adr/0034-supervisor-
 ## Session, start and resume
 
 1. [`index.ts`](../extensions/subagent/index.ts) registers seven tools, one
-   `/subagent` command and a notification renderer once per installation.
-   Registrations close over a Session handle, not a particular runtime.
+   `/subagent` command, its dashboard shortcut, and a notification renderer
+   once per installation. Registrations close over a Session handle, not a
+   particular runtime.
 2. On `session_start`, [Session wiring](../extensions/subagent/host/session.ts)
    releases the previous binding, builds fresh services/backends, installs the
    widget in the runtime scope, binds the push sink, and refreshes Profile

@@ -17,7 +17,7 @@ Add a [profile](#profiles), then ask Pi to delegate work to it.
 | Command | What it does |
 | --- | --- |
 | `/subagent` | Shows a summary of available profiles and current work. |
-| `/subagent dashboard` | Open the Subagent dashboard: live subagents and newest-first run history (read-only). |
+| `/subagent dashboard` | Open the Subagent dashboard: live subagents and newest-first run history (read-only). Shortcut: `Alt+Shift+.` |
 | `/subagent doctor` | Shows troubleshooting information when something goes wrong. |
 
 ## Tools

@@ -5,7 +5,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import type { RunSummary } from "../domain/history.ts";
 import { backendId, runId, subagentId } from "../domain/index.ts";
 import { PLAIN_THEME } from "../testing/stand-in-host.ts";
-import { historyCategory, historyRow } from "./history.ts";
+import { historyCategory, historyColumnWidths, historyRow } from "./history.ts";
 
 const run: RunSummary = {
   runId: runId("run-test-1"),
@@ -25,6 +25,7 @@ test("rows align labels, statuses, activity and rightmost elapsed time without a
   const selected = row(run, 120, true);
   const other = row({ ...run, label: "Settings", phase: "finalizing" });
   assert.equal(selected.indexOf("Running"), other.indexOf("Finalizing"));
+  assert.match(selected, /Running +· Reading middleware/);
   assert.equal(
     selected.indexOf("Reading middleware"),
     other.indexOf("Reading middleware"),
@@ -39,6 +40,42 @@ test("rows align labels, statuses, activity and rightmost elapsed time without a
   );
   assert.equal(visibleWidth(selected), 120);
   assert.equal(visibleWidth(other), 120);
+});
+
+test("a list sizes label and status columns to its longest visible values", () => {
+  const values = [
+    { ...run, label: "One", phase: "finalizing" as const },
+    { ...run, label: "Longer label" },
+  ];
+  const columns = historyColumnWidths(values);
+  assert.deepEqual(columns, { label: 12, status: 10 });
+  const lines = values.map((value) =>
+    stripVTControlCharacters(
+      historyRow(value, 120, PLAIN_THEME, false, 1000, columns),
+    ),
+  );
+  assert.equal(lines[0].indexOf("Finalizing"), lines[1].indexOf("Running"));
+  assert.equal(
+    lines[0].indexOf("Reading middleware"),
+    lines[1].indexOf("Reading middleware"),
+  );
+  assert.match(lines[0], /^ {2}One {11}Finalizing · Reading middleware/);
+});
+
+test("labels are capped at 40 columns in roomy subagent lists", () => {
+  const value = { ...run, label: "a".repeat(80) };
+  const line = stripVTControlCharacters(
+    historyRow(
+      value,
+      160,
+      PLAIN_THEME,
+      false,
+      1000,
+      historyColumnWidths([value]),
+    ),
+  );
+  assert.match(line, /^ {2}a{39}… {2}Running/);
+  assert.doesNotMatch(line, /a{40}/);
 });
 
 test("terminal rows do not imply stale tool activity is the result", () => {
