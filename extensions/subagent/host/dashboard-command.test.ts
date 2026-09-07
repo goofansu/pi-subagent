@@ -37,7 +37,7 @@ test("both lists scroll and clamp after resize, retain selected identities, and 
     ["\x1b[C", "\x1b[D"],
   ]) {
     rig.host.customKey(next);
-    assert.match(rig.host.customLines(80, 10).join("\n"), /任务3/);
+    assert.match(rig.host.customLines(80, 10).join("\n"), /任务6/);
     rig.host.customKey(previous);
     assert.match(rig.host.customLines(80, 10).join("\n"), /任务0/);
   }
@@ -45,7 +45,7 @@ test("both lists scroll and clamp after resize, retain selected identities, and 
   assert.match(rig.host.customLines(80, 10).join("\n"), /任务11/);
   for (const width of [0, 1, 2, 8, 20, 40, 80]) {
     const lines = rig.host.customLines(width, 10);
-    assert.ok(lines.length <= 8);
+    assert.ok(lines.length <= 10);
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
     assert.ok(lines.every((line) => !line.includes("\ufffd")));
   }
@@ -70,7 +70,7 @@ test("both lists scroll and clamp after resize, retain selected identities, and 
   rig.host.customKey(UP);
   assert.match(
     rig.host.customLines(80, 10).join("\n"),
-    /> explore {2}completed/,
+    /› successive 1 +Completed/,
   );
   rig.host.customKey(ESC);
   await rig.pump();
@@ -105,7 +105,7 @@ for (const view of ["overview", "history"] as const) {
         assert.equal(rig.host.customRenderRequests(), requests);
         assert.deepEqual(await rig.probe(), baseline);
       }
-      const browsing = rig.host.command("subagent", "runs");
+      const browsing = rig.host.command("subagent", "dashboard");
       if (view === "history") {
         await rig.pump();
         rig.host.customKey(ENTER); // Immediately replace with the history read in flight.
@@ -223,7 +223,7 @@ test("activity and Turns update live without reordering; history remains entry-o
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
   await start(rig, "first Label");
-  const second = await start(rig, "second Label");
+  await start(rig, "second Label");
   await rig.pump();
   const baseline = await rig.probe();
   const browsing = await open(rig);
@@ -241,16 +241,18 @@ test("activity and Turns update live without reordering; history remains entry-o
   rig.host.customKey(DOWN);
   rig.host.customKey(ENTER);
   await rig.pump();
-  assert.ok(screen(rig).includes(second.subagentId));
+  assert.match(screen(rig), /Subagent dashboard · run history · explore/);
+  assert.match(screen(rig), /second Label/);
   rig.host.customKey(ESC);
   await rig.pump();
   const after = screen(rig);
   assert.match(after, /changed activity/);
-  assert.match(after, /1 turn/);
+  assert.doesNotMatch(after, /turns?|explore|subagent-/);
   assert.ok(after.indexOf("first Label") < after.indexOf("second Label"));
   rig.host.customKey(ENTER);
   await rig.pump();
-  assert.ok(screen(rig).includes(second.subagentId));
+  assert.match(screen(rig), /Subagent dashboard · run history · explore/);
+  assert.match(screen(rig), /second Label/);
   rig.host.customKey(ESC);
   await rig.pump();
   await close(rig, browsing);
@@ -260,7 +262,7 @@ test("Escape during an entry read closes immediately and late reads cannot redra
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
-  const browsing = rig.host.command("subagent", "runs");
+  const browsing = rig.host.command("subagent", "dashboard");
   rig.host.customKey(ESC);
   const requests = rig.host.customRenderRequests();
   await browsing;
@@ -289,33 +291,51 @@ test("all three levels retain a full themed surface across resize and invalidati
   t.after(() => rig.installation.handle.release());
   await start(rig, "任务 👩‍💻 café");
   const browsing = await open(rig);
-  for (const title of ["Session subagents", "Run history", "Run inspection"]) {
+  for (const title of [
+    "Subagent dashboard",
+    "Subagent dashboard · run history",
+    "Subagent dashboard · run inspection",
+  ]) {
     for (const [rows, height] of [
       [0, 0],
-      [1, 0],
-      [2, 1],
-      [3, 2],
-      [4, 3],
-      [10, 8],
-      [13, 10],
-      [24, 19],
+      [1, 1],
+      [2, 2],
+      [3, 3],
+      [4, 4],
+      [10, 10],
+      [13, 13],
+      [24, 24],
     ]) {
       for (const width of [0, 1, 2, 3, 6, 20, 80]) {
         const lines = rig.host.customLines(width, rows);
         assert.equal(lines.length, height);
         assert.ok(lines.every((line) => visibleWidth(line) === width));
-        assert.ok(lines.every((line) => line.startsWith("\x1b[44m")));
+        assert.ok(lines.every((line) => line.startsWith("\x1b[49m")));
         assert.ok(lines.every((line) => !line.includes("\ufffd")));
       }
     }
     const before = rig.host.customLines(80, 24);
     const plain = before.map(stripVTControlCharacters).join("\n");
     assert.ok(plain.includes(title));
-    assert.match(plain, /╭─+╮/);
-    assert.match(plain, /╰─+╯/);
-    if (title !== "Run inspection") {
-      assert.match(plain, /> explore/);
-      assert.match(plain, /Label: 任务 👩‍💻 café/);
+    assert.match(plain.split("\n").at(-1) ?? "", /↑\/↓ move/);
+    assert.doesNotMatch(plain, /[╭╮╰╯│├┤]/);
+    assert.match(plain.split("\n").at(-2) ?? "", /^ ─+ $/);
+    if (title !== "Subagent dashboard · run inspection") {
+      assert.match(plain, /› 任务/);
+      assert.match(plain, /任务 👩‍💻 café/);
+      const selectedRow = plain
+        .split("\n")
+        .find((line) => line.includes("› 任务"));
+      assert.ok(selectedRow);
+      assert.match(selectedRow, /enter (runs|inspect) +$/);
+      assert.doesNotMatch(selectedRow, /explore|run-|subagent-|Label:/);
+      assert.doesNotMatch(plain.split("\n").at(-1) ?? "", /enter/);
+      if (title === "Subagent dashboard") assert.doesNotMatch(plain, /explore/);
+      else
+        assert.match(
+          plain,
+          /Subagent dashboard · run history · explore · newest first/,
+        );
       assert.ok(
         before.some((line) => line.includes("\x1b[45m")),
         "selection has a background as well as a marker",
@@ -329,17 +349,19 @@ test("all three levels retain a full themed surface across resize and invalidati
       after.map(stripVTControlCharacters),
       before.map(stripVTControlCharacters),
     );
-    if (title !== "Run inspection") {
+    if (title !== "Subagent dashboard · run inspection") {
       rig.host.customKey(ENTER);
       await rig.pump();
     }
   }
   assert.ok(
-    themed.some(({ color, text }) => color === "warning" && text === "Active"),
+    themed.some(
+      ({ color, text }) => color === "warning" && text.trim() === "Running",
+    ),
   );
   assert.ok(
     themed.some(
-      ({ color, text }) => color === "warning" && text.includes("running"),
+      ({ color, text }) => color === "warning" && text.includes("Running"),
     ),
   );
   assert.ok(
@@ -379,7 +401,7 @@ async function resume(rig: HostRig, id: string, description: string) {
   return runId;
 }
 async function open(rig: HostRig) {
-  const closed = rig.host.command("subagent", "runs");
+  const closed = rig.host.command("subagent", "dashboard");
   await rig.pump();
   return { closed };
 }
@@ -426,7 +448,7 @@ async function close(rig: HostRig, browsing: { closed: Promise<void> }) {
 
 test("runs reuses no-Session response; a live empty Session opens and closes an explicit overview", async (t) => {
   const rig = hostRig(t);
-  await rig.host.command("subagent", "runs");
+  await rig.host.command("subagent", "dashboard");
   assert.equal(
     rig.host.notices().at(-1)?.message,
     "No subagent Session is running.",
@@ -434,23 +456,22 @@ test("runs reuses no-Session response; a live empty Session opens and closes an 
   assert.equal(rig.host.customOpen(), false);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
-  const browsing = rig.host.command("subagent", "runs");
+  const browsing = rig.host.command("subagent", "dashboard");
   await rig.pump();
   assert.equal(rig.host.customOpen(), true);
   assert.match(
     rig.host.customLines().join("\n"),
     /No subagents in this session/,
   );
-  const panel = rig.host.customLines(80, 24);
-  assert.equal(panel.length, 19);
+  const panel = rig.host.customLines(80, 24).map(stripVTControlCharacters);
+  assert.equal(panel.length, 24);
   assert.ok(panel.every((line) => visibleWidth(line) === 80));
-  assert.match(panel[0], /^╭─+╮$/);
-  assert.match(panel.at(-1) ?? "", /^╰─+╯$/);
-  assert.match(panel[1], /Session subagents/);
-  assert.match(panel[2], /^├─+┤$/);
-  assert.match(panel.at(-3) ?? "", /^├─+┤$/);
-  assert.match(panel.at(-2) ?? "", /escape.*close/);
-  assert.ok(panel.some((line) => /^│ +│$/.test(line)));
+  assert.match(panel[0], /^ Subagent dashboard/);
+  assert.match(panel[1], /^ +$/);
+  assert.match(panel.at(-2) ?? "", /^ ─+ $/);
+  assert.doesNotMatch(panel.join("\n"), /[╭╮╰╯│├┤]/);
+  assert.match(panel.at(-1) ?? "", /^ escape.*close/);
+  assert.ok(panel.some((line) => /^ +$/.test(line)));
   assert.doesNotMatch(panel.join("\n"), /1-1\/1|enter|scroll/);
   rig.host.customKey(ENTER);
   assert.equal(rig.host.customOpen(), true);
@@ -485,17 +506,18 @@ test("duplicate Profiles retain resolved terminal history and Resume grouping; l
   assert.equal(rig.host.hasWidget(), false);
   const browsing = await open(rig);
   let text = screen(rig);
-  assert.match(text, /Needs attention/);
-  assert.match(text, /idle · failed/);
+  assert.match(text, /Failed/);
+  assert.doesNotMatch(text, /Needs attention|idle|explore/);
   assert.ok(text.indexOf("first task") < text.indexOf("second task"));
   for (const id of [first.subagentId, second.subagentId])
-    assert.ok(text.includes(id.replace(/^subagent-/, "")));
+    assert.ok(!text.includes(id.replace(/^subagent-/, "")));
   rig.host.customKey(DOWN);
   rig.host.customKey(ENTER);
   await rig.pump();
   text = screen(rig);
-  assert.ok(text.includes(second.subagentId));
-  assert.ok(text.includes(second.runId));
+  assert.match(text, /Subagent dashboard · run history · explore/);
+  assert.match(text, /second task/);
+  assert.ok(!text.includes(second.runId));
   assert.doesNotMatch(text, /private admission prompt|broken/);
   const retry = await resume(rig, second.subagentId, "retry task");
   await rig.pump();
@@ -503,32 +525,32 @@ test("duplicate Profiles retain resolved terminal history and Resume grouping; l
   rig.host.customKey(ESC);
   await rig.pump();
   text = screen(rig);
-  assert.ok(text.indexOf("Active") < text.indexOf("Needs attention"));
-  assert.match(text, /> explore {2}running · running/);
+  assert.ok(text.indexOf("retry task") < text.indexOf("first task"));
+  assert.match(text, /› retry task +Running/);
   rig.host.customKey(ENTER);
   await rig.pump();
   text = screen(rig);
-  assert.ok(text.indexOf(retry) < text.indexOf(second.runId));
-  assert.match(text, /> explore {2}failed/); // Old Run-ID selection is retained.
+  assert.ok(text.indexOf("retry task") < text.indexOf("second task"));
+  assert.match(text, /› second task +Failed/); // Old Run-ID selection is retained.
   await rig.release("retry");
   await rig.settled(retry);
   await rig.pump();
   rig.host.customKey(ESC);
   await rig.pump();
   text = screen(rig);
-  assert.ok(text.indexOf("Needs attention") < text.indexOf("Completed"));
-  assert.match(text, /> explore {2}idle · completed/);
+  assert.ok(text.indexOf("first task") < text.indexOf("retry task"));
+  assert.match(text, /› retry task +Completed/);
   assert.ok(text.includes("retry task"));
   rig.host.customKey(ENTER);
   await rig.pump();
-  assert.match(screen(rig), /failed/);
-  assert.match(screen(rig), /completed/);
+  assert.match(screen(rig), /Failed/);
+  assert.match(screen(rig), /Completed/);
   rig.host.customKey(ENTER);
   await rig.pump();
-  assert.match(screen(rig), /Run inspection/);
+  assert.match(screen(rig), /Subagent dashboard · run inspection/);
   rig.host.customKey(ESC);
   await rig.pump();
-  assert.match(screen(rig), /Run history/);
+  assert.match(screen(rig), /Subagent dashboard · run history/);
   rig.host.customKey(ESC);
   await rig.pump();
   await close(rig, browsing);
@@ -551,24 +573,21 @@ for (const reason of ["requested", "timeout"] as const) {
     const work = await start(rig, "cancel task");
     await rig.pump();
     const browsing = await open(rig);
-    assert.match(screen(rig), /Active/);
+    assert.match(screen(rig), /Running|Finalizing/);
     assert.doesNotMatch(screen(rig), /requested|timeout/);
     if (reason === "requested")
       await rig.text("agent_cancel", { ids: [work.runId] });
     else await rig.advanceClock(100);
     await rig.pump();
-    assert.match(screen(rig), /Active/);
+    assert.match(screen(rig), /Running|Finalizing/);
     assert.doesNotMatch(screen(rig), /Needs attention|Completed/);
-    assert.ok(screen(rig).includes(`(${reason})`));
+
     await rig.release("cleanup");
     await rig.pump();
     await rig.settled(work.runId);
     await rig.pump();
-    assert.match(
-      screen(rig),
-      reason === "timeout" ? /Needs attention/ : /Completed/,
-    );
-    assert.ok(screen(rig).includes(`cancelled (${reason})`));
+    assert.match(screen(rig), /Cancelled/);
+    assert.ok(screen(rig).includes(reason));
     await close(rig, browsing);
   });
 }
@@ -597,8 +616,8 @@ test("finalizing is Active; delivery failure, Conversation loss, and diagnostics
   const work = await start(rig, "successful task");
   await rig.pump();
   const browsing = await open(rig);
-  assert.match(screen(rig), /Active/);
-  assert.match(screen(rig), /running · finalizing/);
+  assert.match(screen(rig), /Running|Finalizing/);
+  assert.match(screen(rig), /Finalizing/);
   await rig.release("cleanup");
   await rig.settled(work.runId);
   await rig.pump();
@@ -611,7 +630,7 @@ test("finalizing is Active; delivery failure, Conversation loss, and diagnostics
     /Conversation|conversation/,
   );
   assert.match(screen(rig), /Completed/);
-  assert.match(screen(rig), /idle · completed/);
+  assert.match(screen(rig), /Completed/);
   assert.doesNotMatch(
     screen(rig),
     /Needs attention|diagnostic text|notification/,

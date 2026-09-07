@@ -1,5 +1,5 @@
-/** One scoped overview subscription and display clock; never reads output. */
-import { Clock, Effect, Stream } from "effect";
+/** One scoped, publication-driven overview subscription; never reads output. */
+import { Effect, Stream } from "effect";
 import { subagentSummaries } from "../application/history.ts";
 import type { SubagentSummary } from "../domain/history.ts";
 import { RunRepository } from "../runtime/repository.ts";
@@ -7,8 +7,7 @@ import type { SessionObservation } from "./session-handle.ts";
 
 export function observeOverview(
   session: SessionObservation,
-  update: (rows: readonly SubagentSummary[], now: number) => void,
-  tick: (now: number) => void,
+  update: (rows: readonly SubagentSummary[]) => void,
   failed: () => void,
 ): () => void {
   const controller = new AbortController();
@@ -29,17 +28,7 @@ export function observeOverview(
             Stream.runForEach(invalidations, () =>
               Effect.gen(function* () {
                 const rows = yield* subagentSummaries();
-                const now = yield* Clock.currentTimeMillis;
-                if (!controller.signal.aborted) update(rows, now);
-              }),
-            ),
-          );
-          yield* Effect.forkScoped(
-            Effect.forever(
-              Effect.gen(function* () {
-                yield* Effect.sleep("1 second");
-                const now = yield* Clock.currentTimeMillis;
-                if (!controller.signal.aborted) tick(now);
+                if (!controller.signal.aborted) update(rows);
               }),
             ),
           );

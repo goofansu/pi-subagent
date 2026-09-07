@@ -52,7 +52,7 @@ import {
 import { RunRepository } from "../runtime/repository.ts";
 import { SubagentSupervisor } from "../runtime/supervisor.ts";
 import { formatNoAgentsMessage, openProfilesUi } from "./agents-command.ts";
-import { openRunsUi } from "./runs-command.ts";
+import { openDashboardUi } from "./dashboard-command.ts";
 import type { SessionHandle } from "./session-handle.ts";
 import type { CompletionHandoffView } from "./widget.ts";
 
@@ -68,7 +68,7 @@ export const SUBAGENT_COMMAND_NAME = "subagent";
  * than spelled out.
  */
 export const SUBAGENT_SUBCOMMANDS = [
-  "runs",
+  "dashboard",
   "profiles",
   "diagnostics",
 ] as const;
@@ -262,7 +262,7 @@ function profileLines(profiles: readonly Profile[]): readonly string[] {
 /** The ways deeper, each with what it is for. */
 function subcommandLines(): readonly string[] {
   return [
-    "/subagent runs — browse Session Subagents and Run history",
+    "/subagent dashboard — open Subagent dashboard",
     "/subagent profiles — list Profiles and read their prompts",
     "/subagent diagnostics — runtime counters and cleanup probes",
   ];
@@ -337,7 +337,7 @@ export function registerSubagentCommand(
 ): void {
   pi.registerCommand(SUBAGENT_COMMAND_NAME, {
     description:
-      "Subagent status, Run history, Profiles, and runtime diagnostics.",
+      "Subagent dashboard, status, profiles, and runtime diagnostics.",
     handler: async (args, ctx) => {
       const subcommand = args.trim().split(/\s+/, 1)[0] ?? "";
       switch (subcommand) {
@@ -353,9 +353,9 @@ export function registerSubagentCommand(
           );
           return;
         }
-        case "runs":
+        case "dashboard":
           if (!handle.isLive()) ctx.ui.notify(NO_LIVE_SESSION, "info");
-          else await openRunsUi(handle, ctx, handoff);
+          else await openDashboardUi(handle, ctx, handoff);
           return;
         case "profiles":
           await openProfilesUi(pi, profiles, agentsDir, ctx);

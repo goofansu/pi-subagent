@@ -60,7 +60,7 @@ for (const mode of [
       const other = await start(rig, "once");
       await rig.pump();
       const browser = observing
-        ? rig.host.command("subagent", "runs")
+        ? rig.host.command("subagent", "dashboard")
         : undefined;
       if (browser) {
         await rig.pump();
@@ -219,7 +219,7 @@ for (const action of ["back", "close", "shutdown", "replacement"] as const)
       await rig.pump();
       const baseline = await rig.probe();
       for (let cycle = 0; cycle < 3; cycle += 1) {
-        const browser = rig.host.command("subagent", "runs");
+        const browser = rig.host.command("subagent", "dashboard");
         await rig.pump();
         await key(rig, ENTER);
         await key(rig, ENTER);
@@ -231,7 +231,7 @@ for (const action of ["back", "close", "shutdown", "replacement"] as const)
         assert.deepEqual(stale?.render(100), []);
         assert.deepEqual(await rig.probe(), baseline);
       }
-      const browser = rig.host.command("subagent", "runs");
+      const browser = rig.host.command("subagent", "dashboard");
       await rig.pump();
       if (depth !== "overview") await key(rig, ENTER);
       if (["active", "read", "refresh"].includes(depth)) {
@@ -278,7 +278,7 @@ for (const action of ["back", "close", "shutdown", "replacement"] as const)
       }
       assert.equal(rig.noLeaks(), true);
       if (action !== "replacement") await rig.host.sessionStart();
-      const fresh = rig.host.command("subagent", "runs");
+      const fresh = rig.host.command("subagent", "dashboard");
       await rig.pump();
       assert.match(screen(rig), /No subagents in this session/);
       assert.doesNotMatch(screen(rig), /old active content/);
@@ -329,7 +329,7 @@ for (const expire of [false, true])
     t.after(() => rig.installation.handle.release());
     const work = await start(rig);
     await rig.pump();
-    const browser = rig.host.command("subagent", "runs");
+    const browser = rig.host.command("subagent", "dashboard");
     await rig.pump();
     await key(rig, ENTER);
     await key(rig, ENTER);

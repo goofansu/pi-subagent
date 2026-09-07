@@ -1,10 +1,10 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { RenderableTheme } from "./rows.ts";
 
-/** Shared geometry for drawing and scrolling; never exceed Pi's 80% height cap. */
+/** Shared full-screen geometry for drawing and scrolling. */
 export function browserViewport(width: number, terminalRows: number) {
   const columns = Math.max(0, Math.floor(width));
-  const height = Math.max(0, Math.floor(terminalRows * 0.8));
+  const height = Math.max(0, Math.floor(terminalRows));
   const spacious = height >= 10;
   const inset = columns >= 32 ? 1 : 0;
   return {
@@ -12,8 +12,8 @@ export function browserViewport(width: number, terminalRows: number) {
     height,
     spacious,
     inset,
-    contentWidth: Math.max(0, columns - 2 - inset * 2),
-    bodyHeight: Math.max(0, height - (spacious ? 6 : 2)),
+    contentWidth: Math.max(0, columns - inset * 2),
+    bodyHeight: Math.max(0, height - (spacious ? 4 : 2)),
   };
 }
 
@@ -48,43 +48,24 @@ export function browserPanel(
 ): string[] {
   const { width, height, spacious, inset, contentWidth, bodyHeight } = viewport;
   if (height === 0) return [];
-  const border = (text: string) => theme.fg("border", text);
-  const heading = theme.fg("accent", theme.bold(title));
-  const help = theme.fg("dim", footer);
-  const innerWidth = Math.max(0, width - 2);
-  const rule = (left: string, right: string, text = "") => {
-    const label = truncateToWidth(text ? ` ${text} ` : "", innerWidth, "…");
-    return (
-      border(left) +
-      label +
-      border("─".repeat(Math.max(0, innerWidth - visibleWidth(label))) + right)
-    );
-  };
+  const heading = theme.fg("accent", title);
   const row = (text: string) =>
-    border("│") +
-    " ".repeat(inset) +
-    padBrowserLine(text, contentWidth) +
-    " ".repeat(inset) +
-    border("│");
+    " ".repeat(inset) + padBrowserLine(text, contentWidth) + " ".repeat(inset);
   const lines =
     height === 1
-      ? [heading]
+      ? [row(heading)]
       : [
-          rule("╭", "╮", spacious ? "" : heading),
-          ...(spacious ? [row(heading), rule("├", "┤")] : []),
+          row(heading),
+          ...(spacious ? [row("")] : []),
           ...Array.from({ length: bodyHeight }, (_, index) =>
             row(body[index] ?? ""),
           ),
-          ...(spacious ? [rule("├", "┤"), row(help)] : []),
-          rule("╰", "╯", spacious ? "" : help),
+          ...(spacious
+            ? [row(theme.fg("borderMuted", "─".repeat(contentWidth)))]
+            : []),
+          row(footer),
         ];
-  // Theme.bg does not restore an outer background after a nested SGR reset.
-  // Reapply the surface after those resets, including any from captured output.
-  return lines.map((line) =>
-    padBrowserLine(line, width)
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: SGR background resets are terminal formatting.
-      .split(/(\x1b\[(?:0|49)?m)/)
-      .map((part) => theme.bg("userMessageBg", part))
-      .join(""),
-  );
+  // Use the terminal's default surface, like Pi's dashboard overlays. Padding
+  // covers the underlying transcript; resets isolate nested selection colors.
+  return lines.map((line) => `\x1b[49m${padBrowserLine(line, width)}\x1b[49m`);
 }

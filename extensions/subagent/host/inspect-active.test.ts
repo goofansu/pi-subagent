@@ -28,7 +28,7 @@ async function start(rig: HostRig) {
   );
 }
 async function inspect(rig: HostRig) {
-  const closed = rig.host.command("subagent", "runs");
+  const closed = rig.host.command("subagent", "dashboard");
   await rig.pump();
   rig.host.customKey(ENTER);
   await rig.pump();
@@ -137,7 +137,7 @@ test("multiple active refreshes preserve line offset and clamp after shorter rec
   const draw = () => rig.host.customLines(160, 10);
   draw();
   rig.host.customKey("\x1b[C");
-  const page = draw();
+  let page = draw();
   assert.match(page.at(-1) ?? "", /7-12\//);
   for (const key of ["r", "R", "r"]) {
     await rig.advanceClock(1000);
@@ -145,8 +145,11 @@ test("multiple active refreshes preserve line offset and clamp after shorter rec
     // Drawing during the read must not reset the offset either.
     draw();
     await rig.pump();
-    assert.deepEqual(draw().slice(1, -1), page.slice(1, -1));
+    const withoutCaptureTime = (lines: readonly string[]) =>
+      lines.slice(1, -1).filter((line) => !line.includes("Captured at:"));
+    assert.deepEqual(withoutCaptureTime(draw()), withoutCaptureTime(page));
     assert.match(draw().at(-1) ?? "", /7-12\//);
+    page = draw();
   }
   await rig.release("more");
   await rig.pump();
@@ -166,13 +169,13 @@ test("multiple active refreshes preserve line offset and clamp after shorter rec
   rig.host.customKey("R");
   await rig.pump();
   const shorter = draw();
-  assert.match(shorter.join("\n"), /short output/);
   assert.doesNotMatch(shorter.join("\n"), /full retained item|new tail/);
   const position = /(\d+)-(\d+)\/(\d+)/.exec(shorter.at(-1) ?? "");
   assert.ok(position);
   assert.equal(position[2], position[3], "clamped to new bottom");
   rig.host.customKey("\x1b[B");
   assert.deepEqual(draw(), shorter);
+  assert.match(screen(rig), /short output/);
   await close(rig, browser);
 });
 
@@ -330,12 +333,12 @@ for (const expire of [false, true])
     assert.doesNotMatch(terminal, /r refresh/);
     rig.host.customKey(ESC);
     await rig.pump();
-    assert.ok(screen(rig).includes(work.runId));
-    assert.match(screen(rig), /cancelled/);
+    assert.match(screen(rig), /Subagent dashboard · run history · explore/);
+    assert.match(screen(rig), /active Label/);
+    assert.match(screen(rig), /Cancelled/);
     rig.host.customKey(ESC);
     await rig.pump();
-    assert.match(screen(rig), /Completed/);
-    assert.ok(screen(rig).includes("> explore"));
+    assert.match(screen(rig), /› active Label +Cancelled/);
     rig.host.customKey(ESC);
     await browser.closed;
   });

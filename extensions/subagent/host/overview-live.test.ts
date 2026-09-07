@@ -27,7 +27,7 @@ const start = async (rig: HostRig, description: string) =>
     }),
   );
 
-test("semantic activity survives equal normalized/bounded observations, clears and settlement; only the scoped age clock advances its age", async (t) => {
+test("semantic activity survives equal observations, clears and settlement without clock-driven redraws", async (t) => {
   const rig = hostRig(t, {
     testClock: true,
     policy: {
@@ -58,33 +58,35 @@ test("semantic activity survives equal normalized/bounded observations, clears a
   const work = await start(rig, "任务 Label");
   await rig.pump();
   const baseline = await rig.probe();
-  const browsing = rig.host.command("subagent", "runs");
+  const browsing = rig.host.command("subagent", "dashboard");
   await rig.pump();
-  assert.match(screen(rig), /reading file · changed 0\.0s ago/);
+  const initial = screen(rig);
+  assert.match(initial, /reading file/);
+  assert.doesNotMatch(initial, /changed .* ago/);
   const requests = rig.host.customRenderRequests();
   await rig.advanceClock(500);
   assert.equal(rig.host.customRenderRequests(), requests);
   await rig.advanceClock(500);
   await rig.pump();
-  assert.equal(rig.host.customRenderRequests(), requests + 1);
-  assert.match(screen(rig), /reading file · changed 1\.0s ago/);
+  assert.equal(rig.host.customRenderRequests(), requests);
+  assert.equal(screen(rig), initial);
   for (const gate of ["equal", "clear", "repeat"]) {
     await rig.release(gate);
     await rig.pump();
     await rig.advanceClock(1000);
     await rig.pump();
   }
-  assert.match(screen(rig), /reading file · changed 4\.0s ago/);
+  assert.match(screen(rig), /reading file/);
   assert.match(rig.host.customLines(20).join("\n"), /任务 Label/);
   await rig.release("new");
   await rig.pump();
-  assert.match(screen(rig), /writing file · changed 0\.0s ago/);
+  assert.match(screen(rig), /writing file/);
   await rig.advanceClock(2000);
   await rig.release("finish");
   await rig.settled(work.runId);
   await rig.pump();
   assert.match(screen(rig), /Completed/);
-  assert.match(screen(rig), /writing file · changed 2\.0s ago/);
+  assert.doesNotMatch(screen(rig), /writing file|changed .* ago/);
   const rows = await rig.installation.handle.run(
     runSummaries(subagentId(work.subagentId)),
     [],
@@ -108,7 +110,11 @@ test("semantic activity survives equal normalized/bounded observations, clears a
   assert.equal(rig.host.customRenderRequests(), historyRequests);
   rig.host.customKey(ESC);
   await rig.pump();
-  assert.match(screen(rig), /writing file · changed 7\.0s ago/);
+  assert.doesNotMatch(screen(rig), /writing file/);
+  const overviewRequests = rig.host.customRenderRequests();
+  await rig.advanceClock(5000);
+  await rig.pump();
+  assert.equal(rig.host.customRenderRequests(), overviewRequests);
   rig.host.customKey(ESC);
   await browsing;
   await rig.pump();
@@ -124,7 +130,7 @@ test("semantic activity survives equal normalized/bounded observations, clears a
   assert.equal(rig.noLeaks(), true);
 });
 
-test("bursts and clock ticks keep one pending draw while the host is slow; the eventual frame reads the latest rows", async (t) => {
+test("bursts keep one pending draw while the host is slow; elapsed time alone never redraws", async (t) => {
   const burst = (prefix: string): FakeStep[] =>
     Array.from({ length: 500 }, (_, i) => emitActivity(`${prefix} ${i}`));
   const rig = hostRig(t, {
@@ -144,7 +150,7 @@ test("bursts and clock ticks keep one pending draw while the host is slow; the e
   });
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
-  const browsing = rig.host.command("subagent", "runs");
+  const browsing = rig.host.command("subagent", "dashboard");
   await rig.pump();
   assert.match(screen(rig), /No subagents/);
   await start(rig, "first Label");
@@ -169,7 +175,7 @@ test("bursts and clock ticks keep one pending draw while the host is slow; the e
   assert.equal(rig.host.customRenderRequests(), drained);
   await rig.advanceClock(1000);
   await rig.pump();
-  assert.equal(rig.host.customRenderRequests(), drained + 1);
+  assert.equal(rig.host.customRenderRequests(), drained);
   const callbacks = rig.host.captureCustom();
   await rig.probe();
   await rig.host.sessionStart();
@@ -198,7 +204,7 @@ test("selected identity stays visible across live latest-Run groups; peers retai
     await rig.settled(work.runId);
     works.push(work);
   }
-  const browsing = rig.host.command("subagent", "runs");
+  const browsing = rig.host.command("subagent", "dashboard");
   await rig.pump();
   screen(rig);
   for (let i = 0; i < 5; i += 1) rig.host.customKey("\x1b[B");
@@ -213,25 +219,26 @@ test("selected identity stays visible across live latest-Run groups; peers retai
   assert.ok(retry, resumed);
   await rig.pump();
   const active = rig.host.customLines(100, 10).join("\n");
-  assert.match(rig.host.customLines(160, 60).join("\n"), /Active/);
-  assert.match(active, /> explore {2}running · running/);
+  assert.match(rig.host.customLines(160, 60).join("\n"), /Running/);
+  assert.match(active, /› retry Label +Running/);
   assert.match(active, /retry Label/);
   await rig.release("success");
   await rig.settled(retry);
   await rig.pump();
   const completed = rig.host.customLines(100, 10).join("\n");
   assert.match(completed, /Completed/);
-  assert.match(completed, /> explore {2}idle · completed/);
+  assert.match(completed, /› retry Label +Completed/);
   assert.match(completed, /retry Label/);
   const all = rig.host.customLines(160, 60).join("\n");
-  assert.doesNotMatch(all, /Active/);
+  assert.doesNotMatch(all, /Running/);
   for (let i = 0; i < 4; i += 1)
     assert.ok(all.indexOf(`task ${i}`) < all.indexOf(`task ${i + 1}`));
   rig.host.customKey(ENTER);
   await rig.pump();
-  assert.match(screen(rig), /failed/);
-  assert.match(screen(rig), /completed/);
-  assert.ok(screen(rig).includes(selected.subagentId));
+  assert.match(screen(rig), /Failed/);
+  assert.match(screen(rig), /Completed/);
+  assert.match(screen(rig), /Subagent dashboard · run history · explore/);
+  assert.match(screen(rig), /task 5/);
   rig.host.customKey(ESC);
   await rig.pump();
   rig.host.customKey(ESC);

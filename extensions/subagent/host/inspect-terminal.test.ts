@@ -34,7 +34,7 @@ async function start(rig: HostRig, description = "inspected Label") {
   );
 }
 async function inspect(rig: HostRig) {
-  const closed = rig.host.command("subagent", "runs");
+  const closed = rig.host.command("subagent", "dashboard");
   await rig.pump();
   rig.host.customKey(ENTER);
   await rig.pump();
@@ -66,7 +66,7 @@ test("terminal inspection shows every retained transcript item and returns to th
   await rig.pump();
   const browser = await inspect(rig);
   const text = screen(rig);
-  assert.match(text, /Run inspection/);
+  assert.match(text, /Subagent dashboard · run inspection/);
   assert.match(text, /Captured at:/);
   assert.ok(text.includes(work.runId));
   assert.ok(text.includes(work.subagentId));
@@ -79,11 +79,11 @@ test("terminal inspection shows every retained transcript item and returns to th
   );
   rig.host.customKey(ESC);
   await rig.pump();
-  assert.match(screen(rig), /Run history/);
-  assert.ok(screen(rig).includes(work.runId));
+  assert.match(screen(rig), /Subagent dashboard · run history/);
+  assert.match(screen(rig), /Subagent dashboard · run history · explore/);
   rig.host.customKey(ENTER);
   await rig.pump();
-  assert.match(screen(rig), /Run inspection/);
+  assert.match(screen(rig), /Subagent dashboard · run inspection/);
   await close(rig, browser);
 });
 
@@ -315,7 +315,7 @@ for (const outcome of ["unreadable", "unknown"] as const)
     const work = await start(rig);
     await rig.settled(work.runId);
     await rig.pump();
-    const closed = rig.host.command("subagent", "runs");
+    const closed = rig.host.command("subagent", "dashboard");
     await rig.pump();
     rig.host.customKey(ENTER);
     await rig.pump();
@@ -359,7 +359,7 @@ test("line/page scrolling wraps long content, clamps both ends and resize, and r
   rig.host.customKey(LEFT);
   assert.deepEqual(draw(), first);
   rig.host.customKey(DOWN);
-  assert.equal(draw()[1], first[2]);
+  assert.equal(draw()[2], first[3]);
   rig.host.customKey(UP);
   assert.deepEqual(draw(), first);
   rig.host.customKey(RIGHT);
@@ -378,7 +378,7 @@ test("line/page scrolling wraps long content, clamps both ends and resize, and r
   assert.match(seen.join("\n"), /line-50/);
   for (const width of [0, 1, 2, 8, 20, 80, 160]) {
     const lines = rig.host.customLines(width, 10);
-    assert.ok(lines.length <= 8);
+    assert.ok(lines.length <= 10);
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
     assert.ok(lines.every((line) => !line.includes("\ufffd")));
   }

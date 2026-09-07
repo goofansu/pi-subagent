@@ -20,15 +20,15 @@ const theme: RenderableTheme = {
 test("panel fills exact viewport bounds, even at zero/tiny sizes and with styled Unicode", () => {
   for (const [rows, height] of [
     [0, 0],
-    [1, 0],
-    [2, 1],
-    [3, 2],
-    [4, 3],
-    [10, 8],
-    [12, 9],
-    [13, 10],
-    [24, 19],
-    [60, 48],
+    [1, 1],
+    [2, 2],
+    [3, 3],
+    [4, 4],
+    [10, 10],
+    [12, 12],
+    [13, 13],
+    [24, 24],
+    [60, 60],
   ]) {
     for (const width of [0, 1, 2, 3, 4, 5, 6, 8, 20, 80]) {
       const viewport = browserViewport(width, rows);
@@ -47,48 +47,60 @@ test("panel fills exact viewport bounds, even at zero/tiny sizes and with styled
           `${width}x${rows}: ${JSON.stringify(line)}`,
         );
         assert.doesNotMatch(line, /\ufffd/);
-        assert.ok(line.startsWith("\x1b[44m"));
+        assert.ok(line.startsWith("\x1b[49m"));
       }
-      if (width >= 2 && height >= 2) {
-        assert.match(stripVTControlCharacters(lines[0]), /^╭.*╮$/);
-        assert.match(stripVTControlCharacters(lines.at(-1) ?? ""), /^╰.*╯$/);
-      }
+      assert.doesNotMatch(
+        lines.map(stripVTControlCharacters).join("\n"),
+        /[╭╮╰╯│├┤]/,
+      );
     }
   }
 });
 
-test("panel uses the theme's neutral surface rather than its custom-message background", () => {
+test("panel uses the terminal surface without borrowing a message background", () => {
   const backgrounds: string[] = [];
-  browserPanel(browserViewport(40, 24), "Title", ["Body"], "Close", {
-    ...theme,
-    bg: (color, text) => {
-      backgrounds.push(color);
-      return theme.bg(color, text);
+  const lines = browserPanel(
+    browserViewport(40, 24),
+    "Title",
+    ["Body"],
+    "Close",
+    {
+      ...theme,
+      bg: (color, text) => {
+        backgrounds.push(color);
+        return theme.bg(color, text);
+      },
     },
-  });
-  assert.ok(backgrounds.length > 0);
-  assert.deepEqual([...new Set(backgrounds)], ["userMessageBg"]);
+  );
+  assert.deepEqual(backgrounds, []);
+  assert.ok(
+    lines.every(
+      (line) => line.startsWith("\x1b[49m") && line.endsWith("\x1b[49m"),
+    ),
+  );
 });
 
-test("normal panel reserves distinct header/footer rows and fills blank body rows", () => {
+test("borderless screen aligns title, body and bottom navigation with a quiet separator", () => {
   const viewport = browserViewport(40, 24);
-  assert.equal(viewport.contentWidth, 36);
-  assert.equal(viewport.bodyHeight, 13);
+  assert.equal(viewport.contentWidth, 38);
+  assert.equal(viewport.bodyHeight, 20);
   const lines = browserPanel(
     viewport,
-    "Session Subagents",
+    "Subagent dashboard",
     ["No Subagents in this Session."],
     "Esc close",
     theme,
   ).map(stripVTControlCharacters);
-  assert.equal(lines[1], `│ Session Subagents${" ".repeat(20)}│`);
-  assert.equal(lines[3], `│ No Subagents in this Session.${" ".repeat(8)}│`);
-  assert.equal(lines[4], `│${" ".repeat(38)}│`);
-  assert.match(lines[16], /^├─+┤$/);
-  assert.match(lines[17], /Esc close/);
+  assert.equal(lines[0], " Subagent dashboard".padEnd(40));
+  assert.equal(lines[1], " ".repeat(40));
+  assert.equal(lines[2], " No Subagents in this Session.".padEnd(40));
+  assert.equal(lines[3], " ".repeat(40));
+  assert.doesNotMatch(lines.join("\n"), /[╭╮╰╯│├┤]/);
+  assert.equal(lines[22], ` ${"─".repeat(38)} `);
+  assert.equal(lines[23], " Esc close".padEnd(40));
 });
 
-test("nested selection backgrounds cannot leave the right gutter or border uncovered", () => {
+test("selection backgrounds reset before the gutter", () => {
   const lines = browserPanel(
     browserViewport(40, 24),
     "Title",
@@ -97,13 +109,18 @@ test("nested selection backgrounds cannot leave the right gutter or border uncov
     theme,
   );
   for (const line of lines) {
-    let background = false;
+    let background = "default";
     // biome-ignore lint/suspicious/noControlCharactersInRegex: Inspect SGR state at the terminal boundary.
     for (const part of line.split(/(\x1b\[[0-9;]*m)/)) {
-      if (part === "\x1b[44m") background = true;
-      else if (part === "\x1b[49m" || part === "\x1b[0m") background = false;
+      if (part === "\x1b[44m") background = "selected";
+      else if (part === "\x1b[49m" || part === "\x1b[0m")
+        background = "default";
       else if (part && !part.startsWith("\x1b["))
-        assert.ok(background, JSON.stringify(part));
+        assert.equal(
+          background,
+          part === "chosen" ? "selected" : "default",
+          JSON.stringify(part),
+        );
     }
   }
 });

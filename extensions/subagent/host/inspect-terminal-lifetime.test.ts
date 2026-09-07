@@ -24,7 +24,7 @@ async function start(rig: HostRig, agent = "explore") {
   );
 }
 async function history(rig: HostRig) {
-  const closed = rig.host.command("subagent", "runs");
+  const closed = rig.host.command("subagent", "dashboard");
   await rig.pump();
   rig.host.customKey(ENTER);
   await rig.pump();
@@ -81,7 +81,7 @@ for (const mode of [
       await rig.pump();
       // Active work sorts first. Select the terminal Subagent after it.
       const browser = observing
-        ? { closed: rig.host.command("subagent", "runs") }
+        ? { closed: rig.host.command("subagent", "dashboard") }
         : undefined;
       if (browser) {
         await rig.pump();
@@ -212,7 +212,7 @@ for (const condition of [
     if (condition === "Conversation loss") await rig.advanceClock(101);
     await rig.settled(work.runId);
     await rig.pump();
-    const closed = rig.host.command("subagent", "runs");
+    const closed = rig.host.command("subagent", "dashboard");
     await rig.pump();
     const overview = screen(rig);
     if (condition !== "unannounceable") {
@@ -382,7 +382,7 @@ for (const action of ["close", "shutdown", "replacement"] as const) {
       }
       assert.equal(rig.noLeaks(), true);
       if (action !== "replacement") await rig.host.sessionStart();
-      const fresh = rig.host.command("subagent", "runs");
+      const fresh = rig.host.command("subagent", "dashboard");
       await rig.pump();
       assert.match(screen(rig), /No subagents in this session/);
       assert.doesNotMatch(screen(rig), /old explore Label|the rig answered/);

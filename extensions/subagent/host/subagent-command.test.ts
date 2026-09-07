@@ -211,7 +211,7 @@ test("C-1: the status names every Profile with the backend it names", () => {
       "  explore   pi",
       "  reviewer  claude",
       "",
-      "/subagent runs — browse Session Subagents and Run history",
+      "/subagent dashboard — open Subagent dashboard",
       "/subagent profiles — list Profiles and read their prompts",
       "/subagent diagnostics — runtime counters and cleanup probes",
     ].join("\n"),
@@ -397,8 +397,17 @@ test("an unknown subcommand names the three that exist", async (t) => {
   ]);
   assert.equal(
     formatUnknownSubcommand("counters"),
-    '/subagent has no "counters". Try /subagent runs or /subagent profiles or /subagent diagnostics.',
+    '/subagent has no "counters". Try /subagent dashboard or /subagent profiles or /subagent diagnostics.',
   );
+});
+
+test("the former runs subcommand points to dashboard without opening a browser", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  assert.deepEqual(await say(rig, "runs"), [formatUnknownSubcommand("runs")]);
+  assert.equal(rig.host.customOpen(), false);
+  assert.match(formatUnknownSubcommand("runs"), /\/subagent dashboard/);
 });
 
 test("every backend's probe is reported beside the runtime's own, one block each", () => {

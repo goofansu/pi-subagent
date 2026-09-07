@@ -1,12 +1,7 @@
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
 import type { RenderableTheme } from "./rows.ts";
-import {
-  formatDuration,
-  formatTurns,
-  runPhaseTone,
-  runPhaseVerb,
-} from "./status.ts";
+import { runPhaseTone } from "./status.ts";
 
 export const HISTORY_CATEGORIES = [
   "Active",
@@ -25,43 +20,55 @@ export function historyCategory(subagent: SubagentSummary): HistoryCategory {
     : "Completed";
 }
 
-/** A Label gets its own line, so optional activity cannot replace task identity. */
+/** One borderless table row. Widths depend on the viewport, never on selection or content. */
 export function historyRow(
   run: RunSummary,
   width: number,
-  identity: string,
-  subagentPhase?: string,
-  now?: number,
-  theme?: RenderableTheme,
-): readonly string[] {
-  const clip = (text: string, columns = width) =>
+  theme: RenderableTheme,
+  action: string,
+  selected: boolean,
+): string {
+  const clip = (text: string, columns: number) =>
     truncateToWidth(text, Math.max(0, columns), "…");
-  const status =
-    [subagentPhase, runPhaseVerb(run.phase)].filter(Boolean).join(" · ") +
-    (run.cancellationReason ? ` (${run.cancellationReason})` : "");
-  const profileWidth = Math.max(1, Math.floor(width / 3));
+  const cell = (text: string, columns: number) => {
+    const clipped = clip(text, columns);
+    return clipped + " ".repeat(Math.max(0, columns - visibleWidth(clipped)));
+  };
+  const columns = Math.max(0, width - 2);
+  const actionWidth = width >= 60 ? visibleWidth(action) + 2 : 0;
+  const available = Math.max(0, columns - actionWidth);
+  const statusWidth = available >= 24 ? 10 : 0;
+  const activityWidth = available >= 50 ? Math.floor(available * 0.45) : 0;
+  const labelWidth = Math.max(
+    0,
+    available -
+      statusWidth -
+      activityWidth -
+      (statusWidth ? 2 : 0) -
+      (activityWidth ? 2 : 0),
+  );
+  const status = run.phase[0].toUpperCase() + run.phase.slice(1);
+  const tone =
+    run.phase === "cancelled"
+      ? run.cancellationReason === "timeout"
+        ? "error"
+        : "muted"
+      : runPhaseTone(run.phase);
+  // A terminal Run's last tool activity is not its result. Keep that in inspection.
   const activity =
-    now === undefined
-      ? (run.activity ?? run.lastActivity?.summary)
-      : run.lastActivity?.summary;
-  const age =
-    now !== undefined && run.lastActivity
-      ? ` · changed ${formatDuration(now - run.lastActivity.changedAt)} ago`
-      : "";
-  const styledStatus = theme
-    ? theme.fg(
-        run.phase === "cancelled"
-          ? run.cancellationReason === "timeout"
-            ? "error"
-            : "muted"
-          : runPhaseTone(run.phase),
-        status,
-      )
-    : status;
-  return [
-    clip(
-      `${clip(run.profile, profileWidth)}  ${styledStatus}  ${formatTurns(run.turns)}  ${run.backend}  ${identity}`,
-    ),
-    clip(`Label: ${run.label}${activity ? ` · ${activity}${age}` : ""}`),
-  ];
+    run.phase === "running" || run.phase === "finalizing"
+      ? (run.activity ?? run.lastActivity?.summary ?? "—")
+      : (run.cancellationReason ?? "—");
+  return clip(
+    (selected ? theme.fg("accent", "› ") : "  ") +
+      theme.fg(selected ? "accent" : "text", cell(run.label, labelWidth)) +
+      (statusWidth ? `  ${theme.fg(tone, cell(status, statusWidth))}` : "") +
+      (activityWidth
+        ? `  ${theme.fg("muted", cell(activity, activityWidth))}`
+        : "") +
+      (actionWidth
+        ? `  ${selected ? action : " ".repeat(actionWidth - 2)}`
+        : ""),
+    width,
+  );
 }

@@ -1,15 +1,14 @@
 /**
  * A Session-owned browser: live overview, entry-only history. The viewport
- * includes category headings and two-line rows, with a dedicated Label line. It therefore scrolls rendered lines while keeping
- * selection attached to Subagent/Run IDs rather than treating every line as a
- * SelectList item.
+ * uses aligned, single-line rows with selection attached to Subagent/Run IDs.
+ * Public identifiers stay in inspection rather than displacing work labels.
  */
 import {
   type ExtensionCommandContext,
   keyHint,
   rawKeyHint,
 } from "@earendil-works/pi-coding-agent";
-import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { matchesKey } from "@earendil-works/pi-tui";
 import { Effect } from "effect";
 import { inspectRun, runSummaries } from "../application/history.ts";
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
@@ -25,12 +24,16 @@ import {
   historyCategory,
   historyRow,
 } from "../presentation/history.ts";
-import { inspectionLines } from "../presentation/inspection.ts";
+import {
+  type InspectionBlock,
+  inspectionBlocks,
+  renderInspection,
+} from "../presentation/inspection.ts";
 import { observeOverview } from "./overview-observation.ts";
 import type { SessionHandle } from "./session-handle.ts";
 import type { CompletionHandoffView } from "./widget.ts";
 
-export async function openRunsUi(
+export async function openDashboardUi(
   handle: SessionHandle,
   ctx: ExtensionCommandContext,
   handoff: Pick<CompletionHandoffView, "status">,
@@ -45,7 +48,7 @@ export async function openRunsUi(
   try {
     if (ctx.mode !== "tui") {
       ctx.ui.notify(
-        "Run history browsing requires interactive TUI mode.",
+        "Subagent dashboard requires interactive TUI mode.",
         "info",
       );
       return;
@@ -58,7 +61,7 @@ export async function openRunsUi(
         let openSubagentId: SubagentId | undefined;
         let inspectedRunId: RunId | undefined;
         let refreshable = false;
-        let details: readonly string[] = [];
+        let details: readonly InspectionBlock[] = [];
         let detailLines: readonly string[] = [];
         let detailWidth: number | undefined;
         let detailOffset = 0;
@@ -71,9 +74,8 @@ export async function openRunsUi(
         let pageSize = 1;
         // A request remains pending until render acknowledges it, not until a
         // timer fires. Slow hosts therefore owe one frame reading the newest
-        // rows, however many repository changes or age ticks arrived meanwhile.
+        // rows, however many repository changes arrived meanwhile.
         let pending = false;
-        let now = 0;
         let stopOverview: (() => void) | undefined;
         let stopRead: (() => void) | undefined;
         let redraw: (() => void) | undefined = () => {
@@ -134,7 +136,7 @@ export async function openRunsUi(
               const next = await reader.run(
                 inspectRun(requestedRunId).pipe(
                   Effect.map((capture) => ({
-                    lines: inspectionLines(
+                    lines: inspectionBlocks(
                       capture,
                       handoff.status(requestedRunId),
                     ),
@@ -165,26 +167,15 @@ export async function openRunsUi(
             } else {
               stopOverview = observeOverview(
                 session,
-                (next, instant) => {
+                (next) => {
                   if (closed || version !== generation) return;
                   overview = next;
-                  now = instant;
                   loading = false;
                   if (
                     !overview.some((row) => row.subagentId === selectedSubagent)
                   )
                     selectedSubagent = ordered()[0]?.subagentId;
                   redraw?.();
-                },
-                (instant) => {
-                  if (closed || version !== generation) return;
-                  now = instant;
-                  if (
-                    overview.some(
-                      (row) => (row.current ?? row.latest).lastActivity,
-                    )
-                  )
-                    redraw?.();
                 },
                 () => {
                   if (closed || version !== generation) return;
@@ -210,7 +201,9 @@ export async function openRunsUi(
 
         return {
           dispose,
-          invalidate() {},
+          invalidate() {
+            detailWidth = undefined;
+          },
           handleInput(data) {
             if (closed) return;
             if (keys.matches(data, "tui.select.cancel")) {
@@ -314,9 +307,7 @@ export async function openRunsUi(
             if (inspectedRunId) {
               detailPageSize = Math.max(1, bodyHeight);
               if (detailWidth !== contentWidth) {
-                detailLines = details.flatMap((line) =>
-                  wrapTextWithAnsi(line, Math.max(1, contentWidth)),
-                );
+                detailLines = renderInspection(details, contentWidth, theme);
                 detailWidth = contentWidth;
               }
               detailOffset = Math.max(
@@ -330,19 +321,13 @@ export async function openRunsUi(
                 ? `${rawKeyHint("r", "refresh")} · `
                 : "";
               const back = keyHint("tui.select.cancel", "back");
-              const scroll = rawKeyHint(
-                [
-                  ...keys.getKeys("tui.select.up"),
-                  ...keys.getKeys("tui.select.down"),
-                ].join("/"),
-                "lines",
-              );
+              const scroll = rawKeyHint("↑/↓", "move");
               const page = rawKeyHint("←/→", "page");
               return browserPanel(
                 viewport,
                 details.length
-                  ? `Run inspection · ${theme.fg(refreshable ? "warning" : "muted", `${refreshable ? "active" : "terminal"} snapshot`)}`
-                  : "Run inspection",
+                  ? `Subagent dashboard · run inspection · ${theme.fg(refreshable ? "warning" : "muted", `${refreshable ? "active" : "terminal"} snapshot`)}`
+                  : "Subagent dashboard · run inspection",
                 loading
                   ? [theme.fg("muted", "Capturing run snapshot…")]
                   : error
@@ -373,41 +358,20 @@ export async function openRunsUi(
                 theme,
               );
             }
-            pageSize = Math.max(1, Math.floor(bodyHeight / 2));
+            pageSize = Math.max(1, bodyHeight);
+            const enter = keyHint(
+              "tui.select.confirm",
+              openSubagentId ? "inspect" : "runs",
+            );
             const lines: string[] = [];
             let selectedLine = 0;
-            const append = (
-              run: RunSummary,
-              selected: boolean,
-              identity: string,
-              phase?: string,
-            ) => {
+            const append = (run: RunSummary, selected: boolean) => {
               if (selected) selectedLine = lines.length;
-              // On narrow terminals spend indentation on the Label instead.
-              const labelInset = width >= 32 ? "  " : "";
-              const row = historyRow(
-                run,
-                Math.max(0, contentWidth - labelInset.length),
-                identity,
-                phase,
-                openSubagentId ? undefined : now,
-                theme,
-              );
+              const row = historyRow(run, contentWidth, theme, enter, selected);
               lines.push(
-                ...row.map((line, index) =>
-                  selected
-                    ? theme.bg(
-                        "selectedBg",
-                        padBrowserLine(
-                          theme.fg(
-                            "accent",
-                            `${index === 0 ? "> " : labelInset}${line}`,
-                          ),
-                          contentWidth,
-                        ),
-                      )
-                    : `${index === 0 ? "  " : labelInset}${line}`,
-                ),
+                selected
+                  ? theme.bg("selectedBg", padBrowserLine(row, contentWidth))
+                  : row,
               );
             };
             if (loading) lines.push("Loading history…");
@@ -415,44 +379,14 @@ export async function openRunsUi(
               lines.push("History unavailable. Go back or close.");
             else if (openSubagentId) {
               for (const run of runs)
-                append(
-                  run,
-                  run.runId === selectedRuns.get(openSubagentId),
-                  run.runId,
-                );
+                append(run, run.runId === selectedRuns.get(openSubagentId));
               if (!runs.length) lines.push("No runs available.");
             } else {
-              const counts = new Map<string, number>();
-              for (const row of overview)
-                counts.set(
-                  row.latest.profile,
-                  (counts.get(row.latest.profile) ?? 0) + 1,
+              for (const row of ordered())
+                append(
+                  row.current ?? row.latest,
+                  row.subagentId === selectedSubagent,
                 );
-              for (const category of HISTORY_CATEGORIES) {
-                const rows = overview.filter(
-                  (row) => historyCategory(row) === category,
-                );
-                if (!rows.length) continue;
-                lines.push(
-                  theme.fg(
-                    category === "Active"
-                      ? "warning"
-                      : category === "Needs attention"
-                        ? "error"
-                        : "success",
-                    theme.bold(category),
-                  ),
-                );
-                for (const row of rows)
-                  append(
-                    row.current ?? row.latest,
-                    row.subagentId === selectedSubagent,
-                    (counts.get(row.latest.profile) ?? 0) > 1
-                      ? row.subagentId.replace(/^subagent-/, "")
-                      : "",
-                    row.phase,
-                  );
-              }
               if (!overview.length)
                 lines.push(
                   theme.fg("muted", "No subagents in this session."),
@@ -463,11 +397,8 @@ export async function openRunsUi(
                 );
             }
             if (selectedLine < offset) offset = selectedLine;
-            if (selectedLine + Math.min(2, bodyHeight) > offset + bodyHeight)
-              offset = Math.max(
-                0,
-                selectedLine + Math.min(2, bodyHeight) - bodyHeight,
-              );
+            if (selectedLine + 1 > offset + bodyHeight)
+              offset = Math.max(0, selectedLine + 1 - bodyHeight);
             offset = Math.min(offset, Math.max(0, lines.length - bodyHeight));
             const populated =
               !loading &&
@@ -477,31 +408,27 @@ export async function openRunsUi(
               "tui.select.cancel",
               openSubagentId ? "back" : "close",
             );
-            const enter = keyHint(
-              "tui.select.confirm",
-              openSubagentId ? "inspect run" : "runs",
-            );
-            const scroll = rawKeyHint(
-              [
-                ...keys.getKeys("tui.select.up"),
-                ...keys.getKeys("tui.select.down"),
-              ].join("/"),
-              "scroll",
-            );
+            const scroll = rawKeyHint("↑/↓", "move");
             const page = rawKeyHint("←/→", "page");
             return browserPanel(
               viewport,
               openSubagentId
-                ? `Run history · ${openSubagentId} · newest first`
-                : "Session subagents",
+                ? `Subagent dashboard · run history${runs[0] ? ` · ${runs[0].profile}` : ""} · newest first`
+                : "Subagent dashboard",
               lines.slice(offset, offset + bodyHeight),
               browserFooter(
                 contentWidth,
                 populated
                   ? [
-                      `${scroll} · ${page} · ${enter} · ${back}`,
-                      `${scroll} · ${enter} · ${back}`,
-                      `${keyHint("tui.select.confirm", "open")} · ${back}`,
+                      ...(contentWidth >= 60
+                        ? [
+                            `${scroll} · ${page} · ${back}`,
+                            `${scroll} · ${back}`,
+                          ]
+                        : [
+                            `${scroll} · ${enter} · ${back}`,
+                            `${enter} · ${back}`,
+                          ]),
                       back,
                     ]
                   : [back],
@@ -514,7 +441,12 @@ export async function openRunsUi(
       },
       {
         overlay: true,
-        overlayOptions: { width: "90%", maxHeight: "80%", anchor: "center" },
+        overlayOptions: {
+          width: "100%",
+          maxHeight: "100%",
+          margin: 0,
+          anchor: "center",
+        },
       },
     );
   } finally {

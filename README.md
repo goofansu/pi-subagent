@@ -18,7 +18,7 @@ ask Pi to delegate work to it.
 | Command | What it does |
 | --- | --- |
 | `/subagent` | Shows a summary of available profiles and current work. |
-| `/subagent runs` | Browse this Session's Subagents and newest-first Run history (read-only). |
+| `/subagent dashboard` | Open the Subagent dashboard: live subagents and newest-first run history (read-only). |
 | `/subagent profiles` | Browse profiles, read their prompts, and assign a task. |
 | `/subagent diagnostics` | Shows troubleshooting information when something goes wrong. |
 
@@ -77,13 +77,18 @@ or Pi retrieves their result. If a notice cannot be delivered, the row stays
 visible with an explanation. Ask Pi to retrieve the result or cancel active work
 by naming the agent and task—the widget itself is not interactive.
 
-`/subagent runs` opens a live overview, including completed work after
-its widget row disappears. Active work appears first, then failed or timed-out
-latest Runs under **Needs attention**, then **Completed**. Use Up/Down or
-Page Up/Page Down to scroll, Enter to open Run history, and Escape to go back
-and close. Enter on any Run opens a frozen snapshot: Up/Down scroll lines and
-Left/Right page through all retained bounded normalized content. For running or
-finalizing work, **R** captures newer content and preserves or clamps your scroll
+`/subagent dashboard` opens a full-screen, borderless dashboard, including
+completed work after its widget row disappears. Aligned rows show the work label,
+status, and active work's latest activity, with actions at the selected row's end.
+Active work appears first, then failed or timed-out latest runs, then completed
+work. Updates follow actual changes, without a ticking activity-age clock.
+Profiles appear in run history; IDs stay in inspection.
+
+Use Up/Down to move, Left/Right or Page Up/Page Down to page, Enter to open run
+history, and Escape to go back and close. Enter on any run opens a frozen snapshot
+with the Markdown-rendered answer first, followed by metadata, transcript, and
+literal tool output. Up/Down scroll lines and Left/Right page through the snapshot.
+For running or finalizing work, **r** captures newer content and preserves or clamps your scroll
 position. Refresh after settlement shows the stored Result or explains its expiry.
 Terminal snapshots need no refresh; reopening observes current availability.
 Capture time, content, and activity ages stay fixed while reading. Escape rereads
