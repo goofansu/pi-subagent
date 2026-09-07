@@ -62,16 +62,25 @@ The widget above the editor adapts to the number of active Runs:
 
 - **None:** hidden unless terminal completion hand-offs remain unresolved; those
   show only compact outcome and delivery-attention counts.
-- **One:** a summary plus the active Run's Profile, backend, state, turn count,
-  Label, and available activity, using space as it permits.
+- **One:** a summary plus the active Run's Profile, state, and available
+  activity. Turn count and backend follow when space permits; the Label uses
+  only room left after those more useful fields.
 - **Two or more:** aggregate counts only, with no individual activity or rows.
   Hidden activity and accounting updates do not request identical redraws.
 
-One active Run, alongside an unresolved completion:
+One active Run, alongside an unresolved completion at a wide layout:
 
 ```text
  subagents   1 running   1 completed
- explore  pi  running  3 turns  look around · grep: getFinalOutput
+ explore  running  grep: getFinalOutput  3 turns  pi  look around
+```
+
+At a 32-cell layout, the Profile, state, and useful activity remain while the
+Label, backend, and then accounting give way:
+
+```text
+ subagents   1 running   1 comp…
+ explore  running  grep: getFi…
 ```
 
 Multiple active Runs:

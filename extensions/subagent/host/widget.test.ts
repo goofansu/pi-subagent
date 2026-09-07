@@ -64,12 +64,12 @@ test("the widget appears with the first live Run and its row reads as the matrix
   assert.equal(rows.length, 2);
   // The title names the widget and counts the Run, and nothing else.
   assert.equal(rows[0], " subagents   1 running");
-  // The row: the agent, backend, status, the turn count, and what the Run
-  // said it is doing. No glyph and no clock on a live row.
+  // The row prioritizes Profile and state, then honest current activity when
+  // it has arrived; accounting, backend, and Label use sufficient space.
   assert.match(
     rows[1],
     new RegExp(
-      `^ explore {2}pi {2}running {2}(1 turn|—) {2}look around( · ${RIG_ACTIVITY})?$`,
+      `^ explore {2}running( {2}${RIG_ACTIVITY})? {2}(1 turn|—) {2}pi {2}look around$`,
     ),
   );
   assert.doesNotMatch(rows[1] ?? "", /\d\.\ds/);
@@ -86,7 +86,7 @@ test("a Run of the one-shot backend names its own backend in the row", async (t)
 
   assert.match(
     rig.host.widgetLines(120)[1],
-    /^ once {2}one-shot {2}running {2}—/,
+    /^ once {2}running {2}— {2}one-shot/,
   );
 });
 
@@ -282,7 +282,10 @@ test("a burst of index changes coalesces into one render request per draw", asyn
   );
 
   // And the conflation is not lossy: the row shows the latest state.
-  assert.match(rig.host.widgetLines(80)[1], new RegExp(`step ${BURST - 1}$`));
+  assert.match(
+    rig.host.widgetLines(80)[1],
+    new RegExp(`running {2}step ${BURST - 1}`),
+  );
 });
 
 test("a host that draws every request still gets one request per change batch", async (t) => {
@@ -331,7 +334,7 @@ test("a slow subscriber still renders the latest state after the burst", async (
   await heldRun(rig);
   await rig.pump();
 
-  assert.match(rig.host.widgetLines(80)[1], / · last$/);
+  assert.match(rig.host.widgetLines(80)[1], /running {2}last/);
 });
 
 test("the widget lists Runs that are not terminal and terminal ones whose hand-off is unresolved", () => {
@@ -478,8 +481,13 @@ test("adaptive modes follow 0 → 1 → 2 → 1 → 0 active Runs with unresolve
   const single = rig.host.widgetLines(120);
   assert.equal(single.length, 2);
   assert.match(single[0], /1 running.*1 completed/);
-  assert.match(single[1], /newest work$/);
+  assert.match(single[1], /once {2}running {2}newest work/);
   assert.doesNotMatch(single[1], /completed/);
+  const narrowSingle = rig.host.widgetLines(32);
+  assert.match(narrowSingle[0], /1 running.*1 comp/);
+  assert.match(narrowSingle[1], /once {2}running {2}newest work/);
+  assert.doesNotMatch(narrowSingle[1], /one-shot|look around/);
+  for (const line of narrowSingle) assert.ok(visibleWidth(line) <= 32);
 
   await rig.release("second");
   await rig.settled(second.runId);
@@ -523,7 +531,7 @@ test("drawn aggregate ignores alternating hidden activity and accounting but ret
   await rig.release("first-finish");
   await rig.settled(first.runId);
   await rig.pump();
-  assert.match(rig.host.widgetLines(120)[1], /second newest$/);
+  assert.match(rig.host.widgetLines(120)[1], /running {2}second newest/);
   assert.ok(rig.host.renderRequests() > requests);
 });
 

@@ -7,11 +7,7 @@ import { fixtureRow, fixtureUsage } from "../testing/presentation-fixtures.ts";
 import {
   formatRowSummary,
   formatRunRow,
-  MAX_AGENT_COLUMN_WIDTH,
-  MIN_ACTIVITY_WIDTH,
-  MIN_LABEL_WIDTH,
-  MIN_TAIL_WIDTH,
-  measureColumns,
+  MAX_PROFILE_WIDTH,
   type RenderableTheme,
   ROW_DELIMITER,
   renderRunRows,
@@ -62,213 +58,197 @@ const named: RenderableTheme = {
   italic,
   inverse,
 };
-const literal = (text: string): string =>
-  text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-/** A regular expression matching `text` painted in `color`. */
-const painted = (color: string, text: string): RegExp =>
-  new RegExp(literal(paint(color, text)));
-
 function row(width: number, overrides = {}): string {
   return stripVTControlCharacters(
     formatRunRow(fixtureRow(overrides), theme, width),
   ).trimEnd();
 }
 
-// ── One row ──────────────────────────────────────────────────────────────────
+// ── One active Run ──────────────────────────────────────────────────────────
 
-test("a live row reads agent, backend, status, turns, then the label", () => {
-  const line = row(120);
+test("wide detail prioritizes Profile, state, and activity before accounting, backend, and Label", () => {
+  const line = row(120, { activity: "bash: npm test" });
 
   assert.equal(ROW_DELIMITER, "  ");
-  assert.equal(line, "explore  pi  running  3 turns  look around");
-  // No spinner and no clock: the turn count moving is the sign of life.
-  assert.doesNotMatch(line, /\d\.\ds/);
-  // The Run id and the model are deliberately absent: ids belong to tool
-  // results and notices, where the model that acts on them reads them.
-  assert.doesNotMatch(line, /run-1/);
-  assert.doesNotMatch(line, /subagent-1/);
+  assert.equal(
+    line,
+    "explore  running  bash: npm test  3 turns  pi  look around",
+  );
+  assert.doesNotMatch(line, /\d\.\ds|run-1|subagent-1/);
 });
 
-test("a row names each backend the same way", () => {
-  // The active widget row is backend-independent apart from the backend's own
-  // name, so an unfamiliar name formats exactly like a familiar one.
-  assert.deepEqual(
-    ["pi", "claude", "demo-one-shot"].map((backend) =>
-      row(120, { identity: { backendId: backendId(backend) } }),
-    ),
-    [
-      "explore  pi  running  3 turns  look around",
-      "explore  claude  running  3 turns  look around",
-      "explore  demo-one-shot  running  3 turns  look around",
-    ],
+test("optional fields drop without displacing useful activity", () => {
+  const active = (width: number) =>
+    row(width, {
+      identity: {
+        description: "a supplementary Label that is deliberately long",
+      },
+      activity: "bash: npm test",
+    });
+
+  assert.equal(
+    active(80),
+    "explore  running  bash: npm test  3 turns  pi  a supplementary Label that is de…",
+  );
+  assert.equal(active(47), "explore  running  bash: npm test  3 turns  pi");
+  assert.equal(active(43), "explore  running  bash: npm test  3 turns");
+  assert.equal(active(32), "explore  running  bash: npm test");
+});
+
+test("long Profile names are bounded and shrink before state or useful activity disappear", () => {
+  const overrides = {
+    identity: { agent: "a-very-long-agent-profile-name" },
+    activity: "bash: npm test",
+  };
+  assert.equal(MAX_PROFILE_WIDTH, 16);
+  assert.equal(
+    row(80, overrides),
+    "a-very-long-age…  running  bash: npm test  3 turns  pi  look around",
+  );
+  assert.equal(row(30, overrides), "a-very…  running  bash: npm t…");
+  assert.equal(
+    row(20, { identity: overrides.identity }),
+    "a-very-lon…  running",
   );
 });
 
-test("a finalizing row retains its label but not executing activity", () => {
+test("suppressed activity does not let lower-priority optional fields reappear", () => {
+  const active = { activity: "bash: npm test" };
+  for (const width of Array.from({ length: 10 }, (_, index) => 20 + index)) {
+    assert.equal(row(width, active), "explore  running", `width ${width}`);
+  }
+  assert.equal(row(30, active), "explore  running  bash: npm t…");
+});
+
+test("the useful activity boundary also reallocates a long Profile", () => {
+  const active = {
+    identity: { agent: "a-very-long-agent-profile-name" },
+    activity: "bash: npm test",
+  };
+  assert.equal(row(29, active), "a-very-long-age…  running");
+  assert.equal(row(30, active), "a-very…  running  bash: npm t…");
+});
+
+test("missing activity is omitted honestly while wide optional context remains", () => {
+  assert.equal(row(120), "explore  running  3 turns  pi  look around");
+  assert.equal(row(22), "explore  running");
+});
+
+test("finalizing and cancelling never imply that retained activity is executing", () => {
   assert.equal(
     row(120, { phase: "finalizing", activity: "bash: npm test" }),
-    "explore  pi  finalizing  3 turns  look around",
+    "explore  finalizing  3 turns  pi  look around",
   );
-});
-
-test("a running Run whose cancellation is recorded says it is cancelling", () => {
-  // The reader who asked for the cancellation is watching for it to take, and
-  // `running` would tell them nothing had happened.
   assert.equal(
-    row(120, { cancellation: { reason: "requested" } }),
-    "explore  pi  cancelling  3 turns  look around",
+    row(120, {
+      cancellation: { reason: "requested" },
+      activity: "bash: npm test",
+    }),
+    "explore  cancelling  3 turns  pi  look around",
   );
 });
 
-test("a Run with no turns yet reads as a dash rather than a zero", () => {
-  assert.equal(
-    row(120, { usage: fixtureUsage({ turns: 0 }) }),
-    "explore  pi  running  —  look around",
-  );
-});
-
-test("a row shows no tool count and no context gauge, whatever the snapshot carries", () => {
-  // Both were tried and neither told an operator anything they acted on.
+test("zero turns retain existing accounting vocabulary and no tool count or context gauge is added", () => {
   const line = row(120, {
     tools: 4,
     usage: fixtureUsage({
-      turns: 3,
+      turns: 0,
       context: { tokens: 84_000, window: 200_000 },
     }),
   });
-  assert.equal(line, "explore  pi  running  3 turns  look around");
+  assert.equal(line, "explore  running  —  pi  look around");
   assert.doesNotMatch(line, /tool|%|▰/);
 });
 
-// ── The tail ─────────────────────────────────────────────────────────────────
-
-test("reported activity joins the label in the tail", () => {
+test("arbitrary backend names remain presentation-only and drop at their width boundary", () => {
+  const active = {
+    identity: { backendId: backendId("custom-backend") },
+    activity: "bash: npm test",
+  };
   assert.equal(
-    row(120, { activity: "bash: npm test" }),
-    "explore  pi  running  3 turns  look around · bash: npm test",
+    row(120, active),
+    "explore  running  bash: npm test  3 turns  custom-backend  look around",
   );
+  assert.equal(
+    row(57, active),
+    "explore  running  bash: npm test  3 turns  custom-backend",
+  );
+  assert.equal(row(56, active), "explore  running  bash: npm test  3 turns");
 });
 
-test("the label outranks the activity: it is shortened for the activity, never dropped", () => {
-  // Room for the label to be cut and still leave MIN_LABEL_WIDTH: the activity
-  // stays and the label gives up its end.
-  assert.equal(MIN_LABEL_WIDTH, 24);
-  assert.equal(
-    row(64, {
-      identity: { description: "a long label that goes on and on and on" },
-      activity: "read",
-    }),
-    "explore  pi  running  3 turns  a long label that goes on… · read",
-  );
-  // An activity too long to leave that much label is the one shortened, so
-  // the row still says what kind of thing the Run is doing.
-  assert.equal(MIN_ACTIVITY_WIDTH, 12);
-  assert.equal(
-    row(70, {
-      identity: { description: "a long label that goes on and on and on" },
-      activity: "a very long activity name here",
-    }),
-    "explore  pi  running  3 turns  a long label that goes … · a very long…",
-  );
-  // A short label is kept whole rather than cut below its own length.
-  assert.equal(
-    row(58, { activity: "bash: npm test" }),
-    "explore  pi  running  3 turns  look around · bash: npm te…",
-  );
-  // Below MIN_ACTIVITY_WIDTH the activity goes and the label takes the room.
-  // A row that said only `read` would not say which Run was reading.
-  assert.equal(
-    row(56, { activity: "bash: npm test" }),
-    "explore  pi  running  3 turns  look around",
-  );
-});
-
-test("the tail is skipped altogether when there is not room to read it", () => {
-  assert.equal(MIN_TAIL_WIDTH, 12);
-  // The fixed part is 29 cells; a tail needs a delimiter and 12 more.
-  assert.match(row(29 + 2 + 12), /look around$/);
-  assert.equal(row(29 + 2 + 11), "explore  pi  running  3 turns");
-});
-
-test("the label and the activity are painted apart: the activity brighter and in italics", () => {
-  const line = formatRunRow(
+test("identical inputs produce the same exact styled presentation", () => {
+  const first = formatRunRow(
     fixtureRow({ activity: "bash: npm test" }),
     named,
     120,
   );
-  assert.ok(
-    line.endsWith(
-      paint("dim", "look around") +
-        paint("dim", " · ") +
-        paint("muted", italic("bash: npm test")),
-    ),
-  );
-  // The label alone is not italic: only the part that moves looks like it.
-  assert.ok(
-    formatRunRow(fixtureRow(), named, 120).endsWith(
-      paint("dim", "look around"),
-    ),
-  );
-});
-
-test("an ellipsis-shortened label keeps its separator dim", () => {
-  const line = formatRunRow(
-    fixtureRow({
-      identity: { description: "a long label that goes on and on and on" },
-      activity: "read",
-    }),
+  const second = formatRunRow(
+    fixtureRow({ activity: "bash: npm test" }),
     named,
-    64,
+    120,
   );
-
-  assert.match(stripVTControlCharacters(line), /… · read$/);
-  assert.ok(
-    line.includes(paint("dim", " · ") + paint("muted", italic("read"))),
-  );
-});
-
-test("the status is painted in the phase's tone, and nothing precedes the agent", () => {
-  const live = formatRunRow(fixtureRow(), named, 120);
-  assert.match(live, painted("warning", "running"));
-  assert.ok(live.startsWith(paint("toolTitle", bold("explore"))));
+  const expected = [
+    paint("toolTitle", bold("explore")),
+    paint("warning", "running"),
+    paint("muted", italic("bash: npm test")),
+    paint("dim", "3 turns"),
+    paint("dim", "pi"),
+    paint("dim", "look around"),
+  ].join(ROW_DELIMITER);
+  assert.equal(first, expected);
+  assert.equal(second, expected);
 });
 
 // ── Fitting ──────────────────────────────────────────────────────────────────
 
-test("a row never exceeds the width it is given", () => {
-  for (const width of [120, 80, 46, 30, 12]) {
-    const line = row(width);
-    assert.ok(
-      visibleWidth(line) <= width,
-      `width ${width} produced ${visibleWidth(line)} columns`,
+test("very narrow rows keep a Profile prefix without an empty-part delimiter", () => {
+  const expected = new Map([
+    [1, "…"],
+    [2, "e…"],
+    [7, "explore"],
+    [9, "explore"],
+    [10, "…  running"],
+  ]);
+  for (const [width, plain] of expected) {
+    assert.equal(row(width, { activity: "bash: npm test" }), plain);
+    const styled = formatRunRow(
+      fixtureRow({ activity: "bash: npm test" }),
+      named,
+      width,
     );
+    assert.equal(stripVTControlCharacters(styled), plain);
+    assert.ok(!plain.startsWith(ROW_DELIMITER));
+    assert.ok(visibleWidth(styled) <= width);
   }
+  assert.equal(
+    formatRunRow(fixtureRow({ activity: "bash: npm test" }), named, 1),
+    paint("toolTitle", bold("…")),
+  );
+  assert.equal(
+    formatRunRow(fixtureRow({ activity: "bash: npm test" }), named, 10),
+    [paint("toolTitle", bold("…")), paint("warning", "running")].join(
+      ROW_DELIMITER,
+    ),
+  );
 });
 
-test("fields give way from the right: activity, label, then turns; agent, backend, and status never", () => {
-  const rows = [fixtureRow()];
-  const at = (width: number) => measureColumns(rows, width);
-
-  // The fixed part with the turn count is 7+2+2+2+7+2+7 = 29 cells. The
-  // turn count is kept whenever that fits, whatever it leaves the tail.
-  assert.ok(at(29).turns > 0);
-  assert.equal(at(28).turns, 0);
-  assert.ok(at(28).status > 0);
-
-  const narrow = row(22);
-  assert.doesNotMatch(narrow, /3 turns/);
-  assert.doesNotMatch(narrow, /look around/);
-  assert.equal(narrow, "explore  pi  running");
-});
-
-test("a long agent name is truncated without hiding later fields", () => {
-  const line = row(80, {
-    identity: { agent: "a-very-long-agent-profile-name" },
+test("plain and styled wide text stay within every terminal-cell boundary", () => {
+  const wide = fixtureRow({
+    identity: {
+      agent: "探索探索探索探索探索探索",
+      description: "界".repeat(80),
+    },
+    activity: "読む".repeat(40),
   });
-
-  assert.equal(MAX_AGENT_COLUMN_WIDTH, 16);
-  assert.match(line, /^a-very-long-age… {2}pi/);
-  assert.match(line, /running/);
+  for (const width of [0, 1, 2, 8, 20, 30, 46, 80, 120]) {
+    for (const paintTheme of [theme, named]) {
+      const line = formatRunRow(wide, paintTheme, width);
+      assert.ok(
+        visibleWidth(line) <= width,
+        `width ${width} produced ${visibleWidth(line)} cells`,
+      );
+    }
+  }
 });
 
 // ── Summary and the whole widget ─────────────────────────────────────────────
@@ -300,6 +280,25 @@ test("multiple active Runs show aggregate state without individual rows", () => 
   assert.deepEqual(lines, [" subagents   2 running"]);
 });
 
+test("narrow unresolved terminal attention stays compact beside essential active detail", () => {
+  const rows = [
+    fixtureRow({
+      identity: { agent: "explore", description: "supplementary label" },
+      activity: "bash: npm test",
+    }),
+    fixtureRow({ phase: "completed", handoff: "exhausted" }),
+  ];
+  const lines = renderRunRows(rows, named, 32);
+  assert.equal(lines.length, 2);
+  assert.match(stripVTControlCharacters(lines[0]), /^! 1 notification failed/);
+  assert.match(
+    stripVTControlCharacters(lines[1]),
+    /^ explore {2}running {2}bash: npm/,
+  );
+  assert.doesNotMatch(stripVTControlCharacters(lines[1]), /pi|supplementary/);
+  for (const line of lines) assert.ok(visibleWidth(line) <= 32);
+});
+
 test("unresolved terminal Runs contribute only summary beside one active Run", () => {
   // Neither the terminal Run's identity nor its duration affects active detail.
   const rows = [
@@ -311,7 +310,7 @@ test("unresolved terminal Runs contribute only summary beside one active Run", (
   );
   assert.deepEqual(lines, [
     " subagents   1 running   1 completed",
-    " explore  pi  running  3 turns  look around",
+    " explore  running  3 turns  pi  look around",
   ]);
   // Finalizing still counts as active, so a mixed pair has no detail rows.
   const mixedLive = renderRunRows(
