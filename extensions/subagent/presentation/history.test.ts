@@ -5,7 +5,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import type { RunSummary } from "../domain/history.ts";
 import { backendId, runId, subagentId } from "../domain/index.ts";
 import { PLAIN_THEME } from "../testing/stand-in-host.ts";
-import { historyCategory, historyColumnWidths, historyRow } from "./history.ts";
+import { historyCategory, historyRow, historyRows } from "./history.ts";
 
 const run: RunSummary = {
   runId: runId("run-test-1"),
@@ -45,12 +45,8 @@ test("a list sizes label and status columns to its longest visible values", () =
     { ...run, label: "One", phase: "finalizing" as const },
     { ...run, label: "Longer label" },
   ];
-  const columns = historyColumnWidths(values);
-  assert.deepEqual(columns, { label: 12, status: 10 });
-  const lines = values.map((value) =>
-    stripVTControlCharacters(
-      historyRow(value, 120, PLAIN_THEME, false, 1000, columns),
-    ),
+  const lines = historyRows(values, undefined, 120, PLAIN_THEME, 1000).map(
+    stripVTControlCharacters,
   );
   assert.equal(lines[0].indexOf("Finalizing"), lines[1].indexOf("Running"));
   assert.equal(lines[0].indexOf("·"), lines[1].indexOf("·"));
@@ -64,14 +60,7 @@ test("a list sizes label and status columns to its longest visible values", () =
 test("labels are capped at 40 columns in roomy subagent lists", () => {
   const value = { ...run, label: "a".repeat(80) };
   const line = stripVTControlCharacters(
-    historyRow(
-      value,
-      160,
-      PLAIN_THEME,
-      false,
-      1000,
-      historyColumnWidths([value]),
-    ),
+    historyRows([value], undefined, 160, PLAIN_THEME, 1000)[0] ?? "",
   );
   assert.match(line, /^ {2}a{39}… {2}Running/);
   assert.doesNotMatch(line, /a{40}/);

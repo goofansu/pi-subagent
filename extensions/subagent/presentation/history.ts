@@ -1,5 +1,7 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { RunSummary, SubagentSummary } from "../domain/history.ts";
+import type { RunId, SubagentId } from "../domain/index.ts";
+import { padBrowserLine } from "./browser-panel.ts";
 import { MAX_RUN_LABEL_WIDTH } from "./labels.ts";
 import type { RenderableTheme } from "./rows.ts";
 import { formatRunElapsed, resolveRunPresentation } from "./status.ts";
@@ -35,9 +37,7 @@ const statusText = (run: RunSummary) => {
 };
 
 /** Content-sized columns shared by every row in one displayed list. */
-export function historyColumnWidths(
-  runs: readonly RunSummary[],
-): HistoryColumnWidths {
+function historyColumnWidths(runs: readonly RunSummary[]): HistoryColumnWidths {
   return {
     label: Math.min(
       MAX_RUN_LABEL_WIDTH,
@@ -53,6 +53,30 @@ export function historyCategory(subagent: SubagentSummary): HistoryCategory {
   return presentation(subagent.latest).executionNeedsAttention
     ? "Needs attention"
     : "Completed";
+}
+
+/** Render one displayed list, including shared measurements and selection surface. */
+export function historyRows(
+  runs: readonly RunSummary[],
+  selectedIdentity: RunId | SubagentId | undefined,
+  width: number,
+  theme: RenderableTheme,
+  capturedAt: number,
+): string[] {
+  const preferredColumns = historyColumnWidths(runs);
+  return runs.map((run) => {
+    const selected =
+      run.runId === selectedIdentity || run.subagentId === selectedIdentity;
+    const row = historyRow(
+      run,
+      width,
+      theme,
+      selected,
+      capturedAt,
+      preferredColumns,
+    );
+    return selected ? theme.bg("selectedBg", padBrowserLine(row, width)) : row;
+  });
 }
 
 /** One borderless table row. Widths depend on viewport and supplied content-sized columns, never selection. */

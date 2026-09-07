@@ -13,13 +13,11 @@ import {
   browserFooter,
   browserPanel,
   browserViewport,
-  padBrowserLine,
 } from "../presentation/browser-panel.ts";
 import {
   HISTORY_CATEGORIES,
   historyCategory,
-  historyColumnWidths,
-  historyRow,
+  historyRows,
 } from "../presentation/history.ts";
 import {
   type InspectionBlock,
@@ -27,6 +25,7 @@ import {
   renderInspection,
 } from "../presentation/inspection.ts";
 import type {
+  RunHistoryCapture,
   RunId,
   RunSummary,
   SessionObservationSource,
@@ -34,6 +33,44 @@ import type {
   SubagentSummary,
 } from "./session-observation.ts";
 import type { CompletionHandoffView } from "./widget.ts";
+
+type PageStatus = "loading" | "ready" | "error";
+
+interface OverviewPage {
+  readonly kind: "overview";
+  status: PageStatus;
+  summaries: readonly SubagentSummary[];
+  selectedSubagentId: SubagentId | undefined;
+  offset: number;
+}
+
+interface HistoryPage {
+  readonly kind: "history";
+  status: PageStatus;
+  readonly subagentId: SubagentId;
+  capture: RunHistoryCapture;
+  selectedRunId: RunId | undefined;
+  offset: number;
+}
+
+interface InspectionPage {
+  readonly kind: "inspection";
+  status: PageStatus;
+  readonly subagentId: SubagentId;
+  readonly runId: RunId;
+  blocks: readonly InspectionBlock[];
+  lines: readonly string[];
+  renderedWidth: number | undefined;
+  refreshable: boolean;
+  offset: number;
+}
+
+type DashboardPage = OverviewPage | HistoryPage | InspectionPage;
+
+const emptyHistoryCapture = (): RunHistoryCapture => ({
+  runs: [],
+  capturedAt: 0,
+});
 
 export async function openDashboardUi(
   handle: SessionObservationSource,
@@ -57,29 +94,23 @@ export async function openDashboardUi(
     }
     await ctx.ui.custom<void>(
       (tui, theme, keys, done) => {
-        let overview: readonly SubagentSummary[] = [];
-        let runs: readonly RunSummary[] = [];
-        let selectedSubagent: SubagentId | undefined;
-        let openSubagentId: SubagentId | undefined;
-        let inspectedRunId: RunId | undefined;
-        let refreshable = false;
-        let details: readonly InspectionBlock[] = [];
-        let detailLines: readonly string[] = [];
-        let detailWidth: number | undefined;
-        let detailOffset = 0;
+        const historyPages = new Map<SubagentId, HistoryPage>();
+        let overviewPage: OverviewPage = {
+          kind: "overview",
+          status: "loading",
+          summaries: [],
+          selectedSubagentId: undefined,
+          offset: 0,
+        };
+        let page: DashboardPage = overviewPage;
         let detailPageSize = 1;
-        const selectedRuns = new Map<SubagentId, RunId>();
-        let loading = true;
-        let error = false;
-        let generation = 0;
-        let offset = 0;
         let pageSize = 1;
+        let generation = 0;
         // A request remains pending until render acknowledges it, not until a
         // timer fires. Slow hosts therefore owe one frame reading the newest
         // rows, however many observed changes arrived meanwhile.
         let pending = false;
         let now = session.currentInstant();
-        let historyCapturedAt = 0;
         let stopOverview: (() => void) | undefined;
         let stopRead: (() => void) | undefined;
         let redraw: (() => void) | undefined = () => {
@@ -100,14 +131,16 @@ export async function openDashboardUi(
           stopRead?.();
           stopRead = undefined;
           session.dispose();
-          refreshable = false;
           pending = false;
-          overview = [];
-          runs = [];
-          details = [];
-          detailLines = [];
-          inspectedRunId = undefined;
-          selectedRuns.clear();
+          historyPages.clear();
+          overviewPage = {
+            kind: "overview",
+            status: "loading",
+            summaries: [],
+            selectedSubagentId: undefined,
+            offset: 0,
+          };
+          page = overviewPage;
           redraw = undefined;
           finish = undefined;
           closeUi = undefined;
@@ -118,9 +151,9 @@ export async function openDashboardUi(
           complete?.();
         };
         closeUi = close;
-        const ordered = () =>
+        const ordered = (summaries: readonly SubagentSummary[]) =>
           HISTORY_CATEGORIES.flatMap((category) =>
-            overview.filter((row) => historyCategory(row) === category),
+            summaries.filter((row) => historyCategory(row) === category),
           );
         const movementHint = () =>
           rawKeyHint(
@@ -130,6 +163,24 @@ export async function openDashboardUi(
             ].join("/"),
             "move",
           );
+        const historyPage = (subagentId: SubagentId): HistoryPage => {
+          const retained = historyPages.get(subagentId);
+          if (retained) {
+            retained.status = "loading";
+            retained.offset = 0;
+            return retained;
+          }
+          const created: HistoryPage = {
+            kind: "history",
+            status: "loading",
+            subagentId,
+            capture: emptyHistoryCapture(),
+            selectedRunId: undefined,
+            offset: 0,
+          };
+          historyPages.set(subagentId, created);
+          return created;
+        };
         const read = async () => {
           const version = ++generation;
           stopRead?.();
@@ -140,51 +191,58 @@ export async function openDashboardUi(
           stopRead = reader.dispose;
           stopOverview?.();
           stopOverview = undefined;
-          const requestedSubagentId = openSubagentId;
-          const requestedRunId = inspectedRunId;
-          loading = true;
-          error = false;
-          offset = 0;
+          const requestedPage = page;
+          requestedPage.status = "loading";
+          if (requestedPage.kind !== "inspection") requestedPage.offset = 0;
           redraw?.();
           try {
-            if (requestedRunId) {
-              const capture = await reader.inspectRun(requestedRunId);
-              if (closed || version !== generation || !capture) return;
-              details = inspectionBlocks(
-                capture,
-                handoff.status(requestedRunId),
+            if (requestedPage.kind === "inspection") {
+              const capture = await reader.inspectRun(requestedPage.runId);
+              if (closed || version !== generation) return;
+              if (capture) {
+                requestedPage.blocks = inspectionBlocks(
+                  capture,
+                  handoff.status(requestedPage.runId),
+                );
+                requestedPage.refreshable = capture.outcome === "active";
+                requestedPage.renderedWidth = undefined;
+              }
+            } else if (requestedPage.kind === "history") {
+              const capture = await reader.captureHistory(
+                requestedPage.subagentId,
               );
-              refreshable = capture.outcome === "active";
-              detailWidth = undefined;
-            } else if (requestedSubagentId) {
-              const capture = await reader.captureHistory(requestedSubagentId);
-              if (closed || version !== generation || !capture) return;
-              runs = capture.runs;
-              historyCapturedAt = capture.capturedAt;
-              if (
-                !runs.some(
-                  (run) => run.runId === selectedRuns.get(requestedSubagentId),
-                ) &&
-                runs[0]
-              ) {
-                selectedRuns.set(requestedSubagentId, runs[0].runId);
+              if (closed || version !== generation) return;
+              if (capture) {
+                requestedPage.capture = capture;
+                if (
+                  !capture.runs.some(
+                    (run) => run.runId === requestedPage.selectedRunId,
+                  ) &&
+                  capture.runs[0]
+                ) {
+                  requestedPage.selectedRunId = capture.runs[0].runId;
+                }
               }
             } else {
               stopOverview = session.watchSummaries(
                 (next) => {
                   if (closed || version !== generation) return;
-                  overview = next;
-                  loading = false;
+                  requestedPage.summaries = next;
+                  requestedPage.status = "ready";
                   if (
-                    !overview.some((row) => row.subagentId === selectedSubagent)
+                    !next.some(
+                      (row) =>
+                        row.subagentId === requestedPage.selectedSubagentId,
+                    )
                   )
-                    selectedSubagent = ordered()[0]?.subagentId;
+                    requestedPage.selectedSubagentId =
+                      ordered(next)[0]?.subagentId;
+                  overviewPage = requestedPage;
                   redraw?.();
                 },
                 () => {
                   if (closed || version !== generation) return;
-                  error = true;
-                  loading = false;
+                  requestedPage.status = "error";
                   redraw?.();
                 },
               );
@@ -192,12 +250,13 @@ export async function openDashboardUi(
             }
           } catch {
             if (closed || version !== generation) return;
-            error = true;
+            requestedPage.status = "error";
           } finally {
             reader.dispose();
             if (stopRead === reader.dispose) stopRead = undefined;
           }
-          loading = false;
+          requestedPage.status =
+            requestedPage.status === "error" ? "error" : "ready";
           redraw?.();
         };
         if (closed) queueMicrotask(close);
@@ -206,28 +265,25 @@ export async function openDashboardUi(
         return {
           dispose,
           invalidate() {
-            detailWidth = undefined;
+            if (page.kind === "inspection") page.renderedWidth = undefined;
           },
           handleInput(data) {
             if (closed) return;
             if (keys.matches(data, "tui.select.cancel")) {
-              if (inspectedRunId) {
-                inspectedRunId = undefined;
-                refreshable = false;
-                details = [];
-                detailLines = [];
+              if (page.kind === "inspection") {
+                page = historyPage(page.subagentId);
                 void read();
-              } else if (openSubagentId) {
-                openSubagentId = undefined;
-                runs = [];
+              } else if (page.kind === "history") {
+                page.capture = emptyHistoryCapture();
+                page = overviewPage;
                 void read();
               } else close();
               return;
             }
-            if (loading || error) return;
-            if (inspectedRunId) {
+            if (page.status !== "ready") return;
+            if (page.kind === "inspection") {
               if (
-                refreshable &&
+                page.refreshable &&
                 (matchesKey(data, "r") || matchesKey(data, "shift+r"))
               ) {
                 void read();
@@ -243,11 +299,11 @@ export async function openDashboardUi(
                       ? detailPageSize
                       : 0;
               if (delta) {
-                detailOffset = Math.max(
+                page.offset = Math.max(
                   0,
                   Math.min(
-                    Math.max(0, detailLines.length - detailPageSize),
-                    detailOffset + delta,
+                    Math.max(0, page.lines.length - detailPageSize),
+                    page.offset + delta,
                   ),
                 );
                 redraw?.();
@@ -255,16 +311,26 @@ export async function openDashboardUi(
               return;
             }
             if (keys.matches(data, "tui.select.confirm")) {
-              if (!openSubagentId && selectedSubagent) {
-                openSubagentId = selectedSubagent;
+              if (page.kind === "overview" && page.selectedSubagentId) {
+                page = historyPage(page.selectedSubagentId);
                 void read();
-              } else if (openSubagentId) {
-                const selected = selectedRuns.get(openSubagentId);
-                const run = runs.find((row) => row.runId === selected);
+              } else if (page.kind === "history") {
+                const selected = page.selectedRunId;
+                const run = page.capture.runs.find(
+                  (row) => row.runId === selected,
+                );
                 if (run) {
-                  refreshable = false;
-                  inspectedRunId = run.runId;
-                  detailOffset = 0;
+                  page = {
+                    kind: "inspection",
+                    status: "loading",
+                    subagentId: page.subagentId,
+                    runId: run.runId,
+                    blocks: [],
+                    lines: [],
+                    renderedWidth: undefined,
+                    refreshable: false,
+                    offset: 0,
+                  };
                   void read();
                 }
               }
@@ -282,20 +348,29 @@ export async function openDashboardUi(
                     ? pageSize
                     : 0;
             if (!delta) return;
-            if (openSubagentId) {
-              const selected = selectedRuns.get(openSubagentId);
-              const index = runs.findIndex((run) => run.runId === selected);
-              const next =
-                runs[Math.max(0, Math.min(runs.length - 1, index + delta))];
-              if (next) selectedRuns.set(openSubagentId, next.runId);
-            } else {
-              const rows = ordered();
-              const index = rows.findIndex(
-                (row) => row.subagentId === selectedSubagent,
+            if (page.kind === "history") {
+              const selected = page.selectedRunId;
+              const index = page.capture.runs.findIndex(
+                (run) => run.runId === selected,
               );
-              selectedSubagent =
-                rows[Math.max(0, Math.min(rows.length - 1, index + delta))]
-                  ?.subagentId;
+              const next =
+                page.capture.runs[
+                  Math.max(
+                    0,
+                    Math.min(page.capture.runs.length - 1, index + delta),
+                  )
+                ];
+              if (next) page.selectedRunId = next.runId;
+            } else if (page.kind === "overview") {
+              const overview = page;
+              const rows = ordered(overview.summaries);
+              const index = rows.findIndex(
+                (row) => row.subagentId === overview.selectedSubagentId,
+              );
+              overview.selectedSubagentId =
+                rows[
+                  Math.max(0, Math.min(rows.length - 1, index + delta))
+                ]?.subagentId;
             }
             redraw?.();
           },
@@ -308,98 +383,99 @@ export async function openDashboardUi(
               total > bodyHeight && bodyHeight > 0
                 ? `${start + 1}-${Math.min(start + bodyHeight, total)}/${total}`
                 : "";
-            if (inspectedRunId) {
+            if (page.kind === "inspection") {
               detailPageSize = Math.max(1, bodyHeight);
-              if (detailWidth !== contentWidth) {
-                detailLines = renderInspection(details, contentWidth, theme);
-                detailWidth = contentWidth;
+              if (page.renderedWidth !== contentWidth) {
+                page.lines = renderInspection(page.blocks, contentWidth, theme);
+                page.renderedWidth = contentWidth;
               }
-              detailOffset = Math.max(
+              page.offset = Math.max(
                 0,
                 Math.min(
-                  detailOffset,
-                  Math.max(0, detailLines.length - bodyHeight),
+                  page.offset,
+                  Math.max(0, page.lines.length - bodyHeight),
                 ),
               );
-              const refresh = refreshable
+              const refresh = page.refreshable
                 ? `${rawKeyHint("r", "refresh")} · `
                 : "";
               const back = keyHint("tui.select.cancel", "back");
               const scroll = movementHint();
-              const page = rawKeyHint("←/→", "page");
+              const pageHint = rawKeyHint("←/→", "page");
               return browserPanel(
                 viewport,
-                details.length
-                  ? `Subagent dashboard · run inspection · ${theme.fg(refreshable ? "warning" : "muted", `${refreshable ? "active" : "terminal"} snapshot`)}`
+                page.blocks.length
+                  ? `Subagent dashboard · run inspection · ${theme.fg(page.refreshable ? "warning" : "muted", `${page.refreshable ? "active" : "terminal"} snapshot`)}`
                   : "Subagent dashboard · run inspection",
-                loading
+                page.status === "loading"
                   ? [theme.fg("muted", "Capturing run snapshot…")]
-                  : error
+                  : page.status === "error"
                     ? [
                         theme.fg(
                           "error",
                           "Result unavailable. Go back to run history.",
                         ),
                       ]
-                    : detailLines.slice(
-                        detailOffset,
-                        detailOffset + bodyHeight,
-                      ),
+                    : page.lines.slice(page.offset, page.offset + bodyHeight),
                 browserFooter(
                   contentWidth,
-                  loading || error
+                  page.status !== "ready"
                     ? [back]
                     : [
-                        `${scroll} · ${page} · ${refresh}${back}`,
-                        `${page} · ${refresh}${back}`,
+                        `${scroll} · ${pageHint} · ${refresh}${back}`,
+                        `${pageHint} · ${refresh}${back}`,
                         `${refresh}${back}`,
                         back,
                       ],
-                  loading || error
+                  page.status !== "ready"
                     ? ""
-                    : range(detailOffset, detailLines.length),
+                    : range(page.offset, page.lines.length),
                 ),
                 theme,
               );
             }
             pageSize = Math.max(1, bodyHeight);
+            const listPage = page;
+            const isHistory = listPage.kind === "history";
             const enter = keyHint(
               "tui.select.confirm",
-              openSubagentId ? "inspect" : "runs",
+              isHistory ? "inspect" : "runs",
             );
-            const lines: string[] = [];
-            const listedRuns = openSubagentId
-              ? runs
-              : ordered().map((row) => row.current ?? row.latest);
-            const preferredColumns = historyColumnWidths(listedRuns);
-            let selectedLine = 0;
-            const append = (run: RunSummary, selected: boolean) => {
-              if (selected) selectedLine = lines.length;
-              const row = historyRow(
-                run,
-                contentWidth,
-                theme,
-                selected,
-                openSubagentId ? historyCapturedAt : now,
-                preferredColumns,
-              );
-              lines.push(
-                selected
-                  ? theme.bg("selectedBg", padBrowserLine(row, contentWidth))
-                  : row,
-              );
-            };
-            if (loading) lines.push("Loading history…");
-            else if (error)
-              lines.push("History unavailable. Go back or close.");
-            else if (openSubagentId) {
-              for (const run of listedRuns)
-                append(run, run.runId === selectedRuns.get(openSubagentId));
-              if (!runs.length) lines.push("No runs available.");
+            let listedRuns: readonly RunSummary[];
+            let selectedIdentity: RunId | SubagentId | undefined;
+            let capturedAt: number;
+            let title: string;
+            let hasEntries: boolean;
+            if (listPage.kind === "history") {
+              listedRuns = listPage.capture.runs;
+              selectedIdentity = listPage.selectedRunId;
+              capturedAt = listPage.capture.capturedAt;
+              title = `Subagent dashboard · run history${listedRuns[0] ? ` · ${listedRuns[0].profile}` : ""} · newest first`;
+              hasEntries = listedRuns.length > 0;
             } else {
-              for (const run of listedRuns)
-                append(run, run.subagentId === selectedSubagent);
-              if (!overview.length)
+              listedRuns = ordered(listPage.summaries).map(
+                (row) => row.current ?? row.latest,
+              );
+              selectedIdentity = listPage.selectedSubagentId;
+              capturedAt = now;
+              title = "Subagent dashboard";
+              hasEntries = listPage.summaries.length > 0;
+            }
+            const lines =
+              listPage.status === "loading"
+                ? ["Loading history…"]
+                : listPage.status === "error"
+                  ? ["History unavailable. Go back or close."]
+                  : historyRows(
+                      listedRuns,
+                      selectedIdentity,
+                      contentWidth,
+                      theme,
+                      capturedAt,
+                    );
+            if (listPage.status === "ready" && lines.length === 0) {
+              if (isHistory) lines.push("No runs available.");
+              else
                 lines.push(
                   theme.fg("muted", "No subagents in this session."),
                   theme.fg(
@@ -408,37 +484,43 @@ export async function openDashboardUi(
                   ),
                 );
             }
-            if (selectedLine < offset) offset = selectedLine;
-            if (selectedLine + 1 > offset + bodyHeight)
-              offset = Math.max(0, selectedLine + 1 - bodyHeight);
-            offset = Math.min(offset, Math.max(0, lines.length - bodyHeight));
-            const populated =
-              !loading &&
-              !error &&
-              (openSubagentId ? runs.length > 0 : overview.length > 0);
+            const selectedLine = Math.max(
+              0,
+              listedRuns.findIndex((run) =>
+                isHistory
+                  ? run.runId === selectedIdentity
+                  : run.subagentId === selectedIdentity,
+              ),
+            );
+            if (selectedLine < listPage.offset) listPage.offset = selectedLine;
+            if (selectedLine + 1 > listPage.offset + bodyHeight)
+              listPage.offset = Math.max(0, selectedLine + 1 - bodyHeight);
+            listPage.offset = Math.min(
+              listPage.offset,
+              Math.max(0, lines.length - bodyHeight),
+            );
+            const populated = listPage.status === "ready" && hasEntries;
             const back = keyHint(
               "tui.select.cancel",
-              openSubagentId ? "back" : "close",
+              isHistory ? "back" : "close",
             );
             const scroll = movementHint();
-            const page = rawKeyHint("←/→", "page");
+            const pageHint = rawKeyHint("←/→", "page");
             return browserPanel(
               viewport,
-              openSubagentId
-                ? `Subagent dashboard · run history${runs[0] ? ` · ${runs[0].profile}` : ""} · newest first`
-                : "Subagent dashboard",
-              lines.slice(offset, offset + bodyHeight),
+              title,
+              lines.slice(listPage.offset, listPage.offset + bodyHeight),
               browserFooter(
                 contentWidth,
                 populated
                   ? [
-                      `${scroll} · ${page} · ${enter} · ${back}`,
+                      `${scroll} · ${pageHint} · ${enter} · ${back}`,
                       `${scroll} · ${enter} · ${back}`,
                       `${enter} · ${back}`,
                       back,
                     ]
                   : [back],
-                populated ? range(offset, lines.length) : "",
+                populated ? range(listPage.offset, lines.length) : "",
               ),
               theme,
             );
