@@ -2,23 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { Text, visibleWidth } from "@earendil-works/pi-tui";
-import type { CollectedRuns } from "./details.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   contentText,
-  formatCollectedSummary,
   formatNotificationSummary,
   formatParentheticalKeyHint,
   MAX_NOTICE_LABEL_WIDTH,
-  renderCollectedResult,
-  renderStartCall,
 } from "./renderers.ts";
 import type { RenderableTheme } from "./rows.ts";
 
-// The renderers reach Pi's key-hint helper, which reads the active theme.
 initTheme(undefined, false);
-
-/** A theme that paints nothing, so a golden test reads the text itself. */
 const theme: RenderableTheme = {
   fg: (_color, text) => text,
   bg: (_color, text) => text,
@@ -26,178 +19,23 @@ const theme: RenderableTheme = {
   italic: (text) => text,
   inverse: (text) => text,
 };
-
-/**
- * A theme that marks its dim spans visibly.
- *
- * Markers rather than real escapes: the property under test is that the
- * punctuation around a key hint is painted *separately* from the hint, which a
- * marker shows and an escape sequence only obscures.
- */
 const dimAware: RenderableTheme = {
+  ...theme,
   fg: (color, text) => (color === "dim" ? `<dim>${text}</dim>` : text),
-  bg: (_color, text) => text,
-  bold: (text) => text,
-  italic: (text) => text,
-  inverse: (text) => text,
 };
-
 const dimAnsi = (text: string): string => `\u001b[2m${text}\u001b[0m`;
 const ansiDimAware: RenderableTheme = {
+  ...theme,
   fg: (color, text) => (color === "dim" ? dimAnsi(text) : text),
-  bg: (_color, text) => text,
-  bold: (text) => text,
-  italic: (text) => text,
-  inverse: (text) => text,
 };
 const ansiTheme: RenderableTheme = {
+  ...theme,
   fg: (_color, text) => `\u001b[36m${text}\u001b[39m`,
-  bg: (_color, text) => text,
   bold: (text) => `\u001b[1m${text}\u001b[22m`,
-  italic: (text) => text,
-  inverse: (text) => text,
 };
-
-/** A deterministic stand-in for the host's key hint. */
 const keyHintStub = (_action: unknown, description: string): string =>
   `ctrl+o ${description}`;
-
-/**
- * The width the collapsed-line goldens are written for.
- *
- * Wide enough that nothing gives way, so each golden reads as the sentence it
- * is about rather than as an exercise in truncation. The fitting has its own
- * tests, and each of those states its own width.
- */
 const GOLDEN_WIDTH = 120;
-
-function lines(component: { render(width: number): string[] }): string[] {
-  return component
-    .render(80)
-    .map((line) => stripVTControlCharacters(line).trimEnd());
-}
-
-// -- agent_start's transcript row --------------------------------------------
-
-test("a started Run's row shows who was asked and what for, and nothing else", () => {
-  const component = renderStartCall(
-    { agent: "explore", description: "look around", prompt: "have a look" },
-    theme,
-    { expanded: false },
-  );
-
-  // The trailing empty line is deliberate air: the host paints the tool
-  // result directly below this row, in the same grey as the prompt.
-  assert.deepEqual(lines(component), [
-    "explore look around",
-    "",
-    "Prompt: have a look",
-    "",
-  ]);
-});
-
-test("a collapsed brief is cut to three lines and says that it was cut", () => {
-  const component = renderStartCall(
-    {
-      agent: "explore",
-      description: "look around",
-      prompt: "one\ntwo\nthree\nfour\nfive",
-    },
-    theme,
-    { expanded: false },
-  );
-
-  assert.deepEqual(lines(component), [
-    "explore look around",
-    "",
-    "Prompt: one",
-    "two",
-    "three",
-    "…",
-    "",
-  ]);
-});
-
-test("an expanded brief is shown whole", () => {
-  const component = renderStartCall(
-    {
-      agent: "explore",
-      description: "look around",
-      prompt: "one\ntwo\nthree\nfour",
-    },
-    theme,
-    { expanded: true },
-  );
-
-  assert.match(lines(component).join("\n"), /four/);
-});
-
-test("a re-render reuses the row's existing text component", () => {
-  const existing = new Text("", 0, 0);
-
-  const component = renderStartCall(
-    { agent: "explore", description: "d", prompt: "p" },
-    theme,
-    { lastComponent: existing, expanded: false },
-  );
-
-  assert.equal(component, existing);
-});
-
-// -- The collapsed result line -----------------------------------------------
-
-const oneRun: CollectedRuns = {
-  runs: [{ runId: "run-1", agent: "explore", status: "completed" }],
-};
-
-test("a lone Run's collapsed line names it, states its status, and counts characters", () => {
-  assert.equal(
-    formatCollectedSummary(oneRun, 2_400, theme, keyHintStub),
-    "explore (run-1) completed · 2.4k characters (ctrl+o to expand)",
-  );
-});
-
-test("a fan-out of one agent is counted rather than named repeatedly", () => {
-  const many: CollectedRuns = {
-    runs: [
-      { runId: "run-1", agent: "explore", status: "completed" },
-      { runId: "run-2", agent: "explore", status: "completed" },
-      { runId: "run-3", agent: "explore", status: "failed" },
-    ],
-  };
-
-  assert.equal(
-    formatCollectedSummary(many, 900, theme, keyHintStub),
-    "3 explore results · 900 characters (ctrl+o to expand)",
-  );
-});
-
-test("a mixed fan-out names each agent, with a count where it repeats", () => {
-  const mixed: CollectedRuns = {
-    runs: [
-      { runId: "run-1", agent: "explore", status: "completed" },
-      { runId: "run-2", agent: "explore", status: "completed" },
-      { runId: "run-3", agent: "reviewer", status: "completed" },
-    ],
-  };
-
-  assert.equal(
-    formatCollectedSummary(mixed, 1_000, theme, keyHintStub),
-    "3 results from explore ×2, reviewer · 1.0k characters (ctrl+o to expand)",
-  );
-});
-
-test("a wait that timed out says how many are still running", () => {
-  assert.equal(
-    formatCollectedSummary(
-      { ...oneRun, stillRunning: 2 },
-      120,
-      theme,
-      keyHintStub,
-    ),
-    "explore (run-1) completed · 120 characters · 2 still running (ctrl+o to expand)",
-  );
-});
 
 test("the parenthetical hint's punctuation is painted apart from the hint", () => {
   assert.equal(
@@ -208,55 +46,6 @@ test("the parenthetical hint's punctuation is painted apart from the hint", () =
       keyHintStub,
     ),
     "<dim>(</dim>ctrl+o to expand<dim>)</dim>",
-  );
-});
-
-// -- The result component ----------------------------------------------------
-
-test("a collapsed result is one summary line and an expanded one is the body", () => {
-  const result = {
-    content: [{ type: "text", text: "# Findings\n\nAll clear." }],
-    details: oneRun,
-  };
-
-  const collapsed = lines(
-    renderCollectedResult(result, { expanded: false }, theme),
-  );
-  assert.equal(collapsed.length, 1);
-  assert.match(collapsed[0], /^explore \(run-1\) completed · 22 characters/);
-  assert.match(
-    lines(renderCollectedResult(result, { expanded: true }, theme)).join("\n"),
-    /All clear\./,
-  );
-});
-
-test("a result with no Runs to name falls back to its opening line", () => {
-  const result = {
-    content: "Unknown run ids: run-never.\n\nmore text",
-    details: undefined,
-  };
-
-  assert.deepEqual(
-    lines(renderCollectedResult(result, { expanded: false }, theme)),
-    ["Unknown run ids: run-never."],
-  );
-});
-
-test("a result with another extension's details is not summarised as ours", () => {
-  const result = { content: "some text", details: { whatever: true } };
-
-  assert.deepEqual(
-    lines(renderCollectedResult(result, { expanded: false }, theme)),
-    ["some text"],
-  );
-});
-
-test("an empty result renders nothing", () => {
-  assert.deepEqual(
-    lines(
-      renderCollectedResult({ content: "   " }, { expanded: false }, theme),
-    ),
-    [],
   );
 });
 

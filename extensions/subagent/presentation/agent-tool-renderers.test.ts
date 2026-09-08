@@ -475,6 +475,122 @@ test("cancellation uses the configured hint and omits it for an identical one-li
   assert.doesNotMatch(lines(expanded, 80).join("\n"), /to collapse/);
 });
 
+test("empty settled and partial cancellation rows have no inert toggle", () => {
+  const pair = agentToolRenderers("cancel");
+  const cases = [
+    {
+      result: { content: [], details: { foreign: true } },
+      options: { expanded: false, isPartial: false },
+      expected: "agent_cancel returned no readable response.",
+    },
+    {
+      result: { content: [], details: { kind: "cancel", outcomes: [] } },
+      options: { expanded: false, isPartial: false },
+      expected: "No run ids were given.",
+    },
+    {
+      result: { content: [], details: { kind: "cancel", outcomes: [] } },
+      options: { expanded: false, isPartial: true },
+      expected: "agent_cancel is still running.",
+    },
+  ] as const;
+
+  for (const entry of cases) {
+    const collapsed = lines(
+      pair.renderResult(entry.result, entry.options, plainTheme, context({})),
+      80,
+    ).join("\n");
+    const expanded = lines(
+      pair.renderResult(
+        entry.result,
+        { ...entry.options, expanded: true },
+        plainTheme,
+        context({}, { expanded: true, isPartial: entry.options.isPartial }),
+      ),
+      80,
+    ).join("\n");
+    assert.equal(collapsed, entry.expected);
+    assert.equal(expanded, entry.expected);
+    assert.doesNotMatch(`${collapsed}\n${expanded}`, /to (?:expand|collapse)/);
+  }
+});
+
+test("reused continuation and cancel renderers repaint the current theme", () => {
+  const cases = [
+    {
+      operation: "resume" as const,
+      args: { id: "subagent-1", description: "continue", prompt: "again" },
+      result: {
+        content: [{ type: "text", text: "resume prose" }],
+        details: {
+          kind: "resume" as const,
+          outcome: "started" as const,
+          subagentId: "subagent-1",
+          runId: "run-2",
+        },
+      },
+      resultTone: /<toolTitle>/,
+    },
+    {
+      operation: "steer" as const,
+      args: { id: "run-1", message: "continue" },
+      result: {
+        content: [{ type: "text", text: "steer prose" }],
+        details: {
+          kind: "steer" as const,
+          outcome: "accepted" as const,
+          runId: "run-1",
+        },
+      },
+      resultTone: /<toolTitle>/,
+    },
+    {
+      operation: "cancel" as const,
+      args: { ids: ["run-1"] },
+      result: {
+        content: [{ type: "text", text: "cancel prose" }],
+        details: {
+          kind: "cancel" as const,
+          outcomes: [{ kind: "requested" as const, runId: "run-1" }],
+        },
+      },
+      resultTone: /<toolOutput>/,
+    },
+  ];
+
+  for (const entry of cases) {
+    const pair = agentToolRenderers(entry.operation);
+    const state: AgentToolRendererState = {};
+    const firstCall = pair.renderCall(entry.args, plainTheme, {
+      ...context(state),
+      args: entry.args,
+    });
+    const reusedCall = pair.renderCall(entry.args, markedTheme, {
+      ...context(state, { lastComponent: firstCall }),
+      args: entry.args,
+    });
+    assert.equal(reusedCall, firstCall);
+    reusedCall.invalidate();
+    assert.match(lines(reusedCall, 80).join("\n"), /<toolTitle>/);
+
+    const firstResult = pair.renderResult(
+      entry.result,
+      { expanded: false, isPartial: false },
+      plainTheme,
+      context(state),
+    );
+    const reusedResult = pair.renderResult(
+      entry.result,
+      { expanded: false, isPartial: false },
+      markedTheme,
+      context(state, { lastComponent: firstResult }),
+    );
+    assert.equal(reusedResult, firstResult);
+    reusedResult.invalidate();
+    assert.match(lines(reusedResult, 80).join("\n"), entry.resultTone);
+  }
+});
+
 test("malformed, foreign, and legacy cancellation details fall back readably", () => {
   const pair = agentToolRenderers("cancel");
   for (const details of [
