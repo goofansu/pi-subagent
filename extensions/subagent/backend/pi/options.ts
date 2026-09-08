@@ -27,19 +27,19 @@
  *
  * Nothing here performs provider I/O. Building the options reads the agent
  * directory's auth and model files and discovers resources; the model is
- * resolved against the catalogue those files describe, and a model that is not
- * there fails the open rather than the first Run.
+ * resolved against the catalogue those files and retained extensions describe,
+ * and a model that is not there fails the open rather than the first Run.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createAgentSessionServices,
   createBashToolDefinition,
-  DefaultResourceLoader,
   getAgentDir,
   type LoadExtensionsResult,
-  ModelRuntime,
+  type ModelRuntime,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -197,51 +197,53 @@ export async function createPiSessionOptions(
   const settingsManager = SettingsManager.create(subagent.cwd, agentDir, {
     projectTrusted: subagent.projectTrusted,
   });
-  const modelRuntime = await ModelRuntime.create({
-    authPath: path.join(agentDir, "auth.json"),
-    modelsPath: path.join(agentDir, "models.json"),
-  });
+  const prompt = profile.systemPrompt;
+  // See `child-load.ts`: the override is applied only after the factories have
+  // already been initialized, so the discriminator is what covers the gap.
+  // Pi's two-stage service seam applies providers registered by those factories
+  // before this adapter resolves the inherited or pinned model.
+  const services = await withChildResourceLoad(() =>
+    createAgentSessionServices({
+      cwd: subagent.cwd,
+      agentDir,
+      settingsManager,
+      resourceLoaderOptions: {
+        extensionsOverride: (base: LoadExtensionsResult) =>
+          filterChildExtensions(base),
+        ...(prompt.trim().length === 0
+          ? {}
+          : shouldAppendSystemPrompt(profile)
+            ? {
+                appendSystemPromptOverride: (base: string[]) => [
+                  ...base,
+                  prompt,
+                ],
+              }
+            : { systemPromptOverride: () => prompt }),
+      },
+      resourceLoaderReloadOptions: {
+        resolveProjectTrust: async () => subagent.projectTrusted,
+      },
+    }),
+  );
   const model = input.model
-    ? modelForReference(modelRuntime, input.model)
+    ? modelForReference(services.modelRuntime, input.model)
     : undefined;
   if (input.model && !model) throw new Error(unknownModelMessage(input.model));
 
-  const prompt = profile.systemPrompt;
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: subagent.cwd,
-    agentDir,
-    settingsManager,
-    extensionsOverride: (base: LoadExtensionsResult) =>
-      filterChildExtensions(base),
-    ...(prompt.trim().length === 0
-      ? {}
-      : shouldAppendSystemPrompt(profile)
-        ? {
-            appendSystemPromptOverride: (base: string[]) => [...base, prompt],
-          }
-        : { systemPromptOverride: () => prompt }),
-  });
-  // See `child-load.ts`: the override is applied only after the factories have
-  // already been initialized, so the discriminator is what covers the gap.
-  await withChildResourceLoad(() =>
-    resourceLoader.reload({
-      resolveProjectTrust: async () => subagent.projectTrusted,
-    }),
-  );
-
   const tools = parseTools(profile);
   const bash = createBashToolDefinition(subagent.cwd, {
-    commandPrefix: settingsManager.getShellCommandPrefix(),
-    shellPath: settingsManager.getShellPath(),
+    commandPrefix: services.settingsManager.getShellCommandPrefix(),
+    shellPath: services.settingsManager.getShellPath(),
     spawnHook: depthSpawnHook(subagent.childDepth),
   });
 
   return {
     cwd: subagent.cwd,
     agentDir,
-    modelRuntime,
-    settingsManager,
-    resourceLoader,
+    modelRuntime: services.modelRuntime,
+    settingsManager: services.settingsManager,
+    resourceLoader: services.resourceLoader,
     sessionManager: SessionManager.inMemory(subagent.cwd),
     model,
     ...thinkingLevel(input.thinking),

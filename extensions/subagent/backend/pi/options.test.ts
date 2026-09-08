@@ -141,6 +141,55 @@ test("a Profile's tools list reaches the session, and no list leaves the default
   );
 });
 
+test("an extension-defined model is available to inherited model resolution", async (t) => {
+  const agentDir = emptyAgentDir(t);
+  const extensionsDir = path.join(agentDir, "extensions");
+  const childLoadMarker = path.join(agentDir, "child-load-marker.txt");
+  fs.mkdirSync(extensionsDir);
+  fs.writeFileSync(
+    path.join(extensionsDir, "fixture-provider.ts"),
+    `import fs from "node:fs";
+
+export default function fixtureProvider(pi) {
+  const childLoad = globalThis[Symbol.for("pi-subagent.pi-child-extension-load")];
+  fs.writeFileSync(
+    ${JSON.stringify(childLoadMarker)},
+    childLoad?.getStore() === true ? "child" : "parent",
+  );
+  pi.registerProvider("fixture-provider", {
+    baseUrl: "https://fixture.invalid",
+    apiKey: "fixture-key",
+    api: "openai-completions",
+    models: [{
+      id: "fixture-model",
+      name: "Fixture Model",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 4096,
+      maxTokens: 1024,
+    }],
+  });
+}
+`,
+  );
+
+  const options = await createPiSessionOptions({
+    profile: profile(),
+    subagent: subagent(),
+    model: "fixture-provider/fixture-model",
+    agentDir,
+  });
+
+  assert.equal(fs.readFileSync(childLoadMarker, "utf8"), "child");
+  assert.equal(options.model?.provider, "fixture-provider");
+  assert.equal(options.model?.id, "fixture-model");
+  assert.deepEqual(
+    options.modelRuntime?.getModel("fixture-provider", "fixture-model"),
+    options.model,
+  );
+});
+
 test("a pinned model the agent directory cannot resolve fails the build", async (t) => {
   await assert.rejects(
     createPiSessionOptions({
