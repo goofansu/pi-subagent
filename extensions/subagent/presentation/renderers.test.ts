@@ -506,6 +506,37 @@ test("wide, combining, and emoji notice labels fit without damaged text", () => 
   }
 });
 
+test("notice clipping retains complete grapheme prefixes", () => {
+  const notice = (label: string, width: number) =>
+    stripVTControlCharacters(
+      formatNotificationSummary(
+        {
+          agent: "explore",
+          label,
+          status: "completed",
+          durationMillis: 1_000,
+        },
+        theme,
+        width,
+        false,
+        keyHintStub,
+      ),
+    );
+
+  assert.equal(
+    notice("e\u0301xy", 51),
+    "explore · e\u0301… · completed in 1.0s (ctrl+o to expand)",
+  );
+  assert.equal(
+    notice("👩‍💻xy", 51),
+    "explore · … · completed in 1.0s (ctrl+o to expand)",
+  );
+  assert.equal(
+    notice("👩‍💻xy", 52),
+    "explore · 👩‍💻… · completed in 1.0s (ctrl+o to expand)",
+  );
+});
+
 test("a line too narrow for any label drops the label whole, not into a gap", () => {
   // The label gives way the way a widget row's turn count does. The outcome
   // never gives: a reader who cannot see how a Run ended has no line worth

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import * as runLine from "./run-line.ts";
 import {
@@ -169,6 +170,23 @@ test("narrow fitting retains ANSI behavior and never splits combining marks or e
     "painted history parts retain ANSI",
   );
   assert.doesNotMatch(history.label + history.activity, /�/);
+});
+
+test("widget and history clipping retain complete grapheme prefixes", () => {
+  assert.equal(
+    fitWidgetRunLine(parts({ label: "e\u0301xy" }), 2).label,
+    "e\u0301…",
+  );
+  assert.equal(fitWidgetRunLine(parts({ label: "👩‍💻xy" }), 2).label, "…");
+  assert.equal(fitWidgetRunLine(parts({ label: "👩‍💻xy" }), 3).label, "👩‍💻…");
+
+  const historyLabel = (label: string, width: number) =>
+    stripVTControlCharacters(
+      fitHistoryRunLines([historyParts({ label })], width)[0]?.label ?? "",
+    ).trimEnd();
+  assert.equal(historyLabel("e\u0301xy", 4), "e\u0301…");
+  assert.equal(historyLabel("👩‍💻xy", 4), "…");
+  assert.equal(historyLabel("👩‍💻xy", 5), "👩‍💻…");
 });
 
 test("empty history Labels retain the established delimiter accounting", () => {

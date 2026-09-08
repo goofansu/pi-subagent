@@ -24,6 +24,12 @@ test("terminal text fitting measures ANSI, wide characters, combining marks, and
   }
 });
 
+test("terminal text fitting clips only at complete grapheme boundaries", () => {
+  assert.equal(fitToWidth("e\u0301xy", 2, { plain: true }), "e\u0301…");
+  assert.equal(fitToWidth("👩‍💻xy", 2, { plain: true }), "…");
+  assert.equal(fitToWidth("👩‍💻xy", 3, { plain: true }), "👩‍💻…");
+});
+
 test("plain fitting discards clipping resets while painted fitting retains ANSI", () => {
   const painted = `\u001b[2m${"a".repeat(50)}\u001b[0m`;
   assert.ok(!fitToWidth(painted, 10, { plain: true }).includes("\u001b"));
