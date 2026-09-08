@@ -86,6 +86,40 @@ test("terminal rows do not imply stale tool activity is the result", () => {
   );
 });
 
+test("assembled history transitions preserve full-width thresholds and selection prefixes", () => {
+  const selected = (width: number) =>
+    stripVTControlCharacters(
+      historyRows([run], run.runId, width, PLAIN_THEME, 1000)[0] ?? "",
+    );
+  for (const width of [0, 1, 2, 25, 26, 27, 51, 52, 53, 79, 80, 81]) {
+    const line = selected(width);
+    assert.equal(visibleWidth(line), width, `selected width ${width}`);
+    if (width >= 2) assert.ok(line.startsWith("› "), `prefix at ${width}`);
+  }
+  assert.doesNotMatch(selected(25), /Running/);
+  assert.match(selected(26), /Running/);
+  assert.match(selected(27), /Running/);
+  assert.doesNotMatch(selected(51), /Reading middleware/);
+  assert.match(selected(52), /Reading middleware/);
+  assert.match(selected(53), /Reading middleware/);
+  assert.doesNotMatch(selected(79), /1\.0s/);
+  assert.match(selected(80), /1\.0s$/);
+  assert.match(selected(81), /1\.0s$/);
+
+  const [unselected = ""] = historyRows(
+    [run],
+    undefined,
+    80,
+    PLAIN_THEME,
+    1000,
+  );
+  assert.match(
+    stripVTControlCharacters(unselected),
+    /^ {2}Review authentication/,
+  );
+  assert.equal(visibleWidth(unselected), 80);
+});
+
 test("responsive rows drop elapsed time and activity before status and never split Unicode", () => {
   const unicode = {
     ...run,

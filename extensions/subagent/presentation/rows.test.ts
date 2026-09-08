@@ -429,6 +429,31 @@ test("very narrow rows keep a Label prefix without an empty delimiter", () => {
   }
 });
 
+test("assembled widget transitions retain their one-cell margins and fitting priority", () => {
+  const active = fixtureRow({ activity: "bash: npm test" });
+  const detail = (width: number) =>
+    stripVTControlCharacters(widget([active], width)[1] ?? "");
+  const expected = new Map<number, string>([
+    [0, ""],
+    [1, " "],
+    [11, " look aro…"],
+    [12, " …  running"],
+    [13, " l…  running"],
+    [32, " look around  running"],
+    [33, " look a…  running · bash: npm t…"],
+    [34, " look ar…  running · bash: npm t…"],
+    [39, " look around  running · bash: npm test"],
+    [40, " look a…  running · bash: npm t…  12.4s"],
+    [41, " look ar…  running · bash: npm t…  12.4s"],
+  ]);
+  for (const [width, line] of expected) {
+    assert.equal(detail(width), line, `width ${width}`);
+    assert.ok(visibleWidth(line) <= width);
+    if (width >= 11) assert.match(line, /^ \S/);
+    if (line.endsWith("12.4s")) assert.equal(visibleWidth(line), width - 1);
+  }
+});
+
 test("ASCII and wide Unicode widgets fit every plain and styled terminal width", () => {
   for (const fixture of [
     fixtureRow({ activity: "reading source" }),
