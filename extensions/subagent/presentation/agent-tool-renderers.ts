@@ -20,6 +20,7 @@ import {
   type RunId,
   type RunPhase,
   type RunResult,
+  type StartOutcome,
   type SteerOutcome,
   TERMINAL_RUN_PHASES,
   type TerminalRunPhase,
@@ -55,6 +56,7 @@ export interface AgentToolRenderContext {
   readonly state: AgentToolRendererState;
   readonly expanded: boolean;
   readonly isPartial: boolean;
+  readonly argsComplete: boolean;
 }
 
 export interface AgentToolResultOptions {
@@ -99,13 +101,34 @@ interface SteerArguments {
   readonly message: string;
 }
 
-/** Discriminated, presentation-only details for a successful start. */
-export interface StartedRunRenderDetails {
-  readonly kind: "start";
-  readonly agent: string;
-  readonly subagentId: string;
-  readonly runId: string;
-}
+/** Discriminated, presentation-only details for every decoded start outcome. */
+export type StartRenderDetails =
+  | {
+      readonly kind: "start";
+      readonly outcome: "started";
+      readonly agent: string;
+      readonly subagentId: string;
+      readonly runId: string;
+    }
+  | {
+      readonly kind: "start";
+      readonly outcome: Exclude<
+        StartOutcome["outcome"],
+        "started" | "delegation-depth exceeded"
+      >;
+      readonly agent: string;
+    }
+  | {
+      readonly kind: "start";
+      readonly outcome: "delegation-depth exceeded";
+      readonly agent: string;
+      readonly depth: number;
+    };
+
+export type StartedRunRenderDetails = Extract<
+  StartRenderDetails,
+  { readonly outcome: "started" }
+>;
 
 /** One delivered Result in a compact collection or retrieval summary. */
 export interface ResultRunSummary {
@@ -189,7 +212,7 @@ export interface CancelRenderDetails {
 
 /** Explicit semantic details carried by migrated agent-tool outcomes. */
 export type AgentToolRenderDetails =
-  | StartedRunRenderDetails
+  | StartRenderDetails
   | ResumeRenderDetails
   | SteerRenderDetails
   | CollectedRunsRenderDetails
@@ -251,21 +274,72 @@ function steerArguments(value: unknown): SteerArguments | undefined {
     : undefined;
 }
 
-function startedRunRenderDetails(
+type StartRefusal = Exclude<
+  StartOutcome["outcome"],
+  "started" | "delegation-depth exceeded"
+>;
+
+const START_REFUSALS: Readonly<Record<StartRefusal, true>> = {
+  "unknown agent": true,
+  "invalid profile": true,
+  "empty label": true,
+  "at capacity": true,
+  "shutting down": true,
+  "backend unavailable": true,
+};
+
+/** Convert every start outcome into explicit semantic details. */
+export function startRenderDetails(
+  agent: string,
+  outcome: StartOutcome,
+): StartRenderDetails {
+  if (outcome.outcome === "started") {
+    return {
+      kind: "start",
+      outcome: "started",
+      agent,
+      subagentId: outcome.subagentId,
+      runId: outcome.runId,
+    };
+  }
+  return outcome.outcome === "delegation-depth exceeded"
+    ? { kind: "start", outcome: outcome.outcome, agent, depth: outcome.depth }
+    : { kind: "start", outcome: outcome.outcome, agent };
+}
+
+function parseStartRenderDetails(
   value: unknown,
-): StartedRunRenderDetails | undefined {
+): StartRenderDetails | undefined {
   const candidate = recordOf(value);
-  if (!candidate) return undefined;
-  return candidate.kind === "start" &&
-    typeof candidate.agent === "string" &&
+  if (candidate?.kind !== "start" || typeof candidate.agent !== "string") {
+    return undefined;
+  }
+  if (
+    candidate.outcome === "started" &&
     typeof candidate.subagentId === "string" &&
     typeof candidate.runId === "string"
-    ? {
-        kind: "start",
-        agent: candidate.agent,
-        subagentId: candidate.subagentId,
-        runId: candidate.runId,
-      }
+  ) {
+    return {
+      kind: "start",
+      outcome: "started",
+      agent: candidate.agent,
+      subagentId: candidate.subagentId,
+      runId: candidate.runId,
+    };
+  }
+  if (
+    candidate.outcome === "delegation-depth exceeded" &&
+    typeof candidate.depth === "number"
+  ) {
+    return {
+      kind: "start",
+      outcome: candidate.outcome,
+      agent: candidate.agent,
+      depth: candidate.depth,
+    };
+  }
+  return hasOwnOutcome(START_REFUSALS, candidate.outcome)
+    ? { kind: "start", outcome: candidate.outcome, agent: candidate.agent }
     : undefined;
 }
 
@@ -453,23 +527,96 @@ function submittedBody(
   };
 }
 
-class StartCallComponent implements Component {
+interface SubmittedCall {
+  readonly toolName: string;
+  readonly target: string;
+  readonly label?: string;
+  readonly prefix: "Prompt:" | "Message:";
+  readonly body: string;
+}
+
+/** Build the shared heading, fitted Label, and submitted-body block. */
+function submittedCallLines(
+  call: SubmittedCall,
+  theme: RenderableTheme,
+  width: number,
+  expanded: boolean,
+): { readonly lines: readonly string[]; readonly hidden: boolean } {
+  const columns = Math.max(0, width);
+  const operation = theme.fg("toolTitle", theme.bold(call.toolName));
+  const fixedHeader = `${operation} ${theme.fg("accent", call.target)}`;
+  const labelBudget = Math.max(
+    0,
+    columns - visibleWidth(fixedHeader) - visibleWidth(" · "),
+  );
+  const fittedLabel = fitToWidth(call.label ?? "", labelBudget, {
+    plain: true,
+  });
+  const header = fitToWidth(
+    fittedLabel
+      ? `${fixedHeader}${theme.fg("dim", " · ")}${theme.fg("muted", fittedLabel)}`
+      : fixedHeader,
+    columns,
+  );
+  const body = submittedBody(call.prefix, call.body, theme, columns, expanded);
+  return { lines: [header, "", ...body.lines, ""], hidden: body.hidden > 0 };
+}
+
+function unfinishedArgumentsLine(
+  operation: AgentToolOperation,
+  theme: RenderableTheme,
+  width: number,
+): string {
+  return fitToWidth(
+    theme.fg("toolTitle", theme.bold(toolName(operation))) +
+      theme.fg("muted", " [arguments incomplete]"),
+    Math.max(0, width),
+  );
+}
+
+/** Width-derived rendering cache shared by reusable Pi row components. */
+abstract class CachedComponent implements Component {
+  private cachedWidth?: number;
+  private cachedLines?: string[];
+
+  invalidate(): void {
+    this.cachedWidth = undefined;
+    this.cachedLines = undefined;
+    this.onInvalidate();
+  }
+
+  render(width: number): string[] {
+    if (this.cachedLines !== undefined && this.cachedWidth === width) {
+      return this.cachedLines;
+    }
+    this.cachedLines = [...this.renderUncached(width)];
+    this.cachedWidth = width;
+    return this.cachedLines;
+  }
+
+  protected onInvalidate(): void {}
+  protected abstract renderUncached(width: number): readonly string[];
+}
+
+class StartCallComponent extends CachedComponent {
   private args: StartArguments | undefined;
   private theme: RenderableTheme;
   private expanded: boolean;
+  private argsComplete: boolean;
   private readonly state: AgentToolRendererState;
-  private cachedWidth?: number;
-  private cachedLines?: string[];
 
   constructor(
     args: StartArguments | undefined,
     theme: RenderableTheme,
     expanded: boolean,
+    argsComplete: boolean,
     state: AgentToolRendererState,
   ) {
+    super();
     this.args = args;
     this.theme = theme;
     this.expanded = expanded;
+    this.argsComplete = argsComplete;
     this.state = state;
   }
 
@@ -477,69 +624,46 @@ class StartCallComponent implements Component {
     args: StartArguments | undefined,
     theme: RenderableTheme,
     expanded: boolean,
+    argsComplete: boolean,
   ): void {
     this.args = args;
     this.theme = theme;
     this.expanded = expanded;
+    this.argsComplete = argsComplete;
     this.invalidate();
   }
 
-  invalidate(): void {
-    this.cachedWidth = undefined;
-    this.cachedLines = undefined;
-  }
-
-  render(width: number): string[] {
-    if (this.cachedLines !== undefined && this.cachedWidth === width) {
-      return this.cachedLines;
-    }
+  protected renderUncached(width: number): readonly string[] {
     const columns = Math.max(0, width);
+    if (!this.argsComplete && !this.args) {
+      this.state.callHidden = false;
+      return [unfinishedArgumentsLine("start", this.theme, columns)];
+    }
     if (!this.args) {
       this.state.callHidden = false;
-      this.cachedLines = [
+      return [
         fitToWidth(
           this.theme.fg("toolTitle", this.theme.bold("agent_start")) +
             this.theme.fg("error", " [invalid arguments]"),
           columns,
         ),
       ];
-      this.cachedWidth = width;
-      return this.cachedLines;
     }
 
-    const operation = this.theme.fg(
-      "toolTitle",
-      this.theme.bold("agent_start"),
-    );
-    const agent = this.theme.fg("accent", this.args.agent);
-    const fixedHeader = `${operation} ${agent}`;
-    const labelBudget = Math.max(
-      0,
-      columns - visibleWidth(fixedHeader) - visibleWidth(" · "),
-    );
-    const fittedLabel = fitToWidth(this.args.description, labelBudget, {
-      plain: true,
-    });
-    const header = fitToWidth(
-      fittedLabel
-        ? `${fixedHeader}${this.theme.fg("dim", " · ")}${this.theme.fg("muted", fittedLabel)}`
-        : fixedHeader,
-      columns,
-    );
-    const body = submittedBody(
-      "Prompt:",
-      this.args.prompt,
+    const built = submittedCallLines(
+      {
+        toolName: "agent_start",
+        target: this.args.agent,
+        label: this.args.description,
+        prefix: "Prompt:",
+        body: this.args.prompt,
+      },
       this.theme,
       columns,
       this.expanded,
     );
-    this.state.callHidden = body.hidden > 0;
-    const lines = [header, "", ...body.lines];
-    // Air between the submitted prompt and the result slot.
-    lines.push("");
-    this.cachedWidth = width;
-    this.cachedLines = lines;
-    return lines;
+    this.state.callHidden = built.hidden;
+    return built.lines;
   }
 }
 
@@ -630,6 +754,35 @@ function formatStartedIdentity(
   );
 }
 
+function startSummary(
+  details: StartRenderDetails,
+  theme: RenderableTheme,
+  width: number,
+): string {
+  if (details.outcome === "started") {
+    return formatStartedIdentity(details, theme, width);
+  }
+  const [tone, reason] = (() => {
+    switch (details.outcome) {
+      case "unknown agent":
+        return ["error", "unknown Agent"] as const;
+      case "invalid profile":
+        return ["error", "invalid Profile"] as const;
+      case "empty label":
+        return ["error", "empty Label"] as const;
+      case "at capacity":
+        return ["warning", "at capacity"] as const;
+      case "shutting down":
+        return ["warning", "Session shutting down"] as const;
+      case "delegation-depth exceeded":
+        return ["warning", `delegation depth ${details.depth}`] as const;
+      case "backend unavailable":
+        return ["error", "backend unavailable"] as const;
+    }
+  })();
+  return theme.fg(tone, "Start refused") + theme.fg("dim", ` · ${reason}`);
+}
+
 /** A compact successful start with its row's one configured expansion hint. */
 export function formatStartedRunSummary(
   details: StartedRunRenderDetails,
@@ -650,21 +803,23 @@ export function formatStartedRunSummary(
   );
 }
 
-class StartResultComponent implements Component {
+class UnifiedResultComponent extends CachedComponent {
   private result: AgentToolRenderableResult;
   private options: AgentToolResultOptions;
   private theme: RenderableTheme;
+  private readonly operation: AgentToolOperation;
   private readonly state: AgentToolRendererState;
-  private cachedWidth?: number;
-  private cachedLines?: string[];
   private markdown?: Markdown;
 
   constructor(
+    operation: AgentToolOperation,
     result: AgentToolRenderableResult,
     options: AgentToolResultOptions,
     theme: RenderableTheme,
     state: AgentToolRendererState,
   ) {
+    super();
+    this.operation = operation;
     this.result = result;
     this.options = options;
     this.theme = theme;
@@ -682,57 +837,95 @@ class StartResultComponent implements Component {
     this.invalidate();
   }
 
-  invalidate(): void {
-    this.cachedWidth = undefined;
-    this.cachedLines = undefined;
+  protected override onInvalidate(): void {
     this.markdown = undefined;
   }
 
-  render(width: number): string[] {
-    if (this.cachedLines !== undefined && this.cachedWidth === width) {
-      return this.cachedLines;
+  private semanticPresentation():
+    | {
+        readonly line: (width: number) => string;
+        readonly sourceText?: string;
+      }
+    | undefined {
+    switch (this.operation) {
+      case "start": {
+        const details = parseStartRenderDetails(this.result.details);
+        return details === undefined
+          ? undefined
+          : { line: (width) => startSummary(details, this.theme, width) };
+      }
+      case "resume": {
+        const details = parseResumeRenderDetails(this.result.details);
+        return details === undefined
+          ? undefined
+          : { line: (width) => resumeSummary(details, this.theme, width) };
+      }
+      case "steer": {
+        const details = parseSteerRenderDetails(this.result.details);
+        return details === undefined
+          ? undefined
+          : { line: () => steerSummary(details, this.theme) };
+      }
+      case "cancel": {
+        const details = cancelRenderDetails(this.result.details);
+        if (details === undefined) return undefined;
+        const sourceText = cancellationSummaryText(details);
+        return {
+          line: () => this.theme.fg("toolOutput", sourceText),
+          sourceText,
+        };
+      }
+      case "result": {
+        const details = resultRenderDetails(this.result.details);
+        return details === undefined
+          ? undefined
+          : { line: (width) => retrievalSummary(details, this.theme, width) };
+      }
+      case "wait":
+      case "waitAll": {
+        const details = collectedRunsRenderDetails(this.result.details);
+        return details === undefined
+          ? undefined
+          : { line: (width) => collectionSummary(details, this.theme, width) };
+      }
     }
+  }
+
+  protected renderUncached(width: number): readonly string[] {
     const columns = Math.max(0, width);
     const text = contentText(this.result.content).trim();
-    const details = startedRunRenderDetails(this.result.details);
     const partial = this.options.isPartial;
-    const fallback =
-      firstLine(text) ||
-      (partial
-        ? "agent_start is still running."
-        : "agent_start returned no readable response.");
-    const summary =
-      details && !partial
-        ? formatStartedIdentity(details, this.theme, columns)
-        : this.theme.fg(partial ? "muted" : "toolOutput", fallback);
+    const unfinished = `${toolName(this.operation)} is still running.`;
+    const empty = `${toolName(this.operation)} returned no readable response.`;
+    const fallback = firstLine(text) || (partial ? unfinished : empty);
+    const fallbackSummary = this.theme.fg(
+      partial ? "muted" : "toolOutput",
+      partial ? unfinished : fallback,
+    );
+    const semantic = partial ? undefined : this.semanticPresentation();
+    const provisionalSummary = semantic?.line(columns);
     const resultHidden =
-      details !== undefined && !partial
-        ? text.length > 0
-        : text.includes("\n") || visibleWidth(summary) > columns;
+      semantic !== undefined
+        ? semantic.sourceText === undefined
+          ? text.length > 0
+          : text.length > 0 &&
+            (text.includes("\n") ||
+              text !== semantic.sourceText ||
+              visibleWidth(provisionalSummary ?? "") > columns)
+        : text.includes("\n") || visibleWidth(fallbackSummary) > columns;
     const hidden = this.state.callHidden === true || resultHidden;
+    const summaryWidth = collapsedSummaryWidth(this.theme, columns, hidden);
+    const summary = semantic?.line(summaryWidth) ?? fallbackSummary;
 
-    if (!this.options.expanded) {
-      if (details && !partial && hidden) {
-        this.cachedLines = [
-          formatStartedRunSummary(details, this.theme, columns),
-        ];
-        this.cachedWidth = width;
-        return this.cachedLines;
-      }
-      this.cachedLines = [
-        collapsedResultLine(summary, this.theme, columns, hidden),
-      ];
-      this.cachedWidth = width;
-      return this.cachedLines;
+    if (!this.options.expanded || !hidden) {
+      return [collapsedResultLine(summary, this.theme, columns, hidden)];
     }
 
     this.markdown ??= new Markdown(text || fallback, 0, 0, getMarkdownTheme());
-    const rendered = this.markdown.render(columns);
-    this.cachedLines = hidden
-      ? [...rendered, collapseHint(this.theme, columns)]
-      : rendered;
-    this.cachedWidth = width;
-    return this.cachedLines;
+    return [
+      ...this.markdown.render(columns),
+      collapseHint(this.theme, columns),
+    ];
   }
 }
 
@@ -749,37 +942,42 @@ function cancelArguments(value: unknown): CancelArguments | undefined {
   return { ids: [...new Set(ids)] };
 }
 
-class CancelCallComponent implements Component {
+class CancelCallComponent extends CachedComponent {
   private args: CancelArguments | undefined;
   private theme: RenderableTheme;
-  private cachedWidth?: number;
-  private cachedLines?: string[];
+  private argsComplete: boolean;
 
-  constructor(args: CancelArguments | undefined, theme: RenderableTheme) {
+  constructor(
+    args: CancelArguments | undefined,
+    theme: RenderableTheme,
+    argsComplete: boolean,
+  ) {
+    super();
     this.args = args;
     this.theme = theme;
+    this.argsComplete = argsComplete;
   }
 
-  update(args: CancelArguments | undefined, theme: RenderableTheme): void {
+  update(
+    args: CancelArguments | undefined,
+    theme: RenderableTheme,
+    argsComplete: boolean,
+  ): void {
     this.args = args;
     this.theme = theme;
+    this.argsComplete = argsComplete;
     this.invalidate();
   }
 
-  invalidate(): void {
-    this.cachedWidth = undefined;
-    this.cachedLines = undefined;
-  }
-
-  render(width: number): string[] {
-    if (this.cachedLines !== undefined && this.cachedWidth === width) {
-      return this.cachedLines;
-    }
+  protected renderUncached(width: number): readonly string[] {
     const columns = Math.max(0, width);
     const operation = this.theme.fg(
       "toolTitle",
       this.theme.bold("agent_cancel"),
     );
+    if (!this.argsComplete && !this.args) {
+      return [unfinishedArgumentsLine("cancel", this.theme, columns)];
+    }
     let line: string;
     if (!this.args) {
       line = `${operation}${this.theme.fg("error", " [invalid arguments]")}`;
@@ -791,9 +989,7 @@ class CancelCallComponent implements Component {
       }`;
       line = visibleWidth(named) <= columns ? named : count;
     }
-    this.cachedWidth = width;
-    this.cachedLines = [fitToWidth(line, columns)];
-    return this.cachedLines;
+    return [fitToWidth(line, columns)];
   }
 }
 
@@ -856,105 +1052,6 @@ export function formatCancellationSummary(
   );
 }
 
-class CancelResultComponent implements Component {
-  private result: AgentToolRenderableResult;
-  private options: AgentToolResultOptions;
-  private theme: RenderableTheme;
-  private cachedWidth?: number;
-  private cachedLines?: string[];
-  private markdown?: Markdown;
-
-  constructor(
-    result: AgentToolRenderableResult,
-    options: AgentToolResultOptions,
-    theme: RenderableTheme,
-  ) {
-    this.result = result;
-    this.options = options;
-    this.theme = theme;
-  }
-
-  update(
-    result: AgentToolRenderableResult,
-    options: AgentToolResultOptions,
-    theme: RenderableTheme,
-  ): void {
-    this.result = result;
-    this.options = options;
-    this.theme = theme;
-    this.invalidate();
-  }
-
-  invalidate(): void {
-    this.cachedWidth = undefined;
-    this.cachedLines = undefined;
-    this.markdown = undefined;
-  }
-
-  render(width: number): string[] {
-    if (this.cachedLines !== undefined && this.cachedWidth === width) {
-      return this.cachedLines;
-    }
-    const columns = Math.max(0, width);
-    const text = contentText(this.result.content).trim();
-    const details = cancelRenderDetails(this.result.details);
-    const fallback =
-      firstLine(text) ||
-      (this.options.isPartial
-        ? "agent_cancel is still running."
-        : "agent_cancel returned no readable response.");
-    const semantic =
-      details && !this.options.isPartial
-        ? cancellationSummaryText(details)
-        : fallback;
-    const hidden =
-      text.length > 0 &&
-      (text.includes("\n") ||
-        text !== semantic ||
-        visibleWidth(semantic) > columns);
-
-    if (!this.options.expanded) {
-      if (details && !this.options.isPartial && hidden) {
-        this.cachedLines = [
-          formatCancellationSummary(details, this.theme, columns),
-        ];
-      } else {
-        this.cachedLines = [
-          collapsedResultLine(
-            this.theme.fg("toolOutput", semantic),
-            this.theme,
-            columns,
-            hidden,
-          ),
-        ];
-      }
-      this.cachedWidth = width;
-      return this.cachedLines;
-    }
-
-    if (!hidden) {
-      this.cachedLines = [
-        collapsedResultLine(
-          this.theme.fg("toolOutput", semantic),
-          this.theme,
-          columns,
-          false,
-        ),
-      ];
-      this.cachedWidth = width;
-      return this.cachedLines;
-    }
-
-    this.markdown ??= new Markdown(text, 0, 0, getMarkdownTheme());
-    this.cachedLines = [
-      ...this.markdown.render(columns),
-      collapseHint(this.theme, columns),
-    ];
-    this.cachedWidth = width;
-    return this.cachedLines;
-  }
-}
-
 const startPair: AgentToolRendererPair = {
   renderCall(args, theme, context) {
     const parsed = startArguments(args);
@@ -965,16 +1062,23 @@ const startPair: AgentToolRendererPair = {
             parsed,
             theme,
             context.expanded,
+            context.argsComplete,
             context.state,
           );
-    component.update(parsed, theme, context.expanded);
+    component.update(parsed, theme, context.expanded, context.argsComplete);
     return component;
   },
   renderResult(result, options, theme, context) {
     const component =
-      context.lastComponent instanceof StartResultComponent
+      context.lastComponent instanceof UnifiedResultComponent
         ? context.lastComponent
-        : new StartResultComponent(result, options, theme, context.state);
+        : new UnifiedResultComponent(
+            "start",
+            result,
+            options,
+            theme,
+            context.state,
+          );
     component.update(result, options, theme);
     return component;
   },
@@ -1095,17 +1199,20 @@ class TargetCallComponent implements Component {
   private operation: "wait" | "waitAll" | "result";
   private args: TargetArguments | undefined;
   private theme: RenderableTheme;
+  private argsComplete: boolean;
   private readonly state: AgentToolRendererState;
 
   constructor(
     operation: "wait" | "waitAll" | "result",
     args: TargetArguments | undefined,
     theme: RenderableTheme,
+    argsComplete: boolean,
     state: AgentToolRendererState,
   ) {
     this.operation = operation;
     this.args = args;
     this.theme = theme;
+    this.argsComplete = argsComplete;
     this.state = state;
   }
 
@@ -1113,10 +1220,12 @@ class TargetCallComponent implements Component {
     operation: "wait" | "waitAll" | "result",
     args: TargetArguments | undefined,
     theme: RenderableTheme,
+    argsComplete: boolean,
   ): void {
     this.operation = operation;
     this.args = args;
     this.theme = theme;
+    this.argsComplete = argsComplete;
   }
 
   invalidate(): void {}
@@ -1128,6 +1237,9 @@ class TargetCallComponent implements Component {
       "toolTitle",
       this.theme.bold(toolName(this.operation)),
     );
+    if (!this.argsComplete && !this.args) {
+      return [unfinishedArgumentsLine(this.operation, this.theme, columns)];
+    }
     if (!this.args) {
       return [
         fitToWidth(
@@ -1183,21 +1295,37 @@ function collectionSummary(
     parts.push(`${plural(details.unknown, "Run")} unknown`);
   }
   const full = parts.join(" · ") || "No Run outcomes";
-  // A timed-out barrier must still read as incomplete when optional collection
-  // outcomes do not fit beside it.
-  const priority =
+  if (visibleWidth(full) <= width) return theme.fg("toolOutput", full);
+
+  // Retain as many compatible clauses as fit, considering incompleteness
+  // first, then delivered outcome, then progressively less actionable counts.
+  // Selected clauses return to the stable full-summary order for readability.
+  const priorities = [
     details.stillRunning > 0
       ? `${plural(details.stillRunning, "Run")} still running`
-      : details.unavailable > 0
-        ? `${plural(details.unavailable, "Result")} unavailable`
-        : details.unknown > 0
-          ? `${plural(details.unknown, "Run")} unknown`
-          : full;
+      : undefined,
+    details.runs.length > 0
+      ? `Delivered ${plural(details.runs.length, "Result")}`
+      : undefined,
+    details.unavailable > 0
+      ? `${plural(details.unavailable, "Result")} unavailable`
+      : undefined,
+    details.unknown > 0
+      ? `${plural(details.unknown, "Run")} unknown`
+      : undefined,
+  ].filter((part): part is string => part !== undefined);
+  const selected = new Set<string>();
+  for (const part of priorities) {
+    const candidate = parts.filter(
+      (original) => selected.has(original) || original === part,
+    );
+    if (visibleWidth(candidate.join(" · ")) > width) break;
+    selected.add(part);
+  }
+  const retained = parts.filter((part) => selected.has(part)).join(" · ");
   return theme.fg(
     "toolOutput",
-    visibleWidth(full) <= width
-      ? full
-      : fitToWidth(priority, width, { plain: true }),
+    retained || fitToWidth(priorities[0] ?? full, width, { plain: true }),
   );
 }
 
@@ -1230,104 +1358,6 @@ function retrievalSummary(
   }
 }
 
-class OutcomeResultComponent implements Component {
-  private operation: "wait" | "waitAll" | "result";
-  private result: AgentToolRenderableResult;
-  private options: AgentToolResultOptions;
-  private theme: RenderableTheme;
-  private cachedWidth?: number;
-  private cachedLines?: string[];
-  private markdown?: Markdown;
-
-  constructor(
-    operation: "wait" | "waitAll" | "result",
-    result: AgentToolRenderableResult,
-    options: AgentToolResultOptions,
-    theme: RenderableTheme,
-  ) {
-    this.operation = operation;
-    this.result = result;
-    this.options = options;
-    this.theme = theme;
-  }
-
-  update(
-    operation: "wait" | "waitAll" | "result",
-    result: AgentToolRenderableResult,
-    options: AgentToolResultOptions,
-    theme: RenderableTheme,
-  ): void {
-    this.operation = operation;
-    this.result = result;
-    this.options = options;
-    this.theme = theme;
-    this.invalidate();
-  }
-
-  invalidate(): void {
-    this.cachedWidth = undefined;
-    this.cachedLines = undefined;
-    this.markdown = undefined;
-  }
-
-  render(width: number): string[] {
-    if (this.cachedLines !== undefined && this.cachedWidth === width) {
-      return this.cachedLines;
-    }
-    const columns = Math.max(0, width);
-    const text = contentText(this.result.content).trim();
-    const semantic =
-      this.operation === "result"
-        ? resultRenderDetails(this.result.details)
-        : collectedRunsRenderDetails(this.result.details);
-    const partial = this.options.isPartial;
-    const fallback =
-      firstLine(text) ||
-      (partial
-        ? `${toolName(this.operation)} is still running.`
-        : `${toolName(this.operation)} returned no readable response.`);
-    const fallbackSummary = this.theme.fg(
-      partial ? "muted" : "toolOutput",
-      fallback,
-    );
-    const hidden =
-      semantic !== undefined && !partial
-        ? text.length > 0
-        : text.includes("\n") || visibleWidth(fallbackSummary) > columns;
-    const summaryWidth = collapsedSummaryWidth(this.theme, columns, hidden);
-    const summary =
-      semantic !== undefined && !partial
-        ? this.operation === "result"
-          ? retrievalSummary(
-              semantic as ResultRenderDetails,
-              this.theme,
-              summaryWidth,
-            )
-          : collectionSummary(
-              semantic as CollectedRunsRenderDetails,
-              this.theme,
-              summaryWidth,
-            )
-        : fallbackSummary;
-
-    if (!this.options.expanded) {
-      this.cachedLines = [
-        collapsedResultLine(summary, this.theme, columns, hidden),
-      ];
-      this.cachedWidth = width;
-      return this.cachedLines;
-    }
-
-    this.markdown ??= new Markdown(text || fallback, 0, 0, getMarkdownTheme());
-    const rendered = this.markdown.render(columns);
-    this.cachedLines = hidden
-      ? [...rendered, collapseHint(this.theme, columns)]
-      : rendered;
-    this.cachedWidth = width;
-    return this.cachedLines;
-  }
-}
-
 function resultBearingPair(
   operation: "wait" | "waitAll" | "result",
 ): AgentToolRendererPair {
@@ -1337,16 +1367,28 @@ function resultBearingPair(
       const component =
         context.lastComponent instanceof TargetCallComponent
           ? context.lastComponent
-          : new TargetCallComponent(operation, parsed, theme, context.state);
-      component.update(operation, parsed, theme);
+          : new TargetCallComponent(
+              operation,
+              parsed,
+              theme,
+              context.argsComplete,
+              context.state,
+            );
+      component.update(operation, parsed, theme, context.argsComplete);
       return component;
     },
     renderResult(result, options, theme, context) {
       const component =
-        context.lastComponent instanceof OutcomeResultComponent
+        context.lastComponent instanceof UnifiedResultComponent
           ? context.lastComponent
-          : new OutcomeResultComponent(operation, result, options, theme);
-      component.update(operation, result, options, theme);
+          : new UnifiedResultComponent(
+              operation,
+              result,
+              options,
+              theme,
+              context.state,
+            );
+      component.update(result, options, theme);
       return component;
     },
   };
@@ -1356,26 +1398,28 @@ type ContinuationArguments =
   | { readonly operation: "resume"; readonly value: ResumeArguments }
   | { readonly operation: "steer"; readonly value: SteerArguments };
 
-class ContinuationCallComponent implements Component {
+class ContinuationCallComponent extends CachedComponent {
   private readonly operation: "resume" | "steer";
   private args: ContinuationArguments | undefined;
   private theme: RenderableTheme;
   private expanded: boolean;
+  private argsComplete: boolean;
   private readonly state: AgentToolRendererState;
-  private cachedWidth?: number;
-  private cachedLines?: string[];
 
   constructor(
     operation: "resume" | "steer",
     args: ContinuationArguments | undefined,
     theme: RenderableTheme,
     expanded: boolean,
+    argsComplete: boolean,
     state: AgentToolRendererState,
   ) {
+    super();
     this.operation = operation;
     this.args = args;
     this.theme = theme;
     this.expanded = expanded;
+    this.argsComplete = argsComplete;
     this.state = state;
   }
 
@@ -1383,67 +1427,51 @@ class ContinuationCallComponent implements Component {
     args: ContinuationArguments | undefined,
     theme: RenderableTheme,
     expanded: boolean,
+    argsComplete: boolean,
   ): void {
     this.args = args;
     this.theme = theme;
     this.expanded = expanded;
+    this.argsComplete = argsComplete;
     this.invalidate();
   }
 
-  invalidate(): void {
-    this.cachedWidth = undefined;
-    this.cachedLines = undefined;
-  }
-
-  render(width: number): string[] {
-    if (this.cachedLines !== undefined && this.cachedWidth === width) {
-      return this.cachedLines;
-    }
+  protected renderUncached(width: number): readonly string[] {
     const columns = Math.max(0, width);
     const toolName = `agent_${this.operation}`;
+    if (!this.argsComplete && !this.args) {
+      this.state.callHidden = false;
+      return [unfinishedArgumentsLine(this.operation, this.theme, columns)];
+    }
     if (!this.args) {
       this.state.callHidden = false;
-      this.cachedLines = [
+      return [
         fitToWidth(
           this.theme.fg("toolTitle", this.theme.bold(toolName)) +
             this.theme.fg("error", " [invalid arguments]"),
           columns,
         ),
       ];
-      this.cachedWidth = width;
-      return this.cachedLines;
     }
 
-    const target = this.args.value.id;
-    const fixedHeader =
-      this.theme.fg("toolTitle", this.theme.bold(toolName)) +
-      ` ${this.theme.fg("accent", target)}`;
-    const description =
-      this.args.operation === "resume" ? this.args.value.description : "";
-    const labelBudget = Math.max(
-      0,
-      columns - visibleWidth(fixedHeader) - visibleWidth(" · "),
-    );
-    const label = fitToWidth(description, labelBudget, { plain: true });
-    const header = fitToWidth(
-      label
-        ? `${fixedHeader}${this.theme.fg("dim", " · ")}${this.theme.fg("muted", label)}`
-        : fixedHeader,
-      columns,
-    );
-    const body = submittedBody(
-      this.args.operation === "resume" ? "Prompt:" : "Message:",
+    const call: SubmittedCall =
       this.args.operation === "resume"
-        ? this.args.value.prompt
-        : this.args.value.message,
-      this.theme,
-      columns,
-      this.expanded,
-    );
-    this.state.callHidden = body.hidden > 0;
-    this.cachedLines = [header, "", ...body.lines, ""];
-    this.cachedWidth = width;
-    return this.cachedLines;
+        ? {
+            toolName,
+            target: this.args.value.id,
+            label: this.args.value.description,
+            prefix: "Prompt:",
+            body: this.args.value.prompt,
+          }
+        : {
+            toolName,
+            target: this.args.value.id,
+            prefix: "Message:",
+            body: this.args.value.message,
+          };
+    const built = submittedCallLines(call, this.theme, columns, this.expanded);
+    this.state.callHidden = built.hidden;
+    return built.lines;
   }
 }
 
@@ -1585,111 +1613,6 @@ function steerSummary(
   }
 }
 
-class SemanticResultComponent implements Component {
-  private result: AgentToolRenderableResult;
-  private options: AgentToolResultOptions;
-  private theme: RenderableTheme;
-  private readonly operation: "resume" | "steer";
-  private readonly state: AgentToolRendererState;
-  private cachedWidth?: number;
-  private cachedLines?: string[];
-  private markdown?: Markdown;
-
-  constructor(
-    operation: "resume" | "steer",
-    result: AgentToolRenderableResult,
-    options: AgentToolResultOptions,
-    theme: RenderableTheme,
-    state: AgentToolRendererState,
-  ) {
-    this.operation = operation;
-    this.result = result;
-    this.options = options;
-    this.theme = theme;
-    this.state = state;
-  }
-
-  update(
-    result: AgentToolRenderableResult,
-    options: AgentToolResultOptions,
-    theme: RenderableTheme,
-  ): void {
-    this.result = result;
-    this.options = options;
-    this.theme = theme;
-    this.invalidate();
-  }
-
-  invalidate(): void {
-    this.cachedWidth = undefined;
-    this.cachedLines = undefined;
-    this.markdown = undefined;
-  }
-
-  render(width: number): string[] {
-    if (this.cachedLines !== undefined && this.cachedWidth === width) {
-      return this.cachedLines;
-    }
-    const columns = Math.max(0, width);
-    const text = contentText(this.result.content).trim();
-    const details =
-      this.operation === "resume"
-        ? parseResumeRenderDetails(this.result.details)
-        : parseSteerRenderDetails(this.result.details);
-    const semantic =
-      details === undefined
-        ? undefined
-        : details.kind === "resume"
-          ? resumeSummary(details, this.theme, columns)
-          : steerSummary(details, this.theme);
-    const fallback =
-      firstLine(text) ||
-      (this.options.isPartial
-        ? `agent_${this.operation} is still running.`
-        : `agent_${this.operation} returned no readable response.`);
-    const summary =
-      semantic !== undefined && !this.options.isPartial
-        ? semantic
-        : this.theme.fg(
-            this.options.isPartial ? "muted" : "toolOutput",
-            fallback,
-          );
-    const resultHidden =
-      semantic !== undefined && !this.options.isPartial
-        ? text.length > 0
-        : text.includes("\n") || visibleWidth(summary) > columns;
-    const hidden = this.state.callHidden === true || resultHidden;
-
-    if (!this.options.expanded) {
-      if (
-        details?.kind === "resume" &&
-        details.outcome === "started" &&
-        !this.options.isPartial &&
-        hidden
-      ) {
-        this.cachedLines = [
-          formatResumedRunSummary(details, this.theme, columns),
-        ];
-        this.cachedWidth = width;
-        return this.cachedLines;
-      }
-      this.cachedLines = [
-        collapsedResultLine(summary, this.theme, columns, hidden),
-      ];
-      this.cachedWidth = width;
-      return this.cachedLines;
-    }
-
-    this.markdown ??= new Markdown(text || fallback, 0, 0, getMarkdownTheme());
-    const rendered = this.markdown.render(columns);
-    this.cachedLines = hidden
-      ? [...rendered, collapseHint(this.theme, columns)]
-      : rendered;
-    this.cachedWidth = width;
-    return this.cachedLines;
-  }
-}
-
 function continuationPair(
   operation: "resume" | "steer",
 ): AgentToolRendererPair {
@@ -1709,16 +1632,17 @@ function continuationPair(
               value,
               theme,
               context.expanded,
+              context.argsComplete,
               context.state,
             );
-      component.update(value, theme, context.expanded);
+      component.update(value, theme, context.expanded, context.argsComplete);
       return component;
     },
     renderResult(result, options, theme, context) {
       const component =
-        context.lastComponent instanceof SemanticResultComponent
+        context.lastComponent instanceof UnifiedResultComponent
           ? context.lastComponent
-          : new SemanticResultComponent(
+          : new UnifiedResultComponent(
               operation,
               result,
               options,
@@ -1738,15 +1662,21 @@ const cancelPair: AgentToolRendererPair = {
     const component =
       context.lastComponent instanceof CancelCallComponent
         ? context.lastComponent
-        : new CancelCallComponent(parsed, theme);
-    component.update(parsed, theme);
+        : new CancelCallComponent(parsed, theme, context.argsComplete);
+    component.update(parsed, theme, context.argsComplete);
     return component;
   },
   renderResult(result, options, theme, context) {
     const component =
-      context.lastComponent instanceof CancelResultComponent
+      context.lastComponent instanceof UnifiedResultComponent
         ? context.lastComponent
-        : new CancelResultComponent(result, options, theme);
+        : new UnifiedResultComponent(
+            "cancel",
+            result,
+            options,
+            theme,
+            context.state,
+          );
     component.update(result, options, theme);
     return component;
   },

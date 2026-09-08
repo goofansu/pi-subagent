@@ -40,6 +40,7 @@ import {
   formatWaitOutcomes,
   resultRunSummaryOf,
   resumeRenderDetails,
+  startRenderDetails,
   steerRenderDetails,
 } from "../presentation/index.ts";
 import { ProfileCatalog } from "../runtime/profile-catalog.ts";
@@ -194,6 +195,7 @@ const start = (
     if (request === undefined)
       return {
         text: formatStartOutcome(input.agent, EMPTY_LABEL, available),
+        details: startRenderDetails(input.agent, EMPTY_LABEL),
         deliveredRuns: [],
       };
     const supervisor = yield* SubagentSupervisor;
@@ -210,17 +212,8 @@ const start = (
     });
     return {
       text: formatStartOutcome(input.agent, outcome, available),
+      details: startRenderDetails(input.agent, outcome),
       deliveredRuns: [],
-      ...(outcome.outcome === "started"
-        ? {
-            details: {
-              kind: "start",
-              agent: input.agent,
-              subagentId: outcome.subagentId,
-              runId: outcome.runId,
-            } satisfies AgentToolRenderDetails,
-          }
-        : {}),
     };
   });
 

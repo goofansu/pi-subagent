@@ -3,7 +3,11 @@ import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
-import type { ResumeOutcome, SteerOutcome } from "../domain/index.ts";
+import type {
+  ResumeOutcome,
+  StartOutcome,
+  SteerOutcome,
+} from "../domain/index.ts";
 import { runId, subagentId } from "../domain/index.ts";
 import {
   type AgentToolRendererState,
@@ -12,6 +16,7 @@ import {
   formatResumedRunSummary,
   formatStartedRunSummary,
   resumeRenderDetails,
+  startRenderDetails,
   steerRenderDetails,
 } from "./agent-tool-renderers.ts";
 import type { RenderableTheme } from "./rows.ts";
@@ -77,6 +82,7 @@ const successfulResult = {
   ],
   details: {
     kind: "start" as const,
+    outcome: "started" as const,
     agent: "explore",
     subagentId: "subagent-demo-1",
     runId: "run-demo-1",
@@ -254,6 +260,30 @@ test("a narrow resumed summary drops its field label before clipping the Run id"
 test("every operation outcome converts to an explicit discriminated detail", () => {
   const sid = subagentId("subagent-test-1");
   const rid = runId("run-test-1");
+  const startOutcomes: readonly StartOutcome[] = [
+    { outcome: "started", subagentId: sid, runId: rid },
+    { outcome: "unknown agent", agent: "ghost" },
+    { outcome: "invalid profile", diagnostics: [] },
+    { outcome: "empty label" },
+    { outcome: "at capacity" },
+    { outcome: "shutting down" },
+    { outcome: "delegation-depth exceeded", depth: 2 },
+    {
+      outcome: "backend unavailable",
+      diagnostic: { category: "backend-failure", message: "unavailable" },
+    },
+  ];
+  assert.deepEqual(
+    startOutcomes.map(
+      (outcome) => startRenderDetails("explore", outcome).outcome,
+    ),
+    startOutcomes.map(({ outcome }) => outcome),
+  );
+  assert.ok(
+    startOutcomes.every(
+      (outcome) => startRenderDetails("explore", outcome).kind === "start",
+    ),
+  );
   const resumeOutcomes: readonly ResumeOutcome[] = [
     { outcome: "started", subagentId: sid, runId: rid },
     { outcome: "unknown Subagent", subagentId: sid },
@@ -301,7 +331,36 @@ test("every operation outcome converts to an explicit discriminated detail", () 
   );
 });
 
-test("every resume refusal and Control admission outcome has a distinct semantic line", () => {
+test("every start and resume refusal and Control admission outcome has a distinct semantic line", () => {
+  const start = agentToolRenderers("start");
+  const startDetails = [
+    { kind: "start", outcome: "unknown agent", agent: "ghost" },
+    { kind: "start", outcome: "invalid profile", agent: "explore" },
+    { kind: "start", outcome: "empty label", agent: "explore" },
+    { kind: "start", outcome: "at capacity", agent: "explore" },
+    { kind: "start", outcome: "shutting down", agent: "explore" },
+    {
+      kind: "start",
+      outcome: "delegation-depth exceeded",
+      agent: "explore",
+      depth: 2,
+    },
+    { kind: "start", outcome: "backend unavailable", agent: "explore" },
+  ] as const;
+  const startLines = startDetails.map((details) =>
+    lines(
+      start.renderResult(
+        { content: [{ type: "text", text: "complete prose" }], details },
+        { expanded: false, isPartial: false },
+        plainTheme,
+        context({}),
+      ),
+      100,
+    )[0].replace(/ \(.*to expand\)$/, ""),
+  );
+  assert.equal(new Set(startLines).size, startDetails.length);
+  assert.ok(startLines.every((line) => line.startsWith("Start refused")));
+
   const resume = agentToolRenderers("resume");
   const resumeDetails = [
     { kind: "resume", outcome: "unknown Subagent" },
@@ -375,6 +434,7 @@ test("a narrow compact success keeps both actionable ids ahead of a long Agent",
   const line = formatStartedRunSummary(
     {
       kind: "start",
+      outcome: "started",
       agent: "standards-reviewer",
       subagentId: "subagent-abcd-123",
       runId: "run-abcd-456",
@@ -659,6 +719,108 @@ test("the compact success owns one hint and expansion reveals the complete respo
   assert.equal(expanded.match(/to collapse/g)?.length, 1);
 });
 
+test("unfinished arguments are explicit, restored complete arguments render normally, and settled malformed arguments stay invalid", () => {
+  const cases = [
+    ["start", { agent: "explore" }, args],
+    [
+      "resume",
+      { id: "subagent-1" },
+      { id: "subagent-1", description: "continue", prompt: "look again" },
+    ],
+    ["wait", {}, { ids: ["run-1"] }],
+    ["waitAll", null, {}],
+    ["result", {}, { id: "run-1" }],
+    ["cancel", {}, { ids: ["run-1"] }],
+    ["steer", { id: "run-1" }, { id: "run-1", message: "go" }],
+  ] as const;
+
+  for (const [operation, partialArgs, completeArgs] of cases) {
+    const pair = agentToolRenderers(operation);
+    const unfinished = lines(
+      pair.renderCall(partialArgs, plainTheme, {
+        ...context({}),
+        args: partialArgs,
+        argsComplete: false,
+      }),
+      80,
+    ).join("\n");
+    assert.match(unfinished, /\[arguments incomplete\]/);
+    assert.doesNotMatch(unfinished, /invalid arguments/);
+
+    const restored = lines(
+      pair.renderCall(completeArgs, plainTheme, {
+        ...context({}),
+        args: completeArgs,
+        argsComplete: false,
+      }),
+      80,
+    ).join("\n");
+    assert.match(
+      restored,
+      new RegExp(`agent_${operation === "waitAll" ? "wait_all" : operation}`),
+    );
+    assert.doesNotMatch(restored, /arguments (?:incomplete|invalid)/);
+
+    const malformed = lines(
+      pair.renderCall(null, plainTheme, {
+        ...context({}),
+        args: null,
+        argsComplete: true,
+      }),
+      80,
+    ).join("\n");
+    assert.match(malformed, /\[invalid arguments\]/);
+  }
+});
+
+test("start, resume, and steer partial results never present settled semantics", () => {
+  const cases = [
+    [
+      "start",
+      successfulResult,
+      /agent_start is still running\./,
+      /Started|run-demo-1/,
+    ],
+    [
+      "resume",
+      {
+        content: [{ type: "text", text: "Resumed subagent-1" }],
+        details: {
+          kind: "resume",
+          outcome: "started",
+          subagentId: "subagent-1",
+          runId: "run-2",
+        },
+      },
+      /agent_resume is still running\./,
+      /Resumed|run-2/,
+    ],
+    [
+      "steer",
+      {
+        content: [{ type: "text", text: "Steering accepted" }],
+        details: { kind: "steer", outcome: "accepted", runId: "run-1" },
+      },
+      /agent_steer is still running\./,
+      /Accepted|Steering accepted/,
+    ],
+  ] as const;
+
+  for (const [operation, result, expected, settled] of cases) {
+    const rendered = lines(
+      agentToolRenderers(operation).renderResult(
+        result,
+        { expanded: false, isPartial: true },
+        plainTheme,
+        context({}, { isPartial: true }),
+      ),
+      80,
+    ).join("\n");
+    assert.match(rendered, expected);
+    assert.doesNotMatch(rendered, settled);
+  }
+});
+
 test("result-bearing calls retain their operation and identify their scope or targets", () => {
   const cases = [
     {
@@ -772,6 +934,37 @@ test("collection summaries discriminate delivery, timeout, unknown, unavailable,
     assert.equal(collapsed.match(/to expand/g)?.length, 1);
   }
 
+  const progressive = lines(
+    pair.renderResult(
+      {
+        content: [{ type: "text", text: "complete response" }],
+        details: {
+          kind: "collection",
+          scope: "named",
+          runs: [
+            {
+              runId: "run-1",
+              agent: "explore",
+              status: "completed",
+              outputCharacters: 6,
+            },
+          ],
+          stillRunning: 1,
+          unknown: 1,
+          unavailable: 0,
+          noActiveRuns: false,
+        },
+      },
+      { expanded: false, isPartial: false },
+      plainTheme,
+      context({}),
+    ),
+    60,
+  ).join("\n");
+  assert.match(progressive, /^Delivered 1 Result · 1 Run still running/);
+  assert.doesNotMatch(progressive, /unknown/);
+  assert.ok(visibleWidth(progressive) <= 60);
+
   const narrowTimeout = lines(
     pair.renderResult(
       {
@@ -787,6 +980,22 @@ test("collection summaries discriminate delivery, timeout, unknown, unavailable,
   assert.match(narrowTimeout, /^2 Runs still running/);
   assert.doesNotMatch(narrowTimeout, /^Delivered/);
   assert.ok(visibleWidth(narrowTimeout) <= 45);
+
+  const clippedPriority = lines(
+    pair.renderResult(
+      {
+        content: [{ type: "text", text: "complete response" }],
+        details: cases[1][0],
+      },
+      { expanded: false, isPartial: false },
+      plainTheme,
+      context({}),
+    ),
+    30,
+  ).join("\n");
+  assert.match(clippedPriority, /^2 Runs/);
+  assert.doesNotMatch(clippedPriority, /unknown/);
+  assert.ok(visibleWidth(clippedPriority) <= 30);
 });
 
 test("agent_result summaries distinguish available, running, unknown, and unavailable outcomes", () => {

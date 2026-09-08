@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
-import type { Component } from "@earendil-works/pi-tui";
+import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import type { ToolResponse } from "../application/index.ts";
 import { runId } from "../domain/index.ts";
-import { installSubagentV2 } from "../index.ts";
 import { emitText } from "../testing/fakes/script.ts";
 import {
   hostRig,
@@ -21,7 +20,6 @@ import {
   type StandInHost,
 } from "../testing/stand-in-host.ts";
 import { STRESS_POLICY } from "../testing/stress-policy.ts";
-import { createDemoBackendSet } from "./demo-backends.ts";
 import { createSessionHandle, type SessionHandle } from "./session-handle.ts";
 import { registerSubagentTools } from "./tools.ts";
 
@@ -146,6 +144,7 @@ test("a successful agent_start crosses registration, details, and both renderer 
   );
   assert.deepEqual(result.details, {
     kind: "start",
+    outcome: "started",
     agent: "explore",
     subagentId: ids.subagentId,
     runId: ids.runId,
@@ -194,7 +193,11 @@ test("a rejected agent_start remains readable through its registered renderer", 
   const args = { agent: "ghost", description: "d", prompt: "p" };
 
   const result = await rig.call("agent_start", args);
-  assert.equal(result.details, undefined);
+  assert.deepEqual(result.details, {
+    kind: "start",
+    outcome: "unknown agent",
+    agent: "ghost",
+  });
   const collapsed = renderRegisteredRow(
     rig.host,
     "agent_start",
@@ -202,11 +205,11 @@ test("a rejected agent_start remains readable through its registered renderer", 
     result,
     false,
   );
-  assert.equal(
+  assert.match(
     collapsed.result.join("\n"),
-    'Unknown agent: "ghost". Available: explore, once',
+    /^Start refused · unknown Agent \(.*to expand\)$/,
   );
-  assert.doesNotMatch(collapsed.result.join("\n"), /to expand/);
+  assert.doesNotMatch(collapsed.result.join("\n"), /Available:|ghost/);
 });
 
 test("agent_start refuses an unknown agent and names the ones that exist", async (t) => {
@@ -1713,56 +1716,215 @@ test("the stated delivery records consumption with no collapsed line at all", as
 
 // ── The teardown race ────────────────────────────────────────────────────────
 
-test("the registered-host renderer family covers all seven operations without generic fallback", async (t) => {
-  const host = createStandInHost();
-  installSubagentV2(host.pi, {
-    agentDir: hostRig(t).agentsDir,
-    backendSet: createDemoBackendSet,
+test("the registered-host table covers all seven tools in both states and meaningful outcomes", async (t) => {
+  const settled = hostRig(t);
+  await settled.host.sessionStart();
+  t.after(() => settled.installation.handle.release());
+
+  const startArgs = {
+    agent: RIG_RESUMABLE_PROFILE,
+    description: "look around",
+    prompt: "have a look",
+  };
+  const started = await settled.call("agent_start", startArgs);
+  const startedIdentity = startedIds(resultText(started));
+  await settled.call("agent_wait", { ids: [startedIdentity.runId] });
+  const resumeArgs = {
+    id: startedIdentity.subagentId,
+    description: "continue",
+    prompt: "look again",
+  };
+  const resumed = await settled.call("agent_resume", resumeArgs);
+  const resumedRunId = /run id (\S+)/.exec(resultText(resumed))?.[1];
+  assert.ok(resumedRunId);
+  await settled.call("agent_wait", { ids: [resumedRunId] });
+
+  const live = hostRig(t, {
+    resumableSteps: [[{ step: "await-gate", gate: "hold" }]],
   });
+  await live.host.sessionStart();
+  t.after(async () => {
+    await live.release("hold");
+    await live.installation.handle.release();
+  });
+  const active = await startedRun(live);
+  const delivered = await startedRun(live, RIG_ONE_SHOT_PROFILE);
+  await live.settled(delivered.runId);
 
-  // The real handlers take their safe not-ready path; the same table renders
-  // both registered slots, so an omitted custom renderer is visible here.
-  const cases = [
-    [
+  type Case = {
+    readonly host: StandInHost;
+    readonly name: string;
+    readonly args: unknown;
+    readonly result: Awaited<ReturnType<StandInHost["call"]>>;
+    readonly call: RegExp;
+    readonly summary: RegExp;
+  };
+  const cases: Case[] = [];
+  const add = async (
+    host: StandInHost,
+    name: string,
+    args: unknown,
+    call: RegExp,
+    summary: RegExp,
+    existing?: Awaited<ReturnType<StandInHost["call"]>>,
+  ) => {
+    cases.push({
+      host,
+      name,
+      args,
+      result: existing ?? (await host.call(name, args)),
+      call,
+      summary,
+    });
+  };
+
+  await add(
+    settled.host,
+    "agent_start",
+    startArgs,
+    /agent_start explore/,
+    /^Started/,
+    started,
+  );
+  await add(
+    settled.host,
+    "agent_start",
+    { ...startArgs, agent: "ghost" },
+    /agent_start ghost/,
+    /^Start refused · unknown Agent/,
+  );
+  await add(
+    settled.host,
+    "agent_resume",
+    resumeArgs,
+    /agent_resume/,
+    /^Resumed/,
+    resumed,
+  );
+  await add(
+    settled.host,
+    "agent_resume",
+    { ...resumeArgs, id: "subagent-never" },
+    /agent_resume subagent-never/,
+    /^Resume refused · unknown Subagent/,
+  );
+  await add(
+    settled.host,
+    "agent_wait",
+    { ids: [startedIdentity.runId] },
+    /agent_wait/,
+    /^Delivered 1 Result/,
+  );
+  await add(
+    live.host,
+    "agent_wait",
+    {
+      ids: [delivered.runId, active.runId, "run-never"],
+      timeoutSeconds: 0.001,
+    },
+    /agent_wait/,
+    /Delivered 1 Result.*1 Run still running.*1 Run unknown/,
+  );
+  await add(
+    settled.host,
+    "agent_wait_all",
+    {},
+    /agent_wait_all · all active Runs/,
+    /^No active Runs/,
+  );
+  await add(
+    live.host,
+    "agent_wait_all",
+    { timeoutSeconds: 0.001 },
+    /agent_wait_all · all active Runs/,
+    /^1 Run still running/,
+  );
+  await add(
+    settled.host,
+    "agent_result",
+    { id: startedIdentity.runId },
+    /agent_result/,
+    /completed/,
+  );
+  await add(
+    live.host,
+    "agent_result",
+    { id: active.runId },
+    /agent_result/,
+    /still running/,
+  );
+  await add(
+    live.host,
+    "agent_steer",
+    { id: active.runId, message: "go left" },
+    /agent_steer/,
+    /^Accepted into local Control mailbox/,
+  );
+  await add(
+    settled.host,
+    "agent_steer",
+    { id: startedIdentity.runId, message: "late" },
+    /agent_steer/,
+    /^Control refused · Run completed/,
+  );
+  await add(
+    live.host,
+    "agent_cancel",
+    { ids: [active.runId] },
+    /agent_cancel/,
+    /^Cancellation requested: 1/,
+  );
+  const another = await startedRun(live);
+  await add(
+    live.host,
+    "agent_cancel",
+    { ids: [another.runId, delivered.runId, "run-never"] },
+    /agent_cancel/,
+    /Cancellation requested: 1.*Already finished, result kept: 1.*Unknown run ids: 1/,
+  );
+
+  assert.deepEqual(
+    new Set(cases.map(({ name }) => name)),
+    new Set([
       "agent_start",
-      { agent: "explore", description: "d", prompt: "p" },
-      /agent_start explore · d/,
-    ],
-    [
       "agent_resume",
-      { id: "subagent-1", description: "d", prompt: "p" },
-      /agent_resume subagent-1 · d/,
-    ],
-    ["agent_wait", { ids: ["run-1"] }, /agent_wait · run-1/],
-    ["agent_wait_all", {}, /agent_wait_all · all active Runs/],
-    ["agent_result", { id: "run-1" }, /agent_result · run-1/],
-    ["agent_cancel", { ids: ["run-1"] }, /agent_cancel run-1/],
-    ["agent_steer", { id: "run-1", message: "go" }, /agent_steer run-1/],
-  ] as const;
-  assert.equal(host.tools().length, cases.length);
+      "agent_wait",
+      "agent_wait_all",
+      "agent_result",
+      "agent_cancel",
+      "agent_steer",
+    ]),
+  );
 
-  for (const [name, params, callPattern] of cases) {
-    const result = await host.call(name, params);
-    const text = result.content.map((part) => part.text ?? "").join("");
-    assert.equal(
-      text,
-      `Cannot run ${name}: this Session has no subagent runtime, so nothing ` +
-        "was started. That happens only while a Session is starting or " +
-        "shutting down; try again once it is ready.",
+  for (const entry of cases) {
+    const details = entry.result.details as { kind?: string } | undefined;
+    assert.ok(
+      details?.kind,
+      `${entry.name} has semantic details: ${resultText(entry.result)}`,
     );
-    const collapsed = renderRegisteredRow(host, name, params, result, false);
-    const expanded = renderRegisteredRow(host, name, params, result, true);
-    assert.match(collapsed.call.join("\n"), callPattern);
-    assert.equal(collapsed.result.length, 1);
-    assert.match(collapsed.result[0], /^Cannot run agent_/);
-    assert.equal(collapsed.result[0].match(/to expand/g)?.length, 1);
-    const expandedText = expanded.result.join("\n");
-    assert.match(expandedText, /no subagent runtime/);
-    assert.match(
-      expandedText.replaceAll("\n", " "),
-      /try again once it is ready/,
-    );
-    assert.equal(expandedText.match(/to collapse/g)?.length, 1);
+    const responseText = resultText(entry.result);
+    for (const expanded of [false, true]) {
+      const row = renderRegisteredRow(
+        entry.host,
+        entry.name,
+        entry.args,
+        entry.result,
+        expanded,
+        1_000,
+      );
+      assert.match(row.call.join("\n"), entry.call);
+      if (expanded) {
+        assert.ok(row.result.join("\n").includes(responseText));
+      } else {
+        assert.equal(row.result.length, 1);
+        assert.match(row.result[0], entry.summary);
+      }
+      assert.ok(
+        [...row.call, ...row.result].every(
+          (line) => visibleWidth(line) <= 1_000,
+        ),
+      );
+    }
   }
 });
 
@@ -1793,16 +1955,22 @@ test("agent_start refuses an empty description, and spends no identifier doing i
   // Run labelled "" reaches the notice header, the collapsed line and the
   // widget row as a pair of empty quotes.
   for (const description of ["", "   ", "\n\t "]) {
+    const refused = await rig.call("agent_start", {
+      agent: RIG_RESUMABLE_PROFILE,
+      description,
+      prompt: "have a look",
+    });
     assert.equal(
-      await rig.text("agent_start", {
-        agent: RIG_RESUMABLE_PROFILE,
-        description,
-        prompt: "have a look",
-      }),
+      resultText(refused),
       "Cannot start explore: its description is empty. No Run was started and " +
         "no id was handed out. Send a one-line description of the task: it is " +
         "the label this Run is shown under everywhere.",
     );
+    assert.deepEqual(refused.details, {
+      kind: "start",
+      outcome: "empty label",
+      agent: "explore",
+    });
   }
 
   // Three refusals, and the next start is still this Session's first Run and
