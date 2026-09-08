@@ -22,6 +22,7 @@
  * presentation file belongs in the list below when it is written.
  */
 
+export * from "./agent-tool-renderers.ts";
 export * from "./banner.ts";
 export * from "./completion-view.ts";
 export * from "./dashboard-page.ts";

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { stripVTControlCharacters } from "node:util";
+import type { Component } from "@earendil-works/pi-tui";
 import type { ToolResponse } from "../application/index.ts";
 import { runId } from "../domain/index.ts";
 import { installSubagentV2 } from "../index.ts";
@@ -13,6 +15,7 @@ import {
 } from "../testing/host-rig.ts";
 import {
   createStandInHost,
+  PLAIN_THEME,
   type StandInHost,
 } from "../testing/stand-in-host.ts";
 import { STRESS_POLICY } from "../testing/stress-policy.ts";
@@ -50,6 +53,59 @@ async function startedRun(
   );
 }
 
+/** Render both registered slots with the shared row state Pi supplies. */
+function renderRegisteredRow(
+  host: StandInHost,
+  name: string,
+  args: unknown,
+  result: Awaited<ReturnType<StandInHost["call"]>>,
+  expanded: boolean,
+  width = 80,
+): { readonly call: readonly string[]; readonly result: readonly string[] } {
+  const tool = host.tool(name);
+  assert.ok(tool.renderCall, `${name} has no call renderer`);
+  assert.ok(tool.renderResult, `${name} has no result renderer`);
+  const state = {};
+  const context = {
+    args,
+    toolCallId: `call-${name}`,
+    invalidate: () => undefined,
+    lastComponent: undefined,
+    state,
+    cwd: "/work",
+    executionStarted: true,
+    argsComplete: true,
+    isPartial: false,
+    expanded,
+    showImages: true,
+    isError: false,
+  };
+  const call = (
+    tool.renderCall as unknown as (
+      args: unknown,
+      theme: typeof PLAIN_THEME,
+      context: unknown,
+    ) => Component
+  )(args, PLAIN_THEME, context);
+  // Rendering the call first is the host order and lets the two slots share
+  // whether the width-aware prompt preview hid anything.
+  const callLines = call.render(width);
+  const renderedResult = (
+    tool.renderResult as unknown as (
+      result: unknown,
+      options: { readonly expanded: boolean; readonly isPartial: boolean },
+      theme: typeof PLAIN_THEME,
+      context: unknown,
+    ) => Component
+  )(result, { expanded, isPartial: false }, PLAIN_THEME, context);
+  const clean = (lines: readonly string[]) =>
+    lines.map((line) => stripVTControlCharacters(line).trimEnd());
+  return {
+    call: clean(callLines),
+    result: clean(renderedResult.render(width)),
+  };
+}
+
 // ── agent_start ──────────────────────────────────────────────────────────────
 
 test("agent_start returns a Subagent id and a first Run id a model can act on", async (t) => {
@@ -70,6 +126,85 @@ test("agent_start returns a Subagent id and a first Run id a model can act on", 
     text,
     /for agent_wait, agent_result, agent_cancel, and agent_steer/,
   );
+});
+
+test("a successful agent_start crosses registration, details, and both renderer slots", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  const args = {
+    agent: RIG_RESUMABLE_PROFILE,
+    description: "look around",
+    prompt: "have a look",
+  };
+
+  const result = await rig.call("agent_start", args);
+  const ids = startedIds(
+    result.content.map((part) => part.text ?? "").join(""),
+  );
+  assert.deepEqual(result.details, {
+    kind: "start",
+    agent: "explore",
+    subagentId: ids.subagentId,
+    runId: ids.runId,
+  });
+  // Render details describe the row; a start still hands back no Result.
+  assert.equal(rig.installation.sink.status(runId(ids.runId)), "pending");
+
+  const collapsed = renderRegisteredRow(
+    rig.host,
+    "agent_start",
+    args,
+    result,
+    false,
+  );
+  assert.match(collapsed.call.join("\n"), /agent_start explore · look around/);
+  assert.match(collapsed.call.join("\n"), /Prompt: have a look/);
+  assert.match(collapsed.result.join("\n"), new RegExp(ids.subagentId));
+  assert.match(collapsed.result.join("\n"), new RegExp(ids.runId));
+  assert.equal(collapsed.result.join("\n").match(/to expand/g)?.length, 1);
+
+  const expanded = renderRegisteredRow(
+    rig.host,
+    "agent_start",
+    args,
+    result,
+    true,
+    1_000,
+  );
+  assert.match(expanded.call.join("\n"), /Prompt: have a look/);
+  assert.equal(
+    expanded.result.join("\n").includes(
+      result.content
+        .map((part) => part.text ?? "")
+        .join("")
+        .split("\n")
+        .at(-1) ?? "",
+    ),
+    true,
+  );
+});
+
+test("a rejected agent_start remains readable through its registered renderer", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  const args = { agent: "ghost", description: "d", prompt: "p" };
+
+  const result = await rig.call("agent_start", args);
+  assert.equal(result.details, undefined);
+  const collapsed = renderRegisteredRow(
+    rig.host,
+    "agent_start",
+    args,
+    result,
+    false,
+  );
+  assert.equal(
+    collapsed.result.join("\n"),
+    'Unknown agent: "ghost". Available: explore, once',
+  );
+  assert.doesNotMatch(collapsed.result.join("\n"), /to expand/);
 });
 
 test("agent_start refuses an unknown agent and names the ones that exist", async (t) => {

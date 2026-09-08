@@ -33,10 +33,10 @@ import type { SubagentsServices, ToolResponse } from "../application/index.ts";
 import { type SessionFacts, Subagents } from "../application/index.ts";
 import type { RunId } from "../domain/index.ts";
 import {
+  agentToolRenderers,
   formatSessionNotReady,
   renderCollectedResult,
   renderResumeResult,
-  renderStartCall,
 } from "../presentation/index.ts";
 import type { SessionHandle } from "./session-handle.ts";
 import {
@@ -292,9 +292,10 @@ export function registerSubagentTools(
   /* ---------------------------------------------------------------- */
 
   const decodeStart = decodeToolInput(START_COPY.name, StartInputSchema);
+  const startRenderers = agentToolRenderers("start");
 
   register(START_COPY, toolParameters(StartInputSchema), {
-    renderCall: renderStartCall,
+    ...startRenderers,
     async execute(
       _toolCallId: string,
       params: unknown,
