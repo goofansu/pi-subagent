@@ -157,12 +157,13 @@ test("multiple active refreshes preserve line offset and clamp after shorter rec
   rig.host.customKey("R");
   await rig.pump();
   assert.match(draw().at(-2) ?? "", /5-8\//);
+  let sawNewTail = false;
   for (let i = 0; i < 30; i += 1) {
     rig.host.customKey("\x1b[C");
-    draw();
+    sawNewTail ||= draw().join("\n").includes("new tail");
   }
   const bottom = draw();
-  assert.match(bottom.join("\n"), /new tail/);
+  assert.ok(sawNewTail, "new transcript tail is reachable by scrolling");
   await rig.release("shorter");
   await rig.pump();
   assert.deepEqual(draw(), bottom);
@@ -272,6 +273,28 @@ for (const truncated of [false, true])
         "bytes of the final output",
       ])
         assert.ok(text.includes(value), `${value}\n${text}`);
+      const orderedSections = [
+        "Output so far:",
+        "Diagnostics:",
+        "Truncation:",
+        "Transcript:",
+        "Tools:",
+        "Usage:",
+        "Metadata:",
+        "Links:",
+      ];
+      for (let i = 1; i < orderedSections.length; i += 1)
+        assert.ok(
+          text.indexOf(orderedSections[i - 1] ?? "") <
+            text.indexOf(orderedSections[i] ?? ""),
+          orderedSections.join(" → "),
+        );
+      const outputHeading = text.indexOf("Output so far:");
+      const outputWarning = text.indexOf(
+        "7 bytes of the final output were cut.",
+      );
+      assert.ok(outputHeading < outputWarning);
+      assert.ok(outputWarning < text.indexOf("bounded", outputWarning));
     } else assert.match(text, /Active snapshot available but empty/);
     await close(rig, dashboard);
   });

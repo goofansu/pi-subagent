@@ -9,6 +9,7 @@ import type { RunInspection } from "../domain/inspection.ts";
 import type { RenderableTheme } from "./rows.ts";
 import {
   formatDiagnosticLine,
+  formatOutputTruncation,
   formatResultLinkLine,
   formatToolStatus,
   formatTranscriptItem,
@@ -65,9 +66,13 @@ export function inspectionBlocks(
     `Run status: ${run.status.text}${run.cancellationReason ? ` (${run.cancellationReason})` : ""}`,
   );
 
-  // The answer is the primary reason to inspect; accounting and tool history follow it.
+  // The answer and any limitations affecting its evidence precede accounting.
   if (stored) {
     section(capture.outcome === "active" ? "Output so far" : "Final output");
+    const outputTruncation = formatOutputTruncation(
+      stored.truncation.truncatedOutputBytes,
+    );
+    if (outputTruncation !== undefined) add("literal", outputTruncation);
     if (stored.finalOutput) add("markdown", stored.finalOutput);
     else {
       add(
@@ -88,6 +93,29 @@ export function inspectionBlocks(
       section("Error");
       add("literal", stored.errorMessage);
     }
+    if (stored.diagnostics.length) {
+      section("Diagnostics");
+      add("literal", ...stored.diagnostics.map(formatDiagnosticLine));
+    }
+    const truncation = formatTruncation(stored);
+    if (truncation) {
+      section("Truncation");
+      add("literal", truncation);
+    }
+    if (stored.transcript.length) {
+      section("Transcript");
+      for (const item of stored.transcript) {
+        add(
+          "muted",
+          `${item.role}${item.model === undefined ? "" : ` (model: ${item.model})`}:`,
+        );
+        blocks.push(...transcriptBlocks(item));
+      }
+    }
+    if (stored.tools.length) {
+      section("Tools");
+      for (const tool of stored.tools) blocks.push(...toolBlocks(tool));
+    }
   } else {
     add(
       "literal",
@@ -101,6 +129,15 @@ export function inspectionBlocks(
     if (capture.outcome === "unavailable" && capture.diagnostic)
       add("literal", formatDiagnosticLine(capture.diagnostic));
   }
+
+  const usage = result?.usage ?? capture.usage;
+  section("Usage");
+  add(
+    "literal",
+    `Turns: ${usage.turns}`,
+    ...Object.entries(usage.totals).map(([name, count]) => `${name}: ${count}`),
+    `Context tokens: ${usage.context.tokens}${usage.context.window === undefined ? "" : ` / ${usage.context.window}`}`,
+  );
 
   section("Metadata");
   add(
@@ -131,43 +168,10 @@ export function inspectionBlocks(
   if (handoff === "unannounceable")
     add("literal", "Completion hand-off: unannounceable");
   if (stored?.model !== undefined) add("literal", `Model: ${stored.model}`);
-  const usage = result?.usage ?? capture.usage;
-  section("Usage");
-  add(
-    "literal",
-    `Turns: ${usage.turns}`,
-    ...Object.entries(usage.totals).map(([name, count]) => `${name}: ${count}`),
-    `Context tokens: ${usage.context.tokens}${usage.context.window === undefined ? "" : ` / ${usage.context.window}`}`,
-  );
-  if (!stored) return blocks;
 
-  if (stored.transcript.length) {
-    section("Transcript");
-    for (const item of stored.transcript) {
-      add(
-        "muted",
-        `${item.role}${item.model === undefined ? "" : ` (model: ${item.model})`}:`,
-      );
-      blocks.push(...transcriptBlocks(item));
-    }
-  }
-  if (stored.tools.length) {
-    section("Tools");
-    for (const tool of stored.tools) blocks.push(...toolBlocks(tool));
-  }
-  for (const [title, values] of [
-    ["Diagnostics", stored.diagnostics.map(formatDiagnosticLine)],
-    ["Links", stored.links.map(formatResultLinkLine)],
-  ] as const) {
-    if (values.length) {
-      section(title);
-      add("literal", ...values);
-    }
-  }
-  const truncation = formatTruncation(stored);
-  if (truncation) {
-    section("Truncation");
-    add("literal", truncation);
+  if (stored?.links.length) {
+    section("Links");
+    add("literal", ...stored.links.map(formatResultLinkLine));
   }
   return blocks;
 }

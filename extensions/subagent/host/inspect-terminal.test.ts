@@ -185,6 +185,22 @@ test("inspection includes mixed transcript parts, every tool, normalized usage, 
       `second line ${i}`,
     ])
       assert.ok(text.includes(expected), expected);
+  const orderedSections = [
+    "Final output:",
+    "Error:",
+    "Diagnostics:",
+    "Transcript:",
+    "Tools:",
+    "Usage:",
+    "Metadata:",
+    "Links:",
+  ];
+  for (let i = 1; i < orderedSections.length; i += 1)
+    assert.ok(
+      text.indexOf(orderedSections[i - 1] ?? "") <
+        text.indexOf(orderedSections[i] ?? ""),
+      orderedSections.join(" → "),
+    );
   await close(rig, dashboard);
 });
 
@@ -225,6 +241,13 @@ for (const truncated of [false, true])
       assert.match(text, /Truncation:/);
       assert.match(text, /Dropped to stay within bounds: 2 transcript items/);
       assert.match(text, /bytes of the final output/);
+      const outputHeading = text.indexOf("Final output:");
+      const outputWarning = text.indexOf(
+        "6 bytes of the final output were cut.",
+      );
+      assert.ok(outputHeading < outputWarning);
+      assert.ok(outputWarning < text.indexOf("bounded", outputWarning));
+      assert.ok(text.indexOf("Truncation:") < text.indexOf("Transcript:"));
       for (let i = 2; i < 10; i += 1)
         assert.ok(text.includes(`bounded text ${i}`));
     } else assert.match(text, /Result available but empty/);

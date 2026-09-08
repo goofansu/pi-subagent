@@ -135,12 +135,145 @@ test("inspection shows completed and failed outcomes without retained cancellati
       }
 });
 
-test("answer precedes accounting, transcript and tool history", () => {
-  const output = plain();
-  assert.ok(output.indexOf("Output so far:") < output.indexOf("Metadata:"));
-  assert.ok(output.indexOf("Summary") < output.indexOf("Usage:"));
-  assert.ok(output.indexOf("Summary") < output.indexOf("Transcript:"));
-  assert.ok(output.indexOf("Summary") < output.indexOf("Tools:"));
+test("retained evidence precedes accounting in the specified semantic section order", () => {
+  const orderedCapture: RunInspection = {
+    ...capture,
+    content: {
+      ...capture.content,
+      errorMessage: "backend failed",
+      diagnostics: [
+        { category: "other", message: "first diagnostic" },
+        { category: "profile", message: "second diagnostic" },
+      ],
+      links: [
+        { kind: "url", label: "native log", target: "https://example.com/log" },
+      ],
+      truncation: {
+        droppedTranscriptItems: 1,
+        droppedToolEntries: 2,
+        droppedDiagnostics: 3,
+        droppedLinks: 4,
+        truncatedTranscriptBytes: 5,
+        truncatedToolOutputBytes: 6,
+        truncatedOutputBytes: 7,
+      },
+    },
+  };
+  const ordered = inspectionBlocks(orderedCapture, "pending");
+  const headings = ordered
+    .filter((block) => block.kind === "heading")
+    .map((block) => block.text);
+  assert.deepEqual(headings, [
+    "Label: Review **literal** label",
+    "Output so far:",
+    "Error:",
+    "Diagnostics:",
+    "Truncation:",
+    "Transcript:",
+    "Tools:",
+    "Usage:",
+    "Metadata:",
+    "Links:",
+  ]);
+
+  const warning = "7 bytes of the final output were cut.";
+  const outputHeading = ordered.findIndex(
+    (block) => block.text === "Output so far:",
+  );
+  assert.equal(ordered[outputHeading + 1]?.text, warning);
+  assert.equal(
+    ordered[outputHeading + 2]?.text,
+    orderedCapture.content.finalOutput,
+  );
+
+  const truncation = ordered.find((block) =>
+    block.text.startsWith("Dropped to stay within bounds:"),
+  )?.text;
+  for (const expected of [
+    "1 transcript items",
+    "2 tool entries",
+    "3 diagnostics",
+    "4 links",
+    "5 bytes of transcript text",
+    "6 bytes of tool output",
+    "7 bytes of the final output",
+  ])
+    assert.ok(truncation?.includes(expected), expected);
+  assert.ok(
+    ordered.findIndex((block) => block.text.includes("first diagnostic")) <
+      ordered.findIndex((block) => block.text.includes("second diagnostic")),
+  );
+});
+
+test("final-output truncation warning immediately precedes an empty-output explanation", () => {
+  const empty = inspectionBlocks(
+    {
+      ...capture,
+      content: {
+        ...capture.content,
+        finalOutput: "",
+        transcript: [],
+        tools: [],
+        truncation: {
+          ...capture.content.truncation,
+          truncatedOutputBytes: 1_234,
+        },
+      },
+    },
+    "pending",
+  );
+  const outputHeading = empty.findIndex(
+    (block) => block.text === "Output so far:",
+  );
+  assert.equal(
+    empty[outputHeading + 1]?.text,
+    "1,234 bytes of the final output were cut.",
+  );
+  assert.equal(empty[outputHeading + 2]?.text, "No output produced yet.");
+  assert.equal(
+    empty[outputHeading + 3]?.text,
+    "Active snapshot available but empty: no output or transcript retained yet.",
+  );
+});
+
+test("empty optional evidence sections are omitted and missing-data explanations precede accounting", () => {
+  const sparse = inspectionBlocks(
+    {
+      ...capture,
+      content: {
+        ...createRunProjection(),
+        finalOutput: "answer",
+      },
+    },
+    "pending",
+  );
+  const sparseHeadings = sparse
+    .filter((block) => block.kind === "heading")
+    .map((block) => block.text);
+  assert.deepEqual(sparseHeadings, [
+    "Label: Review **literal** label",
+    "Output so far:",
+    "Usage:",
+    "Metadata:",
+  ]);
+
+  for (const outcome of ["ResultExpired", "unavailable"] as const) {
+    const missing: RunInspection = { ...capture, outcome };
+    const missingBlocks = inspectionBlocks(missing, "pending");
+    const explanation = missingBlocks.findIndex((block) =>
+      block.text.startsWith(
+        outcome === "ResultExpired" ? "Result expired:" : "Run unavailable:",
+      ),
+    );
+    assert.ok(explanation >= 0);
+    assert.ok(
+      explanation < missingBlocks.findIndex((block) => block.text === "Usage:"),
+    );
+    assert.ok(
+      explanation <
+        missingBlocks.findIndex((block) => block.text === "Metadata:"),
+    );
+  }
 });
 
 test("assistant Markdown renders headings, bold, inline code, lists and fenced code", () => {

@@ -165,6 +165,15 @@ function formatByteCount(amount: number): string {
   return amount.toLocaleString("en-US");
 }
 
+/** Warn that the retained final output is incomplete, using inspection vocabulary. */
+export function formatOutputTruncation(
+  truncatedBytes: number,
+): string | undefined {
+  return truncatedBytes > 0
+    ? `${formatByteCount(truncatedBytes)} bytes of the final output were cut.`
+    : undefined;
+}
+
 /**
  * What bounding removed, when it removed anything.
  *
@@ -274,10 +283,9 @@ export function runCard(source: RunCardSource): RunCard {
   );
   const links = omitWhenEmpty(result.links.map(formatResultLinkLine));
   const truncation = formatTruncation(result);
-  const outputTruncation =
-    result.truncation.truncatedOutputBytes > 0
-      ? `${formatByteCount(result.truncation.truncatedOutputBytes)} bytes of the final output were cut.`
-      : undefined;
+  const outputTruncation = formatOutputTruncation(
+    result.truncation.truncatedOutputBytes,
+  );
   // Status and duration through the completion view, which is the same value
   // the widget's settled row and the notice header read.
   const completion = completionViewOfResult(result);
