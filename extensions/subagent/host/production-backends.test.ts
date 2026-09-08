@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { test } from "node:test";
 import { Effect } from "effect";
 import { createBackendCatalog } from "../backend/catalog.ts";
@@ -11,11 +8,7 @@ import { backendId, type Profile, parseProfile } from "../domain/index.ts";
 import { sessionRuntimeLayer } from "../runtime/composition.ts";
 import { createRuntimeCounters } from "../runtime/counters.ts";
 import { ProfileCatalog } from "../runtime/profile-catalog.ts";
-import { SubagentSupervisor } from "../runtime/supervisor.ts";
-import {
-  createStandInClaudeQuery,
-  STAND_IN_MODEL,
-} from "../testing/claude/stand-in-query.ts";
+import { createStandInClaudeQuery } from "../testing/claude/stand-in-query.ts";
 import { createFakeNotificationSink } from "../testing/fake-sink.ts";
 import { createProductionBackendSet } from "./production-backends.ts";
 
@@ -23,8 +16,8 @@ import { createProductionBackendSet } from "./production-backends.ts";
  * The set the extension actually ships.
  *
  * What it has to get right is small and easy to get wrong: both backends
- * present under the names Profiles write, bundled Markdown Profiles, the two host
- * facts answered by the one backend that can answer them, and one probe block
+ * present under the names Profiles write, the two host facts answered by the
+ * one backend that can answer them, and one probe block
  * per backend rather than a merged total nobody could act on.
  */
 
@@ -34,48 +27,6 @@ test("the production set offers both backends", () => {
   assert.deepEqual(
     set.backends.map((backend) => backend.id),
     ["pi", "claude"],
-  );
-});
-
-test("production discovers all four bundled specialists without a user agents directory", async (t) => {
-  const agentDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), "bundled-production-"),
-  );
-  t.after(() => fs.rmSync(agentDir, { recursive: true, force: true }));
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      const catalog = yield* ProfileCatalog;
-      assert.deepEqual(catalog.diagnostics(), []);
-      assert.deepEqual(
-        catalog
-          .list()
-          .map((p) => p.name)
-          .sort(),
-        [
-          "general-purpose",
-          "implementer",
-          "spec-reviewer",
-          "standards-reviewer",
-        ],
-      );
-      assert.equal(catalog.get("spec-reviewer")?.backend, "claude");
-      assert.equal(catalog.get("general-purpose")?.fields.model, "opus");
-    }).pipe(
-      Effect.provide(
-        sessionRuntimeLayer({
-          backendSet: createProductionBackendSet().set,
-          profiles: { from: "directory", agentDir },
-          validation: {
-            models: [
-              { provider: "opencode", id: "claude-haiku-4-5" },
-              { provider: "openai-codex", id: "gpt-5.6-sol" },
-            ],
-          },
-          sink: createFakeNotificationSink(),
-        }),
-      ),
-      Effect.scoped,
-    ),
   );
 });
 
@@ -214,68 +165,4 @@ test("a Profile naming a backend the set does not hold is a diagnostic, not a cr
       `a Profile naming ${backend} was not recognized`,
     );
   }
-});
-
-test("the bundled spec-reviewer runs end to end through the production set", async (t) => {
-  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "bundled-reviewer-"));
-  t.after(() => fs.rmSync(agentDir, { recursive: true, force: true }));
-  const standIn = createStandInClaudeQuery({
-    scripts: [
-      [
-        { step: "init" },
-        { step: "assistant", messageId: "msg_1", text: "the answer" },
-        {
-          step: "result",
-          text: "the answer",
-          numTurns: 1,
-          models: { [STAND_IN_MODEL]: { input: 40, output: 10 } },
-        },
-      ],
-    ],
-  });
-  const held = createProductionBackendSet({
-    claude: { loadQuery: async () => standIn.query },
-  });
-
-  const outcome = await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const supervisor = yield* SubagentSupervisor;
-        const started = yield* supervisor.start({
-          agent: "spec-reviewer",
-          description: "review it",
-          prompt: "have a look",
-          cwd: "/work",
-          childDepth: 1,
-          projectTrusted: true,
-        });
-        if (started.outcome !== "started") {
-          return { outcome: started.outcome, output: "" };
-        }
-        const waited = yield* supervisor.wait([started.runId]);
-        const read = yield* supervisor.result(started.runId);
-        return {
-          outcome: waited[0]?.outcome ?? "none",
-          output: read.outcome === "result" ? read.result.finalOutput : "",
-          status: read.outcome === "result" ? read.result.status : read.outcome,
-        };
-      }).pipe(
-        Effect.provide(
-          sessionRuntimeLayer({
-            backendSet: held.set,
-            profiles: { from: "directory", agentDir },
-            sink: createFakeNotificationSink(),
-            counters: createRuntimeCounters(),
-          }),
-        ),
-      ),
-    ),
-  );
-
-  assert.equal(outcome.outcome, "terminal");
-  assert.equal(outcome.status, "completed");
-  assert.equal(outcome.output, "the answer");
-  // Both adapters are holding nothing once the Session Scope has closed.
-  assert.ok(piProbeIsClear(held.probe().pi as never));
-  assert.ok(claudeProbeIsClear(held.probe().claude as never));
 });

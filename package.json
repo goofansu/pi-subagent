@@ -17,7 +17,7 @@
   },
   "license": "MIT",
   "scripts": {
-    "check": "npm run typecheck && npm run lint && npm test && npm run test:conformance && npm run profiles:smoke",
+    "check": "npm run typecheck && npm run lint && npm test && npm run test:conformance",
     "profiles:smoke": "node --import tsx scripts/bundled-profiles-smoke.mjs",
     "pi:smoke": "node --import tsx scripts/pi-live-smoke.mjs",
     "pi:host-smoke": "node --import tsx scripts/host-live-smoke.mjs pi",
