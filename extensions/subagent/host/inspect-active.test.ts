@@ -257,8 +257,8 @@ for (const truncated of [false, true])
       for (const value of [
         "bounded item 5",
         "bounded item 11",
+        "Tool call · read",
         "read — running",
-        "call-id",
         "full tool output",
         "second tool line",
         "user text",
@@ -295,6 +295,9 @@ for (const truncated of [false, true])
       );
       assert.ok(outputHeading < outputWarning);
       assert.ok(outputWarning < text.indexOf("bounded", outputWarning));
+      assert.doesNotMatch(text, /call-id/);
+      assert.match(text, /User:/);
+      assert.match(text, /Tool output:/);
     } else assert.match(text, /Active snapshot available but empty/);
     await close(rig, dashboard);
   });

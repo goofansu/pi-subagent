@@ -93,6 +93,7 @@ test("inspection includes mixed transcript parts, every tool, normalized usage, 
         parts: [
           { kind: "text", text: "mixed text" },
           { kind: "tool_call", name: "mixed-call", callId: "mixed-id" },
+          { kind: "text", text: "text after mixed call" },
         ],
       },
     },
@@ -144,7 +145,10 @@ test("inspection includes mixed transcript parts, every tool, normalized usage, 
       },
     },
     emitText("final answer\nlast answer line"),
-    { step: "fail", message: "failure explanation" },
+    {
+      step: "fail",
+      message: "failure explanation for Call ID: retained-error-id",
+    },
   ];
   const rig = hostRig(t, { resumableSteps: [steps] });
   await rig.host.sessionStart();
@@ -156,10 +160,10 @@ test("inspection includes mixed transcript parts, every tool, normalized usage, 
   const text = screen(rig);
   for (const expected of [
     "mixed text",
-    "mixed-call",
-    "mixed-id",
-    "transcript-model",
-    "primary-model",
+    "Tool call · mixed-call",
+    "text after mixed call",
+    "Reported model: transcript-model",
+    "Model: primary-model",
     "normalized user text",
     "normalized tool text",
     "input: 123",
@@ -173,14 +177,16 @@ test("inspection includes mixed transcript parts, every tool, normalized usage, 
     "https://example.com/report",
     "final answer",
     "last answer line",
-    "failure explanation",
+    "failure explanation for Call ID: retained-error-id",
     "Run status: failed",
+    "Assistant:",
+    "User:",
+    "Tool output:",
   ])
     assert.ok(text.includes(expected), `${expected}\n${text}`);
   for (let i = 0; i < 9; i += 1)
     for (const expected of [
       `tool-${i} — completed`,
-      `call-${i}`,
       `tool output ${i}`,
       `second line ${i}`,
     ])
@@ -201,6 +207,8 @@ test("inspection includes mixed transcript parts, every tool, normalized usage, 
         text.indexOf(orderedSections[i] ?? ""),
       orderedSections.join(" → "),
     );
+  assert.doesNotMatch(text, /mixed-id|call-[0-8]/);
+  assert.equal(text.split("Assistant:").length - 1, 3);
   await close(rig, dashboard);
 });
 
