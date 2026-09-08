@@ -923,6 +923,76 @@ test("a Run cancelled before any frame settles cancelled with nothing at all", a
   assert.ok(claudeProbeIsClear(nativeProbeAfterClose));
 });
 
+test("cancelling an unfinished guided Turn remains cancelled and keeps both Turns' output", async () => {
+  const { value } = await withClaudeSession(
+    {
+      scripts: [
+        [
+          { step: "init" },
+          { step: "assistant", messageId: "msg_1", text: "the first answer" },
+          // Guidance is already provider-visible when the prompt-correlated
+          // success arrives, so this is a Turn boundary rather than Run
+          // settlement.
+          { step: "await-input" },
+          { step: "result", text: "the first answer", correlate: "prompt" },
+          { step: "echo-input" },
+          {
+            step: "assistant",
+            messageId: "msg_2",
+            text: "the guided partial answer",
+          },
+          { step: "hang" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(
+          yield* rig.supervisor.start(claudeRigRequest()),
+        );
+        yield* untilQueried(rig);
+        const steered = yield* rig.supervisor.steer(started.runId, {
+          type: "steer",
+          text: "also inspect cancellation",
+        });
+        yield* untilPushed(rig);
+        yield* until(
+          "the guided Turn's partial assistant output to be observable",
+          Effect.map(rig.supervisor.inspectRun(started.runId), (inspection) =>
+            inspection.outcome === "active"
+              ? inspection.content.finalOutput === "the guided partial answer"
+              : false,
+          ),
+        );
+        yield* rig.supervisor.cancel([started.runId]);
+        yield* untilTerminal(rig, started.runId);
+        return {
+          steered: steered.outcome,
+          result: resultOf(yield* rig.supervisor.result(started.runId)),
+        };
+      }),
+  );
+
+  assert.equal(value.steered, "accepted");
+  assert.equal(value.result.status, "cancelled");
+  assert.equal(value.result.cancellationReason, "requested");
+  assert.equal(value.result.finalOutput, "the guided partial answer");
+  assert.deepEqual(
+    value.result.transcript.map((item) => ({
+      role: item.role,
+      text: item.parts
+        .filter((part) => part.kind === "text")
+        .map((part) => (part.kind === "text" ? part.text : ""))
+        .join(""),
+    })),
+    [
+      { role: "assistant", text: "the first answer" },
+      { role: "user", text: "also inspect cancellation" },
+      { role: "assistant", text: "the guided partial answer" },
+    ],
+  );
+});
+
 test("a successful result already observed survives a later cancel", async () => {
   const { value } = await withClaudeSession(
     {
