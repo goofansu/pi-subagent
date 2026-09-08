@@ -82,10 +82,18 @@ test("panel uses the terminal surface without borrowing a message background", (
   );
 });
 
-test("borderless screen aligns title, body and bottom navigation with a quiet separator", () => {
+test("spacious panel owns paired outer padding around inset content and chrome", () => {
   const viewport = dashboardViewport(40, 24);
   assert.equal(viewport.contentWidth, 38);
-  assert.equal(viewport.bodyHeight, 20);
+  assert.equal(viewport.paddingTop, 1);
+  assert.equal(viewport.paddingBottom, 1);
+  assert.equal(viewport.bodyHeight, 18);
+  assert.equal(
+    dashboardBody({ ...viewport, paddingTop: 0, paddingBottom: 0 }, 1)
+      .bodyHeight - viewport.bodyHeight,
+    2,
+    "paired padding is deducted exactly once",
+  );
   const lines = dashboardPanel(
     viewport,
     "Subagent dashboard",
@@ -93,13 +101,14 @@ test("borderless screen aligns title, body and bottom navigation with a quiet se
     "Esc close",
     theme,
   ).map(stripVTControlCharacters);
-  assert.equal(lines[0], " Subagent dashboard".padEnd(40));
-  assert.equal(lines[1], " ".repeat(40));
-  assert.equal(lines[2], " No Subagents in this Session.".padEnd(40));
-  assert.equal(lines[3], " ".repeat(40));
+  assert.equal(lines[0], " ".repeat(40));
+  assert.equal(lines[1], " Subagent dashboard".padEnd(40));
+  assert.equal(lines[2], " ".repeat(40));
+  assert.equal(lines[3], " No Subagents in this Session.".padEnd(40));
   assert.doesNotMatch(lines.join("\n"), /[╭╮╰╯│├┤]/);
-  assert.equal(lines[22], ` ${"─".repeat(38)} `);
-  assert.equal(lines[23], " Esc close".padEnd(40));
+  assert.equal(lines[21], ` ${"─".repeat(38)} `);
+  assert.equal(lines[22], " Esc close".padEnd(40));
+  assert.equal(lines[23], " ".repeat(40));
 });
 
 test("selection backgrounds reset before the gutter", () => {
@@ -166,7 +175,7 @@ test("a multi-line header takes its rows from the body and is painted by its aut
   const header = ["first", "second", "third", "fourth"];
   const viewport = dashboardViewport(40, 24, header.length);
   assert.equal(viewport.headerHeight, 4);
-  assert.equal(viewport.bodyHeight, 17);
+  assert.equal(viewport.bodyHeight, 15);
   const lines = dashboardPanel(
     viewport,
     header,
@@ -175,18 +184,20 @@ test("a multi-line header takes its rows from the body and is painted by its aut
     theme,
   ).map(stripVTControlCharacters);
   assert.equal(lines.length, 24);
-  assert.deepEqual(lines.slice(0, 5), [
+  assert.deepEqual(lines.slice(0, 6), [
+    " ".repeat(40),
     ...header.map((line) => ` ${line}`.padEnd(40)),
     " ".repeat(40),
   ]);
-  assert.equal(lines[5], " body".padEnd(40));
-  assert.equal(lines[22], ` ${"─".repeat(38)} `);
-  assert.equal(lines[23], " Esc close".padEnd(40));
+  assert.equal(lines[6], " body".padEnd(40));
+  assert.equal(lines[21], ` ${"─".repeat(38)} `);
+  assert.equal(lines[22], " Esc close".padEnd(40));
+  assert.equal(lines[23], " ".repeat(40));
   assert.deepEqual(
     dashboardPanel(viewport, header, ["body"], "Esc close", {
       ...theme,
       fg: () => "painted",
-    }).map(stripVTControlCharacters)[0],
+    }).map(stripVTControlCharacters)[1],
     " first".padEnd(40),
   );
 });
@@ -205,7 +216,7 @@ test("a header too tall for the screen is shortened before the footer is", () =>
     const viewport = dashboardViewport(40, rows, 4);
     assert.equal(
       viewport.headerHeight + viewport.bodyHeight,
-      Math.max(0, height - (viewport.spacious ? 3 : 1)),
+      Math.max(0, height - (viewport.spacious ? 5 : 1)),
     );
     const lines = dashboardPanel(
       viewport,
@@ -216,7 +227,42 @@ test("a header too tall for the screen is shortened before the footer is", () =>
     );
     assert.equal(lines.length, height, `${height} rows`);
     for (const line of lines) assert.equal(visibleWidth(line), 40);
-    if (height > 1)
-      assert.match(stripVTControlCharacters(lines.at(-1) ?? ""), /^ Esc close/);
+    if (height > 1) {
+      const footerIndex = height - 1 - viewport.paddingBottom;
+      assert.match(
+        stripVTControlCharacters(lines[footerIndex] ?? ""),
+        /^ Esc close/,
+      );
+    }
+  }
+});
+
+test("vertical padding appears as a pair exactly at the spacious threshold", () => {
+  for (const [rows, padding, bodyHeight] of [
+    [9, 0, 7],
+    [10, 1, 4],
+  ] as const) {
+    const viewport = dashboardViewport(40, rows, 1);
+    assert.equal(viewport.paddingTop, padding);
+    assert.equal(viewport.paddingBottom, padding);
+    assert.equal(viewport.bodyHeight, bodyHeight);
+    const lines = dashboardPanel(
+      viewport,
+      "Title",
+      ["body"],
+      "Esc close",
+      theme,
+    );
+    const plain = lines.map(stripVTControlCharacters);
+    if (padding) {
+      assert.equal(plain[0], " ".repeat(40));
+      assert.equal(plain.at(-1), " ".repeat(40));
+      assert.ok(lines[0]?.startsWith("\x1b[49m"));
+      assert.ok(!lines[0]?.includes("\x1b[44m"));
+      assert.ok(!lines.at(-1)?.includes("\x1b[44m"));
+    } else {
+      assert.match(plain[0] ?? "", /^ Title/);
+      assert.match(plain.at(-1) ?? "", /^ Esc close/);
+    }
   }
 });

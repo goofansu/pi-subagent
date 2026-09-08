@@ -147,7 +147,11 @@ const inspection = () => {
 };
 
 const footer = (lines: readonly string[]) =>
-  stripVTControlCharacters(lines.at(-1) ?? "").trim();
+  stripVTControlCharacters(
+    [...lines]
+      .reverse()
+      .find((line) => stripVTControlCharacters(line).trim()) ?? "",
+  ).trim();
 
 /**
  * The ladder a page climbs down as its screen narrows.
@@ -178,8 +182,8 @@ test("the screen the host draws on arrives as an event and lands on the page", (
   dashboard.draw(80, 24);
   assert.equal(dashboard.page().viewport.width, 80);
   assert.equal(dashboard.page().viewport.height, 24);
-  // The footer, the blank line and the separator, then the banner's four rows.
-  assert.equal(dashboard.page().viewport.bodyHeight, 17);
+  // Paired outer padding, footer, body gap and separator, then the banner.
+  assert.equal(dashboard.page().viewport.bodyHeight, 15);
 });
 
 test("the header is one case: the banner's four rows and a title's one both come out of the body", () => {
@@ -193,13 +197,13 @@ test("the header is one case: the banner's four rows and a title's one both come
   const short = overview();
   short.draw(80, 11);
   assert.equal(short.page().header.length, 1);
-  assert.equal(short.page().viewport.bodyHeight, 7);
+  assert.equal(short.page().viewport.bodyHeight, 5);
 
   const deeper = history();
   deeper.draw(80, 24);
   assert.equal(deeper.page().header.length, 1);
   assert.equal(deeper.page().viewport.headerHeight, 1);
-  assert.equal(deeper.page().viewport.bodyHeight, 20);
+  assert.equal(deeper.page().viewport.bodyHeight, 18);
   assert.match(
     stripVTControlCharacters(deeper.page().header[0]),
     /^Subagent dashboard · run history · explore · newest first$/,
@@ -209,7 +213,7 @@ test("the header is one case: the banner's four rows and a title's one both come
 test("one page key moves a selection by exactly one body height, in both directions", () => {
   const dashboard = overview();
   dashboard.draw(80, 10);
-  assert.equal(dashboard.page().viewport.bodyHeight, 6);
+  assert.equal(dashboard.page().viewport.bodyHeight, 4);
   assert.match(dashboard.plain(80, 10).join("\n"), /› 任务0/);
 
   for (const [forward, back] of [
@@ -217,7 +221,7 @@ test("one page key moves a selection by exactly one body height, in both directi
     ["right", "left"],
   ] as const) {
     dashboard.press(forward);
-    assert.match(dashboard.plain(80, 10).join("\n"), /› 任务6/);
+    assert.match(dashboard.plain(80, 10).join("\n"), /› 任务4/);
     dashboard.press(back);
     assert.match(dashboard.plain(80, 10).join("\n"), /› 任务0/);
   }
@@ -258,28 +262,57 @@ test("a keystroke that means two things is read by the page it lands on", () => 
   const list = overview();
   list.draw(80, 10);
   list.send(bound);
-  assert.match(list.plain(80, 10).join("\n"), /› 任务6/);
+  assert.match(list.plain(80, 10).join("\n"), /› 任务4/);
 
   const deep = inspection();
   deep.draw(40, 10);
   deep.send(bound);
-  assert.equal(deep.page().offset, 6);
+  assert.equal(deep.page().offset, 4);
 });
 
-test("a page draws inside its screen at every width, whatever the Labels hold", () => {
-  const dashboard = overview();
-  for (const width of [0, 1, 2, 3, 8, 20, 40, 80]) {
-    const lines = dashboard.draw(width, 10);
-    assert.equal(lines.length, 10);
-    assert.ok(lines.every((line) => visibleWidth(line) === width));
-    assert.ok(lines.every((line) => !line.includes("�")));
+test("all pages share paired spacious padding and exact screen bounds", () => {
+  for (const dashboard of [overview(), history(), inspection()]) {
+    for (const [width, rows] of [
+      [0, 0],
+      [1, 1],
+      [40, 9],
+      [40, 10],
+      [80, 24],
+    ] as const) {
+      const lines = dashboard.draw(width, rows);
+      assert.equal(lines.length, rows);
+      assert.ok(lines.every((line) => visibleWidth(line) === width));
+      assert.ok(lines.every((line) => !line.includes("�")));
+      const plain = lines.map(stripVTControlCharacters);
+      if (rows >= 10) {
+        assert.equal(plain[0], " ".repeat(width));
+        assert.equal(plain.at(-1), " ".repeat(width));
+        if (width >= 40)
+          assert.ok(
+            plain
+              .at(-2)
+              ?.trim()
+              .includes(
+                dashboard.page().kind === "overview" ? "close" : "back",
+              ),
+          );
+      } else if (rows === 9) {
+        assert.match(plain[0] ?? "", /^ Subagent dashboard/);
+        assert.ok(
+          plain
+            .at(-1)
+            ?.trim()
+            .includes(dashboard.page().kind === "overview" ? "close" : "back"),
+        );
+      }
+    }
   }
 });
 
 test("an inspection scrolls a line and a page, and clamps at both ends of its content", () => {
   const dashboard = inspection();
   const top = dashboard.draw(40, 10);
-  assert.equal(dashboard.page().viewport.bodyHeight, 6);
+  assert.equal(dashboard.page().viewport.bodyHeight, 4);
   assert.equal(dashboard.page().offset, 0);
 
   dashboard.press("up", "left");
@@ -289,15 +322,15 @@ test("an inspection scrolls a line and a page, and clamps at both ends of its co
   dashboard.press("up");
   assert.deepEqual(dashboard.draw(40, 10), top);
   dashboard.press("right");
-  assert.equal(dashboard.page().offset, 6);
-  assert.match(footer(dashboard.draw(40, 10)), /7-12\//);
+  assert.equal(dashboard.page().offset, 4);
+  assert.match(footer(dashboard.draw(40, 10)), /5-8\//);
   dashboard.press("left");
   assert.deepEqual(dashboard.draw(40, 10), top);
 
   const total = dashboard.page().lines.length;
   for (let i = 0; i < total; i += 1) dashboard.press("right");
   const bottom = dashboard.draw(40, 10);
-  assert.equal(dashboard.page().offset, total - 6);
+  assert.equal(dashboard.page().offset, total - 4);
   assert.match(footer(bottom), new RegExp(`${total}/${total}`));
   dashboard.press("right", "down");
   assert.deepEqual(dashboard.draw(40, 10), bottom);
@@ -308,7 +341,7 @@ test("a scroll clamps back into a screen that has grown taller under it", () => 
   dashboard.draw(40, 10);
   for (let i = 0; i < 200; i += 1) dashboard.press("right");
   const total = dashboard.page().lines.length;
-  assert.equal(dashboard.page().offset, total - 6);
+  assert.equal(dashboard.page().offset, total - 4);
   // A screen with room for all of it scrolls back to the top rather than
   // holding an offset the content no longer reaches.
   const widened = dashboard.plain(160, 200).join("\n");
@@ -333,7 +366,7 @@ test("a scroll clamps back into content that has grown shorter under it", () => 
   });
   dashboard.draw(40, 10);
   assert.ok(dashboard.page().offset < deep);
-  assert.equal(dashboard.page().offset, dashboard.page().lines.length - 6);
+  assert.equal(dashboard.page().offset, dashboard.page().lines.length - 4);
   assert.match(
     dashboard.page().lines.map(stripVTControlCharacters).join("\n"),
     /short output/,

@@ -166,6 +166,8 @@ export interface StandInHost {
   readonly customLines: (width?: number, rows?: number) => readonly string[];
   readonly customKey: (data: string) => void;
   readonly customOpen: () => boolean;
+  /** Options from the most recently opened custom surface. */
+  readonly customOptions: () => unknown;
   /** Retain host callbacks to exercise late invocations after disposal. */
   readonly captureCustom: () => Component | undefined;
   readonly customDisposals: () => number;
@@ -237,6 +239,7 @@ export function createStandInHost(
   };
 
   let custom: (Component & { dispose?(): void }) | undefined;
+  let customOptions: unknown;
   let customDisposals = 0;
   let customRenderRequests = 0;
   const customTui = {
@@ -253,8 +256,10 @@ export function createStandInHost(
         keys: unknown,
         done: () => void,
       ) => Component,
+      surfaceOptions?: unknown,
     ) =>
       new Promise<void>((resolve) => {
+        customOptions = surfaceOptions;
         const done = () => {
           const closing = custom;
           custom = undefined;
@@ -393,6 +398,7 @@ export function createStandInHost(
     },
     customKey: (data) => custom?.handleInput?.(data),
     customOpen: () => custom !== undefined,
+    customOptions: () => customOptions,
     captureCustom: () => custom,
     customDisposals: () => customDisposals,
     customRenderRequests: () => customRenderRequests,
