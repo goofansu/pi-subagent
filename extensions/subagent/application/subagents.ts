@@ -27,6 +27,7 @@ import {
   type RunId,
 } from "../domain/index.ts";
 import {
+  type AgentToolRenderDetails,
   type CollectedRuns,
   collectedRunOf,
   formatCancelOutcomes,
@@ -57,13 +58,14 @@ import type {
 export interface ToolResponse {
   readonly text: string;
   /**
-   * What the renderer draws the collapsed row from.
+   * Presentation-only facts the renderer draws the collapsed row from.
    *
-   * `undefined` for the operations whose answer is already one line —
-   * `agent_cancel` and `agent_steer` — because a summary of a sentence is the
-   * sentence.
+   * Migrated variants are explicitly discriminated. The old collected and
+   * resumed shapes remain while their operation-specific renderers are moved
+   * through the unified family in later tracer bullets. `undefined` remains a
+   * readable rejection/fallback, never a statement about Result delivery.
    */
-  readonly details?: CollectedRuns | ResumedRun;
+  readonly details?: AgentToolRenderDetails | CollectedRuns | ResumedRun;
   /**
    * The Runs whose Result this response actually handed back.
    *
@@ -209,6 +211,16 @@ const start = (
     return {
       text: formatStartOutcome(input.agent, outcome, available),
       deliveredRuns: [],
+      ...(outcome.outcome === "started"
+        ? {
+            details: {
+              kind: "start",
+              agent: input.agent,
+              subagentId: outcome.subagentId,
+              runId: outcome.runId,
+            } satisfies AgentToolRenderDetails,
+          }
+        : {}),
     };
   });
 
