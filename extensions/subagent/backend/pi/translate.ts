@@ -43,6 +43,9 @@ import {
 } from "../../domain/index.ts";
 import { finishedShellActivity, toolActivity } from "../activity.ts";
 
+/** The shared diagnostic category used for provider failures in this adapter. */
+export const PI_BACKEND_FAILURE_CATEGORY = "backend-failure";
+
 /** What a confined provider diagnostic says instead of provider text. */
 export const PI_DIAGNOSTIC_REDACTED = "[redacted]";
 
@@ -60,7 +63,10 @@ export const PI_TERMINAL_ABORT_CATEGORY = "Pi reported an aborted message";
  * expressed in v2's typed diagnostic.
  */
 export function confined(what: string): RunDiagnostic {
-  return runDiagnostic("backend-failure", `${what}: ${PI_DIAGNOSTIC_REDACTED}`);
+  return runDiagnostic(
+    PI_BACKEND_FAILURE_CATEGORY,
+    `${what}: ${PI_DIAGNOSTIC_REDACTED}`,
+  );
 }
 
 /** The same confinement, for a Control that the session refused. */
@@ -531,8 +537,8 @@ export function withoutInitialGoal(
   });
 }
 
-/** Pi's terminal outcome, kept private to this adapter. */
-export type PiTerminalOutcome = "answered" | "failed" | "aborted";
+/** Pi's terminal outcome, kept private to this module. */
+type PiTerminalOutcome = "answered" | "failed" | "aborted";
 
 /**
  * The terminal evidence one execution retains.

@@ -442,6 +442,41 @@ test("a resolved prompt with a terminal provider error settles failed with parti
   );
 });
 
+test("a terminal provider error without errorMessage synthesizes a confined diagnostic", async () => {
+  const { value } = await withPiSession(
+    {
+      scripts: [
+        [
+          {
+            step: "assistant",
+            text: "partial answer",
+            stopReason: "error",
+          },
+          { step: "terminal" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* untilTerminal(rig, started.runId);
+        return yield* rig.supervisor.result(started.runId);
+      }),
+  );
+
+  assert.equal(value.outcome, "result");
+  if (value.outcome === "result") {
+    assert.equal(value.result.status, "failed");
+    assert.equal(value.result.finalOutput, "partial answer");
+    assert.deepEqual(value.result.diagnostics, [
+      {
+        category: "backend-failure",
+        message: "Pi reported a failed message: [redacted]",
+      },
+    ]);
+  }
+});
+
 test("a retrying provider error remains intermediate when the final attempt succeeds", async () => {
   const { value } = await withPiSession(
     {
@@ -531,6 +566,7 @@ test("a terminal provider abort never answers and core cancellation keeps its re
   if (normal.value.outcome === "result") {
     assert.equal(normal.value.result.status, "failed");
     assert.equal(normal.value.result.finalOutput, "partial");
+    assert.deepEqual(normal.value.result.diagnostics, []);
   }
 
   const cancelled = await withPiSession(
@@ -560,6 +596,7 @@ test("a terminal provider abort never answers and core cancellation keeps its re
     assert.equal(cancelled.value.result.status, "cancelled");
     assert.equal(cancelled.value.result.cancellationReason, "requested");
     assert.equal(cancelled.value.result.finalOutput, "partial");
+    assert.deepEqual(cancelled.value.result.diagnostics, []);
   }
 });
 

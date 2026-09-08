@@ -46,6 +46,7 @@ import {
   createPiEventTranslator,
   currentRunMessages,
   isPiUserText,
+  PI_BACKEND_FAILURE_CATEGORY,
   PI_TERMINAL_ABORT_CATEGORY,
   PI_TERMINAL_FAILURE_CATEGORY,
   type PiTerminalEvidence,
@@ -140,7 +141,7 @@ export function runPiExecution(
           for (const observation of piMessageObservations(message)) {
             if (
               observation.kind === "diagnostic" &&
-              observation.diagnostic.category === "backend-failure"
+              observation.diagnostic.category === PI_BACKEND_FAILURE_CATEGORY
             ) {
               terminalFailureObserved = true;
             }
@@ -489,14 +490,10 @@ function emitTerminalDiagnosticIfNeeded(
   alreadyObserved: boolean,
   io: ExecutionIO,
 ): Effect.Effect<void> {
-  if (terminal.outcome === "answered" || alreadyObserved) return Effect.void;
-  const category =
-    terminal.outcome === "failed"
-      ? PI_TERMINAL_FAILURE_CATEGORY
-      : PI_TERMINAL_ABORT_CATEGORY;
+  if (terminal.outcome !== "failed" || alreadyObserved) return Effect.void;
   return io.emit({
     kind: "diagnostic",
-    diagnostic: confined(category),
+    diagnostic: confined(PI_TERMINAL_FAILURE_CATEGORY),
   });
 }
 
