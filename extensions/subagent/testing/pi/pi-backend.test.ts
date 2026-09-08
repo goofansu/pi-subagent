@@ -605,7 +605,65 @@ test("a terminal provider abort never answers and core cancellation keeps its re
   }
 });
 
-test("a terminal answer observed before the abort settles answered", async () => {
+test("cancellation during a later native execution discards earlier terminal evidence", async () => {
+  const { value } = await withPiSession(
+    {
+      scripts: [
+        [
+          {
+            step: "assistant",
+            text: "first execution answer",
+            usage: { input: 10, output: 1 },
+          },
+          { step: "terminal" },
+          { step: "agent-start" },
+          {
+            step: "assistant",
+            text: "second execution partial",
+            usage: { input: 20, output: 2 },
+          },
+          { step: "hang" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* until(
+          "the second native execution to begin",
+          Effect.sync(() => rig.standIn.record().agentStarts === 1),
+        );
+        yield* rig.supervisor.cancel([started.runId]);
+        yield* untilTerminal(rig, started.runId);
+        return yield* rig.supervisor.result(started.runId);
+      }),
+  );
+
+  assert.equal(value.outcome, "result");
+  if (value.outcome === "result") {
+    assert.equal(value.result.status, "cancelled");
+    assert.equal(value.result.cancellationReason, "requested");
+    assert.equal(value.result.finalOutput, "second execution partial");
+    assert.deepEqual(
+      value.result.transcript.map((item) =>
+        item.parts
+          .map((part) => (part.kind === "text" ? part.text : ""))
+          .join(""),
+      ),
+      ["first execution answer", "second execution partial"],
+    );
+    assert.deepEqual(value.result.usage.totals, {
+      input: 30,
+      output: 3,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+    });
+    assert.equal(value.result.usage.turns, 2);
+  }
+});
+
+test("terminal evidence from the actual latest native execution survives late cancellation", async () => {
   const { value } = await withPiSession(
     {
       scripts: [
@@ -619,7 +677,10 @@ test("a terminal answer observed before the abort settles answered", async () =>
     (rig) =>
       Effect.gen(function* () {
         const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
-        yield* untilPrompted(rig);
+        yield* until(
+          "the latest native execution to end",
+          Effect.sync(() => rig.standIn.record().terminalEvents === 1),
+        );
         yield* rig.supervisor.cancel([started.runId]);
         yield* untilTerminal(rig, started.runId);
         const result = yield* rig.supervisor.result(started.runId);
