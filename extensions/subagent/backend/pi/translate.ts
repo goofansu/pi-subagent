@@ -267,6 +267,8 @@ export type PiEventReading =
   | { readonly kind: "activity"; readonly observation: RunObservation }
   /** A tool call starting or finishing, already translated. */
   | { readonly kind: "tool"; readonly observations: readonly RunObservation[] }
+  /** A new native execution within the managed Run. */
+  | { readonly kind: "execution-start" }
   /** The non-retrying terminal frame, with the messages it carried. */
   | { readonly kind: "terminal"; readonly messages: readonly unknown[] }
   /** Anything else Pi emits, which this adapter has no use for. */
@@ -373,6 +375,9 @@ export function readPiEvent(event: unknown): PiEventReading {
   if (!isRecord(event)) return IGNORED;
   if (event.type === "message_end" && event.message !== undefined) {
     return { kind: "message", message: event.message };
+  }
+  if (event.type === "agent_start") {
+    return { kind: "execution-start" };
   }
   if (
     event.type === "tool_execution_start" ||

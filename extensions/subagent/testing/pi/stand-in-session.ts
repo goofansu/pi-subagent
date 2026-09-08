@@ -109,6 +109,8 @@ export type PiScriptStep =
     }
   /** Emit the terminal frame. `willRetry` means it is not terminal after all. */
   | { readonly step: "terminal"; readonly willRetry?: boolean }
+  /** Begin another native execution inside the same prompt. */
+  | { readonly step: "agent-start" }
   /** Reject the prompt. */
   | { readonly step: "reject"; readonly message?: string }
   /** Hang until the session is aborted. */
@@ -144,6 +146,8 @@ export interface StandInRecord {
   readonly prompts: number;
   /** Terminal events emitted, including retrying events. */
   readonly terminalEvents: number;
+  /** Additional native executions begun inside a prompt. */
+  readonly agentStarts: number;
   /** Prompts begun after the session was disposed, which the SDK allows. */
   readonly promptsAfterDispose: number;
   /** `clearQueue` calls. */
@@ -221,6 +225,7 @@ export function createStandInPiSession(
   let binds = 0;
   let prompts = 0;
   let terminalEvents = 0;
+  let agentStarts = 0;
   let promptsAfterDispose = 0;
   let queueClears = 0;
   let aborts = 0;
@@ -388,6 +393,11 @@ export function createStandInPiSession(
             messages: [...messages],
             willRetry: step.willRetry === true,
           });
+          break;
+        }
+        case "agent-start": {
+          agentStarts += 1;
+          emit({ type: "agent_start" });
           break;
         }
         case "reject": {
@@ -558,6 +568,7 @@ export function createStandInPiSession(
       ),
       prompts,
       terminalEvents,
+      agentStarts,
       promptsAfterDispose,
       queueClears,
       aborts,

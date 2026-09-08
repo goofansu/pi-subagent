@@ -611,7 +611,8 @@ export function runClaudeExecution(
 /**
  * What a Claude Run's terminal snapshot can honestly replace.
  *
- * Turns and the model, and **never a transcript**. There is no authoritative
+ * Complete successful result text, turns, and the model, and **never a
+ * transcript**. There is no authoritative
  * message list to read at the end of a Query — the frames were the transcript,
  * and they have already been reported — so a snapshot claiming one would be a
  * snapshot the adapter had made up. That is why the Claude BackendAgent
@@ -621,8 +622,10 @@ export function runClaudeExecution(
  */
 function reconcile(translator: ClaudeTranslator): TerminalReconciliation {
   const model = translator.primaryModel();
+  const finalOutput = translator.finalOutput();
   return {
     turns: translator.turns(),
     ...(model === undefined ? {} : { model }),
+    ...(finalOutput === undefined ? {} : { finalOutput }),
   };
 }

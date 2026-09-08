@@ -77,6 +77,19 @@ type NativeSettlement =
   | { readonly kind: "native"; readonly error: unknown }
   | { readonly kind: "overflow" };
 
+interface RecordedTerminalEvidence {
+  readonly generation: number;
+  readonly evidence: PiTerminalEvidence;
+}
+
+/** Terminal evidence is eligible only while its native execution is current. */
+function currentTerminalEvidence(
+  recorded: RecordedTerminalEvidence | undefined,
+  generation: number,
+): PiTerminalEvidence | undefined {
+  return recorded?.generation === generation ? recorded.evidence : undefined;
+}
+
 export interface PiExecutionContext {
   readonly session: PiSession;
   /** The adapter's own closed flag. The SDK does not defend a disposed session. */
@@ -103,8 +116,12 @@ export function runPiExecution(
     const translator = createPiEventTranslator();
     // Everything the listener writes and the drain loop reads. Plain mutable
     // state, because a callback cannot yield and a `Ref` it could not write.
-    let terminal: PiTerminalEvidence | undefined;
-    let terminalFailureObserved = false;
+    // One managed Run may contain several Pi agent executions. An agent_start
+    // advances this adapter-local identity, making every earlier terminal
+    // snapshot ineligible for interruption and final bundle reconciliation.
+    let nativeExecutionGeneration = 0;
+    let terminal: RecordedTerminalEvidence | undefined;
+    let terminalFailureObservedGeneration: number | undefined;
     let goalOmitted = false;
     let completed = false;
     const baseline = [...session.messages];
@@ -143,7 +160,7 @@ export function runPiExecution(
               observation.kind === "diagnostic" &&
               observation.diagnostic.category === PI_BACKEND_FAILURE_CATEGORY
             ) {
-              terminalFailureObserved = true;
+              terminalFailureObservedGeneration = nativeExecutionGeneration;
             }
             offer(observation);
           }
@@ -157,13 +174,20 @@ export function runPiExecution(
           for (const observation of read.observations) offer(observation);
           return;
         }
+        case "execution-start": {
+          nativeExecutionGeneration += 1;
+          return;
+        }
         case "terminal": {
-          terminal = piTerminalEvidence(
-            withoutInitialGoal(
-              currentRunMessages(read.messages, baseline),
-              input.prompt,
+          terminal = {
+            generation: nativeExecutionGeneration,
+            evidence: piTerminalEvidence(
+              withoutInitialGoal(
+                currentRunMessages(read.messages, baseline),
+                input.prompt,
+              ),
             ),
-          );
+          };
           return;
         }
         case "other":
@@ -259,11 +283,14 @@ export function runPiExecution(
       if (interruptAnnounced) return;
       interruptAnnounced = true;
       yield* drainAvailable;
-      const evidence = terminal;
+      const evidence = currentTerminalEvidence(
+        terminal,
+        nativeExecutionGeneration,
+      );
       if (evidence === undefined) return;
       yield* emitTerminalDiagnosticIfNeeded(
         evidence,
-        terminalFailureObserved,
+        terminalFailureObservedGeneration === nativeExecutionGeneration,
         io,
       );
       yield* io.emit({
@@ -396,8 +423,8 @@ export function runPiExecution(
       yield* drainAvailable;
       return yield* bundleFor(
         outcome.error,
-        terminal,
-        terminalFailureObserved,
+        currentTerminalEvidence(terminal, nativeExecutionGeneration),
+        terminalFailureObservedGeneration === nativeExecutionGeneration,
         io,
       );
     });
