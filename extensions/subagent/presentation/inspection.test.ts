@@ -220,8 +220,8 @@ test("retained evidence precedes accounting in the specified semantic section or
   );
 });
 
-test("final-output truncation warning immediately precedes an empty-output explanation", () => {
-  const empty = inspectionBlocks(
+test("empty retained output is distinguished from output that was never produced", () => {
+  const active = inspectionBlocks(
     {
       ...capture,
       content: {
@@ -237,18 +237,98 @@ test("final-output truncation warning immediately precedes an empty-output expla
     },
     "pending",
   );
-  const outputHeading = empty.findIndex(
+  const activeOutput = active.findIndex(
     (block) => block.text === "Output so far:",
   );
-  assert.equal(
-    empty[outputHeading + 1]?.text,
-    "1,234 bytes of the final output were cut.",
+  assert.deepEqual(
+    active.slice(activeOutput + 1, activeOutput + 3).map((block) => block.text),
+    [
+      "1,234 bytes of the final output were cut.",
+      "No output remains in this snapshot.",
+    ],
   );
-  assert.equal(empty[outputHeading + 2]?.text, "No output produced yet.");
-  assert.equal(
-    empty[outputHeading + 3]?.text,
-    "Active snapshot available but empty: no output or transcript retained yet.",
+  assert.doesNotMatch(
+    active.map((block) => block.text).join("\n"),
+    /produced yet|retained yet/,
   );
+
+  const result = fixtureResult({
+    truncation: { truncatedOutputBytes: 1_234 },
+  });
+  const terminal = inspectionBlocks(
+    {
+      ...capture,
+      outcome: "result",
+      summary: { ...capture.summary, phase: "completed" },
+      result,
+    },
+    "resolved",
+  );
+  const terminalOutput = terminal.findIndex(
+    (block) => block.text === "Final output:",
+  );
+  assert.deepEqual(
+    terminal
+      .slice(terminalOutput + 1, terminalOutput + 3)
+      .map((block) => block.text),
+    [
+      "1,234 bytes of the final output were cut.",
+      "No final output remains in the Result.",
+    ],
+  );
+  assert.doesNotMatch(
+    terminal.map((block) => block.text).join("\n"),
+    /was produced|was retained|snapshot/,
+  );
+
+  const truncatedTranscriptOnly = inspectionBlocks(
+    {
+      ...capture,
+      content: {
+        ...createRunProjection(),
+        truncation: {
+          ...capture.content.truncation,
+          droppedTranscriptItems: 1,
+        },
+      },
+    },
+    "pending",
+  )
+    .map((block) => block.text)
+    .join("\n");
+  assert.match(truncatedTranscriptOnly, /No output produced yet\./);
+  assert.doesNotMatch(truncatedTranscriptOnly, /retained yet/);
+
+  const genuinelyEmpty = inspectionBlocks(
+    {
+      ...capture,
+      content: {
+        ...capture.content,
+        finalOutput: "",
+        transcript: [],
+        tools: [],
+      },
+    },
+    "pending",
+  );
+  assert.match(
+    genuinelyEmpty.map((block) => block.text).join("\n"),
+    /No output produced yet\./,
+  );
+
+  const genuinelyEmptyResult = inspectionBlocks(
+    {
+      ...capture,
+      outcome: "result",
+      summary: { ...capture.summary, phase: "completed" },
+      result: fixtureResult(),
+    },
+    "resolved",
+  )
+    .map((block) => block.text)
+    .join("\n");
+  assert.match(genuinelyEmptyResult, /No final output was produced\./);
+  assert.match(genuinelyEmptyResult, /Result available but empty/);
 });
 
 test("empty optional evidence sections are omitted and missing-data explanations precede accounting", () => {

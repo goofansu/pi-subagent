@@ -71,8 +71,16 @@ export function inspectionBlocks(
     const outputTruncation = formatOutputTruncation(
       stored.truncation.truncatedOutputBytes,
     );
+    const truncation = formatTruncation(stored);
     if (outputTruncation !== undefined) add("literal", outputTruncation);
     if (stored.finalOutput) add("markdown", stored.finalOutput);
+    else if (stored.truncation.truncatedOutputBytes > 0)
+      add(
+        "literal",
+        capture.outcome === "active"
+          ? "No output remains in this snapshot."
+          : "No final output remains in the Result.",
+      );
     else {
       add(
         "literal",
@@ -80,7 +88,7 @@ export function inspectionBlocks(
           ? "No output produced yet."
           : "No final output was produced.",
       );
-      if (stored.transcript.length === 0)
+      if (stored.transcript.length === 0 && truncation === undefined)
         add(
           "literal",
           capture.outcome === "active"
@@ -96,7 +104,6 @@ export function inspectionBlocks(
       section("Diagnostics");
       add("literal", ...stored.diagnostics.map(formatDiagnosticLine));
     }
-    const truncation = formatTruncation(stored);
     if (truncation) {
       section("Truncation");
       add("literal", truncation);
