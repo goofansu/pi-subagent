@@ -1,6 +1,6 @@
 ---
 name: implement-and-review
-description: Implement a specification through an implementer and fresh specification and standards reviews. Use when user asks to implement-and-review a specification explicitly.
+description: Implement a specification through an implementer and fresh specification and standards reviews. Use when the user explicitly asks to implement-and-review a specification.
 ---
 
 # Implement and review
