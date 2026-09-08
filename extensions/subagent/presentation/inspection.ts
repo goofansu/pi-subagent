@@ -14,9 +14,9 @@ import {
   formatTranscriptItem,
   formatTruncation,
 } from "./run-card.ts";
-import { fitToWidth } from "./run-line.ts";
 import { runPresentationFromSummary } from "./run-presentation.ts";
 import { formatDuration } from "./status.ts";
+import { fitToWidth } from "./text-width.ts";
 import type { HandoffStatus } from "./views.ts";
 
 export interface InspectionBlock {

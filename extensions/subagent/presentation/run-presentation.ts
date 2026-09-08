@@ -64,13 +64,16 @@ export interface RunPresentation {
   /**
    * The one activity cell, under one rule for every surface.
    *
-   * A live Run says what it is doing; a terminal one says why it was stopped,
-   * or nothing at all. A terminal Run's last tool activity is deliberately
-   * not its activity: that is history, and showing it beside a finished Run
-   * reads as the Run's result.
+   * Only a running, uncancelled Run shows current activity. A cancelled Run
+   * may show its actual reason; every other case uses the placeholder.
+   * Finalizing and cancelling Runs never revive previous tool activity.
    */
   readonly activity: string;
-  /** Present once a cancellation has been recorded, whatever the phase. */
+  /**
+   * Outstanding request for a nonterminal Run, or actual cause for a cancelled
+   * Run. Absent for completed/failed Runs and when the authoritative source
+   * has no reason; retained requests are not terminal causes.
+   */
   readonly cancellationReason?: CancellationReason;
   /** What the Run is doing now. Absent unless it is running uncancelled. */
   readonly currentActivity?: string;
@@ -105,14 +108,15 @@ interface RunPresentationInput {
  */
 function resolve(run: RunPresentationInput): RunPresentation {
   const terminal = isTerminalRunPhase(run.phase);
-  const cancelling = run.cancellationReason !== undefined && !terminal;
+  const cancellationReason =
+    !terminal || run.phase === "cancelled" ? run.cancellationReason : undefined;
+  const cancelling = cancellationReason !== undefined && !terminal;
   const ordinaryCancellation =
     run.phase === "cancelled" &&
-    (run.cancellationReason === "requested" ||
-      run.cancellationReason === "shutdown");
+    (cancellationReason === "requested" || cancellationReason === "shutdown");
   const currentActivity =
     run.phase === "running" &&
-    run.cancellationReason === undefined &&
+    cancellationReason === undefined &&
     run.activity?.trim()
       ? run.activity
       : undefined;
@@ -126,18 +130,15 @@ function resolve(run: RunPresentationInput): RunPresentation {
           text: runPhaseVerb(run.phase),
           tone: ordinaryCancellation ? "muted" : runPhaseTone(run.phase),
         },
-    activity:
-      (terminal ? run.cancellationReason : currentActivity) ?? NO_ACTIVITY,
-    ...(run.cancellationReason === undefined
-      ? {}
-      : { cancellationReason: run.cancellationReason }),
+    activity: (terminal ? cancellationReason : currentActivity) ?? NO_ACTIVITY,
+    ...(cancellationReason === undefined ? {} : { cancellationReason }),
     ...(currentActivity === undefined ? {} : { currentActivity }),
     ...(run.lastActivity === undefined
       ? {}
       : { lastActivity: run.lastActivity }),
     executionNeedsAttention:
       run.phase === "failed" ||
-      (run.phase === "cancelled" && run.cancellationReason === "timeout"),
+      (run.phase === "cancelled" && cancellationReason === "timeout"),
     startedAt: run.startedAt,
     ...(run.settledAt === undefined ? {} : { settledAt: run.settledAt }),
   };
@@ -162,7 +163,8 @@ export function runPresentationFromRow(row: RunRowView): RunPresentation {
  * Inspection supplies the stored Result as well, because a captured Run whose
  * Result it has read has two accounts of itself and the stored one is
  * authoritative: it is the immutable value settlement produced, while the
- * summary is a live index entry the capture may have raced.
+ * summary is a live index entry the capture may have raced. Result presence
+ * selects the reason source, including authoritative absence.
  */
 export function runPresentationFromSummary(
   run: RunSummary,
@@ -171,7 +173,8 @@ export function runPresentationFromSummary(
   return resolve({
     label: result?.description ?? run.label,
     phase: result?.status ?? run.phase,
-    cancellationReason: result?.cancellationReason ?? run.cancellationReason,
+    cancellationReason:
+      result !== undefined ? result.cancellationReason : run.cancellationReason,
     activity: run.activity,
     lastActivity: run.lastActivity,
     startedAt: result?.startedAt ?? run.startedAt,

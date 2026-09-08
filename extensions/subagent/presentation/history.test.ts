@@ -5,7 +5,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import type { RunSummary } from "../domain/history.ts";
 import { backendId, runId, subagentId } from "../domain/index.ts";
 import { PLAIN_THEME } from "../testing/stand-in-host.ts";
-import { historyCategory, historyRow, historyRows } from "./history.ts";
+import { historyCategory, historyRows } from "./history.ts";
 
 const run: RunSummary = {
   runId: runId("run-test-1"),
@@ -18,12 +18,23 @@ const run: RunSummary = {
   turns: 3,
   startedAt: 0,
 };
-const row = (value: RunSummary, width = 120, selected = false) =>
-  historyRow(value, width, PLAIN_THEME, selected, 1000);
+const row = (value: RunSummary, width = 120, selected = false, now = 1000) =>
+  historyRows(
+    [value],
+    selected ? value.runId : undefined,
+    width,
+    PLAIN_THEME,
+    now,
+  )[0] ?? "";
 
 test("rows align labels, statuses, activity and rightmost elapsed time without actions or technical metadata", () => {
-  const selected = row(run, 120, true);
-  const other = row({ ...run, label: "Settings", phase: "finalizing" });
+  const [selected = "", other = ""] = historyRows(
+    [run, { ...run, label: "Settings", phase: "finalizing" }],
+    run.runId,
+    120,
+    PLAIN_THEME,
+    1000,
+  );
   assert.equal(selected.indexOf("Running"), other.indexOf("Finalizing"));
   assert.match(selected, /Running +· Reading middleware/);
   assert.doesNotMatch(other, /Reading middleware/);
@@ -86,6 +97,40 @@ test("terminal rows do not imply stale tool activity is the result", () => {
   );
 });
 
+test("assembled history preserves content-gate transitions and selection prefixes", () => {
+  const selected = (width: number) =>
+    stripVTControlCharacters(
+      historyRows([run], run.runId, width, PLAIN_THEME, 1000)[0] ?? "",
+    );
+  for (const width of [0, 1, 2, 25, 26, 27, 51, 52, 53, 79, 80, 81]) {
+    const line = selected(width);
+    assert.equal(visibleWidth(line), width, `selected width ${width}`);
+    if (width >= 2) assert.ok(line.startsWith("› "), `prefix at ${width}`);
+  }
+  assert.doesNotMatch(selected(25), /Running/);
+  assert.match(selected(26), /Running/);
+  assert.match(selected(27), /Running/);
+  assert.doesNotMatch(selected(51), /Reading middleware/);
+  assert.match(selected(52), /Reading middleware/);
+  assert.match(selected(53), /Reading middleware/);
+  assert.doesNotMatch(selected(79), /1\.0s/);
+  assert.match(selected(80), /1\.0s$/);
+  assert.match(selected(81), /1\.0s$/);
+
+  const [unselected = ""] = historyRows(
+    [run],
+    undefined,
+    80,
+    PLAIN_THEME,
+    1000,
+  );
+  assert.match(
+    stripVTControlCharacters(unselected),
+    /^ {2}Review authentication/,
+  );
+  assert.equal(visibleWidth(unselected), 80);
+});
+
 test("responsive rows drop elapsed time and activity before status and never split Unicode", () => {
   const unicode = {
     ...run,
@@ -104,7 +149,7 @@ test("responsive rows drop elapsed time and activity before status and never spl
 
 test("elapsed time uses the supplied event time and freezes at settlement", () => {
   const render = (value: RunSummary, now: number) =>
-    historyRow(value, 120, PLAIN_THEME, false, now);
+    row(value, 120, false, now);
   assert.match(render(run, 1500), /1\.5s/);
   assert.match(render(run, 61000), /1m 1s/);
   const completed = { ...run, phase: "completed" as const, settledAt: 2500 };
@@ -127,19 +172,21 @@ test("selection preserves resolved status text and tones", () => {
     ["cancelled", "shutdown", "cancelled", "muted"],
   ] as const) {
     const tones: { color: string; text: string }[] = [];
-    const line = historyRow(
-      { ...run, phase, cancellationReason },
-      120,
-      {
-        ...PLAIN_THEME,
-        fg: (color, text) => {
-          tones.push({ color, text });
-          return `\x1b[33m${text}\x1b[39m`;
+    const value = { ...run, phase, cancellationReason };
+    const line =
+      historyRows(
+        [value],
+        value.runId,
+        120,
+        {
+          ...PLAIN_THEME,
+          fg: (color, text) => {
+            tones.push({ color, text });
+            return `\x1b[33m${text}\x1b[39m`;
+          },
         },
-      },
-      true,
-      1000,
-    );
+        1000,
+      )[0] ?? "";
     assert.ok(
       tones.some(
         ({ color, text }) =>

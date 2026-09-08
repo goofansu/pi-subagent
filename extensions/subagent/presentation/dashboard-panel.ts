@@ -1,6 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { RenderableTheme } from "./rows.ts";
-import { fitToWidth } from "./run-line.ts";
+import { fitToWidth } from "./text-width.ts";
 
 /**
  * A screen a dashboard page is drawn on, before its header is chosen.
