@@ -36,8 +36,9 @@ import {
   formatStartOutcome,
   formatSteerOutcome,
   formatWaitOutcomes,
-  type ResumedRun,
   resultRunSummaryOf,
+  resumeRenderDetails,
+  steerRenderDetails,
 } from "../presentation/index.ts";
 import { ProfileCatalog } from "../runtime/profile-catalog.ts";
 import { RunRepository } from "../runtime/repository.ts";
@@ -59,12 +60,10 @@ export interface ToolResponse {
   /**
    * Presentation-only facts the renderer draws the collapsed row from.
    *
-   * Migrated variants are explicitly discriminated. The old resumed shape
-   * remains until that operation moves through the unified family in a later
-   * tracer bullet. `undefined` remains a readable rejection/fallback, never a
-   * statement about Result delivery.
+   * Migrated variants are explicitly discriminated. `undefined` remains a
+   * readable host/decode fallback, never a statement about Result delivery.
    */
-  readonly details?: AgentToolRenderDetails | ResumedRun;
+  readonly details?: AgentToolRenderDetails;
   /**
    * The Runs whose Result this response actually handed back.
    *
@@ -232,6 +231,7 @@ const resume = (
     if (request === undefined)
       return {
         text: formatResumeOutcome(input.id, EMPTY_LABEL),
+        details: resumeRenderDetails(EMPTY_LABEL),
         deliveredRuns: [],
       };
     const supervisor = yield* SubagentSupervisor;
@@ -242,15 +242,8 @@ const resume = (
     });
     return {
       text: formatResumeOutcome(input.id, outcome),
+      details: resumeRenderDetails(outcome),
       deliveredRuns: [],
-      ...(outcome.outcome === "started"
-        ? {
-            details: {
-              subagentId: outcome.subagentId,
-              runId: outcome.runId,
-            } satisfies ResumedRun,
-          }
-        : {}),
     };
   });
 
@@ -269,6 +262,7 @@ const steer = (
     });
     return {
       text: formatSteerOutcome(input.id, outcome),
+      details: steerRenderDetails(input.id, outcome),
       deliveredRuns: [],
     };
   });

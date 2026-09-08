@@ -28,12 +28,7 @@ import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Markdown, Text, visibleWidth } from "@earendil-works/pi-tui";
 import type { TerminalRunPhase } from "../domain/index.ts";
-import {
-  type CollectedRuns,
-  isCollectedRuns,
-  isResumedRun,
-  type ResumedRun,
-} from "./details.ts";
+import { type CollectedRuns, isCollectedRuns } from "./details.ts";
 import type { RenderableTheme } from "./rows.ts";
 import {
   formatCharacterCount,
@@ -141,24 +136,6 @@ export function renderStartCall(
   return text;
 }
 
-/** The actionable one-line handoff for a resumed Run. */
-export function formatResumeSummary(
-  resumed: ResumedRun,
-  theme: RenderableTheme,
-  renderKeyHint?: KeyHintRenderer,
-): string {
-  return (
-    theme.fg("toolTitle", "Resumed subagent") +
-    theme.fg("dim", ` ${resumed.subagentId} · run ${resumed.runId} `) +
-    formatParentheticalKeyHint(
-      theme,
-      "app.tools.expand",
-      "to expand",
-      renderKeyHint,
-    )
-  );
-}
-
 /**
  * The single line a collapsed result shows in place of the whole body.
  *
@@ -237,19 +214,6 @@ export function renderCollectedResult(
     0,
     0,
   );
-}
-
-/** Render the immediate `agent_resume` result at its registered tool seam. */
-export function renderResumeResult(
-  result: RenderableToolResult,
-  options: RenderResultOptions,
-  theme: RenderableTheme,
-): Component {
-  const text = contentText(result.content).trim();
-  if (!text || options.expanded || !isResumedRun(result.details)) {
-    return renderCollectedResult(result, options, theme);
-  }
-  return new Text(formatResumeSummary(result.details, theme), 0, 0);
 }
 
 /**

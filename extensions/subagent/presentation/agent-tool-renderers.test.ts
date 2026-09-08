@@ -3,10 +3,15 @@ import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
+import type { ResumeOutcome, SteerOutcome } from "../domain/index.ts";
+import { runId, subagentId } from "../domain/index.ts";
 import {
   type AgentToolRendererState,
   agentToolRenderers,
+  formatResumedRunSummary,
   formatStartedRunSummary,
+  resumeRenderDetails,
+  steerRenderDetails,
 } from "./agent-tool-renderers.ts";
 import type { RenderableTheme } from "./rows.ts";
 
@@ -165,6 +170,187 @@ test("malformed, foreign, and legacy start details fall back to readable content
       /^Readable legacy response \(.*to expand\)$/,
     );
   }
+});
+
+test("resume and steer malformed, foreign, and legacy details use readable fallback", () => {
+  for (const [operation, details] of [
+    ["resume", { kind: "resume", outcome: "started", subagentId: "sub-1" }],
+    ["resume", { subagentId: "subagent-legacy", runId: "run-legacy" }],
+    ["resume", { kind: "steer", outcome: "accepted", runId: "run-foreign" }],
+    ["steer", { kind: "steer", outcome: "invalid" }],
+    ["steer", { outcome: "mailbox full", runId: "run-legacy" }],
+    [
+      "steer",
+      {
+        kind: "resume",
+        outcome: "started",
+        subagentId: "sub-foreign",
+        runId: "run-foreign",
+      },
+    ],
+  ] as const) {
+    const pair = agentToolRenderers(operation);
+    const collapsed = pair.renderResult(
+      {
+        content: [{ type: "text", text: "Readable legacy response\nmore" }],
+        details,
+      },
+      { expanded: false, isPartial: false },
+      plainTheme,
+      context({}),
+    );
+    const collapsedText = lines(collapsed, 80).join("\n");
+    assert.match(collapsedText, /^Readable legacy response \(.*to expand\)$/);
+    assert.doesNotMatch(
+      collapsedText,
+      /run-legacy|run-foreign|subagent-legacy/,
+    );
+
+    const expanded = pair.renderResult(
+      {
+        content: [{ type: "text", text: "Readable legacy response\nmore" }],
+        details,
+      },
+      { expanded: true, isPartial: false },
+      plainTheme,
+      context({}, { expanded: true }),
+    );
+    assert.match(
+      lines(expanded, 80).join("\n"),
+      /Readable legacy response\nmore/,
+    );
+  }
+
+  const malformedSteer = agentToolRenderers("steer").renderCall(
+    { id: 3, message: false },
+    plainTheme,
+    { ...context({}), args: { id: 3, message: false } },
+  );
+  assert.match(
+    lines(malformedSteer, 80)[0],
+    /^agent_steer \[invalid arguments\]$/,
+  );
+});
+
+test("a narrow resumed summary drops its field label before clipping the Run id", () => {
+  const line = formatResumedRunSummary(
+    {
+      kind: "resume",
+      outcome: "started",
+      subagentId: "subagent-abcd-123",
+      runId: "run-abcd-456",
+    },
+    plainTheme,
+    38,
+    (_action, description) => `o ${description}`,
+  );
+
+  assert.equal(line, "Resumed · run-abcd-456 (o to expand)");
+  assert.ok(visibleWidth(line) <= 38);
+  assert.doesNotMatch(line, /· Run /);
+});
+
+test("every operation outcome converts to an explicit discriminated detail", () => {
+  const sid = subagentId("subagent-test-1");
+  const rid = runId("run-test-1");
+  const resumeOutcomes: readonly ResumeOutcome[] = [
+    { outcome: "started", subagentId: sid, runId: rid },
+    { outcome: "unknown Subagent", subagentId: sid },
+    { outcome: "Subagent already running", subagentId: sid },
+    { outcome: "empty label" },
+    { outcome: "resume unsupported" },
+    { outcome: "conversation lost" },
+    { outcome: "at capacity" },
+    { outcome: "shutting down" },
+  ];
+  assert.deepEqual(
+    resumeOutcomes.map((outcome) => resumeRenderDetails(outcome).outcome),
+    resumeOutcomes.map(({ outcome }) => outcome),
+  );
+  assert.ok(
+    resumeOutcomes.every(
+      (outcome) => resumeRenderDetails(outcome).kind === "resume",
+    ),
+  );
+
+  const steerOutcomes: readonly SteerOutcome[] = [
+    { outcome: "accepted", runId: rid },
+    { outcome: "mailbox full", runId: rid },
+    { outcome: "invalid", reason: "empty" },
+    { outcome: "unsupported", runId: rid },
+    { outcome: "mailbox closed", runId: rid },
+    { outcome: "already completed", runId: rid },
+    { outcome: "already failed", runId: rid },
+    { outcome: "already cancelled", runId: rid },
+    { outcome: "unknown Run", runId: rid },
+    { outcome: "shutting down" },
+  ];
+  assert.deepEqual(
+    steerOutcomes.map((outcome) => steerRenderDetails(rid, outcome).outcome),
+    steerOutcomes.map(({ outcome }) => outcome),
+  );
+  assert.ok(
+    steerOutcomes.every(
+      (outcome) => steerRenderDetails(rid, outcome).kind === "steer",
+    ),
+  );
+  assert.deepEqual(
+    steerRenderDetails(rid, { outcome: "invalid", reason: "empty" }),
+    { kind: "steer", outcome: "invalid", runId: rid },
+  );
+});
+
+test("every resume refusal and Control admission outcome has a distinct semantic line", () => {
+  const resume = agentToolRenderers("resume");
+  const resumeDetails = [
+    { kind: "resume", outcome: "unknown Subagent" },
+    { kind: "resume", outcome: "Subagent already running" },
+    { kind: "resume", outcome: "empty label" },
+    { kind: "resume", outcome: "resume unsupported" },
+    { kind: "resume", outcome: "conversation lost" },
+    { kind: "resume", outcome: "at capacity" },
+    { kind: "resume", outcome: "shutting down" },
+  ] as const;
+  const resumeLines = resumeDetails.map((details) =>
+    lines(
+      resume.renderResult(
+        { content: [{ type: "text", text: "complete prose" }], details },
+        { expanded: false, isPartial: false },
+        plainTheme,
+        context({}),
+      ),
+      100,
+    )[0].replace(/ \(.*to expand\)$/, ""),
+  );
+  assert.equal(new Set(resumeLines).size, resumeDetails.length);
+
+  const steer = agentToolRenderers("steer");
+  const steerDetails = [
+    { kind: "steer", outcome: "accepted", runId: "run-1" },
+    { kind: "steer", outcome: "mailbox full", runId: "run-1" },
+    { kind: "steer", outcome: "mailbox closed", runId: "run-1" },
+    { kind: "steer", outcome: "unsupported", runId: "run-1" },
+    { kind: "steer", outcome: "invalid", runId: "run-1" },
+    { kind: "steer", outcome: "already completed", runId: "run-1" },
+    { kind: "steer", outcome: "already failed", runId: "run-1" },
+    { kind: "steer", outcome: "already cancelled", runId: "run-1" },
+    { kind: "steer", outcome: "unknown Run", runId: "run-1" },
+    { kind: "steer", outcome: "shutting down", runId: "run-1" },
+  ] as const;
+  const steerLines = steerDetails.map((details) =>
+    lines(
+      steer.renderResult(
+        { content: [{ type: "text", text: "complete prose" }], details },
+        { expanded: false, isPartial: false },
+        plainTheme,
+        context({}),
+      ),
+      100,
+    )[0].replace(/ \(.*to expand\)$/, ""),
+  );
+  assert.equal(new Set(steerLines).size, steerDetails.length);
+  assert.equal(steerLines[0], "Accepted into local Control mailbox");
+  assert.doesNotMatch(steerLines[0], /provider|model/i);
 });
 
 test("a one-line rejection with no hidden prompt content has no expansion affordance", () => {
