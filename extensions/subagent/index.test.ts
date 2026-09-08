@@ -65,7 +65,7 @@ test("the dashboard shortcut opens the same dashboard as /subagent dashboard", a
   await browsing;
 });
 
-test("the entry point subscribes to the two Session events and the three landing events", () => {
+test("the entry point subscribes to Session, prompt, and landing events", () => {
   const host = createStandInHost();
 
   installSubagentV2(host.pi, {
@@ -76,6 +76,7 @@ test("the entry point subscribes to the two Session events and the three landing
   assert.deepEqual(host.subscribed(), [
     "session_start",
     "session_shutdown",
+    "before_agent_start",
     "message_start",
     "turn_end",
     "agent_settled",

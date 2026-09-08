@@ -3,6 +3,7 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import type { Profile } from "./domain/index.ts";
+import { formatAvailableAgents } from "./host/available-agents.ts";
 import {
   NOTIFICATION_MESSAGE_TYPE,
   renderNotificationMessage,
@@ -79,7 +80,6 @@ export interface SubagentV2Installation {
   readonly handle: SessionHandle;
   readonly sink: SessionPushSink;
   readonly profiles: () => readonly Profile[];
-  readonly agentGuidelines: () => readonly string[];
   /**
    * The live Session's widget, or nothing between Sessions.
    *
@@ -101,10 +101,10 @@ export interface SubagentV2Installation {
  * So the factory has exactly four kinds of thing in it:
  *
  * - the process-level state the registrations close over — the session handle,
- *   the push sink, the live guideline array, and the live Profile list;
+ *   the push sink, and the live Profile catalog;
  * - the registrations themselves: seven tools, one command, one shortcut,
  *   one message renderer;
- * - the two Session events that build and dispose a runtime;
+ * - the Session and prompt events that bind runtime state to Pi;
  * - the three host events that drive notification landing.
  *
  * Split from the default export so a test can supply a Profile directory and a
@@ -131,14 +131,12 @@ export function installSubagentV2(
       handle,
       sink,
       profiles: () => [],
-      agentGuidelines: () => [],
       widget: () => undefined,
     };
   }
-  /** Rewritten in place per Session; see `SessionWiring.agentGuidelines`. */
-  const agentGuidelines: string[] = [];
-  /** The live Session's Profiles, for `/subagent` to count and list. */
+  /** The live Session's Profiles, for `/subagent` and the parent prompt. */
   let profiles: readonly Profile[] = [];
+  let availableAgentsPrompt = formatAvailableAgents(profiles);
   let widget: ActiveWidget | undefined;
 
   const wiring = {
@@ -147,7 +145,6 @@ export function installSubagentV2(
     sink,
     backendSet: options.backendSet,
     agentDir: options.agentDir,
-    agentGuidelines,
     ...(options.policy === undefined ? {} : { policy: options.policy }),
     ...(options.clock === undefined ? {} : { clock: options.clock }),
     ...(options.resultEncoder === undefined
@@ -155,6 +152,7 @@ export function installSubagentV2(
       : { resultEncoder: options.resultEncoder }),
     setProfiles: (loaded: readonly Profile[]) => {
       profiles = loaded;
+      availableAgentsPrompt = formatAvailableAgents(loaded);
     },
   };
 
@@ -162,7 +160,6 @@ export function installSubagentV2(
   registerSubagentTools(
     pi,
     handle,
-    agentGuidelines,
     hostFacts.childDepth,
     // Two narrow functions rather than the sink, exactly as the widget is
     // handed a read model: the result and wait handlers say the parent has a
@@ -196,6 +193,9 @@ export function installSubagentV2(
     await shutdownSession(wiring);
     widget = undefined;
   });
+  pi.on("before_agent_start", (event) => ({
+    systemPrompt: `${event.systemPrompt}\n\n${availableAgentsPrompt}`,
+  }));
 
   // The three events notification landing is decided by. The sink owns the
   // decision; the entry point only forwards neutral evidence to it. The fourth
@@ -217,7 +217,6 @@ export function installSubagentV2(
     handle,
     sink,
     profiles: () => profiles,
-    agentGuidelines: () => [...agentGuidelines],
     widget: () => widget,
   };
 }

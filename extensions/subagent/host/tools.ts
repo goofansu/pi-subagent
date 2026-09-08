@@ -184,16 +184,6 @@ export function registerSubagentTools(
   pi: Pick<ExtensionAPI, "registerTool" | "getThinkingLevel">,
   handle: SessionHandle,
   /**
-   * The `agent_start` guidelines, which name the Profiles this Session loaded.
-   *
-   * A live array rather than a copy, and that is the whole reason it is a
-   * parameter. Pi stores the `promptGuidelines` array it is given, and
-   * registration happens once per process while the Profile catalog changes
-   * with every Session — so the Session module rewrites this array's contents
-   * in place and the tool's guidelines follow, with no re-registration.
-   */
-  agentGuidelines: string[],
-  /**
    * How deep this process already is, as the backend set reports it.
    *
    * A function rather than a number, because it is read from the environment
@@ -304,8 +294,6 @@ export function registerSubagentTools(
   const decodeStart = decodeToolInput(START_COPY.name, StartInputSchema);
 
   register(START_COPY, toolParameters(StartInputSchema), {
-    // The array itself, not a copy: see `agentGuidelines` above.
-    promptGuidelines: agentGuidelines,
     renderCall: renderStartCall,
     async execute(
       _toolCallId: string,

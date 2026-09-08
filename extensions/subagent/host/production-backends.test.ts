@@ -37,7 +37,7 @@ test("the production set offers both backends", () => {
   );
 });
 
-test("production discovers all five bundled specialists without a user agents directory", async (t) => {
+test("production discovers all four bundled specialists without a user agents directory", async (t) => {
   const agentDir = fs.mkdtempSync(
     path.join(os.tmpdir(), "bundled-production-"),
   );
@@ -52,18 +52,14 @@ test("production discovers all five bundled specialists without a user agents di
           .map((p) => p.name)
           .sort(),
         [
-          "explore",
+          "general-purpose",
           "implementer",
-          "researcher",
           "spec-reviewer",
           "standards-reviewer",
         ],
       );
       assert.equal(catalog.get("spec-reviewer")?.backend, "claude");
-      assert.equal(
-        catalog.get("explore")?.fields.model,
-        "opencode/claude-haiku-4-5",
-      );
+      assert.equal(catalog.get("general-purpose")?.fields.model, "opus");
     }).pipe(
       Effect.provide(
         sessionRuntimeLayer({

@@ -852,7 +852,7 @@ function handlersOver(response: ToolResponse): {
 } {
   const host = createStandInHost();
   const consumed: string[] = [];
-  registerSubagentTools(host.pi, handleAnswering(response), [], () => 0, {
+  registerSubagentTools(host.pi, handleAnswering(response), () => 0, {
     consumed: (id) => consumed.push(id),
     hold: () => () => undefined,
   });

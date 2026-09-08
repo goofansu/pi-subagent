@@ -1,5 +1,5 @@
 ---
-description: Use when reviewing a caller-scoped diff or uncommitted work against this repo's coding standards and a code-smell baseline, reporting findings only.
+description: Reviews caller-scoped changes against repository standards and a code-smell baseline without editing. Use after implementation or revision.
 backend: claude
 model: sonnet
 effort: medium

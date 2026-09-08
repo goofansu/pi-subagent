@@ -23,8 +23,8 @@ import {
  * The user directory read alongside installed package defaults.
  *
  * No project scope, deliberately. A Profile carries a system prompt, a model,
- * and a tool list, and its description is injected into the calling model's
- * tool guidelines, so honouring repository-controlled Profiles would let a
+ * and a tool list, and its description is injected into the parent model's
+ * system prompt, so honouring repository-controlled Profiles would let a
  * checkout shape what the delegating session does and says. Nothing in a
  * working directory is read here, so there is no trust question to answer.
  */

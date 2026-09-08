@@ -6,7 +6,7 @@
  * boundary — calling the `execute` Pi would call, with the arguments Pi would
  * pass, and reading the text a model would read. So this records every
  * registration surface a Pi host offers, hands out the contexts Pi hands out,
- * and can emit the five host events the extension listens to.
+ * and can emit the host events the extension listens to.
  *
  * It is deliberately a *recorder* rather than a simulator. It does not
  * schedule turns, does not decide when a message lands, and does not
@@ -182,6 +182,8 @@ export interface StandInHost {
   /* The host events, awaited so a handler's promise is settled first. */
   readonly sessionStart: () => Promise<void>;
   readonly sessionShutdown: () => Promise<void>;
+  /** Run the prompt hook and return the system prompt it hands to Pi. */
+  readonly beforeAgentStart: (systemPrompt: string) => Promise<string>;
   readonly messageStart: (message: unknown) => Promise<void>;
   readonly turnEnd: (evidence: {
     readonly stopReason?: string;
@@ -313,10 +315,10 @@ export function createStandInHost(
     signal: undefined as AbortSignal | undefined,
   };
 
-  const emit = async (event: string, payload: unknown): Promise<void> => {
+  const emit = async (event: string, payload: unknown): Promise<unknown> => {
     const handler = handlers.get(event);
     if (!handler) return;
-    await handler(payload, ctx);
+    return handler(payload, ctx);
   };
 
   const pi = {
@@ -408,11 +410,27 @@ export function createStandInHost(
     userMessages: () => [...userMessages],
     notices: () => [...notices],
 
-    sessionStart: () => emit("session_start", { type: "session_start" }),
-    sessionShutdown: () =>
-      emit("session_shutdown", { type: "session_shutdown", reason: "quit" }),
-    messageStart: (message) =>
-      emit("message_start", { type: "message_start", message }),
+    sessionStart: async () => {
+      await emit("session_start", { type: "session_start" });
+    },
+    sessionShutdown: async () => {
+      await emit("session_shutdown", {
+        type: "session_shutdown",
+        reason: "quit",
+      });
+    },
+    beforeAgentStart: async (systemPrompt) => {
+      const result = (await emit("before_agent_start", {
+        type: "before_agent_start",
+        prompt: "",
+        images: [],
+        systemPrompt,
+      })) as { readonly systemPrompt?: string } | undefined;
+      return result?.systemPrompt ?? systemPrompt;
+    },
+    messageStart: async (message) => {
+      await emit("message_start", { type: "message_start", message });
+    },
     turnEnd: async (evidence) => {
       // The host reports the signal on the *context*, not on the event, so a
       // test that says the signal aborted has to say it the way Pi does.
@@ -435,7 +453,9 @@ export function createStandInHost(
         ctx.signal = previous;
       }
     },
-    agentSettled: () => emit("agent_settled", { type: "agent_settled" }),
+    agentSettled: async () => {
+      await emit("agent_settled", { type: "agent_settled" });
+    },
 
     hasWidget: () => widget !== undefined,
     widgetInstalls: () => widgetInstalls,

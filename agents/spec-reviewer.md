@@ -1,5 +1,5 @@
 ---
-description: Use when reviewing a caller-scoped diff or uncommitted work against its originating specification, reporting findings only.
+description: Reviews caller-scoped changes against their originating specification and reports findings without editing. Use after implementation or revision.
 backend: claude
 model: opus
 effort: high

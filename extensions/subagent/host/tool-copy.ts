@@ -182,20 +182,3 @@ export const TOOL_COPY: readonly ToolCopy[] = [
   CANCEL_COPY,
   STEER_COPY,
 ];
-
-/**
- * The `agent_start` guidelines, which name the Profiles this Session loaded.
- *
- * Built per Session rather than fixed, because the list is what tells a model
- * which specialists exist. An empty catalog says so rather than listing
- * nothing, so a Session with no Profiles does not read as a Session whose
- * specialists the model failed to notice.
- */
-export function formatAgentGuidelines(
-  profiles: readonly { readonly name: string; readonly description: string }[],
-): readonly string[] {
-  if (profiles.length === 0) return ["agent_start has no configured agents."];
-  return profiles.map(
-    (profile) => `agent_start ${profile.name}: ${profile.description}`,
-  );
-}

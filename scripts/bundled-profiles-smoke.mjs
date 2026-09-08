@@ -21,9 +21,8 @@ const previousHome = process.env.HOME;
 const previousHerdr = process.env.HERDR_ENV;
 const skillNames = ["herdr-implement-spec", "implement-and-review"];
 const names = [
-  "explore",
+  "general-purpose",
   "implementer",
-  "researcher",
   "spec-reviewer",
   "standards-reviewer",
 ];
@@ -146,14 +145,24 @@ try {
     for (const handler of extension.handlers.get(type) ?? [])
       await handler({ type }, ctx);
   };
+  const systemPrompt = async () => {
+    let prompt = "Base prompt.";
+    for (const handler of extension.handlers.get("before_agent_start") ?? []) {
+      const result = await handler(
+        { type: "before_agent_start", systemPrompt: prompt },
+        ctx,
+      );
+      prompt = result?.systemPrompt ?? prompt;
+    }
+    return prompt;
+  };
   const tool = extension.tools.get("agent_start").definition;
-  const guidelines = () => tool.promptGuidelines.join("\n");
   await emit("session_start");
   try {
     assert.deepEqual(warnings, []);
     for (const name of names)
       assert.ok(
-        guidelines().includes(name),
+        (await systemPrompt()).includes(name),
         `${name} is available without user Profiles`,
       );
     for (const name of ["implementer", "spec-reviewer", "standards-reviewer"]) {
@@ -162,18 +171,21 @@ try {
         `workflow references ${name}`,
       );
       assert.ok(
-        guidelines().includes(name),
+        (await systemPrompt()).includes(name),
         `workflow specialist ${name} is available`,
       );
     }
     fs.mkdirSync(path.join(agentDir, "agents"));
-    fs.writeFileSync(path.join(agentDir, "agents/explore.md"), "---\n---\n");
+    fs.writeFileSync(
+      path.join(agentDir, "agents/general-purpose.md"),
+      "---\n---\n",
+    );
     fs.writeFileSync(
       path.join(agentDir, "agents/custom.md"),
       "---\ndescription: Configured directory specialist\nbackend: claude\n---\nDo custom work.\n",
     );
     assert.ok(
-      !guidelines().includes("Configured directory specialist"),
+      !(await systemPrompt()).includes("Configured directory specialist"),
       "no live discovery",
     );
   } finally {
@@ -181,15 +193,21 @@ try {
   }
   await emit("session_start");
   try {
-    assert.ok(guidelines().includes("Configured directory specialist"));
+    assert.ok(
+      (await systemPrompt()).includes("Configured directory specialist"),
+    );
     assert.ok(
       warnings.some((warning) =>
-        warning.includes(path.join(agentDir, "agents/explore.md")),
+        warning.includes(path.join(agentDir, "agents/general-purpose.md")),
       ),
     );
     const result = await tool.execute(
       "invalid-start",
-      { agent: "explore", description: "inspect", prompt: "inspect" },
+      {
+        agent: "general-purpose",
+        description: "inspect",
+        prompt: "inspect",
+      },
       undefined,
       undefined,
       ctx,
@@ -197,7 +215,7 @@ try {
     const text = result.content.map((part) => part.text ?? "").join("\n");
     assert.match(text, /invalid|cannot|unavailable/i);
     assert.ok(
-      text.includes(path.join(agentDir, "agents/explore.md")),
+      text.includes(path.join(agentDir, "agents/general-purpose.md")),
       "delegation reports the override, not a fallback",
     );
   } finally {

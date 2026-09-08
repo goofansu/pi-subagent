@@ -197,38 +197,38 @@ test("a Session with no Profile files still has the backend set's own", async (t
   );
 });
 
-test("the agent_start guidelines name the Session's Profiles and follow a Session switch", async (t) => {
+test("the parent system prompt names available agents and follows a Session switch", async (t) => {
   const rig = hostRig(t);
   t.after(() => rig.installation.handle.release());
 
   await rig.host.sessionStart();
-  assert.deepEqual(rig.installation.agentGuidelines(), [
-    "agent_start explore: The explore specialist",
-    "agent_start once: The one-shot specialist",
-  ]);
+  const first = await rig.host.beforeAgentStart("Base prompt.");
+  assert.match(first, /<available_agents>/);
+  assert.match(
+    first,
+    /<name>explore<\/name>\n {4}<description>The explore specialist<\/description>/,
+  );
+  assert.match(first, /<name>once<\/name>/);
 
-  // The guidelines are the array the tool was registered with, so a new
-  // Session's catalog reaches the model with no re-registration.
   fs.writeFileSync(path.join(rig.agentsDir, "mine.md"), A_GOOD_PROFILE);
   await rig.host.sessionShutdown();
   await rig.host.sessionStart();
 
-  assert.deepEqual(rig.installation.agentGuidelines(), [
-    "agent_start explore: The explore specialist",
-    "agent_start once: The one-shot specialist",
-    "agent_start mine: A user Profile",
-  ]);
+  const second = await rig.host.beforeAgentStart("Base prompt.");
+  assert.match(second, /<name>mine<\/name>/);
+  assert.match(second, /<description>A user Profile<\/description>/);
 });
 
-test("a Session with no Profiles at all says so in the guidelines", async (t) => {
+test("a Session with no Profiles injects an empty available_agents section", async (t) => {
   const rig = hostRig(t, { profiles: [] });
   t.after(() => rig.installation.handle.release());
 
   await rig.host.sessionStart();
 
-  assert.deepEqual(rig.installation.agentGuidelines(), [
-    "agent_start has no configured agents.",
-  ]);
+  assert.match(
+    await rig.host.beforeAgentStart("Base prompt."),
+    /<available_agents>\n<\/available_agents>$/,
+  );
 });
 
 // -- Session switching -------------------------------------------------------

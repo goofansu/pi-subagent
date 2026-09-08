@@ -1,5 +1,5 @@
 ---
-description: Use when implementing a specification, leaving the changes uncommitted in the working tree for review.
+description: Implements a supplied specification and leaves the changes uncommitted for review. Use when a concrete specification is ready to build.
 backend: pi 
 model: openai-codex/gpt-5.6-sol
 effort: medium

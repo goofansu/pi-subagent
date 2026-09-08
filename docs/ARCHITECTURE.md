@@ -131,7 +131,9 @@ to the Run fiber's finalizers, after detachment. [ADR-0034](adr/0034-supervisor-
 2. On `session_start`, [Session wiring](../extensions/subagent/host/session.ts)
    releases the previous binding, builds fresh services/backends, installs the
    widget in the runtime scope, binds the push sink, and refreshes Profile
-   guidelines and diagnostics. The [handle](../extensions/subagent/host/session-handle.ts)
+   metadata and diagnostics. A `before_agent_start` hook injects names and
+   descriptions under `available_agents` for the parent model. The
+   [handle](../extensions/subagent/host/session-handle.ts)
    returns a supplied not-ready answer when no runtime is bound.
 3. [`host/tools.ts`](../extensions/subagent/host/tools.ts) decodes tool input.
    Start reads cwd, Pi's trust decision, current parent model/thinking, and

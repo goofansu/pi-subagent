@@ -10,8 +10,7 @@
  * - `session_start` builds a runtime from the composition module with the
  *   backend set and the Session's Profile sources; installs the widget *in the
  *   runtime's own Scope*; binds the push sink to the Session's `sendMessage`;
- *   refreshes the `agent_start` guidelines; and warns about Profile files it
- *   could not use.
+ *   and warns about Profile files it could not use.
  * - `session_shutdown` releases the handle, which detaches the host-side
  *   installs and disposes the runtime. Disposal closes the Session Scope, and
  *   closing the Session Scope *is* the M2 shutdown: every Subagent closed,
@@ -44,7 +43,6 @@ import type {
 import { loadedProfiles, sessionRuntimeLayer } from "../runtime/composition.ts";
 import type { SessionPushSink } from "./push-sink.ts";
 import type { SessionHandle } from "./session-handle.ts";
-import { formatAgentGuidelines } from "./tool-copy.ts";
 import type {
   ActiveWidget,
   CompletionHandoffView,
@@ -77,15 +75,7 @@ export interface SessionWiring {
    * production encoding policy.
    */
   readonly resultEncoder?: ResultEncoder;
-  /**
-   * The live `agent_start` guideline array, rewritten in place per Session.
-   *
-   * Pi stores the array a tool was registered with, so mutating its contents
-   * is what makes the guidelines follow the Session's Profile catalog without
-   * re-registering the tool.
-   */
-  readonly agentGuidelines: string[];
-  /** Publish the Profiles the live Session loaded, for `/agents` to read. */
+  /** Publish the Profiles the live Session loaded to parent-facing surfaces. */
   readonly setProfiles: (profiles: readonly Profile[]) => void;
 }
 
@@ -232,9 +222,6 @@ export async function startSession(
   );
 
   wiring.setProfiles(opened.profiles);
-  // Rewritten in place: see `agentGuidelines` above.
-  wiring.agentGuidelines.length = 0;
-  wiring.agentGuidelines.push(...formatAgentGuidelines(opened.profiles));
 
   if (opened.diagnostics.length > 0) {
     ctx.ui.notify(formatInvalidProfilesWarning(opened.diagnostics), "warning");
