@@ -11,6 +11,7 @@ import {
   RIG_ANSWER,
   RIG_ONE_SHOT_PROFILE,
   RIG_RESUMABLE_PROFILE,
+  RIG_RUN,
   startedIds,
 } from "../testing/host-rig.ts";
 import {
@@ -485,6 +486,143 @@ test("an id named twice in agent_cancel produces one observation", async (t) => 
   });
 
   assert.equal(text.match(new RegExp(started.runId, "g"))?.length, 1);
+});
+
+test("registered cancellation renderers cover admission outcomes in both expansion states", async (t) => {
+  const rig = hostRig(t, {
+    resumableSteps: [[{ step: "await-gate", gate: "hold" }]],
+    oneShotSteps: [RIG_RUN],
+  });
+  await rig.host.sessionStart();
+  t.after(async () => {
+    await rig.release("hold");
+    await rig.installation.handle.release();
+  });
+
+  const renderBoth = (
+    args: { readonly ids: readonly string[] },
+    result: Awaited<ReturnType<typeof rig.call>>,
+  ) => {
+    const collapsed = renderRegisteredRow(
+      rig.host,
+      "agent_cancel",
+      args,
+      result,
+      false,
+      100,
+    );
+    const expanded = renderRegisteredRow(
+      rig.host,
+      "agent_cancel",
+      args,
+      result,
+      true,
+      1_000,
+    );
+    assert.equal(collapsed.result.join("\n").match(/to expand/g)?.length, 1);
+    assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
+    assert.ok(
+      expanded.result
+        .join("\n")
+        .includes(result.content.map((part) => part.text ?? "").join("")),
+    );
+    return { collapsed, expanded };
+  };
+
+  const emptyArgs = { ids: [] };
+  const emptyResult = await rig.call("agent_cancel", emptyArgs);
+  assert.deepEqual(emptyResult.details, { kind: "cancel", outcomes: [] });
+  for (const expanded of [false, true]) {
+    const emptyRow = renderRegisteredRow(
+      rig.host,
+      "agent_cancel",
+      emptyArgs,
+      emptyResult,
+      expanded,
+    );
+    assert.equal(emptyRow.result.join("\n"), "No run ids were given.");
+    assert.doesNotMatch(emptyRow.result.join("\n"), /to expand|to collapse/);
+  }
+
+  const one = await startedRun(rig);
+  const oneArgs = { ids: [one.runId] };
+  const oneResult = await rig.call("agent_cancel", oneArgs);
+  assert.deepEqual(oneResult.details, {
+    kind: "cancel",
+    outcomes: [{ kind: "requested", runId: one.runId }],
+  });
+  const oneRow = renderBoth(oneArgs, oneResult);
+  assert.match(
+    oneRow.collapsed.call.join("\n"),
+    new RegExp(`agent_cancel ${one.runId}`),
+  );
+  assert.match(
+    oneRow.collapsed.result[0],
+    /^Cancellation requested: 1 \(.*to expand\)$/,
+  );
+
+  const repeatedResult = await rig.call("agent_cancel", oneArgs);
+  assert.deepEqual(repeatedResult.details, {
+    kind: "cancel",
+    outcomes: [{ kind: "already requested", runId: one.runId }],
+  });
+  assert.match(
+    renderBoth(oneArgs, repeatedResult).collapsed.result[0],
+    /Already cancelling: 1/,
+  );
+  const duplicateRunId = one.runId;
+  const duplicateArgs = { ids: [duplicateRunId, duplicateRunId] };
+  const duplicateResult = await rig.call("agent_cancel", duplicateArgs);
+  assert.equal(
+    (duplicateResult.details as { outcomes: readonly unknown[] }).outcomes
+      .length,
+    1,
+  );
+  const duplicateRow = renderBoth(duplicateArgs, duplicateResult);
+  assert.equal(
+    duplicateRow.collapsed.call
+      .join("\n")
+      .match(new RegExp(duplicateRunId, "g"))?.length,
+    1,
+  );
+
+  const terminalRunId = (await startedRun(rig, RIG_ONE_SHOT_PROFILE)).runId;
+  await rig.text("agent_wait", { ids: [terminalRunId] });
+  const terminalArgs = { ids: [terminalRunId] };
+  const terminalResult = await rig.call("agent_cancel", terminalArgs);
+  assert.deepEqual(terminalResult.details, {
+    kind: "cancel",
+    outcomes: [
+      { kind: "already terminal", runId: terminalRunId, phase: "completed" },
+    ],
+  });
+  assert.match(
+    renderBoth(terminalArgs, terminalResult).collapsed.result[0],
+    /Already finished, result kept: 1/,
+  );
+
+  const unknownArgs = { ids: ["run-never"] };
+  const unknownResult = await rig.call("agent_cancel", unknownArgs);
+  assert.deepEqual(unknownResult.details, {
+    kind: "cancel",
+    outcomes: [{ kind: "unknown", runId: "run-never" }],
+  });
+  assert.match(
+    renderBoth(unknownArgs, unknownResult).collapsed.result[0],
+    /Unknown run ids: 1/,
+  );
+
+  const mixedRunId = (await startedRun(rig)).runId;
+  const mixedArgs = {
+    ids: [mixedRunId, terminalRunId, "run-never", mixedRunId],
+  };
+  const mixedResult = await rig.call("agent_cancel", mixedArgs);
+  const mixedRow = renderBoth(mixedArgs, mixedResult);
+  assert.match(
+    mixedRow.collapsed.result[0],
+    /^Cancellation requested: 1 · Already finished, result kept: 1 · Unknown run ids: 1 /,
+  );
+  assert.doesNotMatch(mixedRow.collapsed.result[0], /cancelled/i);
 });
 
 // ── agent_wait ───────────────────────────────────────────────────────────────

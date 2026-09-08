@@ -6,6 +6,7 @@ import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import {
   type AgentToolRendererState,
   agentToolRenderers,
+  formatCancellationSummary,
   formatStartedRunSummary,
 } from "./agent-tool-renderers.ts";
 import type { RenderableTheme } from "./rows.ts";
@@ -205,6 +206,118 @@ test("a narrow compact success keeps both actionable ids ahead of a long Agent",
   assert.ok(visibleWidth(line) <= width);
   assert.doesNotMatch(line, /standards-reviewer/);
   assert.equal(line.match(/to expand/g)?.length, 1);
+});
+
+test("cancellation call names deduplicated Runs or a width-fitted count", () => {
+  const pair = agentToolRenderers("cancel");
+  const args = {
+    ids: ["run-alpha-123", "run-beta-456", "run-alpha-123"],
+  };
+  const wide = lines(
+    pair.renderCall(args, plainTheme, { ...context({}), args }),
+    80,
+  );
+  assert.equal(wide.join("\n"), "agent_cancel run-alpha-123, run-beta-456");
+
+  const narrow = lines(
+    pair.renderCall(args, plainTheme, { ...context({}), args }),
+    24,
+  );
+  assert.equal(narrow.join("\n"), "agent_cancel 2 Runs");
+  assert.ok(narrow.every((line) => visibleWidth(line) <= 24));
+});
+
+test("cancellation uses the configured hint and omits it for an identical one-line response", () => {
+  const details = {
+    kind: "cancel" as const,
+    outcomes: [{ kind: "requested" as const, runId: "run-demo-1" }],
+  };
+  const actions: string[] = [];
+  const configured = formatCancellationSummary(
+    details,
+    plainTheme,
+    80,
+    (action, description) => {
+      actions.push(action);
+      return `alt+o ${description}`;
+    },
+  );
+  assert.equal(configured, "Cancellation requested: 1 (alt+o to expand)");
+  assert.deepEqual(actions, ["app.tools.expand"]);
+  assert.equal(configured.match(/to expand/g)?.length, 1);
+
+  assert.equal(
+    formatCancellationSummary(
+      { kind: "cancel", outcomes: [] },
+      plainTheme,
+      80,
+      (_action, description) => `alt+o ${description}`,
+    ),
+    "No run ids were given. (alt+o to expand)",
+  );
+
+  const pair = agentToolRenderers("cancel");
+  const state: AgentToolRendererState = {};
+  lines(
+    pair.renderCall({ ids: ["run-demo-1"] }, plainTheme, {
+      ...context(state),
+      args: { ids: ["run-demo-1"] },
+    }),
+    80,
+  );
+  const result = pair.renderResult(
+    {
+      content: [{ type: "text", text: "Cancellation requested: 1" }],
+      details,
+    },
+    { expanded: false, isPartial: false },
+    plainTheme,
+    context(state),
+  );
+  assert.equal(lines(result, 80).join("\n"), "Cancellation requested: 1");
+
+  const expanded = pair.renderResult(
+    {
+      content: [{ type: "text", text: "Cancellation requested: 1" }],
+      details,
+    },
+    { expanded: true, isPartial: false },
+    plainTheme,
+    context(state, { expanded: true }),
+  );
+  assert.equal(lines(expanded, 80).join("\n"), "Cancellation requested: 1");
+  assert.doesNotMatch(lines(expanded, 80).join("\n"), /to collapse/);
+});
+
+test("malformed, foreign, and legacy cancellation details fall back readably", () => {
+  const pair = agentToolRenderers("cancel");
+  for (const details of [
+    { kind: "cancel", outcomes: [{ kind: "requested" }] },
+    {
+      kind: "cancel",
+      outcomes: [
+        { kind: "already terminal", runId: "run-1", phase: "running" },
+      ],
+    },
+    { kind: "start", outcomes: [] },
+    { requested: ["run-1"] },
+  ]) {
+    const result = pair.renderResult(
+      {
+        content: [
+          { type: "text", text: "Readable cancellation response\nmore" },
+        ],
+        details,
+      },
+      { expanded: false, isPartial: false },
+      plainTheme,
+      context({}),
+    );
+    assert.match(
+      lines(result, 80).join("\n"),
+      /^Readable cancellation response \(.*to expand\)$/,
+    );
+  }
 });
 
 test("the compact success owns one hint and expansion reveals the complete response", () => {

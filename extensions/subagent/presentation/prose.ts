@@ -284,6 +284,15 @@ export function formatSteerOutcome(
 /* agent_cancel                                                        */
 /* ------------------------------------------------------------------ */
 
+/** Canonical cancellation bucket names shared by model and collapsed text. */
+export const CANCEL_OUTCOME_HEADINGS = {
+  requested: "Cancellation requested",
+  alreadyCancelling: "Already cancelling",
+  alreadyFinished: "Already finished, result kept",
+  unknownRunIds: "Unknown run ids",
+  empty: "No run ids were given.",
+} as const;
+
 /**
  * `agent_cancel`, grouped by what happened rather than listed per id.
  *
@@ -327,7 +336,7 @@ export function formatCancelOutcomes(
   const parts: string[] = [];
   if (admitted.length > 0) {
     parts.push(
-      `Cancellation requested: ${admitted.join(", ")}. Each Run stops when ` +
+      `${CANCEL_OUTCOME_HEADINGS.requested}: ${admitted.join(", ")}. Each Run stops when ` +
         "its execution and cleanup finish, or settles cancelled once its cleanup " +
         "outlives the cleanup budget; it keeps whatever output it produced and " +
         "still sends its own notification.",
@@ -335,21 +344,23 @@ export function formatCancelOutcomes(
   }
   if (idempotent.length > 0) {
     parts.push(
-      `Already cancelling: ${idempotent.join(", ")}. The first request stands ` +
+      `${CANCEL_OUTCOME_HEADINGS.alreadyCancelling}: ${idempotent.join(", ")}. The first request stands ` +
         "and this one changed nothing.",
     );
   }
   if (terminal.length > 0) {
     parts.push(
-      `Already finished, result kept: ${terminal
+      `${CANCEL_OUTCOME_HEADINGS.alreadyFinished}: ${terminal
         .map((entry) => `${entry.runId} (${entry.status})`)
         .join(", ")}.`,
     );
   }
   if (unknown.length > 0) {
-    parts.push(`Unknown run ids: ${unknown.join(", ")}.`);
+    parts.push(
+      `${CANCEL_OUTCOME_HEADINGS.unknownRunIds}: ${unknown.join(", ")}.`,
+    );
   }
-  if (parts.length === 0) parts.push("No run ids were given.");
+  if (parts.length === 0) parts.push(CANCEL_OUTCOME_HEADINGS.empty);
   return parts.join(" ");
 }
 
