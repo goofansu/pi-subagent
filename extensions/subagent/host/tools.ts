@@ -426,8 +426,10 @@ export function registerSubagentTools(
   /* ---------------------------------------------------------------- */
 
   const decodeCancel = decodeToolInput(CANCEL_COPY.name, CancelInputSchema);
+  const cancelRenderers = agentToolRenderers("cancel");
 
   register(CANCEL_COPY, toolParameters(CancelInputSchema), {
+    ...cancelRenderers,
     async execute(
       _toolCallId: string,
       params: unknown,

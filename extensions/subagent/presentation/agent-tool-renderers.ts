@@ -16,13 +16,16 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import {
+  isTerminalRunPhase,
   type ResumeOutcome,
   type RunId,
+  type RunPhase,
   type RunResult,
   type SteerOutcome,
   TERMINAL_RUN_PHASES,
   type TerminalRunPhase,
 } from "../domain/index.ts";
+import { CANCEL_OUTCOME_HEADINGS } from "./prose.ts";
 import {
   contentText,
   formatParentheticalKeyHint,
@@ -168,13 +171,31 @@ export type SteerRenderDetails =
       readonly runId: string;
     };
 
+/** One cancellation-request admission outcome, separate from settlement. */
+export type CancelRunRenderOutcome =
+  | { readonly kind: "requested"; readonly runId: string }
+  | { readonly kind: "already requested"; readonly runId: string }
+  | {
+      readonly kind: "already terminal";
+      readonly runId: string;
+      readonly phase: TerminalRunPhase;
+    }
+  | { readonly kind: "unknown"; readonly runId: string };
+
+/** Discriminated, presentation-only details for one cancellation operation. */
+export interface CancelRenderDetails {
+  readonly kind: "cancel";
+  readonly outcomes: readonly CancelRunRenderOutcome[];
+}
+
 /** Explicit semantic details carried by migrated agent-tool outcomes. */
 export type AgentToolRenderDetails =
   | StartedRunRenderDetails
   | ResumeRenderDetails
   | SteerRenderDetails
   | CollectedRunsRenderDetails
-  | ResultRenderDetails;
+  | ResultRenderDetails
+  | CancelRenderDetails;
 
 function recordOf(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null
@@ -362,6 +383,45 @@ export function parseSteerRenderDetails(
     >,
     runId: candidate.runId,
   };
+}
+
+function isTerminalPhase(value: unknown): value is TerminalRunPhase {
+  return typeof value === "string" && isTerminalRunPhase(value as RunPhase);
+}
+
+/** Validate cancellation details at the renderer boundary. */
+export function cancelRenderDetails(
+  value: unknown,
+): CancelRenderDetails | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind !== "cancel" || !Array.isArray(candidate.outcomes)) {
+    return undefined;
+  }
+  const outcomes: CancelRunRenderOutcome[] = [];
+  for (const value of candidate.outcomes) {
+    if (typeof value !== "object" || value === null) return undefined;
+    const outcome = value as Record<string, unknown>;
+    if (typeof outcome.runId !== "string") return undefined;
+    switch (outcome.kind) {
+      case "requested":
+      case "already requested":
+      case "unknown":
+        outcomes.push({ kind: outcome.kind, runId: outcome.runId });
+        break;
+      case "already terminal":
+        if (!isTerminalPhase(outcome.phase)) return undefined;
+        outcomes.push({
+          kind: "already terminal",
+          runId: outcome.runId,
+          phase: outcome.phase,
+        });
+        break;
+      default:
+        return undefined;
+    }
+  }
+  return { kind: "cancel", outcomes };
 }
 
 function hiddenMarker(hidden: number, theme: RenderableTheme): string {
@@ -607,6 +667,232 @@ class StartResultComponent implements Component {
       this.cachedLines = [
         fitToWidth(summary, summaryWidth) + fitToWidth(hint, columns),
       ];
+      this.cachedWidth = width;
+      return this.cachedLines;
+    }
+
+    this.markdown ??= new Markdown(text || fallback, 0, 0, getMarkdownTheme());
+    const rendered = this.markdown.render(columns);
+    this.cachedLines = hidden
+      ? [
+          ...rendered,
+          fitToWidth(
+            formatParentheticalKeyHint(
+              this.theme,
+              "app.tools.expand",
+              "to collapse",
+            ),
+            columns,
+          ),
+        ]
+      : rendered;
+    this.cachedWidth = width;
+    return this.cachedLines;
+  }
+}
+
+interface CancelArguments {
+  readonly ids: readonly string[];
+}
+
+function cancelArguments(value: unknown): CancelArguments | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const ids = (value as Record<string, unknown>).ids;
+  if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string")) {
+    return undefined;
+  }
+  return { ids: [...new Set(ids)] };
+}
+
+class CancelCallComponent implements Component {
+  private args: CancelArguments | undefined;
+  private theme: RenderableTheme;
+  private cachedWidth?: number;
+  private cachedLines?: string[];
+
+  constructor(args: CancelArguments | undefined, theme: RenderableTheme) {
+    this.args = args;
+    this.theme = theme;
+  }
+
+  update(args: CancelArguments | undefined, theme: RenderableTheme): void {
+    this.args = args;
+    this.theme = theme;
+    this.invalidate();
+  }
+
+  invalidate(): void {
+    this.cachedWidth = undefined;
+    this.cachedLines = undefined;
+  }
+
+  render(width: number): string[] {
+    if (this.cachedLines !== undefined && this.cachedWidth === width) {
+      return this.cachedLines;
+    }
+    const columns = Math.max(0, width);
+    const operation = this.theme.fg(
+      "toolTitle",
+      this.theme.bold("agent_cancel"),
+    );
+    let line: string;
+    if (!this.args) {
+      line = `${operation}${this.theme.fg("error", " [invalid arguments]")}`;
+    } else {
+      const ids = this.args.ids.join(", ");
+      const named = ids.length > 0 ? `${operation} ${ids}` : operation;
+      const count = `${operation} ${this.args.ids.length} ${
+        this.args.ids.length === 1 ? "Run" : "Runs"
+      }`;
+      line = visibleWidth(named) <= columns ? named : count;
+    }
+    this.cachedWidth = width;
+    this.cachedLines = [fitToWidth(line, columns)];
+    return this.cachedLines;
+  }
+}
+
+function cancellationSummaryText(details: CancelRenderDetails): string {
+  const counts = {
+    requested: 0,
+    alreadyRequested: 0,
+    alreadyTerminal: 0,
+    unknown: 0,
+  };
+  for (const outcome of details.outcomes) {
+    switch (outcome.kind) {
+      case "requested":
+        counts.requested += 1;
+        break;
+      case "already requested":
+        counts.alreadyRequested += 1;
+        break;
+      case "already terminal":
+        counts.alreadyTerminal += 1;
+        break;
+      case "unknown":
+        counts.unknown += 1;
+        break;
+    }
+  }
+  const parts: string[] = [];
+  if (counts.requested > 0) {
+    parts.push(`${CANCEL_OUTCOME_HEADINGS.requested}: ${counts.requested}`);
+  }
+  if (counts.alreadyRequested > 0) {
+    parts.push(
+      `${CANCEL_OUTCOME_HEADINGS.alreadyCancelling}: ${counts.alreadyRequested}`,
+    );
+  }
+  if (counts.alreadyTerminal > 0) {
+    parts.push(
+      `${CANCEL_OUTCOME_HEADINGS.alreadyFinished}: ${counts.alreadyTerminal}`,
+    );
+  }
+  if (counts.unknown > 0) {
+    parts.push(`${CANCEL_OUTCOME_HEADINGS.unknownRunIds}: ${counts.unknown}`);
+  }
+  return parts.join(" · ") || CANCEL_OUTCOME_HEADINGS.empty;
+}
+
+/** One-line cancellation admission summary with the configured toggle hint. */
+export function formatCancellationSummary(
+  details: CancelRenderDetails,
+  theme: RenderableTheme,
+  width: number,
+  renderKeyHint?: KeyHintRenderer,
+): string {
+  const columns = Math.max(0, width);
+  const hint = ` ${formatParentheticalKeyHint(
+    theme,
+    "app.tools.expand",
+    "to expand",
+    renderKeyHint,
+  )}`;
+  const summaryWidth = Math.max(0, columns - visibleWidth(hint));
+  return (
+    fitToWidth(
+      theme.fg("toolOutput", cancellationSummaryText(details)),
+      summaryWidth,
+    ) + fitToWidth(hint, columns)
+  );
+}
+
+class CancelResultComponent implements Component {
+  private result: AgentToolRenderableResult;
+  private options: AgentToolResultOptions;
+  private theme: RenderableTheme;
+  private cachedWidth?: number;
+  private cachedLines?: string[];
+  private markdown?: Markdown;
+
+  constructor(
+    result: AgentToolRenderableResult,
+    options: AgentToolResultOptions,
+    theme: RenderableTheme,
+  ) {
+    this.result = result;
+    this.options = options;
+    this.theme = theme;
+  }
+
+  update(
+    result: AgentToolRenderableResult,
+    options: AgentToolResultOptions,
+    theme: RenderableTheme,
+  ): void {
+    this.result = result;
+    this.options = options;
+    this.theme = theme;
+    this.invalidate();
+  }
+
+  invalidate(): void {
+    this.cachedWidth = undefined;
+    this.cachedLines = undefined;
+    this.markdown = undefined;
+  }
+
+  render(width: number): string[] {
+    if (this.cachedLines !== undefined && this.cachedWidth === width) {
+      return this.cachedLines;
+    }
+    const columns = Math.max(0, width);
+    const text = contentText(this.result.content).trim();
+    const details = cancelRenderDetails(this.result.details);
+    const fallback =
+      firstLine(text) ||
+      (this.options.isPartial
+        ? "agent_cancel is still running."
+        : "agent_cancel returned no readable response.");
+    const semantic =
+      details && !this.options.isPartial
+        ? cancellationSummaryText(details)
+        : fallback;
+    const hidden =
+      text.includes("\n") ||
+      text !== semantic ||
+      visibleWidth(semantic) > columns;
+
+    if (!this.options.expanded) {
+      if (details && !this.options.isPartial && hidden) {
+        this.cachedLines = [
+          formatCancellationSummary(details, this.theme, columns),
+        ];
+      } else {
+        const hint = hidden
+          ? ` ${formatParentheticalKeyHint(
+              this.theme,
+              "app.tools.expand",
+              "to expand",
+            )}`
+          : "";
+        const summaryWidth = Math.max(0, columns - visibleWidth(hint));
+        this.cachedLines = [
+          fitToWidth(this.theme.fg("toolOutput", semantic), summaryWidth) +
+            fitToWidth(hint, columns),
+        ];
+      }
       this.cachedWidth = width;
       return this.cachedLines;
     }
@@ -1454,6 +1740,27 @@ function continuationPair(
   };
 }
 
+const cancelPair: AgentToolRendererPair = {
+  renderCall(args, theme, context) {
+    const parsed = cancelArguments(args);
+    context.state.callHidden = false;
+    const component =
+      context.lastComponent instanceof CancelCallComponent
+        ? context.lastComponent
+        : new CancelCallComponent(parsed, theme);
+    component.update(parsed, theme);
+    return component;
+  },
+  renderResult(result, options, theme, context) {
+    const component =
+      context.lastComponent instanceof CancelResultComponent
+        ? context.lastComponent
+        : new CancelResultComponent(result, options, theme);
+    component.update(result, options, theme);
+    return component;
+  },
+};
+
 function fallbackPair(operation: AgentToolOperation): AgentToolRendererPair {
   return {
     renderCall(_args, theme, context) {
@@ -1482,7 +1789,7 @@ const rendererPairs: Record<AgentToolOperation, AgentToolRendererPair> = {
   wait: resultBearingPair("wait"),
   waitAll: resultBearingPair("waitAll"),
   result: resultBearingPair("result"),
-  cancel: fallbackPair("cancel"),
+  cancel: cancelPair,
   steer: continuationPair("steer"),
 };
 

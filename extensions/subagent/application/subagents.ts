@@ -21,6 +21,7 @@
 import { Effect } from "effect";
 import {
   boundRunLabel,
+  type CancelOutcome,
   isTerminalRunPhase,
   labelShortenedDiagnostic,
   type RunDiagnostic,
@@ -28,6 +29,7 @@ import {
 } from "../domain/index.ts";
 import {
   type AgentToolRenderDetails,
+  type CancelRunRenderOutcome,
   formatCancelOutcomes,
   formatNoActiveRuns,
   formatResult,
@@ -267,6 +269,41 @@ const steer = (
     };
   });
 
+function cancelRenderOutcomes(
+  outcomes: readonly CancelOutcome[],
+): readonly CancelRunRenderOutcome[] {
+  return outcomes.map((outcome): CancelRunRenderOutcome => {
+    switch (outcome.outcome) {
+      case "admitted":
+        return { kind: "requested", runId: outcome.runId };
+      case "idempotent":
+        return { kind: "already requested", runId: outcome.runId };
+      case "already completed":
+        return {
+          kind: "already terminal",
+          runId: outcome.runId,
+          phase: "completed",
+        };
+      case "already failed":
+        return {
+          kind: "already terminal",
+          runId: outcome.runId,
+          phase: "failed",
+        };
+      case "already cancelled":
+        return {
+          kind: "already terminal",
+          runId: outcome.runId,
+          phase: "cancelled",
+        };
+      case "unknown Run":
+        return { kind: "unknown", runId: outcome.runId };
+      default:
+        return outcome satisfies never;
+    }
+  });
+}
+
 /** `agent_cancel`. Answers about request admission, never about terminality. */
 const cancel = (
   input: CancelInput,
@@ -274,7 +311,14 @@ const cancel = (
   Effect.gen(function* () {
     const supervisor = yield* SubagentSupervisor;
     const outcomes = yield* supervisor.cancel(distinct(input.ids));
-    return { text: formatCancelOutcomes(outcomes), deliveredRuns: [] };
+    return {
+      text: formatCancelOutcomes(outcomes),
+      details: {
+        kind: "cancel",
+        outcomes: cancelRenderOutcomes(outcomes),
+      } satisfies AgentToolRenderDetails,
+      deliveredRuns: [],
+    };
   });
 
 /**
