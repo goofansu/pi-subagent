@@ -38,4 +38,5 @@ export * from "./run-card.ts";
 export * from "./run-line.ts";
 export * from "./run-presentation.ts";
 export * from "./status.ts";
+export * from "./text-width.ts";
 export * from "./views.ts";

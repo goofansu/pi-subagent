@@ -38,7 +38,7 @@ import {
   historyCategoryCounts,
 } from "./history.ts";
 import type { RenderableTheme } from "./rows.ts";
-import { fitToWidth } from "./run-line.ts";
+import { fitToWidth } from "./text-width.ts";
 
 /** Every input here is plain, so the shared clip discards its own resets. */
 const PLAIN = { plain: true } as const;

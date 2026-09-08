@@ -35,13 +35,13 @@ import {
   type ResumedRun,
 } from "./details.ts";
 import type { RenderableTheme } from "./rows.ts";
-import { fitRunLine, type RunLinePolicy } from "./run-line.ts";
 import {
   formatCharacterCount,
   formatDuration,
   runPhaseTone,
   runPhaseVerb,
 } from "./status.ts";
+import { fitToWidth } from "./text-width.ts";
 
 /** What `agent_start` was asked, as the renderer receives it. */
 export interface StartCallArguments {
@@ -263,22 +263,6 @@ export function renderResumeResult(
 export const MAX_NOTICE_LABEL_WIDTH = 48;
 
 /**
- * A notice's column budgets: agent-first, with the outcome never giving.
- *
- * The only part of this line that gives way is the Label, so the only budget
- * stated here is its cap. Everything else — the agent, the outcome and the
- * hint — is declared to the fitting as columns already spent, which is what
- * says they are not the parts that shrink: a reader who cannot see how a Run
- * ended has no line worth having, so a terminal narrower than the fixed parts
- * overflows rather than cutting one of them. Those columns are *measured* at
- * the call below rather than named here, because every one of them is painted
- * and a colour is not a column.
- */
-export const NOTICE_RUN_LINE: RunLinePolicy = {
-  label: { cap: MAX_NOTICE_LABEL_WIDTH },
-};
-
-/**
  * The one line a collapsed completion notice shows.
  *
  * `<agent> · <label> · <verb> in <duration>`. It answers the three questions
@@ -297,11 +281,11 @@ export const NOTICE_RUN_LINE: RunLinePolicy = {
  * four figures sit together and an unreported cost is one zero among four
  * rather than a line that quietly means two different things.
  *
- * **The whole line is fitted, not just the label.** The label takes whatever
- * `width` leaves after the agent, the outcome and the hint — those are what
- * the reader came for, so they are never the part that gives — and at most
- * {@link MAX_NOTICE_LABEL_WIDTH} beyond that. It never wraps: a collapsed
- * line that became two lines would defeat the collapsing.
+ * **The label is fitted against the fixed content.** It takes whatever
+ * `width` leaves after the agent, outcome, separators, and hint, and at most
+ * {@link MAX_NOTICE_LABEL_WIDTH}. The fixed content is retained even when it
+ * alone exceeds the width; preserving that narrow fallback avoids turning a
+ * fitting refactor into a notice redesign.
  *
  * `width` is **required and has no default**, because a default is a guess and
  * a guessed width is visibly wrong in both directions: too small and a label
@@ -344,16 +328,14 @@ export function formatNotificationSummary(
   /** The label section gone entirely, rather than left as an empty gap. */
   const withoutLabel = `${agent}${theme.fg("dim", " · ")}${outcome} ${hint}`;
 
-  // What the line costs with an empty label, which is what the label's budget
-  // is subtracted from. Rendered and measured rather than counted: every part
-  // is themed, a colour is not a column, and a delimiter left out of the
-  // arithmetic is a line three columns too wide.
-  const fitted = fitRunLine(
-    { label: details.label },
-    { ...NOTICE_RUN_LINE, reserved: visibleWidth(render("")) },
-    width,
+  // Measure the actual painted fixed content. ANSI bytes are not columns, and
+  // keeping both separators here ensures a displayed label pays for both.
+  const fixedWidth = visibleWidth(render(""));
+  const labelWidth = Math.min(
+    MAX_NOTICE_LABEL_WIDTH,
+    Math.max(0, width - fixedWidth),
   );
-  // Too narrow for even one column of label: the label gives way whole, the
-  // way a widget row's turn count does, rather than leaving `· ·` behind.
-  return fitted.label === "" ? withoutLabel : render(fitted.label);
+  const label = fitToWidth(details.label, labelWidth);
+  // No fitted label means its entire section goes, including one separator.
+  return label === "" ? withoutLabel : render(label);
 }

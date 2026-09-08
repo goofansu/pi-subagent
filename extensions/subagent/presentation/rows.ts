@@ -38,13 +38,13 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { isTerminalRunPhase, type RunPhase } from "../domain/index.ts";
 import {
   fitRunLine,
-  fitToWidth,
   MAX_RUN_LABEL_WIDTH,
   type RunLinePolicy,
   runLineParts,
 } from "./run-line.ts";
 import { runPresentationFromRow } from "./run-presentation.ts";
 import { RUN_PHASE_DISPLAY_ORDER, runPhaseVerb, type Tone } from "./status.ts";
+import { fitToWidth } from "./text-width.ts";
 import type { FailedHandoffStatus, RunRowView } from "./views.ts";
 
 /**

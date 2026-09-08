@@ -1,42 +1,15 @@
 /**
- * Fitting a Run into a width: one algebra, one Label cap, three policies.
- *
- * Three surfaces draw a Run as a single line — the ambient widget's detail
- * row, the dashboard history's table row, and a completion notice's collapsed
- * line — and each used to carry its own arithmetic for deciding how many
- * columns the Label, the status word, the activity and the duration were worth
- * on a terminal of a given width. Three implementations of one idea meant the
- * Label could be capped at forty columns in two of them and forty-eight in the
- * third, and a maintainer changing how a line gives way had to find all three
- * and reason about each separately.
- *
- * So the arithmetic lives here and each surface supplies a **policy**: named
- * column budgets saying what its line is made of and what gives way first.
- * The widget's is label-first with an activity floor, a right-aligned duration
- * and a one-column inset; the dashboard history's is content-sized shared
- * columns with a selection prefix and a duration above eighty columns; a
- * notice's is agent-first, with the outcome never giving. A fourth surface is
- * a fourth policy value, not a fourth implementation.
+ * Shared fitting arithmetic for widget and dashboard Run rows.
  *
  * **This module fits; it does not paint.** It returns the parts of a line at
- * the widths they were allotted, and the surface that owns the line paints
- * them, joins them with its own separators and writes them to the screen. That
- * split is what lets three very differently painted surfaces share one
- * algebra, and it is why the theme never reaches this file.
- *
- * {@link fitToWidth} is the module's other job: the one wrapper over Pi's
- * width primitive. Clipping a line to a width and padding it out to fill one
- * were written five separate times across this module — once per Run surface,
- * once for the dashboard panel and once more for the identity banner — so a
- * change to how a line is elided had five places to land.
+ * the widths they were allotted, and each surface paints and joins them. Run
+ * meaning remains in `run-presentation.ts`; terminal-cell clipping remains in
+ * `text-width.ts`.
  */
 
-import {
-  stripTerminalSequences,
-  truncateToWidth,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { type RunPresentation, runElapsed } from "./run-presentation.ts";
+import { fitToWidth } from "./text-width.ts";
 
 /**
  * Maximum visible Label columns, wherever a Run line names one.
@@ -45,40 +18,10 @@ import { type RunPresentation, runElapsed } from "./run-presentation.ts";
  * may be *stored*, not on what is worth *reading* in a column beside other
  * columns. On a wide terminal an unfitted Label would push the status word and
  * the duration so far right that a reader scanning a list could not find them.
- * A notice's collapsed line caps its Label further still — that is its own
- * policy, stated at its own surface, and this is the cap the surfaces that
- * draw a Run *beside other Runs* share.
+ * Completion notices have their own larger 48-column cap. This is the cap for
+ * surfaces that draw a Run beside other Runs.
  */
 export const MAX_RUN_LABEL_WIDTH = 40;
-
-/** How the one wrapper over Pi's width primitive should treat a line. */
-export interface FitOptions {
-  /** Pad the result out to the full width, so a list's columns line up. */
-  readonly pad?: boolean;
-  /**
-   * The text is plain, so the clip's own resets are discarded.
-   *
-   * Pi's truncator may leave a reset sequence behind. On text a surface is
-   * about to paint itself, that reset would land inside the paint and cut it
-   * short; on text that is already painted, it is what closes the paint and
-   * must stay.
-   */
-  readonly plain?: boolean;
-}
-
-/** Clip a line to a width by display cells, ANSI and wide graphemes included. */
-export function fitToWidth(
-  text: string,
-  width: number,
-  options: FitOptions = {},
-): string {
-  const columns = Math.max(0, width);
-  const clipped = truncateToWidth(text, columns, "…");
-  const fitted = options.plain ? stripTerminalSequences(clipped) : clipped;
-  return options.pad
-    ? fitted + " ".repeat(Math.max(0, columns - visibleWidth(fitted)))
-    : fitted;
-}
 
 /**
  * The column a list of values shares: the widest of them, up to a cap.
@@ -224,14 +167,7 @@ export interface RunLinePolicy {
    * about its geometry.
    */
   readonly inset?: number;
-  /**
-   * Columns the surface has already spent before the first part.
-   *
-   * The dashboard history's selection prefix and a notice's agent, outcome and
-   * hint are all this: columns the line does not have, that no budget here can
-   * take back. Stating a notice's fixed parts this way is what "the outcome
-   * never gives" means as a policy value.
-   */
+  /** Columns the dashboard history has spent on its selection prefix. */
   readonly reserved?: number;
   readonly label: RunLineLabelBudget;
   readonly status?: RunLineStatusBudget;
@@ -239,7 +175,7 @@ export interface RunLinePolicy {
   readonly duration?: RunLineDurationBudget;
   /** Pad each part out to its column, so a list's columns line up. */
   readonly padded?: boolean;
-  /** Every part's text is plain. See {@link FitOptions.plain}. */
+  /** Every part is plain text, so clipping resets are discarded. */
   readonly plain?: boolean;
 }
 

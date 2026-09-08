@@ -13,7 +13,6 @@ import type { RunId, SubagentId } from "../domain/index.ts";
 import type { RenderableTheme } from "./rows.ts";
 import {
   fitRunLine,
-  fitToWidth,
   MAX_RUN_LABEL_WIDTH,
   type RunLinePolicy,
   runLineColumn,
@@ -23,6 +22,7 @@ import {
   type RunPresentation,
   runPresentationFromSummary,
 } from "./run-presentation.ts";
+import { fitToWidth } from "./text-width.ts";
 
 export const HISTORY_CATEGORIES = [
   "Active",

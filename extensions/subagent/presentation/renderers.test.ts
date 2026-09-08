@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import type { CollectedRuns } from "./details.ts";
 import {
   contentText,
@@ -49,6 +49,13 @@ const ansiDimAware: RenderableTheme = {
   fg: (color, text) => (color === "dim" ? dimAnsi(text) : text),
   bg: (_color, text) => text,
   bold: (text) => text,
+  italic: (text) => text,
+  inverse: (text) => text,
+};
+const ansiTheme: RenderableTheme = {
+  fg: (_color, text) => `\u001b[36m${text}\u001b[39m`,
+  bg: (_color, text) => text,
+  bold: (text) => `\u001b[1m${text}\u001b[22m`,
   italic: (text) => text,
   inverse: (text) => text,
 };
@@ -417,6 +424,85 @@ test("the whole collapsed line is fitted to its width, and the label is what giv
     // Everything but the label survives at every width.
     assert.match(line, /^explore · /);
     assert.match(line, /completed in 1\.0s \(ctrl\+o to expand\)$/);
+  }
+});
+
+test("notice label space measures the assembled fixed content rather than ANSI bytes", () => {
+  const details = {
+    agent: "explore",
+    label: "a".repeat(200),
+    status: "completed" as const,
+    durationMillis: 1_000,
+  };
+  const width = 54;
+  const plain = formatNotificationSummary(
+    details,
+    theme,
+    width,
+    false,
+    keyHintStub,
+  );
+  const styled = formatNotificationSummary(
+    details,
+    ansiTheme,
+    width,
+    false,
+    keyHintStub,
+  );
+
+  assert.equal(
+    stripVTControlCharacters(styled),
+    stripVTControlCharacters(plain),
+  );
+  assert.equal(visibleWidth(styled), width);
+  assert.match(stripVTControlCharacters(plain), /^explore · a+… · completed/);
+});
+
+test("an empty or unfittable notice label removes its whole section", () => {
+  for (const [label, width] of [
+    ["", GOLDEN_WIDTH],
+    ["audit auth redirects", 10],
+  ] as const) {
+    const line = stripVTControlCharacters(
+      formatNotificationSummary(
+        {
+          agent: "explore",
+          label,
+          status: "failed",
+          durationMillis: 1_000,
+        },
+        theme,
+        width,
+        false,
+        keyHintStub,
+      ),
+    );
+    assert.equal(line, "explore · failed in 1.0s (ctrl+o to expand)");
+    assert.doesNotMatch(line, /· +·/);
+  }
+});
+
+test("wide, combining, and emoji notice labels fit without damaged text", () => {
+  for (const label of [
+    "任务".repeat(100),
+    "é".repeat(100),
+    "👩‍💻".repeat(100),
+  ]) {
+    const line = formatNotificationSummary(
+      {
+        agent: "explore",
+        label,
+        status: "completed",
+        durationMillis: 1_000,
+      },
+      ansiTheme,
+      72,
+      false,
+      keyHintStub,
+    );
+    assert.equal(visibleWidth(line), 72);
+    assert.doesNotMatch(line, /�/);
+    assert.match(stripVTControlCharacters(line), / · completed in 1\.0s/);
   }
 });
 

@@ -1,15 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { FIXTURE_NOW, fixtureRow } from "../testing/presentation-fixtures.ts";
 import { historyRunLine } from "./history.ts";
-import { NOTICE_RUN_LINE } from "./renderers.ts";
 import { WIDGET_RUN_LINE } from "./rows.ts";
 import {
   type FittedRunLine,
   fitRunLine,
-  fitToWidth,
   MAX_RUN_LABEL_WIDTH,
   type RunLineParts,
   type RunLinePolicy,
@@ -19,19 +16,15 @@ import {
 import { runPresentationFromRow } from "./run-presentation.ts";
 
 /**
- * The three surfaces' own policy values, driven directly.
+ * The widget and history policy values, driven directly.
  *
- * The widget-row, history-row and notice tests assert the exact strings those
- * surfaces paint, and they are what says the merge preserved their behaviour.
- * This one asserts the arithmetic underneath all three — the
- * budgets each policy states, and what gives way when they cannot all be met —
- * which is what a fourth surface would inherit by supplying a fourth policy.
+ * Their surface tests assert the exact painted strings. These tests retain the
+ * shared row-fitting invariants underneath both surfaces.
  */
 const HISTORY_RUN_LINE = historyRunLine({ label: 20, status: 10 });
 
 /** The gaps each policy puts before its status word and its activity. */
 const GAPS = { status: 2, activity: 3 };
-const NO_GAPS = { status: 0, activity: 0 };
 
 /** One Run's parts, from the fixture every presentation golden shares. */
 function parts(overrides: Parameters<typeof fixtureRow>[0] = {}): RunLineParts {
@@ -61,23 +54,6 @@ function shared(policy: RunLinePolicy, width: number): number {
   return Math.max(0, width - (policy.reserved ?? 0));
 }
 
-test("one wrapper clips, pads, and discards the resets a clip leaves in plain text", () => {
-  assert.equal(fitToWidth("look around", 40), "look around");
-  assert.equal(fitToWidth("look around", 7, { plain: true }), "look a…");
-  assert.equal(fitToWidth("look around", 0), "");
-  assert.equal(fitToWidth("look around", -5), "");
-  assert.equal(fitToWidth("ab", 5, { pad: true }), "ab   ");
-  assert.equal(fitToWidth("abcdef", 3, { pad: true, plain: true }), "ab…");
-  // A wide grapheme is never split, and padding still fills the column.
-  assert.equal(visibleWidth(fitToWidth("界".repeat(9), 5, { pad: true })), 5);
-  // A plain caller paints its own text afterwards, so a reset the clip left
-  // behind would close that paint several columns early. A caller whose text
-  // is already painted needs that same reset kept.
-  const painted = `\u001b[2m${"a".repeat(50)}\u001b[0m`;
-  assert.ok(!fitToWidth(painted, 10, { plain: true }).includes("\u001b"));
-  assert.ok(fitToWidth(painted, 10).includes("\u001b"));
-});
-
 test("a shared column is the widest value in a list, up to its cap", () => {
   assert.equal(runLineColumn(["One", "Longer label"]), 12);
   assert.equal(runLineColumn(["界".repeat(4)]), 8);
@@ -88,7 +64,7 @@ test("a shared column is the widest value in a list, up to its cap", () => {
   );
 });
 
-test("the Label cap has one owner, and a notice caps further still", () => {
+test("widget and dashboard rows share their distinct 40-column Label cap", () => {
   const long = parts({ identity: { description: "a".repeat(80) } });
   assert.equal(
     visibleWidth(fitRunLine(long, WIDGET_RUN_LINE, 200).label),
@@ -100,8 +76,6 @@ test("the Label cap has one owner, and a notice caps further still", () => {
     ),
     MAX_RUN_LABEL_WIDTH,
   );
-  // The notice's own budget, which is the whole of its policy.
-  assert.equal(visibleWidth(fitRunLine(long, NOTICE_RUN_LINE, 200).label), 48);
 });
 
 test("the widget's Label leads, and shrinks to a floor rather than vanishing", () => {
@@ -236,24 +210,10 @@ test("a column of no Label still costs the delimiter the row draws after it", ()
   assert.equal(line.duration, "   12.4s");
 });
 
-test("a notice's fixed parts are columns already spent, and never the parts that give", () => {
-  const run = parts();
-  const spent = (reserved: number) =>
-    fitRunLine(run, { ...NOTICE_RUN_LINE, reserved }, 40);
-  assert.equal(spent(0).label, "look around");
-  assert.equal(stripVTControlCharacters(spent(32).label), "look ar…");
-  // No column left for even one of the Label: it goes whole rather than
-  // leaving a fragment, and nothing is taken back from what was spent.
-  assert.equal(spent(40).label, "");
-  assert.equal(spent(60).label, "");
-  assert.equal(spent(40).status, undefined);
-});
-
 test("every policy elides rather than overflowing, at every width down to nothing", () => {
   const policies = [
     ["widget", WIDGET_RUN_LINE, GAPS],
     ["history", HISTORY_RUN_LINE, GAPS],
-    ["notice", NOTICE_RUN_LINE, NO_GAPS],
   ] as const;
   for (const run of [
     parts({ activity: "bash: npm test" }),
