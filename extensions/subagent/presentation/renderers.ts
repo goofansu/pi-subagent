@@ -253,12 +253,9 @@ export function renderResumeResult(
 }
 
 /**
- * The most room the label may take, however wide the line is.
- *
- * A cap as well as a share, for the same reason the widget caps its agent
- * column: on a wide terminal a two-hundred-byte label would push the outcome
- * and the cost so far right that a reader scanning a column of notices could
- * not find them.
+ * A completion notice gives its Run label at most 48 columns. This is distinct
+ * from the widget/dashboard Run-label cap of 40 columns; the remaining notice
+ * budget is calculated from its actual rendered fixed content below.
  */
 export const MAX_NOTICE_LABEL_WIDTH = 48;
 

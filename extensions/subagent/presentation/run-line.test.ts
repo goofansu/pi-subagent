@@ -4,7 +4,6 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import * as runLine from "./run-line.ts";
 import {
   type FittedRunLine,
-  fitHistoryRunLine,
   fitHistoryRunLines,
   fitWidgetRunLine,
   type ResolvedRunLineContent,
@@ -44,7 +43,6 @@ test("the public fitter surface exposes operations, not policy machinery", () =>
   assert.deepEqual(Object.keys(runLine).sort(), [
     "RUN_ACTIVITY_SEPARATOR",
     "RUN_STATUS_SEPARATOR",
-    "fitHistoryRunLine",
     "fitHistoryRunLines",
     "fitWidgetRunLine",
     "runActivitySeparator",
@@ -132,8 +130,9 @@ test("history-list fitting measures and pads shared columns from actual content"
   assert.equal(visibleWidth(asciiLabel.label), 8);
 });
 
-test("history thresholds remain tied to full row width around every transition", () => {
-  const fit = (width: number) => fitHistoryRunLine(historyParts(), width);
+test("history content gates preserve full-row transitions after the prefix", () => {
+  const fit = (width: number) =>
+    fitHistoryRunLines([historyParts()], width)[0] ?? { label: "", gap: 0 };
   assert.equal(fit(25).status, undefined);
   assert.notEqual(fit(26).status, undefined);
   assert.notEqual(fit(27).status, undefined);

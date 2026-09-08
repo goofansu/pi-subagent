@@ -161,6 +161,10 @@ test("a cancel arriving after the execution fiber exited settles on the answer",
           throw new Error("Expected captured Result");
         assert.equal(capture.summary.cancellationReason, "requested");
         assert.deepEqual(capture.result, read.result);
+        // This rendering assertion intentionally stays in the race test: the
+        // regression is specifically runtime settlement observed and then
+        // presented through inspection. Keep it to terminal truth, output,
+        // and absence of cancellation wording so copy changes stay elsewhere.
         const rendered = renderInspection(
           inspectionBlocks(capture, "pending"),
           100,

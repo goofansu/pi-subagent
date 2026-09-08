@@ -113,11 +113,10 @@ function resolve(run: RunPresentationInput): RunPresentation {
   const cancelling = cancellationReason !== undefined && !terminal;
   const ordinaryCancellation =
     run.phase === "cancelled" &&
-    (run.cancellationReason === "requested" ||
-      run.cancellationReason === "shutdown");
+    (cancellationReason === "requested" || cancellationReason === "shutdown");
   const currentActivity =
     run.phase === "running" &&
-    run.cancellationReason === undefined &&
+    cancellationReason === undefined &&
     run.activity?.trim()
       ? run.activity
       : undefined;
@@ -139,7 +138,7 @@ function resolve(run: RunPresentationInput): RunPresentation {
       : { lastActivity: run.lastActivity }),
     executionNeedsAttention:
       run.phase === "failed" ||
-      (run.phase === "cancelled" && run.cancellationReason === "timeout"),
+      (run.phase === "cancelled" && cancellationReason === "timeout"),
     startedAt: run.startedAt,
     ...(run.settledAt === undefined ? {} : { settledAt: run.settledAt }),
   };

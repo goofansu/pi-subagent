@@ -97,14 +97,22 @@ function paintParts(parts: readonly DetailPart[]): string {
  * dashboard history's rather than keeping a second rule for the activity cell.
  * The widget draws no terminal row — {@link renderRunRows} keeps only active
  * ones — so that branch reaches this formatter through its own interface alone.
+ * `surfaceWidth` is the full widget width; this public renderer removes both
+ * outer margins before fitting the returned row content.
  */
 export function formatRunRow(
   row: RunRowView,
   theme: RenderableTheme,
-  width: number,
+  surfaceWidth: number,
   now: number,
 ): string {
-  return formatRunRowContent(runPresentationFromRow(row), theme, width, now);
+  const contentWidth = Math.max(0, surfaceWidth - WIDGET_OUTER_MARGIN * 2);
+  return formatRunRowContent(
+    runPresentationFromRow(row),
+    theme,
+    contentWidth,
+    now,
+  );
 }
 
 /** Paint a resolved row into contentWidth, after the outer margins are removed. */
@@ -114,6 +122,9 @@ function formatRunRowContent(
   contentWidth: number,
   now: number,
 ): string {
+  // Keep this small assembly surface-local rather than teaching geometric
+  // fitting about RunPresentation. History deliberately chooses heading case
+  // for status text, while the widget keeps the shared lowercase verb.
   const fitted = fitWidgetRunLine(
     {
       label: run.label,

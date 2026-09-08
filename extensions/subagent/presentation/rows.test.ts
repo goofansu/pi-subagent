@@ -10,7 +10,7 @@ import {
 } from "../testing/presentation-fixtures.ts";
 import {
   formatRowSummary,
-  formatRunRow,
+  formatRunRow as formatRunRowForSurface,
   type RenderableTheme,
   ROW_DELIMITER,
   renderRunRows,
@@ -23,6 +23,14 @@ const theme: RenderableTheme = {
   italic: (text) => text,
   inverse: (text) => text,
 };
+
+/** Preserve content-width fixtures while the public renderer receives surface width. */
+const formatRunRow = (
+  row: Parameters<typeof formatRunRowForSurface>[0],
+  paintTheme: RenderableTheme,
+  contentWidth: number,
+  now: number,
+) => formatRunRowForSurface(row, paintTheme, contentWidth + 2, now);
 const SGR: Record<string, number> = {
   dim: 2,
   muted: 90,
@@ -85,6 +93,21 @@ function widget(
 ) {
   return renderRunRows(rows, paintTheme, width, FIXTURE_NOW);
 }
+
+test("the public row renderer deducts both widget margins from surface width", () => {
+  for (let surfaceWidth = 0; surfaceWidth <= 120; surfaceWidth++) {
+    const rendered = formatRunRowForSurface(
+      fixtureRow({ activity: "bash: npm test" }),
+      named,
+      surfaceWidth,
+      FIXTURE_NOW,
+    );
+    assert.ok(
+      visibleWidth(rendered) <= Math.max(0, surfaceWidth - 2),
+      `surface width ${surfaceWidth}`,
+    );
+  }
+});
 
 test("wide detail shows only Label, state, activity and elapsed", () => {
   const line = row(120, { activity: "bash: npm test" });

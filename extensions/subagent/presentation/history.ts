@@ -13,9 +13,8 @@ import type { RunId, SubagentId } from "../domain/index.ts";
 import type { RenderableTheme } from "./rows.ts";
 import {
   type FittedRunLine,
-  fitHistoryRunLine,
   fitHistoryRunLines,
-  type ResolvedHistoryRunLineContent,
+  type ResolvedRunLineContent,
   RUN_STATUS_SEPARATOR,
   runActivitySeparator,
 } from "./run-line.ts";
@@ -42,7 +41,10 @@ function historyContent(
   run: RunPresentation,
   now: number,
   prefix: string,
-): ResolvedHistoryRunLineContent {
+): ResolvedRunLineContent & { readonly prefix: string } {
+  // This intentionally remains separate from widget assembly: history uses
+  // heading case and contributes a selection prefix to shared measurement.
+  // A shared helper would couple RunPresentation to otherwise geometric code.
   return {
     prefix,
     label: run.label,
@@ -123,26 +125,6 @@ export function historyRows(
       ? theme.bg("selectedBg", fitToWidth(row, width, { pad: true }))
       : row;
   });
-}
-
-/** One borderless standalone row with the history surface's fixed fallback columns. */
-export function historyRow(
-  run: RunSummary,
-  width: number,
-  theme: RenderableTheme,
-  selected: boolean,
-  now: number,
-): string {
-  const presentation = runPresentationFromSummary(run);
-  const prefix = selected ? SELECTED_PREFIX : UNSELECTED_PREFIX;
-  return paintHistoryRow(
-    presentation,
-    fitHistoryRunLine(historyContent(presentation, now, prefix), width),
-    width,
-    theme,
-    selected,
-    prefix,
-  );
 }
 
 /** Paint one already-resolved Run into the columns its list settled on. */

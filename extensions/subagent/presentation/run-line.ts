@@ -117,10 +117,10 @@ interface HistoryColumns {
   readonly prefix: number;
 }
 
-/** Resolved history content includes the actual prefix the painter will draw. */
-export interface ResolvedHistoryRunLineContent extends ResolvedRunLineContent {
+type HistoryRunLineContent = ResolvedRunLineContent & {
+  /** The actual selection prefix the painter will draw. */
   readonly prefix: string;
-}
+};
 
 function measuredColumn(values: readonly string[], cap: number): number {
   return Math.min(cap, Math.max(0, ...values.map(visibleWidth)));
@@ -168,11 +168,12 @@ export function fitWidgetRunLine(
 
 /**
  * Fit a dashboard history list, measuring shared columns from the supplied
- * resolved rows. Thresholds still read the full row width; selection-prefix
- * reservation is applied privately after those dimensions arrive.
+ * resolved rows. Status/activity gates measure content after the selection
+ * prefix, preserving their established full-row transitions at 26/52 columns;
+ * the duration gate continues to measure the full row width.
  */
 export function fitHistoryRunLines(
-  contents: readonly ResolvedHistoryRunLineContent[],
+  contents: readonly HistoryRunLineContent[],
   width: number,
 ): readonly FittedRunLine[] {
   const columns = {
@@ -191,25 +192,6 @@ export function fitHistoryRunLines(
   };
   const policy = historyPolicy(columns);
   return contents.map((content) => fitRunLine(content, policy, width));
-}
-
-/**
- * Fit the retained standalone history-row surface with its established fixed
- * columns. List rendering should use {@link fitHistoryRunLines} instead.
- */
-export function fitHistoryRunLine(
-  content: ResolvedHistoryRunLineContent,
-  width: number,
-): FittedRunLine {
-  return fitRunLine(
-    content,
-    historyPolicy({
-      label: MAX_RUN_LABEL_WIDTH,
-      status: 10,
-      prefix: visibleWidth(content.prefix),
-    }),
-    width,
-  );
 }
 
 function fitRunLine(
