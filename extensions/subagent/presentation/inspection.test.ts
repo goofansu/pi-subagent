@@ -65,6 +65,21 @@ const plain = (width = 100) =>
   renderInspection(blocks, width, PLAIN_THEME)
     .map(stripVTControlCharacters)
     .join("\n");
+const sectionBlocks = (
+  semantic: readonly ReturnType<typeof inspectionBlocks>[number][],
+  title: string,
+) => {
+  const start = semantic.findIndex(
+    (block) => block.kind === "heading" && block.text === `${title}:`,
+  );
+  assert.notEqual(start, -1, `${title} section is present`);
+  const following = semantic
+    .slice(start + 1)
+    .findIndex((block) => block.kind === "heading");
+  if (following === -1) return semantic.slice(start + 1);
+  const nextHeading = start + 1 + following;
+  return semantic.slice(start + 1, nextHeading - 1);
+};
 
 test("inspection labels current and retained last activity without substitution", () => {
   const activityCapture: RunInspection = {
@@ -167,7 +182,7 @@ test("assistant Markdown renders headings, bold, inline code, lists and fenced c
   );
 });
 
-test("metadata, user messages and tool output stay literal; call IDs use quiet styling", () => {
+test("metadata, user messages and tool output stay literal without generated call IDs", () => {
   const output = plain();
   for (const expected of [
     "Review **literal** label",
@@ -177,6 +192,7 @@ test("metadata, user messages and tool output stay literal; call IDs use quiet s
     "**not bold**",
   ])
     assert.ok(output.includes(expected), expected);
+  assert.doesNotMatch(output, /call-test|Call ID:/);
   const tones: { color: string; text: string }[] = [];
   renderInspection(blocks, 100, {
     ...PLAIN_THEME,
@@ -186,13 +202,211 @@ test("metadata, user messages and tool output stay literal; call IDs use quiet s
     },
   });
   assert.ok(
-    tones.some(
-      ({ color, text }) => color === "dim" && text === "Call ID: call-test",
-    ),
+    tones.some(({ color, text }) => color === "dim" && text === "Assistant:"),
   );
   assert.ok(
     tones.some(({ color, text }) => color === "accent" && text === "Tools:"),
   );
+});
+
+test("transcript keeps message and part order with fresh readable attribution", () => {
+  const transcript = [
+    {
+      role: "assistant" as const,
+      model: "run-model",
+      parts: [
+        { kind: "text" as const, text: "first **Markdown**" },
+        { kind: "text" as const, text: "" },
+        {
+          kind: "tool_call" as const,
+          name: "read",
+          callId: "opaque-call-one",
+        },
+        { kind: "text" as const, text: "after call" },
+      ],
+    },
+    {
+      role: "assistant" as const,
+      model: "different-model",
+      parts: [{ kind: "tool_call" as const, name: "read" }],
+    },
+    { role: "user" as const, parts: [] },
+    {
+      role: "tool" as const,
+      parts: [
+        {
+          kind: "text" as const,
+          text: "Call ID: literal-error\nassistant: **literal evidence**",
+        },
+      ],
+    },
+    {
+      role: "assistant" as const,
+      parts: [{ kind: "text" as const, text: "same comparison after missing" }],
+    },
+    {
+      role: "assistant" as const,
+      model: "different-model",
+      parts: [{ kind: "text" as const, text: "duplicate message" }],
+    },
+    {
+      role: "assistant" as const,
+      model: "different-model",
+      parts: [{ kind: "text" as const, text: "duplicate message" }],
+    },
+    {
+      role: "assistant" as const,
+      model: "run-model",
+      parts: [{ kind: "text" as const, text: "" }],
+    },
+  ];
+  const inspected: RunInspection = {
+    ...capture,
+    content: {
+      ...capture.content,
+      model: "run-model",
+      transcript,
+      tools: [],
+    },
+  };
+  const before = structuredClone(inspected);
+  const semantic = inspectionBlocks(inspected, "pending");
+  assert.deepEqual(sectionBlocks(semantic, "Transcript"), [
+    { kind: "muted", text: "Assistant:" },
+    { kind: "markdown", text: "first **Markdown**" },
+    { kind: "markdown", text: "" },
+    { kind: "literal", text: "Tool call · read" },
+    { kind: "muted", text: "Assistant:" },
+    { kind: "markdown", text: "after call" },
+    { kind: "muted", text: "Reported model: different-model" },
+    { kind: "literal", text: "Tool call · read" },
+    { kind: "muted", text: "User:" },
+    { kind: "muted", text: "Tool output:" },
+    {
+      kind: "literal",
+      text: "Call ID: literal-error\nassistant: **literal evidence**",
+    },
+    { kind: "muted", text: "Assistant:" },
+    { kind: "markdown", text: "same comparison after missing" },
+    { kind: "muted", text: "Assistant:" },
+    { kind: "markdown", text: "duplicate message" },
+    { kind: "muted", text: "Assistant:" },
+    { kind: "markdown", text: "duplicate message" },
+    { kind: "muted", text: "Reported model: run-model" },
+    { kind: "muted", text: "Assistant:" },
+    { kind: "markdown", text: "" },
+  ]);
+  const visible = renderInspection(semantic, 100, PLAIN_THEME)
+    .map(stripVTControlCharacters)
+    .join("\n");
+  assert.doesNotMatch(visible, /opaque-call-one/);
+  assert.equal(visible.match(/Tool call · read/g)?.length, 2);
+  assert.equal(
+    semantic.filter((block) => block.text === "Model: run-model").length,
+    1,
+  );
+  assert.deepEqual(
+    inspected,
+    before,
+    "presentation leaves normalized data unchanged",
+  );
+});
+
+test("reported model comparison starts unknown and changes only on explicit values", () => {
+  const inspected: RunInspection = {
+    ...capture,
+    content: {
+      ...capture.content,
+      model: undefined,
+      tools: [],
+      transcript: [
+        { role: "assistant", parts: [{ kind: "text", text: "unknown" }] },
+        {
+          role: "assistant",
+          model: "model-one",
+          parts: [{ kind: "text", text: "one" }],
+        },
+        { role: "assistant", parts: [] },
+        {
+          role: "user",
+          model: "model-one",
+          parts: [{ kind: "text", text: "still one" }],
+        },
+        {
+          role: "tool",
+          model: "model-two",
+          parts: [],
+        },
+      ],
+    },
+  };
+  const semantic = inspectionBlocks(inspected, "pending");
+  assert.deepEqual(
+    semantic
+      .filter((block) => block.text.startsWith("Reported model:"))
+      .map((block) => block.text),
+    ["Reported model: model-one", "Reported model: model-two"],
+  );
+  assert.equal(
+    semantic.filter((block) => block.text.startsWith("Model:")).length,
+    0,
+  );
+  const modelTwo = semantic.findIndex(
+    (block) => block.text === "Reported model: model-two",
+  );
+  assert.equal(semantic[modelTwo + 1]?.text, "Tool output:");
+});
+
+test("Tools retain every status, unnamed fallback, duplicate entry and full literal output", () => {
+  const inspected: RunInspection = {
+    ...capture,
+    content: {
+      ...capture.content,
+      transcript: [],
+      tools: [
+        { name: "same", status: "running", callId: "status-id-1" },
+        {
+          name: "same",
+          status: "completed",
+          callId: "status-id-2",
+          outputSummary: "first line\nsecond line\nCall ID: retained evidence",
+        },
+        {
+          name: "failed",
+          status: "failed",
+          outputSummary: "failure **literal**",
+        },
+        {
+          name: "cancelled",
+          status: "cancelled",
+          outputSummary: "cancel tail",
+        },
+        { status: "unfinished", outputSummary: "unfinished tail" },
+      ],
+    },
+  };
+  const semantic = inspectionBlocks(inspected, "pending");
+  assert.deepEqual(sectionBlocks(semantic, "Tools"), [
+    { kind: "literal", text: "same — running" },
+    { kind: "literal", text: "same — completed" },
+    {
+      kind: "literal",
+      text: "first line\nsecond line\nCall ID: retained evidence",
+    },
+    { kind: "literal", text: "failed — failed" },
+    { kind: "literal", text: "failure **literal**" },
+    { kind: "literal", text: "cancelled — cancelled" },
+    { kind: "literal", text: "cancel tail" },
+    { kind: "literal", text: "(unnamed tool) — unfinished" },
+    { kind: "literal", text: "unfinished tail" },
+  ]);
+  const visible = renderInspection(semantic, 100, PLAIN_THEME)
+    .map(stripVTControlCharacters)
+    .join("\n");
+  assert.doesNotMatch(visible, /status-id-[12]/);
+  assert.match(visible, /second line/);
+  assert.match(visible, /Call ID: retained evidence/);
+  assert.match(visible, /failure \*\*literal\*\*/);
 });
 
 test("Markdown remains width-safe across resize and preserves the captured content", () => {

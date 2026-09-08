@@ -11,7 +11,6 @@ import {
   formatDiagnosticLine,
   formatResultLinkLine,
   formatToolStatus,
-  formatTranscriptItem,
   formatTruncation,
 } from "./run-card.ts";
 import { runPresentationFromSummary } from "./run-presentation.ts";
@@ -143,11 +142,13 @@ export function inspectionBlocks(
 
   if (stored.transcript.length) {
     section("Transcript");
+    let comparedModel = stored.model;
     for (const item of stored.transcript) {
-      add(
-        "muted",
-        `${item.role}${item.model === undefined ? "" : ` (model: ${item.model})`}:`,
-      );
+      if (item.model !== undefined) {
+        if (item.model !== comparedModel)
+          add("muted", `Reported model: ${item.model}`);
+        comparedModel = item.model;
+      }
       blocks.push(...transcriptBlocks(item));
     }
   }
@@ -195,24 +196,37 @@ export function renderInspection(
     .map((line) => fitToWidth(line, width));
 }
 
+const ROLE_LABELS = {
+  assistant: "Assistant:",
+  user: "User:",
+  tool: "Tool output:",
+} as const satisfies Record<TranscriptItem["role"], string>;
+
 function transcriptBlocks(item: TranscriptItem): readonly InspectionBlock[] {
-  return item.parts.map((part) => ({
-    kind:
-      part.kind === "text" && item.role === "assistant"
-        ? "markdown"
-        : "literal",
-    text:
-      part.kind === "text"
-        ? part.text
-        : `${formatTranscriptItem({ role: item.role, parts: [part] })}${part.callId === undefined ? "" : ` · call ID: ${part.callId}`}`,
-  }));
+  const blocks: InspectionBlock[] = [];
+  let textAttributed = false;
+  for (const part of item.parts) {
+    if (part.kind === "tool_call") {
+      blocks.push({ kind: "literal", text: `Tool call · ${part.name}` });
+      textAttributed = false;
+      continue;
+    }
+    if (!textAttributed) {
+      blocks.push({ kind: "muted", text: ROLE_LABELS[item.role] });
+      textAttributed = true;
+    }
+    blocks.push({
+      kind: item.role === "assistant" ? "markdown" : "literal",
+      text: part.text,
+    });
+  }
+  if (item.parts.length === 0)
+    blocks.push({ kind: "muted", text: ROLE_LABELS[item.role] });
+  return blocks;
 }
 function toolBlocks(entry: ToolEntry): readonly InspectionBlock[] {
   return [
     { kind: "literal", text: formatToolStatus(entry) },
-    ...(entry.callId === undefined
-      ? []
-      : [{ kind: "muted" as const, text: `Call ID: ${entry.callId}` }]),
     ...(entry.outputSummary === undefined
       ? []
       : [{ kind: "literal" as const, text: entry.outputSummary }]),
