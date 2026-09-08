@@ -587,14 +587,16 @@ export function runClaudeExecution(
     /**
      * What a cancelled Run still has to say before its intake is sealed.
      *
-     * A successful result already observed is the Run's answer, and a cancel
-     * that arrived afterwards is a request against a Run that was already
-     * done. Announcing the reconciliation and the ending it implies is what
-     * makes arbitration prefer the answer over the interruption.
+     * Only semantic completion establishes the Run's answer. A successful
+     * result may instead be an adapter-local Turn boundary while accepted
+     * guidance is still outstanding; in that case interruption must leave
+     * arbitration to the recorded cancellation. Once semantic completion has
+     * been reached, announcing its reconciliation and Ending preserves the
+     * answer from a cancellation request that arrived genuinely late.
      */
     const announceOnInterrupt = Effect.gen(function* () {
       yield* emitStderrOnce();
-      if (!successfulResult) return;
+      if (!semanticComplete) return;
       yield* io.emit({
         kind: "reconciliation",
         reconciliation: reconcile(translator),
