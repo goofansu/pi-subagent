@@ -11,7 +11,6 @@ import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
   Markdown,
-  Text,
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
@@ -252,7 +251,7 @@ function steerArguments(value: unknown): SteerArguments | undefined {
     : undefined;
 }
 
-export function startedRunRenderDetails(
+function startedRunRenderDetails(
   value: unknown,
 ): StartedRunRenderDetails | undefined {
   const candidate = recordOf(value);
@@ -336,7 +335,7 @@ export function steerRenderDetails(
   };
 }
 
-export function parseResumeRenderDetails(
+function parseResumeRenderDetails(
   value: unknown,
 ): ResumeRenderDetails | undefined {
   const candidate = recordOf(value);
@@ -358,7 +357,7 @@ export function parseResumeRenderDetails(
     : undefined;
 }
 
-export function parseSteerRenderDetails(
+function parseSteerRenderDetails(
   value: unknown,
 ): SteerRenderDetails | undefined {
   const candidate = recordOf(value);
@@ -390,9 +389,7 @@ function isTerminalPhase(value: unknown): value is TerminalRunPhase {
 }
 
 /** Validate cancellation details at the renderer boundary. */
-export function cancelRenderDetails(
-  value: unknown,
-): CancelRenderDetails | undefined {
+function cancelRenderDetails(value: unknown): CancelRenderDetails | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const candidate = value as Record<string, unknown>;
   if (candidate.kind !== "cancel" || !Array.isArray(candidate.outcomes)) {
@@ -429,6 +426,31 @@ function hiddenMarker(hidden: number, theme: RenderableTheme): string {
     "muted",
     `... (${hidden} more ${hidden === 1 ? "line" : "lines"})`,
   );
+}
+
+/** The one width-aware five-line implementation used by every submitted body. */
+function submittedBody(
+  prefix: "Prompt:" | "Message:",
+  body: string,
+  theme: RenderableTheme,
+  width: number,
+  expanded: boolean,
+): { readonly lines: readonly string[]; readonly hidden: number } {
+  const columns = Math.max(0, width);
+  const painted = `${theme.fg("muted", prefix)} ${theme.fg("dim", body)}`;
+  const visual = wrapTextWithAnsi(painted, Math.max(1, columns));
+  const hidden = Math.max(0, visual.length - COLLAPSED_BODY_LINES);
+  return {
+    hidden,
+    lines: [
+      ...(expanded ? visual : visual.slice(0, COLLAPSED_BODY_LINES)).map(
+        (line) => fitToWidth(line, columns),
+      ),
+      ...(!expanded && hidden > 0
+        ? [fitToWidth(hiddenMarker(hidden, theme), columns)]
+        : []),
+    ],
+  };
 }
 
 class StartCallComponent implements Component {
@@ -504,24 +526,15 @@ class StartCallComponent implements Component {
         : fixedHeader,
       columns,
     );
-    const prompt =
-      this.theme.fg("muted", "Prompt:") +
-      " " +
-      this.theme.fg("dim", this.args.prompt);
-    const visualPrompt = wrapTextWithAnsi(prompt, Math.max(1, columns));
-    const hidden = Math.max(0, visualPrompt.length - COLLAPSED_BODY_LINES);
-    this.state.callHidden = hidden > 0;
-    const shown = this.expanded
-      ? visualPrompt
-      : visualPrompt.slice(0, COLLAPSED_BODY_LINES);
-    const lines = [
-      header,
-      "",
-      ...shown.map((line) => fitToWidth(line, columns)),
-    ];
-    if (!this.expanded && hidden > 0) {
-      lines.push(fitToWidth(hiddenMarker(hidden, this.theme), columns));
-    }
+    const body = submittedBody(
+      "Prompt:",
+      this.args.prompt,
+      this.theme,
+      columns,
+      this.expanded,
+    );
+    this.state.callHidden = body.hidden > 0;
+    const lines = [header, "", ...body.lines];
     // Air between the submitted prompt and the result slot.
     lines.push("");
     this.cachedWidth = width;
@@ -532,6 +545,57 @@ class StartCallComponent implements Component {
 
 function firstLine(text: string): string {
   return text.split("\n", 1)[0]?.trim() ?? "";
+}
+
+/** Build and measure the family's exact configured expansion affordance. */
+function expansionHint(
+  theme: RenderableTheme,
+  renderKeyHint?: KeyHintRenderer,
+): { readonly text: string; readonly width: number } {
+  const text = ` ${formatParentheticalKeyHint(
+    theme,
+    "app.tools.expand",
+    "to expand",
+    renderKeyHint,
+  )}`;
+  return { text, width: visibleWidth(text) };
+}
+
+/** Fit every collapsed result through the family's one toggle-hint policy. */
+function collapsedResultLine(
+  summary: string,
+  theme: RenderableTheme,
+  width: number,
+  hidden: boolean,
+  renderKeyHint?: KeyHintRenderer,
+): string {
+  const columns = Math.max(0, width);
+  const hint = hidden
+    ? expansionHint(theme, renderKeyHint)
+    : { text: "", width: 0 };
+  return (
+    fitToWidth(summary, Math.max(0, columns - hint.width)) +
+    fitToWidth(hint.text, columns)
+  );
+}
+
+function collapsedSummaryWidth(
+  theme: RenderableTheme,
+  width: number,
+  hidden: boolean,
+  renderKeyHint?: KeyHintRenderer,
+): number {
+  return Math.max(
+    0,
+    width - (hidden ? expansionHint(theme, renderKeyHint).width : 0),
+  );
+}
+
+function collapseHint(theme: RenderableTheme, width: number): string {
+  return fitToWidth(
+    formatParentheticalKeyHint(theme, "app.tools.expand", "to collapse"),
+    Math.max(0, width),
+  );
 }
 
 /**
@@ -573,17 +637,16 @@ export function formatStartedRunSummary(
   width: number,
   renderKeyHint?: KeyHintRenderer,
 ): string {
-  const columns = Math.max(0, width);
-  const hint = ` ${formatParentheticalKeyHint(
+  return collapsedResultLine(
+    formatStartedIdentity(
+      details,
+      theme,
+      collapsedSummaryWidth(theme, width, true, renderKeyHint),
+    ),
     theme,
-    "app.tools.expand",
-    "to expand",
+    width,
+    true,
     renderKeyHint,
-  )}`;
-  const summaryWidth = Math.max(0, columns - visibleWidth(hint));
-  return (
-    formatStartedIdentity(details, theme, summaryWidth) +
-    fitToWidth(hint, columns)
   );
 }
 
@@ -656,16 +719,8 @@ class StartResultComponent implements Component {
         this.cachedWidth = width;
         return this.cachedLines;
       }
-      const hint = hidden
-        ? ` ${formatParentheticalKeyHint(
-            this.theme,
-            "app.tools.expand",
-            "to expand",
-          )}`
-        : "";
-      const summaryWidth = Math.max(0, columns - visibleWidth(hint));
       this.cachedLines = [
-        fitToWidth(summary, summaryWidth) + fitToWidth(hint, columns),
+        collapsedResultLine(summary, this.theme, columns, hidden),
       ];
       this.cachedWidth = width;
       return this.cachedLines;
@@ -674,17 +729,7 @@ class StartResultComponent implements Component {
     this.markdown ??= new Markdown(text || fallback, 0, 0, getMarkdownTheme());
     const rendered = this.markdown.render(columns);
     this.cachedLines = hidden
-      ? [
-          ...rendered,
-          fitToWidth(
-            formatParentheticalKeyHint(
-              this.theme,
-              "app.tools.expand",
-              "to collapse",
-            ),
-            columns,
-          ),
-        ]
+      ? [...rendered, collapseHint(this.theme, columns)]
       : rendered;
     this.cachedWidth = width;
     return this.cachedLines;
@@ -802,19 +847,12 @@ export function formatCancellationSummary(
   width: number,
   renderKeyHint?: KeyHintRenderer,
 ): string {
-  const columns = Math.max(0, width);
-  const hint = ` ${formatParentheticalKeyHint(
+  return collapsedResultLine(
+    theme.fg("toolOutput", cancellationSummaryText(details)),
     theme,
-    "app.tools.expand",
-    "to expand",
+    width,
+    true,
     renderKeyHint,
-  )}`;
-  const summaryWidth = Math.max(0, columns - visibleWidth(hint));
-  return (
-    fitToWidth(
-      theme.fg("toolOutput", cancellationSummaryText(details)),
-      summaryWidth,
-    ) + fitToWidth(hint, columns)
   );
 }
 
@@ -870,9 +908,10 @@ class CancelResultComponent implements Component {
         ? cancellationSummaryText(details)
         : fallback;
     const hidden =
-      text.includes("\n") ||
-      text !== semantic ||
-      visibleWidth(semantic) > columns;
+      text.length > 0 &&
+      (text.includes("\n") ||
+        text !== semantic ||
+        visibleWidth(semantic) > columns);
 
     if (!this.options.expanded) {
       if (details && !this.options.isPartial && hidden) {
@@ -880,38 +919,37 @@ class CancelResultComponent implements Component {
           formatCancellationSummary(details, this.theme, columns),
         ];
       } else {
-        const hint = hidden
-          ? ` ${formatParentheticalKeyHint(
-              this.theme,
-              "app.tools.expand",
-              "to expand",
-            )}`
-          : "";
-        const summaryWidth = Math.max(0, columns - visibleWidth(hint));
         this.cachedLines = [
-          fitToWidth(this.theme.fg("toolOutput", semantic), summaryWidth) +
-            fitToWidth(hint, columns),
+          collapsedResultLine(
+            this.theme.fg("toolOutput", semantic),
+            this.theme,
+            columns,
+            hidden,
+          ),
         ];
       }
       this.cachedWidth = width;
       return this.cachedLines;
     }
 
-    this.markdown ??= new Markdown(text || fallback, 0, 0, getMarkdownTheme());
-    const rendered = this.markdown.render(columns);
-    this.cachedLines = hidden
-      ? [
-          ...rendered,
-          fitToWidth(
-            formatParentheticalKeyHint(
-              this.theme,
-              "app.tools.expand",
-              "to collapse",
-            ),
-            columns,
-          ),
-        ]
-      : rendered;
+    if (!hidden) {
+      this.cachedLines = [
+        collapsedResultLine(
+          this.theme.fg("toolOutput", semantic),
+          this.theme,
+          columns,
+          false,
+        ),
+      ];
+      this.cachedWidth = width;
+      return this.cachedLines;
+    }
+
+    this.markdown ??= new Markdown(text, 0, 0, getMarkdownTheme());
+    this.cachedLines = [
+      ...this.markdown.render(columns),
+      collapseHint(this.theme, columns),
+    ];
     this.cachedWidth = width;
     return this.cachedLines;
   }
@@ -970,7 +1008,7 @@ function resultRunSummary(value: unknown): ResultRunSummary | undefined {
     : undefined;
 }
 
-export function collectedRunsRenderDetails(
+function collectedRunsRenderDetails(
   value: unknown,
 ): CollectedRunsRenderDetails | undefined {
   if (typeof value !== "object" || value === null) return undefined;
@@ -1000,9 +1038,7 @@ export function collectedRunsRenderDetails(
     : undefined;
 }
 
-export function resultRenderDetails(
-  value: unknown,
-): ResultRenderDetails | undefined {
+function resultRenderDetails(value: unknown): ResultRenderDetails | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const details = value as Record<string, unknown>;
   if (details.kind !== "result") return undefined;
@@ -1258,14 +1294,7 @@ class OutcomeResultComponent implements Component {
       semantic !== undefined && !partial
         ? text.length > 0
         : text.includes("\n") || visibleWidth(fallbackSummary) > columns;
-    const hint = hidden
-      ? ` ${formatParentheticalKeyHint(
-          this.theme,
-          "app.tools.expand",
-          "to expand",
-        )}`
-      : "";
-    const summaryWidth = Math.max(0, columns - visibleWidth(hint));
+    const summaryWidth = collapsedSummaryWidth(this.theme, columns, hidden);
     const summary =
       semantic !== undefined && !partial
         ? this.operation === "result"
@@ -1283,7 +1312,7 @@ class OutcomeResultComponent implements Component {
 
     if (!this.options.expanded) {
       this.cachedLines = [
-        fitToWidth(summary, summaryWidth) + fitToWidth(hint, columns),
+        collapsedResultLine(summary, this.theme, columns, hidden),
       ];
       this.cachedWidth = width;
       return this.cachedLines;
@@ -1292,17 +1321,7 @@ class OutcomeResultComponent implements Component {
     this.markdown ??= new Markdown(text || fallback, 0, 0, getMarkdownTheme());
     const rendered = this.markdown.render(columns);
     this.cachedLines = hidden
-      ? [
-          ...rendered,
-          fitToWidth(
-            formatParentheticalKeyHint(
-              this.theme,
-              "app.tools.expand",
-              "to collapse",
-            ),
-            columns,
-          ),
-        ]
+      ? [...rendered, collapseHint(this.theme, columns)]
       : rendered;
     this.cachedWidth = width;
     return this.cachedLines;
@@ -1412,27 +1431,17 @@ class ContinuationCallComponent implements Component {
         : fixedHeader,
       columns,
     );
-    const prefix = this.args.operation === "resume" ? "Prompt:" : "Message:";
-    const body =
+    const body = submittedBody(
+      this.args.operation === "resume" ? "Prompt:" : "Message:",
       this.args.operation === "resume"
         ? this.args.value.prompt
-        : this.args.value.message;
-    const paintedBody = `${this.theme.fg("muted", prefix)} ${this.theme.fg("dim", body)}`;
-    const visualBody = wrapTextWithAnsi(paintedBody, Math.max(1, columns));
-    const hidden = Math.max(0, visualBody.length - COLLAPSED_BODY_LINES);
-    this.state.callHidden = hidden > 0;
-    const shown = this.expanded
-      ? visualBody
-      : visualBody.slice(0, COLLAPSED_BODY_LINES);
-    this.cachedLines = [
-      header,
-      "",
-      ...shown.map((line) => fitToWidth(line, columns)),
-      ...(!this.expanded && hidden > 0
-        ? [fitToWidth(hiddenMarker(hidden, this.theme), columns)]
-        : []),
-      "",
-    ];
+        : this.args.value.message,
+      this.theme,
+      columns,
+      this.expanded,
+    );
+    this.state.callHidden = body.hidden > 0;
+    this.cachedLines = [header, "", ...body.lines, ""];
     this.cachedWidth = width;
     return this.cachedLines;
   }
@@ -1466,16 +1475,16 @@ export function formatResumedRunSummary(
   width: number,
   renderKeyHint?: KeyHintRenderer,
 ): string {
-  const columns = Math.max(0, width);
-  const hint = ` ${formatParentheticalKeyHint(
+  return collapsedResultLine(
+    resumedIdentity(
+      details,
+      theme,
+      collapsedSummaryWidth(theme, width, true, renderKeyHint),
+    ),
     theme,
-    "app.tools.expand",
-    "to expand",
+    width,
+    true,
     renderKeyHint,
-  )}`;
-  const summaryWidth = Math.max(0, columns - visibleWidth(hint));
-  return (
-    resumedIdentity(details, theme, summaryWidth) + fitToWidth(hint, columns)
   );
 }
 
@@ -1664,16 +1673,8 @@ class SemanticResultComponent implements Component {
         this.cachedWidth = width;
         return this.cachedLines;
       }
-      const hint = hidden
-        ? ` ${formatParentheticalKeyHint(
-            this.theme,
-            "app.tools.expand",
-            "to expand",
-          )}`
-        : "";
-      const summaryWidth = Math.max(0, columns - visibleWidth(hint));
       this.cachedLines = [
-        fitToWidth(summary, summaryWidth) + fitToWidth(hint, columns),
+        collapsedResultLine(summary, this.theme, columns, hidden),
       ];
       this.cachedWidth = width;
       return this.cachedLines;
@@ -1682,17 +1683,7 @@ class SemanticResultComponent implements Component {
     this.markdown ??= new Markdown(text || fallback, 0, 0, getMarkdownTheme());
     const rendered = this.markdown.render(columns);
     this.cachedLines = hidden
-      ? [
-          ...rendered,
-          fitToWidth(
-            formatParentheticalKeyHint(
-              this.theme,
-              "app.tools.expand",
-              "to collapse",
-            ),
-            columns,
-          ),
-        ]
+      ? [...rendered, collapseHint(this.theme, columns)]
       : rendered;
     this.cachedWidth = width;
     return this.cachedLines;
@@ -1760,28 +1751,6 @@ const cancelPair: AgentToolRendererPair = {
     return component;
   },
 };
-
-function fallbackPair(operation: AgentToolOperation): AgentToolRendererPair {
-  return {
-    renderCall(_args, theme, context) {
-      const text =
-        context.lastComponent instanceof Text
-          ? context.lastComponent
-          : new Text("", 0, 0);
-      text.setText(theme.fg("toolTitle", theme.bold(toolName(operation))));
-      context.state.callHidden = false;
-      return text;
-    },
-    renderResult(result, options, theme, context) {
-      const component =
-        context.lastComponent instanceof StartResultComponent
-          ? context.lastComponent
-          : new StartResultComponent(result, options, theme, context.state);
-      component.update(result, options, theme);
-      return component;
-    },
-  };
-}
 
 const rendererPairs: Record<AgentToolOperation, AgentToolRendererPair> = {
   start: startPair,

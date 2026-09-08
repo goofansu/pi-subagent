@@ -1713,24 +1713,35 @@ test("the stated delivery records consumption with no collapsed line at all", as
 
 // ── The teardown race ────────────────────────────────────────────────────────
 
-test("a tool call with no live runtime returns a sentence and throws nothing", async (t) => {
+test("the registered-host renderer family covers all seven operations without generic fallback", async (t) => {
   const host = createStandInHost();
   installSubagentV2(host.pi, {
     agentDir: hostRig(t).agentsDir,
     backendSet: createDemoBackendSet,
   });
 
-  // No `session_start`: the tools are registered because registration is
-  // per-process, and there is no runtime behind them.
-  for (const [name, params] of [
-    ["agent_start", { agent: "explore", description: "d", prompt: "p" }],
-    ["agent_resume", { id: "subagent-1", description: "d", prompt: "p" }],
-    ["agent_wait", { ids: ["run-1"] }],
-    ["agent_wait_all", {}],
-    ["agent_result", { id: "run-1" }],
-    ["agent_cancel", { ids: ["run-1"] }],
-    ["agent_steer", { id: "run-1", message: "go" }],
-  ] as const) {
+  // The real handlers take their safe not-ready path; the same table renders
+  // both registered slots, so an omitted custom renderer is visible here.
+  const cases = [
+    [
+      "agent_start",
+      { agent: "explore", description: "d", prompt: "p" },
+      /agent_start explore · d/,
+    ],
+    [
+      "agent_resume",
+      { id: "subagent-1", description: "d", prompt: "p" },
+      /agent_resume subagent-1 · d/,
+    ],
+    ["agent_wait", { ids: ["run-1"] }, /agent_wait · run-1/],
+    ["agent_wait_all", {}, /agent_wait_all · all active Runs/],
+    ["agent_result", { id: "run-1" }, /agent_result · run-1/],
+    ["agent_cancel", { ids: ["run-1"] }, /agent_cancel run-1/],
+    ["agent_steer", { id: "run-1", message: "go" }, /agent_steer run-1/],
+  ] as const;
+  assert.equal(host.tools().length, cases.length);
+
+  for (const [name, params, callPattern] of cases) {
     const result = await host.call(name, params);
     const text = result.content.map((part) => part.text ?? "").join("");
     assert.equal(
@@ -1739,6 +1750,19 @@ test("a tool call with no live runtime returns a sentence and throws nothing", a
         "was started. That happens only while a Session is starting or " +
         "shutting down; try again once it is ready.",
     );
+    const collapsed = renderRegisteredRow(host, name, params, result, false);
+    const expanded = renderRegisteredRow(host, name, params, result, true);
+    assert.match(collapsed.call.join("\n"), callPattern);
+    assert.equal(collapsed.result.length, 1);
+    assert.match(collapsed.result[0], /^Cannot run agent_/);
+    assert.equal(collapsed.result[0].match(/to expand/g)?.length, 1);
+    const expandedText = expanded.result.join("\n");
+    assert.match(expandedText, /no subagent runtime/);
+    assert.match(
+      expandedText.replaceAll("\n", " "),
+      /try again once it is ready/,
+    );
+    assert.equal(expandedText.match(/to collapse/g)?.length, 1);
   }
 });
 

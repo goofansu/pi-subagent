@@ -35,7 +35,6 @@ import type { RunId } from "../domain/index.ts";
 import {
   agentToolRenderers,
   formatSessionNotReady,
-  renderCollectedResult,
 } from "../presentation/index.ts";
 import type { SessionHandle } from "./session-handle.ts";
 import {
