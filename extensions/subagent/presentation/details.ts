@@ -32,12 +32,6 @@ export interface CollectedRuns {
   readonly stillRunning?: number;
 }
 
-/** The identity handoff `agent_resume` returns immediately. */
-export interface ResumedRun {
-  readonly subagentId: string;
-  readonly runId: string;
-}
-
 /** The collapsed line's entry for one stored Result. */
 export function collectedRunOf(result: RunResult): CollectedRun {
   return {
@@ -65,12 +59,4 @@ export function isCollectedRuns(value: unknown): value is CollectedRuns {
   if (typeof value !== "object" || value === null) return false;
   const details = value as Record<string, unknown>;
   return Array.isArray(details.runs) && details.runs.every(isCollectedRun);
-}
-
-export function isResumedRun(value: unknown): value is ResumedRun {
-  if (typeof value !== "object" || value === null) return false;
-  const details = value as Record<string, unknown>;
-  return (
-    typeof details.subagentId === "string" && typeof details.runId === "string"
-  );
 }

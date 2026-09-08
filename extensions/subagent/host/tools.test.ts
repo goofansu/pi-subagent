@@ -16,6 +16,7 @@ import {
 import {
   createStandInHost,
   PLAIN_THEME,
+  resultText,
   type StandInHost,
 } from "../testing/stand-in-host.ts";
 import { STRESS_POLICY } from "../testing/stress-policy.ts";
@@ -268,23 +269,101 @@ test("agent_resume starts a second Run on the same Subagent", async (t) => {
   assert.notEqual(resumedRunId, first.runId);
 });
 
-test("agent_resume carries the resumed identity in its details for the renderer", async (t) => {
+test("successful agent_resume crosses registration, semantic details, and both renderer slots", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
 
   const first = await startedRun(rig);
   await rig.text("agent_wait", { ids: [first.runId] });
-  const result = await rig.call("agent_resume", {
+  const args = {
     id: first.subagentId,
-    description: "again",
-    prompt: "once more",
+    description: "investigate again",
+    prompt: "one\ntwo\nthree\nfour\nfive\nsix and the complete final line",
+  };
+  const result = await rig.call("agent_resume", args);
+  const resumedRunId = /run id (\S+)/.exec(resultText(result))?.[1];
+  assert.ok(resumedRunId);
+  assert.deepEqual(result.details, {
+    kind: "resume",
+    outcome: "started",
+    subagentId: first.subagentId,
+    runId: resumedRunId,
   });
 
-  assert.deepEqual(Object.keys(result.details as object).sort(), [
-    "runId",
-    "subagentId",
-  ]);
+  const collapsed = renderRegisteredRow(
+    rig.host,
+    "agent_resume",
+    args,
+    result,
+    false,
+    80,
+  );
+  assert.match(
+    collapsed.call.join("\n"),
+    new RegExp(`agent_resume ${first.subagentId} · investigate again`),
+  );
+  assert.match(collapsed.call.join("\n"), /Prompt: one/);
+  assert.doesNotMatch(collapsed.call.join("\n"), /complete final line/);
+  assert.match(collapsed.call.join("\n"), /\.\.\. \(1 more line\)/);
+  assert.match(collapsed.result.join("\n"), new RegExp(resumedRunId));
+  assert.equal(collapsed.result.join("\n").match(/to expand/g)?.length, 1);
+
+  const expanded = renderRegisteredRow(
+    rig.host,
+    "agent_resume",
+    args,
+    result,
+    true,
+    1_000,
+  );
+  assert.match(expanded.call.join("\n"), /six and the complete final line/);
+  assert.ok(expanded.result.join("\n").includes(resultText(result)));
+  assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
+});
+
+test("a refused agent_resume stays semantic in both expansion states", async (t) => {
+  const rig = hostRig(t, {
+    resumableSteps: [[{ step: "await-gate", gate: "hold" }]],
+  });
+  await rig.host.sessionStart();
+  t.after(async () => {
+    await rig.release("hold");
+    await rig.installation.handle.release();
+  });
+  const started = await startedRun(rig);
+  const args = {
+    id: started.subagentId,
+    description: "try again",
+    prompt: "one\ntwo\nthree\nfour\nfive\nsix",
+  };
+  const result = await rig.call("agent_resume", args);
+
+  assert.deepEqual(result.details, {
+    kind: "resume",
+    outcome: "Subagent already running",
+  });
+  const collapsed = renderRegisteredRow(
+    rig.host,
+    "agent_resume",
+    args,
+    result,
+    false,
+  );
+  assert.match(collapsed.result.join("\n"), /Resume refused · already running/);
+  assert.doesNotMatch(collapsed.result.join("\n"), /request was not queued/i);
+  assert.equal(collapsed.result.join("\n").match(/to expand/g)?.length, 1);
+
+  const expanded = renderRegisteredRow(
+    rig.host,
+    "agent_resume",
+    args,
+    result,
+    true,
+    1_000,
+  );
+  assert.ok(expanded.result.join("\n").includes(resultText(result)));
+  assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
 });
 
 test("the one-shot backend proves resume unsupported at the surface", async (t) => {
@@ -350,7 +429,7 @@ test("agent_resume refuses a Subagent that is already running", async (t) => {
 
 // ── agent_steer ──────────────────────────────────────────────────────────────
 
-test("agent_steer accepts a message and says acceptance is local admission only", async (t) => {
+test("successful agent_steer crosses registration and states local admission in both expansion states", async (t) => {
   const rig = hostRig(t, {
     resumableSteps: [
       [{ step: "await-control", confirm: true }, { step: "complete" }],
@@ -360,15 +439,96 @@ test("agent_steer accepts a message and says acceptance is local admission only"
   t.after(() => rig.installation.handle.release());
 
   const started = await startedRun(rig);
-
+  const args = {
+    id: started.runId,
+    message: "one\ntwo\nthree\nfour\nfive\nsix and the complete Control",
+  };
+  const result = await rig.call("agent_steer", args);
   assert.equal(
-    await rig.text("agent_steer", { id: started.runId, message: "go left" }),
+    resultText(result),
     `Steering accepted for run ${started.runId}. The complete message was ` +
       "synchronously admitted to this Run's local bounded mailbox, and that " +
       "is all acceptance means: it does not mean the backend dequeued it, a " +
       "provider accepted it, or a model consumed it. Do not resend this " +
       "steering message in a retry loop.",
   );
+  assert.deepEqual(result.details, {
+    kind: "steer",
+    outcome: "accepted",
+    runId: started.runId,
+  });
+
+  const collapsed = renderRegisteredRow(
+    rig.host,
+    "agent_steer",
+    args,
+    result,
+    false,
+  );
+  assert.match(
+    collapsed.call.join("\n"),
+    new RegExp(`agent_steer ${started.runId}`),
+  );
+  assert.match(collapsed.call.join("\n"), /Message: one/);
+  assert.doesNotMatch(collapsed.call.join("\n"), /complete Control/);
+  assert.match(collapsed.call.join("\n"), /\.\.\. \(1 more line\)/);
+  assert.match(
+    collapsed.result.join("\n"),
+    /Accepted into local Control mailbox/,
+  );
+  assert.doesNotMatch(
+    collapsed.result.join("\n"),
+    /provider accepted|model consumed/i,
+  );
+  assert.equal(collapsed.result.join("\n").match(/to expand/g)?.length, 1);
+
+  const expanded = renderRegisteredRow(
+    rig.host,
+    "agent_steer",
+    args,
+    result,
+    true,
+    1_000,
+  );
+  assert.match(expanded.call.join("\n"), /six and the complete Control/);
+  assert.ok(expanded.result.join("\n").includes(resultText(result)));
+  assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
+});
+
+test("a refused agent_steer stays semantic in both expansion states", async (t) => {
+  const rig = hostRig(t);
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  const started = await startedRun(rig);
+  await rig.text("agent_wait", { ids: [started.runId] });
+  const args = { id: started.runId, message: "go left" };
+  const result = await rig.call("agent_steer", args);
+
+  assert.deepEqual(result.details, {
+    kind: "steer",
+    outcome: "already completed",
+    runId: started.runId,
+  });
+  const collapsed = renderRegisteredRow(
+    rig.host,
+    "agent_steer",
+    args,
+    result,
+    false,
+  );
+  assert.match(collapsed.result.join("\n"), /Control refused · Run completed/);
+  assert.equal(collapsed.result.join("\n").match(/to expand/g)?.length, 1);
+
+  const expanded = renderRegisteredRow(
+    rig.host,
+    "agent_steer",
+    args,
+    result,
+    true,
+    1_000,
+  );
+  assert.ok(expanded.result.join("\n").includes(resultText(result)));
+  assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
 });
 
 test("the one-shot backend proves unsupported steering at the surface", async (t) => {
@@ -1105,24 +1265,50 @@ test("agent_start refuses an empty description, and spends no identifier doing i
   assert.match(ids.subagentId, /-1$/);
 });
 
-test("agent_resume refuses an empty description, and the Subagent stays resumable", async (t) => {
+test("agent_resume renders an empty-label refusal semantically and leaves the Subagent resumable", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
 
   const first = await startedRun(rig);
   await rig.text("agent_wait", { ids: [first.runId] });
+  const args = {
+    id: first.subagentId,
+    description: "  ",
+    prompt: "carry on",
+  };
+  const result = await rig.call("agent_resume", args);
 
   assert.equal(
-    await rig.text("agent_resume", {
-      id: first.subagentId,
-      description: "  ",
-      prompt: "carry on",
-    }),
+    resultText(result),
     `Cannot resume subagent ${first.subagentId}: its description is empty. No ` +
       "Run was started and nothing was queued. Send a one-line description of " +
       "this Run: it is the label this Run is shown under everywhere.",
   );
+  assert.deepEqual(result.details, {
+    kind: "resume",
+    outcome: "empty label",
+  });
+  const collapsed = renderRegisteredRow(
+    rig.host,
+    "agent_resume",
+    args,
+    result,
+    false,
+  );
+  assert.match(collapsed.result.join("\n"), /Resume refused · empty Label/);
+  assert.equal(collapsed.result.join("\n").match(/to expand/g)?.length, 1);
+
+  const expanded = renderRegisteredRow(
+    rig.host,
+    "agent_resume",
+    args,
+    result,
+    true,
+    1_000,
+  );
+  assert.ok(expanded.result.join("\n").includes(resultText(result)));
+  assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
 
   // The refusal claimed no active Run on the Subagent, so the real resume
   // still works — which is the "nothing was reserved" half of the rejection.

@@ -36,7 +36,6 @@ import {
   agentToolRenderers,
   formatSessionNotReady,
   renderCollectedResult,
-  renderResumeResult,
 } from "../presentation/index.ts";
 import type { SessionHandle } from "./session-handle.ts";
 import {
@@ -321,9 +320,10 @@ export function registerSubagentTools(
   /* ---------------------------------------------------------------- */
 
   const decodeResume = decodeToolInput(RESUME_COPY.name, ResumeInputSchema);
+  const resumeRenderers = agentToolRenderers("resume");
 
   register(RESUME_COPY, toolParameters(ResumeInputSchema), {
-    renderResult: renderResumeResult,
+    ...resumeRenderers,
     async execute(
       _toolCallId: string,
       params: unknown,
@@ -444,9 +444,10 @@ export function registerSubagentTools(
   /* ---------------------------------------------------------------- */
 
   const decodeSteer = decodeToolInput(STEER_COPY.name, SteerInputSchema);
+  const steerRenderers = agentToolRenderers("steer");
 
   register(STEER_COPY, toolParameters(SteerInputSchema), {
-    renderResult: renderCollectedResult,
+    ...steerRenderers,
     async execute(
       _toolCallId: string,
       params: unknown,

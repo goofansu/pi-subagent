@@ -9,10 +9,8 @@ import {
   formatCollectedSummary,
   formatNotificationSummary,
   formatParentheticalKeyHint,
-  formatResumeSummary,
   MAX_NOTICE_LABEL_WIDTH,
   renderCollectedResult,
-  renderResumeResult,
   renderStartCall,
 } from "./renderers.ts";
 import type { RenderableTheme } from "./rows.ts";
@@ -259,47 +257,6 @@ test("an empty result renders nothing", () => {
       renderCollectedResult({ content: "   " }, { expanded: false }, theme),
     ),
     [],
-  );
-});
-
-// -- The resume handoff ------------------------------------------------------
-
-test("a resumed Run's collapsed line is an actionable identity handoff", () => {
-  assert.equal(
-    formatResumeSummary(
-      { subagentId: "subagent-1", runId: "run-2" },
-      theme,
-      keyHintStub,
-    ),
-    "Resumed subagent subagent-1 · run run-2 (ctrl+o to expand)",
-  );
-});
-
-test("a resume result collapses to the handoff and expands to its text", () => {
-  const result = {
-    content: "Resumed subagent subagent-1:\nrun id run-2\n\nmore",
-    details: { subagentId: "subagent-1", runId: "run-2" },
-  };
-
-  assert.match(
-    lines(renderResumeResult(result, { expanded: false }, theme))[0],
-    /^Resumed subagent subagent-1 · run run-2/,
-  );
-  assert.match(
-    lines(renderResumeResult(result, { expanded: true }, theme)).join("\n"),
-    /run id run-2/,
-  );
-});
-
-test("a rejected resume falls back to the collected renderer", () => {
-  const result = {
-    content: "Cannot resume subagent subagent-9: unknown Subagent. More.",
-    details: undefined,
-  };
-
-  assert.deepEqual(
-    lines(renderResumeResult(result, { expanded: false }, theme)),
-    ["Cannot resume subagent subagent-9: unknown Subagent. More."],
   );
 });
 
