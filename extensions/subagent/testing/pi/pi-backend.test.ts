@@ -566,6 +566,11 @@ test("a terminal provider abort never answers and core cancellation keeps its re
   if (normal.value.outcome === "result") {
     assert.equal(normal.value.result.status, "failed");
     assert.equal(normal.value.result.finalOutput, "partial");
+    assert.equal(
+      normal.value.result.errorMessage,
+      "Pi did not complete its message: [redacted]",
+    );
+    assert.doesNotMatch(normal.value.result.errorMessage ?? "", /abort/i);
     assert.deepEqual(normal.value.result.diagnostics, []);
   }
 

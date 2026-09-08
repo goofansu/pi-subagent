@@ -47,8 +47,8 @@ import {
   currentRunMessages,
   isPiUserText,
   PI_BACKEND_FAILURE_CATEGORY,
-  PI_TERMINAL_ABORT_CATEGORY,
-  PI_TERMINAL_FAILURE_CATEGORY,
+  PI_TERMINAL_ABORT_DESCRIPTION,
+  PI_TERMINAL_FAILURE_DESCRIPTION,
   type PiTerminalEvidence,
   piMessageObservations,
   piTerminalEvidence,
@@ -455,7 +455,7 @@ function bundleFor(
       return {
         ending:
           endingForTerminal(terminal) ??
-          failedEnding(confined(PI_TERMINAL_ABORT_CATEGORY).message),
+          failedEnding(confined(PI_TERMINAL_ABORT_DESCRIPTION).message),
         reconciliation: terminal.reconciliation,
       };
     }
@@ -478,7 +478,7 @@ function endingForTerminal(
     case "answered":
       return answeredEnding();
     case "failed":
-      return failedEnding(confined(PI_TERMINAL_FAILURE_CATEGORY).message);
+      return failedEnding(confined(PI_TERMINAL_FAILURE_DESCRIPTION).message);
     case "aborted":
       return undefined;
   }
@@ -493,7 +493,7 @@ function emitTerminalDiagnosticIfNeeded(
   if (terminal.outcome !== "failed" || alreadyObserved) return Effect.void;
   return io.emit({
     kind: "diagnostic",
-    diagnostic: confined(PI_TERMINAL_FAILURE_CATEGORY),
+    diagnostic: confined(PI_TERMINAL_FAILURE_DESCRIPTION),
   });
 }
 

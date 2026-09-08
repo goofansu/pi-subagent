@@ -50,10 +50,10 @@ export const PI_BACKEND_FAILURE_CATEGORY = "backend-failure";
 export const PI_DIAGNOSTIC_REDACTED = "[redacted]";
 
 /** Adapter-owned wording for a terminal assistant failure. */
-export const PI_TERMINAL_FAILURE_CATEGORY = "Pi reported a failed message";
+export const PI_TERMINAL_FAILURE_DESCRIPTION = "Pi reported a failed message";
 
-/** Adapter-owned wording for a terminal assistant abort. */
-export const PI_TERMINAL_ABORT_CATEGORY = "Pi reported an aborted message";
+/** Domain-neutral wording for an incomplete terminal assistant message. */
+export const PI_TERMINAL_ABORT_DESCRIPTION = "Pi did not complete its message";
 
 /**
  * Report that something Pi authored went wrong, without keeping what it said.
@@ -194,7 +194,7 @@ export function piMessageFacts(message: unknown): PiMessageFacts | undefined {
     ...(delta === undefined ? {} : { usage: delta }),
     ...(occupancy === undefined ? {} : { context: { tokens: occupancy } }),
     ...(typeof message.errorMessage === "string"
-      ? { diagnostic: confined(PI_TERMINAL_FAILURE_CATEGORY) }
+      ? { diagnostic: confined(PI_TERMINAL_FAILURE_DESCRIPTION) }
       : {}),
   };
 }
