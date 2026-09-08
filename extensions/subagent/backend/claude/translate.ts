@@ -458,10 +458,16 @@ export interface ClaudeTranslator {
  * resumed Run's translator starts from zero, so the first result frame's
  * cumulative reading is charged in full and every later one is differenced.
  */
+function isRootConversationFrame(frame: Record<string, unknown>): boolean {
+  return (
+    frame.parent_tool_use_id == null && typeof frame.subagent_type !== "string"
+  );
+}
+
 export function createClaudeTranslator(): ClaudeTranslator {
   let previous = ZERO_CUMULATIVE_USAGE;
   let primaryModel: string | undefined;
-  let lastAssistantAnswered = false;
+  let rootAssistantTextSeen = false;
   let terminalFinalOutput: string | undefined;
   let lastStreamingKind: string | undefined;
   const rootMessages = new Set<string>();
@@ -476,8 +482,7 @@ export function createClaudeTranslator(): ClaudeTranslator {
    * rather than a turn of *this* conversation.
    */
   const countAssistantTurn = (frame: Record<string, unknown>): number => {
-    if (frame.parent_tool_use_id != null) return 0;
-    if (typeof frame.subagent_type === "string") return 0;
+    if (!isRootConversationFrame(frame)) return 0;
     const message = isRecord(frame.message) ? frame.message : undefined;
     const id = message?.id;
     if (typeof id !== "string" || rootMessages.has(id)) return 0;
@@ -503,7 +508,9 @@ export function createClaudeTranslator(): ClaudeTranslator {
     const model = typeof message.model === "string" ? message.model : undefined;
     if (model !== undefined) primaryModel ??= model;
     const turnDelta = countAssistantTurn(frame);
-    lastAssistantAnswered = parts.some((part) => part.kind === "text");
+    if (isRootConversationFrame(frame)) {
+      rootAssistantTextSeen ||= parts.some((part) => part.kind === "text");
+    }
     const observations: RunObservation[] = [];
     // A frame with no readable content and no model carries nothing a reader
     // could use, so no message is reported for it — but if it was a new root
@@ -521,11 +528,9 @@ export function createClaudeTranslator(): ClaudeTranslator {
     if (turnDelta > 0) {
       observations.push({ kind: "usage", usage: { turns: turnDelta } });
     }
-    const activity =
-      frame.parent_tool_use_id == null &&
-      typeof frame.subagent_type !== "string"
-        ? latestToolActivity(message.content)
-        : undefined;
+    const activity = isRootConversationFrame(frame)
+      ? latestToolActivity(message.content)
+      : undefined;
     if (activity !== undefined) {
       observations.push({ kind: "activity", activity });
       // The detailed completion replaced the streamed bare name. A later call
@@ -536,10 +541,7 @@ export function createClaudeTranslator(): ClaudeTranslator {
   };
 
   const streamFrame = (frame: Record<string, unknown>): ClaudeTranslation => {
-    if (
-      frame.parent_tool_use_id != null ||
-      typeof frame.subagent_type === "string"
-    ) {
+    if (!isRootConversationFrame(frame)) {
       return { observations: [] };
     }
     const event = isRecord(frame.event) ? frame.event : undefined;
@@ -610,20 +612,20 @@ export function createClaudeTranslator(): ClaudeTranslator {
 
   const resultFrame = (frame: Record<string, unknown>): ClaudeTranslation => {
     const observations: RunObservation[] = [];
-    // The result's own text is the answer only when the last assistant frame
-    // did not carry one — a Run whose model answered in an assistant frame
-    // would otherwise have its answer in the transcript twice.
+    // The result's own text is a transcript answer only when no root assistant
+    // frame supplied readable text. Otherwise it is terminal evidence for
+    // finalOutput alone, and emitting it here would duplicate streamed text.
     const text = typeof frame.result === "string" ? frame.result : "";
     terminalFinalOutput =
       frame.is_error !== true && text !== "" ? text : undefined;
-    if (terminalFinalOutput !== undefined && !lastAssistantAnswered) {
+    if (terminalFinalOutput !== undefined && !rootAssistantTextSeen) {
       observations.push({
         kind: "message",
         role: "assistant",
         parts: [{ kind: "text", text: terminalFinalOutput }],
         ...(primaryModel === undefined ? {} : { model: primaryModel }),
       });
-      lastAssistantAnswered = true;
+      rootAssistantTextSeen = true;
     }
     const current = claudeCumulativeUsage(frame);
     const delta = claudeUsageDelta(current, previous);

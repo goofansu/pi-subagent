@@ -689,6 +689,71 @@ test("the result's text is terminal evidence without repeating an assistant answ
   );
 });
 
+test("a tool frame after streamed text does not duplicate the result in the transcript", () => {
+  const translated = translate([
+    assistantFrame({
+      content: [{ type: "text", text: "the findings" }],
+    }),
+    assistantFrame({
+      id: "msg_2",
+      content: [{ type: "tool_use", id: "toolu_1", name: "Read" }],
+    }),
+    resultFrame({ text: "the findings" }),
+  ]);
+
+  assert.deepEqual(
+    translated.observations.filter((one) => one.kind === "message"),
+    [
+      {
+        kind: "message",
+        role: "assistant",
+        parts: [{ kind: "text", text: "the findings" }],
+        model: "claude-sonnet-4-6",
+      },
+      {
+        kind: "message",
+        role: "assistant",
+        parts: [{ kind: "tool_call", callId: "toolu_1", name: "Read" }],
+        model: "claude-sonnet-4-6",
+      },
+    ],
+  );
+  assert.equal(translated.finalOutput, "the findings");
+  assert.equal(translated.turns, 2);
+});
+
+test("a thinking frame after streamed text does not duplicate the result in the transcript", () => {
+  const translated = translate([
+    assistantFrame({
+      content: [{ type: "text", text: "the findings" }],
+    }),
+    assistantFrame({
+      content: [{ type: "thinking", thinking: "checking" }],
+    }),
+    resultFrame({ text: "the findings" }),
+  ]);
+
+  assert.deepEqual(
+    translated.observations.filter((one) => one.kind === "message"),
+    [
+      {
+        kind: "message",
+        role: "assistant",
+        parts: [{ kind: "text", text: "the findings" }],
+        model: "claude-sonnet-4-6",
+      },
+      {
+        kind: "message",
+        role: "assistant",
+        parts: [],
+        model: "claude-sonnet-4-6",
+      },
+    ],
+  );
+  assert.equal(translated.finalOutput, "the findings");
+  assert.equal(translated.turns, 1);
+});
+
 test("an error or empty result contributes no answer text or terminal output", () => {
   for (const frame of [
     resultFrame({ isError: true, text: "the provider said something" }),

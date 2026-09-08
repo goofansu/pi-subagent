@@ -82,6 +82,14 @@ interface RecordedTerminalEvidence {
   readonly evidence: PiTerminalEvidence;
 }
 
+/** Terminal evidence is eligible only while its native execution is current. */
+function currentTerminalEvidence(
+  recorded: RecordedTerminalEvidence | undefined,
+  generation: number,
+): PiTerminalEvidence | undefined {
+  return recorded?.generation === generation ? recorded.evidence : undefined;
+}
+
 export interface PiExecutionContext {
   readonly session: PiSession;
   /** The adapter's own closed flag. The SDK does not defend a disposed session. */
@@ -275,17 +283,14 @@ export function runPiExecution(
       if (interruptAnnounced) return;
       interruptAnnounced = true;
       yield* drainAvailable;
-      const recorded = terminal;
-      if (
-        recorded === undefined ||
-        recorded.generation !== nativeExecutionGeneration
-      ) {
-        return;
-      }
-      const evidence = recorded.evidence;
+      const evidence = currentTerminalEvidence(
+        terminal,
+        nativeExecutionGeneration,
+      );
+      if (evidence === undefined) return;
       yield* emitTerminalDiagnosticIfNeeded(
         evidence,
-        terminalFailureObservedGeneration === recorded.generation,
+        terminalFailureObservedGeneration === nativeExecutionGeneration,
         io,
       );
       yield* io.emit({
@@ -416,14 +421,9 @@ export function runPiExecution(
       }
       bridge.stop();
       yield* drainAvailable;
-      const recorded = terminal;
-      const currentTerminal =
-        recorded?.generation === nativeExecutionGeneration
-          ? recorded.evidence
-          : undefined;
       return yield* bundleFor(
         outcome.error,
-        currentTerminal,
+        currentTerminalEvidence(terminal, nativeExecutionGeneration),
         terminalFailureObservedGeneration === nativeExecutionGeneration,
         io,
       );
