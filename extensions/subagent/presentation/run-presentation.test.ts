@@ -122,11 +122,14 @@ test("every phase and reason resolves to one status word in one tone", () => {
           expected(phase, reason),
           `${shape} ${phase} ${reason}`,
         );
-        assert.equal(presentation.cancellationReason, reason);
+        assert.equal(
+          presentation.cancellationReason,
+          phase === "completed" || phase === "failed" ? undefined : reason,
+        );
       }
 });
 
-test("a live Run's activity is what it is doing; a terminal Run's is why it stopped", () => {
+test("only genuine cancellation has reason activity; other settled Runs use the placeholder", () => {
   for (const phase of RUN_PHASES)
     for (const [shape, presentation] of bothShapes(phase, undefined, "grep: x"))
       assert.equal(
@@ -141,7 +144,7 @@ test("a live Run's activity is what it is doing; a terminal Run's is why it stop
       for (const [shape, presentation] of bothShapes(phase, reason, "grep: x"))
         assert.equal(
           presentation.activity,
-          isTerminalRunPhase(phase) ? reason : "—",
+          phase === "cancelled" ? reason : "—",
           `${shape} ${phase} ${reason}`,
         );
 });
@@ -249,6 +252,55 @@ test("the Label comes from whichever shape carries it", () => {
       .label,
     "read the diff",
   );
+});
+
+test("completed and failed Results never present a retained request as their cause", () => {
+  for (const status of ["completed", "failed"] as const)
+    for (const reason of CANCELLATION_REASONS) {
+      const presentation = runPresentationFromSummary(
+        fixtureSummary({ cancellationReason: reason, activity: "old tool" }),
+        { ...fixtureResult(), status },
+      );
+      assert.equal(presentation.phase, status);
+      assert.deepEqual(presentation.status, {
+        text: status,
+        tone: status === "completed" ? "success" : "error",
+      });
+      assert.equal(presentation.cancellationReason, undefined);
+      assert.equal(presentation.activity, "—");
+      assert.equal(presentation.currentActivity, undefined);
+      assert.equal(presentation.executionNeedsAttention, status === "failed");
+    }
+});
+
+test("explicit cancelled Result reasons override conflicting summary requests", () => {
+  for (const reason of CANCELLATION_REASONS) {
+    const presentation = runPresentationFromSummary(
+      fixtureSummary({
+        cancellationReason: reason === "timeout" ? "requested" : "timeout",
+      }),
+      { ...fixtureResult(), status: "cancelled", cancellationReason: reason },
+    );
+    assert.equal(presentation.phase, "cancelled");
+    assert.equal(presentation.cancellationReason, reason);
+    assert.equal(presentation.activity, reason);
+    assert.deepEqual(presentation.status, {
+      text: "cancelled",
+      tone: reason === "timeout" ? "error" : "muted",
+    });
+    assert.equal(presentation.executionNeedsAttention, reason === "timeout");
+  }
+});
+
+test("an absent cancelled Result reason is authoritative over a retained request", () => {
+  const presentation = runPresentationFromSummary(
+    fixtureSummary({ cancellationReason: "timeout" }),
+    { ...fixtureResult(), status: "cancelled" },
+  );
+  assert.equal(presentation.cancellationReason, undefined);
+  assert.equal(presentation.activity, "—");
+  assert.deepEqual(presentation.status, { text: "cancelled", tone: "error" });
+  assert.equal(presentation.executionNeedsAttention, false);
 });
 
 test("a stored Result outranks the summary the capture raced", () => {

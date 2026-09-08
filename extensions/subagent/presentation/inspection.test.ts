@@ -4,12 +4,14 @@ import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   backendId,
+  CANCELLATION_REASONS,
   createRunProjection,
   EMPTY_USAGE_SNAPSHOT,
   runId,
   subagentId,
 } from "../domain/index.ts";
 import type { RunInspection } from "../domain/inspection.ts";
+import { fixtureResult } from "../testing/presentation-fixtures.ts";
 import { PLAIN_THEME } from "../testing/stand-in-host.ts";
 import { inspectionBlocks, renderInspection } from "./inspection.ts";
 
@@ -94,6 +96,43 @@ test("inspection labels current and retained last activity without substitution"
     .join("\n");
   assert.doesNotMatch(retainedOnly, /Current activity: read earlier/);
   assert.match(retainedOnly, /Last activity: read earlier/);
+});
+
+test("inspection shows completed and failed outcomes without retained cancellation causes", () => {
+  for (const phase of ["completed", "failed"] as const)
+    for (const cancellationReason of CANCELLATION_REASONS)
+      for (const stored of [false, true]) {
+        const summary = {
+          ...capture.summary,
+          phase,
+          cancellationReason,
+          activity: "old tool",
+        };
+        const inspected: RunInspection = stored
+          ? {
+              ...capture,
+              summary,
+              outcome: "result",
+              result: {
+                ...fixtureResult({ finalOutput: "preserved output" }),
+                status: phase,
+              },
+            }
+          : { ...capture, summary, outcome: "ResultExpired" };
+        const output = renderInspection(
+          inspectionBlocks(inspected, "pending"),
+          100,
+          PLAIN_THEME,
+        )
+          .map(stripVTControlCharacters)
+          .join("\n");
+        assert.match(output, new RegExp(`Run status: ${phase}\\n`));
+        assert.doesNotMatch(
+          output,
+          /requested|shutdown|timeout|Current activity: old tool/,
+        );
+        if (stored) assert.match(output, /preserved output/);
+      }
 });
 
 test("answer precedes accounting, transcript and tool history", () => {
