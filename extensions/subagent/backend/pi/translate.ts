@@ -43,8 +43,17 @@ import {
 } from "../../domain/index.ts";
 import { finishedShellActivity, toolActivity } from "../activity.ts";
 
+/** The shared diagnostic category used for provider failures in this adapter. */
+export const PI_BACKEND_FAILURE_CATEGORY = "backend-failure";
+
 /** What a confined provider diagnostic says instead of provider text. */
 export const PI_DIAGNOSTIC_REDACTED = "[redacted]";
+
+/** Adapter-owned wording for a terminal assistant failure. */
+export const PI_TERMINAL_FAILURE_DESCRIPTION = "Pi reported a failed message";
+
+/** Domain-neutral wording for an incomplete terminal assistant message. */
+export const PI_TERMINAL_ABORT_DESCRIPTION = "Pi did not complete its message";
 
 /**
  * Report that something Pi authored went wrong, without keeping what it said.
@@ -54,7 +63,10 @@ export const PI_DIAGNOSTIC_REDACTED = "[redacted]";
  * expressed in v2's typed diagnostic.
  */
 export function confined(what: string): RunDiagnostic {
-  return runDiagnostic("backend-failure", `${what}: ${PI_DIAGNOSTIC_REDACTED}`);
+  return runDiagnostic(
+    PI_BACKEND_FAILURE_CATEGORY,
+    `${what}: ${PI_DIAGNOSTIC_REDACTED}`,
+  );
 }
 
 /** The same confinement, for a Control that the session refused. */
@@ -182,7 +194,7 @@ export function piMessageFacts(message: unknown): PiMessageFacts | undefined {
     ...(delta === undefined ? {} : { usage: delta }),
     ...(occupancy === undefined ? {} : { context: { tokens: occupancy } }),
     ...(typeof message.errorMessage === "string"
-      ? { diagnostic: confined("Pi reported a failed message") }
+      ? { diagnostic: confined(PI_TERMINAL_FAILURE_DESCRIPTION) }
       : {}),
   };
 }
@@ -523,6 +535,36 @@ export function withoutInitialGoal(
     }
     return true;
   });
+}
+
+/** Pi's terminal outcome, kept private to this module. */
+type PiTerminalOutcome = "answered" | "failed" | "aborted";
+
+/**
+ * The terminal evidence one execution retains.
+ *
+ * A reconciliation proves what Pi observed, not that Pi answered. Keeping the
+ * final assistant outcome beside it prevents the snapshot's mere presence
+ * from deciding the Run while keeping provider vocabulary inside this module.
+ */
+export interface PiTerminalEvidence {
+  readonly reconciliation: TerminalReconciliation;
+  readonly outcome: PiTerminalOutcome;
+}
+
+/** Classify the final assistant message represented by a terminal event. */
+export function piTerminalEvidence(
+  messages: readonly unknown[],
+): PiTerminalEvidence {
+  let outcome: PiTerminalOutcome = "answered";
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!isRecord(message) || message.role !== "assistant") continue;
+    if (message.stopReason === "error") outcome = "failed";
+    else if (message.stopReason === "aborted") outcome = "aborted";
+    break;
+  }
+  return { reconciliation: piTerminalSnapshot(messages), outcome };
 }
 
 /**

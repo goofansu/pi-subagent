@@ -392,6 +392,219 @@ test("a cancelled Run leaves the session resumable on the same conversation", as
   assert.equal(value.prompts, 2);
 });
 
+test("a resolved prompt with a terminal provider error settles failed with partial evidence", async () => {
+  const providerText = "authentication failed for account acct_1234";
+  const { value } = await withPiSession(
+    {
+      scripts: [
+        [
+          {
+            step: "assistant",
+            text: "partial answer",
+            stopReason: "error",
+            errorMessage: providerText,
+          },
+          { step: "terminal" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* untilTerminal(rig, started.runId);
+        const result = yield* rig.supervisor.result(started.runId);
+        if (result.outcome !== "result") return result;
+        return {
+          outcome: result.outcome,
+          status: result.result.status,
+          output: result.result.finalOutput,
+          errorMessage: result.result.errorMessage ?? "",
+          diagnostics: result.result.diagnostics,
+        };
+      }),
+  );
+
+  assert.equal(value.outcome, "result");
+  if (value.outcome !== "result") return;
+  assert.equal(value.status, "failed");
+  assert.equal(value.output, "partial answer");
+  assert.match(value.errorMessage, /Pi reported a failed message/);
+  assert.doesNotMatch(value.errorMessage, /acct_1234|authentication failed/);
+  assert.ok(
+    value.diagnostics.some(
+      (diagnostic) => diagnostic.category === "backend-failure",
+    ),
+  );
+  assert.ok(
+    value.diagnostics.every(
+      (diagnostic) => !diagnostic.message.includes(providerText),
+    ),
+  );
+});
+
+test("a terminal provider error without errorMessage synthesizes a confined diagnostic", async () => {
+  const { value } = await withPiSession(
+    {
+      scripts: [
+        [
+          {
+            step: "assistant",
+            text: "partial answer",
+            stopReason: "error",
+          },
+          { step: "terminal" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* untilTerminal(rig, started.runId);
+        return yield* rig.supervisor.result(started.runId);
+      }),
+  );
+
+  assert.equal(value.outcome, "result");
+  if (value.outcome === "result") {
+    assert.equal(value.result.status, "failed");
+    assert.equal(value.result.finalOutput, "partial answer");
+    assert.deepEqual(value.result.diagnostics, [
+      {
+        category: "backend-failure",
+        message: "Pi reported a failed message: [redacted]",
+      },
+    ]);
+  }
+});
+
+test("a retrying provider error remains intermediate when the final attempt succeeds", async () => {
+  const { value } = await withPiSession(
+    {
+      scripts: [
+        [
+          {
+            step: "assistant",
+            text: "failed attempt",
+            stopReason: "error",
+            errorMessage: "temporary provider failure",
+          },
+          { step: "terminal", willRetry: true },
+          { step: "assistant", text: "successful answer", stopReason: "stop" },
+          { step: "terminal" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* untilTerminal(rig, started.runId);
+        const result = yield* rig.supervisor.result(started.runId);
+        return result.outcome === "result"
+          ? { status: result.result.status, output: result.result.finalOutput }
+          : { status: result.outcome, output: "" };
+      }),
+  );
+
+  assert.equal(value.status, "completed");
+  assert.equal(value.output, "successful answer");
+});
+
+test("a terminal provider error observed before cancellation remains failed", async () => {
+  const { value } = await withPiSession(
+    {
+      scripts: [
+        [
+          {
+            step: "assistant",
+            text: "partial answer",
+            stopReason: "error",
+            errorMessage: "provider secret",
+          },
+          { step: "terminal" },
+          { step: "hang" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* until(
+          "the terminal provider error to be observed",
+          Effect.sync(() => rig.standIn.record().terminalEvents === 1),
+        );
+        yield* rig.supervisor.cancel([started.runId]);
+        yield* untilTerminal(rig, started.runId);
+        const result = yield* rig.supervisor.result(started.runId);
+        return result.outcome === "result"
+          ? { status: result.result.status, output: result.result.finalOutput }
+          : { status: result.outcome, output: "" };
+      }),
+  );
+
+  assert.equal(value.status, "failed");
+  assert.equal(value.output, "partial answer");
+});
+
+test("a terminal provider abort never answers and core cancellation keeps its reason", async () => {
+  const normal = await withPiSession(
+    {
+      scripts: [
+        [
+          { step: "assistant", text: "partial", stopReason: "aborted" },
+          { step: "terminal" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* untilTerminal(rig, started.runId);
+        return yield* rig.supervisor.result(started.runId);
+      }),
+  );
+  assert.equal(normal.value.outcome, "result");
+  if (normal.value.outcome === "result") {
+    assert.equal(normal.value.result.status, "failed");
+    assert.equal(normal.value.result.finalOutput, "partial");
+    assert.equal(
+      normal.value.result.errorMessage,
+      "Pi did not complete its message: [redacted]",
+    );
+    assert.doesNotMatch(normal.value.result.errorMessage ?? "", /abort/i);
+    assert.deepEqual(normal.value.result.diagnostics, []);
+  }
+
+  const cancelled = await withPiSession(
+    {
+      scripts: [
+        [
+          { step: "assistant", text: "partial", stopReason: "aborted" },
+          { step: "terminal" },
+          { step: "hang" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* until(
+          "the terminal provider abort to be observed",
+          Effect.sync(() => rig.standIn.record().terminalEvents === 1),
+        );
+        yield* rig.supervisor.cancel([started.runId]);
+        yield* untilTerminal(rig, started.runId);
+        return yield* rig.supervisor.result(started.runId);
+      }),
+  );
+  assert.equal(cancelled.value.outcome, "result");
+  if (cancelled.value.outcome === "result") {
+    assert.equal(cancelled.value.result.status, "cancelled");
+    assert.equal(cancelled.value.result.cancellationReason, "requested");
+    assert.equal(cancelled.value.result.finalOutput, "partial");
+    assert.deepEqual(cancelled.value.result.diagnostics, []);
+  }
+});
+
 test("a terminal answer observed before the abort settles answered", async () => {
   const { value } = await withPiSession(
     {
