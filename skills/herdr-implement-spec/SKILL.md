@@ -10,7 +10,9 @@ The goal is a single branch implementing the entire specification, handed back r
 
 The tickets are not a list of steps. They are a **task graph** with blocking relationships between them. This means there is always a **frontier** of tickets which are ready to be grabbed.
 
-**Ticket agents** are Herdr pi agents, each a main agent in its own worktree and pane, prompted with `/skill:implement-and-review <ticket>`, each ticket being that agent's specification. You orchestrate them; they implement, review, and commit their own ticket. Use the herdr skill for the commands.
+**Ticket agents** are Herdr pi agents, each a main agent in its own worktree and pane, prompted with `/skill:implement-and-review <ticket>`, each ticket being that agent's specification. You orchestrate them; they implement, review, and commit their own ticket.
+
+**Worktrees:** use `/skill:herdr` for their entire lifecycle.
 
 Communication to and from ticket agents should be sparse. Communicate primarily through **context pointers**: to the specification, tickets, research notes, and previous commits. Don't duplicate information already available via pointers.
 
@@ -22,7 +24,7 @@ Ticket agents run unfocused, so the user keeps their pane and every ticket on th
 
 2. (optional) Use an **exploration subagent** to conduct any exploration required by the tickets - relevant codebase files or external documentation. Ensure the exploration subagent can save files - it should save its markdown notes in a directory outside the repo, so every ticket agent can be pointed at them. This lets ticket agents focus on implementation rather than exploration.
 
-3. Create the **integration branch** off main in a dedicated **integration worktree** (`git worktree add -b <integration-branch> <integration-worktree> main`). Keep the current workspace's branch and working tree unchanged. Every ticket's work lands in the integration worktree; run integration merges and checks there.
+3. Create the **integration branch** off main in a dedicated **integration worktree**. Keep the current workspace's branch and working tree unchanged. Every ticket's work lands in the integration worktree; run integration merges and checks there.
 
 4. Work the frontier until every ticket is merged:
    - Start a ticket agent for each frontier ticket not yet started, all of them at once. Each gets a worktree cut from the current tip of the integration branch. Cutting from the current tip is what carries a blocker's merged work into the ticket that depends on it.
