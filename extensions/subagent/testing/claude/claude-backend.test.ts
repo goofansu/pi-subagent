@@ -781,7 +781,11 @@ test("a frame after the Turn boundary disarms its one-frame wait", async () => {
 
   assert.equal(value.beforeFinish.state, "active");
   assert.equal(value.result.status, "completed");
-  assert.deepEqual(value.result.diagnostics, []);
+  assert.deepEqual(
+    value.result.diagnostics.map((diagnostic) => diagnostic.category),
+    ["reconciliation-difference"],
+  );
+  assert.equal(value.result.finalOutput, "done");
 });
 
 test("only one Control is provider-visible at a time", async () => {
@@ -1179,6 +1183,41 @@ test("a Run that fails before answering still names the model it ran", async () 
 
   assert.equal(value.status, "failed");
   assert.equal(value.model, "claude-opus-4-7");
+});
+
+test("a successful result repairs multi-block output without duplicating the streamed transcript", async () => {
+  const { value } = await withClaudeSession(
+    {
+      scripts: [
+        [
+          { step: "init" },
+          { step: "assistant", messageId: "msg_1", text: "first block\n\n" },
+          { step: "assistant", messageId: "msg_1", text: "second block" },
+          { step: "result", text: "first block\n\nsecond block" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(
+          yield* rig.supervisor.start(claudeRigRequest()),
+        );
+        yield* untilTerminal(rig, started.runId);
+        return resultOf(yield* rig.supervisor.result(started.runId));
+      }),
+  );
+
+  assert.equal(value.finalOutput, "first block\n\nsecond block");
+  assert.equal(value.usage.turns, 1);
+  assert.deepEqual(
+    value.transcript
+      .filter((item) => item.role === "assistant")
+      .map((item) => item.parts),
+    [
+      [{ kind: "text", text: "first block\n\n" }],
+      [{ kind: "text", text: "second block" }],
+    ],
+  );
 });
 
 test("the terminal bundle carries turns and the model, and never a transcript", async () => {

@@ -27,6 +27,7 @@ function translate(frames: readonly unknown[]): {
   readonly observations: readonly RunObservation[];
   readonly turns: number;
   readonly primaryModel: string | undefined;
+  readonly finalOutput: string | undefined;
 } {
   const translator = createClaudeTranslator();
   const observations: RunObservation[] = [];
@@ -37,6 +38,7 @@ function translate(frames: readonly unknown[]): {
     observations,
     turns: translator.turns(),
     primaryModel: translator.primaryModel(),
+    finalOutput: translator.finalOutput(),
   };
 }
 
@@ -658,14 +660,16 @@ test("a thinking-only assistant frame still carries its model", () => {
   ]);
 });
 
-test("the result's text answers only when the last assistant frame did not", () => {
+test("the result's text is terminal evidence without repeating an assistant answer", () => {
   const answered = translate([
-    assistantFrame({ content: [{ type: "text", text: "the answer" }] }),
-    resultFrame({ text: "the answer" }),
+    assistantFrame({ content: [{ type: "text", text: "first block" }] }),
+    assistantFrame({ content: [{ type: "text", text: "second block" }] }),
+    resultFrame({ text: "first block\n\nsecond block" }),
   ]);
+  assert.equal(answered.finalOutput, "first block\n\nsecond block");
   assert.deepEqual(
     answered.observations.filter((one) => one.kind === "message").length,
-    1,
+    2,
   );
 
   const toolOnly = translate([
@@ -685,15 +689,18 @@ test("the result's text answers only when the last assistant frame did not", () 
   );
 });
 
-test("an error result contributes no answer text", () => {
-  const { observations } = translate([
+test("an error or empty result contributes no answer text or terminal output", () => {
+  for (const frame of [
     resultFrame({ isError: true, text: "the provider said something" }),
-  ]);
-
-  assert.deepEqual(
-    observations.filter((one) => one.kind === "message"),
-    [],
-  );
+    resultFrame({ text: "" }),
+  ]) {
+    const translated = translate([frame]);
+    assert.equal(translated.finalOutput, undefined);
+    assert.deepEqual(
+      translated.observations.filter((one) => one.kind === "message"),
+      [],
+    );
+  }
 });
 
 /* ---- usage ---- */

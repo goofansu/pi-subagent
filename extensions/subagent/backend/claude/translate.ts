@@ -446,6 +446,8 @@ export interface ClaudeTranslator {
   readonly primaryModel: () => string | undefined;
   /** Turns counted from root assistant messages and raised by result totals. */
   readonly turns: () => number;
+  /** Complete text from the latest successful result, when it supplied any. */
+  readonly finalOutput: () => string | undefined;
 }
 
 /**
@@ -460,6 +462,7 @@ export function createClaudeTranslator(): ClaudeTranslator {
   let previous = ZERO_CUMULATIVE_USAGE;
   let primaryModel: string | undefined;
   let lastAssistantAnswered = false;
+  let terminalFinalOutput: string | undefined;
   let lastStreamingKind: string | undefined;
   const rootMessages = new Set<string>();
   let turns = 0;
@@ -611,11 +614,13 @@ export function createClaudeTranslator(): ClaudeTranslator {
     // did not carry one — a Run whose model answered in an assistant frame
     // would otherwise have its answer in the transcript twice.
     const text = typeof frame.result === "string" ? frame.result : "";
-    if (frame.is_error !== true && text !== "" && !lastAssistantAnswered) {
+    terminalFinalOutput =
+      frame.is_error !== true && text !== "" ? text : undefined;
+    if (terminalFinalOutput !== undefined && !lastAssistantAnswered) {
       observations.push({
         kind: "message",
         role: "assistant",
-        parts: [{ kind: "text", text }],
+        parts: [{ kind: "text", text: terminalFinalOutput }],
         ...(primaryModel === undefined ? {} : { model: primaryModel }),
       });
       lastAssistantAnswered = true;
@@ -654,6 +659,7 @@ export function createClaudeTranslator(): ClaudeTranslator {
     },
     primaryModel: () => primaryModel,
     turns: () => turns,
+    finalOutput: () => terminalFinalOutput,
   };
 }
 
