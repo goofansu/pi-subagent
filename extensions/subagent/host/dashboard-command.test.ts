@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { runId } from "../domain/index.ts";
 import {
   emitActivity,
@@ -226,6 +226,91 @@ test("run history keeps its entry-time elapsed duration until it is reread", asy
   await close(rig, browsing);
 });
 
+test("inspection handles Home, End, and normalized wheel deltas while other pointer input falls through", async (t) => {
+  const rig = hostRig(t, {
+    resumableSteps: [
+      [
+        ...Array.from({ length: 30 }, (_, index) =>
+          emitText(`retained transcript item ${index}`),
+        ),
+        { step: "hang" },
+      ],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  await start(rig, "long inspection");
+  await rig.pump();
+  const browsing = await open(rig);
+
+  const wheel = (wheelDelta: number): TuiMouseEvent => ({
+    type: "wheel",
+    button: "none",
+    x: 10,
+    y: 5,
+    screenX: 10,
+    screenY: 5,
+    width: 80,
+    height: 10,
+    shift: false,
+    alt: false,
+    ctrl: false,
+    wheelDelta,
+  });
+  assert.equal(rig.host.customMouse(wheel(3)), undefined);
+  rig.host.customKey(ENTER);
+  await rig.pump();
+  assert.equal(rig.host.customMouse(wheel(-2)), undefined);
+  rig.host.customKey(ENTER);
+  await rig.pump();
+
+  const draw = () =>
+    rig.host.customLines(80, 10).map(stripVTControlCharacters).join("\n");
+  const top = draw();
+  assert.match(top, /Label: long inspection/);
+  assert.match(top, /Home\/End jump/);
+  const requests = rig.host.customRenderRequests();
+  assert.deepEqual(rig.host.customMouse(wheel(3)), { handled: true });
+  assert.equal(rig.host.customRenderRequests(), requests + 1);
+  const downThree = draw();
+  assert.notEqual(downThree, top);
+  assert.match(downThree, /4-7\//);
+  assert.deepEqual(rig.host.customMouse(wheel(-2)), { handled: true });
+  assert.match(draw(), /2-5\//);
+
+  rig.host.customKey(END);
+  const bottom = draw();
+  const bottomRange = /(\d+)-(\d+)\/(\d+)/.exec(bottom);
+  assert.ok(bottomRange);
+  assert.equal(bottomRange[2], bottomRange[3]);
+  assert.deepEqual(
+    rig.host.customMouse(wheel(50)),
+    { handled: true },
+    "inspection owns wheel at its lower boundary",
+  );
+  assert.equal(draw(), bottom);
+
+  rig.host.customKey(HOME);
+  assert.equal(draw(), top);
+  assert.deepEqual(
+    rig.host.customMouse(wheel(-50)),
+    { handled: true },
+    "inspection owns wheel at its upper boundary",
+  );
+  assert.equal(draw(), top);
+  assert.equal(
+    rig.host.customMouse({ ...wheel(1), type: "click", button: "left" }),
+    undefined,
+  );
+  assert.equal(rig.host.customMouse(wheel(0)), undefined);
+
+  rig.host.customKey(ESC);
+  await rig.pump();
+  rig.host.customKey(ESC);
+  await rig.pump();
+  await close(rig, browsing);
+});
+
 test("configured selection bindings drive navigation and its displayed hint", async (t) => {
   const rig = hostRig(t, {
     customKeybindings: {
@@ -367,7 +452,12 @@ test("all three levels retain a full themed surface across resize and invalidati
     const before = rig.host.customLines(80, 24);
     const plain = before.map(stripVTControlCharacters).join("\n");
     assert.ok(plain.includes(title));
-    assert.match(plain.split("\n").at(-2) ?? "", /up\/down move/);
+    assert.match(
+      plain.split("\n").at(-2) ?? "",
+      title === "Subagent dashboard · run inspection"
+        ? /Home\/End jump/
+        : /up\/down move/,
+    );
     assert.match(plain.split("\n")[0] ?? "", /^ +$/);
     assert.match(plain.split("\n").at(-1) ?? "", /^ +$/);
     assert.doesNotMatch(plain, /[╭╮╰╯│├┤]/);
@@ -432,6 +522,8 @@ const ESC = "\x1b";
 const ENTER = "\r";
 const PAGE_UP = "\x1b[5~";
 const PAGE_DOWN = "\x1b[6~";
+const HOME = "\x1b[H";
+const END = "\x1b[F";
 const DOWN = "\x1b[B";
 const UP = "\x1b[A";
 

@@ -12,7 +12,11 @@ import {
   type ExtensionContext,
   keyHint,
 } from "@earendil-works/pi-coding-agent";
-import { matchesKey } from "@earendil-works/pi-tui";
+import {
+  matchesKey,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
+} from "@earendil-works/pi-tui";
 import {
   type DashboardIdentity,
   type DashboardKey,
@@ -189,6 +193,8 @@ export async function openDashboardUi(
             pressed.push("pageDown");
           if (matchesKey(data, "left")) pressed.push("left");
           if (matchesKey(data, "right")) pressed.push("right");
+          if (matchesKey(data, "home")) pressed.push("home");
+          if (matchesKey(data, "end")) pressed.push("end");
           if (matchesKey(data, "r") || matchesKey(data, "shift+r"))
             pressed.push("refresh");
           return pressed;
@@ -203,6 +209,17 @@ export async function openDashboardUi(
             if (closed) return;
             const pressed = dashboardKeys(data);
             if (pressed.length) step({ kind: "key", pressed });
+          },
+          handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+            if (
+              closed ||
+              page.kind !== "inspection" ||
+              event.type !== "wheel" ||
+              !event.wheelDelta
+            )
+              return undefined;
+            step({ kind: "scroll", delta: event.wheelDelta });
+            return { handled: true };
           },
           render(width) {
             if (closed) return [];

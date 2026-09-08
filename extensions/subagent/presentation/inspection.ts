@@ -108,18 +108,6 @@ export function inspectionBlocks(
       section("Truncation");
       add("literal", truncation);
     }
-    if (stored.transcript.length) {
-      section("Transcript");
-      let comparedModel = stored.model;
-      for (const item of stored.transcript) {
-        if (item.model !== undefined) {
-          if (item.model !== comparedModel)
-            add("muted", `Reported model: ${item.model}`);
-          comparedModel = item.model;
-        }
-        blocks.push(...transcriptBlocks(item));
-      }
-    }
     if (stored.tools.length) {
       section("Tools");
       for (const tool of stored.tools) blocks.push(...toolBlocks(tool));
@@ -180,6 +168,21 @@ export function inspectionBlocks(
   if (stored?.links.length) {
     section("Links");
     add("literal", ...stored.links.map(formatResultLinkLine));
+  }
+
+  // The unbounded-on-screen evidence appendix comes after every concise
+  // operational section, without changing any retained item or part.
+  if (stored?.transcript.length) {
+    section("Transcript");
+    let comparedModel = stored.model;
+    for (const item of stored.transcript) {
+      if (item.model !== undefined) {
+        if (item.model !== comparedModel)
+          add("muted", `Reported model: ${item.model}`);
+        comparedModel = item.model;
+      }
+      blocks.push(...transcriptBlocks(item));
+    }
   }
   return blocks;
 }

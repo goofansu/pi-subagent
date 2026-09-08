@@ -15,7 +15,7 @@ pi install https://github.com/goofansu/pi-subagent
 | Command | What it does |
 | --- | --- |
 | `/subagent` | Shows a summary of available profiles and current work. |
-| `/subagent dashboard` | Open the Subagent dashboard: live subagents and newest-first run history (read-only). Shortcut: `Alt+Shift+.` |
+| `/subagent dashboard` | Open the Subagent dashboard: live subagents, newest-first Run history, and frozen read-only inspection. Inspection supports keyboard navigation throughout; mouse-wheel scrolling is an additional fullscreen-mode feature. Shortcut: `Alt+Shift+.` |
 | `/subagent doctor` | Shows troubleshooting information when something goes wrong. |
 
 ## Tools

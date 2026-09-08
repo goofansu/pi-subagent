@@ -184,11 +184,11 @@ test("retained evidence precedes accounting in the specified semantic section or
     "Error:",
     "Diagnostics:",
     "Truncation:",
-    "Transcript:",
     "Tools:",
     "Usage:",
     "Metadata:",
     "Links:",
+    "Transcript:",
   ]);
 
   const warning = "7 bytes of the final output were cut.";

@@ -26,6 +26,8 @@ import {
   type KeybindingsConfig,
   KeybindingsManager,
   TUI_KEYBINDINGS,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import type { RenderableTheme } from "../presentation/index.ts";
 
@@ -165,6 +167,10 @@ export interface StandInHost {
   readonly shortcut: (shortcut: string) => Promise<void>;
   readonly customLines: (width?: number, rows?: number) => readonly string[];
   readonly customKey: (data: string) => void;
+  /** Dispatch normalized pointer input through Pi's custom-component contract. */
+  readonly customMouse: (
+    event: TuiMouseEvent,
+  ) => TuiMouseEventResult | undefined;
   readonly customOpen: () => boolean;
   /** Options from the most recently opened custom surface. */
   readonly customOptions: () => unknown;
@@ -399,6 +405,7 @@ export function createStandInHost(
       return custom?.render(width) ?? [];
     },
     customKey: (data) => custom?.handleInput?.(data),
+    customMouse: (event) => custom?.handleMouse?.(event),
     customOpen: () => custom !== undefined,
     customOptions: () => customOptions,
     captureCustom: () => custom,

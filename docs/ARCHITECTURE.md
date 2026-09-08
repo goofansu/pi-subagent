@@ -324,7 +324,10 @@ first. Later reads do not count it again. Observation may advance discovery of
 that defect, but never consumes a Result or changes Completion hand-off state.
 Full transcripts never
 enter the continuously published repository.
-The host adds only the existing read-only Completion hand-off status. The
+The host adds only the existing read-only Completion hand-off status. It also
+translates fullscreen custom-UI wheel input into the normalized logical-line
+delta consumed by the page reducer; keyboard navigation remains complete in
+regular mode, where the terminal owns mouse input. The
 [inspection formatter](../extensions/subagent/presentation/inspection.ts) shares
 RunCard helpers but renders all retained transcript parts and tools, without the
 compact card's recent-item cutoff. Only the current capture is retained; closing
@@ -397,8 +400,9 @@ next Session. Scope-owned widget subscriptions and UI resources are released.
 The [Subagent dashboard](../extensions/subagent/host/dashboard-command.ts) keeps
 only transport: Pi's custom UI surface, a key resolved against the operator's
 bindings, the asynchronous reads a step asks for, and the generation guard
-deciding which may still land. Which page an operator is on, what a key means
-there, the offset clamp, the header height and every line the panel draws are
+deciding which may still land. Which page an operator is on, what a key or
+normalized wheel delta means there, the offset clamp, the header height and
+every line the panel draws are
 the [page reducer's](../extensions/subagent/presentation/dashboard-page.ts). It
 observes lightweight summaries only while its overview is open, and dates their
 ages from a runtime-clock instant sampled on publication and on navigation

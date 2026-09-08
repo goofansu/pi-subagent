@@ -143,6 +143,8 @@ export type DashboardKey =
   | "pageDown"
   | "left"
   | "right"
+  | "home"
+  | "end"
   | "confirm"
   | "cancel"
   | "refresh";
@@ -163,6 +165,8 @@ export type DashboardPageEvent =
     }
   /** One keystroke, as every meaning the operator's bindings gave it. */
   | { readonly kind: "key"; readonly pressed: readonly DashboardKey[] }
+  /** Scroll inspection by Pi's normalized logical-line delta. */
+  | { readonly kind: "scroll"; readonly delta: number }
   /** The instant the overview's Run durations are read against. */
   | { readonly kind: "sampled"; readonly instant: number }
   /** A read for this page went out. */
@@ -655,8 +659,9 @@ const drawPage = (
               [
                 { text: movement, droppedAt: 1 },
                 { text: pageHint, droppedAt: 2 },
+                { text: rawKeyHint("Home/End", "jump"), droppedAt: 3 },
                 ...(page.refreshable
-                  ? [{ text: rawKeyHint("r", "refresh"), droppedAt: 3 }]
+                  ? [{ text: rawKeyHint("r", "refresh"), droppedAt: 4 }]
                   : []),
               ],
               back,
@@ -749,6 +754,10 @@ const keyed = (
   if (page.kind === "inspection") {
     if (page.refreshable && pressed.includes("refresh"))
       return { page, ask: "read" };
+    if (pressed.includes("home"))
+      return { page: scrolledPage(page, -page.lines.length), ask: "draw" };
+    if (pressed.includes("end"))
+      return { page: scrolledPage(page, page.lines.length), ask: "draw" };
     const delta = scrollDelta(page, pressed);
     return delta
       ? { page: scrolledPage(page, delta), ask: "draw" }
@@ -788,6 +797,10 @@ const stepped = (
       };
     case "key":
       return keyed(page, event.pressed);
+    case "scroll":
+      return page.kind === "inspection" && event.delta !== 0
+        ? { page: scrolledPage(page, event.delta), ask: "draw" }
+        : { page, ask: "nothing" };
     // Sampling is what a redraw does on its way out, so asking for one here
     // would ask for the draw that asked for the sample.
     case "sampled":

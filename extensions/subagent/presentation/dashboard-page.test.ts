@@ -336,6 +336,76 @@ test("an inspection scrolls a line and a page, and clamps at both ends of its co
   assert.deepEqual(dashboard.draw(40, 10), bottom);
 });
 
+test("inspection beginning, end, and normalized wheel deltas use current viewport bounds", () => {
+  const dashboard = inspection();
+  dashboard.draw(40, 10);
+  const total = dashboard.page().lines.length;
+
+  dashboard.press("end");
+  assert.equal(dashboard.page().offset, total - 4);
+  dashboard.send({ kind: "scroll", delta: -3 });
+  assert.equal(dashboard.page().offset, total - 7);
+  dashboard.send({ kind: "scroll", delta: 2 });
+  assert.equal(dashboard.page().offset, total - 5);
+  dashboard.send({ kind: "scroll", delta: 10_000 });
+  assert.equal(dashboard.page().offset, total - 4);
+  dashboard.press("home");
+  assert.equal(dashboard.page().offset, 0);
+  dashboard.send({ kind: "scroll", delta: -10_000 });
+  assert.equal(dashboard.page().offset, 0);
+
+  dashboard.draw(40, 0);
+  dashboard.press("end");
+  assert.equal(dashboard.page().offset, dashboard.page().lines.length);
+  dashboard.press("home");
+  assert.equal(dashboard.page().offset, 0);
+});
+
+test("inspection jumps and wheel scrolling clamp short content through resize", () => {
+  const dashboard = inspection();
+  dashboard.send({
+    kind: "inspection",
+    capture: {
+      ...CAPTURE,
+      content: { ...CAPTURE.content, finalOutput: "short output" },
+    },
+    handoff: "pending",
+  });
+  dashboard.draw(80, 60);
+  dashboard.press("end");
+  dashboard.send({ kind: "scroll", delta: 20 });
+  assert.equal(dashboard.page().offset, 0);
+
+  dashboard.draw(20, 10);
+  dashboard.press("end");
+  const narrowedEnd = Math.max(
+    0,
+    dashboard.page().lines.length - dashboard.page().viewport.bodyHeight,
+  );
+  assert.equal(dashboard.page().offset, narrowedEnd);
+  dashboard.draw(80, 60);
+  assert.equal(dashboard.page().offset, 0);
+});
+
+test("scroll-by-delta is confined to inspection and remains available during refresh", () => {
+  const list = history();
+  list.draw(40, 10);
+  const before = list.page();
+  const ignored = reduceDashboardPage(
+    before,
+    { kind: "scroll", delta: 4 },
+    CHROME,
+  );
+  assert.equal(ignored.page, before);
+  assert.equal(ignored.ask, "nothing");
+
+  const loading = inspection();
+  loading.draw(40, 10);
+  loading.send({ kind: "reading" });
+  loading.send({ kind: "scroll", delta: 4 });
+  assert.equal(loading.page().offset, 4);
+});
+
 test("a scroll clamps back into a screen that has grown taller under it", () => {
   const dashboard = inspection();
   dashboard.draw(40, 10);
@@ -390,10 +460,11 @@ test("a list gives up its page keys, then its movement keys, then the way in", (
   ]);
 });
 
-test("an inspection gives them up the other way round, keeping refresh longest", () => {
+test("an inspection advertises jumps, then progressively keeps refresh and the way back", () => {
   assert.deepEqual(ladder(inspection(), 200, 30), [
-    "up/down move · ←/→ page · r refresh · <tui.select.cancel> back",
-    "←/→ page · r refresh · <tui.select.cancel> back",
+    "up/down move · ←/→ page · Home/End jump · r refresh · <tui.select.cancel> back",
+    "←/→ page · Home/End jump · r refresh · <tui.select.cancel> back",
+    "Home/End jump · r refresh · <tui.select.cancel> back",
     "r refresh · <tui.select.cancel> back",
     "<tui.select.cancel> back",
   ]);

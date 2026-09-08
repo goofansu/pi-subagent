@@ -195,11 +195,11 @@ test("inspection includes mixed transcript parts, every tool, normalized usage, 
     "Final output:",
     "Error:",
     "Diagnostics:",
-    "Transcript:",
     "Tools:",
     "Usage:",
     "Metadata:",
     "Links:",
+    "Transcript:",
   ];
   for (let i = 1; i < orderedSections.length; i += 1)
     assert.ok(

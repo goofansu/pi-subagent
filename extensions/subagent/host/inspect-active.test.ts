@@ -277,11 +277,11 @@ for (const truncated of [false, true])
         "Output so far:",
         "Diagnostics:",
         "Truncation:",
-        "Transcript:",
         "Tools:",
         "Usage:",
         "Metadata:",
         "Links:",
+        "Transcript:",
       ];
       for (let i = 1; i < orderedSections.length; i += 1)
         assert.ok(
