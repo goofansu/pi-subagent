@@ -150,7 +150,7 @@ test("inspection shows completed and failed outcomes without retained cancellati
       }
 });
 
-test("retained evidence precedes accounting in the specified semantic section order", () => {
+test("inspection puts operational facts before answer and supporting evidence", () => {
   const orderedCapture: RunInspection = {
     ...capture,
     content: {
@@ -180,13 +180,12 @@ test("retained evidence precedes accounting in the specified semantic section or
     .map((block) => block.text);
   assert.deepEqual(headings, [
     "Label: Review **literal** label",
+    "Usage:",
+    "Metadata:",
     "Output so far:",
     "Error:",
     "Diagnostics:",
-    "Truncation:",
     "Tools:",
-    "Usage:",
-    "Metadata:",
     "Links:",
     "Transcript:",
   ]);
@@ -331,7 +330,7 @@ test("empty retained output is distinguished from output that was never produced
   assert.match(genuinelyEmptyResult, /Result available but empty/);
 });
 
-test("empty optional evidence sections are omitted and missing-data explanations precede accounting", () => {
+test("empty optional evidence sections are omitted and missing-data explanations follow operational facts", () => {
   const sparse = inspectionBlocks(
     {
       ...capture,
@@ -347,9 +346,9 @@ test("empty optional evidence sections are omitted and missing-data explanations
     .map((block) => block.text);
   assert.deepEqual(sparseHeadings, [
     "Label: Review **literal** label",
-    "Output so far:",
     "Usage:",
     "Metadata:",
+    "Output so far:",
   ]);
 
   for (const outcome of ["ResultExpired", "unavailable"] as const) {
@@ -362,10 +361,10 @@ test("empty optional evidence sections are omitted and missing-data explanations
     );
     assert.ok(explanation >= 0);
     assert.ok(
-      explanation < missingBlocks.findIndex((block) => block.text === "Usage:"),
+      explanation > missingBlocks.findIndex((block) => block.text === "Usage:"),
     );
     assert.ok(
-      explanation <
+      explanation >
         missingBlocks.findIndex((block) => block.text === "Metadata:"),
     );
   }
@@ -486,11 +485,15 @@ test("transcript keeps message and part order with fresh readable attribution", 
   const semantic = inspectionBlocks(inspected, "pending");
   assert.deepEqual(sectionBlocks(semantic, "Transcript"), [
     { kind: "muted", text: "Assistant:" },
-    { kind: "markdown", text: "first **Markdown**" },
-    { kind: "markdown", text: "" },
+    {
+      kind: "markdown",
+      text: "first **Markdown**",
+      transcriptPreviewLines: 33,
+    },
+    { kind: "markdown", text: "", transcriptPreviewLines: 33 },
     { kind: "literal", text: "Tool call · read" },
     { kind: "muted", text: "Assistant:" },
-    { kind: "markdown", text: "after call" },
+    { kind: "markdown", text: "after call", transcriptPreviewLines: 33 },
     { kind: "muted", text: "Reported model: different-model" },
     { kind: "literal", text: "Tool call · read" },
     { kind: "muted", text: "User:" },
@@ -498,16 +501,29 @@ test("transcript keeps message and part order with fresh readable attribution", 
     {
       kind: "literal",
       text: "Call ID: literal-error\nassistant: **literal evidence**",
+      transcriptPreviewLines: 33,
     },
     { kind: "muted", text: "Assistant:" },
-    { kind: "markdown", text: "same comparison after missing" },
+    {
+      kind: "markdown",
+      text: "same comparison after missing",
+      transcriptPreviewLines: 33,
+    },
     { kind: "muted", text: "Assistant:" },
-    { kind: "markdown", text: "duplicate message" },
+    {
+      kind: "markdown",
+      text: "duplicate message",
+      transcriptPreviewLines: 33,
+    },
     { kind: "muted", text: "Assistant:" },
-    { kind: "markdown", text: "duplicate message" },
+    {
+      kind: "markdown",
+      text: "duplicate message",
+      transcriptPreviewLines: 33,
+    },
     { kind: "muted", text: "Reported model: run-model" },
     { kind: "muted", text: "Assistant:" },
-    { kind: "markdown", text: "" },
+    { kind: "markdown", text: "", transcriptPreviewLines: 33 },
   ]);
   const visible = renderInspection(semantic, 100, PLAIN_THEME)
     .map(stripVTControlCharacters)
@@ -620,6 +636,44 @@ test("Tools retain every status, unnamed fallback, duplicate entry and full lite
   assert.match(visible, /second line/);
   assert.match(visible, /Call ID: retained evidence/);
   assert.match(visible, /failure \*\*literal\*\*/);
+});
+
+test("large tool transcript output is compact by default and can be expanded", () => {
+  const largeOutput = Array.from(
+    { length: 100 },
+    (_, index) => `source line ${index + 1}`,
+  ).join("\n");
+  const semantic = inspectionBlocks(
+    {
+      ...capture,
+      content: {
+        ...capture.content,
+        transcript: [
+          {
+            role: "tool",
+            parts: [{ kind: "text", text: largeOutput }],
+          },
+        ],
+      },
+    },
+    "pending",
+  );
+  const compact = renderInspection(semantic, 100, PLAIN_THEME, false)
+    .map(stripVTControlCharacters)
+    .join("\n");
+  assert.match(
+    compact,
+    /68 wrapped lines hidden; press t to expand transcript/,
+  );
+  assert.match(compact, /source line 1/);
+  assert.doesNotMatch(compact, /source line 50/);
+  assert.match(compact, /source line 100/);
+
+  const expanded = renderInspection(semantic, 100, PLAIN_THEME, true)
+    .map(stripVTControlCharacters)
+    .join("\n");
+  assert.match(expanded, /source line 50/);
+  assert.doesNotMatch(expanded, /lines hidden/);
 });
 
 test("Markdown remains width-safe across resize and preserves the captured content", () => {

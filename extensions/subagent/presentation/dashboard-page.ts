@@ -95,6 +95,8 @@ export interface DashboardPage {
   readonly blocks: readonly InspectionBlock[];
   /** Whether that capture is of an active Run, so `R` can take another. */
   readonly refreshable: boolean;
+  /** Whether large text parts in the transcript are shown in full. */
+  readonly transcriptExpanded: boolean;
   /** The Subagent the overview has selected, kept while a deeper page is open. */
   readonly selectedSubagentId: SubagentId | undefined;
   /**
@@ -147,7 +149,8 @@ export type DashboardKey =
   | "end"
   | "confirm"
   | "cancel"
-  | "refresh";
+  | "refresh"
+  | "toggleTranscript";
 
 /**
  * What moves a page.
@@ -260,6 +263,7 @@ export function emptyDashboardPage(capturedAt = 0): DashboardPage {
     capturedAt,
     blocks: [],
     refreshable: false,
+    transcriptExpanded: false,
     selectedSubagentId: undefined,
     selectedRuns: new Map(),
     offset: 0,
@@ -348,6 +352,7 @@ const arriving = (
   status: "loading",
   blocks: [],
   refreshable: false,
+  transcriptExpanded: false,
   offset: 0,
   lines: [],
   linesWidth: undefined,
@@ -513,7 +518,12 @@ const pageLines = (
     return page.linesWidth === width
       ? { lines: page.lines, linesWidth: page.linesWidth }
       : {
-          lines: renderInspection(page.blocks, width, theme),
+          lines: renderInspection(
+            page.blocks,
+            width,
+            theme,
+            page.transcriptExpanded,
+          ),
           linesWidth: width,
         };
   if (page.status === "loading")
@@ -644,6 +654,9 @@ const drawPage = (
   const body = page.lines.slice(page.offset, page.offset + bodyHeight);
   if (page.kind === "inspection") {
     const ready = page.status === "ready";
+    const hasTranscript = page.blocks.some(
+      (block) => block.kind === "heading" && block.text === "Transcript:",
+    );
     return dashboardPanel(
       page.viewport,
       page.header,
@@ -660,8 +673,21 @@ const drawPage = (
                 { text: movement, droppedAt: 1 },
                 { text: pageHint, droppedAt: 2 },
                 { text: rawKeyHint("Home/End", "jump"), droppedAt: 3 },
+                ...(hasTranscript
+                  ? [
+                      {
+                        text: rawKeyHint(
+                          "t",
+                          page.transcriptExpanded
+                            ? "compact transcript"
+                            : "expand transcript",
+                        ),
+                        droppedAt: 4,
+                      },
+                    ]
+                  : []),
                 ...(page.refreshable
-                  ? [{ text: rawKeyHint("r", "refresh"), droppedAt: 4 }]
+                  ? [{ text: rawKeyHint("r", "refresh"), droppedAt: 5 }]
                   : []),
               ],
               back,
@@ -754,6 +780,15 @@ const keyed = (
   if (page.kind === "inspection") {
     if (page.refreshable && pressed.includes("refresh"))
       return { page, ask: "read" };
+    if (pressed.includes("toggleTranscript"))
+      return {
+        page: {
+          ...page,
+          transcriptExpanded: !page.transcriptExpanded,
+          linesWidth: undefined,
+        },
+        ask: "draw",
+      };
     if (pressed.includes("home"))
       return { page: scrolledPage(page, -page.lines.length), ask: "draw" };
     if (pressed.includes("end"))

@@ -268,18 +268,17 @@ for (const truncated of [false, true])
         "active-model",
         "active diagnostic",
         "https://example.com/report",
-        "Truncation:",
+        "Dropped to stay within bounds:",
         "5 transcript items",
         "bytes of the final output",
       ])
         assert.ok(text.includes(value), `${value}\n${text}`);
       const orderedSections = [
-        "Output so far:",
-        "Diagnostics:",
-        "Truncation:",
-        "Tools:",
         "Usage:",
         "Metadata:",
+        "Output so far:",
+        "Diagnostics:",
+        "Tools:",
         "Links:",
         "Transcript:",
       ];

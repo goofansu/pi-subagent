@@ -197,6 +197,8 @@ export async function openDashboardUi(
           if (matchesKey(data, "end")) pressed.push("end");
           if (matchesKey(data, "r") || matchesKey(data, "shift+r"))
             pressed.push("refresh");
+          if (matchesKey(data, "t") || matchesKey(data, "shift+t"))
+            pressed.push("toggleTranscript");
           return pressed;
         };
 

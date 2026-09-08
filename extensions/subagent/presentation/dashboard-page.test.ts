@@ -146,6 +146,39 @@ const inspection = () => {
   return dashboard;
 };
 
+test("inspection toggles large tool transcript evidence between compact and full", () => {
+  const dashboard = inspection();
+  const output = Array.from(
+    { length: 100 },
+    (_, index) => `tool source ${index + 1}`,
+  ).join("\n");
+  dashboard.send({
+    kind: "inspection",
+    capture: {
+      ...CAPTURE,
+      content: {
+        ...CAPTURE.content,
+        transcript: [{ role: "tool", parts: [{ kind: "text", text: output }] }],
+      },
+    },
+    handoff: "pending",
+  });
+
+  const compact = dashboard.plain(120, 200).join("\n");
+  assert.match(
+    compact,
+    /68 wrapped lines hidden; press t to expand transcript/,
+  );
+  assert.match(compact, /t expand transcript/);
+  assert.doesNotMatch(compact, /tool source 50/);
+
+  dashboard.press("toggleTranscript");
+  const expanded = dashboard.plain(120, 200).join("\n");
+  assert.match(expanded, /tool source 50/);
+  assert.match(expanded, /t compact transcript/);
+  assert.doesNotMatch(expanded, /lines hidden/);
+});
+
 const footer = (lines: readonly string[]) =>
   stripVTControlCharacters(
     [...lines]

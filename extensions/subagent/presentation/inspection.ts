@@ -22,6 +22,8 @@ import type { HandoffStatus } from "./views.ts";
 export interface InspectionBlock {
   readonly kind: "heading" | "literal" | "muted" | "markdown";
   readonly text: string;
+  /** Rendered-line budget used for compact transcript text. */
+  readonly transcriptPreviewLines?: number;
 }
 
 /** Capture semantic blocks once; wrapping and Markdown rendering belong to the viewport. */
@@ -65,67 +67,6 @@ export function inspectionBlocks(
     `Run status: ${run.status.text}${run.cancellationReason ? ` (${run.cancellationReason})` : ""}`,
   );
 
-  // The answer and any limitations affecting its evidence precede accounting.
-  if (stored) {
-    section(capture.outcome === "active" ? "Output so far" : "Final output");
-    const outputTruncation = formatOutputTruncation(
-      stored.truncation.truncatedOutputBytes,
-    );
-    const truncation = formatTruncation(stored);
-    if (outputTruncation !== undefined) add("literal", outputTruncation);
-    if (stored.finalOutput) add("markdown", stored.finalOutput);
-    else if (stored.truncation.truncatedOutputBytes > 0)
-      add(
-        "literal",
-        capture.outcome === "active"
-          ? "No output remains in this snapshot."
-          : "No final output remains in the Result.",
-      );
-    else {
-      add(
-        "literal",
-        capture.outcome === "active"
-          ? "No output produced yet."
-          : "No final output was produced.",
-      );
-      if (stored.transcript.length === 0 && truncation === undefined)
-        add(
-          "literal",
-          capture.outcome === "active"
-            ? "Active snapshot available but empty: no output or transcript retained yet."
-            : "Result available but empty: no output or transcript was retained.",
-        );
-    }
-    if (stored.errorMessage !== undefined) {
-      section("Error");
-      add("literal", stored.errorMessage);
-    }
-    if (stored.diagnostics.length) {
-      section("Diagnostics");
-      add("literal", ...stored.diagnostics.map(formatDiagnosticLine));
-    }
-    if (truncation) {
-      section("Truncation");
-      add("literal", truncation);
-    }
-    if (stored.tools.length) {
-      section("Tools");
-      for (const tool of stored.tools) blocks.push(...toolBlocks(tool));
-    }
-  } else {
-    add(
-      "literal",
-      "",
-      capture.outcome === "ResultExpired"
-        ? "Result expired: output is gone; retained metadata is shown below."
-        : isTerminalRunPhase(run.phase)
-          ? "Result unavailable: the stored result is missing or unreadable."
-          : "Run unavailable: active snapshot could not be captured.",
-    );
-    if (capture.outcome === "unavailable" && capture.diagnostic)
-      add("literal", formatDiagnosticLine(capture.diagnostic));
-  }
-
   const usage = result?.usage ?? capture.usage;
   section("Usage");
   add(
@@ -165,6 +106,66 @@ export function inspectionBlocks(
     add("literal", "Completion hand-off: unannounceable");
   if (stored?.model !== undefined) add("literal", `Model: ${stored.model}`);
 
+  // Put the Run's answer after the quick operational facts, then its supporting
+  // tool and transcript evidence. Any retention warning stays with the answer
+  // it qualifies instead of becoming a disconnected section.
+  if (stored) {
+    section(capture.outcome === "active" ? "Output so far" : "Final output");
+    const outputTruncation = formatOutputTruncation(
+      stored.truncation.truncatedOutputBytes,
+    );
+    const truncation = formatTruncation(stored);
+    if (outputTruncation !== undefined) add("literal", outputTruncation);
+    if (stored.finalOutput) add("markdown", stored.finalOutput);
+    else if (stored.truncation.truncatedOutputBytes > 0)
+      add(
+        "literal",
+        capture.outcome === "active"
+          ? "No output remains in this snapshot."
+          : "No final output remains in the Result.",
+      );
+    else {
+      add(
+        "literal",
+        capture.outcome === "active"
+          ? "No output produced yet."
+          : "No final output was produced.",
+      );
+      if (stored.transcript.length === 0 && truncation === undefined)
+        add(
+          "literal",
+          capture.outcome === "active"
+            ? "Active snapshot available but empty: no output or transcript retained yet."
+            : "Result available but empty: no output or transcript was retained.",
+        );
+    }
+    if (truncation) add("literal", truncation);
+    if (stored.errorMessage !== undefined) {
+      section("Error");
+      add("literal", stored.errorMessage);
+    }
+    if (stored.diagnostics.length) {
+      section("Diagnostics");
+      add("literal", ...stored.diagnostics.map(formatDiagnosticLine));
+    }
+    if (stored.tools.length) {
+      section("Tools");
+      for (const tool of stored.tools) blocks.push(...toolBlocks(tool));
+    }
+  } else {
+    add(
+      "literal",
+      "",
+      capture.outcome === "ResultExpired"
+        ? "Result expired: output is gone; retained metadata is shown below."
+        : isTerminalRunPhase(run.phase)
+          ? "Result unavailable: the stored result is missing or unreadable."
+          : "Run unavailable: active snapshot could not be captured.",
+    );
+    if (capture.outcome === "unavailable" && capture.diagnostic)
+      add("literal", formatDiagnosticLine(capture.diagnostic));
+  }
+
   if (stored?.links.length) {
     section("Links");
     add("literal", ...stored.links.map(formatResultLinkLine));
@@ -192,20 +193,37 @@ export function renderInspection(
   blocks: readonly InspectionBlock[],
   width: number,
   theme: RenderableTheme,
+  transcriptExpanded = true,
 ): readonly string[] {
   return blocks
     .flatMap((block) => {
-      if (block.kind === "markdown")
-        return new Markdown(block.text, 0, 0, getMarkdownTheme()).render(
-          Math.max(1, width),
-        );
-      const text =
-        block.kind === "heading"
-          ? theme.fg("accent", theme.bold(block.text))
-          : block.kind === "muted"
-            ? theme.fg("dim", block.text)
-            : theme.fg("text", block.text);
-      return wrapTextWithAnsi(text, Math.max(1, width));
+      const rendered =
+        block.kind === "markdown"
+          ? new Markdown(block.text, 0, 0, getMarkdownTheme()).render(
+              Math.max(1, width),
+            )
+          : wrapTextWithAnsi(
+              block.kind === "heading"
+                ? theme.fg("accent", theme.bold(block.text))
+                : block.kind === "muted"
+                  ? theme.fg("dim", block.text)
+                  : theme.fg("text", block.text),
+              Math.max(1, width),
+            );
+      const limit = block.transcriptPreviewLines;
+      if (transcriptExpanded || limit === undefined || rendered.length <= limit)
+        return rendered;
+      const headLines = Math.ceil((limit - 1) * 0.75);
+      const tailLines = limit - headLines - 1;
+      const hiddenLines = rendered.length - headLines - tailLines;
+      return [
+        ...rendered.slice(0, headLines),
+        theme.fg(
+          "dim",
+          `… ${hiddenLines.toLocaleString()} wrapped lines hidden; press t to expand transcript …`,
+        ),
+        ...rendered.slice(-tailLines),
+      ];
     })
     .map((line) => fitToWidth(line, width));
 }
@@ -215,6 +233,8 @@ const ROLE_LABELS = {
   user: "User:",
   tool: "Tool output:",
 } as const satisfies Record<TranscriptItem["role"], string>;
+
+const TRANSCRIPT_PREVIEW_LINES = 33;
 
 function transcriptBlocks(item: TranscriptItem): readonly InspectionBlock[] {
   const blocks: InspectionBlock[] = [];
@@ -232,6 +252,7 @@ function transcriptBlocks(item: TranscriptItem): readonly InspectionBlock[] {
     blocks.push({
       kind: item.role === "assistant" ? "markdown" : "literal",
       text: part.text,
+      transcriptPreviewLines: TRANSCRIPT_PREVIEW_LINES,
     });
   }
   if (item.parts.length === 0)

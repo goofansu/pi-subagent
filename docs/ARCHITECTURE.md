@@ -329,9 +329,12 @@ translates fullscreen custom-UI wheel input into the normalized logical-line
 delta consumed by the page reducer; keyboard navigation remains complete in
 regular mode, where the terminal owns mouse input. The
 [inspection formatter](../extensions/subagent/presentation/inspection.ts) shares
-RunCard helpers but renders all retained transcript parts and tools, without the
-compact card's recent-item cutoff. Only the current capture is retained; closing
-or leaving details releases it. Active snapshots refresh only on R, preserving
+RunCard helpers and keeps all retained transcript parts and tools available,
+without the compact card's recent-item cutoff. Large transcript text parts
+open as head-and-tail previews so source dumps do not dominate agentic
+coding Runs; `t` switches the captured transcript between compact and full
+without rereading the Run. Only the current capture is retained; closing or
+leaving details releases it. Active snapshots refresh only on R, preserving
 or clamping the viewport; content and capture-relative ages never advance on
 backend updates, clock ticks or settlement. A navigation-owned observation lease
 interrupts in-flight entry/refresh reads on Escape as well as closure. The
