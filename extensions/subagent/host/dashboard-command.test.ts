@@ -240,7 +240,7 @@ test("configured selection bindings drive navigation and its displayed hint", as
   await start(rig, "second task");
   await rig.pump();
   const browsing = await open(rig);
-  const footer = stripVTControlCharacters(screen(rig)).split("\n").at(-1) ?? "";
+  const footer = stripVTControlCharacters(screen(rig)).split("\n").at(-2) ?? "";
   assert.match(footer, /k\/j move/);
   assert.doesNotMatch(footer, /up\/down move/);
   assert.match(screen(rig), /› first task {3}Running/);
@@ -367,9 +367,11 @@ test("all three levels retain a full themed surface across resize and invalidati
     const before = rig.host.customLines(80, 24);
     const plain = before.map(stripVTControlCharacters).join("\n");
     assert.ok(plain.includes(title));
-    assert.match(plain.split("\n").at(-1) ?? "", /up\/down move/);
+    assert.match(plain.split("\n").at(-2) ?? "", /up\/down move/);
+    assert.match(plain.split("\n")[0] ?? "", /^ +$/);
+    assert.match(plain.split("\n").at(-1) ?? "", /^ +$/);
     assert.doesNotMatch(plain, /[╭╮╰╯│├┤]/);
-    assert.match(plain.split("\n").at(-2) ?? "", /^ ─+ $/);
+    assert.match(plain.split("\n").at(-3) ?? "", /^ ─+ $/);
     if (title !== "Subagent dashboard · run inspection") {
       assert.match(plain, /› 任务/);
       assert.match(plain, /任务 👩‍💻 café/);
@@ -379,7 +381,7 @@ test("all three levels retain a full themed surface across resize and invalidati
       assert.ok(selectedRow);
       assert.doesNotMatch(selectedRow, /enter/);
       assert.doesNotMatch(selectedRow, /explore|run-|subagent-|Label:/);
-      assert.match(plain.split("\n").at(-1) ?? "", /enter (runs|inspect)/);
+      assert.match(plain.split("\n").at(-2) ?? "", /enter (runs|inspect)/);
       if (title === "Subagent dashboard") assert.doesNotMatch(plain, /explore/);
       else
         assert.match(
@@ -511,6 +513,15 @@ test("runs reuses no-Session response; a live empty Session opens and closes an 
   const browsing = rig.host.command("subagent", "dashboard");
   await rig.pump();
   assert.equal(rig.host.customOpen(), true);
+  assert.deepEqual(rig.host.customOptions(), {
+    overlay: true,
+    overlayOptions: {
+      width: "100%",
+      maxHeight: "100%",
+      margin: 0,
+      anchor: "center",
+    },
+  });
   assert.match(
     rig.host.customLines().join("\n"),
     /No subagents in this session/,
@@ -518,17 +529,19 @@ test("runs reuses no-Session response; a live empty Session opens and closes an 
   const panel = rig.host.customLines(80, 24).map(stripVTControlCharacters);
   assert.equal(panel.length, 24);
   assert.ok(panel.every((line) => visibleWidth(line) === 80));
-  assert.match(panel[0], /^ ██████ {4}Subagent dashboard *$/);
-  assert.match(panel[1], /^ ██ {2}██ {4}\/work *$/);
+  assert.match(panel[0], /^ +$/);
+  assert.match(panel[1], /^ ██████ {4}Subagent dashboard *$/);
+  assert.match(panel[2], /^ ██ {2}██ {4}\/work *$/);
   assert.match(
-    panel[2],
+    panel[3],
     /^ ████ {2}██ {2}0 active · 0 needs attention · 0 completed *$/,
   );
-  assert.match(panel[3], /^ ██ {4}██ +$/);
-  assert.match(panel[4], /^ +$/);
-  assert.match(panel.at(-2) ?? "", /^ ─+ $/);
+  assert.match(panel[4], /^ ██ {4}██ +$/);
+  assert.match(panel[5], /^ +$/);
+  assert.match(panel.at(-3) ?? "", /^ ─+ $/);
   assert.doesNotMatch(panel.join("\n"), /[╭╮╰╯│├┤]/);
-  assert.match(panel.at(-1) ?? "", /^ escape.*close/);
+  assert.match(panel.at(-2) ?? "", /^ escape.*close/);
+  assert.match(panel.at(-1) ?? "", /^ +$/);
   assert.ok(panel.some((line) => /^ +$/.test(line)));
   assert.doesNotMatch(panel.join("\n"), /1-1\/1|enter|scroll/);
   rig.host.customKey(ENTER);
@@ -746,26 +759,29 @@ test("the overview header names the working directory and a live population", as
   const browsing = await open(rig);
   const header = () =>
     rig.host.customLines(160, 60).map(stripVTControlCharacters);
-  assert.match(header()[0], /^ ██████ {4}Subagent dashboard *$/);
-  assert.match(header()[1], /^ ██ {2}██ {4}\/work *$/);
+  assert.match(header()[0], /^ +$/);
+  assert.match(header()[1], /^ ██████ {4}Subagent dashboard *$/);
+  assert.match(header()[2], /^ ██ {2}██ {4}\/work *$/);
   assert.match(
-    header()[2],
+    header()[3],
     /^ ████ {2}██ {2}1 active · 1 needs attention · 1 completed *$/,
   );
-  assert.match(header()[3], /^ ██ {4}██ +$/);
-  assert.match(header()[4], /^ +$/);
+  assert.match(header()[4], /^ ██ {4}██ +$/);
+  assert.match(header()[5], /^ +$/);
   // The population is the list's own, so settling a Run moves it a category.
   await rig.release("still going");
   await rig.settled(active.runId);
   await rig.pump();
-  assert.match(header()[2], /0 active · 1 needs attention · 2 completed/);
+  assert.match(header()[3], /0 active · 1 needs attention · 2 completed/);
   // The mark belongs to the overview; a deeper screen keeps its one-line title.
   rig.host.customKey(ENTER);
   await rig.pump();
-  assert.match(header()[0], /^ Subagent dashboard · run history/);
+  assert.match(header()[0], /^ +$/);
+  assert.match(header()[1], /^ Subagent dashboard · run history/);
   assert.doesNotMatch(header().join("\n"), /█/);
   rig.host.customKey(ESC);
   await rig.pump();
-  assert.match(header()[0], /^ ██████ {4}Subagent dashboard/);
+  assert.match(header()[0], /^ +$/);
+  assert.match(header()[1], /^ ██████ {4}Subagent dashboard/);
   await close(rig, browsing);
 });

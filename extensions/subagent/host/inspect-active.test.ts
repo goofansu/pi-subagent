@@ -138,7 +138,7 @@ test("multiple active refreshes preserve line offset and clamp after shorter rec
   draw();
   rig.host.customKey("\x1b[C");
   let page = draw();
-  assert.match(page.at(-1) ?? "", /7-12\//);
+  assert.match(page.at(-2) ?? "", /5-8\//);
   for (const key of ["r", "R", "r"]) {
     await rig.advanceClock(1000);
     rig.host.customKey(key);
@@ -148,7 +148,7 @@ test("multiple active refreshes preserve line offset and clamp after shorter rec
     const withoutCaptureTime = (lines: readonly string[]) =>
       lines.slice(1, -1).filter((line) => !line.includes("Captured at:"));
     assert.deepEqual(withoutCaptureTime(draw()), withoutCaptureTime(page));
-    assert.match(draw().at(-1) ?? "", /7-12\//);
+    assert.match(draw().at(-2) ?? "", /5-8\//);
     page = draw();
   }
   await rig.release("more");
@@ -156,7 +156,7 @@ test("multiple active refreshes preserve line offset and clamp after shorter rec
   assert.deepEqual(draw(), page);
   rig.host.customKey("R");
   await rig.pump();
-  assert.match(draw().at(-1) ?? "", /7-12\//);
+  assert.match(draw().at(-2) ?? "", /5-8\//);
   for (let i = 0; i < 30; i += 1) {
     rig.host.customKey("\x1b[C");
     draw();
@@ -170,7 +170,7 @@ test("multiple active refreshes preserve line offset and clamp after shorter rec
   await rig.pump();
   const shorter = draw();
   assert.doesNotMatch(shorter.join("\n"), /full retained item|new tail/);
-  const position = /(\d+)-(\d+)\/(\d+)/.exec(shorter.at(-1) ?? "");
+  const position = /(\d+)-(\d+)\/(\d+)/.exec(shorter.at(-2) ?? "");
   assert.ok(position);
   assert.equal(position[2], position[3], "clamped to new bottom");
   assert.match(screen(rig), /short output/);

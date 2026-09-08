@@ -17,6 +17,8 @@ export interface DashboardScreen {
   readonly spacious: boolean;
   readonly inset: number;
   readonly contentWidth: number;
+  readonly paddingTop: number;
+  readonly paddingBottom: number;
 }
 
 /** A screen whose header's rows have been taken out of its body. */
@@ -33,12 +35,15 @@ export function dashboardScreen(
   const columns = Math.max(0, Math.floor(width));
   const height = Math.max(0, Math.floor(terminalRows));
   const inset = columns >= 32 ? 1 : 0;
+  const spacious = height >= 10;
   return {
     width: columns,
     height,
-    spacious: height >= 10,
+    spacious,
     inset,
     contentWidth: Math.max(0, columns - inset * 2),
+    paddingTop: spacious ? 1 : 0,
+    paddingBottom: spacious ? 1 : 0,
   };
 }
 
@@ -55,9 +60,11 @@ export function dashboardBody(
   screen: DashboardScreen,
   headerLines = 1,
 ): DashboardViewport {
-  // The footer always, plus the blank line and the separator a spacious
-  // screen adds around the body.
-  const chrome = screen.spacious ? 3 : 1;
+  // The footer always, plus the blank line and separator around a spacious
+  // body and the paired outer padding rows. This is the one deduction used by
+  // both rendering and navigation.
+  const chrome =
+    1 + screen.paddingTop + screen.paddingBottom + (screen.spacious ? 2 : 0);
   const headerHeight = Math.max(
     0,
     Math.min(Math.max(0, Math.floor(headerLines)), screen.height - chrome),
@@ -107,7 +114,16 @@ export function dashboardPanel(
   footer: string,
   theme: RenderableTheme,
 ): string[] {
-  const { width, height, spacious, inset, contentWidth, bodyHeight } = viewport;
+  const {
+    width,
+    height,
+    spacious,
+    inset,
+    contentWidth,
+    bodyHeight,
+    paddingTop,
+    paddingBottom,
+  } = viewport;
   if (height === 0) return [];
   const heading =
     typeof header === "string" ? [theme.fg("accent", header)] : header;
@@ -119,6 +135,7 @@ export function dashboardPanel(
     height === 1
       ? [row(heading[0] ?? "")]
       : [
+          ...Array.from({ length: paddingTop }, () => row("")),
           ...Array.from({ length: viewport.headerHeight }, (_, index) =>
             row(heading[index] ?? ""),
           ),
@@ -130,6 +147,7 @@ export function dashboardPanel(
             ? [row(theme.fg("borderMuted", "─".repeat(contentWidth)))]
             : []),
           row(footer),
+          ...Array.from({ length: paddingBottom }, () => row("")),
         ];
   // Use the terminal's default surface, like Pi's dashboard overlays. Padding
   // covers the underlying transcript; resets isolate nested selection colors.
