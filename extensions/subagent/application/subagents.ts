@@ -28,8 +28,6 @@ import {
 } from "../domain/index.ts";
 import {
   type AgentToolRenderDetails,
-  type CollectedRuns,
-  collectedRunOf,
   formatCancelOutcomes,
   formatNoActiveRuns,
   formatResult,
@@ -39,6 +37,7 @@ import {
   formatSteerOutcome,
   formatWaitOutcomes,
   type ResumedRun,
+  resultRunSummaryOf,
 } from "../presentation/index.ts";
 import { ProfileCatalog } from "../runtime/profile-catalog.ts";
 import { RunRepository } from "../runtime/repository.ts";
@@ -60,12 +59,12 @@ export interface ToolResponse {
   /**
    * Presentation-only facts the renderer draws the collapsed row from.
    *
-   * Migrated variants are explicitly discriminated. The old collected and
-   * resumed shapes remain while their operation-specific renderers are moved
-   * through the unified family in later tracer bullets. `undefined` remains a
-   * readable rejection/fallback, never a statement about Result delivery.
+   * Migrated variants are explicitly discriminated. The old resumed shape
+   * remains until that operation moves through the unified family in a later
+   * tracer bullet. `undefined` remains a readable rejection/fallback, never a
+   * statement about Result delivery.
    */
-  readonly details?: AgentToolRenderDetails | CollectedRuns | ResumedRun;
+  readonly details?: AgentToolRenderDetails | ResumedRun;
   /**
    * The Runs whose Result this response actually handed back.
    *
@@ -312,6 +311,7 @@ const cancel = (
 const collect = (
   runIds: readonly RunId[],
   timeoutSeconds: number | undefined,
+  scope: "named" | "all-active",
 ): Effect.Effect<ToolResponse, never, SubagentsServices> =>
   Effect.gen(function* () {
     const supervisor = yield* SubagentSupervisor;
@@ -330,12 +330,24 @@ const collect = (
     const stillRunning = outcomes.filter(
       (outcome) => outcome.outcome === "still running",
     ).length;
+    const unknown = outcomes.filter(
+      (outcome) => outcome.outcome === "unknown Run",
+    ).length;
+    const unavailable = outcomes.filter(
+      (outcome) =>
+        outcome.outcome === "terminal" && outcome.result === undefined,
+    ).length;
     return {
       text: formatWaitOutcomes(outcomes, agents),
       details: {
-        runs: delivered.map(collectedRunOf),
+        kind: "collection",
+        scope,
+        runs: delivered.map(resultRunSummaryOf),
         stillRunning,
-      } satisfies CollectedRuns,
+        unknown,
+        unavailable,
+        noActiveRuns: false,
+      } satisfies AgentToolRenderDetails,
       deliveredRuns: delivered.map((result) => result.runId),
     };
   });
@@ -344,7 +356,7 @@ const collect = (
 const wait = (
   input: WaitInput,
 ): Effect.Effect<ToolResponse, never, SubagentsServices> =>
-  collect(distinct(input.ids), input.timeoutSeconds);
+  collect(distinct(input.ids), input.timeoutSeconds, "named");
 
 /**
  * `agent_wait_all`. Every Run of this Session that is active right now.
@@ -366,11 +378,19 @@ const waitAll = (
     if (active.length === 0) {
       return {
         text: formatNoActiveRuns(),
-        details: { runs: [], stillRunning: 0 } satisfies CollectedRuns,
+        details: {
+          kind: "collection",
+          scope: "all-active",
+          runs: [],
+          stillRunning: 0,
+          unknown: 0,
+          unavailable: 0,
+          noActiveRuns: true,
+        } satisfies AgentToolRenderDetails,
         deliveredRuns: [],
       };
     }
-    return yield* collect(active, input.timeoutSeconds);
+    return yield* collect(active, input.timeoutSeconds, "all-active");
   });
 
 /** `agent_result`. The stored answer, or the reason there is not one. */
@@ -381,13 +401,38 @@ const result = (
     const supervisor = yield* SubagentSupervisor;
     const outcome = yield* supervisor.result(input.id);
     if (outcome.outcome !== "result") {
-      return { text: formatResultRejection(outcome), deliveredRuns: [] };
+      const details: AgentToolRenderDetails =
+        outcome.outcome === "ResultExpired"
+          ? {
+              kind: "result",
+              outcome: "unavailable",
+              runId: outcome.runId,
+              status: outcome.status,
+            }
+          : outcome.outcome === "RunNotTerminal"
+            ? {
+                kind: "result",
+                outcome: "still-running",
+                runId: outcome.runId,
+              }
+            : {
+                kind: "result",
+                outcome: "unknown",
+                runId: outcome.runId,
+              };
+      return {
+        text: formatResultRejection(outcome),
+        details,
+        deliveredRuns: [],
+      };
     }
     return {
       text: formatResult(outcome.result),
       details: {
-        runs: [collectedRunOf(outcome.result)],
-      } satisfies CollectedRuns,
+        kind: "result",
+        outcome: "available",
+        run: resultRunSummaryOf(outcome.result),
+      } satisfies AgentToolRenderDetails,
       deliveredRuns: [outcome.result.runId],
     };
   });

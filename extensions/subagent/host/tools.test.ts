@@ -546,15 +546,43 @@ test("agent_wait says why a cancelled Run was cancelled", async (t) => {
   );
 });
 
-test("agent_wait reports an unknown id rather than blocking on it", async (t) => {
+test("agent_wait renders an unknown id distinctly in both expansion states", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
+  const args = { ids: ["run-never"] };
+  const result = await rig.call("agent_wait", args);
 
   assert.equal(
-    await rig.text("agent_wait", { ids: ["run-never"] }),
+    result.content.map((part) => part.text ?? "").join(""),
     "Unknown run ids: run-never.",
   );
+  assert.deepEqual(result.details, {
+    kind: "collection",
+    scope: "named",
+    runs: [],
+    stillRunning: 0,
+    unknown: 1,
+    unavailable: 0,
+    noActiveRuns: false,
+  });
+  const collapsed = renderRegisteredRow(
+    rig.host,
+    "agent_wait",
+    args,
+    result,
+    false,
+  );
+  assert.match(collapsed.result.join("\n"), /^1 Run unknown \(.*to expand\)$/);
+  const expanded = renderRegisteredRow(
+    rig.host,
+    "agent_wait",
+    args,
+    result,
+    true,
+  );
+  assert.match(expanded.result.join("\n"), /Unknown run ids: run-never\./);
+  assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
 });
 
 test("agent_wait is repeatable, and the Result stays readable afterwards", async (t) => {
@@ -563,12 +591,19 @@ test("agent_wait is repeatable, and the Result stays readable afterwards", async
   t.after(() => rig.installation.handle.release());
 
   const started = await startedRun(rig);
-  const first = await rig.text("agent_wait", { ids: [started.runId] });
-  const second = await rig.text("agent_wait", { ids: [started.runId] });
+  const args = { ids: [started.runId] };
+  const first = await rig.call("agent_wait", args);
+  const second = await rig.call("agent_wait", args);
 
   // Reading is not taking: the wait observed the stored Result, and so does
-  // every later reader.
-  assert.equal(first, second);
+  // every later reader. Repeated reads retain both render forms too.
+  assert.deepEqual(first, second);
+  for (const expanded of [false, true]) {
+    assert.deepEqual(
+      renderRegisteredRow(rig.host, "agent_wait", args, first, expanded),
+      renderRegisteredRow(rig.host, "agent_wait", args, second, expanded),
+    );
+  }
   assert.match(
     await rig.text("agent_result", { id: started.runId }),
     new RegExp(RIG_ANSWER),
@@ -696,18 +731,130 @@ test("aborting the turn ends only the wait: the Run settles and its result stand
   );
 });
 
-test("agent_wait carries the delivered Runs and the still-running count in its details", async (t) => {
+test("agent_wait crosses registration with discriminated collection details and complete expansion", async (t) => {
   const rig = hostRig(t);
   await rig.host.sessionStart();
   t.after(() => rig.installation.handle.release());
 
   const started = await startedRun(rig);
-  const result = await rig.call("agent_wait", { ids: [started.runId] });
+  const args = { ids: [started.runId] };
+  const result = await rig.call("agent_wait", args);
 
   assert.deepEqual(result.details, {
-    runs: [{ runId: started.runId, agent: "explore", status: "completed" }],
+    kind: "collection",
+    scope: "named",
+    runs: [
+      {
+        runId: started.runId,
+        agent: "explore",
+        status: "completed",
+        outputCharacters: RIG_ANSWER.length,
+      },
+    ],
     stillRunning: 0,
+    unknown: 0,
+    unavailable: 0,
+    noActiveRuns: false,
   });
+
+  const collapsed = renderRegisteredRow(
+    rig.host,
+    "agent_wait",
+    args,
+    result,
+    false,
+  );
+  assert.match(
+    collapsed.call.join("\n"),
+    new RegExp(`agent_wait.*${started.runId}`),
+  );
+  assert.match(
+    collapsed.result.join("\n"),
+    /^Delivered 1 Result \(.*to expand\)$/,
+  );
+  assert.equal(collapsed.result.join("\n").match(/to expand/g)?.length, 1);
+
+  const expanded = renderRegisteredRow(
+    rig.host,
+    "agent_wait",
+    args,
+    result,
+    true,
+  );
+  assert.equal(
+    expanded.result
+      .join("\n")
+      .includes(result.content.map((part) => part.text ?? "").join("")),
+    true,
+  );
+  assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
+});
+
+test("agent_wait renders partial mixed-Agent delivery without presenting timeout as completion", async (t) => {
+  const rig = hostRig(t, {
+    oneShotSteps: [[{ step: "await-gate", gate: "hold" }]],
+  });
+  await rig.host.sessionStart();
+  t.after(async () => {
+    await rig.release("hold");
+    await rig.installation.handle.release();
+  });
+
+  const delivered = await startedRun(rig);
+  await rig.settled(delivered.runId);
+  const running = await startedRun(rig, RIG_ONE_SHOT_PROFILE);
+  const args = {
+    ids: [delivered.runId, running.runId, "run-never"],
+    timeoutSeconds: 0.01,
+  };
+  const result = await rig.call("agent_wait", args);
+
+  assert.deepEqual(result.details, {
+    kind: "collection",
+    scope: "named",
+    runs: [
+      {
+        runId: delivered.runId,
+        agent: "explore",
+        status: "completed",
+        outputCharacters: RIG_ANSWER.length,
+      },
+    ],
+    stillRunning: 1,
+    unknown: 1,
+    unavailable: 0,
+    noActiveRuns: false,
+  });
+  const collapsed = renderRegisteredRow(
+    rig.host,
+    "agent_wait",
+    args,
+    result,
+    false,
+    120,
+  );
+  assert.match(collapsed.call.join("\n"), /agent_wait/);
+  assert.match(collapsed.result.join("\n"), /Delivered 1 Result/);
+  assert.match(collapsed.result.join("\n"), /1 Run still running/);
+  assert.match(collapsed.result.join("\n"), /1 Run unknown/);
+  assert.doesNotMatch(collapsed.result.join("\n"), /all.*complet/i);
+  assert.equal(collapsed.result.join("\n").match(/to expand/g)?.length, 1);
+
+  const expanded = renderRegisteredRow(
+    rig.host,
+    "agent_wait",
+    args,
+    result,
+    true,
+    120,
+  );
+  assert.match(expanded.result.join("\n"), new RegExp(RIG_ANSWER));
+  assert.match(
+    expanded.result.join("\n"),
+    new RegExp(`Still running: ${running.runId}`),
+  );
+  assert.match(expanded.result.join("\n"), /Unknown run ids: run-never/);
+  assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
 });
 
 // ── agent_wait_all ───────────────────────────────────────────────────────────
@@ -744,12 +891,50 @@ test("agent_wait_all delivers every active Run's result and consumes each", asyn
   assert.match(text, /first answer/);
   assert.match(text, /second answer/);
   assert.deepEqual(result.details, {
+    kind: "collection",
+    scope: "all-active",
     runs: [
-      { runId: first.runId, agent: "explore", status: "completed" },
-      { runId: second.runId, agent: "once", status: "completed" },
+      {
+        runId: first.runId,
+        agent: "explore",
+        status: "completed",
+        outputCharacters: "first answer".length,
+      },
+      {
+        runId: second.runId,
+        agent: "once",
+        status: "completed",
+        outputCharacters: "second answer".length,
+      },
     ],
     stillRunning: 0,
+    unknown: 0,
+    unavailable: 0,
+    noActiveRuns: false,
   });
+  const collapsed = renderRegisteredRow(
+    rig.host,
+    "agent_wait_all",
+    {},
+    result,
+    false,
+  );
+  assert.equal(collapsed.call.join("\n"), "agent_wait_all · all active Runs");
+  assert.match(
+    collapsed.result.join("\n"),
+    /^Delivered 2 Results \(.*to expand\)$/,
+  );
+  const expanded = renderRegisteredRow(
+    rig.host,
+    "agent_wait_all",
+    {},
+    result,
+    true,
+    1_000,
+  );
+  assert.equal(expanded.result.join("\n").includes(text), true);
+  assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
+
   assert.equal(rig.installation.sink.status(runId(first.runId)), "resolved");
   assert.equal(rig.installation.sink.status(runId(second.runId)), "resolved");
   assert.deepEqual(rig.host.sent(), []);
@@ -776,7 +961,36 @@ test("agent_wait_all covers only the Runs that were active when it was called", 
       "finished and is announced by its own completion notice; use " +
       "agent_result with a Run id to re-read one.",
   );
-  assert.deepEqual(result.details, { runs: [], stillRunning: 0 });
+  assert.deepEqual(result.details, {
+    kind: "collection",
+    scope: "all-active",
+    runs: [],
+    stillRunning: 0,
+    unknown: 0,
+    unavailable: 0,
+    noActiveRuns: true,
+  });
+  const collapsed = renderRegisteredRow(
+    rig.host,
+    "agent_wait_all",
+    {},
+    result,
+    false,
+  );
+  assert.equal(collapsed.call.join("\n"), "agent_wait_all · all active Runs");
+  assert.match(collapsed.result.join("\n"), /^No active Runs \(.*to expand\)$/);
+  const expanded = renderRegisteredRow(
+    rig.host,
+    "agent_wait_all",
+    {},
+    result,
+    true,
+  );
+  assert.match(
+    expanded.result.join("\n"),
+    /No Runs are active in this Session/,
+  );
+  assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
   assert.equal(rig.installation.sink.status(runId(earlier.runId)), "pending");
 });
 
@@ -792,7 +1006,9 @@ test("agent_wait_all honours its timeout and reports what is still running", asy
 
   const started = await startedRun(rig);
 
-  const text = await rig.text("agent_wait_all", { timeoutSeconds: 0.01 });
+  const args = { timeoutSeconds: 0.01 };
+  const result = await rig.call("agent_wait_all", args);
+  const text = result.content.map((part) => part.text ?? "").join("");
 
   assert.equal(
     text,
@@ -800,6 +1016,35 @@ test("agent_wait_all honours its timeout and reports what is still running", asy
       "keeps going and notifies on its own, so do not immediately wait on " +
       "the same ids again.",
   );
+  assert.deepEqual(result.details, {
+    kind: "collection",
+    scope: "all-active",
+    runs: [],
+    stillRunning: 1,
+    unknown: 0,
+    unavailable: 0,
+    noActiveRuns: false,
+  });
+  const collapsed = renderRegisteredRow(
+    rig.host,
+    "agent_wait_all",
+    args,
+    result,
+    false,
+  );
+  assert.match(
+    collapsed.result.join("\n"),
+    /^1 Run still running \(.*to expand\)$/,
+  );
+  const expanded = renderRegisteredRow(
+    rig.host,
+    "agent_wait_all",
+    args,
+    result,
+    true,
+  );
+  assert.match(expanded.result.join("\n"), /The wait gave up, not the Runs/);
+  assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
 });
 
 test("agent_wait_all in flight at shutdown answers not-ready and the next Session still holds notices", async (t) => {
@@ -859,10 +1104,13 @@ test("agent_result returns the full stored output with its Run identity", async 
   const started = await startedRun(rig);
   await rig.text("agent_wait", { ids: [started.runId] });
 
+  const args = { id: started.runId };
+  const result = await rig.call("agent_result", args);
+  const text = result.content.map((part) => part.text ?? "").join("");
   // The expanded body: identity, how it went and what it spent, the recent
   // transcript, and then the answer.
   assert.equal(
-    await rig.text("agent_result", { id: started.runId }),
+    text,
     [
       `explore (subagent ${started.subagentId}), run ${started.runId}:`,
       `look around · pi · completed in 0.0s`,
@@ -874,9 +1122,42 @@ test("agent_result returns the full stored output with its Run identity", async 
       RIG_ANSWER,
     ].join("\n"),
   );
+  assert.deepEqual(result.details, {
+    kind: "result",
+    outcome: "available",
+    run: {
+      runId: started.runId,
+      agent: "explore",
+      status: "completed",
+      outputCharacters: RIG_ANSWER.length,
+    },
+  });
+  const collapsed = renderRegisteredRow(
+    rig.host,
+    "agent_result",
+    args,
+    result,
+    false,
+  );
+  assert.match(
+    collapsed.result.join("\n"),
+    new RegExp(
+      `^explore · ${started.runId} · completed · 16 characters \\(.*to expand\\)$`,
+    ),
+  );
+  const expanded = renderRegisteredRow(
+    rig.host,
+    "agent_result",
+    args,
+    result,
+    true,
+    1_000,
+  );
+  assert.equal(expanded.result.join("\n").includes(text), true);
+  assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
 });
 
-test("agent_result on a live Run says it has not finished, distinctly from unknown", async (t) => {
+test("agent_result renders a live Run distinctly from unknown in both expansion states", async (t) => {
   const rig = hostRig(t, {
     resumableSteps: [[{ step: "await-gate", gate: "hold" }]],
   });
@@ -884,15 +1165,49 @@ test("agent_result on a live Run says it has not finished, distinctly from unkno
   t.after(() => rig.installation.handle.release());
 
   const started = await startedRun(rig);
+  const cases = [
+    {
+      args: { id: started.runId },
+      summary: new RegExp(
+        `^${started.runId} · still running \\(.*to expand\\)$`,
+      ),
+      expanded: /has not finished yet, so it has no result/,
+      details: {
+        kind: "result",
+        outcome: "still-running",
+        runId: started.runId,
+      },
+    },
+    {
+      args: { id: "run-never" },
+      summary: /^run-never · unknown Run \(.*to expand\)$/,
+      expanded: /^No run with id run-never\./m,
+      details: { kind: "result", outcome: "unknown", runId: "run-never" },
+    },
+  ] as const;
 
-  assert.match(
-    await rig.text("agent_result", { id: started.runId }),
-    /has not finished yet, so it has no result/,
-  );
-  assert.match(
-    await rig.text("agent_result", { id: "run-never" }),
-    /^No run with id run-never\./,
-  );
+  for (const entry of cases) {
+    const result = await rig.call("agent_result", entry.args);
+    assert.deepEqual(result.details, entry.details);
+    const collapsed = renderRegisteredRow(
+      rig.host,
+      "agent_result",
+      entry.args,
+      result,
+      false,
+    );
+    assert.equal(collapsed.call.join("\n"), `agent_result · ${entry.args.id}`);
+    assert.match(collapsed.result.join("\n"), entry.summary);
+    const expanded = renderRegisteredRow(
+      rig.host,
+      "agent_result",
+      entry.args,
+      result,
+      true,
+    );
+    assert.match(expanded.result.join("\n"), entry.expanded);
+    assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
+  }
 });
 
 test("agent_result tells the host the parent has the Result", async (t) => {
@@ -956,9 +1271,74 @@ test("a Result the store evicted tells the host nothing either", async (t) => {
     await rig.pump();
   }
 
+  const waitArgs = { ids: [first.runId] };
+  const waited = await rig.call("agent_wait", waitArgs);
+  assert.deepEqual(waited.details, {
+    kind: "collection",
+    scope: "named",
+    runs: [],
+    stillRunning: 0,
+    unknown: 0,
+    unavailable: 1,
+    noActiveRuns: false,
+  });
+  const collapsedWait = renderRegisteredRow(
+    rig.host,
+    "agent_wait",
+    waitArgs,
+    waited,
+    false,
+  );
   assert.match(
-    await rig.text("agent_result", { id: first.runId }),
+    collapsedWait.result.join("\n"),
+    /^1 Result unavailable \(.*to expand\)$/,
+  );
+  const expandedWait = renderRegisteredRow(
+    rig.host,
+    "agent_wait",
+    waitArgs,
+    waited,
+    true,
+  );
+  assert.match(expandedWait.result.join("\n"), /its output was evicted/);
+  assert.equal(expandedWait.result.join("\n").match(/to collapse/g)?.length, 1);
+
+  const resultArgs = { id: first.runId };
+  const result = await rig.call("agent_result", resultArgs);
+  assert.match(
+    result.content.map((part) => part.text ?? "").join(""),
     /its output was evicted/,
+  );
+  assert.deepEqual(result.details, {
+    kind: "result",
+    outcome: "unavailable",
+    runId: first.runId,
+    status: "completed",
+  });
+  const collapsedResult = renderRegisteredRow(
+    rig.host,
+    "agent_result",
+    resultArgs,
+    result,
+    false,
+  );
+  assert.match(
+    collapsedResult.result.join("\n"),
+    new RegExp(
+      `^${first.runId} · Result unavailable · completed \\(.*to expand\\)$`,
+    ),
+  );
+  const expandedResult = renderRegisteredRow(
+    rig.host,
+    "agent_result",
+    resultArgs,
+    result,
+    true,
+  );
+  assert.match(expandedResult.result.join("\n"), /its output was evicted/);
+  assert.equal(
+    expandedResult.result.join("\n").match(/to collapse/g)?.length,
+    1,
   );
   assert.equal(rig.installation.sink.status(runId(first.runId)), "pending");
 });
@@ -999,11 +1379,12 @@ test("a Run on the collapsed line alone is not recorded as consumed", async () =
     runId: "run-drawn",
     agent: "explore",
     status: "completed",
+    outputCharacters: 10,
   } as const;
   const collapsedOnly = handlersOver({
     text: "the answer",
     // Drawn in the row, and stated as handed back by nothing.
-    details: { runs: [drawn] },
+    details: { kind: "result", outcome: "available", run: drawn },
     deliveredRuns: [],
   });
 
@@ -1013,7 +1394,11 @@ test("a Run on the collapsed line alone is not recorded as consumed", async () =
 
   // The row still draws the Run — this is a display change and it displays —
   // and no Completion hand-off moved.
-  assert.deepEqual(result.details, { runs: [drawn] });
+  assert.deepEqual(result.details, {
+    kind: "result",
+    outcome: "available",
+    run: drawn,
+  });
   assert.deepEqual(collapsedOnly.consumed, []);
 });
 

@@ -341,9 +341,10 @@ export function registerSubagentTools(
   /* ---------------------------------------------------------------- */
 
   const decodeWait = decodeToolInput(WAIT_COPY.name, WaitInputSchema);
+  const waitRenderers = agentToolRenderers("wait");
 
   register(WAIT_COPY, toolParameters(WaitInputSchema), {
-    renderResult: renderCollectedResult,
+    ...waitRenderers,
     async execute(
       _toolCallId: string,
       params: unknown,
@@ -366,9 +367,10 @@ export function registerSubagentTools(
   /* ---------------------------------------------------------------- */
 
   const decodeWaitAll = decodeToolInput(WAIT_ALL_COPY.name, WaitAllInputSchema);
+  const waitAllRenderers = agentToolRenderers("waitAll");
 
   register(WAIT_ALL_COPY, toolParameters(WaitAllInputSchema), {
-    renderResult: renderCollectedResult,
+    ...waitAllRenderers,
     async execute(
       _toolCallId: string,
       params: unknown,
@@ -394,9 +396,10 @@ export function registerSubagentTools(
   /* ---------------------------------------------------------------- */
 
   const decodeResult = decodeToolInput(RESULT_COPY.name, ResultInputSchema);
+  const resultRenderers = agentToolRenderers("result");
 
   register(RESULT_COPY, toolParameters(ResultInputSchema), {
-    renderResult: renderCollectedResult,
+    ...resultRenderers,
     async execute(
       _toolCallId: string,
       params: unknown,
