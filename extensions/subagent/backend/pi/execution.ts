@@ -19,11 +19,11 @@
  *   cleanup budget. An overrun escalates through M2's path rather than through
  *   Pi-specific pending state; v1 needed that bookkeeping because it had no
  *   bounded escalation, and this does not.
- * - **A terminal snapshot observed before interruption still answers.** The
- *   interrupt handler emits the snapshot and the ending it implies, so
- *   arbitration sees an announced ending and the Run reports the answer it
- *   actually got. A cancel that arrives after the work finished is a request
- *   against a Run that was already done.
+ * - **A terminal outcome keeps its meaning across interruption.** The
+ *   interrupt handler emits the snapshot and its classified ending, so an
+ *   answer remains answered and a provider failure remains failed. A provider
+ *   abort emits no Ending there, allowing arbitration to preserve an
+ *   intentional core cancellation and its recorded reason.
  *
  * The one thing this module never does is settle its own Run. It returns a
  * bundle; the core decides.
@@ -33,7 +33,7 @@ import { Deferred, Effect, Fiber, Option, type Scope } from "effect";
 import {
   answeredEnding,
   failedEnding,
-  type TerminalReconciliation,
+  type RunEnding,
 } from "../../domain/index.ts";
 import type { ExecutionIO, RunInput, TerminalBundle } from "../contract.ts";
 import { BRIDGE_OVERFLOW_MESSAGE } from "../native-bridge.ts";
@@ -46,8 +46,11 @@ import {
   createPiEventTranslator,
   currentRunMessages,
   isPiUserText,
+  PI_TERMINAL_ABORT_CATEGORY,
+  PI_TERMINAL_FAILURE_CATEGORY,
+  type PiTerminalEvidence,
   piMessageObservations,
-  piTerminalSnapshot,
+  piTerminalEvidence,
   withoutInitialGoal,
 } from "./translate.ts";
 
@@ -99,7 +102,8 @@ export function runPiExecution(
     const translator = createPiEventTranslator();
     // Everything the listener writes and the drain loop reads. Plain mutable
     // state, because a callback cannot yield and a `Ref` it could not write.
-    let terminal: TerminalReconciliation | undefined;
+    let terminal: PiTerminalEvidence | undefined;
+    let terminalFailureObserved = false;
     let goalOmitted = false;
     let completed = false;
     const baseline = [...session.messages];
@@ -134,6 +138,12 @@ export function runPiExecution(
             seen.add(message);
           }
           for (const observation of piMessageObservations(message)) {
+            if (
+              observation.kind === "diagnostic" &&
+              observation.diagnostic.category === "backend-failure"
+            ) {
+              terminalFailureObserved = true;
+            }
             offer(observation);
           }
           return;
@@ -147,7 +157,7 @@ export function runPiExecution(
           return;
         }
         case "terminal": {
-          terminal = piTerminalSnapshot(
+          terminal = piTerminalEvidence(
             withoutInitialGoal(
               currentRunMessages(read.messages, baseline),
               input.prompt,
@@ -248,12 +258,24 @@ export function runPiExecution(
       if (interruptAnnounced) return;
       interruptAnnounced = true;
       yield* drainAvailable;
-      const snapshot = terminal;
-      if (snapshot === undefined) return;
-      // The work finished before the cancel reached it. Announcing the
-      // snapshot and its ending is what makes arbitration prefer the answer.
-      yield* io.emit({ kind: "reconciliation", reconciliation: snapshot });
-      yield* io.emit({ kind: "ending", ending: answeredEnding() });
+      const evidence = terminal;
+      if (evidence === undefined) return;
+      yield* emitTerminalDiagnosticIfNeeded(
+        evidence,
+        terminalFailureObserved,
+        io,
+      );
+      yield* io.emit({
+        kind: "reconciliation",
+        reconciliation: evidence.reconciliation,
+      });
+      const ending = endingForTerminal(evidence);
+      // A provider abort is cancellation mechanism evidence, not proof that
+      // the Run answered or independently failed. With no in-stream Ending,
+      // arbitration preserves the core's first recorded cancellation reason.
+      if (ending !== undefined) {
+        yield* io.emit({ kind: "ending", ending });
+      }
     });
 
     // Deliveries begun and not yet finished. The drain loop will not call a
@@ -371,7 +393,12 @@ export function runPiExecution(
       }
       bridge.stop();
       yield* drainAvailable;
-      return yield* bundleFor(outcome.error, terminal, io);
+      return yield* bundleFor(
+        outcome.error,
+        terminal,
+        terminalFailureObserved,
+        io,
+      );
     });
 
     return yield* Effect.onInterrupt(body, () => announceOnInterrupt);
@@ -413,12 +440,23 @@ function deliverSteer(
 /** What the Run ended as, once the native work has stopped talking. */
 function bundleFor(
   promptError: unknown,
-  terminal: TerminalReconciliation | undefined,
+  terminal: PiTerminalEvidence | undefined,
+  terminalFailureObserved: boolean,
   io: ExecutionIO,
 ): Effect.Effect<TerminalBundle> {
   return Effect.gen(function* () {
     if (terminal !== undefined) {
-      return { ending: answeredEnding(), reconciliation: terminal };
+      yield* emitTerminalDiagnosticIfNeeded(
+        terminal,
+        terminalFailureObserved,
+        io,
+      );
+      return {
+        ending:
+          endingForTerminal(terminal) ??
+          failedEnding(confined(PI_TERMINAL_ABORT_CATEGORY).message),
+        reconciliation: terminal.reconciliation,
+      };
     }
     if (promptError !== undefined) {
       const diagnostic = confined(PROMPT_REJECTED_CATEGORY);
@@ -428,6 +466,37 @@ function bundleFor(
     // The session went idle and never said how the Run ended. That is a
     // failure with a fixed message rather than an invented answer.
     return { ending: failedEnding(MISSING_TERMINAL_EVENT_MESSAGE) };
+  });
+}
+
+/** Derive an Ending from the same classified evidence on every path. */
+function endingForTerminal(
+  terminal: PiTerminalEvidence,
+): RunEnding | undefined {
+  switch (terminal.outcome) {
+    case "answered":
+      return answeredEnding();
+    case "failed":
+      return failedEnding(confined(PI_TERMINAL_FAILURE_CATEGORY).message);
+    case "aborted":
+      return undefined;
+  }
+}
+
+/** Ensure a terminal failure has one confined observation even without message_end. */
+function emitTerminalDiagnosticIfNeeded(
+  terminal: PiTerminalEvidence,
+  alreadyObserved: boolean,
+  io: ExecutionIO,
+): Effect.Effect<void> {
+  if (terminal.outcome === "answered" || alreadyObserved) return Effect.void;
+  const category =
+    terminal.outcome === "failed"
+      ? PI_TERMINAL_FAILURE_CATEGORY
+      : PI_TERMINAL_ABORT_CATEGORY;
+  return io.emit({
+    kind: "diagnostic",
+    diagnostic: confined(category),
   });
 }
 

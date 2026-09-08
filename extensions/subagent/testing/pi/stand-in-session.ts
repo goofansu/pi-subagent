@@ -71,6 +71,8 @@ export type PiScriptStep =
       readonly model?: { readonly provider: string; readonly id: string };
       /** Make the message carry a provider error, which is confined. */
       readonly errorMessage?: string;
+      /** Pi's assistant-message terminal outcome, retained only inside its rig. */
+      readonly stopReason?: "stop" | "error" | "aborted";
     }
   | { readonly step: "user"; readonly text: string }
   | { readonly step: "tool-result"; readonly text: string }
@@ -140,6 +142,8 @@ export interface StandInRecord {
   readonly steersByRun: ReadonlyMap<RunId, readonly string[]>;
   /** Prompts begun. */
   readonly prompts: number;
+  /** Terminal events emitted, including retrying events. */
+  readonly terminalEvents: number;
   /** Prompts begun after the session was disposed, which the SDK allows. */
   readonly promptsAfterDispose: number;
   /** `clearQueue` calls. */
@@ -216,6 +220,7 @@ export function createStandInPiSession(
   let shutdownEmits = 0;
   let binds = 0;
   let prompts = 0;
+  let terminalEvents = 0;
   let promptsAfterDispose = 0;
   let queueClears = 0;
   let aborts = 0;
@@ -298,6 +303,9 @@ export function createStandInPiSession(
               ...(step.errorMessage === undefined
                 ? {}
                 : { errorMessage: step.errorMessage }),
+              ...(step.stopReason === undefined
+                ? {}
+                : { stopReason: step.stopReason }),
               ...(step.usage === undefined
                 ? {}
                 : { usage: usageOf(step.usage) }),
@@ -374,6 +382,7 @@ export function createStandInPiSession(
           break;
         }
         case "terminal": {
+          terminalEvents += 1;
           emit({
             type: "agent_end",
             messages: [...messages],
@@ -548,6 +557,7 @@ export function createStandInPiSession(
         [...steersByRun].map(([runId, texts]) => [runId, [...texts]]),
       ),
       prompts,
+      terminalEvents,
       promptsAfterDispose,
       queueClears,
       aborts,
