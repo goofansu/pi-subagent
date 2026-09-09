@@ -169,6 +169,7 @@ test("a cancel arriving after the execution fiber exited settles on the answer",
           inspectionBlocks(capture, "pending"),
           100,
           PLAIN_THEME,
+          true,
         )
           .map(stripVTControlCharacters)
           .join("\n");

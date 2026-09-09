@@ -737,6 +737,19 @@ test("identity is content plus the metadata two different messages would differ 
 
 // ── The terminal snapshot ────────────────────────────────────────────────────
 
+test("recovery lifecycle stays in adapter-local event readings", () => {
+  assert.deepEqual(
+    readPiEvent({ type: "compaction_start", reason: "overflow" }),
+    { kind: "recovery-start" },
+  );
+  assert.deepEqual(readPiEvent({ type: "auto_retry_start", attempt: 1 }), {
+    kind: "recovery-start",
+  });
+  assert.deepEqual(readPiEvent({ type: "agent_settled" }), {
+    kind: "final-settled",
+  });
+});
+
 test("the terminal snapshot recomputes the transcript, usage, turns, and gauge", () => {
   const snapshot = piTerminalSnapshot([
     { role: "user", content: [{ type: "text", text: "keep going" }] },
@@ -762,6 +775,7 @@ test("the terminal snapshot recomputes the transcript, usage, turns, and gauge",
   // The latest gauge, not the sum of the gauges.
   assert.deepEqual(snapshot.context, { tokens: 500 });
   assert.equal(snapshot.model, "openai-codex/gpt-5.4-mini");
+  assert.equal(snapshot.finalOutput, "the answer");
   assert.deepEqual(
     snapshot.transcript?.map((item) => item.role),
     ["user", "assistant", "tool", "assistant"],

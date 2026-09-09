@@ -46,12 +46,14 @@ import {
   createPiEventTranslator,
   currentRunMessages,
   isPiUserText,
+  messageIdentity,
   PI_BACKEND_FAILURE_CATEGORY,
   PI_TERMINAL_ABORT_DESCRIPTION,
   PI_TERMINAL_FAILURE_DESCRIPTION,
   type PiTerminalEvidence,
   piMessageObservations,
   piTerminalEvidence,
+  piTerminalSnapshot,
   withoutInitialGoal,
 } from "./translate.ts";
 
@@ -80,6 +82,8 @@ type NativeSettlement =
 interface RecordedTerminalEvidence {
   readonly generation: number;
   readonly evidence: PiTerminalEvidence;
+  /** Recovery makes an execution end provisional until Pi finally settles. */
+  eligible: boolean;
 }
 
 /** Terminal evidence is eligible only while its native execution is current. */
@@ -87,7 +91,59 @@ function currentTerminalEvidence(
   recorded: RecordedTerminalEvidence | undefined,
   generation: number,
 ): PiTerminalEvidence | undefined {
-  return recorded?.generation === generation ? recorded.evidence : undefined;
+  return recorded?.generation === generation && recorded.eligible
+    ? recorded.evidence
+    : undefined;
+}
+
+/**
+ * Replace only observed message occurrences that a terminal frame restated.
+ *
+ * This retains the ordered-observation history when compaction removes native
+ * messages, while letting a terminal frame heal accounting drift on messages
+ * it still carries. Identity ignores usage deliberately, and occurrences are
+ * consumed in order so equal messages remain distinct.
+ */
+function restateObservedMessages(
+  observed: readonly unknown[],
+  terminalMessages: readonly unknown[],
+): unknown[] {
+  const replacements = new Map<string, unknown[]>();
+  for (const message of terminalMessages) {
+    const key = messageIdentity(message);
+    const matching = replacements.get(key) ?? [];
+    matching.push(message);
+    replacements.set(key, matching);
+  }
+  return observed.map((message) => {
+    const matching = replacements.get(messageIdentity(message));
+    return matching?.shift() ?? message;
+  });
+}
+
+/** Construct only the fields for which Pi has managed-Run authority. */
+function runWideTerminalEvidence(
+  terminalMessages: readonly unknown[],
+  observedMessages: readonly unknown[],
+): PiTerminalEvidence {
+  const frame = piTerminalEvidence(terminalMessages);
+  const runWide = piTerminalSnapshot(observedMessages);
+  return {
+    outcome: frame.outcome,
+    reconciliation: {
+      ...(frame.reconciliation.finalOutput === undefined
+        ? {}
+        : { finalOutput: frame.reconciliation.finalOutput }),
+      ...(runWide.usage === undefined ? {} : { usage: runWide.usage }),
+      ...(runWide.turns === undefined ? {} : { turns: runWide.turns }),
+      ...(frame.reconciliation.context === undefined
+        ? {}
+        : { context: frame.reconciliation.context }),
+      ...(frame.reconciliation.model === undefined
+        ? {}
+        : { model: frame.reconciliation.model }),
+    },
+  };
 }
 
 export interface PiExecutionContext {
@@ -121,6 +177,7 @@ export function runPiExecution(
     // snapshot ineligible for interruption and final bundle reconciliation.
     let nativeExecutionGeneration = 0;
     let terminal: RecordedTerminalEvidence | undefined;
+    let observedMessages: unknown[] = [];
     let terminalFailureObservedGeneration: number | undefined;
     let goalOmitted = false;
     let completed = false;
@@ -155,6 +212,7 @@ export function runPiExecution(
             if (seen.has(message)) return;
             seen.add(message);
           }
+          observedMessages.push(message);
           for (const observation of piMessageObservations(message)) {
             if (
               observation.kind === "diagnostic" &&
@@ -178,15 +236,32 @@ export function runPiExecution(
           nativeExecutionGeneration += 1;
           return;
         }
+        case "recovery-start": {
+          if (terminal !== undefined) terminal.eligible = false;
+          return;
+        }
+        case "final-settled": {
+          if (terminal?.generation === nativeExecutionGeneration) {
+            terminal.eligible = true;
+          }
+          return;
+        }
         case "terminal": {
+          const terminalMessages = withoutInitialGoal(
+            currentRunMessages(read.messages, baseline),
+            input.prompt,
+          );
+          observedMessages = restateObservedMessages(
+            observedMessages,
+            terminalMessages,
+          );
           terminal = {
             generation: nativeExecutionGeneration,
-            evidence: piTerminalEvidence(
-              withoutInitialGoal(
-                currentRunMessages(read.messages, baseline),
-                input.prompt,
-              ),
+            evidence: runWideTerminalEvidence(
+              terminalMessages,
+              observedMessages,
             ),
+            eligible: true,
           };
           return;
         }

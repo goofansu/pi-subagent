@@ -62,7 +62,7 @@ const capture: RunInspection = {
 };
 const blocks = inspectionBlocks(capture, "pending");
 const plain = (width = 100) =>
-  renderInspection(blocks, width, PLAIN_THEME)
+  renderInspection(blocks, width, PLAIN_THEME, true)
     .map(stripVTControlCharacters)
     .join("\n");
 const sectionBlocks = (
@@ -94,6 +94,7 @@ test("inspection labels current and retained last activity without substitution"
     inspectionBlocks(activityCapture, "pending"),
     100,
     PLAIN_THEME,
+    true,
   )
     .map(stripVTControlCharacters)
     .join("\n");
@@ -138,6 +139,7 @@ test("inspection shows completed and failed outcomes without retained cancellati
           inspectionBlocks(inspected, "pending"),
           100,
           PLAIN_THEME,
+          true,
         )
           .map(stripVTControlCharacters)
           .join("\n");
@@ -388,7 +390,7 @@ test("assistant Markdown renders headings, bold, inline code, lists and fenced c
     /## Summary|\*\*bold answer\*\*|`inline code`|\*\*Assistant text\*\*/,
   );
   assert.ok(
-    renderInspection(blocks, 100, PLAIN_THEME).some((line) =>
+    renderInspection(blocks, 100, PLAIN_THEME, true).some((line) =>
       line.includes("\x1b["),
     ),
   );
@@ -406,13 +408,18 @@ test("metadata, user messages and tool output stay literal without generated cal
     assert.ok(output.includes(expected), expected);
   assert.doesNotMatch(output, /call-test|Call ID:/);
   const tones: { color: string; text: string }[] = [];
-  renderInspection(blocks, 100, {
-    ...PLAIN_THEME,
-    fg: (color, text) => {
-      tones.push({ color, text });
-      return text;
+  renderInspection(
+    blocks,
+    100,
+    {
+      ...PLAIN_THEME,
+      fg: (color, text) => {
+        tones.push({ color, text });
+        return text;
+      },
     },
-  });
+    true,
+  );
   assert.ok(
     tones.some(({ color, text }) => color === "dim" && text === "Assistant:"),
   );
@@ -525,7 +532,7 @@ test("transcript keeps message and part order with fresh readable attribution", 
     { kind: "muted", text: "Assistant:" },
     { kind: "markdown", text: "", transcriptPreviewLines: 33 },
   ]);
-  const visible = renderInspection(semantic, 100, PLAIN_THEME)
+  const visible = renderInspection(semantic, 100, PLAIN_THEME, true)
     .map(stripVTControlCharacters)
     .join("\n");
   assert.doesNotMatch(visible, /opaque-call-one/);
@@ -629,7 +636,7 @@ test("Tools retain every status, unnamed fallback, duplicate entry and full lite
     { kind: "literal", text: "(unnamed tool) — unfinished" },
     { kind: "literal", text: "unfinished tail" },
   ]);
-  const visible = renderInspection(semantic, 100, PLAIN_THEME)
+  const visible = renderInspection(semantic, 100, PLAIN_THEME, true)
     .map(stripVTControlCharacters)
     .join("\n");
   assert.doesNotMatch(visible, /status-id-[12]/);
@@ -638,7 +645,7 @@ test("Tools retain every status, unnamed fallback, duplicate entry and full lite
   assert.match(visible, /failure \*\*literal\*\*/);
 });
 
-test("large tool transcript output is compact by default and can be expanded", () => {
+test("large tool transcript output follows explicit compact and expanded modes", () => {
   const largeOutput = Array.from(
     { length: 100 },
     (_, index) => `source line ${index + 1}`,
@@ -679,7 +686,7 @@ test("large tool transcript output is compact by default and can be expanded", (
 test("Markdown remains width-safe across resize and preserves the captured content", () => {
   const before = plain();
   for (const width of [0, 1, 2, 8, 20, 40, 80, 160]) {
-    const lines = renderInspection(blocks, width, PLAIN_THEME);
+    const lines = renderInspection(blocks, width, PLAIN_THEME, true);
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
     assert.ok(lines.every((line) => !line.includes("\ufffd")));
   }

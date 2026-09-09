@@ -269,6 +269,10 @@ export type PiEventReading =
   | { readonly kind: "tool"; readonly observations: readonly RunObservation[] }
   /** A new native execution within the managed Run. */
   | { readonly kind: "execution-start" }
+  /** Pi began recovery after a native execution ended. */
+  | { readonly kind: "recovery-start" }
+  /** Pi has finished every recovery and native execution for this prompt. */
+  | { readonly kind: "final-settled" }
   /** The non-retrying terminal frame, with the messages it carried. */
   | { readonly kind: "terminal"; readonly messages: readonly unknown[] }
   /** Anything else Pi emits, which this adapter has no use for. */
@@ -378,6 +382,12 @@ export function readPiEvent(event: unknown): PiEventReading {
   }
   if (event.type === "agent_start") {
     return { kind: "execution-start" };
+  }
+  if (event.type === "compaction_start" || event.type === "auto_retry_start") {
+    return { kind: "recovery-start" };
+  }
+  if (event.type === "agent_settled") {
+    return { kind: "final-settled" };
   }
   if (
     event.type === "tool_execution_start" ||
@@ -589,6 +599,7 @@ export function piTerminalSnapshot(
   let turns = 0;
   let context: ContextGauge | undefined;
   let model: string | undefined;
+  let finalOutput: string | undefined;
   for (const message of messages) {
     const facts = piMessageFacts(message);
     if (!facts) continue;
@@ -598,7 +609,16 @@ export function piTerminalSnapshot(
       ...(facts.model === undefined ? {} : { model: facts.model }),
     });
     if (facts.model !== undefined) model = facts.model;
-    if (facts.role === "assistant") turns += 1;
+    if (facts.role === "assistant") {
+      turns += 1;
+      const answer = facts.parts
+        .filter((part) => part.kind === "text")
+        .map((part) => (part.kind === "text" ? part.text : ""))
+        .join("");
+      // Match reduction semantics: a tool-only or whitespace-only assistant
+      // message is not an answer and cannot erase the last actual answer.
+      if (answer.trim() !== "") finalOutput = answer;
+    }
     if (facts.usage) {
       totals.input += facts.usage.input ?? 0;
       totals.output += facts.usage.output ?? 0;
@@ -612,6 +632,7 @@ export function piTerminalSnapshot(
     transcript,
     usage: totals,
     turns,
+    ...(finalOutput === undefined ? {} : { finalOutput }),
     ...(context === undefined ? {} : { context }),
     ...(model === undefined ? {} : { model }),
   };
