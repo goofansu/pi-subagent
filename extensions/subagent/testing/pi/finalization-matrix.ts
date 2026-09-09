@@ -427,6 +427,7 @@ export function assertBoundary(
     context: result.usage.context,
     prematureTerminal: value.before.terminalObservations,
     lateObservations: value.counters.lateObservations,
+    cleanupEscalations: value.counters.cleanupEscalations,
     ...(scenario.status === "cancelled"
       ? {
           interruptionEndings: value.observations.filter(
@@ -482,6 +483,7 @@ export function assertBoundary(
     context: { tokens: scenario.second ? 250 : 100 },
     prematureTerminal: [],
     lateObservations: 0,
+    cleanupEscalations: 0,
     ...(scenario.status === "cancelled" ? { interruptionEndings: [] } : {}),
   };
   assert.equal(value.before.nativeIdle, false);

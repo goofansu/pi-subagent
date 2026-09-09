@@ -430,7 +430,7 @@ export function readPiEvent(event: unknown): PiEventReading {
   return IGNORED;
 }
 
-/** Text a shell result printed, without changing progress-summary behavior. */
+/** Text from a native result, shared by shell transcripts and tool summaries. */
 function piShellResultText(result: unknown): string | undefined {
   if (typeof result === "string") return result;
   if (!isRecord(result)) return undefined;
@@ -467,31 +467,15 @@ export function piToolProgress(event: unknown): RunObservation | undefined {
 }
 
 /**
- * A tool result, as one line a reader can scan.
+ * A tool result's text, bounded by the projection rather than serialized.
  *
- * A provider tool result is an arbitrary value, and the projection bounds the
- * text anyway — but a JSON blob of a file read is not a summary of anything,
- * so a string result is taken as it is and everything else is described rather
- * than serialized.
+ * Strings and output fields are retained verbatim; native text-content blocks
+ * are joined with newlines, ignoring non-text blocks. Arrays without extracted
+ * text are described by count; other values have no summary.
  */
 export function toolOutputSummary(result: unknown): string | undefined {
-  if (typeof result === "string") return result;
-  if (isRecord(result) && typeof result.output === "string") {
-    return result.output;
-  }
-  if (isRecord(result) && Array.isArray(result.content)) {
-    const text = result.content
-      .filter(
-        (part) =>
-          isRecord(part) &&
-          part.type === "text" &&
-          typeof part.text === "string",
-      )
-      .map((part) => (part as { readonly text: string }).text)
-      .join("\n");
-    return text === "" ? undefined : text;
-  }
-  if (result === undefined || result === null) return undefined;
+  const text = piShellResultText(result);
+  if (text !== undefined) return text;
   return Array.isArray(result) ? `${result.length} results` : undefined;
 }
 

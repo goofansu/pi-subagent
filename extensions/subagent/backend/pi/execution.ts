@@ -621,12 +621,7 @@ function decisionForInterrupt(
 ): FinishDecision | undefined {
   if (current.terminal?.outcome !== "answered" || nativeDeliveries > 0)
     return undefined;
-  try {
-    if (session.pendingMessageCount > 0) return undefined;
-  } catch {
-    // Without read-only evidence of an empty queue, do not claim task completion.
-    return undefined;
-  }
+  if (session.pendingMessageCount > 0) return undefined;
   return {
     bundle: {
       ending: answeredEnding(),
