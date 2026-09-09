@@ -117,6 +117,7 @@ test("a persistent Result encode defect fails the Run, wakes waiters, and leaves
         const stored = yield* rig.supervisor.result(first.runId);
         yield* quiesce();
         const snapshot = yield* rig.repository.get(first.runId);
+        const [summary] = yield* rig.supervisor.runSummaries(first.subagentId);
         const counters = rig.supervisor.counters();
 
         // Admission of another Run through the public operation is the
@@ -132,6 +133,7 @@ test("a persistent Result encode defect fails the Run, wakes waiters, and leaves
           waited,
           stored,
           snapshot,
+          summary,
           resumed: resumed.outcome,
           counters,
           backend: rig.backend,
@@ -142,6 +144,10 @@ test("a persistent Result encode defect fails the Run, wakes waiters, and leaves
   assert.equal(outcome.value.waited.outcome, "terminal");
   assert.equal(outcome.value.snapshot?.phase, "failed");
   assert.equal(outcome.value.snapshot?.terminalStatus, "failed");
+  assert.equal(
+    outcome.value.summary?.failureDetail,
+    "settlement failed after an internal runtime defect",
+  );
   assert.equal(outcome.value.stored.outcome, "ResultExpired");
   assert.equal(outcome.value.waited.result, undefined);
   assert.equal(outcome.value.resumed, "started");

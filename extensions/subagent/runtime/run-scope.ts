@@ -324,6 +324,13 @@ function reducerLoop(
   });
 }
 
+/** The confined message of the ending that actually closed the projection. */
+function failureDetailOf(projection: RunProjection): string | undefined {
+  return projection.ending?.ending === "failed"
+    ? projection.ending.message
+    : undefined;
+}
+
 /**
  * Whether a reduced reconciliation actually disagreed with what was streamed.
  *
@@ -675,11 +682,15 @@ function runToSettlement(
     //     implies a retrievable result.
     // The row's settled instant is the Result's own, so the row and the
     // RunCard built from that Result quote one figure.
-    yield* repository.transition(
-      identity.runId,
-      settlementEventForEnding(decided.ending),
-      settledAt,
-    );
+    const settlementEvent = settlementEventForEnding(decided.ending);
+    yield* settlementEvent === "settled-failed"
+      ? repository.transition(
+          identity.runId,
+          settlementEvent,
+          settledAt,
+          failureDetailOf(folded),
+        )
+      : repository.transition(identity.runId, settlementEvent, settledAt);
     yield* store.releasePin(identity.runId, "publication");
     context.trace(RUN_STAGES.terminalPublished);
 
@@ -793,6 +804,7 @@ function runToSettlement(
           identity.runId,
           "settled-failed",
           settledAt,
+          failureDetailOf(ended.projection),
         );
         yield* context.onSettled(fallback);
         recovered = {

@@ -15,6 +15,8 @@ export interface RunSummary {
   readonly backend: BackendId;
   readonly label: string;
   readonly phase: RunPhase;
+  /** Safe bounded detail from the authoritative failed ending, when present. */
+  readonly failureDetail?: string;
   readonly cancellationReason?: CancellationReason;
   readonly activity?: string;
   readonly lastActivity?: SemanticActivity;
