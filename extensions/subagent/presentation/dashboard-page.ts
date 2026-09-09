@@ -133,8 +133,8 @@ export interface DashboardPage {
  *
  * The host resolves the operator's bindings, because a keymap is a Session
  * service and this module may not hold one. `pageUp` and `pageDown` are those
- * configured bindings; `left`, `right` and `refresh` are keys the dashboard
- * answers itself whatever the bindings are.
+ * configured bindings; `left`, `right`, the boundary jumps, and `refresh` are
+ * meanings the dashboard answers itself whatever the bindings are.
  *
  * A keystroke can mean several of these at once — an operator who binds
  * `tui.select.pageUp` to the left arrow has pressed both — so a key event
@@ -150,8 +150,8 @@ export type DashboardKey =
   | "pageDown"
   | "left"
   | "right"
-  | "home"
-  | "end"
+  | "beginning"
+  | "lastScreenful"
   | "confirm"
   | "cancel"
   | "refresh"
@@ -794,9 +794,9 @@ const keyed = (
         },
         ask: "draw",
       };
-    if (pressed.includes("home"))
+    if (pressed.includes("beginning"))
       return { page: scrolledPage(page, -page.lines.length), ask: "draw" };
-    if (pressed.includes("end"))
+    if (pressed.includes("lastScreenful"))
       return { page: scrolledPage(page, page.lines.length), ask: "draw" };
     const delta = scrollDelta(page, pressed);
     return delta
