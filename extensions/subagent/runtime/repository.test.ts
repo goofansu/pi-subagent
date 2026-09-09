@@ -11,8 +11,10 @@ import {
 } from "effect";
 import {
   backendId,
+  byteLength,
   createRunProjection,
   runId as makeRunId,
+  RUN_ENDING_MESSAGE_MAX_BYTES,
   type RunId,
   type RunIdentity,
   reduceRun,
@@ -22,6 +24,7 @@ import {
 import { parseAllocatedId } from "../testing/identifiers.ts";
 import type { Equals, Expect } from "../testing/type-level.ts";
 import { createRuntimeCounters } from "./counters.ts";
+import { summarizeRun } from "./history.ts";
 import { RunRepository } from "./repository.ts";
 
 /**
@@ -51,7 +54,14 @@ type TransitionAccepts<A extends readonly unknown[]> =
 type SettlementCarriesItsInstant = [
   Expect<TransitionAccepts<[RunId, "execution-ended"]>>,
   Expect<TransitionAccepts<[RunId, "settled-answered", number]>>,
+  Expect<TransitionAccepts<[RunId, "settled-failed", number, string]>>,
   Expect<Equals<TransitionAccepts<[RunId, "settled-answered"]>, false>>,
+  Expect<
+    Equals<
+      TransitionAccepts<[RunId, "settled-answered", number, string]>,
+      false
+    >
+  >,
   Expect<Equals<TransitionAccepts<[RunId, "execution-ended", number]>, false>>,
 ];
 
@@ -92,9 +102,16 @@ const withRepository = <A>(
 };
 
 test("a settlement is recorded with its instant, and only a settlement is", () => {
-  const proofs: SettlementCarriesItsInstant = [true, true, true, true];
+  const proofs: SettlementCarriesItsInstant = [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+  ];
 
-  assert.equal(proofs.length, 4);
+  assert.equal(proofs.length, 6);
 });
 
 test("an allocated identifier is spent the moment it is handed out", async () => {
@@ -282,6 +299,75 @@ test("a published Run is active, and a settled one is terminal", async () => {
     terminalStatus: "completed",
     activeAfter: 0,
   });
+});
+
+test("failure detail is bounded and published only with failed terminal status", async () => {
+  const snapshots = await withRepository((repository) =>
+    Effect.gen(function* () {
+      const owner = yield* repository.allocateSubagentId();
+      const failed = identityOf(owner, "run-failed");
+      const missing = identityOf(owner, "run-missing");
+      const empty = identityOf(owner, "run-empty");
+      const blank = identityOf(owner, "run-blank");
+      const completed = identityOf(owner, "run-completed");
+      const cancelled = identityOf(owner, "run-cancelled");
+
+      for (const identity of [
+        failed,
+        missing,
+        empty,
+        blank,
+        completed,
+        cancelled,
+      ]) {
+        yield* repository.publish(identity, 0);
+        if (identity === failed) {
+          yield* repository.recordCancellation(identity.runId, "requested");
+        }
+        yield* repository.transition(identity.runId, "execution-ended");
+      }
+
+      yield* repository.transition(
+        failed.runId,
+        "settled-failed",
+        1,
+        `  safe first line\n${"界".repeat(RUN_ENDING_MESSAGE_MAX_BYTES)}`,
+      );
+      yield* repository.transition(missing.runId, "settled-failed", 2);
+      yield* repository.transition(empty.runId, "settled-failed", 3, "");
+      yield* repository.transition(blank.runId, "settled-failed", 4, " \n\t ");
+      yield* repository.transition(completed.runId, "settled-answered", 5);
+      yield* repository.transition(cancelled.runId, "settled-cancelled", 6);
+
+      return {
+        failed: yield* repository.get(failed.runId),
+        missing: yield* repository.get(missing.runId),
+        empty: yield* repository.get(empty.runId),
+        blank: yield* repository.get(blank.runId),
+        completed: yield* repository.get(completed.runId),
+        cancelled: yield* repository.get(cancelled.runId),
+      };
+    }),
+  );
+
+  const failed = snapshots.failed;
+  const blank = snapshots.blank;
+  assert.ok(failed);
+  assert.ok(blank);
+  assert.equal(failed.phase, "failed");
+  assert.match(failed.failureDetail ?? "", /^safe first line /);
+  assert.doesNotMatch(failed.failureDetail ?? "", /[\r\n]/);
+  assert.ok(
+    byteLength(failed.failureDetail ?? "") <= RUN_ENDING_MESSAGE_MAX_BYTES,
+  );
+  assert.equal(snapshots.missing?.failureDetail, undefined);
+  assert.equal(snapshots.empty?.failureDetail, undefined);
+  assert.equal(blank.failureDetail, undefined);
+  assert.equal(snapshots.completed?.failureDetail, undefined);
+  assert.equal(snapshots.cancelled?.failureDetail, undefined);
+  assert.equal(summarizeRun(failed).failureDetail, failed.failureDetail);
+  assert.equal(summarizeRun(failed).cancellationReason, "requested");
+  assert.equal("failureDetail" in summarizeRun(blank), false);
 });
 
 test("an illegal transition is reported, never thrown, and changes nothing", async () => {

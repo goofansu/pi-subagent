@@ -202,6 +202,54 @@ test("summaries, history and inspection read one Session through one seam", asyn
   assert.equal(outcome.noLeaks, true);
 });
 
+test("failed history detail is captured without reading or pinning Results", async () => {
+  const message = "safe failure detail\ncontinued";
+  const outcome = await withSession(
+    { steps: [[{ step: "fail", message }]] },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(rigRequest()));
+        yield* untilTerminal(rig, started.runId);
+        yield* quiesce();
+
+        let resultReads = 0;
+        const read = rig.store.read;
+        Object.defineProperty(rig.store, "read", {
+          configurable: true,
+          value: (...args: Parameters<typeof read>) => {
+            resultReads += 1;
+            return read(...args);
+          },
+        });
+        const pinsBefore = yield* rig.store.pinsOf(started.runId);
+        const handedOffBefore = yield* rig.delivery.handedOff();
+
+        const runs = yield* runSummaries(started.subagentId);
+        const capture = yield* captureRunHistory(started.subagentId);
+
+        return {
+          runs,
+          capture,
+          resultReads,
+          pinsBefore,
+          pinsAfter: yield* rig.store.pinsOf(started.runId),
+          handedOffBefore,
+          handedOffAfter: yield* rig.delivery.handedOff(),
+        };
+      }),
+  );
+
+  assert.equal(
+    outcome.value.runs[0]?.failureDetail,
+    "safe failure detail continued",
+  );
+  assert.deepEqual(outcome.value.capture.runs, outcome.value.runs);
+  assert.equal(outcome.value.resultReads, 0);
+  assert.deepEqual(outcome.value.pinsAfter, outcome.value.pinsBefore);
+  assert.deepEqual(outcome.value.handedOffAfter, outcome.value.handedOffBefore);
+  assert.equal(outcome.noLeaks, true);
+});
+
 test("the Session's counters and its runtime probe read through the same seam", async () => {
   const outcome = await withSession({ steps: [[{ step: "hang" }]] }, (rig) =>
     Effect.gen(function* () {
