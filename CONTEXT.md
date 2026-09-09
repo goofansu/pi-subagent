@@ -178,9 +178,10 @@ possible.
 
 **Trust** — Pi's project-trust decision for the working directory, resolved by
 the Session and fixed when a Subagent is opened; the extension never derives
-its own. Applying it is each backend's policy: Pi applies it to retained SDK
-settings and resource loading; Claude does not consult it, and its constant
-bypass with the value forwarded is reserved for a future shared posture.
+its own. Both adapters consult that fixed Session decision according to
+backend-owned policy: Pi applies it to retained SDK settings and resource
+loading, while Claude selects all setting sources for trusted directories and
+the user source alone for untrusted directories.
 
 **Shutdown** — closing the Session Scope. It cancels every active Run and
 awaits its cleanup, closes every BackendAgent, drops every unlanded

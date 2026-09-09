@@ -6,6 +6,13 @@ Date: 2026-08-26
 
 Accepted.
 
+### Trust-policy amendment (2026-09-09)
+
+[ADR-0038](0038-claude-setting-sources-follow-project-trust.md) supersedes the
+unconditional project/local inheritance decision while preserving this ADR's
+user-environment rationale and its decision for trusted directories. The
+historical decision text below remains unedited.
+
 ## Context
 
 The claude harness builds its SDK options without `settingSources` and

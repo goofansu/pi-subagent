@@ -360,13 +360,20 @@ the parent model and, when no model is pinned, its thinking level.
 [Claude selection](../extensions/subagent/backend/claude/profile.ts) accepts its
 listed family aliases and leaves omitted settings to the SDK, not the Pi parent.
 
-Trust is Pi's `isProjectTrusted()` answer, fixed in Subagent context, not a new
-extension trust calculation. [Pi options](../extensions/subagent/backend/pi/options.ts)
-apply it to settings and resource loading. [Claude options](../extensions/subagent/backend/claude/options.ts)
-do not consult it: permissions are bypassed, the environment is inherited,
-and `settingSources`/`mcpServers` are omitted deliberately. Ambient MCP servers
-and connectors therefore widen capability beyond the Profile's built-in tool
-selection. This is not a sandbox. [ADR-0008](adr/0008-claude-children-inherit-operator-environment.md).
+Trust is Pi's `isProjectTrusted()` answer for the Session working directory,
+fixed in Subagent context rather than recalculated by this extension. Both
+adapters consult that neutral fact according to backend-owned policy.
+[Pi options](../extensions/subagent/backend/pi/options.ts) apply it to retained
+settings and resource loading. [Claude options](../extensions/subagent/backend/claude/options.ts)
+recompute source selection for each Query from the same fixed context: trusted
+omits `settingSources`, preserving normal user/project/local Claude inheritance;
+untrusted passes `settingSources: ["user"]`, retaining user settings, MCP
+servers, and connectors while excluding project/local settings, instructions
+loaded through those sources, and project `.mcp.json`. Those ambient user-owned
+capabilities can exceed the Profile's built-in tool selection. The adapter does
+not use SDK isolation or strict MCP configuration. Permissions remain bypassed in both
+cases, and Trust controls input loading rather than filesystem, shell, network,
+or permission access. It is not a sandbox. [ADR-0038](adr/0038-claude-setting-sources-follow-project-trust.md).
 
 Delegation is one level deep. Admission checks the proposed child depth; entry
 registration is inert above zero. Pi also filters this package's extensions,

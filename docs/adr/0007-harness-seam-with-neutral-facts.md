@@ -20,6 +20,13 @@ product ships two of them, Pi and Claude. Everything below is kept unedited:
 the reason a decision was made is part of the record even when its subject is
 gone.
 
+### Trust-policy amendment (2026-09-09)
+
+[ADR-0038](0038-claude-setting-sources-follow-project-trust.md) supersedes only
+this ADR's statement that Claude forwards Trust without consulting it. Claude's
+unconditional permission bypass remains in force; the historical decision and
+consequences below remain unedited.
+
 ## Context
 
 ADR-0005 deliberately let pi-ai's `Message` cross the executor seam while pi

@@ -32,3 +32,17 @@ that can continue across tasks; a **Run** is one task started in that conversati
 | `agent_cancel` | Requests cancellation of specified Runs, keeping any partial output. |
 | `agent_steer` | Sends guidance to an active Run. Acceptance does not guarantee the subagent has read it yet. |
 | `agent_result` | Retrieves a finished Run's result, including output too long to fit in its completion notice. |
+
+## Trust and Claude settings
+
+Pi decides whether the Session working directory is trusted once, and every
+subagent uses that fixed decision. Claude subagents in trusted directories use
+Claude Code's normal user, project, and local settings. In untrusted
+directories they use only the user setting source: user-owned settings, MCP
+servers, and cloud connectors remain available, while project/local settings,
+project instructions loaded through them, and project `.mcp.json` are excluded.
+
+Claude subagents bypass permission prompts in both cases. **Trust is not a
+sandbox:** it does not restrict filesystem, shell, network, or other ambient
+access, and user-configured MCP servers and connectors may provide capabilities
+that are not listed in a profile.
