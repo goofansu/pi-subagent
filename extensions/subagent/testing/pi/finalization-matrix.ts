@@ -22,6 +22,7 @@ export interface BoundaryScenario {
   readonly consumed?: boolean;
   readonly recoveryFailure?: boolean;
   readonly providerFailure?: boolean;
+  readonly recoveredWithoutAnswer?: boolean;
 }
 
 export const firstPartial: PiScript = [
@@ -219,6 +220,7 @@ export const boundaryScenarios: readonly BoundaryScenario[] = [
   ...([true, false] as const).map(
     (willRetry): BoundaryScenario => ({
       name: `successful recovery willRetry=${willRetry} native finish without answer`,
+      recoveredWithoutAnswer: true,
       script: [
         ...firstPartial,
         ...recoveryStart,
@@ -498,13 +500,19 @@ export function assertBoundary(
     result.diagnostics.filter((d) => d.category === "control"),
     [],
   );
-  if (scenario.providerFailure || scenario.recoveryFailure) {
+  if (
+    scenario.providerFailure ||
+    scenario.recoveryFailure ||
+    scenario.recoveredWithoutAnswer
+  ) {
     const expectedDiagnostics = [
       {
         category: "backend-failure",
         message: scenario.recoveryFailure
           ? "Pi recovery failed: [redacted]"
-          : "Pi reported a failed message: [redacted]",
+          : scenario.recoveredWithoutAnswer
+            ? "Pi did not complete its message: [redacted]"
+            : "Pi reported a failed message: [redacted]",
       },
     ];
     assert.deepEqual(result.diagnostics, expectedDiagnostics);

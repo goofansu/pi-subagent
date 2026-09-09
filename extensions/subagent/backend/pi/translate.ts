@@ -479,6 +479,18 @@ export function toolOutputSummary(result: unknown): string | undefined {
   if (isRecord(result) && typeof result.output === "string") {
     return result.output;
   }
+  if (isRecord(result) && Array.isArray(result.content)) {
+    const text = result.content
+      .filter(
+        (part) =>
+          isRecord(part) &&
+          part.type === "text" &&
+          typeof part.text === "string",
+      )
+      .map((part) => (part as { readonly text: string }).text)
+      .join("\n");
+    return text === "" ? undefined : text;
+  }
   if (result === undefined || result === null) return undefined;
   return Array.isArray(result) ? `${result.length} results` : undefined;
 }
