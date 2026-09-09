@@ -24,7 +24,11 @@ import {
   type PiNativeProbe,
   type PiSessionOptions,
 } from "../../backend/pi/index.ts";
-import { DEFAULT_BACKEND_ID, type Profile } from "../../domain/index.ts";
+import {
+  DEFAULT_BACKEND_ID,
+  type Profile,
+  type RunObservation,
+} from "../../domain/index.ts";
 import {
   createRuntimeCounters,
   type RuntimeCounters,
@@ -76,6 +80,8 @@ export function piRigRequest(
 
 export interface PiRig extends BackendSessionServices {
   readonly sink: FakeNotificationSink;
+  /** Observations handed across the real backend boundary, not private evidence. */
+  readonly observations: readonly RunObservation[];
   readonly counters: RuntimeCounters;
   /** What the native session was asked to do. */
   readonly standIn: StandInPiSession;
@@ -90,6 +96,7 @@ export interface PiRig extends BackendSessionServices {
 export interface PiRigOptions {
   /** One script per prompt, consumed in order. */
   readonly scripts?: readonly PiScript[];
+  readonly steerDelivery?: "queued";
   readonly profiles?: readonly Profile[];
   readonly policy?: RuntimePolicy;
   /** Replace the runtime clock for cleanup-budget assertions. */
@@ -159,6 +166,9 @@ export function withPiSession<A>(
   let stagesAtAbort: readonly string[] = [];
   const standIn = createStandInPiSession({
     scripts: options.scripts ?? [],
+    ...(options.steerDelivery === undefined
+      ? {}
+      : { steerDelivery: options.steerDelivery }),
     onAbort: () => {
       stagesAtAbort = servicesAtAbort?.supervisor.stages() ?? [];
     },
@@ -177,11 +187,32 @@ export function withPiSession<A>(
     sessionOptionsFactory: async () => ({}) as PiSessionOptions,
   });
 
+  const observations: RunObservation[] = [];
+  const observedBackend = {
+    ...handle.backend,
+    open: (...args: Parameters<typeof handle.backend.open>) =>
+      handle.backend.open(...args).pipe(
+        Effect.map((agent) => ({
+          ...agent,
+          execute: (
+            input: Parameters<typeof agent.execute>[0],
+            io: Parameters<typeof agent.execute>[1],
+          ) =>
+            agent.execute(input, {
+              ...io,
+              emit: (observation) =>
+                Effect.sync(() => {
+                  observations.push(observation);
+                }).pipe(Effect.andThen(io.emit(observation))),
+            }),
+        })),
+      ),
+  };
   const agentDir = profileDirectoryFor(options);
 
   return withBackendSession(
     {
-      backend: correlateRuns(handle.backend, standIn),
+      backend: correlateRuns(observedBackend, standIn),
       profiles:
         agentDir === undefined
           ? { from: "list", profiles: options.profiles ?? [PI_RIG_PROFILE] }
@@ -198,6 +229,7 @@ export function withPiSession<A>(
       servicesAtAbort = services;
       return body({
         ...services,
+        observations,
         sink,
         counters,
         standIn,

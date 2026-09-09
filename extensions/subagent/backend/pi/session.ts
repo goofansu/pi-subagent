@@ -40,6 +40,7 @@ export type PiSession = Pick<
   | "dispose"
   | "messages"
   | "isIdle"
+  | "pendingMessageCount"
 > & {
   readonly extensionRunner: {
     emit(event: { type: "session_shutdown"; reason: "quit" }): Promise<unknown>;

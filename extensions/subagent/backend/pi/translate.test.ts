@@ -662,6 +662,61 @@ test("a tool result that is not a line is described rather than serialized", () 
   assert.equal(toolOutputSummary({ shape: "nobody asked for" }), undefined);
 });
 
+test("native tool text content supplies a progress summary", () => {
+  assert.deepEqual(
+    piToolProgress({
+      type: "tool_execution_end",
+      toolCallId: "native-tool",
+      result: { content: [{ type: "text", text: "later tool result" }] },
+      isError: false,
+    }),
+    {
+      kind: "tool_progress",
+      callId: "native-tool",
+      status: "completed",
+      outputSummary: "later tool result",
+    },
+  );
+});
+
+test("empty or non-text native tool content has no summary", () => {
+  for (const content of [
+    [],
+    [{ type: "text", text: "" }],
+    [{ type: "image", data: "not text" }],
+    [null, { type: "text", text: 42 }, { text: "missing type" }],
+  ]) {
+    assert.equal(toolOutputSummary({ content }), undefined);
+  }
+});
+
+test("mixed native tool content joins only valid text blocks in order", () => {
+  assert.equal(
+    toolOutputSummary({
+      content: [
+        { type: "text", text: "first\nline" },
+        { type: "image", data: "not text" },
+        null,
+        { type: "text", text: 42 },
+        { type: "text", text: "second" },
+      ],
+    }),
+    "first\nline\nsecond",
+  );
+});
+
+test("explicit tool output retains precedence over native text content", () => {
+  for (const output of ["from a field", ""]) {
+    assert.equal(
+      toolOutputSummary({
+        output,
+        content: [{ type: "text", text: "content fallback" }],
+      }),
+      output,
+    );
+  }
+});
+
 test("an event with no call id is not progress about anything", () => {
   assert.equal(
     piToolProgress({ type: "tool_execution_start", toolName: "bash" }),
