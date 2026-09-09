@@ -71,6 +71,9 @@ export const PROMPT_REJECTED_CATEGORY = "Pi prompt failed";
 /** What a rejected native steer says. */
 export const STEER_REJECTED_CATEGORY = "Pi steering was not delivered";
 
+/** What failed required recovery says without exposing Pi's compaction error. */
+export const RECOVERY_FAILED_CATEGORY = "Pi recovery failed";
+
 /** What a steer the session never took says, once the Run is otherwise done. */
 export const STEER_ABANDONED_MESSAGE =
   "the Pi session finished without taking guidance that was still being delivered";
@@ -82,8 +85,14 @@ type NativeSettlement =
 interface RecordedTerminalEvidence {
   readonly generation: number;
   readonly evidence: PiTerminalEvidence;
-  /** Recovery makes an execution end provisional until Pi finally settles. */
+  /** Required recovery makes incomplete execution evidence provisional. */
   eligible: boolean;
+}
+
+interface RequiredRecovery {
+  readonly generation: number;
+  readonly evidence: PiTerminalEvidence;
+  failureAnnounced: boolean;
 }
 
 /** Terminal evidence is eligible only while its native execution is current. */
@@ -94,6 +103,19 @@ function currentTerminalEvidence(
   return recorded?.generation === generation && recorded.eligible
     ? recorded.evidence
     : undefined;
+}
+
+/** Required recovery belongs only to the execution whose response required it. */
+function currentRequiredRecovery(
+  recovery: RequiredRecovery | undefined,
+  generation: number,
+): RequiredRecovery | undefined {
+  return recovery?.generation === generation ? recovery : undefined;
+}
+
+/** A failed or truncated response requires recovery; an answer gets maintenance. */
+function requiresRecovery(evidence: PiTerminalEvidence): boolean {
+  return evidence.outcome === "failed" || evidence.outcome === "incomplete";
 }
 
 /**
@@ -177,6 +199,7 @@ export function runPiExecution(
     // snapshot ineligible for interruption and final bundle reconciliation.
     let nativeExecutionGeneration = 0;
     let terminal: RecordedTerminalEvidence | undefined;
+    let requiredRecovery: RequiredRecovery | undefined;
     let observedMessages: unknown[] = [];
     let terminalFailureObservedGeneration: number | undefined;
     let goalOmitted = false;
@@ -237,13 +260,72 @@ export function runPiExecution(
           return;
         }
         case "recovery-start": {
-          if (terminal !== undefined) terminal.eligible = false;
+          if (
+            terminal?.generation === nativeExecutionGeneration &&
+            requiresRecovery(terminal.evidence)
+          ) {
+            terminal.eligible = false;
+            requiredRecovery = {
+              generation: nativeExecutionGeneration,
+              evidence: terminal.evidence,
+              failureAnnounced: false,
+            };
+          }
+          return;
+        }
+        case "recovery-end": {
+          let recovery = currentRequiredRecovery(
+            requiredRecovery,
+            nativeExecutionGeneration,
+          );
+          // Pi's exhausted overflow path reports failure directly, without a
+          // matching start event. The current incomplete response still makes
+          // that failed compaction required recovery for this generation.
+          if (
+            recovery === undefined &&
+            read.outcome !== "succeeded" &&
+            terminal?.generation === nativeExecutionGeneration &&
+            requiresRecovery(terminal.evidence)
+          ) {
+            terminal.eligible = false;
+            recovery = {
+              generation: nativeExecutionGeneration,
+              evidence: terminal.evidence,
+              failureAnnounced: false,
+            };
+            requiredRecovery = recovery;
+          }
+          if (recovery === undefined) return;
+          if (read.outcome === "succeeded") {
+            if (read.willRetry) return;
+            // A successful non-retrying compaction was maintenance around the
+            // provider outcome, not recovery that can complete the response.
+            // Restore its eligibility; incomplete still maps to failed below.
+            if (terminal?.generation === nativeExecutionGeneration) {
+              terminal.eligible = true;
+            }
+            requiredRecovery = undefined;
+            return;
+          }
+          if (read.outcome === "aborted") return;
+
+          // A non-abort recovery failure is terminal as soon as Pi reports it.
+          // Emitting now means a later cancellation cannot rewrite an already
+          // observed failure. An aborted recovery emits no Ending here so an
+          // intentional core cancellation retains its first-recorded reason.
+          const diagnostic = confined(RECOVERY_FAILED_CATEGORY);
+          offer({ kind: "diagnostic", diagnostic });
+          offer({
+            kind: "reconciliation",
+            reconciliation: recovery.evidence.reconciliation,
+          });
+          offer({ kind: "ending", ending: failedEnding(diagnostic.message) });
+          recovery.failureAnnounced = true;
           return;
         }
         case "final-settled": {
-          if (terminal?.generation === nativeExecutionGeneration) {
-            terminal.eligible = true;
-          }
+          // Settlement is only a lifecycle boundary. It cannot turn required
+          // recovery into an answer, and maintenance never disabled an answer.
           return;
         }
         case "terminal": {
@@ -499,6 +581,7 @@ export function runPiExecution(
       return yield* bundleFor(
         outcome.error,
         currentTerminalEvidence(terminal, nativeExecutionGeneration),
+        currentRequiredRecovery(requiredRecovery, nativeExecutionGeneration),
         terminalFailureObservedGeneration === nativeExecutionGeneration,
         io,
       );
@@ -544,10 +627,21 @@ function deliverSteer(
 function bundleFor(
   promptError: unknown,
   terminal: PiTerminalEvidence | undefined,
+  recovery: RequiredRecovery | undefined,
   terminalFailureObserved: boolean,
   io: ExecutionIO,
 ): Effect.Effect<TerminalBundle> {
   return Effect.gen(function* () {
+    if (recovery !== undefined) {
+      const diagnostic = confined(RECOVERY_FAILED_CATEGORY);
+      if (!recovery.failureAnnounced) {
+        yield* io.emit({ kind: "diagnostic", diagnostic });
+      }
+      return {
+        ending: failedEnding(diagnostic.message),
+        reconciliation: recovery.evidence.reconciliation,
+      };
+    }
     if (terminal !== undefined) {
       yield* emitTerminalDiagnosticIfNeeded(
         terminal,
@@ -581,6 +675,8 @@ function endingForTerminal(
       return answeredEnding();
     case "failed":
       return failedEnding(confined(PI_TERMINAL_FAILURE_DESCRIPTION).message);
+    case "incomplete":
+      return failedEnding(confined(PI_TERMINAL_ABORT_DESCRIPTION).message);
     case "aborted":
       return undefined;
   }
@@ -592,10 +688,17 @@ function emitTerminalDiagnosticIfNeeded(
   alreadyObserved: boolean,
   io: ExecutionIO,
 ): Effect.Effect<void> {
-  if (terminal.outcome !== "failed" || alreadyObserved) return Effect.void;
+  if (alreadyObserved) return Effect.void;
+  const description =
+    terminal.outcome === "failed"
+      ? PI_TERMINAL_FAILURE_DESCRIPTION
+      : terminal.outcome === "incomplete"
+        ? PI_TERMINAL_ABORT_DESCRIPTION
+        : undefined;
+  if (description === undefined) return Effect.void;
   return io.emit({
     kind: "diagnostic",
-    diagnostic: confined(PI_TERMINAL_FAILURE_DESCRIPTION),
+    diagnostic: confined(description),
   });
 }
 

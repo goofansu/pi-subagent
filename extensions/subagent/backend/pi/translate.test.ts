@@ -12,6 +12,7 @@ import {
   piMessageObservations,
   piMessagePart,
   piRole,
+  piTerminalEvidence,
   piTerminalSnapshot,
   piToolProgress,
   piTranscriptItem,
@@ -745,9 +746,56 @@ test("recovery lifecycle stays in adapter-local event readings", () => {
   assert.deepEqual(readPiEvent({ type: "auto_retry_start", attempt: 1 }), {
     kind: "recovery-start",
   });
+  assert.deepEqual(
+    readPiEvent({
+      type: "compaction_end",
+      reason: "overflow",
+      result: { summary: "smaller context" },
+      aborted: false,
+      willRetry: true,
+    }),
+    { kind: "recovery-end", outcome: "succeeded", willRetry: true },
+  );
+  assert.deepEqual(
+    readPiEvent({
+      type: "compaction_end",
+      reason: "overflow",
+      result: undefined,
+      aborted: false,
+      willRetry: false,
+      errorMessage: "provider credential and stack trace",
+    }),
+    { kind: "recovery-end", outcome: "failed", willRetry: false },
+  );
+  assert.deepEqual(
+    readPiEvent({
+      type: "compaction_end",
+      reason: "threshold",
+      result: undefined,
+      aborted: true,
+      willRetry: false,
+    }),
+    { kind: "recovery-end", outcome: "aborted", willRetry: false },
+  );
   assert.deepEqual(readPiEvent({ type: "agent_settled" }), {
     kind: "final-settled",
   });
+});
+
+test("terminal evidence distinguishes complete and incomplete responses", () => {
+  assert.equal(piTerminalEvidence([assistant()]).outcome, "answered");
+  assert.equal(
+    piTerminalEvidence([assistant({ stopReason: "length" })]).outcome,
+    "incomplete",
+  );
+  assert.equal(
+    piTerminalEvidence([assistant({ stopReason: "error" })]).outcome,
+    "failed",
+  );
+  assert.equal(
+    piTerminalEvidence([assistant({ stopReason: "aborted" })]).outcome,
+    "aborted",
+  );
 });
 
 test("the terminal snapshot recomputes the transcript, usage, turns, and gauge", () => {

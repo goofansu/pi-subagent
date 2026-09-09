@@ -269,8 +269,14 @@ export type PiEventReading =
   | { readonly kind: "tool"; readonly observations: readonly RunObservation[] }
   /** A new native execution within the managed Run. */
   | { readonly kind: "execution-start" }
-  /** Pi began recovery after a native execution ended. */
+  /** Pi began compaction after a native execution ended. */
   | { readonly kind: "recovery-start" }
+  /** Pi finished compaction, with its provider-facing outcome confined here. */
+  | {
+      readonly kind: "recovery-end";
+      readonly outcome: "succeeded" | "failed" | "aborted";
+      readonly willRetry: boolean;
+    }
   /** Pi has finished every recovery and native execution for this prompt. */
   | { readonly kind: "final-settled" }
   /** The non-retrying terminal frame, with the messages it carried. */
@@ -385,6 +391,18 @@ export function readPiEvent(event: unknown): PiEventReading {
   }
   if (event.type === "compaction_start" || event.type === "auto_retry_start") {
     return { kind: "recovery-start" };
+  }
+  if (event.type === "compaction_end") {
+    return {
+      kind: "recovery-end",
+      outcome:
+        event.result !== undefined
+          ? "succeeded"
+          : event.aborted === true
+            ? "aborted"
+            : "failed",
+      willRetry: event.willRetry === true,
+    };
   }
   if (event.type === "agent_settled") {
     return { kind: "final-settled" };
@@ -553,7 +571,7 @@ export function withoutInitialGoal(
 }
 
 /** Pi's terminal outcome, kept private to this module. */
-type PiTerminalOutcome = "answered" | "failed" | "aborted";
+type PiTerminalOutcome = "answered" | "incomplete" | "failed" | "aborted";
 
 /**
  * The terminal evidence one execution retains.
@@ -576,6 +594,7 @@ export function piTerminalEvidence(
     const message = messages[index];
     if (!isRecord(message) || message.role !== "assistant") continue;
     if (message.stopReason === "error") outcome = "failed";
+    else if (message.stopReason === "length") outcome = "incomplete";
     else if (message.stopReason === "aborted") outcome = "aborted";
     break;
   }
