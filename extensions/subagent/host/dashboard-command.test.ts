@@ -685,7 +685,8 @@ test("duplicate Profiles retain resolved terminal history and Resume grouping; l
   assert.match(text, /Subagent dashboard · run history · explore/);
   assert.match(text, /second task/);
   assert.ok(!text.includes(second.runId));
-  assert.doesNotMatch(text, /private admission prompt|broken/);
+  assert.doesNotMatch(text, /private admission prompt/);
+  assert.match(text, /Failed +· broken/);
   const retry = await resume(rig, second.subagentId, "retry task");
   await rig.pump();
   assert.doesNotMatch(screen(rig), /retry task/); // Static until re-entry.

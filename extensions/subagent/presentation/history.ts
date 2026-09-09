@@ -36,13 +36,8 @@ export type HistoryCategory = (typeof HISTORY_CATEGORIES)[number];
 const statusText = (run: RunPresentation) =>
   run.status.text[0].toUpperCase() + run.status.text.slice(1);
 
-/** Standalone structural seam for the optional failed terminal summary detail. */
-type HistoryRunSummary = RunSummary & {
-  readonly failureDetail?: string | undefined;
-};
-
 /** Resolve the history-only frozen outcome detail without changing shared activity. */
-function historyOutcomeDetail(run: HistoryRunSummary): string {
+function historyOutcomeDetail(run: RunSummary): string {
   if (run.phase === "failed") {
     return run.failureDetail?.trim() ? run.failureDetail : "-";
   }
@@ -121,7 +116,7 @@ export function overviewRows(
 
 /** Render one Subagent's Run history with frozen outcome details. */
 export function historyRows(
-  runs: readonly HistoryRunSummary[],
+  runs: readonly RunSummary[],
   selectedIdentity: RunId | SubagentId | undefined,
   width: number,
   theme: RenderableTheme,
