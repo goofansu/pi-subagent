@@ -169,6 +169,8 @@ export interface StandInRecord {
   readonly steers: readonly string[];
   /** The most steers in flight at once. One, for a serial consumer. */
   readonly maxConcurrentSteers: number;
+  /** Native delivery promises still unresolved (distinct from queued input). */
+  readonly concurrentSteers: number;
   /** Which Run each steer was delivered during. */
   readonly steersByRun: ReadonlyMap<RunId, readonly string[]>;
   /** Prompts begun. */
@@ -179,6 +181,8 @@ export interface StandInRecord {
   readonly compactionStarts: number;
   /** Additional native executions begun inside a prompt. */
   readonly agentStarts: number;
+  readonly reachedGates: readonly string[];
+  readonly consumedSteers: readonly string[];
   /** Prompts begun after the session was disposed, which the SDK allows. */
   readonly promptsAfterDispose: number;
   /** `clearQueue` calls. */
@@ -188,7 +192,7 @@ export interface StandInRecord {
 }
 
 export interface StandInPiSession {
-  readonly session: PiSession;
+  readonly session: PiSession & { readonly pendingMessageCount: number };
   readonly record: () => StandInRecord;
   /** Say which Run is running, so steers can be grouped by it. */
   readonly beginRun: (runId: RunId) => void;
@@ -200,6 +204,8 @@ export interface StandInPiSession {
 export interface StandInPiSessionOptions {
   /** One script per prompt, consumed in order. */
   readonly scripts: readonly PiScript[];
+  /** SDK queue acceptance resolves before consumption; default retains stalled-delivery tests. */
+  readonly steerDelivery?: "queued";
   /** Gates shared with the rig, created on first mention when omitted. */
   readonly gates?: Record<string, Gate>;
   /** Test-only observation point for ordering native stop against core stages. */
@@ -243,6 +249,8 @@ export function createStandInPiSession(
   const messages: StandInMessage[] = [];
   const gates: Record<string, Gate> = options.gates ?? {};
   const steers: string[] = [];
+  const consumedSteers: string[] = [];
+  const reachedGates: string[] = [];
   const steersByRun = new Map<RunId, string[]>();
   const pendingSteers: PendingSteer[] = [];
   const steeringQueue: string[] = [];
@@ -398,14 +406,19 @@ export function createStandInPiSession(
           break;
         }
         case "await-gate": {
+          reachedGates.push(step.gate);
           if (await untilAborted(gate(step.gate).promise)) return;
           break;
         }
         case "await-steer": {
-          while (pendingSteers.length === 0) {
+          while (pendingSteers.length === 0 && steeringQueue.length === 0) {
             if (await untilAborted(waitForSteer())) return;
           }
-          const pending = pendingSteers.shift() as PendingSteer;
+          const pending = pendingSteers.shift() ?? {
+            text: steeringQueue.shift() as string,
+            settle: () => {},
+          };
+          if (!step.reject) consumedSteers.push(pending.text);
           if (step.confirm) {
             clock += 1;
             emitMessage(
@@ -490,7 +503,10 @@ export function createStandInPiSession(
     }
   }
 
-  const session: PiSession = {
+  const session: StandInPiSession["session"] = {
+    get pendingMessageCount() {
+      return steeringQueue.length;
+    },
     get messages() {
       return messages as unknown as PiSession["messages"];
     },
@@ -545,8 +561,9 @@ export function createStandInPiSession(
       concurrentSteers += 1;
       maxConcurrentSteers = Math.max(maxConcurrentSteers, concurrentSteers);
       try {
-        if (inFlight === 0) {
+        if (inFlight === 0 || options.steerDelivery === "queued") {
           steeringQueue.push(text);
+          for (const wake of steerWaiters.splice(0)) wake();
           return;
         }
         const rejected = await new Promise<boolean>((resolve) => {
@@ -633,6 +650,7 @@ export function createStandInPiSession(
       binds,
       steers: [...steers],
       maxConcurrentSteers,
+      concurrentSteers,
       steersByRun: new Map(
         [...steersByRun].map(([runId, texts]) => [runId, [...texts]]),
       ),
@@ -640,6 +658,8 @@ export function createStandInPiSession(
       terminalEvents,
       compactionStarts,
       agentStarts,
+      reachedGates: [...reachedGates],
+      consumedSteers: [...consumedSteers],
       promptsAfterDispose,
       queueClears,
       aborts,

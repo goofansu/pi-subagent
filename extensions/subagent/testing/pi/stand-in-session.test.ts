@@ -37,6 +37,89 @@ function drive(script: PiScript) {
   return { standIn, events, unsubscribe };
 }
 
+test("queued delivery resolves before consumption and willRetry=false continuation takes actual guidance", async () => {
+  const gate = createGate();
+  const standIn = createStandInPiSession({
+    steerDelivery: "queued",
+    gates: { recovery: gate },
+    scripts: [
+      [
+        { step: "assistant", text: "partial", stopReason: "length" },
+        { step: "terminal" },
+        { step: "compaction-start", reason: "overflow" },
+        { step: "await-gate", gate: "recovery" },
+        {
+          step: "compaction-end",
+          reason: "overflow",
+          aborted: false,
+          willRetry: false,
+          errorMessage: "failed",
+        },
+        { step: "await-steer", confirm: true },
+        { step: "agent-start" },
+        { step: "assistant", text: "answer" },
+        { step: "terminal", messages: "current-execution" },
+      ],
+    ],
+  });
+  const events = recorder();
+  const unsubscribe = standIn.session.subscribe(events.listen);
+  const prompting = standIn.session.prompt("go");
+  await standIn.session.steer("genuine guidance");
+  assert.equal(standIn.session.pendingMessageCount, 1);
+  assert.deepEqual(standIn.record().consumedSteers, []);
+  assert.equal(standIn.session.isIdle, false);
+  assert.equal(
+    events.events().filter((event) => event.type === "message_end").length,
+    2,
+  );
+  gate.release();
+  await prompting;
+  assert.equal(standIn.session.pendingMessageCount, 0);
+  assert.deepEqual(standIn.record().consumedSteers, ["genuine guidance"]);
+  assert.deepEqual(
+    events.events().map((event) => event.type),
+    [
+      "message_end",
+      "message_end",
+      "agent_end",
+      "compaction_start",
+      "compaction_end",
+      "message_end",
+      "agent_start",
+      "message_end",
+      "agent_end",
+      "agent_settled",
+    ],
+  );
+  assert.equal(events.events()[4].willRetry, false);
+  unsubscribe();
+  standIn.session.dispose();
+  assert.equal(standIn.record().liveSubscriptions, 0);
+  assert.equal(standIn.record().disposed, 1);
+});
+
+test("pending native task input can be read without consuming or clearing it", async () => {
+  const standIn = createStandInPiSession({
+    steerDelivery: "queued",
+    scripts: [[{ step: "hang" }]],
+  });
+  const prompting = standIn.session.prompt("go");
+  await standIn.session.steer("not consumed");
+  assert.equal(standIn.session.pendingMessageCount, 1);
+  assert.equal(standIn.session.pendingMessageCount, 1);
+  assert.equal(standIn.record().queueClears, 0);
+  assert.deepEqual(standIn.record().consumedSteers, []);
+  assert.deepEqual(standIn.session.clearQueue(), {
+    steering: ["not consumed"],
+    followUp: [],
+  });
+  assert.equal(standIn.session.pendingMessageCount, 0);
+  await standIn.session.abort();
+  await prompting;
+  standIn.session.dispose();
+});
+
 test("a prompt echoes the brief back as the Run's first user message", async () => {
   const { standIn, events } = drive([]);
 

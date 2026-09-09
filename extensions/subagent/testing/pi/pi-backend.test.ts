@@ -11,6 +11,13 @@ import { DEFAULT_BACKEND_ID } from "../../domain/index.ts";
 import { DEFAULT_RUNTIME_POLICY } from "../../runtime/policy.ts";
 import { RUN_STAGES } from "../../runtime/run-scope.ts";
 import {
+  assertBoundary,
+  boundary,
+  boundaryScenarios,
+  firstPartial,
+  reproduceBoundary,
+} from "./finalization-matrix.ts";
+import {
   issueCancelBeforeClockMoves,
   piRigRequest,
   quiesce,
@@ -43,6 +50,24 @@ function startedRun(outcome: { readonly outcome: string }): {
   }
   return outcome as never;
 }
+
+for (const scenario of boundaryScenarios) {
+  test(`managed boundary: ${scenario.name}`, async () => {
+    assertBoundary(scenario, await reproduceBoundary(scenario));
+  });
+}
+
+test("managed boundary: incomplete cancelled before recovery-start", async () => {
+  const scenario = {
+    name: "before recovery",
+    script: [...firstPartial, ...boundary],
+    cancel: true,
+    status: "cancelled" as const,
+  };
+  const value = await reproduceBoundary(scenario);
+  assert.equal(value.before.compactionStarts, 0);
+  assertBoundary(scenario, value);
+});
 
 test("a disposed Pi session is refused by the adapter, not by the SDK", async () => {
   // The spike's finding: `prompt()` after `dispose()` does not throw. So the
@@ -517,8 +542,8 @@ test("a retrying provider error remains intermediate when the final attempt succ
   assert.equal(value.output, "successful answer");
 });
 
-test("a terminal provider error observed before cancellation remains failed", async () => {
-  const { value } = await withPiSession(
+test("a finalized provider failure after native finish survives later cancellation", async () => {
+  const { value, noLeaks, nativeProbeAfterClose } = await withPiSession(
     {
       scripts: [
         [
@@ -529,26 +554,29 @@ test("a terminal provider error observed before cancellation remains failed", as
             errorMessage: "provider secret",
           },
           { step: "terminal" },
-          { step: "hang" },
         ],
       ],
     },
     (rig) =>
       Effect.gen(function* () {
         const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
-        yield* until(
-          "the terminal provider error to be observed",
-          Effect.sync(() => rig.standIn.record().terminalEvents === 1),
-        );
+        // agent_end alone was not native finish: the old script hung here.
+        // Establish prompt/idle completion and the immutable failed Result first.
+        yield* untilTerminal(rig, started.runId);
+        assert.equal(rig.standIn.session.isIdle, true);
+        const finalized = yield* rig.supervisor.result(started.runId);
         yield* rig.supervisor.cancel([started.runId]);
         yield* untilTerminal(rig, started.runId);
         const result = yield* rig.supervisor.result(started.runId);
+        assert.deepEqual(result, finalized);
         return result.outcome === "result"
           ? { status: result.result.status, output: result.result.finalOutput }
           : { status: result.outcome, output: "" };
       }),
   );
 
+  assert.equal(noLeaks, true);
+  assert.ok(piProbeIsClear(nativeProbeAfterClose));
   assert.equal(value.status, "failed");
   assert.equal(value.output, "partial answer");
 });
