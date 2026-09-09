@@ -40,6 +40,10 @@ import {
   type Stream,
   SubscriptionRef,
 } from "effect";
+import {
+  boundOneLine,
+  RUN_ENDING_MESSAGE_MAX_BYTES,
+} from "../domain/bounding.ts";
 import type { SemanticActivity } from "../domain/history.ts";
 import {
   type CancellationReason,
@@ -77,6 +81,8 @@ export interface RunSnapshot {
   readonly phase: RunPhase;
   /** Present once a cancellation has been recorded, whatever the phase. */
   readonly cancellation?: CancellationRequest;
+  /** Present only on a failed terminal publication with usable safe detail. */
+  readonly failureDetail?: string;
   /** Conflated and display-only. Cleared when the Run settles. */
   readonly activity?: string;
   readonly lastActivity?: SemanticActivity;
@@ -362,18 +368,21 @@ const make = (counters: RuntimeCounters) =>
       /**
        * Move a Run to its next phase, and stamp a settlement with its instant.
        *
-       * The parameters are one tuple with two shapes rather than an optional
-       * third argument, so a settlement recorded without its instant fails to
-       * compile: a terminal row that had lost the instant would silently go
-       * back to reading a display clock, which is the defect this shape
-       * exists to prevent. `execution-ended` reaches `finalizing`, which names
-       * no duration and so needs no instant.
+       * The parameters are one tuple with terminal shapes rather than optional
+       * settlement arguments, so a settlement recorded without its instant
+       * fails to compile. Failure detail is stored only for failed settlement.
+       * `execution-ended` reaches `finalizing`, which names no duration and so
+       * needs no instant.
        */
       transition: (
         runId: RunId,
-        ...[event, settledAt]:
+        ...[event, settledAt, failureDetail]:
           | [event: "execution-ended"]
-          | [event: SettlementEvent, settledAt: number]
+          | [
+              event: Exclude<SettlementEvent, "settled-failed">,
+              settledAt: number,
+            ]
+          | [event: "settled-failed", settledAt: number, failureDetail?: string]
       ): Effect.Effect<TransitionOutcome> =>
         SubscriptionRef.modify(index, (current) => {
           const snapshot = current.get(runId);
@@ -391,13 +400,23 @@ const make = (counters: RuntimeCounters) =>
             ];
           }
           const next = new Map(current);
+          const boundedFailureDetail =
+            event === "settled-failed" && failureDetail !== undefined
+              ? boundOneLine(failureDetail, RUN_ENDING_MESSAGE_MAX_BYTES)
+              : undefined;
           const moved: RunSnapshot = {
             ...snapshot,
             phase,
-            // The instant travels with the terminal status, because they are
-            // one fact: a row is settled and says what it cost, or neither.
+            // Terminal outcome facts are published in one index update: a
+            // failed row cannot become visible before its safe detail does.
             ...(isTerminalRunPhase(phase)
-              ? { terminalStatus: phase, settledAt }
+              ? {
+                  terminalStatus: phase,
+                  settledAt,
+                  ...(boundedFailureDetail
+                    ? { failureDetail: boundedFailureDetail }
+                    : {}),
+                }
               : {}),
           };
           // A settled Run is quiet: the activity a backend last reported is

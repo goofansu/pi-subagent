@@ -47,6 +47,9 @@ export function summarizeRun(run: RunSnapshot): RunSummary {
     backend: run.identity.backendId,
     label: run.identity.description,
     phase: run.phase,
+    ...(run.failureDetail === undefined
+      ? {}
+      : { failureDetail: run.failureDetail }),
     ...(run.cancellation
       ? { cancellationReason: run.cancellation.reason }
       : {}),
