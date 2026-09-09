@@ -7,12 +7,15 @@
  * - **Partial messages are included.** Their content-block starts drive the
  *   Run's live thinking, writing, and tool activity; the completed frames
  *   remain the source of transcript and accounting observations.
- * - **The operator's environment is inherited.** `settingSources` and
- *   `mcpServers` are deliberately *omitted*, which is what makes the SDK load
- *   the operator's own settings and expose their MCP servers and cloud
- *   connectors to the child. That is the feature being bought — different
- *   backends exist to bring different toolsets to the work — and it is
- *   [ADR-0008](../../../../docs/adr/0008-claude-children-inherit-operator-environment.md).
+ * - **Setting sources follow the fixed Trust posture.** A trusted Subagent
+ *   omits `settingSources`, preserving the complete operator and project
+ *   environment. An untrusted Subagent selects only the operator-owned user
+ *   source. `mcpServers` and strict MCP configuration stay omitted, retaining
+ *   user-owned MCP integrations while project `.mcp.json` is excluded with
+ *   the project setting source. This deliberately reopens and supersedes only
+ *   [ADR-0008's](../../../../docs/adr/0008-claude-children-inherit-operator-environment.md)
+ *   unconditional-inheritance decision; ticket 02 owns the durable ADR,
+ *   domain, and architecture record of that supersession.
  * - **The process environment is spread, not replaced.** The SDK's `env`
  *   *replaces* the subprocess environment entirely rather than merging into
  *   it, so a bare depth variable would strip the child of `PATH`, the
@@ -153,6 +156,9 @@ export function createClaudeOptions(input: ClaudeOptionsInput): Options {
     ...claudeEffort(input.effort),
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
+    ...(input.subagent.projectTrusted
+      ? {}
+      : { settingSources: ["user"] as const }),
     disallowedTools: [...CLAUDE_DISALLOWED_TOOLS],
     env: claudeChildEnvironment(input.subagent.childDepth, input.env),
     ...(tools === undefined ? {} : { tools }),

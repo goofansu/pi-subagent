@@ -132,6 +132,37 @@ test("opening loads the SDK and starts no Query, because there is nothing else t
   assert.equal(value.queries, 1);
 });
 
+test("each Query applies the Subagent's fixed Trust posture to Claude setting sources", async () => {
+  const { value } = await withClaudeSession(
+    { scripts: [ANSWERED, ANSWERED] },
+    (rig) =>
+      Effect.gen(function* () {
+        const trusted = startedRun(
+          yield* rig.supervisor.start(
+            claudeRigRequest({ projectTrusted: true }),
+          ),
+        );
+        yield* untilTerminal(rig, trusted.runId);
+
+        const untrusted = startedRun(
+          yield* rig.supervisor.start(
+            claudeRigRequest({ projectTrusted: false }),
+          ),
+        );
+        yield* untilTerminal(rig, untrusted.runId);
+
+        return rig.standIn.record().options;
+      }),
+  );
+
+  assert.equal("settingSources" in value[0], false);
+  assert.deepEqual(value[1]?.settingSources, ["user"]);
+  assert.equal("strictMcpConfig" in value[0], false);
+  assert.equal("strictMcpConfig" in value[1], false);
+  assert.equal(value[0]?.permissionMode, "bypassPermissions");
+  assert.equal(value[1]?.permissionMode, "bypassPermissions");
+});
+
 test("a BackendAgent that has never run holds no conversation to resume", async () => {
   // ADR-0023's first exception, end to end: the SDK has no open call, so the
   // identity comes into existence only as a side effect of the first Run.

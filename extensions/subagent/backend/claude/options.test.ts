@@ -162,13 +162,28 @@ test("a Profile that opted out replaces the preset instead of appending", () => 
   );
 });
 
-test("setting sources and MCP servers are absent, so the operator's environment is inherited", () => {
+test("a trusted Subagent inherits every setting source and ambient MCP configuration", () => {
   const built = options();
 
-  // ADR-0008: omitting both is what makes the SDK load the operator's own
-  // settings and expose their MCP servers and connectors to the child.
   assert.equal("settingSources" in built, false);
   assert.equal("mcpServers" in built, false);
+  assert.equal("strictMcpConfig" in built, false);
+});
+
+test("an untrusted Subagent selects only user settings without strict MCP configuration", () => {
+  const abort = new AbortController();
+  const trusted = options({}, { abort });
+  const built = options(
+    {},
+    { abort, subagent: { ...SUBAGENT, projectTrusted: false } },
+  );
+
+  assert.deepEqual(built, { ...trusted, settingSources: ["user"] });
+  assert.deepEqual(built.settingSources, ["user"]);
+  assert.equal(built.settingSources?.includes("project"), false);
+  assert.equal(built.settingSources?.includes("local"), false);
+  assert.equal("mcpServers" in built, false);
+  assert.equal("strictMcpConfig" in built, false);
 });
 
 test("a resumed Run carries the retained identity and a first Run carries none", () => {
