@@ -613,6 +613,153 @@ test("a terminal provider abort never answers and core cancellation keeps its re
   }
 });
 
+test("failed required length recovery fails with confined detail and preserves partial evidence", async () => {
+  const providerText = "compaction credentials for acct_1234 were rejected";
+  const { value } = await withPiSession(
+    {
+      scripts: [
+        [
+          {
+            step: "assistant",
+            text: "useful partial answer",
+            stopReason: "length",
+            usage: { input: 11, output: 7, totalTokens: 101, cost: 0.25 },
+          },
+          { step: "terminal", messages: "current-execution" },
+          {
+            step: "compaction-start",
+            reason: "overflow",
+            retainedMessages: "remove",
+          },
+          {
+            step: "compaction-end",
+            reason: "overflow",
+            result: undefined,
+            aborted: false,
+            willRetry: false,
+            errorMessage: providerText,
+          },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* untilTerminal(rig, started.runId);
+        return yield* rig.supervisor.result(started.runId);
+      }),
+  );
+
+  assert.equal(value.outcome, "result");
+  if (value.outcome === "result") {
+    assert.equal(value.result.status, "failed");
+    assert.equal(value.result.finalOutput, "useful partial answer");
+    assert.equal(value.result.errorMessage, "Pi recovery failed: [redacted]");
+    assert.deepEqual(value.result.transcript, [
+      {
+        role: "assistant",
+        parts: [{ kind: "text", text: "useful partial answer" }],
+      },
+    ]);
+    assert.deepEqual(value.result.usage.totals, {
+      input: 11,
+      output: 7,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0.25,
+    });
+    assert.equal(value.result.usage.turns, 1);
+    assert.deepEqual(value.result.usage.context, { tokens: 101 });
+    assert.deepEqual(value.result.diagnostics, [
+      {
+        category: "backend-failure",
+        message: "Pi recovery failed: [redacted]",
+      },
+    ]);
+    assert.doesNotMatch(
+      `${value.result.errorMessage} ${value.result.diagnostics.map((one) => one.message).join(" ")}`,
+      /acct_1234|credentials were rejected/,
+    );
+  }
+});
+
+test("cancellation during post-answer threshold and supported overflow maintenance preserves completion", async () => {
+  const outcomes = await Promise.all(
+    (["threshold", "overflow"] as const).map(async (reason) => {
+      const { value } = await withPiSession(
+        {
+          scripts: [
+            [
+              {
+                step: "assistant",
+                text: `complete ${reason} answer`,
+                stopReason: "stop",
+                usage: { input: 13, output: 5, totalTokens: 90 },
+              },
+              { step: "terminal", messages: "current-execution" },
+              { step: "compaction-start", reason },
+              { step: "hang" },
+            ],
+          ],
+        },
+        (rig) =>
+          Effect.gen(function* () {
+            const started = startedRun(
+              yield* rig.supervisor.start(piRigRequest()),
+            );
+            yield* until(
+              `post-answer ${reason} maintenance to begin`,
+              Effect.sync(() => rig.standIn.record().compactionStarts === 1),
+            );
+            yield* rig.supervisor.cancel([started.runId]);
+            yield* untilTerminal(rig, started.runId);
+            return yield* rig.supervisor.result(started.runId);
+          }),
+      );
+      if (value.outcome !== "result") return { outcome: value.outcome };
+      return {
+        outcome: value.outcome,
+        status: value.result.status,
+        cancellationReason: value.result.cancellationReason,
+        finalOutput: value.result.finalOutput,
+        totals: value.result.usage.totals,
+        turns: value.result.usage.turns,
+      };
+    }),
+  );
+
+  assert.deepEqual(outcomes, [
+    {
+      outcome: "result",
+      status: "completed",
+      cancellationReason: undefined,
+      finalOutput: "complete threshold answer",
+      totals: {
+        input: 13,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+      },
+      turns: 1,
+    },
+    {
+      outcome: "result",
+      status: "completed",
+      cancellationReason: undefined,
+      finalOutput: "complete overflow answer",
+      totals: {
+        input: 13,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+      },
+      turns: 1,
+    },
+  ]);
+});
+
 test("final settlement restores terminal evidence after recovery without another execution", async () => {
   const { value } = await withPiSession(
     {
@@ -625,6 +772,13 @@ test("final settlement restores terminal evidence after recovery without another
           },
           { step: "terminal", messages: "current-execution" },
           { step: "compaction-start", reason: "threshold" },
+          {
+            step: "compaction-end",
+            reason: "threshold",
+            result: { summary: "compacted" },
+            aborted: false,
+            willRetry: false,
+          },
         ],
       ],
     },
@@ -640,6 +794,65 @@ test("final settlement restores terminal evidence after recovery without another
   if (value.outcome === "result") {
     assert.equal(value.result.status, "completed");
     assert.equal(value.result.finalOutput, "answer before compaction");
+  }
+});
+
+test("failed post-answer maintenance preserves the completed answer", async () => {
+  const providerText = "maintenance failed with token sk-secret";
+  const { value } = await withPiSession(
+    {
+      scripts: [
+        [
+          {
+            step: "assistant",
+            text: "answer before failed maintenance",
+            stopReason: "stop",
+            usage: { input: 17, output: 4 },
+          },
+          { step: "terminal", messages: "current-execution" },
+          { step: "compaction-start", reason: "threshold" },
+          {
+            step: "compaction-end",
+            reason: "threshold",
+            result: undefined,
+            aborted: false,
+            willRetry: false,
+            errorMessage: providerText,
+          },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* untilTerminal(rig, started.runId);
+        return yield* rig.supervisor.result(started.runId);
+      }),
+  );
+
+  assert.equal(value.outcome, "result");
+  if (value.outcome === "result") {
+    assert.equal(value.result.status, "completed");
+    assert.equal(value.result.cancellationReason, undefined);
+    assert.equal(value.result.finalOutput, "answer before failed maintenance");
+    assert.deepEqual(value.result.usage.totals, {
+      input: 17,
+      output: 4,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+    });
+    assert.ok(
+      value.result.diagnostics.every(
+        (diagnostic) =>
+          diagnostic.category === "backend-failure" &&
+          diagnostic.message === "Pi recovery failed: [redacted]",
+      ),
+    );
+    assert.doesNotMatch(
+      value.result.diagnostics.map((one) => one.message).join(" "),
+      /sk-secret|maintenance failed/,
+    );
   }
 });
 
@@ -669,7 +882,7 @@ test("length recovery cancelled before its next execution preserves cancellation
         const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
         yield* until(
           "length recovery to begin",
-          Effect.sync(() => rig.standIn.record().terminalEvents === 1),
+          Effect.sync(() => rig.standIn.record().compactionStarts === 1),
         );
         yield* rig.supervisor.cancel([started.runId]);
         yield* untilTerminal(rig, started.runId);
@@ -716,7 +929,7 @@ test("context-overflow recovery cancelled before its next execution preserves ca
         const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
         yield* until(
           "overflow recovery to begin",
-          Effect.sync(() => rig.standIn.record().terminalEvents === 1),
+          Effect.sync(() => rig.standIn.record().compactionStarts === 1),
         );
         yield* rig.supervisor.cancel([started.runId]);
         yield* untilTerminal(rig, started.runId);
@@ -745,6 +958,7 @@ test("disjoint native executions retain ordered evidence and truthful aggregate 
           {
             step: "assistant",
             text: "first execution",
+            stopReason: "length",
             usage: { input: 10, output: 2, totalTokens: 100 },
             model: { provider: "provider", id: "first-model" },
             toolCalls: [{ name: "read", callId: "call-1" }],
@@ -763,10 +977,18 @@ test("disjoint native executions retain ordered evidence and truthful aggregate 
             reason: "overflow",
             retainedMessages: "remove",
           },
+          {
+            step: "compaction-end",
+            reason: "overflow",
+            result: { summary: "compacted" },
+            aborted: false,
+            willRetry: false,
+          },
           { step: "agent-start" },
           {
             step: "assistant",
             text: "actual final answer",
+            stopReason: "stop",
             usage: { input: 20, output: 3, totalTokens: 250 },
             model: { provider: "provider", id: "final-model" },
           },
@@ -863,9 +1085,18 @@ test("cancellation during a later native execution discards earlier terminal evi
           {
             step: "assistant",
             text: "first execution answer",
+            stopReason: "stop",
             usage: { input: 10, output: 1 },
           },
           { step: "terminal" },
+          { step: "compaction-start", reason: "overflow" },
+          {
+            step: "compaction-end",
+            reason: "overflow",
+            result: { summary: "compacted" },
+            aborted: false,
+            willRetry: false,
+          },
           { step: "agent-start" },
           {
             step: "assistant",

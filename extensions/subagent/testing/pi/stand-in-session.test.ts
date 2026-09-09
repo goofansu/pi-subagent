@@ -232,6 +232,13 @@ test("recovery, disjoint terminals, compaction removal, and final settlement fol
       reason: "overflow",
       retainedMessages: "remove",
     },
+    {
+      step: "compaction-end",
+      reason: "overflow",
+      result: { summary: "compacted" },
+      aborted: false,
+      willRetry: false,
+    },
     { step: "agent-start" },
     { step: "assistant", text: "second" },
     { step: "terminal", messages: "current-execution" },
@@ -246,6 +253,7 @@ test("recovery, disjoint terminals, compaction removal, and final settlement fol
         [
           "agent_end",
           "compaction_start",
+          "compaction_end",
           "agent_start",
           "agent_settled",
         ].includes(event.type as string),
@@ -254,16 +262,57 @@ test("recovery, disjoint terminals, compaction removal, and final settlement fol
     [
       "agent_end",
       "compaction_start",
+      "compaction_end",
       "agent_start",
       "agent_end",
       "agent_settled",
     ],
+  );
+  assert.equal(standIn.record().compactionStarts, 1);
+  assert.deepEqual(
+    events.events().find((event) => event.type === "compaction_end"),
+    {
+      type: "compaction_end",
+      reason: "overflow",
+      result: { summary: "compacted" },
+      aborted: false,
+      willRetry: false,
+    },
   );
   const terminals = events
     .events()
     .filter((event) => event.type === "agent_end");
   assert.equal((terminals[0].messages as readonly unknown[]).length, 2);
   assert.equal((terminals[1].messages as readonly unknown[]).length, 1);
+});
+
+test("a failed compaction end carries Pi's complete lifecycle shape", async () => {
+  const { standIn, events } = drive([
+    { step: "compaction-start", reason: "overflow" },
+    {
+      step: "compaction-end",
+      reason: "overflow",
+      result: undefined,
+      aborted: false,
+      willRetry: true,
+      errorMessage: "summarization failed",
+    },
+  ]);
+
+  await standIn.session.prompt("go");
+
+  assert.deepEqual(
+    events.events().find((event) => event.type === "compaction_end"),
+    {
+      type: "compaction_end",
+      reason: "overflow",
+      result: undefined,
+      aborted: false,
+      willRetry: true,
+      errorMessage: "summarization failed",
+    },
+  );
+  assert.equal(standIn.record().compactionStarts, 1);
 });
 
 test("a reject step makes the prompt reject", async () => {

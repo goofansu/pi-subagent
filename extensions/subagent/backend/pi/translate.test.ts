@@ -745,6 +745,54 @@ test("recovery lifecycle stays in adapter-local event readings", () => {
   assert.deepEqual(readPiEvent({ type: "auto_retry_start", attempt: 1 }), {
     kind: "recovery-start",
   });
+  assert.deepEqual(
+    readPiEvent({
+      type: "compaction_end",
+      reason: "overflow",
+      result: { summary: "compacted" },
+      aborted: false,
+      willRetry: false,
+    }),
+    {
+      kind: "recovery-end",
+      outcome: "succeeded",
+      willRetry: false,
+    },
+  );
+  assert.deepEqual(
+    readPiEvent({
+      type: "compaction_end",
+      reason: "overflow",
+      result: undefined,
+      aborted: false,
+      willRetry: false,
+      errorMessage: "credentials for acct_1234 were rejected",
+    }),
+    {
+      kind: "recovery-end",
+      outcome: "failed",
+      willRetry: false,
+      diagnostic: {
+        category: "backend-failure",
+        message: "Pi recovery failed: [redacted]",
+      },
+    },
+  );
+  assert.deepEqual(
+    readPiEvent({
+      type: "compaction_end",
+      reason: "threshold",
+      result: undefined,
+      aborted: true,
+      willRetry: true,
+      errorMessage: "operator interrupted native compaction",
+    }),
+    {
+      kind: "recovery-end",
+      outcome: "aborted",
+      willRetry: true,
+    },
+  );
   assert.deepEqual(readPiEvent({ type: "agent_settled" }), {
     kind: "final-settled",
   });

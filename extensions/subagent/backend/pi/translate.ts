@@ -52,6 +52,9 @@ export const PI_DIAGNOSTIC_REDACTED = "[redacted]";
 /** Adapter-owned wording for a terminal assistant failure. */
 export const PI_TERMINAL_FAILURE_DESCRIPTION = "Pi reported a failed message";
 
+/** Adapter-owned wording for failed recovery. */
+export const PI_RECOVERY_FAILURE_DESCRIPTION = "Pi recovery failed";
+
 /** Domain-neutral wording for an incomplete terminal assistant message. */
 export const PI_TERMINAL_ABORT_DESCRIPTION = "Pi did not complete its message";
 
@@ -271,6 +274,13 @@ export type PiEventReading =
   | { readonly kind: "execution-start" }
   /** Pi began recovery after a native execution ended. */
   | { readonly kind: "recovery-start" }
+  /** The confined outcome of one recovery attempt. */
+  | {
+      readonly kind: "recovery-end";
+      readonly outcome: "succeeded" | "failed" | "aborted";
+      readonly willRetry: boolean;
+      readonly diagnostic?: RunDiagnostic;
+    }
   /** Pi has finished every recovery and native execution for this prompt. */
   | { readonly kind: "final-settled" }
   /** The non-retrying terminal frame, with the messages it carried. */
@@ -385,6 +395,22 @@ export function readPiEvent(event: unknown): PiEventReading {
   }
   if (event.type === "compaction_start" || event.type === "auto_retry_start") {
     return { kind: "recovery-start" };
+  }
+  if (event.type === "compaction_end") {
+    const outcome =
+      event.result !== undefined
+        ? "succeeded"
+        : event.aborted === true
+          ? "aborted"
+          : "failed";
+    return {
+      kind: "recovery-end",
+      outcome,
+      willRetry: event.willRetry === true,
+      ...(outcome === "failed"
+        ? { diagnostic: confined(PI_RECOVERY_FAILURE_DESCRIPTION) }
+        : {}),
+    };
   }
   if (event.type === "agent_settled") {
     return { kind: "final-settled" };
