@@ -378,6 +378,8 @@ test("activity updates live without reordering, turns and Profile names are abse
   await rig.pump();
   assert.match(screen(rig), /Subagent dashboard · run history · explore/);
   assert.match(screen(rig), /second Label/);
+  assert.match(screen(rig), /Running +· -/);
+  assert.doesNotMatch(screen(rig), /initial activity|changed activity/);
   rig.host.customKey(ESC);
   await rig.pump();
   const after = screen(rig);
@@ -388,6 +390,8 @@ test("activity updates live without reordering, turns and Profile names are abse
   await rig.pump();
   assert.match(screen(rig), /Subagent dashboard · run history · explore/);
   assert.match(screen(rig), /second Label/);
+  assert.match(screen(rig), /Running +· -/);
+  assert.doesNotMatch(screen(rig), /initial activity|changed activity/);
   rig.host.customKey(ESC);
   await rig.pump();
   await close(rig, browsing);

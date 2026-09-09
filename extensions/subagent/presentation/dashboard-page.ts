@@ -43,7 +43,12 @@ import {
   dashboardPanel,
   dashboardScreen,
 } from "./dashboard-panel.ts";
-import { HISTORY_CATEGORIES, historyCategory, historyRows } from "./history.ts";
+import {
+  HISTORY_CATEGORIES,
+  historyCategory,
+  historyRows,
+  overviewRows,
+} from "./history.ts";
 import {
   type InspectionBlock,
   inspectionBlocks,
@@ -533,7 +538,7 @@ const pageLines = (
       lines: ["History unavailable. Go back or close."],
       linesWidth: width,
     };
-  const rows = historyRows(
+  const rows = (page.kind === "history" ? historyRows : overviewRows)(
     page.runs,
     pageSelection(page),
     width,
