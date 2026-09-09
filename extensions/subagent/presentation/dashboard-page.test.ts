@@ -421,29 +421,39 @@ test("an inspection scrolls a line and a page, and clamps at both ends of its co
   assert.deepEqual(dashboard.draw(40, 10), bottom);
 });
 
-test("inspection beginning, end, and normalized wheel deltas use current viewport bounds", () => {
+test("inspection boundary jumps draw the retained capture at current viewport bounds", () => {
   const dashboard = inspection();
   dashboard.draw(40, 10);
   const total = dashboard.page().lines.length;
+  const retainedBlocks = dashboard.page().blocks;
+  const retainedLines = dashboard.page().lines;
 
-  dashboard.press("end");
-  assert.equal(dashboard.page().offset, total - 4);
-  dashboard.send({ kind: "scroll", delta: -3 });
-  assert.equal(dashboard.page().offset, total - 7);
-  dashboard.send({ kind: "scroll", delta: 2 });
-  assert.equal(dashboard.page().offset, total - 5);
-  dashboard.send({ kind: "scroll", delta: 10_000 });
-  assert.equal(dashboard.page().offset, total - 4);
-  dashboard.press("home");
-  assert.equal(dashboard.page().offset, 0);
-  dashboard.send({ kind: "scroll", delta: -10_000 });
-  assert.equal(dashboard.page().offset, 0);
+  const bottom = reduceDashboardPage(
+    dashboard.page(),
+    { kind: "key", pressed: ["lastScreenful"] },
+    CHROME,
+  );
+  assert.equal(bottom.ask, "draw");
+  assert.equal(bottom.page.offset, total - 4);
+  assert.equal(bottom.page.blocks, retainedBlocks);
+  assert.equal(bottom.page.lines, retainedLines);
 
-  dashboard.draw(40, 0);
-  dashboard.press("end");
-  assert.equal(dashboard.page().offset, dashboard.page().lines.length);
-  dashboard.press("home");
-  assert.equal(dashboard.page().offset, 0);
+  const top = reduceDashboardPage(
+    bottom.page,
+    { kind: "key", pressed: ["beginning"] },
+    CHROME,
+  );
+  assert.equal(top.ask, "draw");
+  assert.equal(top.page.offset, 0);
+  assert.equal(top.page.blocks, retainedBlocks);
+  assert.equal(top.page.lines, retainedLines);
+
+  const zeroHeight = browsing(top.page);
+  zeroHeight.draw(40, 0);
+  zeroHeight.press("lastScreenful");
+  assert.equal(zeroHeight.page().offset, zeroHeight.page().lines.length);
+  zeroHeight.press("beginning");
+  assert.equal(zeroHeight.page().offset, 0);
 });
 
 test("inspection jumps and wheel scrolling clamp short content through resize", () => {
@@ -457,12 +467,12 @@ test("inspection jumps and wheel scrolling clamp short content through resize", 
     handoff: "pending",
   });
   dashboard.draw(80, 60);
-  dashboard.press("end");
+  dashboard.press("lastScreenful");
   dashboard.send({ kind: "scroll", delta: 20 });
   assert.equal(dashboard.page().offset, 0);
 
   dashboard.draw(20, 10);
-  dashboard.press("end");
+  dashboard.press("lastScreenful");
   const narrowedEnd = Math.max(
     0,
     dashboard.page().lines.length - dashboard.page().viewport.bodyHeight,
@@ -470,6 +480,74 @@ test("inspection jumps and wheel scrolling clamp short content through resize", 
   assert.equal(dashboard.page().offset, narrowedEnd);
   dashboard.draw(80, 60);
   assert.equal(dashboard.page().offset, 0);
+});
+
+test("inspection jumps clamp empty content and follow transcript toggles and resize", () => {
+  const dashboard = inspection();
+  dashboard.send({
+    kind: "inspection",
+    capture: {
+      ...CAPTURE,
+      content: {
+        ...CAPTURE.content,
+        finalOutput: "",
+        transcript: [
+          {
+            role: "assistant",
+            parts: [
+              {
+                kind: "text",
+                text: Array.from(
+                  { length: 100 },
+                  (_, index) => `transcript line ${index + 1}`,
+                ).join("\n"),
+              },
+            ],
+          },
+        ],
+      },
+    },
+    handoff: "pending",
+  });
+  dashboard.draw(40, 10);
+  const compactLines = dashboard.page().lines.length;
+  dashboard.press("lastScreenful");
+  assert.equal(dashboard.page().offset, compactLines - 4);
+
+  dashboard.press("toggleTranscript");
+  dashboard.draw(40, 10);
+  const expandedLines = dashboard.page().lines.length;
+  assert.ok(expandedLines > compactLines);
+  dashboard.press("lastScreenful");
+  assert.equal(dashboard.page().offset, expandedLines - 4);
+
+  dashboard.draw(40, 20);
+  dashboard.press("lastScreenful");
+  assert.equal(
+    dashboard.page().offset,
+    expandedLines - dashboard.page().viewport.bodyHeight,
+  );
+
+  dashboard.press("toggleTranscript");
+  dashboard.draw(40, 20);
+  dashboard.press("lastScreenful");
+  assert.equal(
+    dashboard.page().offset,
+    Math.max(0, compactLines - dashboard.page().viewport.bodyHeight),
+  );
+  dashboard.press("beginning");
+  assert.equal(dashboard.page().offset, 0);
+
+  const empty = browsing({
+    ...dashboard.page(),
+    lines: [],
+    linesWidth: dashboard.page().viewport.contentWidth,
+    offset: 0,
+  });
+  empty.press("lastScreenful");
+  assert.equal(empty.page().offset, 0);
+  empty.press("beginning");
+  assert.equal(empty.page().offset, 0);
 });
 
 test("scroll-by-delta is confined to inspection and remains available during refresh", () => {
@@ -560,6 +638,47 @@ test("a page with nothing on it offers the way out and no range", () => {
   const lines = empty.plain(80, 24);
   assert.equal(footer(lines), "<tui.select.cancel> close");
   assert.match(lines.join("\n"), /No subagents in this session/);
+});
+
+test("boundary jumps are guarded to ready inspection while unavailable pages retain back", () => {
+  const step = (page: DashboardPage, key: DashboardKey) =>
+    reduceDashboardPage(page, { kind: "key", pressed: [key] }, CHROME);
+
+  for (const dashboard of [overview(), history()]) {
+    for (const key of ["beginning", "lastScreenful"] as const) {
+      const before = dashboard.page();
+      const ignored = step(before, key);
+      assert.equal(ignored.page, before);
+      assert.equal(ignored.ask, "nothing");
+    }
+  }
+
+  const readyInspection = inspection();
+  readyInspection.draw(40, 10);
+  readyInspection.press("right");
+  const nonBackKeys: readonly DashboardKey[] = [
+    "up",
+    "down",
+    "pageUp",
+    "pageDown",
+    "left",
+    "right",
+    "beginning",
+    "lastScreenful",
+    "confirm",
+    "refresh",
+    "toggleTranscript",
+  ];
+  for (const event of [{ kind: "reading" }, { kind: "failed" }] as const) {
+    readyInspection.send(event);
+    for (const key of nonBackKeys) {
+      const before = readyInspection.page();
+      const ignored = step(before, key);
+      assert.equal(ignored.page, before);
+      assert.equal(ignored.ask, "nothing");
+    }
+    assert.equal(step(readyInspection.page(), "cancel").ask, "read");
+  }
 });
 
 test("a step leaves the host one thing to do, and never more than one", () => {
