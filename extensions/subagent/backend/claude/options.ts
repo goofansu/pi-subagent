@@ -14,8 +14,8 @@
  *   user-owned MCP integrations while project `.mcp.json` is excluded with
  *   the project setting source. This deliberately reopens and supersedes only
  *   [ADR-0008's](../../../../docs/adr/0008-claude-children-inherit-operator-environment.md)
- *   unconditional-inheritance decision; ticket 02 owns the durable ADR,
- *   domain, and architecture record of that supersession.
+ *   unconditional-inheritance decision, as recorded by
+ *   [ADR-0038](../../../../docs/adr/0038-claude-setting-sources-follow-project-trust.md).
  * - **The process environment is spread, not replaced.** The SDK's `env`
  *   *replaces* the subprocess environment entirely rather than merging into
  *   it, so a bare depth variable would strip the child of `PATH`, the
