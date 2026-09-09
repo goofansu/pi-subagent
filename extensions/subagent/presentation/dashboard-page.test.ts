@@ -12,6 +12,7 @@ import {
   subagentId,
 } from "../domain/index.ts";
 import type { RunInspection } from "../domain/inspection.ts";
+import { fixtureResult } from "../testing/presentation-fixtures.ts";
 import { PLAIN_THEME } from "../testing/stand-in-host.ts";
 import {
   type DashboardKey,
@@ -195,7 +196,8 @@ test("inspection toggles every retained transcript text block over one frozen ca
   const compact = dashboard.plain(120, 240).join("\n");
   assert.equal(dashboard.page().transcriptExpanded, false);
   assert.match(compact, /lines hidden; press t to expand transcript/);
-  assert.match(compact, /t expand transcript/);
+  assert.match(footer(compact.split("\n")), /t expand/);
+  assert.doesNotMatch(footer(compact.split("\n")), /transcript/);
   assert.doesNotMatch(compact, /assistant source 50|tool source 50/);
   assert.match(compact, /Dropped to stay within bounds: 1 transcript items/);
 
@@ -212,7 +214,8 @@ test("inspection toggles every retained transcript text block over one frozen ca
   const expanded = expandedDashboard.plain(120, 240).join("\n");
   assert.match(expanded, /assistant source 50/);
   assert.match(expanded, /tool source 50/);
-  assert.match(expanded, /t compact transcript/);
+  assert.match(footer(expanded.split("\n")), /t compact/);
+  assert.doesNotMatch(footer(expanded.split("\n")), /transcript/);
   assert.doesNotMatch(expanded, /lines hidden/);
   assert.match(expanded, /Dropped to stay within bounds: 1 transcript items/);
 
@@ -408,7 +411,6 @@ test("an inspection scrolls a line and a page, and clamps at both ends of its co
   assert.deepEqual(dashboard.draw(40, 10), top);
   dashboard.press("right");
   assert.equal(dashboard.page().offset, 4);
-  assert.match(footer(dashboard.draw(40, 10)), /5-8\//);
   dashboard.press("left");
   assert.deepEqual(dashboard.draw(40, 10), top);
 
@@ -416,7 +418,6 @@ test("an inspection scrolls a line and a page, and clamps at both ends of its co
   for (let i = 0; i < total; i += 1) dashboard.press("right");
   const bottom = dashboard.draw(40, 10);
   assert.equal(dashboard.page().offset, total - 4);
-  assert.match(footer(bottom), new RegExp(`${total}/${total}`));
   dashboard.press("right", "down");
   assert.deepEqual(dashboard.draw(40, 10), bottom);
 });
@@ -623,14 +624,81 @@ test("a list gives up its page keys, then its movement keys, then the way in", (
   ]);
 });
 
-test("an inspection advertises jumps, then progressively keeps refresh and the way back", () => {
+test("a ready inspection advertises concise applicable actions in the existing reduction order", () => {
   assert.deepEqual(ladder(inspection(), 200, 30), [
-    "up/down move · ←/→ page · Home/End jump · r refresh · <tui.select.cancel> back",
-    "←/→ page · Home/End jump · r refresh · <tui.select.cancel> back",
-    "Home/End jump · r refresh · <tui.select.cancel> back",
+    "up/down scroll · ←/→ page · g/G jump · r refresh · <tui.select.cancel> back",
+    "←/→ page · g/G jump · r refresh · <tui.select.cancel> back",
+    "g/G jump · r refresh · <tui.select.cancel> back",
     "r refresh · <tui.select.cancel> back",
     "<tui.select.cancel> back",
   ]);
+});
+
+test("inspection transcript and refresh hints appear only when applicable", () => {
+  const activeWithoutTranscript = inspection();
+  const activeFooter = footer(activeWithoutTranscript.draw(120, 200));
+  assert.match(activeFooter, /r refresh/);
+  assert.doesNotMatch(activeFooter, /t (?:expand|compact)/);
+
+  const result = fixtureResult({
+    identity: {
+      runId: CAPTURE.runId,
+      subagentId: CAPTURE.summary.subagentId,
+      agent: CAPTURE.summary.profile,
+    },
+    transcript: [
+      { role: "assistant", parts: [{ kind: "text", text: "retained" }] },
+    ],
+  });
+  const terminalWithTranscript = inspection();
+  terminalWithTranscript.send({
+    kind: "inspection",
+    capture: {
+      outcome: "result",
+      runId: CAPTURE.runId,
+      capturedAt: NOW,
+      summary: {
+        ...CAPTURE.summary,
+        phase: "completed",
+        settledAt: NOW,
+      },
+      usage: EMPTY_USAGE_SNAPSHOT,
+      result,
+    },
+    handoff: "resolved",
+  });
+  const compact = footer(terminalWithTranscript.draw(120, 200));
+  assert.match(compact, /t expand/);
+  assert.doesNotMatch(compact, /r refresh|Home\/End|transcript/);
+
+  terminalWithTranscript.press("toggleTranscript");
+  assert.match(footer(terminalWithTranscript.draw(120, 200)), /t compact/);
+});
+
+test("loading and error inspection footers offer only back", () => {
+  const dashboard = inspection();
+  dashboard.send({ kind: "reading" });
+  assert.equal(footer(dashboard.draw(120, 24)), "<tui.select.cancel> back");
+  dashboard.send({ kind: "failed" });
+  assert.equal(footer(dashboard.draw(120, 24)), "<tui.select.cancel> back");
+});
+
+test("inspection drops its counter before reducing any applicable action", () => {
+  const dashboard = inspection();
+  const all =
+    "up/down scroll · ←/→ page · g/G jump · r refresh · <tui.select.cancel> back";
+
+  const withCounter = footer(dashboard.draw(120, 10));
+  assert.equal(withCounter.startsWith(`${all} · `), true);
+  assert.match(withCounter, / · \d+-\d+\/\d+$/);
+
+  // At exactly the complete action width (plus the panel's two inset columns),
+  // the optional counter cannot fit, but every applicable action still can.
+  assert.equal(footer(dashboard.draw(visibleWidth(all) + 2, 10)), all);
+  assert.equal(
+    footer(dashboard.draw(visibleWidth(all) + 1, 10)),
+    "←/→ page · g/G jump · r refresh · <tui.select.cancel> back",
+  );
 });
 
 test("a page with nothing on it offers the way out and no range", () => {
