@@ -121,6 +121,15 @@ export type PiScriptStep =
       /** Model compaction removing the retained native messages entirely. */
       readonly retainedMessages?: "keep" | "remove";
     }
+  /** Pi finished one compaction attempt. */
+  | {
+      readonly step: "compaction-end";
+      readonly reason: "manual" | "threshold" | "overflow";
+      readonly result?: unknown;
+      readonly aborted: boolean;
+      readonly willRetry: boolean;
+      readonly errorMessage?: string;
+    }
   /** Pi scheduled another attempt after a retryable native execution. */
   | {
       readonly step: "auto-retry-start";
@@ -166,6 +175,8 @@ export interface StandInRecord {
   readonly prompts: number;
   /** Terminal events emitted, including retrying events. */
   readonly terminalEvents: number;
+  /** Compactions begun inside prompts. */
+  readonly compactionStarts: number;
   /** Additional native executions begun inside a prompt. */
   readonly agentStarts: number;
   /** Prompts begun after the session was disposed, which the SDK allows. */
@@ -245,6 +256,7 @@ export function createStandInPiSession(
   let binds = 0;
   let prompts = 0;
   let terminalEvents = 0;
+  let compactionStarts = 0;
   let agentStarts = 0;
   let promptsAfterDispose = 0;
   let queueClears = 0;
@@ -420,11 +432,25 @@ export function createStandInPiSession(
           break;
         }
         case "compaction-start": {
+          compactionStarts += 1;
           emit({ type: "compaction_start", reason: step.reason });
           if (step.retainedMessages === "remove") {
             messages.splice(0);
             executionMessageStart = 0;
           }
+          break;
+        }
+        case "compaction-end": {
+          emit({
+            type: "compaction_end",
+            reason: step.reason,
+            result: step.result,
+            aborted: step.aborted,
+            willRetry: step.willRetry,
+            ...(step.errorMessage === undefined
+              ? {}
+              : { errorMessage: step.errorMessage }),
+          });
           break;
         }
         case "auto-retry-start": {
@@ -612,6 +638,7 @@ export function createStandInPiSession(
       ),
       prompts,
       terminalEvents,
+      compactionStarts,
       agentStarts,
       promptsAfterDispose,
       queueClears,

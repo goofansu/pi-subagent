@@ -240,6 +240,8 @@ export function runPiExecution(
           if (terminal !== undefined) terminal.eligible = false;
           return;
         }
+        case "recovery-end":
+          return;
         case "final-settled": {
           if (terminal?.generation === nativeExecutionGeneration) {
             terminal.eligible = true;
