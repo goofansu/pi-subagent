@@ -52,9 +52,6 @@ export const PI_DIAGNOSTIC_REDACTED = "[redacted]";
 /** Adapter-owned wording for a terminal assistant failure. */
 export const PI_TERMINAL_FAILURE_DESCRIPTION = "Pi reported a failed message";
 
-/** Adapter-owned wording for failed recovery. */
-export const PI_RECOVERY_FAILURE_DESCRIPTION = "Pi recovery failed";
-
 /** Domain-neutral wording for an incomplete terminal assistant message. */
 export const PI_TERMINAL_ABORT_DESCRIPTION = "Pi did not complete its message";
 
@@ -272,14 +269,13 @@ export type PiEventReading =
   | { readonly kind: "tool"; readonly observations: readonly RunObservation[] }
   /** A new native execution within the managed Run. */
   | { readonly kind: "execution-start" }
-  /** Pi began recovery after a native execution ended. */
+  /** Pi began compaction after a native execution ended. */
   | { readonly kind: "recovery-start" }
-  /** The confined outcome of one recovery attempt. */
+  /** Pi finished compaction, with its provider-facing outcome confined here. */
   | {
       readonly kind: "recovery-end";
       readonly outcome: "succeeded" | "failed" | "aborted";
       readonly willRetry: boolean;
-      readonly diagnostic?: RunDiagnostic;
     }
   /** Pi has finished every recovery and native execution for this prompt. */
   | { readonly kind: "final-settled" }
@@ -397,19 +393,15 @@ export function readPiEvent(event: unknown): PiEventReading {
     return { kind: "recovery-start" };
   }
   if (event.type === "compaction_end") {
-    const outcome =
-      event.result !== undefined
-        ? "succeeded"
-        : event.aborted === true
-          ? "aborted"
-          : "failed";
     return {
       kind: "recovery-end",
-      outcome,
+      outcome:
+        event.result !== undefined
+          ? "succeeded"
+          : event.aborted === true
+            ? "aborted"
+            : "failed",
       willRetry: event.willRetry === true,
-      ...(outcome === "failed"
-        ? { diagnostic: confined(PI_RECOVERY_FAILURE_DESCRIPTION) }
-        : {}),
     };
   }
   if (event.type === "agent_settled") {
@@ -579,7 +571,7 @@ export function withoutInitialGoal(
 }
 
 /** Pi's terminal outcome, kept private to this module. */
-type PiTerminalOutcome = "answered" | "failed" | "aborted";
+type PiTerminalOutcome = "answered" | "incomplete" | "failed" | "aborted";
 
 /**
  * The terminal evidence one execution retains.
@@ -602,6 +594,7 @@ export function piTerminalEvidence(
     const message = messages[index];
     if (!isRecord(message) || message.role !== "assistant") continue;
     if (message.stopReason === "error") outcome = "failed";
+    else if (message.stopReason === "length") outcome = "incomplete";
     else if (message.stopReason === "aborted") outcome = "aborted";
     break;
   }

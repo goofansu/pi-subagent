@@ -12,6 +12,7 @@ import {
   piMessageObservations,
   piMessagePart,
   piRole,
+  piTerminalEvidence,
   piTerminalSnapshot,
   piToolProgress,
   piTranscriptItem,
@@ -749,15 +750,11 @@ test("recovery lifecycle stays in adapter-local event readings", () => {
     readPiEvent({
       type: "compaction_end",
       reason: "overflow",
-      result: { summary: "compacted" },
+      result: { summary: "smaller context" },
       aborted: false,
-      willRetry: false,
+      willRetry: true,
     }),
-    {
-      kind: "recovery-end",
-      outcome: "succeeded",
-      willRetry: false,
-    },
+    { kind: "recovery-end", outcome: "succeeded", willRetry: true },
   );
   assert.deepEqual(
     readPiEvent({
@@ -766,17 +763,9 @@ test("recovery lifecycle stays in adapter-local event readings", () => {
       result: undefined,
       aborted: false,
       willRetry: false,
-      errorMessage: "credentials for acct_1234 were rejected",
+      errorMessage: "provider credential and stack trace",
     }),
-    {
-      kind: "recovery-end",
-      outcome: "failed",
-      willRetry: false,
-      diagnostic: {
-        category: "backend-failure",
-        message: "Pi recovery failed: [redacted]",
-      },
-    },
+    { kind: "recovery-end", outcome: "failed", willRetry: false },
   );
   assert.deepEqual(
     readPiEvent({
@@ -784,18 +773,29 @@ test("recovery lifecycle stays in adapter-local event readings", () => {
       reason: "threshold",
       result: undefined,
       aborted: true,
-      willRetry: true,
-      errorMessage: "operator interrupted native compaction",
+      willRetry: false,
     }),
-    {
-      kind: "recovery-end",
-      outcome: "aborted",
-      willRetry: true,
-    },
+    { kind: "recovery-end", outcome: "aborted", willRetry: false },
   );
   assert.deepEqual(readPiEvent({ type: "agent_settled" }), {
     kind: "final-settled",
   });
+});
+
+test("terminal evidence distinguishes complete and incomplete responses", () => {
+  assert.equal(piTerminalEvidence([assistant()]).outcome, "answered");
+  assert.equal(
+    piTerminalEvidence([assistant({ stopReason: "length" })]).outcome,
+    "incomplete",
+  );
+  assert.equal(
+    piTerminalEvidence([assistant({ stopReason: "error" })]).outcome,
+    "failed",
+  );
+  assert.equal(
+    piTerminalEvidence([assistant({ stopReason: "aborted" })]).outcome,
+    "aborted",
+  );
 });
 
 test("the terminal snapshot recomputes the transcript, usage, turns, and gauge", () => {
