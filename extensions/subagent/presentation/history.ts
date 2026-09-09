@@ -36,20 +36,35 @@ export type HistoryCategory = (typeof HISTORY_CATEGORIES)[number];
 const statusText = (run: RunPresentation) =>
   run.status.text[0].toUpperCase() + run.status.text.slice(1);
 
+/** Standalone structural seam for the optional failed terminal summary detail. */
+type HistoryRunSummary = RunSummary & {
+  readonly failureDetail?: string | undefined;
+};
+
+/** Resolve the history-only frozen outcome detail without changing shared activity. */
+function historyOutcomeDetail(run: HistoryRunSummary): string {
+  if (run.phase === "failed") {
+    return run.failureDetail?.trim() ? run.failureDetail : "-";
+  }
+  if (run.phase === "cancelled") return run.cancellationReason ?? "-";
+  return "-";
+}
+
 /** Supply geometric fitting only already-resolved text and elapsed duration. */
 function historyContent(
   run: RunPresentation,
+  outcomeDetail: string,
   now: number,
   prefix: string,
 ): ResolvedRunLineContent & { readonly prefix: string } {
   // This intentionally remains separate from widget assembly: history uses
   // heading case and contributes a selection prefix to shared measurement.
-  // A shared helper would couple RunPresentation to otherwise geometric code.
+  // Its detail is a terminal outcome, not RunPresentation's shared activity.
   return {
     prefix,
     label: run.label,
     status: statusText(run),
-    activity: run.activity,
+    activity: outcomeDetail,
     duration: runElapsed(run, now),
   };
 }
@@ -86,13 +101,50 @@ export function historyCategoryCounts(
   return counts;
 }
 
-/** Render one displayed list, including shared measurements and selection surface. */
-export function historyRows(
+/** Render the overview with the shared live activity presentation unchanged. */
+export function overviewRows(
   runs: readonly RunSummary[],
   selectedIdentity: RunId | SubagentId | undefined,
   width: number,
   theme: RenderableTheme,
   capturedAt: number,
+): string[] {
+  return renderRows(
+    runs,
+    selectedIdentity,
+    width,
+    theme,
+    capturedAt,
+    (_run, presentation) => presentation.activity,
+  );
+}
+
+/** Render one Subagent's Run history with frozen outcome details. */
+export function historyRows(
+  runs: readonly HistoryRunSummary[],
+  selectedIdentity: RunId | SubagentId | undefined,
+  width: number,
+  theme: RenderableTheme,
+  capturedAt: number,
+): string[] {
+  return renderRows(
+    runs,
+    selectedIdentity,
+    width,
+    theme,
+    capturedAt,
+    historyOutcomeDetail,
+  );
+}
+
+/** Render one displayed list, including shared measurements and selection surface. */
+function renderRows<T extends RunSummary>(
+  runs: readonly T[],
+  selectedIdentity: RunId | SubagentId | undefined,
+  width: number,
+  theme: RenderableTheme,
+  capturedAt: number,
+  detail: (run: T, presentation: RunPresentation) => string,
 ): string[] {
   // One resolution per Run: the shared column widths and the rows they size
   // read the same presentation rather than deriving each Run's meaning three
@@ -100,15 +152,17 @@ export function historyRows(
   const resolved = runs.map((run) => {
     const selected =
       run.runId === selectedIdentity || run.subagentId === selectedIdentity;
+    const presentation = runPresentationFromSummary(run);
     return {
-      presentation: runPresentationFromSummary(run),
+      presentation,
+      outcomeDetail: detail(run, presentation),
       selected,
       prefix: selected ? SELECTED_PREFIX : UNSELECTED_PREFIX,
     };
   });
   const fittedRows = fitHistoryRunLines(
-    resolved.map(({ presentation, prefix }) =>
-      historyContent(presentation, capturedAt, prefix),
+    resolved.map(({ presentation, outcomeDetail, prefix }) =>
+      historyContent(presentation, outcomeDetail, capturedAt, prefix),
     ),
     width,
   );

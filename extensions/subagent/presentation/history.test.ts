@@ -18,7 +18,16 @@ const run: RunSummary = {
   turns: 3,
   startedAt: 0,
 };
-const row = (value: RunSummary, width = 120, selected = false, now = 1000) =>
+type HistoryRunSummary = RunSummary & {
+  readonly failureDetail?: string | undefined;
+};
+
+const row = (
+  value: HistoryRunSummary,
+  width = 120,
+  selected = false,
+  now = 1000,
+) =>
   historyRows(
     [value],
     selected ? value.runId : undefined,
@@ -27,7 +36,7 @@ const row = (value: RunSummary, width = 120, selected = false, now = 1000) =>
     now,
   )[0] ?? "";
 
-test("rows align labels, statuses, activity and rightmost elapsed time without actions or technical metadata", () => {
+test("rows align labels, statuses, outcome details and rightmost elapsed time without actions or technical metadata", () => {
   const [selected = "", other = ""] = historyRows(
     [run, { ...run, label: "Settings", phase: "finalizing" }],
     run.runId,
@@ -36,9 +45,9 @@ test("rows align labels, statuses, activity and rightmost elapsed time without a
     1000,
   );
   assert.equal(selected.indexOf("Running"), other.indexOf("Finalizing"));
-  assert.match(selected, /Running +· Reading middleware/);
-  assert.doesNotMatch(other, /Reading middleware/);
-  assert.match(other, /Finalizing +· —/);
+  assert.doesNotMatch(selected + other, /Reading middleware/);
+  assert.match(selected, /Running +· -/);
+  assert.match(other, /Finalizing +· -/);
   assert.ok(selected.startsWith("› Review authentication"));
   assert.ok(selected.endsWith("1.0s"));
   assert.ok(other.endsWith("1.0s"));
@@ -61,11 +70,8 @@ test("a list sizes label and status columns to its longest visible values", () =
   );
   assert.equal(lines[0].indexOf("Finalizing"), lines[1].indexOf("Running"));
   assert.equal(lines[0].indexOf("·"), lines[1].indexOf("·"));
-  assert.match(lines[0], /^ {2}One {11}Finalizing · —/);
-  assert.match(
-    lines[1],
-    /^ {2}Longer label {2}Running {4}· Reading middleware/,
-  );
+  assert.match(lines[0], /^ {2}One {11}Finalizing · -/);
+  assert.match(lines[1], /^ {2}Longer label {2}Running {4}· -/);
 });
 
 test("labels are capped at 40 columns in roomy subagent lists", () => {
@@ -77,24 +83,58 @@ test("labels are capped at 40 columns in roomy subagent lists", () => {
   assert.doesNotMatch(line, /a{40}/);
 });
 
-test("terminal rows do not imply stale tool activity is the result", () => {
-  for (const phase of ["completed", "failed", "cancelled"] as const) {
-    const line = row({ ...run, phase });
-    assert.doesNotMatch(line, /Reading middleware/);
-    assert.match(line, /—/);
+test("history resolves outcome detail for every phase and cancellation reason", () => {
+  const reasons = [undefined, "requested", "shutdown", "timeout"] as const;
+  for (const phase of [
+    "running",
+    "finalizing",
+    "completed",
+    "failed",
+    "cancelled",
+  ] as const) {
+    for (const cancellationReason of reasons) {
+      const line = stripVTControlCharacters(
+        row({
+          ...run,
+          phase,
+          cancellationReason,
+          activity: "Current activity",
+          lastActivity: { summary: "Last activity", changedAt: 0 },
+          failureDetail: "Safe failure detail",
+        }),
+      );
+      const expected =
+        phase === "failed"
+          ? "Safe failure detail"
+          : phase === "cancelled" && cancellationReason !== undefined
+            ? cancellationReason
+            : "-";
+      assert.match(
+        line,
+        new RegExp(`· ${expected.replaceAll(" ", "\\s+")}`),
+        `${phase} ${cancellationReason}`,
+      );
+      assert.doesNotMatch(line, /Current activity|Last activity/);
+      if (phase === "completed" || phase === "failed") {
+        assert.doesNotMatch(line, /requested|shutdown|timeout/);
+      }
+    }
   }
-  assert.match(
-    row({ ...run, phase: "cancelled", cancellationReason: "timeout" }),
-    /timeout/,
+});
+
+test("failed and cancelled outcome details fall back to a literal hyphen when unavailable", () => {
+  for (const failureDetail of [undefined, "", " ", "\t\n"]) {
+    const line = stripVTControlCharacters(
+      row({ ...run, phase: "failed", failureDetail }),
+    );
+    assert.match(line, /Failed +· -/);
+    assert.doesNotMatch(line, /· —/);
+  }
+  const cancelled = stripVTControlCharacters(
+    row({ ...run, phase: "cancelled", cancellationReason: undefined }),
   );
-  assert.match(
-    row({
-      ...run,
-      activity: undefined,
-      lastActivity: { summary: "Latest activity", changedAt: 0 },
-    }),
-    /Running +· —/,
-  );
+  assert.match(cancelled, /Cancelled +· -/);
+  assert.doesNotMatch(cancelled, /· —/);
 });
 
 test("assembled history preserves content-gate transitions and selection prefixes", () => {
@@ -110,9 +150,9 @@ test("assembled history preserves content-gate transitions and selection prefixe
   assert.doesNotMatch(selected(25), /Running/);
   assert.match(selected(26), /Running/);
   assert.match(selected(27), /Running/);
-  assert.doesNotMatch(selected(51), /Reading middleware/);
-  assert.match(selected(52), /Reading middleware/);
-  assert.match(selected(53), /Reading middleware/);
+  assert.doesNotMatch(selected(51), /· -/);
+  assert.match(selected(52), /· -/);
+  assert.match(selected(53), /· -/);
   assert.doesNotMatch(selected(79), /1\.0s/);
   assert.match(selected(80), /1\.0s$/);
   assert.match(selected(81), /1\.0s$/);
@@ -131,20 +171,22 @@ test("assembled history preserves content-gate transitions and selection prefixe
   assert.equal(visibleWidth(unselected), 80);
 });
 
-test("responsive rows drop elapsed time and activity before status and never split Unicode", () => {
+test("responsive rows fit oversized wide-character failure detail without splitting Unicode", () => {
   const unicode = {
     ...run,
     label: "任务 café 👩‍💻 é".repeat(20),
-    activity: "界".repeat(100),
+    phase: "failed" as const,
+    failureDetail: "界".repeat(100),
   };
   for (let width = 0; width <= 160; width += 1) {
     const line = row(unicode, width, true);
     assert.ok(visibleWidth(line) <= width);
     assert.doesNotMatch(line, /\ufffd/);
   }
-  const narrow = row(run, 40, true);
-  assert.match(narrow, /Review authentication.*Running/);
-  assert.doesNotMatch(narrow, /Reading middleware|enter runs/);
+  assert.match(row(unicode, 160, true), /界/);
+  const narrow = row(unicode, 40, true);
+  assert.match(narrow, /任务.*Failed/);
+  assert.doesNotMatch(narrow, /界|Reading middleware|enter runs/);
 });
 
 test("elapsed time uses the supplied event time and freezes at settlement", () => {
