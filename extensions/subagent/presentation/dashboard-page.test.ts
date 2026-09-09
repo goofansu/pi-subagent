@@ -146,37 +146,60 @@ const inspection = () => {
   return dashboard;
 };
 
-test("inspection toggles large tool transcript evidence between compact and full", () => {
+test("inspection toggles every retained transcript block without rereading its frozen capture", () => {
   const dashboard = inspection();
-  const output = Array.from(
-    { length: 100 },
-    (_, index) => `tool source ${index + 1}`,
-  ).join("\n");
+  const output = (label: string) =>
+    Array.from({ length: 100 }, (_, index) => `${label} ${index + 1}`).join(
+      "\n",
+    );
+  const frozen = structuredClone(CAPTURE);
   dashboard.send({
     kind: "inspection",
     capture: {
       ...CAPTURE,
       content: {
         ...CAPTURE.content,
-        transcript: [{ role: "tool", parts: [{ kind: "text", text: output }] }],
+        transcript: [
+          { role: "tool", parts: [{ kind: "text", text: output("first") }] },
+          { role: "tool", parts: [{ kind: "text", text: output("second") }] },
+        ],
       },
     },
     handoff: "pending",
   });
 
-  const compact = dashboard.plain(120, 200).join("\n");
-  assert.match(
-    compact,
-    /68 wrapped lines hidden; press t to expand transcript/,
-  );
+  const compact = dashboard.plain(120, 300).join("\n");
+  assert.equal(compact.match(/68 wrapped lines hidden/g)?.length, 2);
   assert.match(compact, /t expand transcript/);
-  assert.doesNotMatch(compact, /tool source 50/);
+  assert.doesNotMatch(compact, /first 50|second 50/);
+  const capturedBlocks = dashboard.page().blocks;
 
+  const expandedStep = reduceDashboardPage(
+    dashboard.page(),
+    { kind: "key", pressed: ["toggleTranscript"] },
+    CHROME,
+  );
+  assert.equal(expandedStep.ask, "draw");
+  assert.equal(expandedStep.page.blocks, capturedBlocks);
   dashboard.press("toggleTranscript");
-  const expanded = dashboard.plain(120, 200).join("\n");
-  assert.match(expanded, /tool source 50/);
+  const expanded = dashboard.plain(120, 300).join("\n");
+  assert.match(expanded, /first 50/);
+  assert.match(expanded, /second 50/);
   assert.match(expanded, /t compact transcript/);
   assert.doesNotMatch(expanded, /lines hidden/);
+
+  const compactedStep = reduceDashboardPage(
+    dashboard.page(),
+    { kind: "key", pressed: ["toggleTranscript"] },
+    CHROME,
+  );
+  assert.equal(compactedStep.ask, "draw");
+  assert.equal(compactedStep.page.blocks, capturedBlocks);
+  dashboard.press("toggleTranscript");
+  const recompact = dashboard.plain(120, 300).join("\n");
+  assert.equal(recompact.match(/68 wrapped lines hidden/g)?.length, 2);
+  assert.doesNotMatch(recompact, /first 50|second 50/);
+  assert.deepEqual(CAPTURE, frozen);
 });
 
 const footer = (lines: readonly string[]) =>

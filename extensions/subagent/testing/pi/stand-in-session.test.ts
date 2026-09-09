@@ -51,6 +51,7 @@ test("a prompt echoes the brief back as the Run's first user message", async () 
         timestamp: 2,
       },
     },
+    { type: "agent_settled" },
   ]);
 });
 
@@ -95,7 +96,10 @@ test("a user step and a tool-result step emit their own roles", async () => {
   await standIn.session.prompt("go");
 
   assert.deepEqual(
-    events.events().map((event) => (event.message as { role: string }).role),
+    events
+      .events()
+      .filter((event) => event.type === "message_end")
+      .map((event) => (event.message as { role: string }).role),
     ["user", "user", "toolResult"],
   );
 });
@@ -114,21 +118,30 @@ test("the tool execution steps emit the frames the adapter joins by call id", as
 
   await standIn.session.prompt("go");
 
-  assert.deepEqual(events.events().slice(1), [
-    {
-      type: "tool_execution_start",
-      toolCallId: "c1",
-      toolName: "read_file",
-      args: {},
-    },
-    {
-      type: "tool_execution_end",
-      toolCallId: "c1",
-      toolName: "read_file",
-      result: "40 lines",
-      isError: false,
-    },
-  ]);
+  assert.deepEqual(
+    events
+      .events()
+      .filter(
+        (event) =>
+          typeof event.type === "string" &&
+          event.type.startsWith("tool_execution_"),
+      ),
+    [
+      {
+        type: "tool_execution_start",
+        toolCallId: "c1",
+        toolName: "read_file",
+        args: {},
+      },
+      {
+        type: "tool_execution_end",
+        toolCallId: "c1",
+        toolName: "read_file",
+        result: "40 lines",
+        isError: false,
+      },
+    ],
+  );
 });
 
 test("restating usage rewrites the retained message without re-emitting it", async () => {
@@ -141,7 +154,9 @@ test("restating usage rewrites the retained message without re-emitting it", asy
   await standIn.session.prompt("go");
 
   const emitted = events.events()[1].message as { usage: { input: number } };
-  const terminal = events.events().at(-1) as {
+  const terminal = events
+    .events()
+    .find((event) => event.type === "agent_end") as {
     messages: readonly { usage?: { input: number } }[];
   };
   // What was streamed said forty; what the terminal frame carries says fifty,
@@ -168,6 +183,49 @@ test("a terminal step carries the whole message list and says whether it retries
     [true, false],
   );
   assert.equal((terminals[1].messages as readonly unknown[]).length, 3);
+});
+
+test("recovery, disjoint terminals, compaction removal, and final settlement follow Pi ordering", async () => {
+  const { standIn, events } = drive([
+    { step: "assistant", text: "first" },
+    { step: "terminal", messages: "current-execution" },
+    {
+      step: "compaction-start",
+      reason: "overflow",
+      retainedMessages: "remove",
+    },
+    { step: "agent-start" },
+    { step: "assistant", text: "second" },
+    { step: "terminal", messages: "current-execution" },
+  ]);
+
+  await standIn.session.prompt("go");
+
+  assert.deepEqual(
+    events
+      .events()
+      .filter((event) =>
+        [
+          "agent_end",
+          "compaction_start",
+          "agent_start",
+          "agent_settled",
+        ].includes(event.type as string),
+      )
+      .map((event) => event.type),
+    [
+      "agent_end",
+      "compaction_start",
+      "agent_start",
+      "agent_end",
+      "agent_settled",
+    ],
+  );
+  const terminals = events
+    .events()
+    .filter((event) => event.type === "agent_end");
+  assert.equal((terminals[0].messages as readonly unknown[]).length, 2);
+  assert.equal((terminals[1].messages as readonly unknown[]).length, 1);
 });
 
 test("a reject step makes the prompt reject", async () => {
@@ -238,7 +296,7 @@ test("a speak-on-abort step says one more thing while the session is torn down",
   await standIn.session.abort();
   await prompting;
 
-  assert.deepEqual(events.events().at(-1)?.message, {
+  assert.deepEqual(events.events().at(-2)?.message, {
     role: "assistant",
     content: [{ type: "text", text: "a frame nobody asked for" }],
     timestamp: 3,

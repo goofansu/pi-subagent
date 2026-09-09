@@ -72,7 +72,7 @@ export type PiScriptStep =
       /** Make the message carry a provider error, which is confined. */
       readonly errorMessage?: string;
       /** Pi's assistant-message terminal outcome, retained only inside its rig. */
-      readonly stopReason?: "stop" | "error" | "aborted";
+      readonly stopReason?: "stop" | "length" | "error" | "aborted";
     }
   | { readonly step: "user"; readonly text: string }
   | { readonly step: "tool-result"; readonly text: string }
@@ -107,8 +107,20 @@ export type PiScriptStep =
       /** Leave the native `steer` promise pending after consuming it. */
       readonly settle?: boolean;
     }
-  /** Emit the terminal frame. `willRetry` means it is not terminal after all. */
-  | { readonly step: "terminal"; readonly willRetry?: boolean }
+  /** Emit one native execution's terminal frame. */
+  | {
+      readonly step: "terminal";
+      readonly willRetry?: boolean;
+      /** Pi terminal arrays can be disjoint after recovery rebuilds its state. */
+      readonly messages?: "all" | "current-execution";
+    }
+  /** Recovery began after native terminal evidence but before managed settlement. */
+  | {
+      readonly step: "compaction-start";
+      readonly reason: "manual" | "threshold" | "overflow";
+      /** Model compaction removing the retained native messages entirely. */
+      readonly retainedMessages?: "keep" | "remove";
+    }
   /** Begin another native execution inside the same prompt. */
   | { readonly step: "agent-start" }
   /** Reject the prompt. */
@@ -237,6 +249,7 @@ export function createStandInPiSession(
   let activeRun: RunId | undefined;
   let abortedRun = false;
   let speakOnAbort: string | undefined;
+  let executionMessageStart = 0;
   let clock = 1;
 
   const gate = (name: string): Gate => {
@@ -390,13 +403,25 @@ export function createStandInPiSession(
           terminalEvents += 1;
           emit({
             type: "agent_end",
-            messages: [...messages],
+            messages:
+              step.messages === "current-execution"
+                ? messages.slice(executionMessageStart)
+                : [...messages],
             willRetry: step.willRetry === true,
           });
           break;
         }
+        case "compaction-start": {
+          emit({ type: "compaction_start", reason: step.reason });
+          if (step.retainedMessages === "remove") {
+            messages.splice(0);
+            executionMessageStart = 0;
+          }
+          break;
+        }
         case "agent-start": {
           agentStarts += 1;
+          executionMessageStart = messages.length;
           emit({ type: "agent_start" });
           break;
         }
@@ -461,6 +486,7 @@ export function createStandInPiSession(
       try {
         await runScript(script);
       } finally {
+        emit({ type: "agent_settled" });
         inFlight -= 1;
         releaseIdle();
       }

@@ -193,7 +193,7 @@ export function renderInspection(
   blocks: readonly InspectionBlock[],
   width: number,
   theme: RenderableTheme,
-  transcriptExpanded = true,
+  transcriptExpanded: boolean,
 ): readonly string[] {
   return blocks
     .flatMap((block) => {
