@@ -605,6 +605,218 @@ test("a terminal provider abort never answers and core cancellation keeps its re
   }
 });
 
+test("length recovery cancelled before its next execution preserves cancellation and partial evidence", async () => {
+  const { value } = await withPiSession(
+    {
+      scripts: [
+        [
+          {
+            step: "assistant",
+            text: "useful partial answer",
+            stopReason: "length",
+            usage: { input: 11, output: 7, totalTokens: 101 },
+          },
+          { step: "terminal", messages: "current-execution" },
+          {
+            step: "compaction-start",
+            reason: "overflow",
+            retainedMessages: "remove",
+          },
+          { step: "hang" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* until(
+          "length recovery to begin",
+          Effect.sync(() => rig.standIn.record().terminalEvents === 1),
+        );
+        yield* rig.supervisor.cancel([started.runId]);
+        yield* untilTerminal(rig, started.runId);
+        return yield* rig.supervisor.result(started.runId);
+      }),
+  );
+
+  assert.equal(value.outcome, "result");
+  if (value.outcome === "result") {
+    assert.equal(value.result.status, "cancelled");
+    assert.equal(value.result.cancellationReason, "requested");
+    assert.equal(value.result.finalOutput, "useful partial answer");
+    assert.equal(value.result.transcript.length, 1);
+    assert.deepEqual(value.result.usage.totals, {
+      input: 11,
+      output: 7,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+    });
+    assert.equal(value.result.usage.turns, 1);
+  }
+});
+
+test("context-overflow recovery cancelled before its next execution preserves cancellation", async () => {
+  const { value } = await withPiSession(
+    {
+      scripts: [
+        [
+          {
+            step: "assistant",
+            text: "overflow partial",
+            stopReason: "error",
+            errorMessage: "provider context overflow",
+          },
+          { step: "terminal", messages: "current-execution" },
+          { step: "compaction-start", reason: "overflow" },
+          { step: "hang" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* until(
+          "overflow recovery to begin",
+          Effect.sync(() => rig.standIn.record().terminalEvents === 1),
+        );
+        yield* rig.supervisor.cancel([started.runId]);
+        yield* untilTerminal(rig, started.runId);
+        return yield* rig.supervisor.result(started.runId);
+      }),
+  );
+
+  assert.equal(value.outcome, "result");
+  if (value.outcome === "result") {
+    assert.equal(value.result.status, "cancelled");
+    assert.equal(value.result.cancellationReason, "requested");
+    assert.equal(value.result.finalOutput, "overflow partial");
+    assert.ok(
+      value.result.diagnostics.some(
+        (diagnostic) => diagnostic.category === "backend-failure",
+      ),
+    );
+  }
+});
+
+test("disjoint native executions retain ordered evidence and truthful aggregate semantics", async () => {
+  const { value } = await withPiSession(
+    {
+      scripts: [
+        [
+          {
+            step: "assistant",
+            text: "first execution",
+            usage: { input: 10, output: 2, totalTokens: 100 },
+            model: { provider: "provider", id: "first-model" },
+            toolCalls: [{ name: "read", callId: "call-1" }],
+          },
+          { step: "tool-start", callId: "call-1", name: "read" },
+          {
+            step: "tool-end",
+            callId: "call-1",
+            name: "read",
+            result: "earlier tool evidence",
+          },
+          { step: "tool-result", text: "earlier tool evidence" },
+          { step: "terminal", messages: "current-execution" },
+          {
+            step: "compaction-start",
+            reason: "overflow",
+            retainedMessages: "remove",
+          },
+          { step: "agent-start" },
+          {
+            step: "assistant",
+            text: "actual final answer",
+            usage: { input: 20, output: 3, totalTokens: 250 },
+            model: { provider: "provider", id: "final-model" },
+          },
+          { step: "terminal", messages: "current-execution" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* untilTerminal(rig, started.runId);
+        return yield* rig.supervisor.result(started.runId);
+      }),
+  );
+
+  assert.equal(value.outcome, "result");
+  if (value.outcome === "result") {
+    assert.equal(value.result.status, "completed");
+    assert.equal(value.result.finalOutput, "actual final answer");
+    assert.deepEqual(
+      value.result.transcript.map((item) =>
+        item.parts
+          .map((part) => (part.kind === "text" ? part.text : part.name))
+          .join(" "),
+      ),
+      ["first execution read", "earlier tool evidence", "actual final answer"],
+    );
+    assert.deepEqual(value.result.usage.totals, {
+      input: 30,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+    });
+    assert.equal(value.result.usage.turns, 2);
+    assert.deepEqual(value.result.usage.context, { tokens: 250 });
+    assert.equal(value.result.model, "provider/final-model");
+    assert.deepEqual(value.result.tools, [
+      {
+        name: "read",
+        callId: "call-1",
+        status: "completed",
+        outputSummary: "earlier tool evidence",
+      },
+    ]);
+  }
+});
+
+test("a text-less terminal assistant leaves the previous actual answer authoritative", async () => {
+  const { value } = await withPiSession(
+    {
+      scripts: [
+        [
+          { step: "assistant", text: "genuine partial answer" },
+          {
+            step: "assistant",
+            toolCalls: [{ name: "read", callId: "call-without-answer" }],
+          },
+          { step: "terminal", messages: "current-execution" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* untilTerminal(rig, started.runId);
+        const result = yield* rig.supervisor.result(started.runId);
+        return {
+          result,
+          reconciliationDifferences:
+            rig.supervisor.counters().reconciliationDifferences,
+        };
+      }),
+  );
+
+  assert.equal(value.result.outcome, "result");
+  if (value.result.outcome === "result") {
+    assert.equal(value.result.result.status, "completed");
+    assert.equal(value.result.result.finalOutput, "genuine partial answer");
+    assert.ok(
+      !value.result.result.diagnostics.some(
+        (diagnostic) => diagnostic.category === "reconciliation-difference",
+      ),
+    );
+  }
+  assert.equal(value.reconciliationDifferences, 0);
+});
+
 test("cancellation during a later native execution discards earlier terminal evidence", async () => {
   const { value } = await withPiSession(
     {
