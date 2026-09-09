@@ -22,6 +22,7 @@
  */
 
 import { rawKeyHint } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type {
   RunHistoryCapture,
   RunSummary,
@@ -133,8 +134,8 @@ export interface DashboardPage {
  *
  * The host resolves the operator's bindings, because a keymap is a Session
  * service and this module may not hold one. `pageUp` and `pageDown` are those
- * configured bindings; `left`, `right` and `refresh` are keys the dashboard
- * answers itself whatever the bindings are.
+ * configured bindings; `left`, `right`, the boundary jumps, and `refresh` are
+ * meanings the dashboard answers itself whatever the bindings are.
  *
  * A keystroke can mean several of these at once — an operator who binds
  * `tui.select.pageUp` to the left arrow has pressed both — so a key event
@@ -150,8 +151,8 @@ export type DashboardKey =
   | "pageDown"
   | "left"
   | "right"
-  | "home"
-  | "end"
+  | "beginning"
+  | "lastScreenful"
   | "confirm"
   | "cancel"
   | "refresh"
@@ -615,13 +616,11 @@ interface FooterHint {
 /**
  * The footer's ladder: the same hints, given up one rung at a time.
  *
- * One ladder for every page, so the overview and an inspection cannot offer
- * different hints for the same key. The hints are listed in the order they are
- * shown and each names the rung it is given up at, because those two orders
- * are not the same — a list gives up its page keys before its movement keys,
- * an inspection the other way round. The last rung is the back hint alone,
- * which is never given up: a way out an operator cannot see is a way out they
- * cannot take.
+ * The hints are listed in the order they are shown and each names the rung it
+ * is given up at, because those two orders are not the same — a list gives up
+ * its page keys before its movement keys, an inspection the other way round.
+ * The last rung is the back hint alone, which is never given up: a way out an
+ * operator cannot see is a way out they cannot take.
  */
 const footerLadder = (
   hints: readonly FooterHint[],
@@ -637,6 +636,20 @@ const footerLadder = (
         back,
       ].join(" · "),
   );
+
+/** Inspection keeps every applicable action before its optional position. */
+const inspectionFooter = (
+  width: number,
+  hints: readonly string[],
+  range: string,
+): string => {
+  const complete = hints[0];
+  if (complete && range) {
+    const withRange = `${complete} · ${range}`;
+    if (visibleWidth(withRange) <= width) return withRange;
+  }
+  return dashboardFooter(width, hints);
+};
 
 /** Draw the page. Every fact this reads is already on the value. */
 const drawPage = (
@@ -670,22 +683,23 @@ const drawPage = (
         : page.status === "error"
           ? [theme.fg("error", "Result unavailable. Go back to run history.")]
           : body,
-      dashboardFooter(
-        contentWidth,
-        ready
-          ? footerLadder(
+      ready
+        ? inspectionFooter(
+            contentWidth,
+            footerLadder(
               [
-                { text: movement, droppedAt: 1 },
+                {
+                  text: rawKeyHint(chrome.moveKeys.join("/"), "scroll"),
+                  droppedAt: 1,
+                },
                 { text: pageHint, droppedAt: 2 },
-                { text: rawKeyHint("Home/End", "jump"), droppedAt: 3 },
+                { text: rawKeyHint("g/G", "jump"), droppedAt: 3 },
                 ...(hasTranscript
                   ? [
                       {
                         text: rawKeyHint(
                           "t",
-                          page.transcriptExpanded
-                            ? "compact transcript"
-                            : "expand transcript",
+                          page.transcriptExpanded ? "compact" : "expand",
                         ),
                         droppedAt: 4,
                       },
@@ -696,10 +710,10 @@ const drawPage = (
                   : []),
               ],
               back,
-            )
-          : [back],
-        ready ? range : "",
-      ),
+            ),
+            range,
+          )
+        : back,
       theme,
     );
   }
@@ -794,9 +808,9 @@ const keyed = (
         },
         ask: "draw",
       };
-    if (pressed.includes("home"))
+    if (pressed.includes("beginning"))
       return { page: scrolledPage(page, -page.lines.length), ask: "draw" };
-    if (pressed.includes("end"))
+    if (pressed.includes("lastScreenful"))
       return { page: scrolledPage(page, page.lines.length), ask: "draw" };
     const delta = scrollDelta(page, pressed);
     return delta

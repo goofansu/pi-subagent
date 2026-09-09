@@ -226,7 +226,7 @@ test("run history keeps its entry-time elapsed duration until it is reread", asy
   await close(rig, browsing);
 });
 
-test("inspection handles Home, End, and normalized wheel deltas while other pointer input falls through", async (t) => {
+test("host distinguishes g/G inspection jumps, ignores Home/End, and leaves other pages unchanged", async (t) => {
   const rig = hostRig(t, {
     resumableSteps: [
       [
@@ -242,6 +242,13 @@ test("inspection handles Home, End, and normalized wheel deltas while other poin
   await start(rig, "long inspection");
   await rig.pump();
   const browsing = await open(rig);
+  let requests = rig.host.customRenderRequests();
+  for (const key of ["g", "G", HOME, END]) rig.host.customKey(key);
+  assert.equal(
+    rig.host.customRenderRequests(),
+    requests,
+    "overview gives boundary keys no navigation behavior",
+  );
 
   const wheel = (wheelDelta: number): TuiMouseEvent => ({
     type: "wheel",
@@ -260,16 +267,24 @@ test("inspection handles Home, End, and normalized wheel deltas while other poin
   assert.equal(rig.host.customMouse(wheel(3)), undefined);
   rig.host.customKey(ENTER);
   await rig.pump();
+  requests = rig.host.customRenderRequests();
+  for (const key of ["g", "G", HOME, END]) rig.host.customKey(key);
+  assert.equal(
+    rig.host.customRenderRequests(),
+    requests,
+    "Run history gives boundary keys no navigation behavior",
+  );
   assert.equal(rig.host.customMouse(wheel(-2)), undefined);
   rig.host.customKey(ENTER);
   await rig.pump();
 
   const draw = () =>
-    rig.host.customLines(80, 10).map(stripVTControlCharacters).join("\n");
+    rig.host.customLines(120, 10).map(stripVTControlCharacters).join("\n");
   const top = draw();
   assert.match(top, /Label: long inspection/);
-  assert.match(top, /Home\/End jump/);
-  const requests = rig.host.customRenderRequests();
+  assert.match(top, /g\/G jump/);
+  assert.doesNotMatch(top, /Home\/End/);
+  requests = rig.host.customRenderRequests();
   assert.deepEqual(rig.host.customMouse(wheel(3)), { handled: true });
   assert.equal(rig.host.customRenderRequests(), requests + 1);
   const downThree = draw();
@@ -278,7 +293,24 @@ test("inspection handles Home, End, and normalized wheel deltas while other poin
   assert.deepEqual(rig.host.customMouse(wheel(-2)), { handled: true });
   assert.match(draw(), /2-5\//);
 
+  const beforeObsoleteKeys = draw();
+  requests = rig.host.customRenderRequests();
+  rig.host.customKey(HOME);
   rig.host.customKey(END);
+  assert.equal(draw(), beforeObsoleteKeys);
+  assert.equal(
+    rig.host.customRenderRequests(),
+    requests,
+    "Home and End are no longer recognized",
+  );
+
+  requests = rig.host.customRenderRequests();
+  rig.host.customKey("g");
+  assert.equal(rig.host.customRenderRequests(), requests + 1);
+  assert.equal(draw(), top);
+  requests = rig.host.customRenderRequests();
+  rig.host.customKey("G");
+  assert.equal(rig.host.customRenderRequests(), requests + 1);
   const bottom = draw();
   const bottomRange = /(\d+)-(\d+)\/(\d+)/.exec(bottom);
   assert.ok(bottomRange);
@@ -290,7 +322,7 @@ test("inspection handles Home, End, and normalized wheel deltas while other poin
   );
   assert.equal(draw(), bottom);
 
-  rig.host.customKey(HOME);
+  rig.host.customKey("g");
   assert.equal(draw(), top);
   assert.deepEqual(
     rig.host.customMouse(wheel(-50)),
@@ -459,7 +491,7 @@ test("all three levels retain a full themed surface across resize and invalidati
     assert.match(
       plain.split("\n").at(-2) ?? "",
       title === "Subagent dashboard · run inspection"
-        ? /Home\/End jump/
+        ? /g\/G jump/
         : /up\/down move/,
     );
     assert.match(plain.split("\n")[0] ?? "", /^ +$/);

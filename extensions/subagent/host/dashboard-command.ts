@@ -193,8 +193,8 @@ export async function openDashboardUi(
             pressed.push("pageDown");
           if (matchesKey(data, "left")) pressed.push("left");
           if (matchesKey(data, "right")) pressed.push("right");
-          if (matchesKey(data, "home")) pressed.push("home");
-          if (matchesKey(data, "end")) pressed.push("end");
+          if (matchesKey(data, "g")) pressed.push("beginning");
+          if (matchesKey(data, "shift+g")) pressed.push("lastScreenful");
           if (matchesKey(data, "r") || matchesKey(data, "shift+r"))
             pressed.push("refresh");
           if (matchesKey(data, "t") || matchesKey(data, "shift+t"))
