@@ -489,6 +489,14 @@ test("a retrying provider error remains intermediate when the final attempt succ
             errorMessage: "temporary provider failure",
           },
           { step: "terminal", willRetry: true },
+          {
+            step: "auto-retry-start",
+            attempt: 1,
+            maxAttempts: 3,
+            delayMs: 500,
+            errorMessage: "temporary provider failure",
+          },
+          { step: "agent-start" },
           { step: "assistant", text: "successful answer", stopReason: "stop" },
           { step: "terminal" },
         ],
@@ -602,6 +610,36 @@ test("a terminal provider abort never answers and core cancellation keeps its re
     assert.equal(cancelled.value.result.cancellationReason, "requested");
     assert.equal(cancelled.value.result.finalOutput, "partial");
     assert.deepEqual(cancelled.value.result.diagnostics, []);
+  }
+});
+
+test("final settlement restores terminal evidence after recovery without another execution", async () => {
+  const { value } = await withPiSession(
+    {
+      scripts: [
+        [
+          {
+            step: "assistant",
+            text: "answer before compaction",
+            stopReason: "stop",
+          },
+          { step: "terminal", messages: "current-execution" },
+          { step: "compaction-start", reason: "threshold" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(piRigRequest()));
+        yield* untilTerminal(rig, started.runId);
+        return yield* rig.supervisor.result(started.runId);
+      }),
+  );
+
+  assert.equal(value.outcome, "result");
+  if (value.outcome === "result") {
+    assert.equal(value.result.status, "completed");
+    assert.equal(value.result.finalOutput, "answer before compaction");
   }
 });
 

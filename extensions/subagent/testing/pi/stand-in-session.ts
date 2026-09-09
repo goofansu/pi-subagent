@@ -121,6 +121,14 @@ export type PiScriptStep =
       /** Model compaction removing the retained native messages entirely. */
       readonly retainedMessages?: "keep" | "remove";
     }
+  /** Pi scheduled another attempt after a retryable native execution. */
+  | {
+      readonly step: "auto-retry-start";
+      readonly attempt: number;
+      readonly maxAttempts: number;
+      readonly delayMs: number;
+      readonly errorMessage: string;
+    }
   /** Begin another native execution inside the same prompt. */
   | { readonly step: "agent-start" }
   /** Reject the prompt. */
@@ -417,6 +425,16 @@ export function createStandInPiSession(
             messages.splice(0);
             executionMessageStart = 0;
           }
+          break;
+        }
+        case "auto-retry-start": {
+          emit({
+            type: "auto_retry_start",
+            attempt: step.attempt,
+            maxAttempts: step.maxAttempts,
+            delayMs: step.delayMs,
+            errorMessage: step.errorMessage,
+          });
           break;
         }
         case "agent-start": {

@@ -185,6 +185,44 @@ test("a terminal step carries the whole message list and says whether it retries
   assert.equal((terminals[1].messages as readonly unknown[]).length, 3);
 });
 
+test("an auto-retry step emits Pi's recovery event before the next execution", async () => {
+  const { standIn, events } = drive([
+    { step: "terminal", willRetry: true },
+    {
+      step: "auto-retry-start",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 500,
+      errorMessage: "temporary provider failure",
+    },
+    { step: "agent-start" },
+  ]);
+
+  await standIn.session.prompt("go");
+
+  assert.deepEqual(
+    events.events().find((event) => event.type === "auto_retry_start"),
+    {
+      type: "auto_retry_start",
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 500,
+      errorMessage: "temporary provider failure",
+    },
+  );
+  assert.deepEqual(
+    events
+      .events()
+      .filter((event) =>
+        ["agent_end", "auto_retry_start", "agent_start"].includes(
+          event.type as string,
+        ),
+      )
+      .map((event) => event.type),
+    ["agent_end", "auto_retry_start", "agent_start"],
+  );
+});
+
 test("recovery, disjoint terminals, compaction removal, and final settlement follow Pi ordering", async () => {
   const { standIn, events } = drive([
     { step: "assistant", text: "first" },
