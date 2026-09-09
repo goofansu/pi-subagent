@@ -265,10 +265,11 @@ test("inspection handles Home, End, and normalized wheel deltas while other poin
   await rig.pump();
 
   const draw = () =>
-    rig.host.customLines(80, 10).map(stripVTControlCharacters).join("\n");
+    rig.host.customLines(120, 10).map(stripVTControlCharacters).join("\n");
   const top = draw();
   assert.match(top, /Label: long inspection/);
-  assert.match(top, /Home\/End jump/);
+  assert.match(top, /g\/G jump/);
+  assert.doesNotMatch(top, /Home\/End/);
   const requests = rig.host.customRenderRequests();
   assert.deepEqual(rig.host.customMouse(wheel(3)), { handled: true });
   assert.equal(rig.host.customRenderRequests(), requests + 1);
@@ -459,7 +460,7 @@ test("all three levels retain a full themed surface across resize and invalidati
     assert.match(
       plain.split("\n").at(-2) ?? "",
       title === "Subagent dashboard · run inspection"
-        ? /Home\/End jump/
+        ? /g\/G jump/
         : /up\/down move/,
     );
     assert.match(plain.split("\n")[0] ?? "", /^ +$/);
