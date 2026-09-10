@@ -35,14 +35,33 @@ that can continue across tasks; a **Run** is one task started in that conversati
 
 ## Trust and Claude settings
 
-Pi decides whether the Session working directory is trusted once, and every
-subagent uses that fixed decision. Claude subagents in trusted directories use
-Claude Code's normal user, project, and local settings. In untrusted
-directories they use only the user setting source: user-owned settings, MCP
-servers, and cloud connectors remain available, while project/local settings,
-project instructions loaded through them, and project `.mcp.json` are excluded.
+Pi resolves trust for the Session working directory. When a subagent starts,
+the extension reads that decision with `ctx.isProjectTrusted()` and stores it in
+`SubagentContext`. The value stays fixed when you resume the subagent.
+
+Claude subagents in trusted directories load Claude Code's user, project, and
+local settings. In untrusted directories, they load only the user setting
+source. User settings, MCP servers, and cloud connectors remain available.
+Project and local settings, their project instructions, and project `.mcp.json`
+are excluded.
+
+```text
+Pi session (trust already resolved)
+        │  ctx.isProjectTrusted()
+        ▼
+sessionFactsOf() → SessionFacts.projectTrusted
+        ▼
+supervisor.ts → SubagentContext.projectTrusted (fixed per Subagent)
+        ▼
+   ┌────────────┴────────────┐
+   ▼                         ▼
+Claude adapter           Pi adapter
+settingSources:          SettingsManager.create({ projectTrusted })
+  trusted → omitted      resolveProjectTrust: () => projectTrusted
+  untrusted → ["user"]
+```
 
 Claude subagents bypass permission prompts in both cases. **Trust is not a
-sandbox:** it does not restrict filesystem, shell, network, or other ambient
-access, and user-configured MCP servers and connectors may provide capabilities
-that are not listed in a profile.
+sandbox.** It does not restrict filesystem, shell, network, or other ambient
+access. User-configured MCP servers and connectors may provide capabilities
+that a profile does not list.
