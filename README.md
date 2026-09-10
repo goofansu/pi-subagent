@@ -1,6 +1,6 @@
 # pi-subagent
 
-Delegate tasks to specialised subagents in Pi, using Pi or Claude. Each subagent
+Delegate tasks to specialised subagents in pi, using either the pi or Claude backend. Each subagent
 works in its own conversation, reports progress, and sends its result back when
 finished. You can continue its conversation, give it guidance, or cancel its work.
 
