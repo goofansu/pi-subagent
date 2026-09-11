@@ -1,8 +1,9 @@
 # pi-subagent
 
-Run specialised agents in separate conversations from Pi. A subagent can use
-the Pi or Claude backend while you continue other work. You can resume, steer,
-cancel, and inspect each Run.
+Run and orchestrate specialised agents in separate conversations from Pi, backed
+by Pi or Claude. Fan out work in parallel, keep track of every Run from the live
+dashboard, and resume, steer, or cancel agents without interrupting your main
+conversation.
 
 ## Install
 
