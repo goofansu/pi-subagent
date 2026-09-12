@@ -62,10 +62,10 @@ test("terminal inspection shows every retained transcript item and returns to th
   const dashboard = await inspect(rig);
   const text = screen(rig);
   assert.match(text, /Subagent dashboard · run inspection/);
-  assert.match(text, /Captured at:/);
+  assert.doesNotMatch(text, /Captured at:/);
   assert.ok(text.includes(work.runId));
   assert.ok(text.includes(work.subagentId));
-  assert.match(text, /Label: inspected Label/);
+  assert.match(text, /inspected Label/);
   for (let i = 0; i < 10; i += 1)
     assert.ok(text.includes(`retained item ${i}`));
   assert.doesNotMatch(
@@ -163,22 +163,22 @@ test("inspection includes mixed transcript parts, every tool, normalized usage, 
     "Tool call · mixed-call",
     "text after mixed call",
     "Reported model: transcript-model",
-    "Model: primary-model",
+    "model:              primary-model",
     "normalized user text",
     "normalized tool text",
-    "input: 123",
-    "output: 45",
-    "cacheRead: 6",
-    "cacheWrite: 7",
-    "cost: 0.125",
-    "Turns: 3",
-    "Context tokens: 181 / 1000",
+    "input tokens:       123",
+    "output tokens:      45",
+    "cache read tokens:  6",
+    "cache write tokens: 7",
+    "total tokens:       181",
+    "cost:               $0.1250",
+    "turns:              3",
     "captured diagnostic",
     "https://example.com/report",
     "final answer",
     "last answer line",
     "failure explanation for Call ID: retained-error-id",
-    "Run status: failed",
+    "status:             failed",
     "Assistant:",
     "User:",
     "Tool output:",
@@ -192,14 +192,13 @@ test("inspection includes mixed transcript parts, every tool, normalized usage, 
     ])
       assert.ok(text.includes(expected), expected);
   const orderedSections = [
-    "Usage:",
-    "Metadata:",
-    "Final output:",
-    "Error:",
-    "Diagnostics:",
-    "Tools:",
-    "Links:",
-    "Transcript:",
+    "Metadata",
+    "Final output",
+    "Error",
+    "Diagnostics",
+    "Tools",
+    "Links",
+    "Transcript",
   ];
   for (let i = 1; i < orderedSections.length; i += 1)
     assert.ok(
@@ -249,7 +248,7 @@ for (const truncated of [false, true])
       assert.doesNotMatch(text, /Truncation:/);
       assert.match(text, /Dropped to stay within bounds: 2 transcript items/);
       assert.match(text, /bytes of the final output/);
-      const outputHeading = text.indexOf("Final output:");
+      const outputHeading = text.indexOf("Final output");
       const outputWarning = text.indexOf(
         "6 bytes of the final output were cut.",
       );
@@ -257,7 +256,7 @@ for (const truncated of [false, true])
       assert.ok(outputWarning < text.indexOf("bounded", outputWarning));
       assert.ok(
         text.indexOf("Dropped to stay within bounds:") <
-          text.indexOf("Transcript:"),
+          text.indexOf("Transcript"),
       );
       for (let i = 2; i < 10; i += 1)
         assert.ok(text.includes(`bounded text ${i}`));
@@ -266,7 +265,7 @@ for (const truncated of [false, true])
   });
 
 for (const reason of ["requested", "timeout"] as const)
-  test(`terminal inspection captures ${reason} Cancellation reason and settled duration`, async (t) => {
+  test(`terminal inspection captures ${reason} Cancellation reason and settlement time`, async (t) => {
     const rig = hostRig(t, {
       testClock: true,
       policy: {
@@ -286,17 +285,17 @@ for (const reason of ["requested", "timeout"] as const)
     await rig.pump();
     const dashboard = await inspect(rig);
     const text = screen(rig);
-    assert.ok(text.includes(`Run status: cancelled (${reason})`));
-    assert.match(text, /Started at: 1970-01-01T00:00:00.000Z/);
-    assert.match(text, /Settled at: 1970-01-01T00:00:02.000Z/);
-    assert.match(text, /Duration: 2.0s/);
+    assert.match(text, new RegExp(`status: +cancelled \\(${reason}\\)`));
+    assert.match(text, /created: +1970-01-01 00:00 UTC/);
+    assert.match(text, /settled: +1970-01-01 00:00 UTC/);
+    assert.doesNotMatch(text, /Duration:/);
     assert.match(text, /partial answer/);
     await rig.advanceClock(5000);
     assert.equal(screen(rig), text);
     await close(rig, dashboard);
   });
 
-test("capture and capture time survive eviction; reopening observes current expiry and retains metadata", async (t) => {
+test("capture survives eviction; reopening observes current expiry and retains metadata", async (t) => {
   const rig = hostRig(t, {
     testClock: true,
     policy: { ...RIG_POLICY, maxResultBytes: 4096, resultStoreBytes: 4096 },
@@ -309,7 +308,7 @@ test("capture and capture time survive eviction; reopening observes current expi
   const dashboard = await inspect(rig);
   const captured = screen(rig);
   assert.match(captured, /the rig answered/);
-  assert.match(captured, /Captured at: 1970-01-01T00:00:00.000Z/);
+  assert.doesNotMatch(captured, /Captured at:/);
   await rig.advanceClock(2000);
   const other = await start(rig, "evicts old output");
   await rig.settled(other.runId);
@@ -322,10 +321,10 @@ test("capture and capture time survive eviction; reopening observes current expi
   await rig.pump();
   const reopened = screen(rig);
   assert.match(reopened, /Result expired: output is gone/);
-  assert.match(reopened, /Captured at: 1970-01-01T00:00:02.000Z/);
-  assert.match(reopened, /Label: inspected Label/);
-  assert.match(reopened, /Run status: completed/);
-  assert.match(reopened, /Turns: 1/);
+  assert.doesNotMatch(reopened, /Captured at:/);
+  assert.match(reopened, /inspected Label/);
+  assert.match(reopened, /status: +completed/);
+  assert.match(reopened, /turns: +1/);
   assert.doesNotMatch(reopened, /the rig answered|available but empty/);
   assert.ok(reopened.includes(work.runId));
   await close(rig, dashboard);

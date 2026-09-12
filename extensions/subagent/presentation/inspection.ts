@@ -15,7 +15,6 @@ import {
   formatTruncation,
 } from "./run-card.ts";
 import { runPresentationFromSummary } from "./run-presentation.ts";
-import { formatDuration } from "./status.ts";
 import { fitToWidth } from "./text-width.ts";
 import type { HandoffStatus } from "./views.ts";
 
@@ -37,7 +36,7 @@ export function inspectionBlocks(
   };
   const section = (title: string) => {
     add("literal", "");
-    add("heading", `${title}:`);
+    add("heading", title);
   };
   if (capture.outcome === "unknown Run") {
     add(
@@ -60,51 +59,50 @@ export function inspectionBlocks(
   // `run-presentation.ts` is where that preference and the Run's meaning are
   // decided.
   const run = runPresentationFromSummary(summary, result);
-  add("heading", `Label: ${run.label}`);
-  add(
-    "literal",
-    `Profile: ${summary.profile} · backend: ${summary.backend}`,
-    `Run status: ${run.status.text}${run.cancellationReason ? ` (${run.cancellationReason})` : ""}`,
-  );
+  add("heading", run.label);
+  add("literal", "");
 
   const usage = result?.usage ?? capture.usage;
-  section("Usage");
+  const { input, output, cacheRead, cacheWrite, cost } = usage.totals;
+  const totalTokens = input + output + cacheRead + cacheWrite;
+  const fact = (label: string, value: string | number) =>
+    `${`${label}:`.padEnd(20)}${value}`;
+  const instant = (milliseconds: number) => {
+    const iso = new Date(milliseconds).toISOString();
+    return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+  };
   add(
     "literal",
-    `Turns: ${usage.turns}`,
-    ...Object.entries(usage.totals).map(([name, count]) => `${name}: ${count}`),
-    `Context tokens: ${usage.context.tokens}${usage.context.window === undefined ? "" : ` / ${usage.context.window}`}`,
+    fact("profile", summary.profile),
+    fact("backend", summary.backend),
+    ...(stored?.model === undefined ? [] : [fact("model", stored.model)]),
+    fact(
+      "status",
+      `${run.status.text}${run.cancellationReason ? ` (${run.cancellationReason})` : ""}`,
+    ),
+    fact("created", instant(run.startedAt)),
+    ...(run.settledAt === undefined
+      ? []
+      : [fact("settled", instant(run.settledAt))]),
+    "",
+    fact("input tokens", input.toLocaleString("en-US")),
+    fact("output tokens", output.toLocaleString("en-US")),
+    fact("cache read tokens", cacheRead.toLocaleString("en-US")),
+    fact("cache write tokens", cacheWrite.toLocaleString("en-US")),
+    fact("total tokens", totalTokens.toLocaleString("en-US")),
+    "",
+    fact("turns", usage.turns),
+    fact("cost", `$${cost.toFixed(4)}`),
   );
 
   section("Metadata");
-  add(
-    "muted",
-    `Run: ${capture.runId}`,
-    `Subagent: ${summary.subagentId}`,
-    `Captured at: ${new Date(capture.capturedAt).toISOString()}`,
-  );
-  if (subagent) add("literal", `Subagent phase: ${subagent.phase}`);
-  add("literal", `Started at: ${new Date(run.startedAt).toISOString()}`);
-  if (run.currentActivity)
-    add("literal", `Current activity: ${run.currentActivity}`);
-  if (run.lastActivity)
-    add(
-      "literal",
-      `Last activity: ${run.lastActivity.summary} · changed ${formatDuration(capture.capturedAt - run.lastActivity.changedAt)} ago`,
-    );
-  if (run.settledAt !== undefined)
-    add(
-      "literal",
-      `Settled at: ${new Date(run.settledAt).toISOString()}`,
-      `Duration: ${formatDuration(Math.max(0, run.settledAt - run.startedAt))}`,
-    );
+  add("muted", `Subagent: ${summary.subagentId}`, `Run: ${capture.runId}`);
   if (subagent?.conversationLost)
     add("literal", "Conversation unavailable for resume");
   if (handoff === "exhausted")
     add("literal", "Completion hand-off: notification failed (exhausted)");
   if (handoff === "unannounceable")
     add("literal", "Completion hand-off: unannounceable");
-  if (stored?.model !== undefined) add("literal", `Model: ${stored.model}`);
 
   // Put the Run's answer after the quick operational facts, then its supporting
   // tool and transcript evidence. Any retention warning stays with the answer

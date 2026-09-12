@@ -673,7 +673,7 @@ const drawPage = (
   if (page.kind === "inspection") {
     const ready = page.status === "ready";
     const hasTranscript = page.blocks.some(
-      (block) => block.kind === "heading" && block.text === "Transcript:",
+      (block) => block.kind === "heading" && block.text === "Transcript",
     );
     return dashboardPanel(
       page.viewport,

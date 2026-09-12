@@ -278,7 +278,7 @@ test("Conversation loss learned by ordinary Resume admission is visible without 
   rig.host.customKey(ENTER);
   await rig.pump();
   assert.match(screen(rig), /Conversation unavailable for resume/);
-  assert.match(screen(rig), /Run status: completed/);
+  assert.match(screen(rig), /status: +completed/);
   assert.deepEqual(rig.resumable.counters(), controls);
   await back(rig);
   await back(rig);

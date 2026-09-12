@@ -281,7 +281,7 @@ test("host distinguishes g/G inspection jumps, ignores Home/End, and leaves othe
   const draw = () =>
     rig.host.customLines(120, 10).map(stripVTControlCharacters).join("\n");
   const top = draw();
-  assert.match(top, /Label: long inspection/);
+  assert.match(top, /long inspection/);
   assert.match(top, /g\/G jump/);
   assert.doesNotMatch(top, /Home\/End/);
   requests = rig.host.customRenderRequests();

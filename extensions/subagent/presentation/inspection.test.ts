@@ -70,7 +70,7 @@ const sectionBlocks = (
   title: string,
 ) => {
   const start = semantic.findIndex(
-    (block) => block.kind === "heading" && block.text === `${title}:`,
+    (block) => block.kind === "heading" && block.text === title,
   );
   assert.notEqual(start, -1, `${title} section is present`);
   const following = semantic
@@ -81,37 +81,25 @@ const sectionBlocks = (
   return semantic.slice(start + 1, nextHeading - 1);
 };
 
-test("inspection labels current and retained last activity without substitution", () => {
-  const activityCapture: RunInspection = {
-    ...capture,
-    summary: {
-      ...capture.summary,
-      activity: "writing now",
-      lastActivity: { summary: "read earlier", changedAt: 500 },
-    },
-  };
-  const output = renderInspection(
-    inspectionBlocks(activityCapture, "pending"),
-    100,
-    PLAIN_THEME,
-    true,
-  )
-    .map(stripVTControlCharacters)
-    .join("\n");
-  assert.match(output, /Current activity: writing now/);
-  assert.match(output, /Last activity: read earlier · changed 0\.5s ago/);
-
-  const retainedOnly = inspectionBlocks(
+test("inspection keeps secondary metadata focused on identifiers", () => {
+  const output = inspectionBlocks(
     {
-      ...activityCapture,
-      summary: { ...activityCapture.summary, activity: undefined },
+      ...capture,
+      summary: {
+        ...capture.summary,
+        activity: "writing now",
+        lastActivity: { summary: "read earlier", changedAt: 500 },
+      },
     },
     "pending",
   )
     .map((block) => block.text)
     .join("\n");
-  assert.doesNotMatch(retainedOnly, /Current activity: read earlier/);
-  assert.match(retainedOnly, /Last activity: read earlier/);
+  assert.match(output, /Subagent: subagent-test-1\nRun: run-test-1/);
+  assert.doesNotMatch(
+    output,
+    /Captured at|Subagent phase|Current activity|Last activity|Context tokens|Duration/,
+  );
 });
 
 test("inspection shows completed and failed outcomes without retained cancellation causes", () => {
@@ -143,13 +131,75 @@ test("inspection shows completed and failed outcomes without retained cancellati
         )
           .map(stripVTControlCharacters)
           .join("\n");
-        assert.match(output, new RegExp(`Run status: ${phase}\\n`));
+        assert.match(output, new RegExp(`status: +${phase}\\n`));
         assert.doesNotMatch(
           output,
           /requested|shutdown|timeout|Current activity: old tool/,
         );
         if (stored) assert.match(output, /preserved output/);
       }
+});
+
+test("inspection presents aligned at-a-glance facts with normalized totals", () => {
+  const startedAt = Date.UTC(2026, 8, 12, 5, 14);
+  const settledAt = Date.UTC(2026, 8, 12, 5, 15);
+  const result = {
+    ...fixtureResult({
+      model: "model-id",
+      settledAt,
+      usage: {
+        totals: {
+          input: 160,
+          output: 217,
+          cacheRead: 37_888,
+          cacheWrite: 0,
+          cost: 0.0004,
+        },
+        context: { tokens: 1_000 },
+        turns: 2,
+      },
+    }),
+    startedAt,
+  };
+  const output = renderInspection(
+    inspectionBlocks(
+      {
+        ...capture,
+        outcome: "result",
+        summary: { ...capture.summary, phase: "completed" },
+        result,
+      },
+      "resolved",
+    ),
+    100,
+    PLAIN_THEME,
+    true,
+  )
+    .map(stripVTControlCharacters)
+    .join("\n");
+  assert.ok(
+    output.includes(
+      [
+        "profile:            explore",
+        "backend:            pi",
+        "model:              model-id",
+        "status:             completed",
+        "created:            2026-09-12 05:14 UTC",
+        "settled:            2026-09-12 05:15 UTC",
+        "",
+        "input tokens:       160",
+        "output tokens:      217",
+        "cache read tokens:  37,888",
+        "cache write tokens: 0",
+        "total tokens:       38,265",
+        "",
+        "turns:              2",
+        "cost:               $0.0004",
+      ].join("\n"),
+    ),
+    output,
+  );
+  assert.doesNotMatch(output, /Run status:|Usage:/);
 });
 
 test("inspection puts operational facts before answer and supporting evidence", () => {
@@ -181,20 +231,19 @@ test("inspection puts operational facts before answer and supporting evidence", 
     .filter((block) => block.kind === "heading")
     .map((block) => block.text);
   assert.deepEqual(headings, [
-    "Label: Review **literal** label",
-    "Usage:",
-    "Metadata:",
-    "Output so far:",
-    "Error:",
-    "Diagnostics:",
-    "Tools:",
-    "Links:",
-    "Transcript:",
+    "Review **literal** label",
+    "Metadata",
+    "Output so far",
+    "Error",
+    "Diagnostics",
+    "Tools",
+    "Links",
+    "Transcript",
   ]);
 
   const warning = "7 bytes of the final output were cut.";
   const outputHeading = ordered.findIndex(
-    (block) => block.text === "Output so far:",
+    (block) => block.text === "Output so far",
   );
   assert.equal(ordered[outputHeading + 1]?.text, warning);
   assert.equal(
@@ -239,7 +288,7 @@ test("empty retained output is distinguished from output that was never produced
     "pending",
   );
   const activeOutput = active.findIndex(
-    (block) => block.text === "Output so far:",
+    (block) => block.text === "Output so far",
   );
   assert.deepEqual(
     active.slice(activeOutput + 1, activeOutput + 3).map((block) => block.text),
@@ -266,7 +315,7 @@ test("empty retained output is distinguished from output that was never produced
     "resolved",
   );
   const terminalOutput = terminal.findIndex(
-    (block) => block.text === "Final output:",
+    (block) => block.text === "Final output",
   );
   assert.deepEqual(
     terminal
@@ -347,10 +396,9 @@ test("empty optional evidence sections are omitted and missing-data explanations
     .filter((block) => block.kind === "heading")
     .map((block) => block.text);
   assert.deepEqual(sparseHeadings, [
-    "Label: Review **literal** label",
-    "Usage:",
-    "Metadata:",
-    "Output so far:",
+    "Review **literal** label",
+    "Metadata",
+    "Output so far",
   ]);
 
   for (const outcome of ["ResultExpired", "unavailable"] as const) {
@@ -363,11 +411,8 @@ test("empty optional evidence sections are omitted and missing-data explanations
     );
     assert.ok(explanation >= 0);
     assert.ok(
-      explanation > missingBlocks.findIndex((block) => block.text === "Usage:"),
-    );
-    assert.ok(
       explanation >
-        missingBlocks.findIndex((block) => block.text === "Metadata:"),
+        missingBlocks.findIndex((block) => block.text === "Metadata"),
     );
   }
 });
@@ -424,7 +469,7 @@ test("metadata, user messages and tool output stay literal without generated cal
     tones.some(({ color, text }) => color === "dim" && text === "Assistant:"),
   );
   assert.ok(
-    tones.some(({ color, text }) => color === "accent" && text === "Tools:"),
+    tones.some(({ color, text }) => color === "accent" && text === "Tools"),
   );
 });
 
@@ -538,7 +583,8 @@ test("transcript keeps message and part order with fresh readable attribution", 
   assert.doesNotMatch(visible, /opaque-call-one/);
   assert.equal(visible.match(/Tool call · read/g)?.length, 2);
   assert.equal(
-    semantic.filter((block) => block.text === "Model: run-model").length,
+    semantic.filter((block) => block.text === "model:              run-model")
+      .length,
     1,
   );
   assert.deepEqual(
@@ -584,7 +630,7 @@ test("reported model comparison starts unknown and changes only on explicit valu
     ["Reported model: model-one", "Reported model: model-two"],
   );
   assert.equal(
-    semantic.filter((block) => block.text.startsWith("Model:")).length,
+    semantic.filter((block) => block.text.startsWith("model:")).length,
     0,
   );
   const modelTwo = semantic.findIndex(

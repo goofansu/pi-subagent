@@ -350,7 +350,7 @@ for (const expire of [false, true])
     await Effect.runPromise(Deferred.succeed(gate, undefined));
     await rig.pump();
     const terminal = screen(rig);
-    assert.match(terminal, /Run status: completed/);
+    assert.match(terminal, /status: +completed/);
     assert.match(
       terminal,
       expire ? /Result expired: output is gone/ : /authoritative answer/,

@@ -199,8 +199,8 @@ test("a cancel arriving after the execution fiber exited settles on the answer",
   assert.equal(outcome.value.output, "the answer");
   assert.equal(outcome.value.reason, undefined);
   assert.equal(outcome.value.notifications, 1);
-  assert.match(outcome.value.rendered, /Run status: completed\n/);
-  assert.match(outcome.value.rendered, /Final output:\n.*the answer/);
+  assert.match(outcome.value.rendered, /status: +completed\n/);
+  assert.match(outcome.value.rendered, /Final output\n.*the answer/);
   assert.doesNotMatch(
     outcome.value.rendered,
     /requested|shutdown|timeout|cancelling|cancelled/,

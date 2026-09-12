@@ -68,11 +68,10 @@ test("active inspection freezes content and activity ages until explicit refresh
   const dashboard = await inspect(rig);
   const first = screen(rig);
   assert.match(first, /active snapshot/);
-  assert.match(first, /Label: active Label/);
-  assert.match(first, /Run status: running/);
+  assert.match(first, /active Label/);
+  assert.match(first, /status: +running/);
   assert.match(first, /first content/);
-  assert.match(first, /Last activity: reading files · changed 2\.0s ago/);
-  assert.match(first, /Captured at: 1970-01-01T00:00:02.000Z/);
+  assert.doesNotMatch(first, /Last activity:|Captured at:/);
   assert.match(first, /r refresh/);
   const requests = rig.host.customRenderRequests();
   await rig.release("more");
@@ -84,8 +83,7 @@ test("active inspection freezes content and activity ages until explicit refresh
   await rig.pump();
   const second = screen(rig);
   assert.match(second, /second content/);
-  assert.match(second, /Last activity: writing report · changed 3\.0s ago/);
-  assert.match(second, /Captured at: 1970-01-01T00:00:05.000Z/);
+  assert.doesNotMatch(second, /Last activity:|Captured at:/);
   await rig.release("finish");
   await rig.settled(work.runId);
   await rig.pump();
@@ -94,7 +92,7 @@ test("active inspection freezes content and activity ages until explicit refresh
   await rig.pump();
   const terminal = screen(rig);
   assert.match(terminal, /terminal snapshot/);
-  assert.match(terminal, /Run status: completed/);
+  assert.match(terminal, /status: +completed/);
   assert.match(terminal, /authoritative answer/);
   assert.doesNotMatch(terminal, /r refresh/);
   await rig.advanceClock(2000);
@@ -145,9 +143,7 @@ test("multiple active refreshes preserve line offset and clamp after shorter rec
     // Drawing during the read must not reset the offset either.
     draw();
     await rig.pump();
-    const withoutCaptureTime = (lines: readonly string[]) =>
-      lines.slice(1, -1).filter((line) => !line.includes("Captured at:"));
-    assert.deepEqual(withoutCaptureTime(draw()), withoutCaptureTime(page));
+    assert.deepEqual(draw(), page);
     assert.match(draw().at(-2) ?? "", /5-8\//);
     page = draw();
   }
@@ -251,8 +247,8 @@ for (const truncated of [false, true])
     await rig.pump();
     const dashboard = await inspect(rig);
     const text = screen(rig);
-    assert.match(text, /Run status: running/);
-    assert.doesNotMatch(text, /Result expired|Final output:|Settled at:/);
+    assert.match(text, /status: +running/);
+    assert.doesNotMatch(text, /Result expired|Final output|settled:/);
     if (truncated) {
       for (const value of [
         "bounded item 5",
@@ -263,8 +259,8 @@ for (const truncated of [false, true])
         "second tool line",
         "user text",
         "tool text",
-        "Turns: 2",
-        "input: 12",
+        "turns:              2",
+        "input tokens:       12",
         "active-model",
         "active diagnostic",
         "https://example.com/report",
@@ -274,13 +270,12 @@ for (const truncated of [false, true])
       ])
         assert.ok(text.includes(value), `${value}\n${text}`);
       const orderedSections = [
-        "Usage:",
-        "Metadata:",
-        "Output so far:",
-        "Diagnostics:",
-        "Tools:",
-        "Links:",
-        "Transcript:",
+        "Metadata",
+        "Output so far",
+        "Diagnostics",
+        "Tools",
+        "Links",
+        "Transcript",
       ];
       for (let i = 1; i < orderedSections.length; i += 1)
         assert.ok(
@@ -288,7 +283,7 @@ for (const truncated of [false, true])
             text.indexOf(orderedSections[i] ?? ""),
           orderedSections.join(" → "),
         );
-      const outputHeading = text.indexOf("Output so far:");
+      const outputHeading = text.indexOf("Output so far");
       const outputWarning = text.indexOf(
         "7 bytes of the final output were cut.",
       );
@@ -328,7 +323,7 @@ for (const expire of [false, true])
     await rig.pump();
     const finalizing = screen(rig);
     assert.match(finalizing, /active snapshot/);
-    assert.match(finalizing, /Run status: cancelling \(requested\)/);
+    assert.match(finalizing, /status: +cancelling \(requested\)/);
     assert.match(finalizing, /partial content/);
     await rig.release("cleanup");
     await rig.settled(work.runId);
@@ -348,7 +343,7 @@ for (const expire of [false, true])
     rig.host.customKey("R");
     await rig.pump();
     const terminal = screen(rig);
-    assert.match(terminal, /Run status: cancelled \(requested\)/);
+    assert.match(terminal, /status: +cancelled \(requested\)/);
     assert.match(
       terminal,
       expire ? /Result expired: output is gone/ : /partial content/,
