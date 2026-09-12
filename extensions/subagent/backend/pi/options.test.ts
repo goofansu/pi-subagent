@@ -14,9 +14,7 @@ import { DEPTH_ENV_KEY, readChildDepth } from "./depth.ts";
 import {
   createPiSessionOptions,
   depthSpawnHook,
-  filterChildExtensions,
   PI_ORCHESTRATION_TOOLS,
-  packageNameForPath,
   unknownModelMessage,
 } from "./options.ts";
 import { validatePiProfile } from "./profile.ts";
@@ -24,10 +22,9 @@ import { validatePiProfile } from "./profile.ts";
 /**
  * The fixed native policy one retained session is built with.
  *
- * These are v1's decisions, and each of them was arrived at by running
- * children for real: forwarded trust, this package filtered out of the child's
- * extensions, the delegation tools excluded, and a Bash spawn that carries the
- * depth without mutating the parent's own environment.
+ * This keeps v1's forwarded trust, delegation-tool exclusion, and Bash depth
+ * propagation. Disabling extensions is the newer policy that makes the Profile
+ * authoritative.
  *
  * The options are built against a temporary agent directory, so nothing here
  * reads the machine's own credentials or reaches a provider.
@@ -141,35 +138,16 @@ test("a Profile's tools list reaches the session, and no list leaves the default
   );
 });
 
-test("an extension-defined model is available to inherited model resolution", async (t) => {
+test("extensions are neither initialized nor bound in a Pi child", async (t) => {
   const agentDir = emptyAgentDir(t);
   const extensionsDir = path.join(agentDir, "extensions");
-  const childLoadMarker = path.join(agentDir, "child-load-marker.txt");
+  const initializedMarker = path.join(agentDir, "extension-initialized.txt");
   fs.mkdirSync(extensionsDir);
   fs.writeFileSync(
-    path.join(extensionsDir, "fixture-provider.ts"),
+    path.join(extensionsDir, "fixture-extension.ts"),
     `import fs from "node:fs";
-
-export default function fixtureProvider(pi) {
-  const childLoad = globalThis[Symbol.for("pi-subagent.pi-child-extension-load")];
-  fs.writeFileSync(
-    ${JSON.stringify(childLoadMarker)},
-    childLoad?.getStore() === true ? "child" : "parent",
-  );
-  pi.registerProvider("fixture-provider", {
-    baseUrl: "https://fixture.invalid",
-    apiKey: "fixture-key",
-    api: "openai-completions",
-    models: [{
-      id: "fixture-model",
-      name: "Fixture Model",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 4096,
-      maxTokens: 1024,
-    }],
-  });
+export default function fixtureExtension() {
+  fs.writeFileSync(${JSON.stringify(initializedMarker)}, "initialized");
 }
 `,
   );
@@ -177,17 +155,48 @@ export default function fixtureProvider(pi) {
   const options = await createPiSessionOptions({
     profile: profile(),
     subagent: subagent(),
-    model: "fixture-provider/fixture-model",
     agentDir,
   });
 
-  assert.equal(fs.readFileSync(childLoadMarker, "utf8"), "child");
-  assert.equal(options.model?.provider, "fixture-provider");
+  assert.equal(fs.existsSync(initializedMarker), false);
+  assert.deepEqual(options.resourceLoader?.getExtensions().extensions, []);
+});
+
+test("a built-in Radius model remains available with extensions disabled", async (t) => {
+  const agentDir = emptyAgentDir(t);
+  const radiusModel = {
+    id: "fixture-model",
+    name: "Fixture Radius Model",
+    api: "pi-messages",
+    provider: "radius",
+    baseUrl: "https://radius.invalid/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 4096,
+    maxTokens: 1024,
+  };
+  fs.writeFileSync(
+    path.join(agentDir, "models-store.json"),
+    JSON.stringify({
+      radius: { models: [radiusModel], checkedAt: 0 },
+    }),
+  );
+
+  const options = await createPiSessionOptions({
+    profile: profile(),
+    subagent: subagent(),
+    model: "radius/fixture-model",
+    agentDir,
+  });
+
+  assert.equal(options.model?.provider, "radius");
   assert.equal(options.model?.id, "fixture-model");
   assert.deepEqual(
-    options.modelRuntime?.getModel("fixture-provider", "fixture-model"),
+    options.modelRuntime?.getModel("radius", "fixture-model"),
     options.model,
   );
+  assert.deepEqual(options.resourceLoader?.getExtensions().extensions, []);
 });
 
 test("a pinned model the agent directory cannot resolve fails the build", async (t) => {
@@ -231,98 +240,25 @@ test("the session is given a Bash tool of its own, in place of the default", asy
 });
 
 test("the resource load runs inside the child-load discriminator", async (t) => {
-  // Outside the load, the discriminator is false — which is what lets a
-  // parent's own reload reattach this extension normally.
-  assert.equal(isChildResourceLoad(), false);
+  const observed: boolean[] = [];
+  const context = subagent();
+  Object.defineProperty(context, "projectTrusted", {
+    get() {
+      observed.push(isChildResourceLoad());
+      return true;
+    },
+  });
 
+  // Settings construction reads trust outside the scope; resource loading
+  // resolves it again inside. Afterwards the parent's load context is clear.
   await createPiSessionOptions({
     profile: profile(),
-    subagent: subagent(),
+    subagent: context,
     agentDir: emptyAgentDir(t),
   });
 
+  assert.deepEqual(observed, [false, true]);
   assert.equal(isChildResourceLoad(), false);
-});
-
-// ── Filtering this package out of a child's extensions ───────────────────────
-
-/**
- * A package tree with an extension directory in it, like this one.
- *
- * Two directories are written rather than one, deliberately: the filter works
- * by *package identity* rather than by path, so a package that grew a second
- * extension directory must have both filtered — and a fixture with one could
- * not tell path matching from identity matching apart.
- */
-function fixturePackage(
-  t: { after(fn: () => void): void },
-  name: string,
-): { readonly root: string; readonly resolve: (relative: string) => string } {
-  const root = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), `pi-subagent-package-${name}-`)),
-  );
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name }));
-  for (const directory of ["extensions/subagent", "extensions/other"]) {
-    fs.mkdirSync(path.join(root, directory), { recursive: true });
-    fs.writeFileSync(path.join(root, directory, "index.ts"), "export {};\n");
-  }
-  return { root, resolve: (relative) => path.join(root, relative) };
-}
-
-test("every extension directory of this package is filtered from a child", (t) => {
-  const own = fixturePackage(t, "pi-subagent");
-  const other = fixturePackage(t, "somebody-elses-extension");
-
-  const filtered = filterChildExtensions(
-    {
-      extensions: [
-        { resolvedPath: own.resolve("extensions/subagent/index.ts") },
-        { resolvedPath: own.resolve("extensions/other/index.ts") },
-        { resolvedPath: other.resolve("extensions/subagent/index.ts") },
-      ],
-    } as never,
-    "pi-subagent",
-  );
-
-  // By package identity, which is what covers every directory at once — and
-  // what keeps covering them through a rename.
-  assert.deepEqual(
-    filtered.extensions.map((extension) => extension.resolvedPath),
-    [other.resolve("extensions/subagent/index.ts")],
-  );
-});
-
-test("a package identity is read from the nearest manifest above a file", (t) => {
-  const own = fixturePackage(t, "pi-subagent");
-
-  assert.equal(
-    packageNameForPath(own.resolve("extensions/subagent/index.ts")),
-    "pi-subagent",
-  );
-  // A path that no longer exists still resolves through its parent, because a
-  // loader entry may name a file that disappeared after it was loaded.
-  assert.equal(
-    packageNameForPath(own.resolve("extensions/subagent/gone.ts")),
-    "pi-subagent",
-  );
-});
-
-test("everything the loader kept is left exactly as it was", (t) => {
-  const other = fixturePackage(t, "somebody-elses-extension");
-  const base = {
-    extensions: [
-      { resolvedPath: other.resolve("extensions/subagent/index.ts") },
-    ],
-    diagnostics: ["something the loader said"],
-  } as never;
-
-  const filtered = filterChildExtensions(base, "pi-subagent");
-
-  assert.deepEqual(
-    (filtered as unknown as { diagnostics: string[] }).diagnostics,
-    ["something the loader said"],
-  );
 });
 
 // ── The depth environment ────────────────────────────────────────────────────

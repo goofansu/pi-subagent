@@ -590,8 +590,10 @@ session symbols, its message and event shapes, the resource loader, the
 child-load discriminator, and the depth environment variable all stop there,
 and the boundary test enforces it in both directions: nothing outside names a
 Pi session symbol, and nothing outside the composition root imports the
-directory at all. The adapter does not know the runtime, the host, or
-presentation exist.
+directory at all. A Pi child loads no extensions: its Profile remains the
+complete policy for its model, prompt, tools, and behaviour, while providers
+and models from Pi's own catalogue remain available. The adapter does not know
+the runtime, the host, or presentation exist.
 
 **Claude adapter** — everything this codebase knows about Claude, in
 `backend/claude/`.
@@ -670,11 +672,11 @@ never read clear. It exists because Claude has no SDK close call to count
 twice, and "close is idempotent" needs a number rather than a claim.
 
 **Child-load discriminator** — the `AsyncLocalStorage` flag that says "this
-resource load belongs to a child". Pi initializes an extension's factory while
-the loader discovers resources and applies the extensions filter only
-afterwards, so the filter alone would not stop a child from registering the
-delegation tools; the flag covers that window. Shared through a global
-symbol, so whichever entry point a child reaches reads a true answer.
+resource load belongs to a child". Pi children disable extension discovery;
+the flag remains a backstop around their resource load so this package stays
+inert if Pi evaluates an explicitly supplied factory despite that policy.
+Shared through a global symbol, so whichever entry point a child reaches reads
+a true answer.
 
 **Child depth** — how deep in a delegation chain a process is, carried in the
 `PI_SUBAGENT_DEPTH` environment variable that a Bash spawn's own environment

@@ -1,17 +1,15 @@
 /**
  * The child-load discriminator: "is this resource load a child's?"
  *
- * Pi initializes an extension's factory while the resource loader discovers
- * resources, and the loader's `extensionsOverride` is applied only *after*
- * that. So filtering this package out of a child's extension list is not on
- * its own enough: by the time the filter runs, the child has already asked
- * this module's entry point to register itself.
+ * Pi children disable extensions during resource discovery, making their
+ * Profile the complete behavioural policy. This discriminator remains defence
+ * in depth: if Pi ever evaluates an explicitly supplied extension factory
+ * despite that loader policy, this package's entry point still stays inert.
  *
- * The answer, ported from v1 unchanged in behaviour, is an
- * `AsyncLocalStorage` flag scoped to the asynchronous load chain the adapter
- * owns. Anything the child loads inside {@link withChildResourceLoad} can ask
- * {@link isChildResourceLoad} and stay inert; a parent's own reload runs
- * outside the scope and reattaches normally.
+ * The answer is an `AsyncLocalStorage` flag scoped to the asynchronous load
+ * chain the adapter owns. Anything evaluated inside
+ * {@link withChildResourceLoad} can ask {@link isChildResourceLoad} and stay
+ * inert; a parent's own reload runs outside the scope and reattaches normally.
  *
  * The storage is keyed by a **global symbol shared with v1**. That is not an
  * import — the two trees stay independent — but it means a v1 parent loading a

@@ -33,10 +33,7 @@ export {
 export {
   createPiSessionOptions,
   depthSpawnHook,
-  filterChildExtensions,
-  OWN_PACKAGE_NAME,
   PI_ORCHESTRATION_TOOLS,
-  packageNameForPath,
   unknownModelMessage,
 } from "./options.ts";
 export {

@@ -11,6 +11,22 @@ abstraction and how the product is built now. Everything below is kept
 unedited: the reason a decision was made is part of the record even when its
 subject is gone.
 
+## Amendment: child extensions disabled (2026-09-12)
+
+A Pi child's Profile is now its complete behavioural policy, so child resource
+loading disables all extensions rather than retaining every extension except
+this package. An extension can change model, thinking level, prompt, or tools
+from `session_start`; allowing that made a valid Profile advisory rather than
+fixed. Pi's own provider catalogue remains available, including Radius, while
+extension-defined providers and extension tools deliberately do not. Therefore,
+a Profile that omits its model cannot inherit a parent model supplied by an
+extension: opening the child fails because that provider is outside the child's
+catalogue. Such a Profile must pin a built-in or `models.json` model instead.
+
+This replaces the extension-filtering part of the original decision below. The
+child-load discriminator and orchestration-tool exclusion remain defence in
+depth, and retained-session Resume and steering are unchanged.
+
 ## Context
 
 The one-shot Pi CLI preserved isolation but could not accept guidance after

@@ -40,6 +40,14 @@ task in that conversation.
 `agent_start` and `agent_resume` return IDs immediately. A completion notice
 contains the result when it fits. Use `agent_result` to read longer output.
 
+Pi-backed subagents do not load extensions. Their Profile controls their model,
+prompt, and tools without extension startup hooks changing them. Models from
+Pi's built-in catalogue, including Radius, remain available; extension-defined
+providers and extension tools do not. Consequently, if a Profile omits its
+model while the parent uses an extension-defined provider, `agent_start` fails
+because that provider is unavailable to the child. Pin a built-in or
+`models.json` model in the Profile instead.
+
 ## Trust and Claude settings
 
 Pi resolves trust for the Session working directory. `agent_start` reads the
