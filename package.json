@@ -1,8 +1,14 @@
 {
-  "name": "pi-subagent",
-  "version": "2.0.2",
+  "name": "@goofansu/pi-subagent",
+  "version": "1.0.0",
   "description": "Delegate tasks to specialized Pi subagents with isolated context. Any run can be cancelled.",
   "type": "module",
+  "files": [
+    "agents",
+    "extensions/subagent/**/*.ts",
+    "!extensions/subagent/**/*.test.ts",
+    "skills"
+  ],
   "keywords": [
     "pi-package"
   ],
@@ -16,6 +22,17 @@
     ]
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/goofansu/pi-subagent.git"
+  },
+  "homepage": "https://github.com/goofansu/pi-subagent#readme",
+  "bugs": {
+    "url": "https://github.com/goofansu/pi-subagent/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "check": "npm run typecheck && npm run lint && npm test && npm run test:conformance",
     "profiles:smoke": "node --import tsx scripts/bundled-profiles-smoke.mjs",

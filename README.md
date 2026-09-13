@@ -8,7 +8,7 @@ conversation.
 ## Install
 
 ```bash
-pi install https://github.com/goofansu/pi-subagent
+pi install npm:@goofansu/pi-subagent
 ```
 
 The package includes profiles for general work, implementation, specification
