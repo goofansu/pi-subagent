@@ -50,6 +50,18 @@ because that provider is unavailable to the child. Pin a built-in or
 
 ## Trust and Claude settings
 
+For the safest default, I recommend setting Pi's `defaultProjectTrust` to
+`"never"` in `~/.pi/agent/settings.json` (or through `/settings`):
+
+```json
+{
+  "defaultProjectTrust": "never"
+}
+```
+
+This declines trust when no saved decision applies; explicitly trust projects
+whose project-level settings and instructions you want subagents to load.
+
 Pi resolves trust for the Session working directory. `agent_start` reads the
 decision through `ctx.isProjectTrusted()` and stores it in `SubagentContext`.
 The decision stays fixed for the subagent, including resumed Runs.
