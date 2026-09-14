@@ -595,6 +595,18 @@ complete policy for its model, prompt, tools, and behaviour, while providers
 and models from Pi's own catalogue remain available. The adapter does not know
 the runtime, the host, or presentation exist.
 
+**Pi Run evidence** — the in-process, Run-scoped fold inside the Pi adapter
+that accumulates translated Pi readings into the Run meaning Pi alone can
+supply: echoed-goal omission, message occurrence identity, native generations,
+recovery and terminal classification, Run-wide reconciliation, diagnostic
+suppression, and normal or interruption decisions. It reads neither Pi wire
+shapes nor resources, performs no I/O, and settles nothing. Its outputs are
+ordered core **Observations** plus a **terminal bundle**, or no adapter decision
+when interruption leaves **Arbitration** authoritative. Recording native
+prompt return freezes its normal decision synchronously. A translated Pi
+reading is adapter-local input to this fold; it is neither a provider event nor
+a core Observation.
+
 **Claude adapter** — everything this codebase knows about Claude, in
 `backend/claude/`.
 The SDK's `query` function, its forty-member frame union, its options bag, its

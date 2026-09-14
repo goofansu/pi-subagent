@@ -4,6 +4,7 @@ import {
   confined,
   confinedControl,
   createPiEventTranslator,
+  createPiRunReadingTranslator,
   currentRunMessages,
   isPiUserText,
   messageIdentity,
@@ -305,6 +306,38 @@ test("model-turn output kind is reset across executions", () => {
     kind: "activity",
     observation: { kind: "activity", activity: "responding…" },
   });
+});
+
+test("Pi Run readings contain translated messages and preserve streamed references", () => {
+  const translator = createPiRunReadingTranslator();
+  const native = assistant({ stopReason: "length", usage: RECORDED_USAGE });
+  const first = translator.event({ type: "message_end", message: native });
+  const repeated = translator.event({ type: "message_end", message: native });
+  const terminal = translator.event({
+    type: "agent_end",
+    willRetry: false,
+    messages: [native],
+  });
+
+  assert.equal(first.kind, "message");
+  assert.equal(repeated.kind, "message");
+  assert.equal(terminal.kind, "terminal");
+  if (
+    first.kind !== "message" ||
+    repeated.kind !== "message" ||
+    terminal.kind !== "terminal"
+  ) {
+    return;
+  }
+  assert.strictEqual(repeated.message, first.message);
+  assert.strictEqual(terminal.messages[0], first.message);
+  assert.equal(first.message.assistantOutcome, "incomplete");
+  assert.equal(first.message.facts?.usage?.input, 209);
+  assert.deepEqual(
+    first.message.observations.map((one) => one.kind),
+    ["message", "usage", "context"],
+  );
+  assert.equal("stopReason" in first.message, false);
 });
 
 test("message updates emit no message; the message still comes from message end", () => {

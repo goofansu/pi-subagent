@@ -150,6 +150,52 @@ export interface PiMessageFacts {
 }
 
 /**
+ * One message after translation has consumed Pi's wire vocabulary.
+ *
+ * The object itself is the streamed occurrence identity. `semanticIdentity`
+ * is separate because retained-session baselines and terminal frames may
+ * rebuild equal messages as new objects. Pi Run evidence can therefore use
+ * reference and counted semantic identity for their distinct jobs without
+ * inspecting a native message.
+ */
+export interface PiTranslatedMessage {
+  readonly semanticIdentity: string;
+  readonly goalText?: string;
+  readonly facts?: PiMessageFacts;
+  readonly observations: readonly RunObservation[];
+  readonly assistantOutcome?: "answered" | "incomplete" | "failed" | "aborted";
+}
+
+/** A fully translated reading consumed by Pi Run evidence. */
+export type PiRunReading =
+  | { readonly kind: "message"; readonly message: PiTranslatedMessage }
+  | { readonly kind: "activity"; readonly observation: RunObservation }
+  | {
+      readonly kind: "tool";
+      readonly observations: readonly RunObservation[];
+    }
+  | { readonly kind: "execution-start" }
+  | { readonly kind: "recovery-start" }
+  | {
+      readonly kind: "recovery-end";
+      readonly outcome: "succeeded" | "failed" | "aborted";
+      readonly willRetry: boolean;
+    }
+  | { readonly kind: "final-settled" }
+  | {
+      readonly kind: "terminal";
+      readonly messages: readonly PiTranslatedMessage[];
+    }
+  | { readonly kind: "other" };
+
+export interface PiRunReadingTranslator {
+  readonly event: (event: unknown) => PiRunReading;
+  readonly messages: (
+    messages: readonly unknown[],
+  ) => readonly PiTranslatedMessage[];
+}
+
+/**
  * Read one native message.
  *
  * An empty parts list is still a message: thinking blocks and provider-private
@@ -196,6 +242,41 @@ export function piMessageFacts(message: unknown): PiMessageFacts | undefined {
     ...(typeof message.errorMessage === "string"
       ? { diagnostic: confined(PI_TERMINAL_FAILURE_DESCRIPTION) }
       : {}),
+  };
+}
+
+/** The user text used only to recognize Pi's echo of the Run goal. */
+function piUserText(message: unknown): string | undefined {
+  if (!isRecord(message) || message.role !== "user") return undefined;
+  if (typeof message.content === "string") return message.content;
+  if (!Array.isArray(message.content)) return undefined;
+  return message.content
+    .filter((part) => isRecord(part) && part.type === "text")
+    .map((part) => (part as Record<string, unknown>).text)
+    .join("");
+}
+
+/** Translate one native message all the way to adapter-local evidence input. */
+export function translatePiMessage(message: unknown): PiTranslatedMessage {
+  const facts = piMessageFacts(message);
+  const stopReason = isRecord(message) ? message.stopReason : undefined;
+  const assistantOutcome =
+    facts?.role !== "assistant"
+      ? undefined
+      : stopReason === "error"
+        ? "failed"
+        : stopReason === "length"
+          ? "incomplete"
+          : stopReason === "aborted"
+            ? "aborted"
+            : "answered";
+  const goalText = piUserText(message);
+  return {
+    semanticIdentity: messageIdentity(message),
+    ...(goalText === undefined ? {} : { goalText }),
+    ...(facts === undefined ? {} : { facts }),
+    observations: piMessageObservations(message),
+    ...(assistantOutcome === undefined ? {} : { assistantOutcome }),
   };
 }
 
@@ -288,6 +369,41 @@ const IGNORED: PiEventReading = { kind: "other" };
 
 export interface PiEventTranslator {
   readonly event: (event: unknown) => PiEventReading;
+}
+
+/**
+ * Translate events for the Pi Run evidence seam while preserving message
+ * object identity across repeated streamed events. The current execution path
+ * intentionally continues to use {@link createPiEventTranslator}; this is the
+ * beside-the-path seam for the later integration ticket.
+ */
+export function createPiRunReadingTranslator(): PiRunReadingTranslator {
+  const events = createPiEventTranslator();
+  const references = new WeakMap<object, PiTranslatedMessage>();
+  const translate = (message: unknown): PiTranslatedMessage => {
+    if (typeof message !== "object" || message === null) {
+      return translatePiMessage(message);
+    }
+    const prior = references.get(message);
+    if (prior !== undefined) return prior;
+    const translated = translatePiMessage(message);
+    references.set(message, translated);
+    return translated;
+  };
+  const messages = (values: readonly unknown[]) => values.map(translate);
+  return {
+    messages,
+    event: (event) => {
+      const reading = events.event(event);
+      if (reading.kind === "message") {
+        return { kind: "message", message: translate(reading.message) };
+      }
+      if (reading.kind === "terminal") {
+        return { kind: "terminal", messages: messages(reading.messages) };
+      }
+      return reading;
+    },
+  };
 }
 
 type PiTurnKind = "thinking" | "text";
