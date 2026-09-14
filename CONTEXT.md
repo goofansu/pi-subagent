@@ -575,6 +575,15 @@ notice is **held** while a wait covers its Run, and is told when a Run is
 **unannounceable**, so all seven states have one owner and a settled Run's
 continued visibility has an explanation.
 
+**Tool-row facts** — presentation-specific meaning carried beside an agent
+Tool's model-visible prose so its collapsed transcript row can be drawn. One
+presentation module owns the discriminated union, named construction from every
+operation outcome, and total decoding from the host-owned unknown details slot.
+Facts are bounded summaries, not domain values or authoritative Results: they
+cannot decide what a Run means, and naming a Run in them cannot decide Result
+hand-off. Only `ToolResponse.deliveredRuns`, read at the host boundary, says
+which Results the parent received.
+
 **RunCard** — the pure presentation of one Run, built from a published index row
 (live, and therefore carrying no output) or from an immutable stored Result
 (terminal, and therefore carrying everything). It is where Run presentation

@@ -3,21 +3,12 @@ import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
-import type {
-  ResumeOutcome,
-  StartOutcome,
-  SteerOutcome,
-} from "../domain/index.ts";
-import { runId, subagentId } from "../domain/index.ts";
 import {
   type AgentToolRendererState,
   agentToolRenderers,
   formatCancellationSummary,
   formatResumedRunSummary,
   formatStartedRunSummary,
-  resumeRenderDetails,
-  startRenderDetails,
-  steerRenderDetails,
 } from "./agent-tool-renderers.ts";
 import type { RenderableTheme } from "./rows.ts";
 
@@ -255,80 +246,6 @@ test("a narrow resumed summary drops its field label before clipping the Run id"
   assert.equal(line, "Resumed · run-abcd-456 (o to expand)");
   assert.ok(visibleWidth(line) <= 38);
   assert.doesNotMatch(line, /· Run /);
-});
-
-test("every operation outcome converts to an explicit discriminated detail", () => {
-  const sid = subagentId("subagent-test-1");
-  const rid = runId("run-test-1");
-  const startOutcomes: readonly StartOutcome[] = [
-    { outcome: "started", subagentId: sid, runId: rid },
-    { outcome: "unknown agent", agent: "ghost" },
-    { outcome: "invalid profile", diagnostics: [] },
-    { outcome: "empty label" },
-    { outcome: "at capacity" },
-    { outcome: "shutting down" },
-    { outcome: "delegation-depth exceeded", depth: 2 },
-    {
-      outcome: "backend unavailable",
-      diagnostic: { category: "backend-failure", message: "unavailable" },
-    },
-  ];
-  assert.deepEqual(
-    startOutcomes.map(
-      (outcome) => startRenderDetails("explore", outcome).outcome,
-    ),
-    startOutcomes.map(({ outcome }) => outcome),
-  );
-  assert.ok(
-    startOutcomes.every(
-      (outcome) => startRenderDetails("explore", outcome).kind === "start",
-    ),
-  );
-  const resumeOutcomes: readonly ResumeOutcome[] = [
-    { outcome: "started", subagentId: sid, runId: rid },
-    { outcome: "unknown Subagent", subagentId: sid },
-    { outcome: "Subagent already running", subagentId: sid },
-    { outcome: "empty label" },
-    { outcome: "resume unsupported" },
-    { outcome: "conversation lost" },
-    { outcome: "at capacity" },
-    { outcome: "shutting down" },
-  ];
-  assert.deepEqual(
-    resumeOutcomes.map((outcome) => resumeRenderDetails(outcome).outcome),
-    resumeOutcomes.map(({ outcome }) => outcome),
-  );
-  assert.ok(
-    resumeOutcomes.every(
-      (outcome) => resumeRenderDetails(outcome).kind === "resume",
-    ),
-  );
-
-  const steerOutcomes: readonly SteerOutcome[] = [
-    { outcome: "accepted", runId: rid },
-    { outcome: "mailbox full", runId: rid },
-    { outcome: "invalid", reason: "empty" },
-    { outcome: "unsupported", runId: rid },
-    { outcome: "mailbox closed", runId: rid },
-    { outcome: "already completed", runId: rid },
-    { outcome: "already failed", runId: rid },
-    { outcome: "already cancelled", runId: rid },
-    { outcome: "unknown Run", runId: rid },
-    { outcome: "shutting down" },
-  ];
-  assert.deepEqual(
-    steerOutcomes.map((outcome) => steerRenderDetails(rid, outcome).outcome),
-    steerOutcomes.map(({ outcome }) => outcome),
-  );
-  assert.ok(
-    steerOutcomes.every(
-      (outcome) => steerRenderDetails(rid, outcome).kind === "steer",
-    ),
-  );
-  assert.deepEqual(
-    steerRenderDetails(rid, { outcome: "invalid", reason: "empty" }),
-    { kind: "steer", outcome: "invalid", runId: rid },
-  );
 });
 
 test("every start and resume refusal and Control admission outcome has a distinct semantic line", () => {
@@ -913,8 +830,11 @@ test("collection summaries discriminate delivery, timeout, unknown, unavailable,
   ] as const;
 
   for (const [details, expected] of cases) {
+    const operationPair = agentToolRenderers(
+      details.scope === "named" ? "wait" : "waitAll",
+    );
     const collapsed = lines(
-      pair.renderResult(
+      operationPair.renderResult(
         {
           content: [{ type: "text", text: "Complete model response" }],
           details,
