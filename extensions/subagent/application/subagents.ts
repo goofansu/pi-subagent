@@ -21,15 +21,13 @@
 import { Effect } from "effect";
 import {
   boundRunLabel,
-  type CancelOutcome,
   isTerminalRunPhase,
   labelShortenedDiagnostic,
   type RunDiagnostic,
   type RunId,
 } from "../domain/index.ts";
 import {
-  type AgentToolRenderDetails,
-  type CancelRunRenderOutcome,
+  cancelToolRowFacts,
   formatCancelOutcomes,
   formatNoActiveRuns,
   formatResult,
@@ -38,10 +36,14 @@ import {
   formatStartOutcome,
   formatSteerOutcome,
   formatWaitOutcomes,
-  resultRunSummaryOf,
-  resumeRenderDetails,
-  startRenderDetails,
-  steerRenderDetails,
+  noActiveWaitAllToolRowFacts,
+  resultToolRowFacts,
+  resumeToolRowFacts,
+  startToolRowFacts,
+  steerToolRowFacts,
+  type ToolRowFacts,
+  waitAllToolRowFacts,
+  waitToolRowFacts,
 } from "../presentation/index.ts";
 import { ProfileCatalog } from "../runtime/profile-catalog.ts";
 import { RunRepository } from "../runtime/repository.ts";
@@ -66,7 +68,7 @@ export interface ToolResponse {
    * Migrated variants are explicitly discriminated. `undefined` remains a
    * readable host/decode fallback, never a statement about Result delivery.
    */
-  readonly details?: AgentToolRenderDetails;
+  readonly details?: ToolRowFacts;
   /**
    * The Runs whose Result this response actually handed back.
    *
@@ -195,7 +197,7 @@ const start = (
     if (request === undefined)
       return {
         text: formatStartOutcome(input.agent, EMPTY_LABEL, available),
-        details: startRenderDetails(input.agent, EMPTY_LABEL),
+        details: startToolRowFacts(input.agent, EMPTY_LABEL),
         deliveredRuns: [],
       };
     const supervisor = yield* SubagentSupervisor;
@@ -212,7 +214,7 @@ const start = (
     });
     return {
       text: formatStartOutcome(input.agent, outcome, available),
-      details: startRenderDetails(input.agent, outcome),
+      details: startToolRowFacts(input.agent, outcome),
       deliveredRuns: [],
     };
   });
@@ -226,7 +228,7 @@ const resume = (
     if (request === undefined)
       return {
         text: formatResumeOutcome(input.id, EMPTY_LABEL),
-        details: resumeRenderDetails(EMPTY_LABEL),
+        details: resumeToolRowFacts(EMPTY_LABEL),
         deliveredRuns: [],
       };
     const supervisor = yield* SubagentSupervisor;
@@ -237,7 +239,7 @@ const resume = (
     });
     return {
       text: formatResumeOutcome(input.id, outcome),
-      details: resumeRenderDetails(outcome),
+      details: resumeToolRowFacts(outcome),
       deliveredRuns: [],
     };
   });
@@ -257,45 +259,10 @@ const steer = (
     });
     return {
       text: formatSteerOutcome(input.id, outcome),
-      details: steerRenderDetails(input.id, outcome),
+      details: steerToolRowFacts(input.id, outcome),
       deliveredRuns: [],
     };
   });
-
-function cancelRenderOutcomes(
-  outcomes: readonly CancelOutcome[],
-): readonly CancelRunRenderOutcome[] {
-  return outcomes.map((outcome): CancelRunRenderOutcome => {
-    switch (outcome.outcome) {
-      case "admitted":
-        return { kind: "requested", runId: outcome.runId };
-      case "idempotent":
-        return { kind: "already requested", runId: outcome.runId };
-      case "already completed":
-        return {
-          kind: "already terminal",
-          runId: outcome.runId,
-          phase: "completed",
-        };
-      case "already failed":
-        return {
-          kind: "already terminal",
-          runId: outcome.runId,
-          phase: "failed",
-        };
-      case "already cancelled":
-        return {
-          kind: "already terminal",
-          runId: outcome.runId,
-          phase: "cancelled",
-        };
-      case "unknown Run":
-        return { kind: "unknown", runId: outcome.runId };
-      default:
-        return outcome satisfies never;
-    }
-  });
-}
 
 /** `agent_cancel`. Answers about request admission, never about terminality. */
 const cancel = (
@@ -306,10 +273,7 @@ const cancel = (
     const outcomes = yield* supervisor.cancel(distinct(input.ids));
     return {
       text: formatCancelOutcomes(outcomes),
-      details: {
-        kind: "cancel",
-        outcomes: cancelRenderOutcomes(outcomes),
-      } satisfies AgentToolRenderDetails,
+      details: cancelToolRowFacts(outcomes),
       deliveredRuns: [],
     };
   });
@@ -358,27 +322,12 @@ const collect = (
         ? [outcome.result]
         : [],
     );
-    const stillRunning = outcomes.filter(
-      (outcome) => outcome.outcome === "still running",
-    ).length;
-    const unknown = outcomes.filter(
-      (outcome) => outcome.outcome === "unknown Run",
-    ).length;
-    const unavailable = outcomes.filter(
-      (outcome) =>
-        outcome.outcome === "terminal" && outcome.result === undefined,
-    ).length;
     return {
       text: formatWaitOutcomes(outcomes, agents),
-      details: {
-        kind: "collection",
-        scope,
-        runs: delivered.map(resultRunSummaryOf),
-        stillRunning,
-        unknown,
-        unavailable,
-        noActiveRuns: false,
-      } satisfies AgentToolRenderDetails,
+      details:
+        scope === "named"
+          ? waitToolRowFacts(outcomes)
+          : waitAllToolRowFacts(outcomes),
       deliveredRuns: delivered.map((result) => result.runId),
     };
   });
@@ -409,15 +358,7 @@ const waitAll = (
     if (active.length === 0) {
       return {
         text: formatNoActiveRuns(),
-        details: {
-          kind: "collection",
-          scope: "all-active",
-          runs: [],
-          stillRunning: 0,
-          unknown: 0,
-          unavailable: 0,
-          noActiveRuns: true,
-        } satisfies AgentToolRenderDetails,
+        details: noActiveWaitAllToolRowFacts(),
         deliveredRuns: [],
       };
     }
@@ -432,38 +373,15 @@ const result = (
     const supervisor = yield* SubagentSupervisor;
     const outcome = yield* supervisor.result(input.id);
     if (outcome.outcome !== "result") {
-      const details: AgentToolRenderDetails =
-        outcome.outcome === "ResultExpired"
-          ? {
-              kind: "result",
-              outcome: "unavailable",
-              runId: outcome.runId,
-              status: outcome.status,
-            }
-          : outcome.outcome === "RunNotTerminal"
-            ? {
-                kind: "result",
-                outcome: "still-running",
-                runId: outcome.runId,
-              }
-            : {
-                kind: "result",
-                outcome: "unknown",
-                runId: outcome.runId,
-              };
       return {
         text: formatResultRejection(outcome),
-        details,
+        details: resultToolRowFacts(outcome),
         deliveredRuns: [],
       };
     }
     return {
       text: formatResult(outcome.result),
-      details: {
-        kind: "result",
-        outcome: "available",
-        run: resultRunSummaryOf(outcome.result),
-      } satisfies AgentToolRenderDetails,
+      details: resultToolRowFacts(outcome),
       deliveredRuns: [outcome.result.runId],
     };
   });

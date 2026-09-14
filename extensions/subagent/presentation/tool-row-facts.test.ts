@@ -1,0 +1,264 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import type {
+  CancelOutcome,
+  ResultOutcome,
+  ResumeOutcome,
+  StartOutcome,
+  SteerOutcome,
+  WaitOutcome,
+} from "../domain/index.ts";
+import { runId, subagentId } from "../domain/index.ts";
+import { fixtureResult } from "../testing/presentation-fixtures.ts";
+import {
+  cancelToolRowFacts,
+  decodeToolRowFacts,
+  noActiveWaitAllToolRowFacts,
+  resultToolRowFacts,
+  resumeToolRowFacts,
+  startToolRowFacts,
+  steerToolRowFacts,
+  waitAllToolRowFacts,
+  waitToolRowFacts,
+} from "./tool-row-facts.ts";
+
+const rid = runId("run-test-1");
+const sid = subagentId("subagent-test-1");
+const result = fixtureResult({ finalOutput: "answer" });
+const startOutcomes: readonly StartOutcome[] = [
+  { outcome: "started", subagentId: sid, runId: rid },
+  { outcome: "unknown agent", agent: "ghost" },
+  { outcome: "invalid profile", diagnostics: [] },
+  { outcome: "empty label" },
+  { outcome: "at capacity" },
+  { outcome: "shutting down" },
+  { outcome: "delegation-depth exceeded", depth: 2 },
+  {
+    outcome: "backend unavailable",
+    diagnostic: { category: "backend-failure", message: "unavailable" },
+  },
+];
+
+const resumeOutcomes: readonly ResumeOutcome[] = [
+  { outcome: "started", subagentId: sid, runId: rid },
+  { outcome: "unknown Subagent", subagentId: sid },
+  { outcome: "Subagent already running", subagentId: sid },
+  { outcome: "empty label" },
+  { outcome: "resume unsupported" },
+  { outcome: "conversation lost" },
+  { outcome: "at capacity" },
+  { outcome: "shutting down" },
+];
+
+const steerOutcomes: readonly SteerOutcome[] = [
+  { outcome: "accepted", runId: rid },
+  { outcome: "mailbox full", runId: rid },
+  { outcome: "invalid", reason: "empty" },
+  { outcome: "unsupported", runId: rid },
+  { outcome: "mailbox closed", runId: rid },
+  { outcome: "already completed", runId: rid },
+  { outcome: "already failed", runId: rid },
+  { outcome: "already cancelled", runId: rid },
+  { outcome: "unknown Run", runId: rid },
+  { outcome: "shutting down" },
+];
+
+const cancelOutcomes: readonly CancelOutcome[] = [
+  { outcome: "admitted", runId: rid },
+  { outcome: "idempotent", runId: rid },
+  { outcome: "already completed", runId: rid },
+  { outcome: "already failed", runId: rid },
+  { outcome: "already cancelled", runId: rid },
+  { outcome: "unknown Run", runId: rid },
+];
+
+const waitOutcomes: readonly WaitOutcome[] = [
+  { outcome: "terminal", runId: result.runId, status: "completed", result },
+  { outcome: "terminal", runId: rid, status: "failed" },
+  { outcome: "still running", runId: rid },
+  { outcome: "unknown Run", runId: rid },
+];
+
+const resultOutcomes: readonly ResultOutcome[] = [
+  { outcome: "result", result },
+  {
+    outcome: "ResultExpired",
+    runId: rid,
+    subagentId: sid,
+    status: "cancelled",
+  },
+  { outcome: "RunNotTerminal", runId: rid },
+  { outcome: "unknown Run", runId: rid },
+];
+
+test("named Tool-row facts construction covers every domain outcome and round-trips", () => {
+  const facts = [
+    ...startOutcomes.map((outcome) => startToolRowFacts("explore", outcome)),
+    ...resumeOutcomes.map(resumeToolRowFacts),
+    ...steerOutcomes.map((outcome) => steerToolRowFacts(rid, outcome)),
+    ...cancelOutcomes.map((outcome) => cancelToolRowFacts([outcome])),
+    waitToolRowFacts(waitOutcomes),
+    waitAllToolRowFacts(waitOutcomes),
+    noActiveWaitAllToolRowFacts(),
+    ...resultOutcomes.map(resultToolRowFacts),
+  ];
+
+  for (const value of facts) assert.deepEqual(decodeToolRowFacts(value), value);
+  assert.deepEqual(
+    facts.map((value) =>
+      value.kind === "collection" ? `${value.kind}:${value.scope}` : value.kind,
+    ),
+    [
+      ...startOutcomes.map(() => "start"),
+      ...resumeOutcomes.map(() => "resume"),
+      ...steerOutcomes.map(() => "steer"),
+      ...cancelOutcomes.map(() => "cancel"),
+      "collection:named",
+      "collection:all-active",
+      "collection:all-active",
+      ...resultOutcomes.map(() => "result"),
+    ],
+  );
+});
+
+test("the Tool-row facts decoder accepts all terminal phases and nested cancellation outcomes", () => {
+  for (const phase of ["completed", "failed", "cancelled"] as const) {
+    const facts = {
+      kind: "cancel",
+      outcomes: [{ kind: "already terminal", runId: rid, phase }],
+    };
+    assert.deepEqual(decodeToolRowFacts(facts), facts);
+  }
+
+  assert.deepEqual(
+    decodeToolRowFacts(resultToolRowFacts({ outcome: "result", result })),
+    {
+      kind: "result",
+      outcome: "available",
+      run: {
+        runId: result.runId,
+        agent: "explore",
+        status: "completed",
+        outputCharacters: 6,
+      },
+    },
+  );
+});
+
+test("the Tool-row facts decoder returns absence and never throws for malformed, foreign, and legacy values", () => {
+  const throwing = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error("host getter failed");
+      },
+    },
+  );
+  const malformed: readonly unknown[] = [
+    undefined,
+    null,
+    "facts",
+    throwing,
+    { kind: "foreign", outcome: "started" },
+    { kind: "wait", runs: [] },
+    { agent: "explore", subagentId: "subagent-legacy", runId: "run-legacy" },
+    { kind: "start", outcome: "started", agent: "explore", runId: rid },
+    {
+      kind: "start",
+      outcome: "started",
+      agent: "explore",
+      subagentId: "bad id",
+      runId: rid,
+    },
+    {
+      kind: "start",
+      outcome: "delegation-depth exceeded",
+      agent: "x",
+      depth: Number.NaN,
+    },
+    { kind: "resume", outcome: "started", subagentId: sid, runId: "" },
+    { kind: "steer", outcome: "accepted", runId: rid, excess: true },
+    { kind: "cancel", outcomes: [{ kind: "requested", runId: "bad id" }] },
+    {
+      kind: "cancel",
+      outcomes: [{ kind: "already terminal", runId: rid, phase: "running" }],
+    },
+    {
+      kind: "cancel",
+      outcomes: [{ kind: "already terminal", runId: rid, phase: "finalizing" }],
+    },
+    {
+      kind: "collection",
+      scope: "named",
+      runs: "not-an-array",
+      stillRunning: 0,
+      unknown: 0,
+      unavailable: 0,
+      noActiveRuns: false,
+    },
+    {
+      kind: "collection",
+      scope: "named",
+      runs: [],
+      stillRunning: -1,
+      unknown: 0,
+      unavailable: 0,
+      noActiveRuns: false,
+    },
+    {
+      kind: "collection",
+      scope: "named",
+      runs: [],
+      stillRunning: 0,
+      unknown: 0,
+      unavailable: 0,
+      noActiveRuns: true,
+    },
+    {
+      kind: "collection",
+      scope: "all-active",
+      runs: [],
+      stillRunning: 1,
+      unknown: 0,
+      unavailable: 0,
+      noActiveRuns: true,
+    },
+    {
+      kind: "collection",
+      scope: "all-active",
+      runs: [
+        {
+          runId: rid,
+          agent: "explore",
+          status: "running",
+          outputCharacters: 1,
+        },
+      ],
+      stillRunning: 0,
+      unknown: 0,
+      unavailable: 0,
+      noActiveRuns: false,
+    },
+    {
+      kind: "result",
+      outcome: "available",
+      run: {
+        runId: rid,
+        agent: "explore",
+        status: "completed",
+        outputCharacters: Infinity,
+      },
+    },
+    {
+      kind: "result",
+      outcome: "unavailable",
+      runId: rid,
+      status: "finalizing",
+    },
+  ];
+
+  for (const value of malformed) {
+    assert.doesNotThrow(() => decodeToolRowFacts(value));
+    assert.equal(decodeToolRowFacts(value), undefined);
+  }
+});

@@ -14,17 +14,6 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import {
-  isTerminalRunPhase,
-  type ResumeOutcome,
-  type RunId,
-  type RunPhase,
-  type RunResult,
-  type StartOutcome,
-  type SteerOutcome,
-  TERMINAL_RUN_PHASES,
-  type TerminalRunPhase,
-} from "../domain/index.ts";
 import { CANCEL_OUTCOME_HEADINGS } from "./prose.ts";
 import {
   contentText,
@@ -34,6 +23,16 @@ import {
 import type { RenderableTheme } from "./rows.ts";
 import { formatCharacterCount } from "./status.ts";
 import { fitToWidth } from "./text-width.ts";
+import {
+  type CancelToolRowFacts as CancelRenderDetails,
+  type CollectedRunsToolRowFacts as CollectedRunsRenderDetails,
+  decodeToolRowFacts,
+  type ResultToolRowFacts as ResultRenderDetails,
+  type ResumeToolRowFacts as ResumeRenderDetails,
+  type StartedRunToolRowFacts as StartedRunRenderDetails,
+  type StartToolRowFacts as StartRenderDetails,
+  type SteerToolRowFacts as SteerRenderDetails,
+} from "./tool-row-facts.ts";
 
 /** The operation keys of the one agent-tool family. */
 export type AgentToolOperation =
@@ -101,138 +100,10 @@ interface SteerArguments {
   readonly message: string;
 }
 
-/** Discriminated, presentation-only details for every decoded start outcome. */
-export type StartRenderDetails =
-  | {
-      readonly kind: "start";
-      readonly outcome: "started";
-      readonly agent: string;
-      readonly subagentId: string;
-      readonly runId: string;
-    }
-  | {
-      readonly kind: "start";
-      readonly outcome: Exclude<
-        StartOutcome["outcome"],
-        "started" | "delegation-depth exceeded"
-      >;
-      readonly agent: string;
-    }
-  | {
-      readonly kind: "start";
-      readonly outcome: "delegation-depth exceeded";
-      readonly agent: string;
-      readonly depth: number;
-    };
-
-export type StartedRunRenderDetails = Extract<
-  StartRenderDetails,
-  { readonly outcome: "started" }
->;
-
-/** One delivered Result in a compact collection or retrieval summary. */
-export interface ResultRunSummary {
-  readonly runId: string;
-  readonly agent: string;
-  readonly status: TerminalRunPhase;
-  /** Characters retained in the Result's final output. */
-  readonly outputCharacters: number;
-}
-
-/** Presentation-only facts for either Wait operation. */
-export interface CollectedRunsRenderDetails {
-  readonly kind: "collection";
-  readonly scope: "named" | "all-active";
-  readonly runs: readonly ResultRunSummary[];
-  readonly stillRunning: number;
-  readonly unknown: number;
-  readonly unavailable: number;
-  readonly noActiveRuns: boolean;
-}
-
-/** Presentation-only facts for one `agent_result` outcome. */
-export type ResultRenderDetails =
-  | {
-      readonly kind: "result";
-      readonly outcome: "available";
-      readonly run: ResultRunSummary;
-    }
-  | {
-      readonly kind: "result";
-      readonly outcome: "still-running" | "unknown";
-      readonly runId: string;
-    }
-  | {
-      readonly kind: "result";
-      readonly outcome: "unavailable";
-      readonly runId: string;
-      readonly status: TerminalRunPhase;
-    };
-
-export type ResumeRenderDetails =
-  | {
-      readonly kind: "resume";
-      readonly outcome: "started";
-      readonly subagentId: string;
-      readonly runId: string;
-    }
-  | {
-      readonly kind: "resume";
-      readonly outcome: Exclude<ResumeOutcome["outcome"], "started">;
-    };
-
-export type SteerRenderDetails =
-  | {
-      readonly kind: "steer";
-      readonly outcome: Exclude<SteerOutcome["outcome"], "invalid">;
-      readonly runId: string;
-    }
-  | {
-      readonly kind: "steer";
-      readonly outcome: "invalid";
-      readonly runId: string;
-    };
-
-/** One cancellation-request admission outcome, separate from settlement. */
-export type CancelRunRenderOutcome =
-  | { readonly kind: "requested"; readonly runId: string }
-  | { readonly kind: "already requested"; readonly runId: string }
-  | {
-      readonly kind: "already terminal";
-      readonly runId: string;
-      readonly phase: TerminalRunPhase;
-    }
-  | { readonly kind: "unknown"; readonly runId: string };
-
-/** Discriminated, presentation-only details for one cancellation operation. */
-export interface CancelRenderDetails {
-  readonly kind: "cancel";
-  readonly outcomes: readonly CancelRunRenderOutcome[];
-}
-
-/** Explicit semantic details carried by migrated agent-tool outcomes. */
-export type AgentToolRenderDetails =
-  | StartRenderDetails
-  | ResumeRenderDetails
-  | SteerRenderDetails
-  | CollectedRunsRenderDetails
-  | ResultRenderDetails
-  | CancelRenderDetails;
-
 function recordOf(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-/** Build the shared compact vocabulary from one immutable Result. */
-export function resultRunSummaryOf(result: RunResult): ResultRunSummary {
-  return {
-    runId: result.runId,
-    agent: result.agent,
-    status: result.status,
-    outputCharacters: result.finalOutput.length,
-  };
 }
 
 const COLLAPSED_BODY_LINES = 5;
@@ -272,227 +143,6 @@ function steerArguments(value: unknown): SteerArguments | undefined {
     typeof candidate.message === "string"
     ? { id: candidate.id, message: candidate.message }
     : undefined;
-}
-
-type StartRefusal = Exclude<
-  StartOutcome["outcome"],
-  "started" | "delegation-depth exceeded"
->;
-
-const START_REFUSALS: Readonly<Record<StartRefusal, true>> = {
-  "unknown agent": true,
-  "invalid profile": true,
-  "empty label": true,
-  "at capacity": true,
-  "shutting down": true,
-  "backend unavailable": true,
-};
-
-/** Convert every start outcome into explicit semantic details. */
-export function startRenderDetails(
-  agent: string,
-  outcome: StartOutcome,
-): StartRenderDetails {
-  if (outcome.outcome === "started") {
-    return {
-      kind: "start",
-      outcome: "started",
-      agent,
-      subagentId: outcome.subagentId,
-      runId: outcome.runId,
-    };
-  }
-  return outcome.outcome === "delegation-depth exceeded"
-    ? { kind: "start", outcome: outcome.outcome, agent, depth: outcome.depth }
-    : { kind: "start", outcome: outcome.outcome, agent };
-}
-
-function parseStartRenderDetails(
-  value: unknown,
-): StartRenderDetails | undefined {
-  const candidate = recordOf(value);
-  if (candidate?.kind !== "start" || typeof candidate.agent !== "string") {
-    return undefined;
-  }
-  if (
-    candidate.outcome === "started" &&
-    typeof candidate.subagentId === "string" &&
-    typeof candidate.runId === "string"
-  ) {
-    return {
-      kind: "start",
-      outcome: "started",
-      agent: candidate.agent,
-      subagentId: candidate.subagentId,
-      runId: candidate.runId,
-    };
-  }
-  if (
-    candidate.outcome === "delegation-depth exceeded" &&
-    typeof candidate.depth === "number"
-  ) {
-    return {
-      kind: "start",
-      outcome: candidate.outcome,
-      agent: candidate.agent,
-      depth: candidate.depth,
-    };
-  }
-  return hasOwnOutcome(START_REFUSALS, candidate.outcome)
-    ? { kind: "start", outcome: candidate.outcome, agent: candidate.agent }
-    : undefined;
-}
-
-type ResumeRefusal = Exclude<ResumeOutcome["outcome"], "started">;
-
-/** Exhaustive runtime keys, linked to the domain unions they validate. */
-const RESUME_REFUSALS: Readonly<Record<ResumeRefusal, true>> = {
-  "unknown Subagent": true,
-  "Subagent already running": true,
-  "empty label": true,
-  "resume unsupported": true,
-  "conversation lost": true,
-  "at capacity": true,
-  "shutting down": true,
-};
-
-const STEER_OUTCOMES: Readonly<Record<SteerOutcome["outcome"], true>> = {
-  accepted: true,
-  "mailbox full": true,
-  invalid: true,
-  unsupported: true,
-  "mailbox closed": true,
-  "already completed": true,
-  "already failed": true,
-  "already cancelled": true,
-  "unknown Run": true,
-  "shutting down": true,
-};
-
-function hasOwnOutcome<K extends string>(
-  outcomes: Readonly<Record<K, true>>,
-  value: unknown,
-): value is K {
-  return typeof value === "string" && Object.hasOwn(outcomes, value);
-}
-
-/** Convert every resume operation outcome into explicit semantic details. */
-export function resumeRenderDetails(
-  outcome: ResumeOutcome,
-): ResumeRenderDetails {
-  return outcome.outcome === "started"
-    ? {
-        kind: "resume",
-        outcome: "started",
-        subagentId: outcome.subagentId,
-        runId: outcome.runId,
-      }
-    : { kind: "resume", outcome: outcome.outcome };
-}
-
-/** Convert every Control admission outcome into explicit semantic details. */
-export function steerRenderDetails(
-  runId: RunId,
-  outcome: SteerOutcome,
-): SteerRenderDetails {
-  if (outcome.outcome === "invalid") {
-    return {
-      kind: "steer",
-      outcome: "invalid",
-      runId,
-    };
-  }
-  return {
-    kind: "steer",
-    outcome: outcome.outcome,
-    runId: outcome.outcome === "shutting down" ? runId : outcome.runId,
-  };
-}
-
-function parseResumeRenderDetails(
-  value: unknown,
-): ResumeRenderDetails | undefined {
-  const candidate = recordOf(value);
-  if (candidate?.kind !== "resume") return undefined;
-  if (
-    candidate.outcome === "started" &&
-    typeof candidate.subagentId === "string" &&
-    typeof candidate.runId === "string"
-  ) {
-    return {
-      kind: "resume",
-      outcome: "started",
-      subagentId: candidate.subagentId,
-      runId: candidate.runId,
-    };
-  }
-  return hasOwnOutcome(RESUME_REFUSALS, candidate.outcome)
-    ? { kind: "resume", outcome: candidate.outcome }
-    : undefined;
-}
-
-function parseSteerRenderDetails(
-  value: unknown,
-): SteerRenderDetails | undefined {
-  const candidate = recordOf(value);
-  if (
-    candidate?.kind !== "steer" ||
-    typeof candidate.runId !== "string" ||
-    !hasOwnOutcome(STEER_OUTCOMES, candidate.outcome)
-  )
-    return undefined;
-  if (candidate.outcome === "invalid") {
-    return {
-      kind: "steer",
-      outcome: "invalid",
-      runId: candidate.runId,
-    };
-  }
-  return {
-    kind: "steer",
-    outcome: candidate.outcome as Exclude<
-      SteerRenderDetails["outcome"],
-      "invalid"
-    >,
-    runId: candidate.runId,
-  };
-}
-
-function isTerminalPhase(value: unknown): value is TerminalRunPhase {
-  return typeof value === "string" && isTerminalRunPhase(value as RunPhase);
-}
-
-/** Validate cancellation details at the renderer boundary. */
-function cancelRenderDetails(value: unknown): CancelRenderDetails | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const candidate = value as Record<string, unknown>;
-  if (candidate.kind !== "cancel" || !Array.isArray(candidate.outcomes)) {
-    return undefined;
-  }
-  const outcomes: CancelRunRenderOutcome[] = [];
-  for (const value of candidate.outcomes) {
-    if (typeof value !== "object" || value === null) return undefined;
-    const outcome = value as Record<string, unknown>;
-    if (typeof outcome.runId !== "string") return undefined;
-    switch (outcome.kind) {
-      case "requested":
-      case "already requested":
-      case "unknown":
-        outcomes.push({ kind: outcome.kind, runId: outcome.runId });
-        break;
-      case "already terminal":
-        if (!isTerminalPhase(outcome.phase)) return undefined;
-        outcomes.push({
-          kind: "already terminal",
-          runId: outcome.runId,
-          phase: outcome.phase,
-        });
-        break;
-      default:
-        return undefined;
-    }
-  }
-  return { kind: "cancel", outcomes };
 }
 
 function hiddenMarker(hidden: number, theme: RenderableTheme): string {
@@ -847,47 +497,40 @@ class UnifiedResultComponent extends CachedComponent {
         readonly sourceText?: string;
       }
     | undefined {
+    const facts = decodeToolRowFacts(this.result.details);
     switch (this.operation) {
-      case "start": {
-        const details = parseStartRenderDetails(this.result.details);
-        return details === undefined
-          ? undefined
-          : { line: (width) => startSummary(details, this.theme, width) };
-      }
-      case "resume": {
-        const details = parseResumeRenderDetails(this.result.details);
-        return details === undefined
-          ? undefined
-          : { line: (width) => resumeSummary(details, this.theme, width) };
-      }
-      case "steer": {
-        const details = parseSteerRenderDetails(this.result.details);
-        return details === undefined
-          ? undefined
-          : { line: () => steerSummary(details, this.theme) };
-      }
+      case "start":
+        return facts?.kind === "start"
+          ? { line: (width) => startSummary(facts, this.theme, width) }
+          : undefined;
+      case "resume":
+        return facts?.kind === "resume"
+          ? { line: (width) => resumeSummary(facts, this.theme, width) }
+          : undefined;
+      case "steer":
+        return facts?.kind === "steer"
+          ? { line: () => steerSummary(facts, this.theme) }
+          : undefined;
       case "cancel": {
-        const details = cancelRenderDetails(this.result.details);
-        if (details === undefined) return undefined;
-        const sourceText = cancellationSummaryText(details);
+        if (facts?.kind !== "cancel") return undefined;
+        const sourceText = cancellationSummaryText(facts);
         return {
           line: () => this.theme.fg("toolOutput", sourceText),
           sourceText,
         };
       }
-      case "result": {
-        const details = resultRenderDetails(this.result.details);
-        return details === undefined
-          ? undefined
-          : { line: (width) => retrievalSummary(details, this.theme, width) };
-      }
+      case "result":
+        return facts?.kind === "result"
+          ? { line: (width) => retrievalSummary(facts, this.theme, width) }
+          : undefined;
       case "wait":
-      case "waitAll": {
-        const details = collectedRunsRenderDetails(this.result.details);
-        return details === undefined
-          ? undefined
-          : { line: (width) => collectionSummary(details, this.theme, width) };
-      }
+        return facts?.kind === "collection" && facts.scope === "named"
+          ? { line: (width) => collectionSummary(facts, this.theme, width) }
+          : undefined;
+      case "waitAll":
+        return facts?.kind === "collection" && facts.scope === "all-active"
+          ? { line: (width) => collectionSummary(facts, this.theme, width) }
+          : undefined;
     }
   }
 
@@ -1086,92 +729,6 @@ const startPair: AgentToolRendererPair = {
 
 function toolName(operation: AgentToolOperation): string {
   return operation === "waitAll" ? "agent_wait_all" : `agent_${operation}`;
-}
-
-function isCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
-}
-
-function isTerminalStatus(value: unknown): value is TerminalRunPhase {
-  return (TERMINAL_RUN_PHASES as readonly unknown[]).includes(value);
-}
-
-function resultRunSummary(value: unknown): ResultRunSummary | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const run = value as Record<string, unknown>;
-  return typeof run.runId === "string" &&
-    typeof run.agent === "string" &&
-    isTerminalStatus(run.status) &&
-    isCount(run.outputCharacters)
-    ? {
-        runId: run.runId,
-        agent: run.agent,
-        status: run.status,
-        outputCharacters: run.outputCharacters,
-      }
-    : undefined;
-}
-
-function collectedRunsRenderDetails(
-  value: unknown,
-): CollectedRunsRenderDetails | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const details = value as Record<string, unknown>;
-  if (
-    details.kind !== "collection" ||
-    (details.scope !== "named" && details.scope !== "all-active") ||
-    !Array.isArray(details.runs) ||
-    !isCount(details.stillRunning) ||
-    !isCount(details.unknown) ||
-    !isCount(details.unavailable) ||
-    typeof details.noActiveRuns !== "boolean"
-  ) {
-    return undefined;
-  }
-  const runs = details.runs.map(resultRunSummary);
-  return runs.every((run) => run !== undefined)
-    ? {
-        kind: "collection",
-        scope: details.scope,
-        runs: runs as ResultRunSummary[],
-        stillRunning: details.stillRunning,
-        unknown: details.unknown,
-        unavailable: details.unavailable,
-        noActiveRuns: details.noActiveRuns,
-      }
-    : undefined;
-}
-
-function resultRenderDetails(value: unknown): ResultRenderDetails | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const details = value as Record<string, unknown>;
-  if (details.kind !== "result") return undefined;
-  if (details.outcome === "available") {
-    const run = resultRunSummary(details.run);
-    return run === undefined
-      ? undefined
-      : { kind: "result", outcome: "available", run };
-  }
-  if (
-    (details.outcome === "still-running" || details.outcome === "unknown") &&
-    typeof details.runId === "string"
-  ) {
-    return {
-      kind: "result",
-      outcome: details.outcome,
-      runId: details.runId,
-    };
-  }
-  return details.outcome === "unavailable" &&
-    typeof details.runId === "string" &&
-    isTerminalStatus(details.status)
-    ? {
-        kind: "result",
-        outcome: "unavailable",
-        runId: details.runId,
-        status: details.status,
-      }
-    : undefined;
 }
 
 interface TargetArguments {
