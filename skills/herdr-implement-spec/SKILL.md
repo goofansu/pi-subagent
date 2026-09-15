@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 You have been provided a specification. It should have tickets associated with it, describing how to implement it.
 
-The goal is a single branch implementing the entire specification, handed back ready to review.
+The goal is the set of **delivery branches** the specification calls for, each completed in its own **delivery worktree**. Every ticket is assigned to exactly one delivery branch. Each delivery branch has one **handoff**: a **local merge** into its base, which is the default when no PR was requested, or a **PR handoff** when the specification or user requests one. Usually one integration branch collects all tickets; a specification may instead call for one branch per PR, or a mix.
 
 The tickets are not a list of steps. They are a **task graph** with blocking relationships between them. This means there is always a **frontier** of tickets which are ready to be grabbed.
 
@@ -24,17 +24,20 @@ Ticket agents run unfocused, so the user keeps their pane and every ticket on th
 
 2. (optional) Use an **exploration subagent** to conduct any exploration required by the tickets - relevant codebase files or external documentation. Ensure the exploration subagent can save files - it should save its markdown notes in a directory outside the repo, so every ticket agent can be pointed at them. This lets ticket agents focus on implementation rather than exploration.
 
-3. Create the **integration branch** off main in a dedicated **integration worktree**. Keep the current workspace's branch and working tree unchanged. Every ticket's work lands in the integration worktree; run integration merges and checks there.
+3. Determine the **delivery topology** from the specification and tickets before starting work: every delivery branch, its base, its assigned tickets, and its handoff. Record who opens each requested PR; you own that handoff unless the specification assigns it elsewhere. Resolve any ambiguity before creating worktrees. Create or check out every delivery branch in a dedicated delivery worktree; a stacked PR starts from the delivery branch beneath it. Keep the current workspace's branch and working tree unchanged while tickets run.
 
-4. Work the frontier until every ticket is merged:
-   - Start a ticket agent for each frontier ticket not yet started, all of them at once. Each gets a worktree cut from the current tip of the integration branch. Cutting from the current tip is what carries a blocker's merged work into the ticket that depends on it.
+4. Work the frontier until every ticket is merged into its delivery branch:
+   - Before starting a newly-ready ticket, ensure its delivery branch contains every completed blocker. Blockers assigned to that delivery branch are already present. For a blocker on another delivery branch, first merge that branch's tip into this ticket's delivery branch.
+   - Start a ticket agent for each frontier ticket not yet started, all of them at once. Each gets its own temporary branch and worktree cut from the current tip of its delivery branch. Cutting from that tip carries the merged blocker work into the ticket.
    - Every prompt starts with `/implement-and-review`, then the ticket and pointers to the specification and the exploration notes: `/implement-and-review <ticket> against <specification>, notes in <notes-dir>`.
    - Wait on the agents. A settled agent has stopped, which is a signal to look rather than proof of success: it may have ended clean, or stopped on a specification gap or a review stalemate. Read its final report, and answer or surface anything it is blocked on.
-   - As each ticket finishes green, merge its branch into the integration branch, then remove its worktree and delete the ticket branch. Merge one at a time; the other ticket agents keep running.
+   - As each ticket finishes green, merge its branch into its delivery branch, then remove its temporary worktree and delete its temporary branch. Merge into any one delivery branch one ticket at a time; the other ticket agents keep running.
    - Every merge grows the frontier. Start the newly-ready tickets straight away rather than waiting for the rest of the round.
 
-5. When a ticket agent fails, or its work will not merge, stop that part of the graph: report it, leave the tickets it blocks unstarted, and keep working the rest of the frontier.
+5. When a ticket agent fails, or its work will not merge into its delivery branch, stop that part of the graph: report it, leave the tickets it blocks unstarted, and keep working the rest of the frontier. A stopped delivery line does not stop the others. Finalize a delivery branch only after all of its tickets land.
 
-6. Once all tickets are complete, run `/code-review` in the integration worktree. Fix everything it raises with a single pi agent started in that worktree.
+6. After every ticket has either landed, failed, or been left unstarted behind a failure, finalize each completed delivery branch. Run `/code-review` in its delivery worktree and fix everything raised with a single pi agent started there, then perform its recorded handoff:
+   - **Local merge:** merge the delivery branch into its recorded base and verify the result there. If the base is checked out in the current workspace, require a clean tree and use it only for this final merge. After a successful merge, remove the delivery worktree and branch.
+   - **PR handoff:** when you own it, push the delivery branch and open or update its PR against the recorded base. Otherwise, leave the branch ready and report who owns the handoff. Preserve the delivery branch and worktree as the PR head.
 
-7. Report every ticket and whether it merged, plus anything left unstarted and why. Leave the integration branch and its worktree ready for review, and report their name and path. Leave no ticket branches or worktrees behind.
+7. Report every ticket and which delivery branch contains it, plus anything left unstarted and why. Report every delivery branch and the result of its handoff: the local base and merge commit, or the worktree path and PR when applicable. Ticket branches and worktrees are temporary: none remain at the end. Successfully local-merged delivery branches and worktrees are temporary too. PR delivery branches and worktrees are final: preserve every one.
