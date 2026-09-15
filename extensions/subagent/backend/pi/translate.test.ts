@@ -5,21 +5,15 @@ import {
   confinedControl,
   createPiEventTranslator,
   createPiRunReadingTranslator,
-  currentRunMessages,
-  isPiUserText,
-  messageIdentity,
   piActivity,
   piMessageFacts,
   piMessageObservations,
   piMessagePart,
   piRole,
-  piTerminalEvidence,
-  piTerminalSnapshot,
   piToolProgress,
-  piTranscriptItem,
   readPiEvent,
   toolOutputSummary,
-  withoutInitialGoal,
+  translatePiMessage,
 } from "./translate.ts";
 
 /**
@@ -121,7 +115,7 @@ test("a user message counts no turn", () => {
 test("a tool result is a message of its own, with the tool role", () => {
   assert.equal(piRole("toolResult"), "tool");
   assert.deepEqual(
-    piTranscriptItem({
+    piMessageFacts({
       role: "toolResult",
       content: [{ type: "text", text: "40 lines" }],
     }),
@@ -308,11 +302,12 @@ test("model-turn output kind is reset across executions", () => {
   });
 });
 
-test("Pi Run readings contain translated messages and preserve streamed references", () => {
+test("Pi Run readings preserve streamed references and freshly read terminal values", () => {
   const translator = createPiRunReadingTranslator();
   const native = assistant({ stopReason: "length", usage: RECORDED_USAGE });
   const first = translator.event({ type: "message_end", message: native });
   const repeated = translator.event({ type: "message_end", message: native });
+  native.usage = { ...RECORDED_USAGE, input: 300 };
   const terminal = translator.event({
     type: "agent_end",
     willRetry: false,
@@ -330,9 +325,10 @@ test("Pi Run readings contain translated messages and preserve streamed referenc
     return;
   }
   assert.strictEqual(repeated.message, first.message);
-  assert.strictEqual(terminal.messages[0], first.message);
+  assert.notStrictEqual(terminal.messages[0], first.message);
   assert.equal(first.message.assistantOutcome, "incomplete");
   assert.equal(first.message.facts?.usage?.input, 209);
+  assert.equal(terminal.messages[0]?.facts?.usage?.input, 300);
   assert.deepEqual(
     first.message.observations.map((one) => one.kind),
     ["message", "usage", "context"],
@@ -758,73 +754,42 @@ test("an event with no call id is not progress about anything", () => {
   assert.equal(piActivity({ type: "message_end" }), undefined);
 });
 
-// ── The Run's own messages ───────────────────────────────────────────────────
+// ── Evidence inputs ──────────────────────────────────────────────────────────
 
-test("the initial goal is recognized however Pi spells the content", () => {
+test("translated user text recognizes either native content spelling", () => {
   assert.equal(
-    isPiUserText({ role: "user", content: "have a look" }, "have a look"),
-    true,
+    translatePiMessage({ role: "user", content: "have a look" }).goalText,
+    "have a look",
   );
   assert.equal(
-    isPiUserText(
-      { role: "user", content: [{ type: "text", text: "have a look" }] },
-      "have a look",
-    ),
-    true,
+    translatePiMessage({
+      role: "user",
+      content: [{ type: "text", text: "have a look" }],
+    }).goalText,
+    "have a look",
   );
   assert.equal(
-    isPiUserText({ role: "assistant", content: "have a look" }, "have a look"),
-    false,
+    translatePiMessage({ role: "assistant", content: "have a look" }).goalText,
+    undefined,
   );
 });
 
-test("only the first echo of the brief is omitted", () => {
-  const goal = { role: "user", content: "have a look" };
-  const steer = { role: "user", content: "have a look" };
-
-  // Two consumed Controls can carry identical text, so only the first match
-  // is the goal and the second is something the user actually said.
-  assert.deepEqual(withoutInitialGoal([goal, steer], "have a look"), [steer]);
-});
-
-test("the Run's own messages are what the baseline does not already hold", () => {
-  const first = { role: "assistant", content: "first", timestamp: 1 };
-  const second = { role: "assistant", content: "second", timestamp: 2 };
-
-  assert.deepEqual(currentRunMessages([first, second], [first]), [second]);
-});
-
-test("a genuinely repeated message is kept, because counts are compared", () => {
-  const same = { role: "user", content: "again", timestamp: 1 };
-
-  // Comparing a counted snapshot rather than a set: the retained session may
-  // rebuild message objects while compacting, so positions move — but a
-  // second identical message the current Run added is still new.
-  assert.deepEqual(currentRunMessages([same, { ...same }], [same]), [
-    { ...same },
-  ]);
-});
-
-test("identity is content plus the metadata two different messages would differ in", () => {
-  const one = {
+test("semantic identity excludes restated usage", () => {
+  const one = translatePiMessage({
     role: "assistant",
     content: "x",
     timestamp: 1,
     usage: { input: 1 },
-  };
-  const two = {
+  });
+  const two = translatePiMessage({
     role: "assistant",
     content: "x",
     timestamp: 1,
     usage: { input: 9 },
-  };
+  });
 
-  // Usage is deliberately not part of identity: a message the session restated
-  // with an authoritative figure is the same message.
-  assert.equal(messageIdentity(one), messageIdentity(two));
+  assert.equal(one.semanticIdentity, two.semanticIdentity);
 });
-
-// ── The terminal snapshot ────────────────────────────────────────────────────
 
 test("recovery lifecycle stays in adapter-local event readings", () => {
   assert.deepEqual(
@@ -870,59 +835,18 @@ test("recovery lifecycle stays in adapter-local event readings", () => {
   });
 });
 
-test("terminal evidence distinguishes complete and incomplete responses", () => {
-  assert.equal(piTerminalEvidence([assistant()]).outcome, "answered");
+test("translated assistant messages classify every native stop reason", () => {
+  assert.equal(translatePiMessage(assistant()).assistantOutcome, "answered");
   assert.equal(
-    piTerminalEvidence([assistant({ stopReason: "length" })]).outcome,
+    translatePiMessage(assistant({ stopReason: "length" })).assistantOutcome,
     "incomplete",
   );
   assert.equal(
-    piTerminalEvidence([assistant({ stopReason: "error" })]).outcome,
+    translatePiMessage(assistant({ stopReason: "error" })).assistantOutcome,
     "failed",
   );
   assert.equal(
-    piTerminalEvidence([assistant({ stopReason: "aborted" })]).outcome,
+    translatePiMessage(assistant({ stopReason: "aborted" })).assistantOutcome,
     "aborted",
   );
-});
-
-test("the terminal snapshot recomputes the transcript, usage, turns, and gauge", () => {
-  const snapshot = piTerminalSnapshot([
-    { role: "user", content: [{ type: "text", text: "keep going" }] },
-    assistant({
-      content: [{ type: "toolCall", name: "read_file", id: "call-1" }],
-      usage: { input: 100, output: 10, totalTokens: 400 },
-    }),
-    { role: "toolResult", content: [{ type: "text", text: "40 lines" }] },
-    assistant({
-      usage: { input: 50, output: 8, totalTokens: 500, cost: { total: 0.5 } },
-    }),
-  ]);
-
-  assert.deepEqual(snapshot.usage, {
-    input: 150,
-    output: 18,
-    cacheRead: 0,
-    cacheWrite: 0,
-    cost: 0.5,
-  });
-  // One turn per assistant message, which is what the widget's count means.
-  assert.equal(snapshot.turns, 2);
-  // The latest gauge, not the sum of the gauges.
-  assert.deepEqual(snapshot.context, { tokens: 500 });
-  assert.equal(snapshot.model, "openai-codex/gpt-5.4-mini");
-  assert.equal(snapshot.finalOutput, "the answer");
-  assert.deepEqual(
-    snapshot.transcript?.map((item) => item.role),
-    ["user", "assistant", "tool", "assistant"],
-  );
-});
-
-test("a snapshot of nothing is an empty snapshot, not a fabricated one", () => {
-  const snapshot = piTerminalSnapshot([]);
-
-  assert.deepEqual(snapshot.transcript, []);
-  assert.equal(snapshot.turns, 0);
-  assert.equal(snapshot.context, undefined);
-  assert.equal(snapshot.model, undefined);
 });

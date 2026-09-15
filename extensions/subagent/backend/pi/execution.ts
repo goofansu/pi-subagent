@@ -30,50 +30,21 @@
  */
 
 import { Deferred, Effect, Fiber, Option, type Scope } from "effect";
-import {
-  answeredEnding,
-  failedEnding,
-  type RunDiagnostic,
-  type RunEnding,
-} from "../../domain/index.ts";
+import { failedEnding } from "../../domain/index.ts";
 import type { ExecutionIO, RunInput, TerminalBundle } from "../contract.ts";
 import { BRIDGE_OVERFLOW_MESSAGE } from "../native-bridge.ts";
 import { createCallbackBridge } from "./bridge.ts";
 import type { PiProbeCounters } from "./probe.ts";
+import { createPiRunEvidence, type PiRunFinishReport } from "./run-evidence.ts";
 import type { PiSession, PiSessionEvent } from "./session.ts";
-import {
-  confined,
-  confinedControl,
-  createPiEventTranslator,
-  currentRunMessages,
-  isPiUserText,
-  messageIdentity,
-  PI_BACKEND_FAILURE_CATEGORY,
-  PI_TERMINAL_ABORT_DESCRIPTION,
-  PI_TERMINAL_FAILURE_DESCRIPTION,
-  type PiTerminalEvidence,
-  piMessageObservations,
-  piTerminalEvidence,
-  piTerminalSnapshot,
-  withoutInitialGoal,
-} from "./translate.ts";
-
-/** What a Run says when it ended with no terminal event to read. */
-export const MISSING_TERMINAL_EVENT_MESSAGE =
-  "the Pi session finished without a terminal event carrying its messages";
+import { confinedControl, createPiRunReadingTranslator } from "./translate.ts";
 
 /** What an execution says when the BackendAgent was closed under it. */
 export const CLOSED_BEFORE_EXECUTION_MESSAGE =
   "the Pi BackendAgent was closed before this Run could start";
 
-/** What a rejected prompt says, with the provider's own text left behind. */
-export const PROMPT_REJECTED_CATEGORY = "Pi prompt failed";
-
 /** What a rejected native steer says. */
 export const STEER_REJECTED_CATEGORY = "Pi steering was not delivered";
-
-/** What failed required recovery says without exposing Pi's compaction error. */
-export const RECOVERY_FAILED_CATEGORY = "Pi recovery failed";
 
 /** What a steer the session never took says, once the Run is otherwise done. */
 export const STEER_ABANDONED_MESSAGE =
@@ -82,76 +53,6 @@ export const STEER_ABANDONED_MESSAGE =
 type NativeSettlement =
   | { readonly kind: "native"; readonly error: unknown }
   | { readonly kind: "overflow" };
-
-/** Replaced at each native execution start; never inferred from response failure. */
-interface CurrentExecution {
-  readonly generation: number;
-  terminal?: PiTerminalEvidence;
-  recovery?: "active" | "succeeded" | "failed" | "aborted";
-  recoveryDiagnosticObserved: boolean;
-  responseDiagnosticObserved: boolean;
-}
-
-/** A normal-finish decision is recorded before reporting can yield. */
-interface FinishDecision {
-  readonly bundle: TerminalBundle;
-  readonly diagnostic?: RunDiagnostic;
-}
-
-/** A failed or truncated response requires recovery; an answer gets maintenance. */
-function requiresRecovery(evidence: PiTerminalEvidence): boolean {
-  return evidence.outcome === "failed" || evidence.outcome === "incomplete";
-}
-
-/**
- * Replace only observed message occurrences that a terminal frame restated.
- *
- * This retains the ordered-observation history when compaction removes native
- * messages, while letting a terminal frame heal accounting drift on messages
- * it still carries. Identity ignores usage deliberately, and occurrences are
- * consumed in order so equal messages remain distinct.
- */
-function restateObservedMessages(
-  observed: readonly unknown[],
-  terminalMessages: readonly unknown[],
-): unknown[] {
-  const replacements = new Map<string, unknown[]>();
-  for (const message of terminalMessages) {
-    const key = messageIdentity(message);
-    const matching = replacements.get(key) ?? [];
-    matching.push(message);
-    replacements.set(key, matching);
-  }
-  return observed.map((message) => {
-    const matching = replacements.get(messageIdentity(message));
-    return matching?.shift() ?? message;
-  });
-}
-
-/** Construct only the fields for which Pi has managed-Run authority. */
-function runWideTerminalEvidence(
-  terminalMessages: readonly unknown[],
-  observedMessages: readonly unknown[],
-): PiTerminalEvidence {
-  const frame = piTerminalEvidence(terminalMessages);
-  const runWide = piTerminalSnapshot(observedMessages);
-  return {
-    outcome: frame.outcome,
-    reconciliation: {
-      ...(frame.reconciliation.finalOutput === undefined
-        ? {}
-        : { finalOutput: frame.reconciliation.finalOutput }),
-      ...(runWide.usage === undefined ? {} : { usage: runWide.usage }),
-      ...(runWide.turns === undefined ? {} : { turns: runWide.turns }),
-      ...(frame.reconciliation.context === undefined
-        ? {}
-        : { context: frame.reconciliation.context }),
-      ...(frame.reconciliation.model === undefined
-        ? {}
-        : { model: frame.reconciliation.model }),
-    },
-  };
-}
 
 export interface PiExecutionContext {
   readonly session: PiSession;
@@ -176,26 +77,16 @@ export function runPiExecution(
 
     const bridge = yield* createCallbackBridge();
     const settlement = yield* Deferred.make<NativeSettlement>();
-    const translator = createPiEventTranslator();
-    // Everything the listener writes and the drain loop reads. Plain mutable
-    // state, because a callback cannot yield and a `Ref` it could not write.
-    // One managed Run may contain several Pi agent executions. An agent_start
-    // advances this adapter-local identity, making every earlier terminal
-    // snapshot ineligible for interruption and final bundle reconciliation.
-    let current: CurrentExecution = {
-      generation: 0,
-      recoveryDiagnosticObserved: false,
-      responseDiagnosticObserved: false,
-    };
-    let normalFinish: FinishDecision | undefined;
-    let finishDiagnosticObserved = false;
-    let observedMessages: unknown[] = [];
-    let goalOmitted = false;
+    const translator = createPiRunReadingTranslator();
+    const evidence = createPiRunEvidence({
+      goal: input.prompt,
+      baseline: translator.messages(session.messages),
+    });
+    // The native callback cannot yield. Translation and evidence therefore
+    // make their complete synchronous decision before execution offers the
+    // resulting neutral observations to the callback bridge.
+    let normalFinish: PiRunFinishReport | undefined;
     let completed = false;
-    const baseline = [...session.messages];
-    // Reference identity, not content: two consumed Controls can carry the
-    // same text, and equal content is not the same event.
-    const seen = new WeakSet<object>();
 
     const offer = (observation: Parameters<typeof bridge.offer>[0]): void => {
       if (bridge.offer(observation)) return;
@@ -207,98 +98,8 @@ export function runPiExecution(
 
     const listen = (event: PiSessionEvent): void => {
       if (!bridge.accepting()) return;
-      const read = translator.event(event);
-      switch (read.kind) {
-        case "message": {
-          // Two Run-state decisions the translator cannot make for us: Pi
-          // echoes the brief back as the Run's first user message, and the
-          // same message object can arrive twice. Identity, not content —
-          // two consumed Controls can carry the same text.
-          const { message } = read;
-          if (!goalOmitted && isPiUserText(message, input.prompt)) {
-            goalOmitted = true;
-            return;
-          }
-          if (typeof message === "object" && message !== null) {
-            if (seen.has(message)) return;
-            seen.add(message);
-          }
-          observedMessages.push(message);
-          for (const observation of piMessageObservations(message)) {
-            if (
-              observation.kind === "diagnostic" &&
-              observation.diagnostic.category === PI_BACKEND_FAILURE_CATEGORY
-            ) {
-              current.responseDiagnosticObserved = true;
-            }
-            offer(observation);
-          }
-          return;
-        }
-        case "activity": {
-          offer(read.observation);
-          return;
-        }
-        case "tool": {
-          for (const observation of read.observations) offer(observation);
-          return;
-        }
-        case "execution-start": {
-          current = {
-            generation: current.generation + 1,
-            recoveryDiagnosticObserved: false,
-            responseDiagnosticObserved: false,
-          };
-          normalFinish = undefined;
-          finishDiagnosticObserved = false;
-          return;
-        }
-        case "recovery-start": {
-          current.recovery = "active";
-          return;
-        }
-        case "recovery-end": {
-          // Exhausted overflow can report an end without a matching start.
-          // Either event is actual operation evidence, unlike a failed response.
-          current.recovery = read.outcome;
-          if (
-            read.outcome === "failed" &&
-            current.terminal !== undefined &&
-            requiresRecovery(current.terminal) &&
-            !current.recoveryDiagnosticObserved
-          ) {
-            offer({
-              kind: "diagnostic",
-              diagnostic: confined(RECOVERY_FAILED_CATEGORY),
-            });
-            current.recoveryDiagnosticObserved = true;
-          }
-          // Neither willRetry=true automatic recovery nor willRetry=false
-          // queued continuation establishes a managed outcome here.
-          return;
-        }
-        case "final-settled": {
-          // Settlement is only a lifecycle boundary. It cannot turn required
-          // recovery into an answer, and maintenance never disabled an answer.
-          return;
-        }
-        case "terminal": {
-          const terminalMessages = withoutInitialGoal(
-            currentRunMessages(read.messages, baseline),
-            input.prompt,
-          );
-          observedMessages = restateObservedMessages(
-            observedMessages,
-            terminalMessages,
-          );
-          current.terminal = runWideTerminalEvidence(
-            terminalMessages,
-            observedMessages,
-          );
-          return;
-        }
-        case "other":
-          return;
+      for (const observation of evidence.read(translator.event(event))) {
+        offer(observation);
       }
     };
 
@@ -383,12 +184,17 @@ export function runPiExecution(
         );
       }),
     );
-    const announceFinishDiagnostic = (decision: FinishDecision) =>
+    // Reporting can yield to the core's bounded intake. Mark the frozen
+    // finish observations before the first yield so interruption resumes with
+    // reconciliation and ending rather than duplicating a diagnostic.
+    let finishObservationsAnnounced = false;
+    const announceFinishObservations = (report: PiRunFinishReport) =>
       Effect.gen(function* () {
-        if (finishDiagnosticObserved || decision.diagnostic === undefined)
-          return;
-        finishDiagnosticObserved = true;
-        yield* io.emit({ kind: "diagnostic", diagnostic: decision.diagnostic });
+        if (finishObservationsAnnounced) return;
+        finishObservationsAnnounced = true;
+        for (const observation of report.observations) {
+          yield* io.emit(observation);
+        }
       });
 
     /** Snapshot semantics before any drain, child interruption or native cleanup. */
@@ -396,20 +202,20 @@ export function runPiExecution(
     const announceOnInterrupt = Effect.gen(function* () {
       if (interruptAnnounced) return;
       interruptAnnounced = true;
-      const decision =
-        normalFinish ??
-        decisionForInterrupt(current, session, nativeDeliveries);
+      const observations = evidence.interrupted({
+        pendingNativeMessages: session.pendingMessageCount,
+        activeNativeDeliveries: nativeDeliveries,
+      });
       bridge.stop();
       yield* drainAvailable;
-      if (decision === undefined) return;
-      yield* announceFinishDiagnostic(decision);
-      if (decision.bundle.reconciliation !== undefined) {
-        yield* io.emit({
-          kind: "reconciliation",
-          reconciliation: decision.bundle.reconciliation,
-        });
+      if (observations === undefined) return;
+      const alreadyAnnounced =
+        normalFinish !== undefined && finishObservationsAnnounced
+          ? normalFinish.observations.length
+          : 0;
+      for (const observation of observations.slice(alreadyAnnounced)) {
+        yield* io.emit(observation);
       }
-      yield* io.emit({ kind: "ending", ending: decision.bundle.ending });
     });
 
     // Deliveries begun and not yet finished. The drain loop will not call a
@@ -480,7 +286,9 @@ export function runPiExecution(
         Effect.tap((settled) =>
           Effect.sync(() => {
             if (settled.kind === "native") {
-              normalFinish = decisionForFinish(settled.error, current);
+              normalFinish = evidence.promptReturned(
+                settled.error === undefined ? "resolved" : "rejected",
+              );
             }
           }),
         ),
@@ -533,8 +341,11 @@ export function runPiExecution(
       bridge.stop();
       yield* drainAvailable;
       const decision =
-        normalFinish ?? decisionForFinish(outcome.error, current);
-      yield* announceFinishDiagnostic(decision);
+        normalFinish ??
+        evidence.promptReturned(
+          outcome.error === undefined ? "resolved" : "rejected",
+        );
+      yield* announceFinishObservations(decision);
       return decision.bundle;
     });
 
@@ -572,78 +383,6 @@ function deliverSteer(
       diagnostic: confinedControl(STEER_REJECTED_CATEGORY),
     });
   });
-}
-
-/** What the Run ended as, once the native work has stopped talking. */
-function decisionForFinish(
-  promptError: unknown,
-  current: CurrentExecution,
-): FinishDecision {
-  const terminal = current.terminal;
-  if (terminal !== undefined) {
-    const recoveryFailed =
-      requiresRecovery(terminal) && current.recovery === "failed";
-    const description = recoveryFailed
-      ? RECOVERY_FAILED_CATEGORY
-      : terminal.outcome === "failed"
-        ? PI_TERMINAL_FAILURE_DESCRIPTION
-        : terminal.outcome === "incomplete"
-          ? PI_TERMINAL_ABORT_DESCRIPTION
-          : undefined;
-    const alreadyObserved = recoveryFailed
-      ? current.recoveryDiagnosticObserved
-      : current.responseDiagnosticObserved;
-    return {
-      bundle: {
-        ending: recoveryFailed
-          ? failedEnding(confined(RECOVERY_FAILED_CATEGORY).message)
-          : (endingForTerminal(terminal) ??
-            failedEnding(confined(PI_TERMINAL_ABORT_DESCRIPTION).message)),
-        reconciliation: terminal.reconciliation,
-      },
-      ...(description === undefined || alreadyObserved
-        ? {}
-        : { diagnostic: confined(description) }),
-    };
-  }
-  if (promptError !== undefined) {
-    const diagnostic = confined(PROMPT_REJECTED_CATEGORY);
-    return { bundle: { ending: failedEnding(diagnostic.message) }, diagnostic };
-  }
-  return { bundle: { ending: failedEnding(MISSING_TERMINAL_EVENT_MESSAGE) } };
-}
-
-/** Open incomplete/failed work belongs to runtime cancellation arbitration. */
-function decisionForInterrupt(
-  current: CurrentExecution,
-  session: PiSession,
-  nativeDeliveries: number,
-): FinishDecision | undefined {
-  if (current.terminal?.outcome !== "answered" || nativeDeliveries > 0)
-    return undefined;
-  if (session.pendingMessageCount > 0) return undefined;
-  return {
-    bundle: {
-      ending: answeredEnding(),
-      reconciliation: current.terminal.reconciliation,
-    },
-  };
-}
-
-/** Derive an Ending from the same classified evidence on every path. */
-function endingForTerminal(
-  terminal: PiTerminalEvidence,
-): RunEnding | undefined {
-  switch (terminal.outcome) {
-    case "answered":
-      return answeredEnding();
-    case "failed":
-      return failedEnding(confined(PI_TERMINAL_FAILURE_DESCRIPTION).message);
-    case "incomplete":
-      return failedEnding(confined(PI_TERMINAL_ABORT_DESCRIPTION).message);
-    case "aborted":
-      return undefined;
-  }
 }
 
 /** The promise side of one Run, forked inside the execution Scope. */

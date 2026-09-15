@@ -17,15 +17,12 @@
  * vocabulary would otherwise cross the boundary. Checking here is what makes
  * "no Pi type leaks into the runtime" true of the values as well as the types.
  *
- * The three rules worth naming, all of them v1's, all of them earned:
+ * Two rules worth naming, both earned in v1:
  *
- * - **The initial goal is omitted.** Pi echoes the prompt back as the Run's
- *   first user message. Reporting it would put the caller's own brief in the
- *   transcript of every Run, and in a *resumed* Run it would look like new
- *   input.
- * - **Messages are deduplicated by identity, not by content.** Two consumed
- *   Controls can carry identical text, and treating equal content as the same
- *   event would silently drop the second one.
+ * - **Message identity has two forms.** A translated object preserves streamed
+ *   reference identity, while its semantic identity recognizes rebuilt
+ *   terminal and baseline occurrences without treating usage restatement as a
+ *   new message. Pi Run evidence applies both identities.
  * - **`totalTokens` is a gauge, not a delta.** It is Pi's per-message context
  *   occupancy. Summing it would report a context window several times over.
  */
@@ -37,8 +34,6 @@ import {
   type RunDiagnostic,
   type RunObservation,
   runDiagnostic,
-  type TerminalReconciliation,
-  type TranscriptItem,
   type UsageDelta,
 } from "../../domain/index.ts";
 import { finishedShellActivity, toolActivity } from "../activity.ts";
@@ -318,17 +313,6 @@ export function piMessageObservations(
   return observations;
 }
 
-/** One native message as a transcript item, for a terminal snapshot. */
-export function piTranscriptItem(message: unknown): TranscriptItem | undefined {
-  const facts = piMessageFacts(message);
-  if (!facts) return undefined;
-  return {
-    role: facts.role,
-    parts: facts.parts,
-    ...(facts.model === undefined ? {} : { model: facts.model }),
-  };
-}
-
 /**
  * One native session event, read once, into something with no wire in it.
  *
@@ -373,9 +357,7 @@ export interface PiEventTranslator {
 
 /**
  * Translate events for the Pi Run evidence seam while preserving message
- * object identity across repeated streamed events. The current execution path
- * intentionally continues to use {@link createPiEventTranslator}; this is the
- * beside-the-path seam for the later integration ticket.
+ * object identity across repeated streamed events.
  */
 export function createPiRunReadingTranslator(): PiRunReadingTranslator {
   const events = createPiEventTranslator();
@@ -390,7 +372,11 @@ export function createPiRunReadingTranslator(): PiRunReadingTranslator {
     references.set(message, translated);
     return translated;
   };
-  const messages = (values: readonly unknown[]) => values.map(translate);
+  // Snapshots are translated at read time even when Pi reuses a streamed
+  // object: compaction may have restated its accounting in place since the
+  // message event was observed. Only streamed event identity is cached.
+  const messages = (values: readonly unknown[]) =>
+    values.map(translatePiMessage);
   return {
     messages,
     event: (event) => {
@@ -614,7 +600,7 @@ export function piActivity(event: unknown): RunObservation | undefined {
  * available because the retained session may have rebuilt its list while
  * compacting or retrying.
  */
-export function messageIdentity(message: unknown): string {
+function messageIdentity(message: unknown): string {
   if (!isRecord(message)) return JSON.stringify(message) ?? "";
   return JSON.stringify({
     role: message.role,
@@ -625,146 +611,4 @@ export function messageIdentity(message: unknown): string {
     stopReason: message.stopReason,
     errorMessage: message.errorMessage,
   });
-}
-
-/**
- * The messages this Run added, given what was there when it started.
- *
- * Counted rather than sliced by length: the retained session rebuilds message
- * objects while compacting, so positions move. Counting preserves genuinely
- * repeated identical messages the current Run added, which slicing by a set
- * would drop.
- */
-export function currentRunMessages(
-  messages: readonly unknown[],
-  baseline: readonly unknown[],
-): readonly unknown[] {
-  const before = new Map<string, number>();
-  for (const message of baseline) {
-    const key = messageIdentity(message);
-    before.set(key, (before.get(key) ?? 0) + 1);
-  }
-  return messages.filter((message) => {
-    const key = messageIdentity(message);
-    const remaining = before.get(key) ?? 0;
-    if (remaining === 0) return true;
-    before.set(key, remaining - 1);
-    return false;
-  });
-}
-
-/** Whether this message is the user text the Run was started with. */
-export function isPiUserText(message: unknown, text: string): boolean {
-  if (!isRecord(message) || message.role !== "user") return false;
-  const content = message.content;
-  if (typeof content === "string") return content === text;
-  if (!Array.isArray(content)) return false;
-  return (
-    content
-      .filter((part) => isRecord(part) && part.type === "text")
-      .map((part) => (part as Record<string, unknown>).text)
-      .join("") === text
-  );
-}
-
-/** The same list with the first echo of the brief removed. */
-export function withoutInitialGoal(
-  messages: readonly unknown[],
-  prompt: string,
-): readonly unknown[] {
-  let omitted = false;
-  return messages.filter((message) => {
-    if (!omitted && isPiUserText(message, prompt)) {
-      omitted = true;
-      return false;
-    }
-    return true;
-  });
-}
-
-/** Pi's terminal outcome, kept private to this module. */
-type PiTerminalOutcome = "answered" | "incomplete" | "failed" | "aborted";
-
-/**
- * The terminal evidence one execution retains.
- *
- * A reconciliation proves what Pi observed, not that Pi answered. Keeping the
- * final assistant outcome beside it prevents the snapshot's mere presence
- * from deciding the Run while keeping provider vocabulary inside this module.
- */
-export interface PiTerminalEvidence {
-  readonly reconciliation: TerminalReconciliation;
-  readonly outcome: PiTerminalOutcome;
-}
-
-/** Classify the final assistant message represented by a terminal event. */
-export function piTerminalEvidence(
-  messages: readonly unknown[],
-): PiTerminalEvidence {
-  let outcome: PiTerminalOutcome = "answered";
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!isRecord(message) || message.role !== "assistant") continue;
-    if (message.stopReason === "error") outcome = "failed";
-    else if (message.stopReason === "length") outcome = "incomplete";
-    else if (message.stopReason === "aborted") outcome = "aborted";
-    break;
-  }
-  return { reconciliation: piTerminalSnapshot(messages), outcome };
-}
-
-/**
- * Everything a terminal snapshot replaces, recomputed from its own messages.
- *
- * A {@link TerminalReconciliation} rather than a shape of its own, because
- * that is exactly what it is: every field present replaces what was streamed,
- * and every field absent retains it. Returning the domain type means the
- * execution hands the snapshot straight to the bundle instead of copying it
- * field by field into the type it was already.
- */
-export function piTerminalSnapshot(
-  messages: readonly unknown[],
-): TerminalReconciliation {
-  const transcript: TranscriptItem[] = [];
-  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-  let turns = 0;
-  let context: ContextGauge | undefined;
-  let model: string | undefined;
-  let finalOutput: string | undefined;
-  for (const message of messages) {
-    const facts = piMessageFacts(message);
-    if (!facts) continue;
-    transcript.push({
-      role: facts.role,
-      parts: facts.parts,
-      ...(facts.model === undefined ? {} : { model: facts.model }),
-    });
-    if (facts.model !== undefined) model = facts.model;
-    if (facts.role === "assistant") {
-      turns += 1;
-      const answer = facts.parts
-        .filter((part) => part.kind === "text")
-        .map((part) => (part.kind === "text" ? part.text : ""))
-        .join("");
-      // Match reduction semantics: a tool-only or whitespace-only assistant
-      // message is not an answer and cannot erase the last actual answer.
-      if (answer.trim() !== "") finalOutput = answer;
-    }
-    if (facts.usage) {
-      totals.input += facts.usage.input ?? 0;
-      totals.output += facts.usage.output ?? 0;
-      totals.cacheRead += facts.usage.cacheRead ?? 0;
-      totals.cacheWrite += facts.usage.cacheWrite ?? 0;
-      totals.cost += facts.usage.cost ?? 0;
-    }
-    if (facts.context) context = facts.context;
-  }
-  return {
-    transcript,
-    usage: totals,
-    turns,
-    ...(finalOutput === undefined ? {} : { finalOutput }),
-    ...(context === undefined ? {} : { context }),
-    ...(model === undefined ? {} : { model }),
-  };
 }
