@@ -20,28 +20,29 @@ output.
 
 ## 1. Prepare
 
-Before starting workers, create one owner-only root outside every repository,
-worktree, and harness temporary directory:
+Before starting workers, resolve [init.mjs](init.mjs) relative to this skill
+and invoke its absolute path with no arguments (requires Node.js and `mktemp`):
 
 ```bash
-umask 077
-base="$HOME/.agent-runs"
-mkdir -p "$base"
-chmod 700 "$base"
-root="$(mktemp -d "$base/handoff-$(date +%Y%m%dT%H%M%S)-XXXXXX")"
-mkdir -m 700 "$root/evidence" "$root/evidence/orchestrator"
+root="$(node "<absolute-skill-directory>/init.mjs")" || exit 1
 ```
 
-Resolve [WRITER.md](WRITER.md) and [synopsis.mjs](synopsis.mjs) relative to
-this skill. Copy both to the root and keep the run-scoped copies unchanged.
-Write `$root/README.md` with shared context pointers, the project and base
-revision, and common constraints. Set all three files to mode `600`:
+Use exactly the returned absolute root for every path below. The initializer
+allocates a fresh `$HOME/.agent-runs/handoff-YYYYMMDDTHHMMSS-XXXXXX` with
+`mktemp -d`; it accepts no root/path override and never reuses a root. It prepares
+mode-`700` directories including `evidence/orchestrator/`, mode-`600` run-scoped
+[WRITER.md](WRITER.md) and [synopsis.mjs](synopsis.mjs) copies, and a private
+README scaffold. Stdout contains only the root after preparation succeeds;
+failure exits nonzero, reports on stderr, and attempts to remove any incomplete
+allocation. Stop on failure rather than substituting a hand-built path.
 
-```bash
-chmod 600 "$root/README.md" "$root/WRITER.md" "$root/synopsis.mjs"
-```
+Keep the protocol copies unchanged. Fill in `$root/README.md` with shared context
+pointers, the project and base revision, and common constraints, retaining mode
+`600`. The orchestrator alone writes README and `evidence/orchestrator/`.
 
-The orchestrator alone writes README and `evidence/orchestrator/`.
+The CLI guarantees its own allocations, not that agents cannot bypass it. Verify
+that the returned root is outside the repositories, worktrees, and harness
+temporary directories involved before assigning workers.
 
 Give every planned worker a unique short `RUN_KEY`. A resumed Subagent doing new
 work gets a new key.
