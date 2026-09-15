@@ -18,7 +18,8 @@
     ],
     "skills": [
       "./skills/implement-and-review",
-      "./skills/herdr-implement-spec"
+      "./skills/herdr-implement-spec",
+      "./skills/artifact-handoff"
     ]
   },
   "license": "MIT",

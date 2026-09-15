@@ -104,7 +104,9 @@ A stop condition ends the session; do not start later units. The session is
 clean only when every unit has passed both review axes and required checks,
 every unit has one recorded commit, and the final working tree is clean.
 
-Report:
+When the opening brief assigns a handoff artifact, that artifact is the
+destination for the report below; follow its supplied writer contract for
+checkpoint cadence and the final receipt. Otherwise report directly:
 
 - each completed unit, its changes, satisfied criteria, and commit hash;
 - checks run and their results;

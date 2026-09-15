@@ -19,7 +19,11 @@ const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 const previousDepth = process.env.PI_SUBAGENT_DEPTH;
 const previousHome = process.env.HOME;
 const previousHerdr = process.env.HERDR_ENV;
-const skillNames = ["herdr-implement-spec", "implement-and-review"];
+const skillNames = [
+  "artifact-handoff",
+  "herdr-implement-spec",
+  "implement-and-review",
+];
 const names = [
   "general-purpose",
   "implementer",
@@ -107,10 +111,13 @@ try {
     );
   const implementAndReview = workflow("implement-and-review");
   const herdrWorkflow = workflow("herdr-implement-spec");
+  const artifactHandoff = workflow("artifact-handoff");
   assert.doesNotMatch(implementAndReview, /herdr/i);
   assert.ok(herdrWorkflow.includes("/skill:implement-and-review"));
   assert.ok(herdrWorkflow.includes("/skill:code-review"));
-  for (const contents of [implementAndReview, herdrWorkflow]) {
+  assert.ok(herdrWorkflow.includes("artifact-handoff"));
+  assert.ok(artifactHandoff.includes("HANDOFF_ARTIFACT"));
+  for (const contents of [implementAndReview, herdrWorkflow, artifactHandoff]) {
     assert.doesNotMatch(
       contents,
       /\/Users\/|~\/code\//,
