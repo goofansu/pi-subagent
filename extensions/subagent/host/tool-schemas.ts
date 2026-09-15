@@ -16,10 +16,11 @@
  *   noise in a model-facing schema and swallows both the description and any
  *   numeric refinement. `Schema.Finite` emits a plain `{"type":"number"}`.
  * - **`additionalProperties: false` is emitted, and is stricter than v1.**
- *   v1's `Type.Object` permitted unlisted keys. Keeping the emitted document
- *   as it stands means a call carrying an excess argument is rejected, by Pi
- *   and by the decode below. That is a deliberate v2 difference, recorded in
- *   the M3 exit gate: an argument the tool does not understand is far more
+ *   v1's `Type.Object` permitted unlisted keys, as does Effect's generation by
+ *   default. Generation explicitly uses `onExcessProperty: "error"` to keep
+ *   the JSON Schema aligned with the exact runtime decode below. That
+ *   deliberate v2 difference is recorded in the M3 exit gate: an argument the
+ *   tool does not understand is far more
  *   likely to be a mistake than a courtesy.
  *
  * **Decoding at `execute` is the real check.** Pi falls back to JSON-Schema
@@ -50,7 +51,9 @@ export type ToolParameters = Readonly<Record<string, unknown>>;
 
 /** Emit the JSON Schema document Pi validates a call against. */
 export function toolParameters(schema: Schema.Top): ToolParameters {
-  return Schema.toJsonSchemaDocument(schema).schema;
+  return Schema.toJsonSchemaDocument(schema, {
+    onExcessProperty: "error",
+  }).schema;
 }
 
 /**
