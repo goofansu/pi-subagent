@@ -63,6 +63,13 @@ try {
       packed.files.some((file) => file.path === `skills/${name}/SKILL.md`),
     );
   }
+  for (const name of ["WRITER.md", "synopsis.mjs"]) {
+    assert.ok(
+      packed.files.some(
+        (file) => file.path === `skills/artifact-handoff/${name}`,
+      ),
+    );
+  }
   for (const name of ["to-spec", "to-tickets"]) {
     assert.ok(
       !packed.files.some((file) => file.path.startsWith(`skills/${name}/`)),
@@ -112,12 +119,40 @@ try {
   const implementAndReview = workflow("implement-and-review");
   const herdrWorkflow = workflow("herdr-implement-spec");
   const artifactHandoff = workflow("artifact-handoff");
+  const artifactWriter = fs.readFileSync(
+    path.join(installed, "skills", "artifact-handoff", "WRITER.md"),
+    "utf8",
+  );
+  const synopsisToolPath = path.join(
+    installed,
+    "skills",
+    "artifact-handoff",
+    "synopsis.mjs",
+  );
+  const synopsisTool = fs.readFileSync(synopsisToolPath, "utf8");
+  const synopsisHelp = execFileSync(
+    process.execPath,
+    [synopsisToolPath, "--help"],
+    { encoding: "utf8" },
+  );
   assert.doesNotMatch(implementAndReview, /herdr/i);
   assert.ok(herdrWorkflow.includes("/skill:implement-and-review"));
   assert.ok(herdrWorkflow.includes("/skill:code-review"));
   assert.ok(herdrWorkflow.includes("artifact-handoff"));
   assert.ok(artifactHandoff.includes("HANDOFF_ARTIFACT"));
-  for (const contents of [implementAndReview, herdrWorkflow, artifactHandoff]) {
+  assert.ok(artifactHandoff.includes("[WRITER.md](WRITER.md)"));
+  assert.ok(artifactHandoff.includes("[synopsis.mjs](synopsis.mjs)"));
+  assert.ok(artifactWriter.includes("HANDOFF_ARTIFACT"));
+  assert.ok(artifactWriter.includes("SYNOPSIS_TOOL"));
+  assert.ok(artifactWriter.includes("16 KiB"));
+  assert.match(synopsisHelp, /^Usage:\n {2}node synopsis\.mjs validate/);
+  for (const contents of [
+    implementAndReview,
+    herdrWorkflow,
+    artifactHandoff,
+    artifactWriter,
+    synopsisTool,
+  ]) {
     assert.doesNotMatch(
       contents,
       /\/Users\/|~\/code\//,

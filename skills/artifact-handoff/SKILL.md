@@ -1,198 +1,168 @@
 ---
 name: artifact-handoff
-description: Coordinates artifact-backed handoffs for multi-agent fan-out and work that must survive worktree or Session teardown. Use before delegating several Runs whose detailed outputs would otherwise fan into the parent, or when delegated work must checkpoint durable findings outside its working tree.
+description: Artifact-backed fan-in for report-heavy delegations and findings that must survive Session or worktree teardown. Use before starting those workers.
 ---
 
 # Artifact handoff
 
-Make the **handoff artifact** the detailed reporting interface. A worker writes
-confirmed facts there during the work; the orchestrator reads only compact
-headers, exceptions, and evidence needed for verification.
+Use an artifact handoff when detailed worker reports would flood the parent or
+when confirmed findings must outlive a Run, Session, process, or worktree. Keep
+ordinary one-off delegations on their normal Result path.
 
-A handoff artifact is not a **Result**. A Result remains the immutable terminal
-output of one Run. The artifact is a durable, incrementally written report that
-can outlive its Run, Session, process, and worktree.
+A handoff has three surfaces:
 
-Use this protocol for a fan-out or when losing in-progress findings would be
-costly. Keep ordinary one-off delegations on their normal Result path.
+- **Synopsis** — one bounded `handoff-<key>.md` containing current conclusions.
+- **Evidence** — detailed commands, logs, and incremental working records.
+- **Receipt** — the worker's two-line final message pointing to its Synopsis.
 
-## 1. Prepare the handoff root
+The Synopsis is not a **Result**. A Result remains one Run's immutable terminal
+output.
 
-Before starting any worker, create one collision-resistant root under
-`$HOME/.agent-runs/`. It must be outside every repository, worktree, and
-harness temporary directory. Give it owner-only permissions.
+## 1. Prepare
 
-A suitable allocation is:
+Before starting workers, create one owner-only root outside every repository,
+worktree, and harness temporary directory:
 
 ```bash
+umask 077
 base="$HOME/.agent-runs"
 mkdir -p "$base"
 chmod 700 "$base"
-root="$(mktemp -d "$base/<project>-$(date +%Y%m%dT%H%M%S)-XXXXXX")"
-mkdir -m 700 "$root/evidence"
+root="$(mktemp -d "$base/handoff-$(date +%Y%m%dT%H%M%S)-XXXXXX")"
+mkdir -m 700 "$root/evidence" "$root/evidence/orchestrator"
 ```
 
-Replace `<project>` with a short filesystem-safe project name before running
-it. The random suffix makes one orchestrator the sole owner of one root; do not
-share a root between orchestrators.
+Resolve [WRITER.md](WRITER.md) and [synopsis.mjs](synopsis.mjs) relative to
+this skill. Copy both to the root and keep the run-scoped copies unchanged.
+Write `$root/README.md` with shared context pointers, the project and base
+revision, and common constraints. Set all three files to mode `600`:
 
-Write `$root/README.md` with the shared context and pointers every worker needs:
-project and base revision, specification paths, common constraints, and where
-authoritative external references live. Point to existing material rather than
-copying it.
-
-Preparation is complete when the root and README exist outside the repository,
-the root is owner-only, and every planned worker has a unique short `RUN_KEY`.
-A resumed Subagent doing new work gets a new key and artifact.
-
-## 2. Assign the artifact in the opening prompt
-
-For each worker, reserve these paths before starting it:
-
-```text
-HANDOFF_ARTIFACT: <root>/handoff-<run-key>.md
-EVIDENCE_DIR: <root>/evidence/<run-key>/
+```bash
+chmod 600 "$root/README.md" "$root/WRITER.md" "$root/synopsis.mjs"
 ```
 
-Create the evidence directory with owner-only permissions. Substitute every
-placeholder in the writer contract below, then put the complete contract in the
-worker's **opening prompt** without omitting or paraphrasing it. For
-`agent_start` or `agent_resume`, the key is allocated before the Run id is
-known; keep the key as the artifact identity rather than trying to rename the
-artifact afterward.
+The orchestrator alone writes README and `evidence/orchestrator/`.
 
-Do not depend on the worker loading this skill. Pi, Claude, and external
-harnesses do not expand nested skill invocations identically. The opening
-prompt carries the contract itself.
+Give every planned worker a unique short `RUN_KEY`. A resumed Subagent doing new
+work gets a new key.
 
-### Writer contract to include verbatim
+Preparation is complete when the private external root contains README,
+WRITER.md, synopsis.mjs, `evidence/orchestrator/`, and one allocated key per
+planned worker.
+
+## 2. Assign
+
+For each worker, create `$root/evidence/<run-key>/` with mode `700`. Put this
+block, with absolute paths and substituted values, in its opening prompt:
 
 ```text
-## Durable handoff contract
-
-Your detailed report belongs in the handoff artifact, not in your final
-message. This contract is part of the task's completion criteria and is the
-destination for any report required by your Profile or invoked workflow.
+Artifact handoff. Before substantive work, read WRITER_PROTOCOL completely and
+follow it. The assignment is incomplete until its completion criteria pass.
 
 RUN_KEY: <run-key>
+WRITER_PROTOCOL: <absolute-root>/WRITER.md
+SYNOPSIS_TOOL: <absolute-root>/synopsis.mjs
 SHARED_CONTEXT: <absolute-root>/README.md
 HANDOFF_ARTIFACT: <absolute-root>/handoff-<run-key>.md
 EVIDENCE_DIR: <absolute-root>/evidence/<run-key>/
-
-Before substantive work, read SHARED_CONTEXT, create EVIDENCE_DIR if needed,
-and initialize HANDOFF_ARTIFACT with exactly these first five lines:
-
-STATUS: running
-RUN_KEY: <run-key>
-SUMMARY: work in progress
-ATTENTION: yes
-HEAD: <current-git-sha-or-n/a>
-
-Then add these sections as applicable:
-
-## Criteria
-## Checks
-## Decisions worth knowing
-## Residue
-
-Checkpoint as you go. Immediately after confirming a criterion, check,
-finding, waiver, or load-bearing decision, append its concise record before
-moving to unrelated work. Preserve prior checkpoints; only replace the five
-header lines when their values change. Prefer facts the orchestrator can
-re-derive—revision identifiers, paths, commands, and exit codes. Reserve prose
-for rationale, rejected approaches, and other context that cannot be recovered
-from the environment.
-
-Use checklist entries under Criteria. A waiver names who waived it and why.
-For every claimed command result, record:
-
-- COMMAND: the exact command
-- CWD: the directory it ran in
-- PRECONDITIONS: setup that affected the result
-- REVISION: the Git HEAD or state it exercised
-- EXIT: the exit code
-- EVIDENCE: a relative path under EVIDENCE_DIR, when retained
-
-Store verbose logs under EVIDENCE_DIR and point to them from the artifact.
-Retain the minimum evidence needed for verification and redact credentials,
-tokens, environment dumps, and unrelated sensitive output.
-
-Use STATUS: pass only when every assigned criterion is satisfied or explicitly
-waived. Use blocked when caller input is required, and failed when attempted
-work cannot satisfy the assignment without such a choice. ATTENTION is yes for
-any waiver, unresolved risk, failure, blocker, or decision the orchestrator
-must read; it is no only for a straightforward pass.
-
-Before finishing, replace the header with the terminal status, one-line
-summary, correct attention value, and final HEAD. Your final message must be
-exactly:
-
-HANDOFF: <absolute artifact path>
-STATUS: <same terminal status>
 ```
 
-Assignment is complete when every opening prompt already contains its unique
-absolute artifact and evidence paths plus that writer contract. A later Control
-may clarify work, but must not introduce the artifact for the first time.
+Include the worker's exact task brief and context pointers in the same opening
+prompt; another invoked workflow may determine their ordering. For
+`agent_start` or `agent_resume`, allocate the key before the Run id is returned;
+the artifact keeps the key rather than being renamed afterward. The worker
+reads the run-scoped protocol file, so Pi, Claude, and external harnesses need
+not expand another skill invocation.
 
-## 3. Let workers checkpoint independently
+Assignment is complete when every opening prompt already names its unique
+Synopsis, Evidence directory, shared context, Writer protocol, and Synopsis
+tool. Later Control may clarify the work but never introduces the handoff for
+the first time.
 
-Fan out normally. Continue useful orchestrator work while Runs are active, and
-wait only at a real dependency barrier. Treat a settled Run or stopped external
-agent as a signal to inspect its artifact, not as proof that its assignment
-passed.
+## 3. Run
 
-One worker owns one handoff file and one evidence subtree. The orchestrator owns
-README.md. This one-writer layout needs no file lock.
+Fan out normally. One worker writes one Synopsis and one Evidence subtree.
+Continue independent orchestrator work while Runs are active and wait only at a
+real dependency barrier. A worker stopping is a signal to inspect, not proof of
+success.
 
-## 4. Fan in by attention
+At a dependency barrier, continue only after every worker required beyond it
+has stopped; unrelated workers may continue.
 
-At the barrier, read only the five-line headers first:
+## 4. Fan in
+
+Build `expected_keys` from the allocations, then read only the five-line
+headers first and account for missing files:
 
 ```bash
-for artifact in "$root"/handoff-*.md; do
+for key in "${expected_keys[@]}"; do
+  artifact="$root/handoff-$key.md"
   printf '\n== %s ==\n' "$artifact"
-  head -n 5 "$artifact"
+  if [[ -f "$artifact" ]]; then head -n 5 "$artifact"; else printf 'MISSING\n'; fi
 done
 ```
 
-Account for every expected key, including a missing file. Open the body when:
+As workers stop, build `stopped_keys` and run the same terminal gate they ran
+before their Receipts. At the final barrier, it contains every expected key:
 
-- `STATUS` is not `pass`;
-- `ATTENTION` is `yes`;
-- the file is missing, malformed, or still `running` after the worker stopped;
-- the Run failed or was cancelled; or
-- a claim selected for verification needs its preconditions or evidence.
+```bash
+validation_failed=0
+for key in "${stopped_keys[@]}"; do
+  artifact="$root/handoff-$key.md"
+  node "$root/synopsis.mjs" validate \
+    --artifact "$artifact" --run-key "$key" || validation_failed=1
+done
+(( validation_failed == 0 ))
+```
 
-The orchestrator verifies rather than trusts. Re-run cheap decisive commands
-from the recorded CWD, revision, and preconditions. Read referenced evidence
-only where re-derivation is expensive or an exception needs diagnosis. A Run's
-terminal phase and its artifact status are separate facts; report disagreement
-between them rather than choosing one silently.
+A nonzero exit is a protocol failure, including when the canonical header says
+`STATUS: pass`. The Synopsis tool also rejects a `.staged` file left beside the
+canonical Synopsis. It enforces the size, canonical header and sections,
+terminal criteria, Attention semantics, private mode, and resolving Evidence
+pointers. Atomic publishing means header readers see either the previous
+complete Synopsis or the next one, never an in-progress rewrite.
 
-Fan-in is complete when every expected key has a terminal artifact or an
-explicitly reported protocol failure, and every claim required for the final
-handoff is verified or marked unverified.
+For a valid `ATTENTION: yes`, read at most the bounded Attention section first:
 
-## 5. Recover residue
+```bash
+awk '/^## Attention$/{p=1;next} /^## /&&p{exit} p{print;if(++n==12)exit}' "$artifact"
+```
 
-When an artifact is missing or incomplete, use the smallest available fallback:
+For non-passing or malformed Synopses, read only the relevant Criteria or
+Residue lines next. For passing Synopses, select decisive claims for
+verification and follow their Evidence pointers. Re-run cheap checks from the
+recorded CWD, revision, and preconditions; read verbose evidence only when
+re-derivation is expensive or an exception needs diagnosis. A Run phase and an
+artifact status are separate facts, so report disagreement between them.
 
-1. While the worker is still reachable, ask it once to finish the artifact.
-2. Within a live pi-subagent Session, use the Run's delivered Result or
-   `agent_result`.
-3. When an external harness exposes a native session transcript, extract only
-   the last assistant text or relevant message records.
+Fan-in is complete when every expected key has a valid terminal Synopsis or an
+explicit protocol failure, and every claim needed for handoff is verified or
+marked unverified.
+
+## 5. Recover
+
+For a missing or incomplete Synopsis, use the smallest available fallback:
+
+1. While the worker is reachable, ask it once to seal the Synopsis.
+2. In a live pi-subagent Session, use the delivered Result or `agent_result`.
+3. From an external harness transcript, extract only relevant message records.
 4. At worker end-of-life, accept a final narrative dump as unverified residue.
 
-Recovered prose cannot turn an artifact into a verified pass. Preserve it as
-evidence, mark the protocol failure, and continue any independent delivery
-lines. Tear down a temporary worktree only after its terminal artifact or
-recovered residue is safely outside that worktree.
+A stopped worker's `.staged` file may contain a newer interrupted checkpoint.
+Never publish it on the worker's behalf; inspect it as untrusted recovery input
+and preserve any useful material under `evidence/orchestrator/`.
 
-## 6. Complete the orchestration
+Store recovered material under `evidence/orchestrator/`, mark the protocol
+failure, and preserve the independent delivery lines. Recovery is complete when
+the residue is durable and explicitly classified as unverified. Tear down a
+temporary worktree only after its terminal Synopsis or recovered residue is
+outside that worktree.
 
-Report the handoff root, each key and status, what was verified, and every
-blocker, failure, waiver, risk, or protocol failure. Keep the root until the
-human accepts the handoff; deletion is an explicit later action rather than
-part of Session or worktree cleanup.
+## 6. Complete
+
+Remove group and other permissions recursively from the root. Report the root,
+every key and status, verification performed, every attention item or protocol
+failure, and any remaining `.staged` file. Keep the root until the human accepts
+the handoff; deletion is a separate explicit action.
+
+Completion is done when the permissions are swept and that report is delivered.
