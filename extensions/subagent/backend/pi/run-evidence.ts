@@ -25,10 +25,10 @@ import {
   type PiTranslatedMessage,
 } from "./translate.ts";
 
-export const PI_EVIDENCE_MISSING_TERMINAL_MESSAGE =
+export const MISSING_TERMINAL_EVENT_MESSAGE =
   "the Pi session finished without a terminal event carrying its messages";
-export const PI_EVIDENCE_PROMPT_REJECTED_CATEGORY = "Pi prompt failed";
-export const PI_EVIDENCE_RECOVERY_FAILED_CATEGORY = "Pi recovery failed";
+export const PROMPT_REJECTED_CATEGORY = "Pi prompt failed";
+export const RECOVERY_FAILED_CATEGORY = "Pi recovery failed";
 
 export interface PiRunEvidenceOptions {
   readonly goal: string;
@@ -234,7 +234,7 @@ function finishFor(
     const recoveryFailed =
       requiresRecovery(terminal) && current.recovery === "failed";
     const description = recoveryFailed
-      ? PI_EVIDENCE_RECOVERY_FAILED_CATEGORY
+      ? RECOVERY_FAILED_CATEGORY
       : terminal.outcome === "failed"
         ? PI_TERMINAL_FAILURE_DESCRIPTION
         : terminal.outcome === "incomplete"
@@ -248,7 +248,7 @@ function finishFor(
         ? undefined
         : confined(description);
     const ending = recoveryFailed
-      ? failedEnding(confined(PI_EVIDENCE_RECOVERY_FAILED_CATEGORY).message)
+      ? failedEnding(confined(RECOVERY_FAILED_CATEGORY).message)
       : terminal.outcome === "answered"
         ? answeredEnding()
         : terminal.outcome === "failed"
@@ -261,7 +261,7 @@ function finishFor(
     };
   }
   if (outcome === "rejected") {
-    const diagnostic = confined(PI_EVIDENCE_PROMPT_REJECTED_CATEGORY);
+    const diagnostic = confined(PROMPT_REJECTED_CATEGORY);
     return {
       observations: [{ kind: "diagnostic", diagnostic }],
       bundle: { ending: failedEnding(diagnostic.message) },
@@ -269,7 +269,7 @@ function finishFor(
   }
   return {
     observations: [],
-    bundle: { ending: failedEnding(PI_EVIDENCE_MISSING_TERMINAL_MESSAGE) },
+    bundle: { ending: failedEnding(MISSING_TERMINAL_EVENT_MESSAGE) },
   };
 }
 
@@ -346,9 +346,7 @@ export function createPiRunEvidence(
           ) {
             return [];
           }
-          const diagnostic: RunDiagnostic = confined(
-            PI_EVIDENCE_RECOVERY_FAILED_CATEGORY,
-          );
+          const diagnostic: RunDiagnostic = confined(RECOVERY_FAILED_CATEGORY);
           current.recoveryDiagnosticObserved = true;
           return [{ kind: "diagnostic", diagnostic }];
         }

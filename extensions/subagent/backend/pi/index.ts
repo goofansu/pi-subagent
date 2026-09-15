@@ -26,10 +26,7 @@ export {
   type DepthEnvironment,
   readChildDepth,
 } from "./depth.ts";
-export {
-  CLOSED_BEFORE_EXECUTION_MESSAGE,
-  MISSING_TERMINAL_EVENT_MESSAGE,
-} from "./execution.ts";
+export { CLOSED_BEFORE_EXECUTION_MESSAGE } from "./execution.ts";
 export {
   createPiSessionOptions,
   depthSpawnHook,
@@ -51,6 +48,7 @@ export {
   resolvePiModel,
   validatePiProfile,
 } from "./profile.ts";
+export { MISSING_TERMINAL_EVENT_MESSAGE } from "./run-evidence.ts";
 export type {
   PiSession,
   PiSessionEvent,
