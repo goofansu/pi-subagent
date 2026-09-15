@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { RunObservation } from "../../domain/index.ts";
 import { createPiRunEvidence } from "./run-evidence.ts";
-import type { PiTranslatedMessage } from "./translate.ts";
+import { type PiTranslatedMessage, translatePiMessage } from "./translate.ts";
 
 function message(
   role: "user" | "assistant" | "tool",
@@ -196,6 +196,28 @@ test("required recovery failure is diagnosed once and provider detail has no inp
   assert.deepEqual(finish.observations, []);
 });
 
+for (const [outcome, messageText] of [
+  ["failed", "Pi reported a failed message: [redacted]"],
+  ["incomplete", "Pi did not complete its message: [redacted]"],
+] as const) {
+  test(`${outcome} terminal evidence synthesizes its confined diagnostic`, () => {
+    const evidence = createPiRunEvidence({ goal: "goal", baseline: [] });
+    const partial = message("assistant", "partial", { outcome });
+    evidence.read({ kind: "message", message: partial });
+    evidence.read({ kind: "terminal", messages: [partial] });
+
+    assert.deepEqual(evidence.promptReturned("resolved").observations, [
+      {
+        kind: "diagnostic",
+        diagnostic: {
+          category: "backend-failure",
+          message: messageText,
+        },
+      },
+    ]);
+  });
+}
+
 test("an observed response diagnostic suppresses its synthetic duplicate", () => {
   const evidence = createPiRunEvidence({ goal: "goal", baseline: [] });
   const failed = message("assistant", "partial", {
@@ -207,6 +229,23 @@ test("an observed response diagnostic suppresses its synthetic duplicate", () =>
 
   assert.equal(streamed.filter((one) => one.kind === "diagnostic").length, 1);
   assert.deepEqual(evidence.promptReturned("resolved").observations, []);
+});
+
+test("terminal outcome survives malformed assistant message content", () => {
+  const evidence = createPiRunEvidence({ goal: "goal", baseline: [] });
+  const malformed = translatePiMessage({
+    role: "assistant",
+    content: { malformed: true },
+    stopReason: "error",
+  });
+
+  assert.equal(malformed.facts, undefined);
+  assert.equal(malformed.assistantOutcome, "failed");
+  evidence.read({ kind: "terminal", messages: [malformed] });
+  assert.deepEqual(evidence.promptReturned("resolved").bundle.ending, {
+    ending: "failed",
+    message: "Pi reported a failed message: [redacted]",
+  });
 });
 
 test("prompt rejection and absent terminal evidence have fixed normal decisions", () => {
@@ -353,6 +392,7 @@ for (const outcome of outcomes) {
       const observations = evidence.interrupted({
         pendingNativeMessages: outstanding === "queued" ? 1 : 0,
         activeNativeDeliveries: outstanding === "in-flight" ? 1 : 0,
+        finishObservationsAnnounced: false,
       });
 
       if (outcome !== "answered" || outstanding !== "none") {
@@ -370,6 +410,44 @@ for (const outcome of outcomes) {
     });
   }
 }
+
+test("interruption reports only the frozen observations execution has not announced", () => {
+  const evidence = createPiRunEvidence({ goal: "goal", baseline: [] });
+  const failed = message("assistant", "partial", { outcome: "failed" });
+  evidence.read({ kind: "message", message: failed });
+  evidence.read({ kind: "terminal", messages: [failed] });
+  const finish = evidence.promptReturned("resolved");
+
+  assert.deepEqual(finish.observations, [
+    {
+      kind: "diagnostic",
+      diagnostic: {
+        category: "backend-failure",
+        message: "Pi reported a failed message: [redacted]",
+      },
+    },
+  ]);
+  assert.deepEqual(
+    evidence
+      .interrupted({
+        pendingNativeMessages: 0,
+        activeNativeDeliveries: 0,
+        finishObservationsAnnounced: false,
+      })
+      ?.map((observation) => observation.kind),
+    ["diagnostic", "reconciliation", "ending"],
+  );
+  assert.deepEqual(
+    evidence
+      .interrupted({
+        pendingNativeMessages: 0,
+        activeNativeDeliveries: 0,
+        finishObservationsAnnounced: true,
+      })
+      ?.map((observation) => observation.kind),
+    ["reconciliation", "ending"],
+  );
+});
 
 test("native prompt return freezes the normal decision before later readings", () => {
   const evidence = createPiRunEvidence({ goal: "goal", baseline: [] });
@@ -389,6 +467,7 @@ test("native prompt return freezes the normal decision before later readings", (
       .interrupted({
         pendingNativeMessages: 9,
         activeNativeDeliveries: 9,
+        finishObservationsAnnounced: false,
       })
       ?.at(-1),
     { kind: "ending", ending: { ending: "answered" } },

@@ -48,6 +48,8 @@ export interface PiRunFinishReport {
 export interface PiRunInterruptionFacts {
   readonly pendingNativeMessages: number;
   readonly activeNativeDeliveries: number;
+  /** Whether execution already began publishing the frozen finish observations. */
+  readonly finishObservationsAnnounced: boolean;
 }
 
 /** The synchronous, total interface of one Run's Pi evidence fold. */
@@ -57,7 +59,7 @@ export interface PiRunEvidence {
   readonly promptReturned: (
     outcome: "resolved" | "rejected",
   ) => PiRunFinishReport;
-  /** Ordered ending evidence, or no adapter decision for core Arbitration. */
+  /** Ordered, still-unannounced ending evidence, or no decision for Arbitration. */
   readonly interrupted: (
     facts: PiRunInterruptionFacts,
   ) => readonly RunObservation[] | undefined;
@@ -193,9 +195,9 @@ function terminalEvidence(
 ): TerminalEvidence {
   let outcome: TerminalOutcome = "answered";
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.facts?.role !== "assistant") continue;
-    outcome = message.assistantOutcome ?? "answered";
+    const assistantOutcome = messages[index].assistantOutcome;
+    if (assistantOutcome === undefined) continue;
+    outcome = assistantOutcome;
     break;
   }
   return { outcome, reconciliation: snapshot(messages) };
@@ -273,9 +275,12 @@ function finishFor(
   };
 }
 
-function endingObservations(report: PiRunFinishReport): RunObservation[] {
+function endingObservations(
+  report: PiRunFinishReport,
+  finishObservationsAnnounced = false,
+): RunObservation[] {
   return [
-    ...report.observations,
+    ...(finishObservationsAnnounced ? [] : report.observations),
     ...(report.bundle.reconciliation === undefined
       ? []
       : [
@@ -369,7 +374,9 @@ export function createPiRunEvidence(
       return frozen;
     },
     interrupted: (facts) => {
-      if (frozen !== undefined) return endingObservations(frozen);
+      if (frozen !== undefined) {
+        return endingObservations(frozen, facts.finishObservationsAnnounced);
+      }
       if (
         current.terminal?.outcome !== "answered" ||
         facts.activeNativeDeliveries > 0 ||

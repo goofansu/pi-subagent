@@ -254,9 +254,10 @@ function piUserText(message: unknown): string | undefined {
 /** Translate one native message all the way to adapter-local evidence input. */
 export function translatePiMessage(message: unknown): PiTranslatedMessage {
   const facts = piMessageFacts(message);
-  const stopReason = isRecord(message) ? message.stopReason : undefined;
+  const nativeMessage = isRecord(message) ? message : undefined;
+  const stopReason = nativeMessage?.stopReason;
   const assistantOutcome =
-    facts?.role !== "assistant"
+    nativeMessage?.role !== "assistant"
       ? undefined
       : stopReason === "error"
         ? "failed"

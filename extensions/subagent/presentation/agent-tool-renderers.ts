@@ -24,14 +24,14 @@ import type { RenderableTheme } from "./rows.ts";
 import { formatCharacterCount } from "./status.ts";
 import { fitToWidth } from "./text-width.ts";
 import {
-  type CancelToolRowFacts as CancelRenderDetails,
-  type CollectedRunsToolRowFacts as CollectedRunsRenderDetails,
+  type CancelToolRowFacts,
+  type CollectedRunsToolRowFacts,
   decodeToolRowFacts,
-  type ResultToolRowFacts as ResultRenderDetails,
-  type ResumeToolRowFacts as ResumeRenderDetails,
-  type StartedRunToolRowFacts as StartedRunRenderDetails,
-  type StartToolRowFacts as StartRenderDetails,
-  type SteerToolRowFacts as SteerRenderDetails,
+  type ResultToolRowFacts,
+  type ResumeToolRowFacts,
+  type StartedRunToolRowFacts,
+  type StartToolRowFacts,
+  type SteerToolRowFacts,
 } from "./tool-row-facts.ts";
 
 /** The operation keys of the one agent-tool family. */
@@ -380,7 +380,7 @@ function collapseHint(theme: RenderableTheme, width: number): string {
  * first, then field labels give way while both self-describing ids stay whole.
  */
 function formatStartedIdentity(
-  details: StartedRunRenderDetails,
+  details: StartedRunToolRowFacts,
   theme: RenderableTheme,
   width: number,
 ): string {
@@ -405,7 +405,7 @@ function formatStartedIdentity(
 }
 
 function startSummary(
-  details: StartRenderDetails,
+  details: StartToolRowFacts,
   theme: RenderableTheme,
   width: number,
 ): string {
@@ -435,7 +435,7 @@ function startSummary(
 
 /** A compact successful start with its row's one configured expansion hint. */
 export function formatStartedRunSummary(
-  details: StartedRunRenderDetails,
+  details: StartedRunToolRowFacts,
   theme: RenderableTheme,
   width: number,
   renderKeyHint?: KeyHintRenderer,
@@ -636,7 +636,7 @@ class CancelCallComponent extends CachedComponent {
   }
 }
 
-function cancellationSummaryText(details: CancelRenderDetails): string {
+function cancellationSummaryText(details: CancelToolRowFacts): string {
   const counts = {
     requested: 0,
     alreadyRequested: 0,
@@ -681,7 +681,7 @@ function cancellationSummaryText(details: CancelRenderDetails): string {
 
 /** One-line cancellation admission summary with the configured toggle hint. */
 export function formatCancellationSummary(
-  details: CancelRenderDetails,
+  details: CancelToolRowFacts,
   theme: RenderableTheme,
   width: number,
   renderKeyHint?: KeyHintRenderer,
@@ -833,7 +833,7 @@ function plural(count: number, one: string, many = `${one}s`): string {
 }
 
 function collectionSummary(
-  details: CollectedRunsRenderDetails,
+  details: CollectedRunsToolRowFacts,
   theme: RenderableTheme,
   width: number,
 ): string {
@@ -887,7 +887,7 @@ function collectionSummary(
 }
 
 function retrievalSummary(
-  details: ResultRenderDetails,
+  details: ResultToolRowFacts,
   theme: RenderableTheme,
   width: number,
 ): string {
@@ -1032,13 +1032,13 @@ class ContinuationCallComponent extends CachedComponent {
   }
 }
 
-type ResumedRunRenderDetails = Extract<
-  ResumeRenderDetails,
+type ResumedRunToolRowFacts = Extract<
+  ResumeToolRowFacts,
   { readonly outcome: "started" }
 >;
 
 function resumedIdentity(
-  details: ResumedRunRenderDetails,
+  details: ResumedRunToolRowFacts,
   theme: RenderableTheme,
   width: number,
 ): string {
@@ -1055,7 +1055,7 @@ function resumedIdentity(
 
 /** A compact resumed identity with the row's one configured expansion hint. */
 export function formatResumedRunSummary(
-  details: ResumedRunRenderDetails,
+  details: ResumedRunToolRowFacts,
   theme: RenderableTheme,
   width: number,
   renderKeyHint?: KeyHintRenderer,
@@ -1074,7 +1074,7 @@ export function formatResumedRunSummary(
 }
 
 function resumeSummary(
-  details: ResumeRenderDetails,
+  details: ResumeToolRowFacts,
   theme: RenderableTheme,
   width: number,
 ): string {
@@ -1119,7 +1119,7 @@ function resumeSummary(
 }
 
 function steerSummary(
-  details: SteerRenderDetails,
+  details: SteerToolRowFacts,
   theme: RenderableTheme,
 ): string {
   switch (details.outcome) {

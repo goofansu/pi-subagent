@@ -205,15 +205,12 @@ export function runPiExecution(
       const observations = evidence.interrupted({
         pendingNativeMessages: session.pendingMessageCount,
         activeNativeDeliveries: nativeDeliveries,
+        finishObservationsAnnounced,
       });
       bridge.stop();
       yield* drainAvailable;
       if (observations === undefined) return;
-      const alreadyAnnounced =
-        normalFinish !== undefined && finishObservationsAnnounced
-          ? normalFinish.observations.length
-          : 0;
-      for (const observation of observations.slice(alreadyAnnounced)) {
+      for (const observation of observations) {
         yield* io.emit(observation);
       }
     });
