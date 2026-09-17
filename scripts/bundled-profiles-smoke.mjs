@@ -18,8 +18,7 @@ const previousCwd = process.cwd();
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 const previousDepth = process.env.PI_SUBAGENT_DEPTH;
 const previousHome = process.env.HOME;
-const previousHerdr = process.env.HERDR_ENV;
-const skillNames = ["herdr-implement-spec", "implement-and-review"];
+const skillNames = ["implement-and-review"];
 const names = [
   "general-purpose",
   "implementer",
@@ -67,7 +66,6 @@ try {
   // Isolate normal global skill discovery as well as the configured Pi directory.
   process.env.HOME = path.join(temporary, "home");
   fs.mkdirSync(process.env.HOME);
-  delete process.env.HERDR_ENV;
   const cwd = path.join(temporary, "unrelated");
   const agentDir = path.join(temporary, "configured-user");
   fs.mkdirSync(cwd);
@@ -95,10 +93,7 @@ try {
       skill.filePath,
       path.join(installed, "skills", skill.name, "SKILL.md"),
     );
-    assert.equal(
-      skill.disableModelInvocation,
-      skill.name === "herdr-implement-spec",
-    );
+    assert.equal(skill.disableModelInvocation, false);
   }
   const workflow = (name) =>
     fs.readFileSync(
@@ -106,17 +101,11 @@ try {
       "utf8",
     );
   const implementAndReview = workflow("implement-and-review");
-  const herdrWorkflow = workflow("herdr-implement-spec");
-  assert.doesNotMatch(implementAndReview, /herdr/i);
-  assert.ok(herdrWorkflow.includes("/skill:implement-and-review"));
-  assert.ok(herdrWorkflow.includes("/skill:code-review"));
-  for (const contents of [implementAndReview, herdrWorkflow]) {
-    assert.doesNotMatch(
-      contents,
-      /\/Users\/|~\/code\//,
-      "workflows do not depend on migration source paths",
-    );
-  }
+  assert.doesNotMatch(
+    implementAndReview,
+    /\/Users\/|~\/code\//,
+    "workflows do not depend on migration source paths",
+  );
   const loaded = loader.getExtensions();
   assert.deepEqual(loaded.errors, []);
   const extension = loaded.extensions.find(
@@ -233,7 +222,7 @@ try {
     "production child cannot delegate recursively",
   );
   console.log(
-    "PASS: packed Profiles and orchestration skills; Pi skill discovery without Herdr; Pi production loading from unrelated cwd; configured user overrides and diagnostics; Session-start discovery; child guard. No provider calls.",
+    "PASS: packed Profiles and implement-and-review skill; Pi skill discovery; Pi production loading from unrelated cwd; configured user overrides and diagnostics; Session-start discovery; child guard. No provider calls.",
   );
 } finally {
   process.chdir(previousCwd);
@@ -243,7 +232,5 @@ try {
   else process.env.PI_SUBAGENT_DEPTH = previousDepth;
   if (previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = previousHome;
-  if (previousHerdr === undefined) delete process.env.HERDR_ENV;
-  else process.env.HERDR_ENV = previousHerdr;
   fs.rmSync(temporary, { recursive: true, force: true });
 }

@@ -17,8 +17,7 @@
       "./extensions/subagent/index.ts"
     ],
     "skills": [
-      "./skills/implement-and-review",
-      "./skills/herdr-implement-spec"
+      "./skills/implement-and-review"
     ]
   },
   "license": "MIT",
