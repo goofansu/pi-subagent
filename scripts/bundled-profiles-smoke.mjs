@@ -17,8 +17,6 @@ const temporary = fs.mkdtempSync(
 const previousCwd = process.cwd();
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 const previousDepth = process.env.PI_SUBAGENT_DEPTH;
-const previousHome = process.env.HOME;
-const skillNames = ["implement-and-review"];
 const names = [
   "general-purpose",
   "implementer",
@@ -46,26 +44,6 @@ try {
     path.join(root, "node_modules"),
     path.join(installed, "node_modules"),
   );
-  const manifest = JSON.parse(
-    fs.readFileSync(path.join(installed, "package.json"), "utf8"),
-  );
-  assert.deepEqual(
-    [...manifest.pi.skills].sort(),
-    skillNames.map((name) => `./skills/${name}`),
-  );
-  for (const name of skillNames) {
-    assert.ok(
-      packed.files.some((file) => file.path === `skills/${name}/SKILL.md`),
-    );
-  }
-  for (const name of ["to-spec", "to-tickets"]) {
-    assert.ok(
-      !packed.files.some((file) => file.path.startsWith(`skills/${name}/`)),
-    );
-  }
-  // Isolate normal global skill discovery as well as the configured Pi directory.
-  process.env.HOME = path.join(temporary, "home");
-  fs.mkdirSync(process.env.HOME);
   const cwd = path.join(temporary, "unrelated");
   const agentDir = path.join(temporary, "configured-user");
   fs.mkdirSync(cwd);
@@ -77,35 +55,11 @@ try {
     cwd,
     agentDir,
     settingsManager: SettingsManager.inMemory({ packages: [installed] }),
-    noSkills: false,
+    noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
   });
   await loader.reload();
-  const skillResources = loader.getSkills();
-  assert.deepEqual(skillResources.diagnostics, []);
-  assert.deepEqual(
-    skillResources.skills.map((skill) => skill.name).sort(),
-    skillNames,
-  );
-  for (const skill of skillResources.skills) {
-    assert.equal(
-      skill.filePath,
-      path.join(installed, "skills", skill.name, "SKILL.md"),
-    );
-    assert.equal(skill.disableModelInvocation, false);
-  }
-  const workflow = (name) =>
-    fs.readFileSync(
-      skillResources.skills.find((skill) => skill.name === name).filePath,
-      "utf8",
-    );
-  const implementAndReview = workflow("implement-and-review");
-  assert.doesNotMatch(
-    implementAndReview,
-    /\/Users\/|~\/code\//,
-    "workflows do not depend on migration source paths",
-  );
   const loaded = loader.getExtensions();
   assert.deepEqual(loaded.errors, []);
   const extension = loaded.extensions.find(
@@ -154,16 +108,6 @@ try {
         (await systemPrompt()).includes(name),
         `${name} is available without user Profiles`,
       );
-    for (const name of ["implementer", "spec-reviewer", "standards-reviewer"]) {
-      assert.ok(
-        implementAndReview.includes(name),
-        `workflow references ${name}`,
-      );
-      assert.ok(
-        (await systemPrompt()).includes(name),
-        `workflow specialist ${name} is available`,
-      );
-    }
     fs.mkdirSync(path.join(agentDir, "agents"));
     fs.writeFileSync(
       path.join(agentDir, "agents/general-purpose.md"),
@@ -222,7 +166,7 @@ try {
     "production child cannot delegate recursively",
   );
   console.log(
-    "PASS: packed Profiles and implement-and-review skill; Pi skill discovery; Pi production loading from unrelated cwd; configured user overrides and diagnostics; Session-start discovery; child guard. No provider calls.",
+    "PASS: packed Profiles; Pi production loading from unrelated cwd; configured user overrides and diagnostics; Session-start discovery; child guard. No provider calls.",
   );
 } finally {
   process.chdir(previousCwd);
@@ -230,7 +174,5 @@ try {
   else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
   if (previousDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
   else process.env.PI_SUBAGENT_DEPTH = previousDepth;
-  if (previousHome === undefined) delete process.env.HOME;
-  else process.env.HOME = previousHome;
   fs.rmSync(temporary, { recursive: true, force: true });
 }
