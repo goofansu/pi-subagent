@@ -5,6 +5,7 @@
   "type": "module",
   "files": [
     "agents",
+    "skills",
     "extensions/subagent/**/*.ts",
     "!extensions/subagent/**/*.test.ts"
   ],
@@ -14,6 +15,9 @@
   "pi": {
     "extensions": [
       "./extensions/subagent/index.ts"
+    ],
+    "skills": [
+      "./skills/implement-spec/SKILL.md"
     ]
   },
   "license": "MIT",
