@@ -14,10 +14,10 @@ The caller supplies:
 
 - the exact command that defines the diff;
 - the commit list for orientation;
-- the applicable standards sources, or an explicit statement that none exist; and
+- the applicable standards sources, an explicitly empty source list, or a statement that none were found; and
 - the complete smell baseline to apply.
 
-Run the supplied diff command unchanged. Its output is the review boundary; use the commit list and unchanged code only to understand that output. Read every named standards source and follow its pointers when they lead to rules applicable to a changed file. If the caller omits the diff command, the standards-source status, or the smell baseline, report the missing input and stop rather than inventing a substitute.
+Run the supplied diff command unchanged. Its output is the review boundary; use the commit list and unchanged code only to understand that output. Read every named standards source and follow its pointers when they lead to rules applicable to a changed file. An explicitly empty source list means no documented standards were found; proceed with the supplied smell baseline. An omitted source list without a statement that none were found is missing input. If the caller omits the diff command, the standards-source status, or the smell baseline, report the missing input and stop rather than inventing a substitute.
 
 Inspect only: leave the working tree unchanged.
 
