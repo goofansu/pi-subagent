@@ -574,7 +574,7 @@ test("transcript keeps message and part order with fresh readable attribution", 
     },
     { kind: "muted", text: "Reported model: run-model" },
     { kind: "muted", text: "Assistant:" },
-    { kind: "markdown", text: "", transcriptPreviewLines: 33 },
+    { kind: "muted", text: "No visible content." },
   ]);
   const visible = renderInspection(semantic, 100, PLAIN_THEME, true)
     .map(stripVTControlCharacters)

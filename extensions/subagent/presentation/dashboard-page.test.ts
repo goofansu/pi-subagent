@@ -148,6 +148,140 @@ const inspection = () => {
   return dashboard;
 };
 
+test("empty Assistant transcript items stay distinct and explicit across inspection modes", () => {
+  const transcript = [
+    { role: "assistant" as const, parts: [], model: "empty-model" },
+    {
+      role: "assistant" as const,
+      parts: [{ kind: "text" as const, text: "" }],
+    },
+    {
+      role: "assistant" as const,
+      parts: [{ kind: "text" as const, text: " \n\t " }],
+    },
+    {
+      role: "assistant" as const,
+      parts: [
+        { kind: "text" as const, text: "" },
+        { kind: "text" as const, text: "  " },
+      ],
+    },
+    {
+      role: "assistant" as const,
+      parts: [
+        { kind: "tool_call" as const, name: "only-tool", callId: "call-1" },
+      ],
+    },
+    {
+      role: "assistant" as const,
+      model: "mixed-model",
+      parts: [
+        { kind: "text" as const, text: "" },
+        { kind: "tool_call" as const, name: "mixed-tool", callId: "call-2" },
+        { kind: "text" as const, text: "visible mixed answer" },
+        { kind: "text" as const, text: "   " },
+      ],
+    },
+    { role: "user" as const, parts: [] },
+    { role: "tool" as const, parts: [] },
+    { role: "assistant" as const, parts: [] },
+    {
+      role: "assistant" as const,
+      parts: [{ kind: "text" as const, text: "successful answer" }],
+    },
+  ];
+  const captures: readonly RunInspection[] = [
+    {
+      ...CAPTURE,
+      content: {
+        ...CAPTURE.content,
+        model: "primary-model",
+        finalOutput: "successful answer",
+        transcript,
+      },
+    },
+    {
+      outcome: "result",
+      runId: CAPTURE.runId,
+      capturedAt: NOW,
+      summary: { ...CAPTURE.summary, phase: "completed", settledAt: NOW },
+      prompt: CAPTURE.prompt,
+      usage: EMPTY_USAGE_SNAPSHOT,
+      result: fixtureResult({
+        identity: {
+          runId: CAPTURE.runId,
+          subagentId: CAPTURE.summary.subagentId,
+          agent: CAPTURE.summary.profile,
+        },
+        model: "primary-model",
+        finalOutput: "successful answer",
+        transcript,
+      }),
+    },
+  ];
+
+  for (const capture of captures) {
+    const dashboard = inspection();
+    dashboard.send({ kind: "inspection", capture, handoff: "pending" });
+    const compact = dashboard.plain(80, 200).join("\n");
+    assert.equal(compact.split("No visible content.").length - 1, 5);
+    assert.equal(
+      compact.split("Assistant:").length - 1,
+      8,
+      "tool-call-only content adds no Assistant heading",
+    );
+    assert.ok(
+      compact.indexOf("Reported model: empty-model") <
+        compact.indexOf("No visible content."),
+    );
+    assert.ok(
+      compact.indexOf("No visible content.") <
+        compact.indexOf("Tool call · only-tool"),
+    );
+    assert.ok(
+      compact.indexOf("Tool call · only-tool") <
+        compact.indexOf("Reported model: mixed-model"),
+    );
+    assert.ok(
+      compact.indexOf("Reported model: mixed-model") <
+        compact.indexOf("Tool call · mixed-tool"),
+    );
+    assert.ok(
+      compact.indexOf("Tool call · mixed-tool") <
+        compact.indexOf("visible mixed answer"),
+    );
+    assert.ok(
+      compact.lastIndexOf("No visible content.") <
+        compact.indexOf("successful answer", compact.indexOf("Transcript")),
+    );
+    assert.equal(
+      compact.split("Tool call · only-tool").length - 1,
+      1,
+      "a tool-call-only item remains only a tool call",
+    );
+    assert.match(compact, /User:/);
+    assert.match(compact, /Tool output:/);
+
+    dashboard.press("toggleTranscript");
+    const expanded = dashboard.plain(80, 200).join("\n");
+    assert.equal(expanded.split("No visible content.").length - 1, 5);
+    assert.ok(expanded.includes("visible mixed answer"));
+    assert.ok(expanded.includes("successful answer"));
+
+    const narrow = dashboard.draw(12, 200);
+    assert.ok(narrow.every((line) => visibleWidth(line) === 12));
+    const narrowLines = narrow.map((line) =>
+      stripVTControlCharacters(line).trim(),
+    );
+    const indicatorStart = narrowLines.indexOf("No visible");
+    assert.ok(indicatorStart >= 0);
+    assert.equal(narrowLines[indicatorStart + 1], "content.");
+    assert.ok(
+      narrowLines.indexOf("successful", indicatorStart) > indicatorStart,
+    );
+  }
+});
+
 test("inspection toggles every retained transcript text block over one frozen capture", () => {
   const retainedCapture: RunInspection = {
     ...CAPTURE,

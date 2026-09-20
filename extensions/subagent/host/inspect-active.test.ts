@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   emitActivity,
   emitText,
@@ -103,6 +104,86 @@ test("active inspection freezes content and activity ages until explicit refresh
   rig.host.customKey("R");
   await rig.pump();
   assert.equal(screen(rig), terminal);
+  await close(rig, dashboard);
+});
+
+test("host inspection explains an empty Assistant item before a visible answer without changing the frozen capture", async (t) => {
+  const rig = hostRig(t, {
+    resumableSteps: [
+      [
+        {
+          step: "emit",
+          observation: {
+            kind: "message",
+            role: "assistant",
+            parts: [],
+            model: "fixture-model",
+          },
+        },
+        emitText("successful answer after empty item"),
+        { step: "await-gate", gate: "finish" },
+        { step: "complete" },
+      ],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+  const work = await start(rig);
+  await rig.pump();
+  const dashboard = await inspect(rig);
+
+  const active = screen(rig);
+  assert.match(active, /active snapshot/);
+  assert.equal(active.split("No visible content.").length - 1, 1);
+  assert.ok(
+    active.indexOf("Assistant:") < active.indexOf("No visible content."),
+  );
+  assert.ok(
+    active.indexOf(
+      "successful answer after empty item",
+      active.indexOf("No visible content."),
+    ) > active.indexOf("No visible content."),
+  );
+  assert.match(active, /model: +fixture-model/);
+
+  rig.host.customKey("t");
+  assert.equal(screen(rig).split("No visible content.").length - 1, 1);
+  for (const width of [12, 20, 40]) {
+    const lines = rig.host.customLines(width, 200);
+    assert.ok(lines.every((line) => visibleWidth(line) === width));
+    const plain = lines.map(stripVTControlCharacters).join("\n");
+    const indicator = plain.indexOf("No visible");
+    assert.ok(indicator >= 0);
+    assert.ok(plain.indexOf("successful", indicator) > indicator);
+  }
+  rig.host.customKey("t");
+  assert.equal(screen(rig), active);
+
+  await rig.release("finish");
+  await rig.settled(work.runId);
+  await rig.pump();
+  assert.equal(
+    screen(rig),
+    active,
+    "an active capture stays frozen at settlement",
+  );
+  rig.host.customKey("r");
+  await rig.pump();
+  const terminal = screen(rig);
+  assert.match(terminal, /terminal snapshot/);
+  assert.equal(terminal.split("No visible content.").length - 1, 1);
+  assert.ok(
+    terminal.indexOf(
+      "successful answer after empty item",
+      terminal.indexOf("No visible content."),
+    ) > terminal.indexOf("No visible content."),
+  );
+
+  rig.host.customKey(ESC);
+  await rig.pump();
+  rig.host.customKey(ENTER);
+  await rig.pump();
+  assert.equal(screen(rig).split("No visible content.").length - 1, 1);
   await close(rig, dashboard);
 });
 

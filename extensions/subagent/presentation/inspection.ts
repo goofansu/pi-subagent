@@ -228,9 +228,20 @@ const ROLE_LABELS = {
 } as const satisfies Record<TranscriptItem["role"], string>;
 
 const TRANSCRIPT_PREVIEW_LINES = 33;
+const NO_VISIBLE_ASSISTANT_CONTENT = "No visible content.";
 
 function transcriptBlocks(item: TranscriptItem): readonly InspectionBlock[] {
   const blocks: InspectionBlock[] = [];
+  const assistantHasNoVisibleContent =
+    item.role === "assistant" &&
+    item.parts.every(
+      (part) => part.kind === "text" && part.text.trim().length === 0,
+    );
+  if (assistantHasNoVisibleContent)
+    return [
+      { kind: "muted", text: ROLE_LABELS[item.role] },
+      { kind: "muted", text: NO_VISIBLE_ASSISTANT_CONTENT },
+    ];
   let textAttributed = false;
   for (const part of item.parts) {
     if (part.kind === "tool_call") {
