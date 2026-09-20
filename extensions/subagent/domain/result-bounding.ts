@@ -15,11 +15,12 @@
  *
  * The order things go in is fixed, and it is the order of least loss first:
  *
- * 1. the final output, cut to a prefix — a truncated answer is still an answer;
- * 2. tool output summaries, cut to a prefix;
- * 3. transcript items, oldest first — the recent ones are what a reader needs;
- * 4. tool entries, oldest first;
- * 5. links, then diagnostics, oldest first.
+ * 1. tool output summaries;
+ * 2. transcript items, oldest first — the recent ones are what a reader needs;
+ * 3. tool entries, oldest first;
+ * 4. links, then diagnostics, oldest first;
+ * 5. the final output, cut to a UTF-8-safe prefix only after supporting
+ *    evidence cannot make the Result fit.
  *
  * Every step records what it removed in the {@link TruncationRecord}, so a
  * bounded result says it is bounded rather than quietly being lossy. The whole
@@ -83,27 +84,7 @@ export function boundResultToBytes(
     bytes = encodedResultBytes(current);
   };
 
-  // 1. The final output. A truncated answer is still an answer, so this is the
-  //    first thing to give and the last thing to disappear entirely.
-  if (current.finalOutput !== "") {
-    const target = Math.max(0, byteLength(current.finalOutput) - over());
-    const cut = boundText(current.finalOutput, target);
-    if (cut.droppedBytes > 0) {
-      remeasure({
-        ...current,
-        finalOutput: cut.text,
-        truncation: {
-          ...current.truncation,
-          truncatedOutputBytes:
-            current.truncation.truncatedOutputBytes + cut.droppedBytes,
-        },
-      });
-      if (bytes <= maxBytes) return { result: current, bytes, bounded: true };
-    }
-  }
-
-  // 2. Tool output summaries, which are the other place a backend can put an
-  //    arbitrary amount of text.
+  // 1. Tool output summaries are the first supporting evidence to go.
   if (current.tools.some((entry) => entry.outputSummary !== undefined)) {
     let cutBytes = 0;
     const tools = current.tools.map((entry) => {
@@ -124,7 +105,7 @@ export function boundResultToBytes(
     if (bytes <= maxBytes) return { result: current, bytes, bounded: true };
   }
 
-  // 3. Transcript items, oldest first, halving what is kept each time so the
+  // 2. Transcript items, oldest first, halving what is kept each time so the
   //    pass finishes in a logarithmic number of encodes rather than one per
   //    item.
   while (bytes > maxBytes && current.transcript.length > 0) {
@@ -141,7 +122,7 @@ export function boundResultToBytes(
     });
   }
 
-  // 4. Tool entries, then 5. links and diagnostics. Each is small, so each
+  // 3. Tool entries, then 4. links and diagnostics. Each is small, so each
   //    goes all at once rather than by halves.
   if (bytes > maxBytes && current.tools.length > 0) {
     remeasure({
@@ -172,6 +153,25 @@ export function boundResultToBytes(
         ...current.truncation,
         droppedDiagnostics:
           current.truncation.droppedDiagnostics + current.diagnostics.length,
+      },
+    });
+  }
+
+  // 5. The answer is authoritative, not supporting evidence. Shorten it only
+  // after every removable evidence category above has failed to make the
+  // Result fit. Remeasure after each cut because a larger decimal truncation
+  // counter can itself consume bytes from the budget.
+  while (bytes > maxBytes && current.finalOutput !== "") {
+    const target = Math.max(0, byteLength(current.finalOutput) - over());
+    const cut = boundText(current.finalOutput, target);
+    if (cut.droppedBytes === 0) break;
+    remeasure({
+      ...current,
+      finalOutput: cut.text,
+      truncation: {
+        ...current.truncation,
+        truncatedOutputBytes:
+          current.truncation.truncatedOutputBytes + cut.droppedBytes,
       },
     });
   }
