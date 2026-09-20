@@ -377,6 +377,38 @@ test("empty retained output is distinguished from output that was never produced
   assert.match(genuinelyEmptyResult, /Result available but empty/);
 });
 
+test("inspection treats whitespace-only output as not visibly produced", () => {
+  const active = inspectionBlocks(
+    {
+      ...capture,
+      content: {
+        ...capture.content,
+        finalOutput: "  \n\t ",
+        transcript: [],
+      },
+    },
+    "pending",
+  )
+    .map((block) => block.text)
+    .join("\n");
+  assert.match(active, /No output produced yet/);
+  assert.doesNotMatch(active, /\n\t /);
+
+  const terminal = inspectionBlocks(
+    {
+      ...capture,
+      outcome: "result",
+      summary: { ...capture.summary, phase: "completed" },
+      result: fixtureResult({ finalOutput: "  \n\t " }),
+    },
+    "resolved",
+  )
+    .map((block) => block.text)
+    .join("\n");
+  assert.match(terminal, /No final output was produced/);
+  assert.doesNotMatch(terminal, /No final output remains/);
+});
+
 test("empty optional evidence sections are omitted and missing-data explanations follow operational facts", () => {
   const sparse = inspectionBlocks(
     {

@@ -104,6 +104,93 @@ test("a whitespace-only answer is record-only and carries no output fence", () =
   assert.match(text, /No output was produced\./);
 });
 
+test("completed, failed, and cancelled notices distinguish all output-retention states", () => {
+  const endings = [
+    { ending: undefined, status: /completed/, explanation: undefined },
+    {
+      ending: failedEnding("boom"),
+      status: /failed/,
+      explanation: /Reason: boom/,
+    },
+    {
+      ending: cancelledEnding("timeout"),
+      status: /cancelled/,
+      explanation: /\(timeout\)/,
+    },
+  ] as const;
+
+  for (const { ending, status, explanation } of endings) {
+    const options = ending === undefined ? {} : { ending };
+    const absent = formatNotificationText(fixtureNotification(options));
+    const retained = formatNotificationText(
+      fixtureNotification({ ...options, finalOutput: "visible answer" }),
+    );
+    const prefix = formatNotificationText(
+      fixtureNotification({
+        ...options,
+        finalOutput: "visible prefix",
+        truncation: { truncatedOutputBytes: 7 },
+      }),
+    );
+    const removed = formatNotificationText(
+      fixtureNotification({
+        ...options,
+        truncation: { truncatedOutputBytes: 7 },
+      }),
+    );
+
+    for (const text of [absent, retained, prefix, removed]) {
+      assert.match(text, status);
+      if (explanation !== undefined) assert.match(text, explanation);
+    }
+    assert.match(absent, /No output was produced/);
+    assert.match(retained, /visible answer/);
+    assert.match(prefix, /visible prefix/);
+    assert.match(prefix, /retained output prefix/);
+    assert.match(prefix, /7 bytes were removed by retention bounds/);
+    assert.doesNotMatch(prefix, /complete output|all the output/);
+    assert.match(removed, /Final output was produced, but none remains/);
+    assert.match(removed, /7 bytes were removed by retention bounds/);
+    assert.doesNotMatch(removed, /No output was produced/);
+  }
+});
+
+test("a wholly removed answer identifies surviving transcript as supporting evidence", () => {
+  const notice = fixtureNotification({
+    truncation: { truncatedOutputBytes: 23 },
+    transcript: [
+      {
+        role: "assistant",
+        parts: [{ kind: "text", text: "retained supporting work" }],
+      },
+    ],
+  });
+  const text = formatNotificationText(notice);
+
+  assert.equal(notice.resultAvailability, "partial");
+  assert.deepEqual(notice.outputRetention, {
+    kind: "removed",
+    removedBytes: 23,
+  });
+  assert.match(text, /Final output was produced, but none remains/);
+  assert.match(text, /Supporting transcript evidence remains/);
+  assert.doesNotMatch(text, /retained supporting work/);
+});
+
+test("a retained prefix over the inline threshold is previewed and still qualified", () => {
+  const notice = fixtureNotification({
+    finalOutput: "x".repeat(NOTIFICATION_INLINE_MAX_BYTES + 1),
+    truncation: { truncatedOutputBytes: 9 },
+  });
+  const text = formatNotificationText(notice);
+
+  assert.equal(notice.output, undefined);
+  assert.equal(byteLength(notice.preview), NOTIFICATION_PREVIEW_MAX_BYTES);
+  assert.match(text, /Preview of the retained output prefix/);
+  assert.match(text, /A retained output prefix is available/);
+  assert.match(text, /9 bytes were removed by retention bounds/);
+});
+
 test("N-2: a completed Run with no output has no body, and its record is available", () => {
   // "No output was produced" is said once, by the pointer, and the body is
   // absent rather than repeating it and then promising a full result.
@@ -271,15 +358,15 @@ test("every terminal status ends with the availability sentence and the exact ca
 test("N-10: the pointer says what a model will find, in each of the three availabilities", () => {
   const runId = fixtureNotification({}).runId;
   assert.equal(
-    formatResultPointer(runId, "complete"),
+    formatResultPointer(runId, "complete", { kind: "retained" }),
     'The result is available. Call agent_result with {"id":"run-1"}.',
   );
   assert.equal(
-    formatResultPointer(runId, "partial"),
+    formatResultPointer(runId, "partial", { kind: "retained" }),
     'Partial output is available. Call agent_result with {"id":"run-1"}.',
   );
   assert.equal(
-    formatResultPointer(runId, "record-only"),
+    formatResultPointer(runId, "record-only", { kind: "absent" }),
     'No output was produced. The Run record is available. Call agent_result with {"id":"run-1"}.',
   );
 });
@@ -287,23 +374,23 @@ test("N-10: the pointer says what a model will find, in each of the three availa
 test("N-10: an inlined pointer is a note rather than an instruction, and never says Call", () => {
   const runId = fixtureNotification({}).runId;
   assert.equal(
-    formatResultPointer(runId, "complete", true),
+    formatResultPointer(runId, "complete", { kind: "retained" }, true),
     "This is the complete output; nothing further to fetch. agent_result " +
       'with {"id":"run-1"} re-reads it with the transcript.',
   );
   assert.equal(
-    formatResultPointer(runId, "partial", true),
+    formatResultPointer(runId, "partial", { kind: "retained" }, true),
     "This is all the output the Run produced. agent_result with " +
       '{"id":"run-1"} re-reads it with the transcript.',
   );
   // Record-only has nothing to inline, so the flag changes nothing.
   assert.equal(
-    formatResultPointer(runId, "record-only", true),
-    formatResultPointer(runId, "record-only"),
+    formatResultPointer(runId, "record-only", { kind: "absent" }, true),
+    formatResultPointer(runId, "record-only", { kind: "absent" }),
   );
   for (const availability of ["complete", "partial"] as const) {
     assert.doesNotMatch(
-      formatResultPointer(runId, availability, true),
+      formatResultPointer(runId, availability, { kind: "retained" }, true),
       /\bCall\b/,
     );
   }

@@ -129,17 +129,28 @@ the Run settles, and is retrieved by Run id with `agent_result`. A provider's
 own "result" event is adapter-local Turn evidence; it is not this Result and is
 not synonymous with settlement.
 
+**Final output retention** — the shared, backend-neutral meaning of a Run's
+retained final output: **absent** (no visible output and no removal),
+**retained** (visible output with none removed), **retained prefix** (visible
+output remains and removal bytes say how much was cut), or **removed** (no
+visible output remains and removal bytes prove some was cut). Whitespace-only
+text is not visible output. Result, Wait, inspection, and Notification use this
+one interpretation; it is independent of both Result availability and whether
+a Notification inlines a retained value or previews it.
+
 **Notification** — a status-specific completion notice pushed as a follow-up
 message. It opens with the Run's **Label**, so a model running several
 Subagents reads which delegation finished before it reads an identifier; it
-identifies the owning Subagent and the specific Run, and says how much of the
-Result is there — **complete**, **partial**, or **record-only**, read off the
-Result's own output rather than off the Run's status. When the final output
-fits `NOTIFICATION_INLINE_MAX_BYTES` (16 KiB) the notice carries it **whole**
-and its pointer says nothing further need be fetched; otherwise it carries a
-bounded **preview** and points at `agent_result` with the exact argument shape.
-Presence of `output` on the value is what tells the two apart. The Result store
-stays authoritative either way.
+identifies the owning Subagent and the specific Run, says how much of the
+Result is there — **complete**, **partial**, or **record-only** — and carries
+Final output retention so absence, removal, and retained prefixes remain
+explicit. When the retained final-output value fits
+`NOTIFICATION_INLINE_MAX_BYTES` (16 KiB), the notice carries that value whole;
+otherwise it carries a bounded **preview** and points at `agent_result` with
+the exact argument shape. Presence of `output` still distinguishes the whole
+retained value from a preview, independently of whether that retained value is
+a complete produced output or a bounded prefix. The Result store stays
+authoritative either way.
 [ADR-0037](docs/adr/0037-a-notice-carries-a-short-output-whole.md).
 **Pushed is not landed**: Pi may hold a follow-up while the model is
 mid-turn. Its queue may survive a non-Escape abort; when the sink reports the

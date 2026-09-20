@@ -21,15 +21,15 @@
  * remembers to append, so no status can be the one that forgets it.
  *
  * The body is the only place the statuses differ, and within each status the
- * one question is whether the notice carries the output whole
+ * one question is whether the notice carries the retained output value whole
  * ([ADR-0037](../../../docs/adr/0037-a-notice-carries-a-short-output-whole.md)):
  *
- * - **completed** carries the whole output when the notice has it, set off in
- *   a labelled block, and the pointer then says nothing further need be
- *   fetched. Otherwise it carries the bounded preview, labelled and quoted, so
- *   a model can decide whether the answer is worth fetching without fetching
- *   it. A completed Run with nothing to show has no body at all; the pointer
- *   is where "no output was produced" is said.
+ * - **completed** carries that retained value when the notice has it, set off
+ *   in a labelled block. The pointer says whether it is the complete produced
+ *   output or a bounded prefix. Otherwise the notice carries the bounded
+ *   preview, labelled and quoted, so a model can decide whether the answer is
+ *   worth fetching without fetching it. A completed Run with nothing retained
+ *   has no body; the pointer distinguishes absent from wholly removed output.
  * - **failed** carries the primary error, then the partial output whole when
  *   the notice has it. Otherwise the pointer says the partial output exists
  *   and `agent_result` has it.
@@ -44,6 +44,7 @@
  */
 
 import type {
+  FinalOutputRetention,
   NotificationAccounting,
   ResultAvailability,
   RunId,
@@ -106,10 +107,10 @@ function formatNotificationIdentity(notice: RunNotification): string {
  * or this same output later. The verb "Call" is deliberately absent from
  * those two sentences, because it is the word the habit is keyed on.
  *
- * The record-only sentence **owns** "no output was produced". It is the one
- * place that says it, which is why a completed Run with an empty preview has
- * no body: saying it in the body and then promising a full result in the
- * pointer is what this wording replaced.
+ * The pointer owns absent/removed meaning. A record-only Result can mean no
+ * output was produced or that bounding removed all of it; retained transcript
+ * evidence is named as supporting evidence, never as final output. This is why
+ * a completed Run with an empty preview has no body.
  *
  * Present for every terminal status, `cancelled` included: a cancelled Run
  * keeps the output it produced before it was stopped, and a timeout or a
@@ -119,20 +120,42 @@ function formatNotificationIdentity(notice: RunNotification): string {
 export function formatResultPointer(
   runId: RunId,
   availability: ResultAvailability,
+  retention: FinalOutputRetention,
   inlined = false,
 ): string {
   const call = `agent_result with {"id":"${runId}"}`;
-  switch (availability) {
-    case "complete":
+  switch (retention.kind) {
+    case "removed":
+      return `Final output was produced, but none remains in the Run record; ${retention.removedBytes.toLocaleString("en-US")} bytes were removed by retention bounds.${
+        availability === "partial"
+          ? " Supporting transcript evidence remains."
+          : ""
+      } Call ${call}.`;
+    case "absent":
+      return availability === "partial"
+        ? `No final output was produced. Supporting transcript evidence is available. Call ${call}.`
+        : `No output was produced. The Run record is available. Call ${call}.`;
+    case "retained-prefix": {
+      const qualification = `${retention.removedBytes.toLocaleString("en-US")} bytes were removed by retention bounds`;
       return inlined
-        ? `This is the complete output; nothing further to fetch. ${call} re-reads it with the transcript.`
-        : `The result is available. Call ${call}.`;
-    case "partial":
-      return inlined
-        ? `This is all the output the Run produced. ${call} re-reads it with the transcript.`
-        : `Partial output is available. Call ${call}.`;
-    case "record-only":
-      return `No output was produced. The Run record is available. Call ${call}.`;
+        ? `This is the retained output prefix; ${qualification}. ${call} re-reads it with the transcript.`
+        : `A retained output prefix is available; ${qualification}. Call ${call}.`;
+    }
+    case "retained":
+      switch (availability) {
+        case "complete":
+          return inlined
+            ? `This is the complete output; nothing further to fetch. ${call} re-reads it with the transcript.`
+            : `The result is available. Call ${call}.`;
+        case "partial":
+          return inlined
+            ? `This is all the output the Run produced. ${call} re-reads it with the transcript.`
+            : `Partial output is available. Call ${call}.`;
+        case "record-only":
+          // Unreachable for a derived notice: retained visible output is never
+          // record-only. Keep the formatter total for decoded domain values.
+          return `The Run record is available. Call ${call}.`;
+      }
   }
 }
 
@@ -201,7 +224,11 @@ function formatNotificationBody(notice: RunNotification): string | undefined {
       // the whole reason this branch has an absence rather than a sentence.
       return notice.preview === ""
         ? undefined
-        : `Preview from the subagent:\n"${notice.preview}"`;
+        : `${
+            notice.outputRetention.kind === "retained-prefix"
+              ? "Preview of the retained output prefix"
+              : "Preview from the subagent"
+          }:\n"${notice.preview}"`;
     case "failed": {
       const reason = `Reason: ${notice.errorMessage || "none reported."}`;
       return notice.output === undefined
@@ -229,6 +256,7 @@ export function formatNotificationText(notice: RunNotification): string {
     formatResultPointer(
       notice.runId,
       notice.resultAvailability,
+      notice.outputRetention,
       notice.output !== undefined,
     ),
     notice.accounting === undefined

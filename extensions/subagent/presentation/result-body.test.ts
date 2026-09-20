@@ -63,8 +63,37 @@ test("a failed result labels its partial output", () => {
     ),
     "This Run failed before completing.\n\n" +
       "Failure: the backend refused\n\n" +
-      "Output produced before failure:\n\nhalf an answer",
+      "Output produced before failure:\n\n  half an answer  ",
   );
+});
+
+test("whitespace-only output is visibly absent for every terminal status", () => {
+  const cases = [
+    {
+      result: fixtureResult({ finalOutput: "  \n\t " }),
+      absent: /finished without output/,
+    },
+    {
+      result: fixtureResult({
+        ending: failedEnding("boom"),
+        finalOutput: "  \n\t ",
+      }),
+      absent: /failed before producing output/,
+    },
+    {
+      result: fixtureResult({
+        ending: cancelledEnding("shutdown"),
+        finalOutput: "  \n\t ",
+      }),
+      absent: /cancelled before producing output \(shutdown\)/,
+    },
+  ];
+
+  for (const { result, absent } of cases) {
+    const body = formatResultBody(result);
+    assert.match(body, absent);
+    assert.doesNotMatch(body, /Output produced before/);
+  }
 });
 
 test("a failed result with nothing to show plainly says so", () => {

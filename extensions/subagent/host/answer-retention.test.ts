@@ -72,6 +72,40 @@ async function inspectFirstRun(rig: ReturnType<typeof hostRig>) {
   return { closed };
 }
 
+test("an automatic Notification identifies retained final output as a bounded prefix", async (t) => {
+  const rig = hostRig(t, {
+    policy: {
+      ...RIG_POLICY,
+      projection: {
+        ...RIG_POLICY.projection,
+        maxFinalOutputBytes: 10,
+      },
+    },
+    resumableSteps: [
+      [emitText("0123456789ANSWER-REMOVED"), { step: "complete" }],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const started = await start(rig);
+  await rig.settled(started.runId);
+  await rig.pump();
+
+  const notice = rig.host.sent()[0]?.message.content;
+  assert.equal(typeof notice, "string");
+  if (typeof notice !== "string") return;
+  assert.match(notice, /0123456789/);
+  assert.doesNotMatch(notice, /ANSWER-REMOVED/);
+  assert.match(notice, /retained output prefix/);
+  assert.match(notice, /14 bytes were removed by retention bounds/);
+  assert.doesNotMatch(notice, /complete output|all the output/);
+
+  const result = await rig.text("agent_result", { id: started.runId });
+  assert.match(result, /0123456789/);
+  assert.match(result, /14 bytes of the final output were cut/);
+});
+
 test("the host preserves a short answer across Result, waits, Notification, and inspection", async (t) => {
   const resultAnswer = "UNIQUE answer returned by agent_result";
   const waitAnswer = "UNIQUE answer returned by agent_wait";

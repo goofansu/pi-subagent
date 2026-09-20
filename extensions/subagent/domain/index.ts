@@ -11,6 +11,7 @@ export * from "./bounding.ts";
 export * from "./decoding.ts";
 export * from "./diagnostics.ts";
 export * from "./endings.ts";
+export * from "./final-output.ts";
 export * from "./history.ts";
 export * from "./ids.ts";
 export * from "./inspection.ts";

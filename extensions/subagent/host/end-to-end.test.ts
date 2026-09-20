@@ -508,6 +508,7 @@ test("the message the sink sends is the one the renderer can parse", async (t) =
     label: "look around",
     status: "completed",
     resultAvailability: "complete",
+    outputRetention: { kind: "retained" },
     output: RIG_ANSWER,
     preview: RIG_ANSWER,
     // The Run's real duration, which is wall-clock: the round trip is about

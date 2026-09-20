@@ -14,7 +14,11 @@
  * message still says something.
  */
 
-import type { DiagnosticCategory, RunResult } from "../domain/index.ts";
+import {
+  type DiagnosticCategory,
+  interpretFinalOutput,
+  type RunResult,
+} from "../domain/index.ts";
 
 const CANCELLED_WITHOUT_OUTPUT =
   "The Run was cancelled before producing output.";
@@ -25,12 +29,6 @@ const COMPLETED_WITHOUT_OUTPUT = "The Run finished without output.";
 
 /** The dedicated final-output field existed, but bounding removed all of it. */
 export const NO_FINAL_OUTPUT_REMAINS = "No final output remains in the Result.";
-
-function absentOutput(result: RunResult, genuinelyAbsent: string): string {
-  return result.truncation.truncatedOutputBytes > 0
-    ? NO_FINAL_OUTPUT_REMAINS
-    : genuinelyAbsent;
-}
 
 /**
  * Diagnostic categories that describe why a Run failed, as opposed to
@@ -56,43 +54,66 @@ export function primaryFailure(result: RunResult): string | undefined {
   )?.message;
 }
 
+function retainedOutputOr(
+  result: RunResult,
+  absent: string,
+  label: string,
+): string {
+  const output = interpretFinalOutput(result);
+  switch (output.kind) {
+    case "retained":
+    case "retained-prefix":
+      return `${label}:\n\n${output.output}`;
+    case "removed":
+      return NO_FINAL_OUTPUT_REMAINS;
+    case "absent":
+      return absent;
+  }
+}
+
 function failedBody(result: RunResult): string {
-  const partial = result.finalOutput.trim();
   const failure = primaryFailure(result);
   const sections = ["This Run failed before completing."];
   if (failure !== undefined) sections.push(`Failure: ${failure}`);
   sections.push(
-    partial
-      ? `Output produced before failure:\n\n${partial}`
-      : absentOutput(result, FAILED_WITHOUT_OUTPUT),
+    retainedOutputOr(
+      result,
+      FAILED_WITHOUT_OUTPUT,
+      "Output produced before failure",
+    ),
   );
   return sections.join("\n\n");
 }
 
 function cancelledBody(result: RunResult): string {
-  const partial = result.finalOutput.trim();
   const reason =
     result.cancellationReason === undefined
       ? ""
       : ` (${result.cancellationReason})`;
-  const cancelled = `This Run was cancelled before finishing${reason}.`;
-  const output = partial
-    ? `Output produced before cancellation:\n\n${partial}`
-    : absentOutput(
-        result,
-        `${CANCELLED_WITHOUT_OUTPUT.slice(0, -1)}${reason}.`,
-      );
-  if (!partial && result.truncation.truncatedOutputBytes === 0) return output;
-  return [cancelled, output].join("\n\n");
+  const output = interpretFinalOutput(result);
+  if (output.kind === "absent") {
+    return `${CANCELLED_WITHOUT_OUTPUT.slice(0, -1)}${reason}.`;
+  }
+  return [
+    `This Run was cancelled before finishing${reason}.`,
+    retainedOutputOr(
+      result,
+      CANCELLED_WITHOUT_OUTPUT,
+      "Output produced before cancellation",
+    ),
+  ].join("\n\n");
 }
 
 /** Everything the Run said, labelled by how it stopped saying it. */
 export function formatResultBody(result: RunResult): string {
   switch (result.status) {
-    case "completed":
-      return (
-        result.finalOutput || absentOutput(result, COMPLETED_WITHOUT_OUTPUT)
-      );
+    case "completed": {
+      const output = interpretFinalOutput(result);
+      if ("output" in output) return output.output;
+      return output.kind === "removed"
+        ? NO_FINAL_OUTPUT_REMAINS
+        : COMPLETED_WITHOUT_OUTPUT;
+    }
     case "failed":
       return failedBody(result);
     case "cancelled":

@@ -6,12 +6,12 @@
  * identifies the owning Subagent and the specific Run, says how it ended, and
  * then does one of two things with the output
  * ([ADR-0037](../../../docs/adr/0037-a-notice-carries-a-short-output-whole.md)):
- * an output that fits {@link NOTIFICATION_INLINE_MAX_BYTES} travels **whole**,
- * so the common case is one message and no fetch; a longer one is
- * **previewed**, bounded, with a pointer at `agent_result` for the rest. The
- * two are told apart by the shape — `output` is present exactly when the
- * whole output is here — so a formatter cannot mistake a preview for the
- * answer.
+ * retained output that fits {@link NOTIFICATION_INLINE_MAX_BYTES} travels
+ * **whole as retained**, so the common case is one message and no fetch; a
+ * longer retained value is **previewed**, bounded, with a pointer at
+ * `agent_result` for the rest. The two are told apart by the shape — `output`
+ * is present exactly when the whole retained value is here — while
+ * `outputRetention` says whether that value is itself only a bounded prefix.
  *
  * Both bounds are applied here rather than at the point of delivery, because
  * a bound that lives at one of several call sites is a bound that one of them
@@ -40,6 +40,11 @@
 
 import { Schema } from "effect";
 import { boundOneLine, byteLength } from "./bounding.ts";
+import {
+  FinalOutputRetention,
+  finalOutputRetentionOf,
+  interpretFinalOutput,
+} from "./final-output.ts";
 import { RunId, SubagentId } from "./ids.ts";
 import { CancellationReason, TerminalRunPhase } from "./phases.ts";
 import { RUN_LABEL_MAX_BYTES, type RunResult } from "./result.ts";
@@ -109,8 +114,9 @@ export type ResultAvailability = typeof ResultAvailability.Type;
  * without the first.
  */
 export function resultAvailabilityOf(result: RunResult): ResultAvailability {
-  const hasOutput = result.finalOutput.trim() !== "";
-  if (result.status === "completed" && hasOutput) {
+  const output = interpretFinalOutput(result);
+  const hasRetainedOutput = "output" in output;
+  if (result.status === "completed" && hasRetainedOutput) {
     return "complete";
   }
   const hasTranscriptEvidence = result.transcript.some(
@@ -118,7 +124,7 @@ export function resultAvailabilityOf(result: RunResult): ResultAvailability {
       transcriptItemText(item).trim() !== "" ||
       item.parts.some((part) => part.kind === "tool_call"),
   );
-  return hasOutput || hasTranscriptEvidence ? "partial" : "record-only";
+  return hasRetainedOutput || hasTranscriptEvidence ? "partial" : "record-only";
 }
 
 /**
@@ -205,13 +211,20 @@ export const RunNotification = Schema.Struct({
   /** How much of the Result is there. See {@link resultAvailabilityOf}. */
   resultAvailability: ResultAvailability,
   /**
-   * The whole final output, present exactly when it is non-whitespace and fits
+   * Whether visible final output is absent, retained whole, retained only as a
+   * prefix, or wholly removed. This lets a notice explain retention without
+   * carrying or rereading the Result.
+   */
+  outputRetention: FinalOutputRetention,
+  /**
+   * The whole retained final output, present exactly when it is visible and fits
    * {@link NOTIFICATION_INLINE_MAX_BYTES}.
    *
-   * Presence is the discriminant: a notice with `output` *is* the answer and
-   * its pointer says so; a notice without one is a preview and points at the
-   * Result. Carried untouched — line breaks and all — because it is the
-   * agent's Markdown and the parent reads it as such.
+   * Presence is the inline/preview discriminant: a notice with `output`
+   * carries the stored final-output value whole; a notice without one carries
+   * only its preview. `outputRetention` independently says whether the stored
+   * value is a bounded prefix. Carried untouched — line breaks and all —
+   * because it is the agent's Markdown and the parent reads it as such.
    */
   output: Schema.optionalKey(Schema.String),
   /**
@@ -254,6 +267,7 @@ export type RunNotification = typeof RunNotification.Type;
 /** Build the notice for one stored result. Nothing is invented. */
 export function toRunNotification(result: RunResult): RunNotification {
   const accounting = toNotificationAccounting(result.usage, result.model);
+  const finalOutput = interpretFinalOutput(result);
   return {
     runId: result.runId,
     subagentId: result.subagentId,
@@ -261,11 +275,15 @@ export function toRunNotification(result: RunResult): RunNotification {
     label: boundOneLine(result.description, RUN_LABEL_MAX_BYTES),
     status: result.status,
     resultAvailability: resultAvailabilityOf(result),
-    ...(result.finalOutput.trim() !== "" &&
-    byteLength(result.finalOutput) <= NOTIFICATION_INLINE_MAX_BYTES
-      ? { output: result.finalOutput }
+    outputRetention: finalOutputRetentionOf(finalOutput),
+    ...("output" in finalOutput &&
+    byteLength(finalOutput.output) <= NOTIFICATION_INLINE_MAX_BYTES
+      ? { output: finalOutput.output }
       : {}),
-    preview: boundOneLine(result.finalOutput, NOTIFICATION_PREVIEW_MAX_BYTES),
+    preview:
+      "output" in finalOutput
+        ? boundOneLine(finalOutput.output, NOTIFICATION_PREVIEW_MAX_BYTES)
+        : "",
     ...(result.errorMessage === undefined
       ? {}
       : {

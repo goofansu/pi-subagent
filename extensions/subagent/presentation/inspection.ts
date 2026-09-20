@@ -1,6 +1,10 @@
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Markdown, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { isTerminalRunPhase, type TranscriptItem } from "../domain/index.ts";
+import {
+  interpretFinalOutput,
+  isTerminalRunPhase,
+  type TranscriptItem,
+} from "../domain/index.ts";
 import type { RunInspection } from "../domain/inspection.ts";
 import { NO_FINAL_OUTPUT_REMAINS } from "./result-body.ts";
 import type { RenderableTheme } from "./rows.ts";
@@ -108,33 +112,40 @@ export function inspectionBlocks(
   // of becoming a disconnected section.
   if (stored) {
     section(capture.outcome === "active" ? "Output so far" : "Final output");
+    const output = interpretFinalOutput(stored);
     const outputTruncation = formatOutputTruncation(
       stored.truncation.truncatedOutputBytes,
     );
     const truncation = formatTruncation(stored);
     if (outputTruncation !== undefined) add("literal", outputTruncation);
-    if (stored.finalOutput) add("markdown", stored.finalOutput);
-    else if (stored.truncation.truncatedOutputBytes > 0)
-      add(
-        "literal",
-        capture.outcome === "active"
-          ? "No output remains in this snapshot."
-          : NO_FINAL_OUTPUT_REMAINS,
-      );
-    else {
-      add(
-        "literal",
-        capture.outcome === "active"
-          ? "No output produced yet."
-          : "No final output was produced.",
-      );
-      if (stored.transcript.length === 0 && truncation === undefined)
+    switch (output.kind) {
+      case "retained":
+      case "retained-prefix":
+        add("markdown", output.output);
+        break;
+      case "removed":
         add(
           "literal",
           capture.outcome === "active"
-            ? "Active snapshot available but empty: no output or transcript retained yet."
-            : "Result available but empty: no output or transcript was retained.",
+            ? "No output remains in this snapshot."
+            : NO_FINAL_OUTPUT_REMAINS,
         );
+        break;
+      case "absent":
+        add(
+          "literal",
+          capture.outcome === "active"
+            ? "No output produced yet."
+            : "No final output was produced.",
+        );
+        if (stored.transcript.length === 0 && truncation === undefined)
+          add(
+            "literal",
+            capture.outcome === "active"
+              ? "Active snapshot available but empty: no output or transcript retained yet."
+              : "Result available but empty: no output or transcript was retained.",
+          );
+        break;
     }
     if (truncation) add("literal", truncation);
     if (stored.errorMessage !== undefined) {
