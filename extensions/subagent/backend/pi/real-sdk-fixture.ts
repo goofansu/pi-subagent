@@ -79,7 +79,7 @@ export async function realSdkFixture(
     refreshOnCreate: false,
     allowModelNetwork: false,
   });
-  // Initial prompt preflight is deliberately distinct from summarization getAuth.
+  // Initial prompt preflight is deliberately distinct from cancellable summarization getAuth.
   t.mock.method(runtime, "hasConfiguredAuth", () => {
     initialAuthChecks++;
     return true;
@@ -87,10 +87,7 @@ export async function realSdkFixture(
   t.mock.method(runtime, "getAuth", async () => {
     summarizationAuthCalls++;
     assert.equal(events.filter((e) => e.type === "agent_end").length, 1);
-    assert.equal(
-      events.some((e) => e.type === "compaction_start"),
-      false,
-    );
+    assert.equal(events.filter((e) => e.type === "compaction_start").length, 1);
     authEntered.release();
     await authRelease.promise;
     return undefined;

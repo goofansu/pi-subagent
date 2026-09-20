@@ -74,8 +74,8 @@ for (const mode of ["continue", "cancel-second", "auth"] as const) {
           assert.equal(fixture.record().initialAuthChecks, 1);
           assert.equal(fixture.record().summarizationAuthCalls, 1);
           assert.equal(
-            fixture.events.some((e) => e.type === "compaction_start"),
-            false,
+            fixture.events.filter((e) => e.type === "compaction_start").length,
+            1,
           );
           assert.ok(
             fixture.events.some(
@@ -99,8 +99,9 @@ for (const mode of ["continue", "cancel-second", "auth"] as const) {
             );
             assert.equal(fixture.authRelease.opened, false);
             assert.equal(
-              fixture.events.some((e) => e.type === "compaction_start"),
-              false,
+              fixture.events.filter((e) => e.type === "compaction_start")
+                .length,
+              1,
             );
             fixture.authRelease.release();
             fixture.summaryRelease.release();
