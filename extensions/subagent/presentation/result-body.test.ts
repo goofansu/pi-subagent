@@ -26,6 +26,21 @@ test("a completed result with no output plainly says so", () => {
   );
 });
 
+test("a completed Result says when all final output was removed", () => {
+  const result = fixtureResult({
+    diagnostics: [
+      runDiagnostic("backend-failure", "an earlier attempt failed"),
+    ],
+    truncation: { truncatedOutputBytes: 1_234 },
+  });
+
+  assert.equal(
+    formatResultBody(result),
+    "No final output remains in the Result.",
+  );
+  assert.doesNotMatch(formatResultBody(result), /failed|without output/i);
+});
+
 test("the full result text names the agent, the Subagent, and the Run", () => {
   assert.equal(
     formatResult(fixtureResult({ finalOutput: "done" })),
@@ -59,6 +74,23 @@ test("a failed result with nothing to show plainly says so", () => {
       "Failure: boom\n\n" +
       "The Run failed before producing output.",
   );
+});
+
+test("a failed Result keeps its failure when all final output was removed", () => {
+  const body = formatResultBody(
+    fixtureResult({
+      ending: failedEnding("boom"),
+      truncation: { truncatedOutputBytes: 17 },
+    }),
+  );
+
+  assert.equal(
+    body,
+    "This Run failed before completing.\n\n" +
+      "Failure: boom\n\n" +
+      "No final output remains in the Result.",
+  );
+  assert.doesNotMatch(body, /before producing output/);
 });
 
 test("a failed result with no message falls back to a failure diagnostic", () => {
@@ -108,4 +140,101 @@ test("a cancelled result with nothing to show plainly says so", () => {
     formatResultBody(fixtureResult({ ending: cancelledEnding("shutdown") })),
     "The Run was cancelled before producing output (shutdown).",
   );
+});
+
+test("a cancelled Result keeps its reason when all final output was removed", () => {
+  const body = formatResultBody(
+    fixtureResult({
+      ending: cancelledEnding("requested"),
+      truncation: { truncatedOutputBytes: 17 },
+    }),
+  );
+
+  assert.equal(
+    body,
+    "This Run was cancelled before finishing (requested).\n\n" +
+      "No final output remains in the Result.",
+  );
+  assert.doesNotMatch(body, /before producing output/);
+});
+
+test("a retained output prefix keeps status-specific framing and its warning", () => {
+  for (const result of [
+    fixtureResult({
+      finalOutput: "answer pre",
+      truncation: { truncatedOutputBytes: 4 },
+    }),
+    fixtureResult({
+      ending: failedEnding("boom"),
+      finalOutput: "answer pre",
+      truncation: { truncatedOutputBytes: 4 },
+    }),
+    fixtureResult({
+      ending: cancelledEnding("timeout"),
+      finalOutput: "answer pre",
+      truncation: { truncatedOutputBytes: 4 },
+    }),
+  ]) {
+    const text = formatResult(result);
+    assert.match(text, /4 bytes of the final output were cut\./);
+    assert.match(text, /answer pre/);
+    assert.doesNotMatch(text, /No final output remains/);
+  }
+});
+
+test("Transcript evidence is never promoted into truncated-away final output", () => {
+  for (const transcript of [
+    [],
+    [
+      {
+        role: "assistant" as const,
+        parts: [
+          { kind: "text" as const, text: "supporting transcript answer" },
+        ],
+      },
+    ],
+  ]) {
+    const cases = [
+      {
+        status: "completed",
+        result: fixtureResult({
+          transcript,
+          truncation: { truncatedOutputBytes: 23 },
+        }),
+        context: /look around · pi · completed/,
+      },
+      {
+        status: "failed",
+        result: fixtureResult({
+          ending: failedEnding("boom"),
+          transcript,
+          truncation: { truncatedOutputBytes: 23 },
+        }),
+        context: /Failure: boom/,
+      },
+      {
+        status: "cancelled",
+        result: fixtureResult({
+          ending: cancelledEnding("requested"),
+          transcript,
+          truncation: { truncatedOutputBytes: 23 },
+        }),
+        context: /cancelled before finishing \(requested\)/,
+      },
+    ];
+
+    for (const { status, result, context } of cases) {
+      const text = formatResult(result);
+      assert.match(text, new RegExp(`look around · pi · ${status}`));
+      assert.match(text, context);
+      assert.match(text, /No final output remains in the Result\./);
+      assert.doesNotMatch(
+        text,
+        /finished without output|before producing output/,
+      );
+      if (transcript.length === 0)
+        assert.doesNotMatch(text, /supporting transcript answer/);
+      else assert.match(text, /assistant: supporting transcript answer/);
+    }
+  }
 });

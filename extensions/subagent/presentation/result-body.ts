@@ -23,6 +23,17 @@ const FAILED_WITHOUT_OUTPUT = "The Run failed before producing output.";
 
 const COMPLETED_WITHOUT_OUTPUT = "The Run finished without output.";
 
+/** The dedicated final-output field existed, but bounding removed all of it. */
+export const NO_FINAL_OUTPUT_REMAINS = "No final output remains in the Result.";
+
+function absentOutput(
+  result: RunResult,
+  genuinelyAbsent: string,
+  removed = NO_FINAL_OUTPUT_REMAINS,
+): string {
+  return result.truncation.truncatedOutputBytes > 0 ? removed : genuinelyAbsent;
+}
+
 /**
  * Diagnostic categories that describe why a Run failed, as opposed to
  * something that merely happened during it.
@@ -55,7 +66,7 @@ function failedBody(result: RunResult): string {
   sections.push(
     partial
       ? `Output produced before failure:\n\n${partial}`
-      : FAILED_WITHOUT_OUTPUT,
+      : absentOutput(result, FAILED_WITHOUT_OUTPUT),
   );
   return sections.join("\n\n");
 }
@@ -66,18 +77,23 @@ function cancelledBody(result: RunResult): string {
     result.cancellationReason === undefined
       ? ""
       : ` (${result.cancellationReason})`;
-  if (!partial) return `${CANCELLED_WITHOUT_OUTPUT.slice(0, -1)}${reason}.`;
-  return (
-    `This Run was cancelled before finishing${reason}.\n\n` +
-    `Output produced before cancellation:\n\n${partial}`
-  );
+  const cancelled = `This Run was cancelled before finishing${reason}.`;
+  if (!partial)
+    return absentOutput(
+      result,
+      `${CANCELLED_WITHOUT_OUTPUT.slice(0, -1)}${reason}.`,
+      `${cancelled}\n\n${NO_FINAL_OUTPUT_REMAINS}`,
+    );
+  return `${cancelled}\n\nOutput produced before cancellation:\n\n${partial}`;
 }
 
 /** Everything the Run said, labelled by how it stopped saying it. */
 export function formatResultBody(result: RunResult): string {
   switch (result.status) {
     case "completed":
-      return result.finalOutput || COMPLETED_WITHOUT_OUTPUT;
+      return (
+        result.finalOutput || absentOutput(result, COMPLETED_WITHOUT_OUTPUT)
+      );
     case "failed":
       return failedBody(result);
     case "cancelled":

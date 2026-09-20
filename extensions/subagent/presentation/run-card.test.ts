@@ -106,6 +106,44 @@ test("a terminal card carries the failed and cancelled tones and bodies", () => 
   assert.match(cancelled.output ?? "", /^The Run was cancelled/);
 });
 
+test("terminal cards explain when all final output was removed", () => {
+  const completed = runCard({
+    from: "result",
+    result: fixtureResult({ truncation: { truncatedOutputBytes: 17 } }),
+  });
+  const failed = runCard({
+    from: "result",
+    result: fixtureResult({
+      ending: failedEnding("boom"),
+      truncation: { truncatedOutputBytes: 17 },
+    }),
+  });
+  const cancelled = runCard({
+    from: "result",
+    result: fixtureResult({
+      ending: cancelledEnding("shutdown"),
+      truncation: { truncatedOutputBytes: 17 },
+    }),
+  });
+
+  for (const card of [completed, failed, cancelled]) {
+    assert.equal(
+      card.outputTruncation,
+      "17 bytes of the final output were cut.",
+    );
+    assert.match(card.output ?? "", /No final output remains in the Result\./);
+    assert.doesNotMatch(
+      card.output ?? "",
+      /before producing output|without output/,
+    );
+  }
+  assert.match(failed.output ?? "", /Failure: boom/);
+  assert.match(
+    cancelled.output ?? "",
+    /cancelled before finishing \(shutdown\)/,
+  );
+});
+
 test("a card with nothing to account for omits the accounting line", () => {
   assert.equal(
     runCard({ from: "result", result: fixtureResult({}) }).accounting,

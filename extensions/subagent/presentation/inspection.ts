@@ -2,6 +2,7 @@ import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Markdown, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { isTerminalRunPhase, type TranscriptItem } from "../domain/index.ts";
 import type { RunInspection } from "../domain/inspection.ts";
+import { NO_FINAL_OUTPUT_REMAINS } from "./result-body.ts";
 import type { RenderableTheme } from "./rows.ts";
 import {
   formatDiagnosticLine,
@@ -118,7 +119,7 @@ export function inspectionBlocks(
         "literal",
         capture.outcome === "active"
           ? "No output remains in this snapshot."
-          : "No final output remains in the Result.",
+          : NO_FINAL_OUTPUT_REMAINS,
       );
     else {
       add(
