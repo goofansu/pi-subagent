@@ -26,12 +26,10 @@ const COMPLETED_WITHOUT_OUTPUT = "The Run finished without output.";
 /** The dedicated final-output field existed, but bounding removed all of it. */
 export const NO_FINAL_OUTPUT_REMAINS = "No final output remains in the Result.";
 
-function absentOutput(
-  result: RunResult,
-  genuinelyAbsent: string,
-  removed = NO_FINAL_OUTPUT_REMAINS,
-): string {
-  return result.truncation.truncatedOutputBytes > 0 ? removed : genuinelyAbsent;
+function absentOutput(result: RunResult, genuinelyAbsent: string): string {
+  return result.truncation.truncatedOutputBytes > 0
+    ? NO_FINAL_OUTPUT_REMAINS
+    : genuinelyAbsent;
 }
 
 /**
@@ -78,13 +76,14 @@ function cancelledBody(result: RunResult): string {
       ? ""
       : ` (${result.cancellationReason})`;
   const cancelled = `This Run was cancelled before finishing${reason}.`;
-  if (!partial)
-    return absentOutput(
-      result,
-      `${CANCELLED_WITHOUT_OUTPUT.slice(0, -1)}${reason}.`,
-      `${cancelled}\n\n${NO_FINAL_OUTPUT_REMAINS}`,
-    );
-  return `${cancelled}\n\nOutput produced before cancellation:\n\n${partial}`;
+  const output = partial
+    ? `Output produced before cancellation:\n\n${partial}`
+    : absentOutput(
+        result,
+        `${CANCELLED_WITHOUT_OUTPUT.slice(0, -1)}${reason}.`,
+      );
+  if (!partial && result.truncation.truncatedOutputBytes === 0) return output;
+  return [cancelled, output].join("\n\n");
 }
 
 /** Everything the Run said, labelled by how it stopped saying it. */
