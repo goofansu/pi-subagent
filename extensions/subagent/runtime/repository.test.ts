@@ -267,7 +267,7 @@ test("a published Run is active, and a settled one is terminal", async () => {
     Effect.gen(function* () {
       const subagent = yield* repository.allocateSubagentId();
       const identity = identityOf(subagent, "run-1");
-      yield* repository.publish(identity, 1_000);
+      yield* repository.publish(identity, 1_000, "test prompt");
 
       const running = (yield* repository.lookup(identity.runId)).state;
       const activeWhileRunning = yield* repository.activeCount();
@@ -320,7 +320,7 @@ test("failure detail is bounded and published only with failed terminal status",
         completed,
         cancelled,
       ]) {
-        yield* repository.publish(identity, 0);
+        yield* repository.publish(identity, 0, "test prompt");
         if (identity === failed) {
           yield* repository.recordCancellation(identity.runId, "requested");
         }
@@ -375,7 +375,7 @@ test("an illegal transition is reported, never thrown, and changes nothing", asy
     Effect.gen(function* () {
       const subagent = yield* repository.allocateSubagentId();
       const identity = identityOf(subagent, "run-1");
-      yield* repository.publish(identity, 0);
+      yield* repository.publish(identity, 0, "test prompt");
 
       // Settling straight from running would skip cleanup, which is exactly
       // what `finalizing` exists to make impossible.
@@ -415,7 +415,7 @@ test("the repository is the only writer, and a subscriber sees each change", asy
       );
       yield* Deferred.await(attached);
 
-      yield* repository.publish(identity, 0);
+      yield* repository.publish(identity, 0, "test prompt");
       const folded = reduceRun(createRunProjection(), {
         kind: "activity",
         activity: "reading files",
@@ -436,7 +436,7 @@ test("activity is conflated in the row: twenty updates leave one value", async (
     Effect.gen(function* () {
       const subagent = yield* repository.allocateSubagentId();
       const identity = identityOf(subagent, "run-1");
-      yield* repository.publish(identity, 0);
+      yield* repository.publish(identity, 0, "test prompt");
 
       // Twenty activity updates with nobody reading between them. The row is
       // one value, replaced each time, so a chatty backend grows the index by
@@ -463,7 +463,7 @@ test("a settled Run is quiet: settlement clears the activity on the row", async 
     Effect.gen(function* () {
       const subagent = yield* repository.allocateSubagentId();
       const identity = identityOf(subagent, "run-1");
-      yield* repository.publish(identity, 0);
+      yield* repository.publish(identity, 0, "test prompt");
       yield* repository.recordProjection(
         identity.runId,
         reduceRun(createRunProjection(), {
@@ -486,7 +486,7 @@ test("recording a cancellation keeps the first reason and leaves the phase alone
     Effect.gen(function* () {
       const subagent = yield* repository.allocateSubagentId();
       const identity = identityOf(subagent, "run-1");
-      yield* repository.publish(identity, 0);
+      yield* repository.publish(identity, 0, "test prompt");
 
       const first = yield* repository.recordCancellation(
         identity.runId,
@@ -536,8 +536,12 @@ test("one Subagent's active Run is findable, and it has at most one", async () =
     Effect.gen(function* () {
       const first = subagentId("subagent-a");
       const second = subagentId("subagent-b");
-      yield* repository.publish(identityOf(first, "run-1"), 0);
-      yield* repository.publish(identityOf(second, "run-2"), 0);
+      yield* repository.publish(identityOf(first, "run-1"), 0, "first prompt");
+      yield* repository.publish(
+        identityOf(second, "run-2"),
+        0,
+        "second prompt",
+      );
 
       const beforeSettling = yield* repository.activeRunOf(first);
       yield* repository.transition(makeRunId("run-1"), "execution-ended");

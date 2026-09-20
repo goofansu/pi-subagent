@@ -103,7 +103,7 @@ function withRunHandle<A>(
     };
 
     const handle = yield* makeRunHandle(context);
-    yield* repository.publish(identity, startedAt);
+    yield* repository.publish(identity, startedAt, context.input.prompt);
     return yield* body({ handle, backend });
   }).pipe(
     Effect.scoped,

@@ -30,6 +30,7 @@ const capture: RunInspection = {
     startedAt: 0,
   },
   usage: EMPTY_USAGE_SNAPSHOT,
+  prompt: "Inspect **rawly**\n\n- keep this literal",
   content: {
     ...createRunProjection(),
     finalOutput:
@@ -48,14 +49,6 @@ const capture: RunInspection = {
       {
         role: "tool",
         parts: [{ kind: "text", text: "## Literal tool **text**" }],
-      },
-    ],
-    tools: [
-      {
-        name: "bash",
-        status: "completed",
-        callId: "call-test",
-        outputSummary: "## Raw output\n**not bold**",
       },
     ],
   },
@@ -233,13 +226,18 @@ test("inspection puts operational facts before answer and supporting evidence", 
   assert.deepEqual(headings, [
     "Review **literal** label",
     "Metadata",
+    "Prompt",
     "Output so far",
     "Error",
     "Diagnostics",
-    "Tools",
     "Links",
     "Transcript",
   ]);
+  const promptHeading = ordered.findIndex((block) => block.text === "Prompt");
+  assert.deepEqual(ordered[promptHeading + 1], {
+    kind: "literal",
+    text: orderedCapture.prompt,
+  });
 
   const warning = "7 bytes of the final output were cut.";
   const outputHeading = ordered.findIndex(
@@ -278,7 +276,6 @@ test("empty retained output is distinguished from output that was never produced
         ...capture.content,
         finalOutput: "",
         transcript: [],
-        tools: [],
         truncation: {
           ...capture.content.truncation,
           truncatedOutputBytes: 1_234,
@@ -356,7 +353,6 @@ test("empty retained output is distinguished from output that was never produced
         ...capture.content,
         finalOutput: "",
         transcript: [],
-        tools: [],
       },
     },
     "pending",
@@ -398,6 +394,7 @@ test("empty optional evidence sections are omitted and missing-data explanations
   assert.deepEqual(sparseHeadings, [
     "Review **literal** label",
     "Metadata",
+    "Prompt",
     "Output so far",
   ]);
 
@@ -441,14 +438,14 @@ test("assistant Markdown renders headings, bold, inline code, lists and fenced c
   );
 });
 
-test("metadata, user messages and tool output stay literal without generated call IDs", () => {
+test("prompt, metadata, and transcript evidence stay literal without generated call IDs", () => {
   const output = plain();
   for (const expected of [
     "Review **literal** label",
+    "Inspect **rawly**",
+    "- keep this literal",
     "## Literal user **text**",
     "## Literal tool **text**",
-    "## Raw output",
-    "**not bold**",
   ])
     assert.ok(output.includes(expected), expected);
   assert.doesNotMatch(output, /call-test|Call ID:/);
@@ -469,7 +466,10 @@ test("metadata, user messages and tool output stay literal without generated cal
     tones.some(({ color, text }) => color === "dim" && text === "Assistant:"),
   );
   assert.ok(
-    tones.some(({ color, text }) => color === "accent" && text === "Tools"),
+    tones.some(({ color, text }) => color === "accent" && text === "Prompt"),
+  );
+  assert.ok(
+    tones.every(({ color, text }) => color !== "accent" || text !== "Tools"),
   );
 });
 
@@ -530,7 +530,6 @@ test("transcript keeps message and part order with fresh readable attribution", 
       ...capture.content,
       model: "run-model",
       transcript,
-      tools: [],
     },
   };
   const before = structuredClone(inspected);
@@ -600,7 +599,6 @@ test("reported model comparison starts unknown and changes only on explicit valu
     content: {
       ...capture.content,
       model: undefined,
-      tools: [],
       transcript: [
         { role: "assistant", parts: [{ kind: "text", text: "unknown" }] },
         {
@@ -639,12 +637,12 @@ test("reported model comparison starts unknown and changes only on explicit valu
   assert.equal(semantic[modelTwo + 1]?.text, "Tool output:");
 });
 
-test("Tools retain every status, unnamed fallback, duplicate entry and full literal output", () => {
+test("terminal inspection omits the Tools section without changing retained Result tool data", () => {
   const inspected: RunInspection = {
     ...capture,
-    content: {
-      ...capture.content,
-      transcript: [],
+    outcome: "result",
+    summary: { ...capture.summary, phase: "completed" },
+    result: fixtureResult({
       tools: [
         { name: "same", status: "running", callId: "status-id-1" },
         {
@@ -653,42 +651,20 @@ test("Tools retain every status, unnamed fallback, duplicate entry and full lite
           callId: "status-id-2",
           outputSummary: "first line\nsecond line\nCall ID: retained evidence",
         },
-        {
-          name: "failed",
-          status: "failed",
-          outputSummary: "failure **literal**",
-        },
-        {
-          name: "cancelled",
-          status: "cancelled",
-          outputSummary: "cancel tail",
-        },
-        { status: "unfinished", outputSummary: "unfinished tail" },
       ],
-    },
+    }),
   };
+  const before = structuredClone(inspected.result.tools);
   const semantic = inspectionBlocks(inspected, "pending");
-  assert.deepEqual(sectionBlocks(semantic, "Tools"), [
-    { kind: "literal", text: "same — running" },
-    { kind: "literal", text: "same — completed" },
-    {
-      kind: "literal",
-      text: "first line\nsecond line\nCall ID: retained evidence",
-    },
-    { kind: "literal", text: "failed — failed" },
-    { kind: "literal", text: "failure **literal**" },
-    { kind: "literal", text: "cancelled — cancelled" },
-    { kind: "literal", text: "cancel tail" },
-    { kind: "literal", text: "(unnamed tool) — unfinished" },
-    { kind: "literal", text: "unfinished tail" },
-  ]);
   const visible = renderInspection(semantic, 100, PLAIN_THEME, true)
     .map(stripVTControlCharacters)
     .join("\n");
-  assert.doesNotMatch(visible, /status-id-[12]/);
-  assert.match(visible, /second line/);
-  assert.match(visible, /Call ID: retained evidence/);
-  assert.match(visible, /failure \*\*literal\*\*/);
+  assert.equal(
+    semantic.some((block) => block.text === "Tools"),
+    false,
+  );
+  assert.doesNotMatch(visible, /status-id|first line|second line/);
+  assert.deepEqual(inspected.result.tools, before);
 });
 
 test("large tool transcript output follows explicit compact and expanded modes", () => {

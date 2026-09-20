@@ -666,6 +666,7 @@ test("a terminal Run with no Result store entry counts once", async () => {
           description: "missing output",
         },
         0,
+        "missing-result prompt",
       );
       yield* rig.repository.transition(id, "execution-ended");
       yield* rig.repository.transition(id, "settled-failed", 1);

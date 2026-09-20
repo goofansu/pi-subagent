@@ -73,11 +73,13 @@ import type { RuntimeCounters } from "./counters.ts";
  * Deliberately not the projection. A projection holds the whole transcript,
  * and the index is read by everything: publishing the transcript on every
  * observation would make a UI subscriber's work proportional to how much a
- * backend said. What a row needs is identity, where the Run is, and the few
- * figures a widget shows.
+ * backend said. A row holds identity, where the Run is, the few figures a
+ * widget shows, and the fixed admission prompt for on-demand inspection.
  */
 export interface RunSnapshot {
   readonly identity: RunIdentity;
+  /** Exact caller text that admitted this Run; not provider transcript evidence. */
+  readonly prompt: string;
   readonly phase: RunPhase;
   /** Present once a cancellation has been recorded, whatever the phase. */
   readonly cancellation?: CancellationRequest;
@@ -299,10 +301,12 @@ const make = (counters: RuntimeCounters) =>
       publish: (
         identity: RunIdentity,
         startedAt: number,
+        prompt: string,
       ): Effect.Effect<RunSnapshot> =>
         SubscriptionRef.modify(index, (current) => {
           const snapshot: RunSnapshot = {
             identity,
+            prompt,
             phase: "running",
             usage: EMPTY_USAGE_SNAPSHOT,
             tools: 0,

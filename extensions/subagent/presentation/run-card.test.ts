@@ -15,13 +15,12 @@ import {
 } from "../testing/presentation-fixtures.ts";
 import {
   formatToolEntry,
-  formatToolStatus,
   RECENT_TRANSCRIPT_ITEMS,
   runCard,
   runCardLines,
 } from "./run-card.ts";
 
-test("shared tool status preserves unnamed fallback and compact output formatting", () => {
+test("compact tool entry preserves unnamed fallback and output formatting", () => {
   for (const name of [undefined, "read"]) {
     const entry = {
       name,
@@ -29,7 +28,6 @@ test("shared tool status preserves unnamed fallback and compact output formattin
       outputSummary: "  first\nsecond  ",
     } as const;
     const status = `${name ?? "(unnamed tool)"} — completed`;
-    assert.equal(formatToolStatus(entry), status);
     assert.equal(formatToolEntry(entry), `${status}: first\nsecond`);
     assert.equal(formatToolEntry({ ...entry, outputSummary: "  " }), status);
   }

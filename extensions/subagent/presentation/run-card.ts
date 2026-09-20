@@ -123,8 +123,8 @@ export function formatTranscriptItem(item: TranscriptItem): string {
   return `${item.role}: ${said}`;
 }
 
-/** Tool identity and outcome, shared by compact and full inspection views. */
-export function formatToolStatus(entry: ToolEntry): string {
+/** Tool identity and outcome for the compact RunCard entry. */
+function formatToolStatus(entry: ToolEntry): string {
   return `${entry.name ?? "(unnamed tool)"} — ${entry.status}`;
 }
 

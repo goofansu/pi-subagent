@@ -742,7 +742,7 @@ const makeSupervisor = (settings: SessionSettings) =>
               scope: opened.scope,
             });
             records.attachRun(record.id, handle);
-            yield* repository.publish(identity, startedAt);
+            yield* repository.publish(identity, startedAt, request.prompt);
             yield* forkRun({
               record,
               lease,
@@ -920,7 +920,7 @@ const makeSupervisor = (settings: SessionSettings) =>
             // operation can reach this exact Run through the records module.
             records.markRunning(record.id);
             records.attachRun(record.id, handle);
-            yield* repository.publish(identity, startedAt);
+            yield* repository.publish(identity, startedAt, request.prompt);
             yield* forkRun({
               record,
               lease,

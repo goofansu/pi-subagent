@@ -1,17 +1,12 @@
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Markdown, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import {
-  isTerminalRunPhase,
-  type ToolEntry,
-  type TranscriptItem,
-} from "../domain/index.ts";
+import { isTerminalRunPhase, type TranscriptItem } from "../domain/index.ts";
 import type { RunInspection } from "../domain/inspection.ts";
 import type { RenderableTheme } from "./rows.ts";
 import {
   formatDiagnosticLine,
   formatOutputTruncation,
   formatResultLinkLine,
-  formatToolStatus,
   formatTruncation,
 } from "./run-card.ts";
 import { runPresentationFromSummary } from "./run-presentation.ts";
@@ -104,9 +99,12 @@ export function inspectionBlocks(
   if (handoff === "unannounceable")
     add("literal", "Completion hand-off: unannounceable");
 
-  // Put the Run's answer after the quick operational facts, then its supporting
-  // tool and transcript evidence. Any retention warning stays with the answer
-  // it qualifies instead of becoming a disconnected section.
+  section("Prompt");
+  add("literal", capture.prompt);
+
+  // Put the Run's answer after the prompt that admitted it, then its transcript
+  // evidence. Any retention warning stays with the answer it qualifies instead
+  // of becoming a disconnected section.
   if (stored) {
     section(capture.outcome === "active" ? "Output so far" : "Final output");
     const outputTruncation = formatOutputTruncation(
@@ -145,10 +143,6 @@ export function inspectionBlocks(
     if (stored.diagnostics.length) {
       section("Diagnostics");
       add("literal", ...stored.diagnostics.map(formatDiagnosticLine));
-    }
-    if (stored.tools.length) {
-      section("Tools");
-      for (const tool of stored.tools) blocks.push(...toolBlocks(tool));
     }
   } else {
     add(
@@ -256,12 +250,4 @@ function transcriptBlocks(item: TranscriptItem): readonly InspectionBlock[] {
   if (item.parts.length === 0)
     blocks.push({ kind: "muted", text: ROLE_LABELS[item.role] });
   return blocks;
-}
-function toolBlocks(entry: ToolEntry): readonly InspectionBlock[] {
-  return [
-    { kind: "literal", text: formatToolStatus(entry) },
-    ...(entry.outputSummary === undefined
-      ? []
-      : [{ kind: "literal" as const, text: entry.outputSummary }]),
-  ];
 }

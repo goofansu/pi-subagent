@@ -24,7 +24,7 @@ async function start(rig: HostRig, description = "inspected Label") {
     await rig.text("agent_start", {
       agent: "explore",
       description,
-      prompt: "not separately retained admission prompt",
+      prompt: "raw admission prompt",
     }),
   );
 }
@@ -68,10 +68,11 @@ test("terminal inspection shows every retained transcript item and returns to th
   assert.match(text, /inspected Label/);
   for (let i = 0; i < 10; i += 1)
     assert.ok(text.includes(`retained item ${i}`));
-  assert.doesNotMatch(
-    text,
-    /Recent transcript|not separately retained admission prompt/,
-  );
+  assert.doesNotMatch(text, /Recent transcript/);
+  assert.match(text, /Prompt/);
+  assert.match(text, /raw admission prompt/);
+  assert.ok(text.indexOf("Metadata") < text.indexOf("Prompt"));
+  assert.ok(text.indexOf("Prompt") < text.indexOf("Final output"));
   rig.host.customKey(ESC);
   await rig.pump();
   assert.match(screen(rig), /Subagent dashboard · run history/);
@@ -82,7 +83,7 @@ test("terminal inspection shows every retained transcript item and returns to th
   await close(rig, dashboard);
 });
 
-test("inspection includes mixed transcript parts, every tool, normalized usage, errors, diagnostics and links", async (t) => {
+test("inspection includes mixed transcript evidence, usage, errors, diagnostics and links but no Tools section", async (t) => {
   const steps: FakeStep[] = [
     {
       step: "emit",
@@ -185,18 +186,18 @@ test("inspection includes mixed transcript parts, every tool, normalized usage, 
   ])
     assert.ok(text.includes(expected), `${expected}\n${text}`);
   for (let i = 0; i < 9; i += 1)
-    for (const expected of [
+    for (const omitted of [
       `tool-${i} — completed`,
       `tool output ${i}`,
       `second line ${i}`,
     ])
-      assert.ok(text.includes(expected), expected);
+      assert.ok(!text.includes(omitted), omitted);
   const orderedSections = [
     "Metadata",
+    "Prompt",
     "Final output",
     "Error",
     "Diagnostics",
-    "Tools",
     "Links",
     "Transcript",
   ];
@@ -206,7 +207,7 @@ test("inspection includes mixed transcript parts, every tool, normalized usage, 
         text.indexOf(orderedSections[i] ?? ""),
       orderedSections.join(" → "),
     );
-  assert.doesNotMatch(text, /mixed-id|call-[0-8]/);
+  assert.doesNotMatch(text, /\nTools\n|mixed-id|call-[0-8]/);
   assert.equal(text.split("Assistant:").length - 1, 3);
   await close(rig, dashboard);
 });

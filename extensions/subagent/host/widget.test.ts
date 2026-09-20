@@ -493,6 +493,7 @@ test("the widget lists Runs that are not terminal and terminal ones whose hand-o
       agent: "explore",
       description: "look around",
     },
+    prompt: "have a look",
     phase,
     usage: {
       totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },

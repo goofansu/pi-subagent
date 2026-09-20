@@ -18,6 +18,8 @@ interface Capture {
 }
 interface KnownCapture extends Capture {
   readonly summary: RunSummary;
+  /** Exact caller text admitted for this Run, distinct from transcript evidence. */
+  readonly prompt: string;
   readonly usage: UsageSnapshot;
   readonly subagent?: SubagentInspectionSummary;
 }
@@ -26,7 +28,6 @@ interface KnownCapture extends Capture {
 export type ActiveRunContent = Pick<
   RunProjection,
   | "transcript"
-  | "tools"
   | "diagnostics"
   | "links"
   | "model"

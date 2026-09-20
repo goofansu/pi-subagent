@@ -36,6 +36,7 @@ export function captureRunInspection(
         const metadata = {
           ...capture,
           summary: summarizeRun(snapshot),
+          prompt: snapshot.prompt,
           usage: snapshot.usage,
           ...(record
             ? {
@@ -64,7 +65,6 @@ export function captureRunInspection(
             outcome: "active",
             content: {
               transcript: projection.transcript,
-              tools: projection.tools,
               diagnostics: projection.diagnostics,
               links: projection.links,
               model: projection.model,

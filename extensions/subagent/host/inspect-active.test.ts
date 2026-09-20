@@ -71,7 +71,11 @@ test("active inspection freezes content and activity ages until explicit refresh
   assert.match(first, /active Label/);
   assert.match(first, /status: +running/);
   assert.match(first, /first content/);
-  assert.doesNotMatch(first, /Last activity:|Captured at:/);
+  assert.match(first, /Prompt/);
+  assert.match(first, /task/);
+  assert.ok(first.indexOf("Metadata") < first.indexOf("Prompt"));
+  assert.ok(first.indexOf("Prompt") < first.indexOf("Output so far"));
+  assert.doesNotMatch(first, /Last activity:|Captured at:|\nTools\n/);
   assert.match(first, /r refresh/);
   const requests = rig.host.customRenderRequests();
   await rig.release("more");
@@ -254,9 +258,6 @@ for (const truncated of [false, true])
         "bounded item 5",
         "bounded item 11",
         "Tool call · read",
-        "read — running",
-        "full tool output",
-        "second tool line",
         "user text",
         "tool text",
         "turns:              2",
@@ -271,9 +272,9 @@ for (const truncated of [false, true])
         assert.ok(text.includes(value), `${value}\n${text}`);
       const orderedSections = [
         "Metadata",
+        "Prompt",
         "Output so far",
         "Diagnostics",
-        "Tools",
         "Links",
         "Transcript",
       ];
@@ -289,7 +290,10 @@ for (const truncated of [false, true])
       );
       assert.ok(outputHeading < outputWarning);
       assert.ok(outputWarning < text.indexOf("bounded", outputWarning));
-      assert.doesNotMatch(text, /call-id/);
+      assert.doesNotMatch(
+        text,
+        /\nTools\n|read — running|full tool output|second tool line|call-id/,
+      );
       assert.match(text, /User:/);
       assert.match(text, /Tool output:/);
     } else assert.match(text, /Active snapshot available but empty/);

@@ -478,6 +478,7 @@ test("an active repository row without an attached Run is an invariant defect", 
           description: "orphaned active row",
         },
         0,
+        "orphaned prompt",
       );
 
       return {

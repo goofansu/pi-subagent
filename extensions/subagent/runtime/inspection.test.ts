@@ -37,6 +37,7 @@ test("unreadable inspection discovers the same one-time defect as later parent a
               description: result.description,
             },
             result.startedAt,
+            "test prompt",
           );
           yield* rig.store.commit(result).pipe(Effect.orDie);
           yield* rig.repository.transition(result.runId, "execution-ended");
@@ -90,6 +91,45 @@ function assertPlainFrozen(value: unknown): void {
   for (const child of Object.values(value)) assertPlainFrozen(child);
 }
 
+test("inspection retains each Run's exact start and resume admission prompt", async () => {
+  const startPrompt = "Start raw **Markdown**\n\n  indented line";
+  const resumePrompt = "Resume raw <xml>\nsecond line";
+  const outcome = await withSession(
+    { steps: [[{ step: "complete" }], [{ step: "complete" }]] },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(
+          yield* rig.supervisor.start(rigRequest({ prompt: startPrompt })),
+        );
+        const activeStart = yield* rig.supervisor.inspectRun(started.runId);
+        yield* untilTerminal(rig, started.runId);
+        const terminalStart = yield* rig.supervisor.inspectRun(started.runId);
+        const resumed = startedRun(
+          yield* rig.supervisor.resume({
+            subagentId: started.subagentId,
+            description: "continue",
+            prompt: resumePrompt,
+          }),
+        );
+        const activeResume = yield* rig.supervisor.inspectRun(resumed.runId);
+        yield* untilTerminal(rig, resumed.runId);
+        const terminalResume = yield* rig.supervisor.inspectRun(resumed.runId);
+        return { activeStart, terminalStart, activeResume, terminalResume };
+      }),
+  );
+  for (const [capture, expected] of [
+    [outcome.value.activeStart, startPrompt],
+    [outcome.value.terminalStart, startPrompt],
+    [outcome.value.activeResume, resumePrompt],
+    [outcome.value.terminalResume, resumePrompt],
+  ] as const) {
+    assert.notEqual(capture.outcome, "unknown Run");
+    if (capture.outcome !== "unknown Run")
+      assert.equal(capture.prompt, expected);
+  }
+  assert.equal(outcome.noLeaks, true);
+});
+
 test("inspection returns independent immutable plain bounded values; a reduced ending remains active through cleanup", async () => {
   const more = Effect.runSync(Deferred.make<void>());
   const cleanup = Effect.runSync(Deferred.make<void>());
@@ -125,6 +165,7 @@ test("inspection returns independent immutable plain bounded values; a reduced e
         if (again.outcome !== "active") throw new Error("expected active");
         assert.notEqual(first.content, again.content);
         assert.notEqual(first.content.transcript, again.content.transcript);
+        assert.equal("tools" in first.content, false);
         assert.notEqual(first.usage, again.usage);
         assert.equal(Reflect.set(first.content.transcript, "0", {}), false);
         yield* Deferred.succeed(more, undefined);
@@ -141,7 +182,14 @@ test("inspection returns independent immutable plain bounded values; a reduced e
         if (finalizing.outcome !== "active") throw new Error("expected active");
         assert.equal(finalizing.summary.phase, "finalizing");
         assert.equal(finalizing.content.finalOutput, "last");
-        assert.equal(finalizing.content.tools[0]?.status, "unfinished");
+        assert.equal("tools" in finalizing.content, false);
+        assert.ok(
+          finalizing.content.transcript.some((item) =>
+            item.parts.some(
+              (part) => part.kind === "tool_call" && part.name === "read",
+            ),
+          ),
+        );
         assert.equal("terminal" in finalizing.content, false);
         assert.equal("result" in finalizing, false);
         assert.equal(

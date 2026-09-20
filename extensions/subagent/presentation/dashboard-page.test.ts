@@ -79,6 +79,7 @@ const CAPTURE: RunInspection = {
   runId: runId("run-0"),
   capturedAt: NOW,
   summary: fixtureRun(0),
+  prompt: "have a look",
   usage: EMPTY_USAGE_SNAPSHOT,
   content: {
     ...createRunProjection(),
@@ -662,6 +663,7 @@ test("inspection transcript and refresh hints appear only when applicable", () =
         phase: "completed",
         settledAt: NOW,
       },
+      prompt: CAPTURE.prompt,
       usage: EMPTY_USAGE_SNAPSHOT,
       result,
     },
