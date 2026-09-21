@@ -28,6 +28,7 @@ import {
   formatToolInputRejected,
   formatUnknownAgent,
   formatWaitOutcomes,
+  WAIT_RETURNED as RETURNED,
 } from "./prose.ts";
 import { formatResult } from "./run-card.ts";
 
@@ -372,6 +373,33 @@ test("a wait delivers each terminal Run's Result as the card agent_result return
   assert.match(formatWaitOutcomes(outcomes), /the answer$/m);
 });
 
+test("a wait with nothing outstanding says so after the cards, and one with something left does not", () => {
+  const result = fixtureResult({ finalOutput: "the answer" });
+  const delivered: WaitOutcome = {
+    outcome: "terminal",
+    runId: RUN,
+    status: "completed",
+    result,
+  };
+
+  assert.equal(
+    formatWaitOutcomes([delivered]),
+    `${formatResult(result)}\n\n${RETURNED}`,
+  );
+
+  // The line exists to stop a reader concluding the call is still blocking,
+  // so a wait that really did leave something behind must not carry it: that
+  // wait says it gave up, and both sentences at once would be a contradiction
+  // rather than an extra.
+  const leftovers: WaitOutcome[] = [
+    { outcome: "still running", runId: OTHER_RUN },
+    { outcome: "unknown Run", runId: OTHER_RUN },
+  ];
+  for (const leftover of leftovers) {
+    assert.ok(!formatWaitOutcomes([delivered, leftover]).includes(RETURNED));
+  }
+});
+
 test("a wait names an evicted Run by agent and status, and says its output is gone", () => {
   // v1 rendered `cancelled (requested)` and `cancelled (shutdown)`, and the
   // two are different facts: only one of them is something the caller asked
@@ -398,13 +426,14 @@ test("a wait names an evicted Run by agent and status, and says its output is go
       ]),
     ),
     `explore (run-1): cancelled (requested), ${EVICTED}\n\n` +
-      `librarian (run-2): cancelled (shutdown), ${EVICTED}`,
+      `librarian (run-2): cancelled (shutdown), ${EVICTED}\n\n` +
+      RETURNED,
   );
   assert.equal(
     formatWaitOutcomes([
       { outcome: "terminal", runId: RUN, status: "completed" },
     ]),
-    `run-1: completed, ${EVICTED}`,
+    `run-1: completed, ${EVICTED}\n\n${RETURNED}`,
   );
 });
 
@@ -420,7 +449,10 @@ test("a wait covers every outcome and reports an unnamed Run by id", () => {
   }
 
   coversEveryOutcome(WAIT_OUTCOMES, rendered);
-  assert.equal(rendered.get("terminal"), `run-1: failed, ${EVICTED}`);
+  assert.equal(
+    rendered.get("terminal"),
+    `run-1: failed, ${EVICTED}\n\n${RETURNED}`,
+  );
 });
 
 test("a wait with no ids says so, and a wait-all with nothing active says where the answers went", () => {

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runId } from "../domain/index.ts";
-import { NO_FINAL_OUTPUT_REMAINS } from "../presentation/index.ts";
+import {
+  NO_FINAL_OUTPUT_REMAINS,
+  WAIT_RETURNED,
+} from "../presentation/index.ts";
 import { emitText } from "../testing/fakes/script.ts";
 import {
   hostRig,
@@ -78,7 +81,9 @@ test("automatic delivery, Result tools, and inspection agree when all final outp
 
   const resultText = await rig.text("agent_result", { id: started.runId });
   const waitText = await rig.text("agent_wait", { ids: [started.runId] });
-  assert.equal(waitText, resultText);
+  // The card is byte-identical to the one `agent_result` returns; the
+  // wait adds only its own closing sentence about the call.
+  assert.equal(waitText, `${resultText}\n\n${WAIT_RETURNED}`);
   assert.ok(resultText.includes(NO_FINAL_OUTPUT_REMAINS));
   assert.doesNotMatch(resultText, /finished without output/);
   assert.doesNotMatch(resultText, new RegExp(REMOVED_OUTPUT));
@@ -114,7 +119,7 @@ test("automatic delivery, Result tools, and inspection agree when all final outp
   const waitAllText = await waitingForAll;
   assert.equal(
     waitAllText,
-    await rig.text("agent_result", { id: waited.runId }),
+    `${await rig.text("agent_result", { id: waited.runId })}\n\n${WAIT_RETURNED}`,
     "agent_wait_all uses the same Result formatter",
   );
   await rig.pump();

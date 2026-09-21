@@ -4,6 +4,7 @@ import { stripVTControlCharacters } from "node:util";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import type { ToolResponse } from "../application/index.ts";
 import { runId } from "../domain/index.ts";
+import { WAIT_RETURNED } from "../presentation/index.ts";
 import { emitText } from "../testing/fakes/script.ts";
 import {
   hostRig,
@@ -808,12 +809,14 @@ test("agent_wait delivers each terminal Run's full result, as agent_result would
     ids: [first.runId, second.runId],
   });
 
-  // Two cards, one per Run, each the same text `agent_result` returns for it.
+  // Two cards, one per Run, each the same text `agent_result` returns for
+  // it, closed by the wait's own sentence about the call.
   assert.equal(
     text,
     [
       await rig.text("agent_result", { id: first.runId }),
       await rig.text("agent_result", { id: second.runId }),
+      WAIT_RETURNED,
     ].join("\n\n"),
   );
   assert.match(

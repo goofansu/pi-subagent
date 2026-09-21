@@ -188,6 +188,23 @@ const OUTPUT_EVICTED =
   "cannot be recovered.";
 
 /**
+ * What a wait says when it waited the whole way and nothing is left over.
+ *
+ * Every other path explains the wait's own outcome: it gave up, the ids were
+ * unknown, no ids were given. The successful path explained nothing, and left
+ * a reader to infer from the absence of a complaint that the call had
+ * returned at all — an inference a reader can fail to make, and then the only
+ * remaining reading is that the wait is still blocking, which is the one
+ * thing a returned wait is not.
+ *
+ * One line inside the width an expanded Tool row is drawn at, because a
+ * sentence whose whole job is to be read at a glance should not be the one
+ * that wraps.
+ */
+export const WAIT_RETURNED =
+  "This wait has returned: every Run it covered is terminal, nothing outstanding.";
+
+/**
  * A wait, which delivers the Result of each Run it waited for.
  *
  * A terminal Run that still has its Result renders as the same card
@@ -200,6 +217,11 @@ const OUTPUT_EVICTED =
  * carry no Result, so a barrier over several agents still reads as a list of
  * specialists. An id the Session no longer names is reported by id alone,
  * which is honest rather than blank.
+ *
+ * {@link WAIT_RETURNED} closes a wait that left nothing behind, in the same
+ * trailing position every other sentence about the wait itself occupies. It
+ * is the last thing before the parent's own next turn, which is where a
+ * reader deciding whether it may speak yet is looking.
  */
 export function formatWaitOutcomes(
   outcomes: readonly WaitOutcome[],
@@ -242,6 +264,7 @@ export function formatWaitOutcomes(
     }
   }
 
+  const outstanding = stillRunning.length > 0 || unknown.length > 0;
   const sections = [...terminal];
   if (stillRunning.length > 0) {
     sections.push(
@@ -253,6 +276,7 @@ export function formatWaitOutcomes(
   if (unknown.length > 0) {
     sections.push(`Unknown run ids: ${unknown.join(", ")}.`);
   }
+  if (terminal.length > 0 && !outstanding) sections.push(WAIT_RETURNED);
   if (sections.length === 0) sections.push("No run ids were given.");
   return sections.join("\n\n");
 }
