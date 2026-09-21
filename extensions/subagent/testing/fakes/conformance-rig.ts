@@ -1,35 +1,34 @@
 /**
  * The conformance rig for the two fake backends.
  *
- * One rig builder, parameterized by which fake it is building for. That is
- * deliberate for the same reason the two fakes share a script runner: if the
- * resumable rig and the one-shot rig were written separately, a capability
- * scenario could pass because the two rigs differ rather than because the core
- * enforces anything.
+ * One rig builder and one shared scenario table serve both fakes. The visible
+ * skip list is the intended distinction in scenario coverage; that keeps a
+ * capability scenario passing because the core enforces the declaration, not
+ * because a separately built one-shot rig happens to agree.
  *
- * Where the one-shot backend cannot support a scenario, the rig returns
- * `undefined` and the suite records a visible skip. Those skips are the whole
- * observable difference between the two rigs, and the tests that use this
- * builder assert exactly which ones they are.
+ * The provider-neutral plans and expectations live in the shared table. This
+ * file contains only fake scripts, fake-only instrumentation, visible skips,
+ * and reasoned capability-shaped row/script overrides. Those small overrides
+ * express what an unsupported operation can drive or observe; they do not
+ * create a second scenario definition.
  */
 
 import { Deferred } from "effect";
 import {
   contextGauge,
   DEFAULT_BACKEND_ID,
-  DEFAULT_PROJECTION_BOUNDS,
   type Profile,
   runDiagnostic,
 } from "../../domain/index.ts";
 import {
-  DEFAULT_RUNTIME_POLICY,
-  type RuntimePolicy,
-} from "../../runtime/policy.ts";
-import type {
-  BackendConformanceFixture,
-  BackendConformanceFixtureParts,
-  BackendConformanceRig,
-  BackendConformanceScenario,
+  BACKEND_CONFORMANCE_SCENARIO_TABLE,
+  type BackendConformanceRig,
+  type BackendConformanceRigStructure,
+  type BackendConformanceScenario,
+  type BackendConformanceScenarioOverride,
+  type BackendConformanceScenarioRow,
+  composeConformanceFixture,
+  conformanceRigStructure,
 } from "../conformance.ts";
 import {
   createFakeOneShotBackend,
@@ -79,41 +78,51 @@ function build(kind: FakeKind, options: FakeBackendOptions): FakeBackendHandle {
     : createFakeOneShotBackend(options);
 }
 
-/** A fixture over one fake, with the plans and expectations of one scenario. */
+interface FakeInstrumentation {
+  readonly diagnose?: FakeBackendOptions["diagnose"];
+  readonly open?: FakeBackendOptions["open"];
+}
+
+/** Fake mechanisms that are not part of the provider-neutral scenario row. */
+const FAKE_INSTRUMENTATION: Partial<
+  Record<BackendConformanceScenario, FakeInstrumentation>
+> = {
+  "validation-is-deterministic": {
+    diagnose: (_subject, filePath) => [
+      { filePath, reason: "the fixture always says this" },
+    ],
+  },
+  "a-failed-open-leaves-nothing-behind": {
+    open: { open: "fails", reason: "the provider said no" },
+  },
+};
+
+/** A fixture over one fake, composed from the shared row and a fake script. */
 function fixtureOf(
   kind: FakeKind,
   runScripts: readonly FakeRunScript[],
-  parts: BackendConformanceFixtureParts,
-  extra?: {
-    readonly diagnose?: FakeBackendOptions["diagnose"];
-    readonly open?: FakeBackendOptions["open"];
-    readonly providerStopsOnRequest?: boolean;
-  },
-): BackendConformanceFixture {
+  row: BackendConformanceScenarioRow,
+  instrumentation: FakeInstrumentation | undefined,
+) {
   const handle = build(kind, {
     scripts: runScripts,
-    ...(parts.trace === undefined ? {} : { trace: parts.trace }),
-    ...(extra?.diagnose === undefined ? {} : { diagnose: extra.diagnose }),
-    ...(extra?.open === undefined ? {} : { open: extra.open }),
-    // Every scenario that cancels or holds a Run open waits on this gate, and
-    // nothing ever completes it: the cancel is what ends the Run.
+    ...(row.trace === undefined ? {} : { trace: row.trace }),
+    ...(instrumentation?.diagnose === undefined
+      ? {}
+      : { diagnose: instrumentation.diagnose }),
+    ...(instrumentation?.open === undefined
+      ? {}
+      : { open: instrumentation.open }),
     gates: { hold: holdGate() },
   });
   return {
     backend: handle.backend,
     profile: { ...profile, backend: handle.backend.id },
     counters: handle.counters,
-    providerStopsOnRequest: extra?.providerStopsOnRequest ?? true,
-    ...parts,
   };
 }
 
-/**
- * A gate nothing completes.
- *
- * Built per fixture so two fixtures cannot share one, and made outside an
- * Effect because a rig is plain data the suite runs later.
- */
+/** A gate nothing completes; cancellation is what releases the Run. */
 function holdGate(): Deferred.Deferred<void> {
   return Deferred.makeUnsafe<void>();
 }
@@ -127,847 +136,320 @@ const ORDINARY: readonly FakeStep[] = [
   { step: "complete" },
 ];
 
-/** The fake adapter's bound for a provider that contributes no next event. */
 const QUIET_PROVIDER_WAIT_MILLIS = 1_000;
 
-/** A policy with the bounds one scenario needs lowered. */
-function lowered(overrides: Partial<RuntimePolicy>): RuntimePolicy {
-  return { ...DEFAULT_RUNTIME_POLICY, ...overrides };
+/** One fake-vocabulary script sequence for every shared scenario. */
+const FAKE_SCRIPTS = {
+  "validation-is-deterministic": scripts(),
+  "open-creates-no-run": scripts(ORDINARY),
+  "capabilities-are-enforced": scripts([
+    { step: "await-control", confirm: true },
+    emitText("the answer"),
+    { step: "complete" },
+  ]),
+  "resume-or-honest-refusal": scripts(ORDINARY, ORDINARY),
+  "close-is-idempotent": scripts(ORDINARY),
+  "close-releases-every-resource": scripts(ORDINARY, ORDINARY),
+  "a-failed-open-leaves-nothing-behind": scripts(ORDINARY),
+  "one-active-run-per-subagent": scripts([
+    { step: "await-gate", gate: "hold" },
+    emitText("done"),
+  ]),
+  "observations-reduce-in-accepted-order": scripts(ORDINARY),
+  "exactly-one-ending-is-emitted": scripts([
+    emitText("the answer"),
+    { step: "decide", ending: { ending: "answered" } },
+    { step: "decide", ending: { ending: "cancelled", reason: "shutdown" } },
+    { step: "complete", ending: { ending: "cancelled", reason: "shutdown" } },
+  ]),
+  "cancellation-terminates-with-partial-output": scripts([
+    emitText("a partial answer"),
+    emitToolCall("bash", "c1"),
+    { step: "await-gate", gate: "hold" },
+    emitText("never said"),
+    { step: "complete" },
+  ]),
+  "a decided bundle survives a later cancel": scripts([
+    {
+      step: "decide",
+      reconciliation: { finalOutput: "the decided answer" },
+    },
+    { step: "await-gate", gate: "hold" },
+  ]),
+  "result-follows-scope-closure": scripts(ORDINARY),
+  "cleanup-observations-precede-the-core-ending": scripts([
+    {
+      step: "emit-in-finalizer",
+      observation: {
+        kind: "diagnostic",
+        diagnostic: {
+          category: "other",
+          message: "test-only cleanup observation",
+        },
+      },
+    },
+    emitText("the answer"),
+    { step: "complete" },
+  ]),
+  "a-failing-sink-cannot-strand-the-execution": scripts([
+    emitText("first"),
+    { step: "defect", message: "the adapter threw" },
+  ]),
+  "a-run-may-settle-with-no-observations": scripts([{ step: "hang" }]),
+  "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop": scripts([
+    emitText("a partial answer"),
+    { step: "hang-on-stop" },
+  ]),
+  "an-execution-settles-when-the-provider-goes-quiet": scripts([
+    {
+      step: "result-then-quiet",
+      waitMillis: QUIET_PROVIDER_WAIT_MILLIS,
+    },
+  ]),
+  "observations-carry-no-provider-vocabulary": scripts([
+    ...ORDINARY.slice(0, -1),
+    {
+      step: "emit",
+      observation: {
+        kind: "diagnostic",
+        diagnostic: runDiagnostic("other", "something happened"),
+      },
+    },
+    {
+      step: "emit",
+      observation: { kind: "activity", activity: "working" },
+    },
+    { step: "emit", observation: { kind: "model", model: "model-a" } },
+    {
+      step: "emit",
+      observation: { kind: "context", context: contextGauge(100) },
+    },
+    { step: "complete" },
+  ]),
+  "capacity-rejection-is-immediate": scripts([
+    { step: "await-gate", gate: "hold" },
+    emitText("done"),
+  ]),
+  "shutdown-rejects-new-work": scripts(ORDINARY),
+  "a-late-waiter-reads-the-stored-result": scripts(ORDINARY),
+  "an-evicted-result-answers-expired": scripts(ORDINARY),
+  "steering-admission-follows-the-declared-capability": scripts([
+    { step: "await-control", confirm: true },
+    { step: "await-control", confirm: true },
+    emitText("the answer"),
+    { step: "complete" },
+  ]),
+  "controls-are-delivered-serially-in-order": scripts([
+    emitText("under way"),
+    { step: "await-control", confirm: true },
+    { step: "await-control", confirm: true },
+    { step: "await-control", confirm: true },
+    emitText("the answer"),
+    { step: "complete" },
+  ]),
+  "a-control-cannot-leak-into-the-next-run": scripts(
+    [emitText("first"), { step: "await-gate", gate: "hold" }],
+    [
+      emitText("second"),
+      { step: "await-control", confirm: true },
+      { step: "await-gate", gate: "hold" },
+    ],
+  ),
+  "a-user-observation-appears-only-on-confirmation": scripts([
+    emitText("under way"),
+    { step: "await-control", confirm: true },
+    { step: "await-control", confirm: false },
+    emitText("the answer"),
+    { step: "complete" },
+  ]),
+  "a-full-mailbox-answers-immediately": scripts([
+    emitText("under way"),
+    { step: "await-gate", gate: "hold" },
+    { step: "complete" },
+  ]),
+  "a-closed-mailbox-refuses-after-cancel": scripts([
+    emitText("under way"),
+    { step: "await-gate", gate: "hold" },
+    { step: "complete" },
+  ]),
+  "usage-deltas-are-run-local": scripts(ORDINARY),
+  "reconciliation-does-not-double-count": scripts([
+    emitText("a partial answer"),
+    { step: "cumulative-usage", total: { input: 40, output: 10 } },
+    {
+      step: "complete",
+      reconciliation: { usage: { input: 50, output: 12 }, turns: 2 },
+    },
+  ]),
+  "context-occupancy-is-a-gauge": scripts([
+    {
+      step: "emit",
+      observation: { kind: "context", context: contextGauge(1_000) },
+    },
+    emitText("thinking"),
+    {
+      step: "emit",
+      observation: {
+        kind: "context",
+        context: contextGauge(1_800, 200_000),
+      },
+    },
+    emitText("the answer"),
+    { step: "complete" },
+  ]),
+  "a-replayed-transcript-adds-no-usage": scripts(
+    [
+      emitText("first answer"),
+      { step: "cumulative-usage", total: { input: 100 } },
+      { step: "complete" },
+    ],
+    [{ step: "replay-history" }, { step: "complete" }],
+  ),
+  "a-resumed-run-excludes-prior-usage": scripts(
+    [
+      emitText("first answer"),
+      { step: "cumulative-usage", total: { input: 100, output: 40 } },
+      { step: "complete" },
+    ],
+    [
+      emitText("second answer"),
+      { step: "cumulative-usage", total: { input: 175, output: 65 } },
+      { step: "complete" },
+    ],
+  ),
+  "only-the-repository-writes-snapshots": scripts(ORDINARY),
+  "projections-stay-within-their-limits": scripts([
+    ...Array.from({ length: 6 }, (_unused, index) =>
+      emitText(`message ${index}`),
+    ),
+    { step: "complete" },
+  ]),
+  "settlement-stores-the-result-exactly-once": scripts([
+    emitText("the answer"),
+    { step: "decide", ending: { ending: "answered" } },
+    { step: "decide", ending: { ending: "failed" } },
+    { step: "complete", ending: { ending: "failed" } },
+  ]),
+  "wait-and-result-observe-the-same-value": scripts(ORDINARY),
+  "a-notification-follows-storage": scripts(ORDINARY),
+  "a-notification-retry-cannot-duplicate-or-alter-settlement":
+    scripts(ORDINARY),
+} satisfies Record<BackendConformanceScenario, readonly FakeRunScript[]>;
+
+/**
+ * Scripts that must not wait for Controls the one-shot capability rejects
+ * before they can cross the backend seam.
+ */
+const ONE_SHOT_SCRIPT_OVERRIDES: Partial<
+  Record<BackendConformanceScenario, readonly FakeRunScript[]>
+> = {
+  "capabilities-are-enforced": scripts([
+    emitText("the answer"),
+    { step: "complete" },
+  ]),
+  "steering-admission-follows-the-declared-capability": scripts([
+    emitText("the answer"),
+    { step: "complete" },
+  ]),
+};
+
+/** Capability-shaped row replacements needed by the non-skipped one-shot cases. */
+const ONE_SHOT_OVERRIDES: Partial<
+  Record<BackendConformanceScenario, BackendConformanceScenarioOverride>
+> = {
+  "capabilities-are-enforced": {
+    reason: "the one-shot fake declares no steering capability",
+    replace: {
+      expected: {
+        runs: [{ status: "completed", steerOutcomes: ["unsupported"] }],
+        controlsReceived: [],
+      },
+    },
+  },
+  "resume-or-honest-refusal": {
+    reason: "the one-shot fake honestly refuses resume after its first Run",
+    replace: {
+      plans: [{}],
+      expected: { runs: [{ status: "completed" }] },
+    },
+  },
+  "close-releases-every-resource": {
+    reason: "the one-shot fake has no resumable second Run to release",
+    replace: {
+      plans: [{}],
+      expected: { runs: [{ status: "completed" }] },
+    },
+  },
+  "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop": {
+    reason:
+      "the one-shot fake cannot attempt resume after bounded cancellation",
+    replace: {
+      plans: [{ cancel: true, advanceClockAfterCancelMillis: 2_001 }],
+    },
+  },
+  "an-execution-settles-when-the-provider-goes-quiet": {
+    reason: "the one-shot fake proves the bound without admitting guidance",
+    replace: {
+      plans: [{ advanceClockMillis: QUIET_PROVIDER_WAIT_MILLIS + 1 }],
+      expected: {
+        runs: [{ status: "completed", diagnosticCategories: ["control"] }],
+      },
+    },
+  },
+  "steering-admission-follows-the-declared-capability": {
+    reason: "the one-shot fake declares that steering is unsupported",
+    replace: {
+      expected: {
+        runs: [
+          {
+            status: "completed",
+            steerOutcomes: ["unsupported", "unsupported"],
+          },
+        ],
+        controlsReceived: [],
+      },
+    },
+  },
+};
+
+/** Structural declarations for one of the two fake conformance rigs. */
+export function fakeConformanceStructure(
+  kind: FakeKind,
+): BackendConformanceRigStructure {
+  const oneShot = kind === "one-shot";
+  return conformanceRigStructure({
+    name: oneShot ? "FakeOneShotBackend" : "FakeResumableBackend",
+    scripts: FAKE_SCRIPTS,
+    skips: oneShot ? ONE_SHOT_SKIPS : [],
+    overrides: oneShot ? ONE_SHOT_OVERRIDES : {},
+  });
 }
 
 export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
   const skips = kind === "one-shot" ? ONE_SHOT_SKIPS : [];
   const name =
     kind === "resumable" ? "FakeResumableBackend" : "FakeOneShotBackend";
-  const steerable = kind === "resumable";
 
   return {
     name,
     build(scenario) {
       if (skips.includes(scenario)) return undefined;
-
-      switch (scenario) {
-        case "validation-is-deterministic":
-          return fixtureOf(
-            kind,
-            scripts(),
-            {
-              plans: [],
-              expected: {
-                runs: [],
-                profileDiagnostics: ["the fixture always says this"],
-              },
-            },
-            {
-              diagnose: (_subject, filePath) => [
-                { filePath, reason: "the fixture always says this" },
-              ],
-            },
-          );
-
-        case "open-creates-no-run":
-          return fixtureOf(kind, scripts(ORDINARY), {
-            plans: [],
-            expected: { runs: [] },
-          });
-
-        case "capabilities-are-enforced":
-          return fixtureOf(
-            kind,
-            scripts([
-              ...(steerable
-                ? [{ step: "await-control" as const, confirm: true }]
-                : []),
-              emitText("the answer"),
-              { step: "complete" },
-            ]),
-            {
-              plans: [
-                { controls: [{ type: "steer", text: "an offered Control" }] },
-              ],
-              expected: {
-                runs: [
-                  {
-                    status: "completed",
-                    steerOutcomes: [steerable ? "accepted" : "unsupported"],
-                  },
-                ],
-                controlsReceived: steerable ? ["an offered Control"] : [],
-              },
-            },
-          );
-
-        case "resume-or-honest-refusal":
-          return fixtureOf(kind, scripts(ORDINARY, ORDINARY), {
-            plans: steerable ? [{}, {}] : [{}],
-            expected: {
-              runs: steerable
-                ? [{ status: "completed" }, { status: "completed" }]
-                : [{ status: "completed" }],
-            },
-          });
-
-        case "close-is-idempotent":
-          // The Session Scope closes the BackendAgent once, however many ways
-          // it is reached: shutdown closes the Subagent, and the scope closes
-          // it again on the way out.
-          return fixtureOf(kind, scripts(ORDINARY), {
-            plans: [{}],
-            expected: { runs: [{ status: "completed" }] },
-          });
-
-        case "close-releases-every-resource":
-          return fixtureOf(kind, scripts(ORDINARY, ORDINARY), {
-            plans: steerable ? [{}, {}] : [{}],
-            expected: {
-              runs: steerable
-                ? [{ status: "completed" }, { status: "completed" }]
-                : [{ status: "completed" }],
-            },
-          });
-
-        case "a-failed-open-leaves-nothing-behind":
-          return fixtureOf(
-            kind,
-            scripts(ORDINARY),
-            {
-              plans: [],
-              concurrentStarts: 1,
-              expected: { runs: [], startOutcomes: ["backend unavailable"] },
-            },
-            { open: { open: "fails", reason: "the provider said no" } },
-          );
-
-        case "one-active-run-per-subagent":
-          return fixtureOf(
-            kind,
-            scripts([{ step: "await-gate", gate: "hold" }, emitText("done")]),
-            {
-              plans: [{ cancel: true }],
-              resumeWhileRunning: true,
-              expected: {
-                runs: [{ status: "cancelled" }],
-                resumeWhileRunning: "Subagent already running",
-              },
-            },
-          );
-
-        case "observations-reduce-in-accepted-order":
-          return fixtureOf(kind, scripts(ORDINARY), {
-            plans: [{}],
-            expected: {
-              runs: [
-                {
-                  status: "completed",
-                  transcriptTexts: ["", "the answer"],
-                  finalOutput: "the answer",
-                  toolStatuses: ["completed"],
-                },
-              ],
-            },
-          });
-
-        case "exactly-one-ending-is-emitted":
-          return fixtureOf(
-            kind,
-            scripts([
-              emitText("the answer"),
-              { step: "decide", ending: { ending: "answered" } },
-              {
-                step: "decide",
-                ending: { ending: "cancelled", reason: "shutdown" },
-              },
-              {
-                step: "complete",
-                ending: { ending: "cancelled", reason: "shutdown" },
-              },
-            ]),
-            {
-              plans: [{}],
-              // The first decision supplies the one ending the core emits.
-              expected: {
-                runs: [{ status: "completed", finalOutput: "the answer" }],
-              },
-            },
-          );
-
-        case "cancellation-terminates-with-partial-output":
-          return fixtureOf(
-            kind,
-            scripts([
-              emitText("a partial answer"),
-              emitToolCall("bash", "c1"),
-              { step: "await-gate", gate: "hold" },
-              emitText("never said"),
-              { step: "complete" },
-            ]),
-            {
-              plans: [{ cancel: true }],
-              expected: {
-                runs: [
-                  {
-                    status: "cancelled",
-                    cancellationReason: "requested",
-                    finalOutput: "a partial answer",
-                    toolStatuses: ["cancelled"],
-                  },
-                ],
-              },
-            },
-          );
-
-        case "a decided bundle survives a later cancel":
-          return fixtureOf(
-            kind,
-            scripts([
-              {
-                step: "decide",
-                reconciliation: { finalOutput: "the decided answer" },
-              },
-              { step: "await-gate", gate: "hold" },
-            ]),
-            {
-              plans: [{ cancel: true, cancelAfterDecision: true }],
-              trace: [],
-              expected: {
-                runs: [
-                  {
-                    status: "completed",
-                    finalOutput: "the decided answer",
-                    diagnosticCategories: ["reconciliation-difference"],
-                  },
-                ],
-                reconciliationDifferences: 1,
-                duplicateDecisions: 0,
-              },
-            },
-          );
-
-        case "result-follows-scope-closure":
-          return fixtureOf(kind, scripts(ORDINARY), {
-            plans: [{}],
-            trace: [],
-            expected: { runs: [{ status: "completed" }] },
-          });
-
-        case "cleanup-observations-precede-the-core-ending":
-          return fixtureOf(
-            kind,
-            scripts([
-              {
-                step: "emit-in-finalizer",
-                observation: {
-                  kind: "diagnostic",
-                  diagnostic: {
-                    category: "other",
-                    message: "test-only cleanup observation",
-                  },
-                },
-              },
-              emitText("the answer"),
-              { step: "complete" },
-            ]),
-            {
-              plans: [{}],
-              expected: {
-                runs: [
-                  {
-                    status: "completed",
-                    finalOutput: "the answer",
-                    transcriptTexts: ["the answer"],
-                    diagnosticCategories: ["other"],
-                  },
-                ],
-              },
-            },
-          );
-
-        case "a-failing-sink-cannot-strand-the-execution":
-          return fixtureOf(
-            kind,
-            scripts([
-              emitText("first"),
-              { step: "defect", message: "the adapter threw" },
-            ]),
-            {
-              plans: [{}],
-              expected: {
-                runs: [
-                  {
-                    status: "failed",
-                    finalOutput: "first",
-                    diagnosticCategories: ["backend-failure"],
-                  },
-                ],
-              },
-            },
-          );
-
-        case "a-run-may-settle-with-no-observations":
-          return fixtureOf(kind, scripts([{ step: "hang" }]), {
-            plans: [{ cancel: true }],
-            expected: {
-              runs: [{ status: "cancelled", cancellationReason: "requested" }],
-            },
-          });
-
-        case "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop":
-          return fixtureOf(
-            kind,
-            scripts([emitText("a partial answer"), { step: "hang-on-stop" }]),
-            {
-              testClock: true,
-              policy: lowered({ cleanupBudgetMillis: 2_000 }),
-              plans: [
-                {
-                  cancel: true,
-                  advanceClockAfterCancelMillis: 2_001,
-                  resumeAfterSettlement: steerable,
-                },
-              ],
-              expected: {
-                runs: [
-                  {
-                    status: "cancelled",
-                    cancellationReason: "requested",
-                    finalOutput: "a partial answer",
-                    diagnosticCategories: ["cleanup-escalation"],
-                  },
-                ],
-              },
-            },
-            { providerStopsOnRequest: false },
-          );
-
-        case "an-execution-settles-when-the-provider-goes-quiet":
-          return fixtureOf(
-            kind,
-            scripts([
-              {
-                step: "result-then-quiet",
-                waitMillis: QUIET_PROVIDER_WAIT_MILLIS,
-              },
-            ]),
-            {
-              testClock: true,
-              plans: [
-                {
-                  ...(steerable
-                    ? {
-                        controls: [
-                          { type: "steer", text: "guidance awaiting a turn" },
-                        ],
-                      }
-                    : {}),
-                  advanceClockMillis: QUIET_PROVIDER_WAIT_MILLIS + 1,
-                },
-              ],
-              expected: {
-                runs: [
-                  {
-                    status: "completed",
-                    diagnosticCategories: ["control"],
-                    ...(steerable ? { steerOutcomes: ["accepted"] } : {}),
-                  },
-                ],
-                ...(steerable
-                  ? { controlsReceived: ["guidance awaiting a turn"] }
-                  : {}),
-              },
-            },
-          );
-
-        case "observations-carry-no-provider-vocabulary":
-          return fixtureOf(
-            kind,
-            scripts([
-              ...ORDINARY.slice(0, -1),
-              {
-                step: "emit",
-                observation: {
-                  kind: "diagnostic",
-                  diagnostic: runDiagnostic("other", "something happened"),
-                },
-              },
-              {
-                step: "emit",
-                observation: { kind: "activity", activity: "working" },
-              },
-              {
-                step: "emit",
-                observation: { kind: "model", model: "model-a" },
-              },
-              {
-                step: "emit",
-                observation: { kind: "context", context: contextGauge(100) },
-              },
-              { step: "complete" },
-            ]),
-            {
-              plans: [{}],
-              expected: { runs: [{ status: "completed" }] },
-            },
-          );
-
-        case "capacity-rejection-is-immediate":
-          return fixtureOf(
-            kind,
-            scripts([{ step: "await-gate", gate: "hold" }, emitText("done")]),
-            {
-              plans: [{ cancel: true }],
-              policy: lowered({ maxActiveRuns: 1 }),
-              concurrentStarts: 2,
-              expected: {
-                runs: [{ status: "cancelled" }],
-                startOutcomes: ["started", "at capacity"],
-              },
-            },
-          );
-
-        case "shutdown-rejects-new-work":
-          return fixtureOf(kind, scripts(ORDINARY), {
-            plans: [],
-            startsAfterClose: 1,
-            expected: { runs: [], startOutcomes: ["shutting down"] },
-          });
-
-        case "a-late-waiter-reads-the-stored-result":
-          return fixtureOf(kind, scripts(ORDINARY), {
-            plans: [{ waitAfterSettlement: true }],
-            expected: { runs: [{ status: "completed" }] },
-          });
-
-        case "an-evicted-result-answers-expired":
-          return fixtureOf(kind, scripts(ORDINARY), {
-            plans: [{}],
-            // Room for a couple of results, so filler forces the choice.
-            policy: lowered({ maxResultBytes: 4_096, resultStoreBytes: 8_192 }),
-            evictOldest: true,
-            expected: { runs: [{ status: "completed" }] },
-          });
-
-        case "steering-admission-follows-the-declared-capability": {
-          // The same two Controls are offered to both kinds of backend. What
-          // differs is only what each declared, which is the point.
-          return fixtureOf(
-            kind,
-            scripts([
-              ...(steerable
-                ? [
-                    { step: "await-control" as const, confirm: true },
-                    { step: "await-control" as const, confirm: true },
-                  ]
-                : []),
-              emitText("the answer"),
-              { step: "complete" },
-            ]),
-            {
-              plans: [
-                {
-                  controls: [
-                    { type: "steer", text: "first" },
-                    { type: "steer", text: "second" },
-                  ],
-                },
-              ],
-              expected: {
-                runs: [
-                  {
-                    status: "completed",
-                    steerOutcomes: steerable
-                      ? ["accepted", "accepted"]
-                      : ["unsupported", "unsupported"],
-                  },
-                ],
-                controlsReceived: steerable ? ["first", "second"] : [],
-              },
-            },
-          );
-        }
-
-        case "controls-are-delivered-serially-in-order":
-          return fixtureOf(
-            kind,
-            scripts([
-              emitText("under way"),
-              { step: "await-control", confirm: true },
-              { step: "await-control", confirm: true },
-              { step: "await-control", confirm: true },
-              emitText("the answer"),
-              { step: "complete" },
-            ]),
-            {
-              plans: [
-                {
-                  controls: ["first", "second", "third"].map((text) => ({
-                    type: "steer" as const,
-                    text,
-                  })),
-                },
-              ],
-              expected: {
-                runs: [
-                  {
-                    status: "completed",
-                    steerOutcomes: ["accepted", "accepted", "accepted"],
-                  },
-                ],
-                controlsReceived: ["first", "second", "third"],
-                maxConcurrentControls: 1,
-              },
-            },
-          );
-
-        case "a-control-cannot-leak-into-the-next-run":
-          return fixtureOf(
-            kind,
-            scripts(
-              // The first Run is offered a Control and never takes it: it is
-              // waiting when the cancel arrives, and cancellation discards
-              // what was admitted and never sent.
-              [emitText("first"), { step: "await-gate", gate: "hold" }],
-              // The second Run asks for one. Nothing is admitted to it, so it
-              // waits — and what releases it is its own mailbox closing when
-              // it is cancelled, with `undefined` meaning drained. If the
-              // first Run's Control could reach it, this is where it would.
-              [
-                emitText("second"),
-                { step: "await-control", confirm: true },
-                // Whatever the take answered, the Run cannot finish on its
-                // own: the cancel is what ends it, so the outcome does not
-                // depend on which of the two got there first.
-                { step: "await-gate", gate: "hold" },
-              ],
-            ),
-            {
-              plans: [
-                {
-                  controls: [{ type: "steer", text: "never taken" }],
-                  cancel: true,
-                },
-                { cancel: true },
-              ],
-              expected: {
-                runs: [
-                  {
-                    status: "cancelled",
-                    finalOutput: "first",
-                    steerOutcomes: ["accepted"],
-                  },
-                  { status: "cancelled", finalOutput: "second" },
-                ],
-                controlsReceived: [],
-              },
-            },
-          );
-
-        case "a-user-observation-appears-only-on-confirmation":
-          return fixtureOf(
-            kind,
-            scripts([
-              emitText("under way"),
-              { step: "await-control", confirm: true },
-              { step: "await-control", confirm: false },
-              emitText("the answer"),
-              { step: "complete" },
-            ]),
-            {
-              plans: [
-                {
-                  controls: ["confirmed", "unconfirmed"].map((text) => ({
-                    type: "steer" as const,
-                    text,
-                  })),
-                },
-              ],
-              expected: {
-                runs: [
-                  {
-                    status: "completed",
-                    // Only the confirmed one is in the transcript.
-                    transcriptTexts: ["under way", "confirmed", "the answer"],
-                  },
-                ],
-                controlsReceived: ["confirmed", "unconfirmed"],
-              },
-            },
-          );
-
-        case "a-full-mailbox-answers-immediately":
-          return fixtureOf(
-            kind,
-            scripts([
-              emitText("under way"),
-              { step: "await-gate", gate: "hold" },
-              { step: "complete" },
-            ]),
-            {
-              // Two fit; the third is refused at once with nothing queued.
-              policy: lowered({
-                controls: {
-                  maxPending: 2,
-                  maxMessageBytes: 16 * 1024,
-                  maxPendingBytes: 64 * 1024,
-                },
-              }),
-              plans: [{ floodControls: 3, cancel: true }],
-              expected: {
-                runs: [
-                  {
-                    status: "cancelled",
-                    floodOutcomes: ["accepted", "accepted", "mailbox full"],
-                  },
-                ],
-              },
-            },
-          );
-
-        case "a-closed-mailbox-refuses-after-cancel":
-          return fixtureOf(
-            kind,
-            scripts([
-              emitText("under way"),
-              { step: "await-gate", gate: "hold" },
-              { step: "complete" },
-            ]),
-            {
-              plans: [{ cancel: true, steerAfterCancel: true }],
-              expected: { runs: [{ status: "cancelled" }] },
-            },
-          );
-
-        case "usage-deltas-are-run-local":
-          return fixtureOf(kind, scripts(ORDINARY), {
-            plans: [{}],
-            expected: {
-              runs: [
-                {
-                  status: "completed",
-                  usageTotals: { input: 40, output: 10 },
-                  turns: 1,
-                },
-              ],
-            },
-          });
-
-        case "reconciliation-does-not-double-count":
-          return fixtureOf(
-            kind,
-            scripts([
-              emitText("a partial answer"),
-              { step: "cumulative-usage", total: { input: 40, output: 10 } },
-              {
-                step: "complete",
-                reconciliation: { usage: { input: 50, output: 12 }, turns: 2 },
-              },
-            ]),
-            {
-              plans: [{}],
-              expected: {
-                runs: [
-                  {
-                    status: "completed",
-                    // Replaced, not 40 + 50.
-                    usageTotals: { input: 50, output: 12 },
-                    turns: 2,
-                    // The snapshot disagreed about usage and raised the turn
-                    // count, so the Run says so in its own diagnostics.
-                    diagnosticCategories: ["reconciliation-difference"],
-                  },
-                ],
-                reconciliationDifferences: 1,
-              },
-            },
-          );
-
-        case "context-occupancy-is-a-gauge":
-          return fixtureOf(
-            kind,
-            scripts([
-              {
-                step: "emit",
-                observation: { kind: "context", context: contextGauge(1_000) },
-              },
-              emitText("thinking"),
-              {
-                step: "emit",
-                observation: {
-                  kind: "context",
-                  context: contextGauge(1_800, 200_000),
-                },
-              },
-              emitText("the answer"),
-              { step: "complete" },
-            ]),
-            {
-              plans: [{}],
-              expected: {
-                runs: [
-                  {
-                    status: "completed",
-                    // The latest reading, not 1000 + 1800.
-                    context: { tokens: 1_800, window: 200_000 },
-                  },
-                ],
-              },
-            },
-          );
-
-        case "a-replayed-transcript-adds-no-usage":
-          return fixtureOf(
-            kind,
-            scripts(
-              [
-                emitText("first answer"),
-                { step: "cumulative-usage", total: { input: 100 } },
-                { step: "complete" },
-              ],
-              [
-                // The provider replays the conversation, then does no work.
-                { step: "replay-history" },
-                { step: "complete" },
-              ],
-            ),
-            {
-              plans: [{}, {}],
-              expected: {
-                runs: [
-                  {
-                    status: "completed",
-                    usageTotals: { input: 100 },
-                    turns: 1,
-                  },
-                  { status: "completed", usageTotals: { input: 0 }, turns: 0 },
-                ],
-              },
-            },
-          );
-
-        case "a-resumed-run-excludes-prior-usage":
-          return fixtureOf(
-            kind,
-            scripts(
-              [
-                emitText("first answer"),
-                { step: "cumulative-usage", total: { input: 100, output: 40 } },
-                { step: "complete" },
-              ],
-              [
-                emitText("second answer"),
-                { step: "cumulative-usage", total: { input: 175, output: 65 } },
-                { step: "complete" },
-              ],
-            ),
-            {
-              plans: [{}, {}],
-              expected: {
-                runs: [
-                  {
-                    status: "completed",
-                    usageTotals: { input: 100, output: 40 },
-                  },
-                  {
-                    status: "completed",
-                    // The difference alone, though the provider's cumulative
-                    // reading covers both Runs.
-                    usageTotals: { input: 75, output: 25 },
-                  },
-                ],
-              },
-            },
-          );
-
-        case "only-the-repository-writes-snapshots":
-          return fixtureOf(kind, scripts(ORDINARY), {
-            plans: [{}],
-            expected: { runs: [{ status: "completed" }] },
-          });
-
-        case "projections-stay-within-their-limits":
-          return fixtureOf(
-            kind,
-            scripts([
-              ...Array.from({ length: 6 }, (_unused, index) =>
-                emitText(`message ${index}`),
-              ),
-              { step: "complete" },
-            ]),
-            {
-              // Tight enough that the Run overruns them and the bounding has
-              // to say so.
-              policy: lowered({
-                projection: {
-                  ...DEFAULT_PROJECTION_BOUNDS,
-                  maxTranscriptItems: 2,
-                },
-              }),
-              plans: [{}],
-              expected: {
-                runs: [
-                  {
-                    status: "completed",
-                    transcriptTexts: ["message 4", "message 5"],
-                  },
-                ],
-              },
-            },
-          );
-
-        case "settlement-stores-the-result-exactly-once":
-          // Two decisions compete, so the once-only decision slot and the
-          // one-commit settlement path are exercised together.
-          return fixtureOf(
-            kind,
-            scripts([
-              emitText("the answer"),
-              { step: "decide", ending: { ending: "answered" } },
-              { step: "decide", ending: { ending: "failed" } },
-              { step: "complete", ending: { ending: "failed" } },
-            ]),
-            {
-              plans: [{}],
-              expected: {
-                runs: [{ status: "completed", finalOutput: "the answer" }],
-                notifications: 1,
-              },
-            },
-          );
-
-        case "wait-and-result-observe-the-same-value":
-          return fixtureOf(kind, scripts(ORDINARY), {
-            plans: [{}],
-            expected: { runs: [{ status: "completed" }] },
-          });
-
-        case "a-notification-follows-storage":
-          return fixtureOf(kind, scripts(ORDINARY), {
-            plans: [{}],
-            expected: { runs: [{ status: "completed" }], notifications: 1 },
-          });
-
-        case "a-notification-retry-cannot-duplicate-or-alter-settlement":
-          return fixtureOf(kind, scripts(ORDINARY), {
-            plans: [{}],
-            sinkFailsOnce: true,
-            // No delay between attempts, so the retry runs without a clock.
-            policy: lowered({
-              deliveryRetryBudget: { attempts: 3, delayMillis: 0 },
-            }),
-            expected: { runs: [{ status: "completed" }], notifications: 1 },
-          });
-      }
+      const scriptOverride =
+        kind === "one-shot" ? ONE_SHOT_SCRIPT_OVERRIDES[scenario] : undefined;
+      const rowOverride =
+        kind === "one-shot" ? ONE_SHOT_OVERRIDES[scenario] : undefined;
+      return composeConformanceFixture({
+        row: BACKEND_CONFORMANCE_SCENARIO_TABLE[scenario],
+        script: scriptOverride ?? FAKE_SCRIPTS[scenario],
+        ...(rowOverride === undefined ? {} : { override: rowOverride }),
+        build: (script, row) =>
+          fixtureOf(kind, script, row, FAKE_INSTRUMENTATION[scenario]),
+      });
     },
   };
 }
 
-/**
- * The scenarios a rig for this fake is expected to skip.
- *
- * A backend that declares every capability skips nothing: every scenario is
- * written so that it means something for whichever capabilities the backend
- * under test declared, and a skip therefore always names a capability the
- * backend does not have.
- */
+/** The scenarios a rig for this fake is expected to skip. */
 export function fakeConformanceSkips(
   kind: FakeKind,
 ): readonly BackendConformanceScenario[] {

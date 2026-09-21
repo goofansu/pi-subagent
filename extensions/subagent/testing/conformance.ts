@@ -45,6 +45,7 @@ import type {
   ToolEntryStatus,
   UsageTotals,
 } from "../domain/index.ts";
+import { DEFAULT_PROJECTION_BOUNDS } from "../domain/index.ts";
 import { sessionRuntimeLayer } from "../runtime/composition.ts";
 import {
   createRuntimeCounters,
@@ -230,13 +231,8 @@ export interface BackendConformanceExpectation {
   readonly duplicateDecisions?: number;
 }
 
-export interface BackendConformanceFixture {
-  readonly backend: Backend;
-  readonly profile: Profile;
-  /** Retained-resource counters, read after the Session Scope closes. */
-  readonly counters: () => ResourceCountersSnapshot;
-  /** Whether this fixture's provider cooperates with execution interruption. */
-  readonly providerStopsOnRequest: boolean;
+/** One provider-neutral row in the shared scenario table. */
+export interface BackendConformanceScenarioRow {
   /** One plan per Run the suite should drive. Empty means drive none. */
   readonly plans: readonly ConformanceRunPlan[];
   readonly expected: BackendConformanceExpectation;
@@ -256,13 +252,568 @@ export interface BackendConformanceFixture {
   readonly evictOldest?: boolean;
   /** Replace the runtime clock for a scenario that proves a time bound. */
   readonly testClock?: boolean;
+  /** Override the rig's ordinary cooperative-stop declaration. */
+  readonly providerStopsOnRequest?: boolean;
 }
 
-/** Fields supplied by every rig's fixture builder rather than each scenario. */
-export type BackendConformanceFixtureParts = Omit<
-  BackendConformanceFixture,
-  "backend" | "profile" | "counters" | "providerStopsOnRequest"
->;
+/** A composed row whose driver levers are all explicit. */
+export interface ComposedBackendConformanceScenarioRow {
+  readonly plans: readonly ConformanceRunPlan[];
+  readonly expected: BackendConformanceExpectation;
+  readonly trace: string[] | undefined;
+  readonly policy: RuntimePolicy | undefined;
+  readonly concurrentStarts: number;
+  readonly startsAfterClose: number;
+  readonly resumeWhileRunning: boolean;
+  readonly sinkFailsOnce: boolean;
+  readonly evictOldest: boolean;
+  readonly testClock: boolean;
+  readonly providerStopsOnRequest: boolean;
+}
+
+/** Provider-shaped fixture data plus its required, composed scenario row. */
+export interface BackendConformanceFixture {
+  readonly backend: Backend;
+  readonly profile: Profile;
+  /** Retained-resource counters, read after the Session Scope closes. */
+  readonly counters: () => ResourceCountersSnapshot;
+  readonly scenario: ComposedBackendConformanceScenarioRow;
+}
+
+/** A provider-shaped replacement of named row fields, with its rationale. */
+export interface BackendConformanceScenarioOverride {
+  readonly reason: string;
+  /** Request fresh fixture-local trace storage without supplying its contents. */
+  readonly trace?: true;
+  /** Trace storage is declared separately and cannot be replaced or shared. */
+  readonly replace: Partial<Omit<BackendConformanceScenarioRow, "trace">>;
+}
+
+/** A policy with only the bounds owned by one scenario changed. */
+const lowered = (overrides: Partial<RuntimePolicy>): RuntimePolicy => ({
+  ...DEFAULT_RUNTIME_POLICY,
+  ...overrides,
+});
+
+/**
+ * The suite's one declaration of what every scenario does and expects.
+ *
+ * `satisfies` keeps each row's useful literal shape while making omission of
+ * any scenario a compile error. Provider scripts and instrumentation do not
+ * belong here; rigs add those through `composeConformanceFixture`.
+ */
+export const BACKEND_CONFORMANCE_SCENARIO_TABLE = {
+  "validation-is-deterministic": {
+    plans: [],
+    expected: {
+      runs: [],
+      profileDiagnostics: ["the fixture always says this"],
+    },
+  },
+  "open-creates-no-run": { plans: [], expected: { runs: [] } },
+  "capabilities-are-enforced": {
+    plans: [{ controls: [{ type: "steer", text: "an offered Control" }] }],
+    expected: {
+      runs: [{ status: "completed", steerOutcomes: ["accepted"] }],
+      controlsReceived: ["an offered Control"],
+    },
+  },
+  "resume-or-honest-refusal": {
+    plans: [{}, {}],
+    expected: {
+      runs: [{ status: "completed" }, { status: "completed" }],
+    },
+  },
+  "close-is-idempotent": {
+    plans: [{}],
+    expected: { runs: [{ status: "completed" }] },
+  },
+  "close-releases-every-resource": {
+    plans: [{}, {}],
+    expected: {
+      runs: [{ status: "completed" }, { status: "completed" }],
+    },
+  },
+  "a-failed-open-leaves-nothing-behind": {
+    plans: [],
+    concurrentStarts: 1,
+    expected: { runs: [], startOutcomes: ["backend unavailable"] },
+  },
+  "one-active-run-per-subagent": {
+    plans: [{ cancel: true }],
+    resumeWhileRunning: true,
+    expected: {
+      runs: [{ status: "cancelled" }],
+      resumeWhileRunning: "Subagent already running",
+    },
+  },
+  "observations-reduce-in-accepted-order": {
+    plans: [{}],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          transcriptTexts: ["", "the answer"],
+          finalOutput: "the answer",
+          toolStatuses: ["completed"],
+        },
+      ],
+    },
+  },
+  "exactly-one-ending-is-emitted": {
+    plans: [{}],
+    expected: {
+      runs: [{ status: "completed", finalOutput: "the answer" }],
+    },
+  },
+  "cancellation-terminates-with-partial-output": {
+    plans: [{ cancel: true }],
+    expected: {
+      runs: [
+        {
+          status: "cancelled",
+          cancellationReason: "requested",
+          finalOutput: "a partial answer",
+          toolStatuses: ["cancelled"],
+        },
+      ],
+    },
+  },
+  "a decided bundle survives a later cancel": {
+    plans: [{ cancel: true, cancelAfterDecision: true }],
+    trace: [],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          finalOutput: "the decided answer",
+          diagnosticCategories: ["reconciliation-difference"],
+        },
+      ],
+      reconciliationDifferences: 1,
+      duplicateDecisions: 0,
+    },
+  },
+  "result-follows-scope-closure": {
+    plans: [{}],
+    trace: [],
+    expected: { runs: [{ status: "completed" }] },
+  },
+  "cleanup-observations-precede-the-core-ending": {
+    plans: [{}],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          finalOutput: "the answer",
+          transcriptTexts: ["the answer"],
+          diagnosticCategories: ["other"],
+        },
+      ],
+    },
+  },
+  "a-failing-sink-cannot-strand-the-execution": {
+    plans: [{}],
+    expected: {
+      runs: [
+        {
+          status: "failed",
+          finalOutput: "first",
+          diagnosticCategories: ["backend-failure"],
+        },
+      ],
+    },
+  },
+  "a-run-may-settle-with-no-observations": {
+    plans: [{ cancel: true }],
+    expected: {
+      runs: [{ status: "cancelled", cancellationReason: "requested" }],
+    },
+  },
+  "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop": {
+    testClock: true,
+    policy: lowered({ cleanupBudgetMillis: 2_000 }),
+    plans: [
+      {
+        cancel: true,
+        advanceClockAfterCancelMillis: 2_001,
+        resumeAfterSettlement: true,
+      },
+    ],
+    providerStopsOnRequest: false,
+    expected: {
+      runs: [
+        {
+          status: "cancelled",
+          cancellationReason: "requested",
+          finalOutput: "a partial answer",
+          diagnosticCategories: ["cleanup-escalation"],
+        },
+      ],
+    },
+  },
+  "an-execution-settles-when-the-provider-goes-quiet": {
+    testClock: true,
+    plans: [
+      {
+        controls: [{ type: "steer", text: "guidance awaiting a turn" }],
+        advanceClockMillis: 1_001,
+      },
+    ],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          diagnosticCategories: ["control"],
+          steerOutcomes: ["accepted"],
+        },
+      ],
+      controlsReceived: ["guidance awaiting a turn"],
+    },
+  },
+  "observations-carry-no-provider-vocabulary": {
+    plans: [{}],
+    expected: { runs: [{ status: "completed" }] },
+  },
+  "capacity-rejection-is-immediate": {
+    plans: [{ cancel: true }],
+    policy: lowered({ maxActiveRuns: 1 }),
+    concurrentStarts: 2,
+    expected: {
+      runs: [{ status: "cancelled" }],
+      startOutcomes: ["started", "at capacity"],
+    },
+  },
+  "shutdown-rejects-new-work": {
+    plans: [],
+    startsAfterClose: 1,
+    expected: { runs: [], startOutcomes: ["shutting down"] },
+  },
+  "a-late-waiter-reads-the-stored-result": {
+    plans: [{ waitAfterSettlement: true }],
+    expected: { runs: [{ status: "completed" }] },
+  },
+  "an-evicted-result-answers-expired": {
+    plans: [{}],
+    policy: lowered({ maxResultBytes: 4_096, resultStoreBytes: 8_192 }),
+    evictOldest: true,
+    expected: { runs: [{ status: "completed" }] },
+  },
+  "steering-admission-follows-the-declared-capability": {
+    plans: [
+      {
+        controls: [
+          { type: "steer", text: "first" },
+          { type: "steer", text: "second" },
+        ],
+      },
+    ],
+    expected: {
+      runs: [{ status: "completed", steerOutcomes: ["accepted", "accepted"] }],
+      controlsReceived: ["first", "second"],
+    },
+  },
+  "controls-are-delivered-serially-in-order": {
+    plans: [
+      {
+        controls: ["first", "second", "third"].map((text) => ({
+          type: "steer" as const,
+          text,
+        })),
+      },
+    ],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          steerOutcomes: ["accepted", "accepted", "accepted"],
+        },
+      ],
+      controlsReceived: ["first", "second", "third"],
+      maxConcurrentControls: 1,
+    },
+  },
+  "a-control-cannot-leak-into-the-next-run": {
+    plans: [
+      {
+        controls: [{ type: "steer", text: "never taken" }],
+        cancel: true,
+      },
+      { cancel: true },
+    ],
+    expected: {
+      runs: [
+        {
+          status: "cancelled",
+          finalOutput: "first",
+          steerOutcomes: ["accepted"],
+        },
+        { status: "cancelled", finalOutput: "second" },
+      ],
+      controlsReceived: [],
+    },
+  },
+  "a-user-observation-appears-only-on-confirmation": {
+    plans: [
+      {
+        controls: ["confirmed", "unconfirmed"].map((text) => ({
+          type: "steer" as const,
+          text,
+        })),
+      },
+    ],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          transcriptTexts: ["under way", "confirmed", "the answer"],
+        },
+      ],
+      controlsReceived: ["confirmed", "unconfirmed"],
+    },
+  },
+  "a-full-mailbox-answers-immediately": {
+    policy: lowered({
+      controls: {
+        maxPending: 2,
+        maxMessageBytes: 16 * 1024,
+        maxPendingBytes: 64 * 1024,
+      },
+    }),
+    plans: [{ floodControls: 3, cancel: true }],
+    expected: {
+      runs: [
+        {
+          status: "cancelled",
+          floodOutcomes: ["accepted", "accepted", "mailbox full"],
+        },
+      ],
+    },
+  },
+  "a-closed-mailbox-refuses-after-cancel": {
+    plans: [{ cancel: true, steerAfterCancel: true }],
+    expected: { runs: [{ status: "cancelled" }] },
+  },
+  "usage-deltas-are-run-local": {
+    plans: [{}],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          usageTotals: { input: 40, output: 10 },
+          turns: 1,
+        },
+      ],
+    },
+  },
+  "reconciliation-does-not-double-count": {
+    plans: [{}],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          usageTotals: { input: 50, output: 12 },
+          turns: 2,
+          diagnosticCategories: ["reconciliation-difference"],
+        },
+      ],
+      reconciliationDifferences: 1,
+    },
+  },
+  "context-occupancy-is-a-gauge": {
+    plans: [{}],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          context: { tokens: 1_800, window: 200_000 },
+        },
+      ],
+    },
+  },
+  "a-replayed-transcript-adds-no-usage": {
+    plans: [{}, {}],
+    expected: {
+      runs: [
+        { status: "completed", usageTotals: { input: 100 }, turns: 1 },
+        { status: "completed", usageTotals: { input: 0 }, turns: 0 },
+      ],
+    },
+  },
+  "a-resumed-run-excludes-prior-usage": {
+    plans: [{}, {}],
+    expected: {
+      runs: [
+        { status: "completed", usageTotals: { input: 100, output: 40 } },
+        { status: "completed", usageTotals: { input: 75, output: 25 } },
+      ],
+    },
+  },
+  "only-the-repository-writes-snapshots": {
+    plans: [{}],
+    expected: { runs: [{ status: "completed" }] },
+  },
+  "projections-stay-within-their-limits": {
+    policy: lowered({
+      projection: {
+        ...DEFAULT_PROJECTION_BOUNDS,
+        maxTranscriptItems: 2,
+      },
+    }),
+    plans: [{}],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          transcriptTexts: ["message 4", "message 5"],
+        },
+      ],
+    },
+  },
+  "settlement-stores-the-result-exactly-once": {
+    plans: [{}],
+    expected: {
+      runs: [{ status: "completed", finalOutput: "the answer" }],
+      notifications: 1,
+    },
+  },
+  "wait-and-result-observe-the-same-value": {
+    plans: [{}],
+    expected: { runs: [{ status: "completed" }] },
+  },
+  "a-notification-follows-storage": {
+    plans: [{}],
+    expected: { runs: [{ status: "completed" }], notifications: 1 },
+  },
+  "a-notification-retry-cannot-duplicate-or-alter-settlement": {
+    plans: [{}],
+    sinkFailsOnce: true,
+    policy: lowered({
+      deliveryRetryBudget: { attempts: 3, delayMillis: 0 },
+    }),
+    expected: { runs: [{ status: "completed" }], notifications: 1 },
+  },
+} satisfies Record<BackendConformanceScenario, BackendConformanceScenarioRow>;
+
+/** The data needed to prove one rig covers the shared scenario table. */
+export interface BackendConformanceRigStructure {
+  readonly name: string;
+  readonly scriptedScenarios: readonly string[];
+  readonly skips: readonly string[];
+  readonly overrides: readonly {
+    readonly scenario: string;
+    readonly reason: string;
+  }[];
+}
+
+/** Describe a rig's declarations without widening the rig execution seam. */
+export function conformanceRigStructure(options: {
+  readonly name: string;
+  readonly scripts: Readonly<Record<string, unknown>>;
+  readonly skips: readonly BackendConformanceScenario[];
+  readonly overrides: Readonly<
+    Partial<
+      Record<BackendConformanceScenario, BackendConformanceScenarioOverride>
+    >
+  >;
+}): BackendConformanceRigStructure {
+  const skipped = new Set<string>(options.skips);
+  return {
+    name: options.name,
+    scriptedScenarios: Object.keys(options.scripts).filter(
+      (scenario) => !skipped.has(scenario),
+    ),
+    skips: options.skips,
+    overrides: Object.entries(options.overrides).flatMap(
+      ([scenario, override]) =>
+        override === undefined ? [] : [{ scenario, reason: override.reason }],
+    ),
+  };
+}
+
+/** Assert the shared table and every rig declaration are structurally total. */
+export function assertConformanceStructure(
+  rigs: readonly BackendConformanceRigStructure[],
+): void {
+  const listed = [...BACKEND_CONFORMANCE_SCENARIOS];
+  assert.deepEqual(
+    Object.keys(BACKEND_CONFORMANCE_SCENARIO_TABLE).sort(),
+    [...listed].sort(),
+    "the conformance scenario table must contain every listed scenario",
+  );
+
+  const known = new Set<string>(listed);
+  for (const rig of rigs) {
+    const skipped = new Set(rig.skips);
+    const expectedScripts = listed.filter((scenario) => !skipped.has(scenario));
+    assert.deepEqual(
+      [...rig.scriptedScenarios].sort(),
+      expectedScripts.sort(),
+      `${rig.name}: scripts must equal listed scenarios minus skips`,
+    );
+    for (const override of rig.overrides) {
+      assert.ok(
+        known.has(override.scenario),
+        `${rig.name}: override names unknown scenario '${override.scenario}'`,
+      );
+      assert.ok(
+        override.reason.trim().length > 0,
+        `${rig.name}: override '${override.scenario}' requires a non-empty reason`,
+      );
+    }
+  }
+}
+
+/**
+ * Compose provider-neutral scenario data with one rig's script vocabulary.
+ * Replacements are shallow on purpose: an override names the complete row
+ * fields whose provider-shaped versions it supplies.
+ */
+export function composeConformanceFixture<Script>(options: {
+  readonly row: BackendConformanceScenarioRow;
+  readonly script: Script;
+  readonly override?: BackendConformanceScenarioOverride;
+  readonly build: (
+    script: Script,
+    row: BackendConformanceScenarioRow,
+  ) => Pick<BackendConformanceFixture, "backend" | "profile" | "counters">;
+}): BackendConformanceFixture {
+  const reason = options.override?.reason.trim();
+  if (options.override !== undefined && !reason) {
+    throw new Error("a conformance scenario override requires a reason");
+  }
+  if (options.override !== undefined && "trace" in options.override.replace) {
+    throw new Error("a conformance scenario override cannot replace trace");
+  }
+  if (options.row.trace !== undefined && options.row.trace.length > 0) {
+    throw new Error("a conformance scenario row cannot supply trace contents");
+  }
+  const traceRequested =
+    options.row.trace !== undefined || options.override?.trace === true;
+  const row: BackendConformanceScenarioRow = {
+    ...options.row,
+    ...options.override?.replace,
+    // A row or override declares that tracing is needed; each built fixture
+    // owns fresh mutable storage rather than sharing declaration-time state.
+    ...(traceRequested ? { trace: [] } : {}),
+  };
+  return {
+    ...options.build(options.script, row),
+    scenario: {
+      plans: row.plans,
+      expected: row.expected,
+      trace: row.trace,
+      policy: row.policy,
+      concurrentStarts: row.concurrentStarts ?? (row.plans.length > 0 ? 1 : 0),
+      startsAfterClose: row.startsAfterClose ?? 0,
+      resumeWhileRunning: row.resumeWhileRunning ?? false,
+      sinkFailsOnce: row.sinkFailsOnce ?? false,
+      evictOldest: row.evictOldest ?? false,
+      testClock: row.testClock ?? false,
+      providerStopsOnRequest: row.providerStopsOnRequest ?? true,
+    },
+  };
+}
 
 /**
  * Rig-side code implements this.
@@ -419,7 +970,7 @@ function runFixture(
         for (let step = 0; step < 30; step += 1) yield* Effect.yieldNow;
       });
 
-      if (fixture.sinkFailsOnce) sink.failNext(1);
+      if (fixture.scenario.sinkFailsOnce) sink.failNext(1);
 
       const startOutcomes: string[] = [];
       const runs: RunOutcome[] = [];
@@ -427,8 +978,7 @@ function runFixture(
       let resumeWhileRunning: string | undefined;
       let subagentId: SubagentId | undefined;
 
-      const howMany =
-        fixture.concurrentStarts ?? (fixture.plans.length > 0 ? 1 : 0);
+      const howMany = fixture.scenario.concurrentStarts;
       const issued =
         howMany === 0
           ? []
@@ -447,7 +997,7 @@ function runFixture(
         }
       }
 
-      for (const [index, plan] of fixture.plans.entries()) {
+      for (const [index, plan] of fixture.scenario.plans.entries()) {
         let runId: RunId | undefined = index === 0 ? admitted[0] : undefined;
         if (index > 0) {
           if (subagentId === undefined) break;
@@ -463,7 +1013,7 @@ function runFixture(
 
         yield* untilUnderWay(index);
 
-        if (index === 0 && fixture.resumeWhileRunning && subagentId) {
+        if (index === 0 && fixture.scenario.resumeWhileRunning && subagentId) {
           const rejected = yield* supervisor.resume({
             subagentId,
             description: "conformance",
@@ -499,7 +1049,7 @@ function runFixture(
               "the execution to record its decision",
               Effect.sync(
                 () =>
-                  fixture.trace?.some((entry) =>
+                  fixture.scenario.trace?.some((entry) =>
                     entry.startsWith("decision-recorded:"),
                   ) ?? false,
               ),
@@ -566,7 +1116,7 @@ function runFixture(
         });
       }
 
-      if (fixture.evictOldest && runs.length > 0) {
+      if (fixture.scenario.evictOldest && runs.length > 0) {
         // Everything holding the settled results open has finished, so release
         // the pins and make room pressure the only thing left.
         for (const run of runs) {
@@ -618,18 +1168,22 @@ function runFixture(
           profiles: { from: "list", profiles: [fixture.profile] },
           sink,
           counters,
-          ...(fixture.policy === undefined ? {} : { policy: fixture.policy }),
+          ...(fixture.scenario.policy === undefined
+            ? {}
+            : { policy: fixture.scenario.policy }),
         }),
       ),
       Effect.scoped,
-      Effect.provide(fixture.testClock ? TestClock.layer() : Layer.empty),
+      Effect.provide(
+        fixture.scenario.testClock ? TestClock.layer() : Layer.empty,
+      ),
     ),
     // The probe is read *after* the Session Scope has closed, which is the
     // only moment at which "nothing is still alive" means anything.
   ).then(async ({ supervisor, readProbe, ...outcome }) => {
     const afterClose = await Effect.runPromise(
       Effect.all(
-        Array.from({ length: fixture.startsAfterClose ?? 0 }, () =>
+        Array.from({ length: fixture.scenario.startsAfterClose }, () =>
           supervisor.start(startRequest(fixture)),
         ),
         { concurrency: "unbounded" },
@@ -747,7 +1301,7 @@ function assertFixture(
   fixture: BackendConformanceFixture,
   outcome: FixtureOutcome,
 ): void {
-  const { expected } = fixture;
+  const { expected } = fixture.scenario;
   assert.equal(
     outcome.runs.length,
     expected.runs.length,
@@ -830,10 +1384,10 @@ const SCENARIO_CHECKS: {
     const first = fixture.backend.validateProfile(fixture.profile, path);
     const second = fixture.backend.validateProfile(fixture.profile, path);
     assert.deepEqual(second, first, "validation is not deterministic");
-    if (fixture.expected.profileDiagnostics !== undefined) {
+    if (fixture.scenario.expected.profileDiagnostics !== undefined) {
       assert.deepEqual(
         first.map((diagnostic) => diagnostic.reason),
-        [...fixture.expected.profileDiagnostics],
+        [...fixture.scenario.expected.profileDiagnostics],
       );
     }
   },
@@ -845,7 +1399,7 @@ const SCENARIO_CHECKS: {
     assert.equal(fixture.counters().opens, 0);
   },
   "capabilities-are-enforced": (fixture, outcome) => {
-    const declared = fixture.expected.runs[0]?.steerOutcomes?.[0];
+    const declared = fixture.scenario.expected.runs[0]?.steerOutcomes?.[0];
     const offered = outcome.runs.flatMap((run) => run.steerOutcomes);
     assert.ok(offered.length > 0, "no Control was offered");
     for (const admitted of offered) assert.equal(admitted, declared);
@@ -884,7 +1438,7 @@ const SCENARIO_CHECKS: {
     for (const run of outcome.runs) {
       assert.ok(run.result.transcript.length > 0);
     }
-    assert.ok(fixture.expected.runs[0]?.transcriptTexts !== undefined);
+    assert.ok(fixture.scenario.expected.runs[0]?.transcriptTexts !== undefined);
   },
   "exactly-one-ending-is-emitted": (_fixture, outcome) => {
     // More than one decision was recorded, but the first supplied the one
@@ -905,10 +1459,10 @@ const SCENARIO_CHECKS: {
     assert.equal(outcome.runs.length, 1, "the scenario drove one Run");
     assert.equal(outcome.runs[0].result.status, "completed");
     assert.equal(outcome.runs[0].result.cancellationReason, undefined);
-    if (fixture.expected.duplicateDecisions !== undefined) {
+    if (fixture.scenario.expected.duplicateDecisions !== undefined) {
       assert.equal(
         outcome.counters.duplicateDecisions,
-        fixture.expected.duplicateDecisions,
+        fixture.scenario.expected.duplicateDecisions,
       );
     }
   },
@@ -977,18 +1531,18 @@ const SCENARIO_CHECKS: {
     );
     assert.equal(
       escalationDiagnostics.length,
-      fixture.providerStopsOnRequest ? 0 : 1,
+      fixture.scenario.providerStopsOnRequest ? 0 : 1,
       "cleanup-escalation diagnostics did not follow the fixture's stop behavior",
     );
     assert.equal(
       outcome.counters.cleanupEscalations,
-      fixture.providerStopsOnRequest ? 0 : 1,
+      fixture.scenario.providerStopsOnRequest ? 0 : 1,
     );
     const liveExecutionFibers = fixture.counters().liveExecutionFibers;
     if (liveExecutionFibers !== undefined) {
       assert.equal(
         liveExecutionFibers,
-        fixture.providerStopsOnRequest ? 0 : 1,
+        fixture.scenario.providerStopsOnRequest ? 0 : 1,
         "abandoned execution fibers did not follow stop behavior",
       );
     }
@@ -1075,7 +1629,7 @@ const SCENARIO_CHECKS: {
   },
   "controls-are-delivered-serially-in-order": (fixture) => {
     const counters = fixture.counters();
-    const offered = fixture.plans.flatMap((plan) =>
+    const offered = fixture.scenario.plans.flatMap((plan) =>
       (plan.controls ?? []).map((control) => control.text),
     );
     assert.ok(offered.length > 1, "one Control cannot be out of order");
@@ -1143,7 +1697,7 @@ const SCENARIO_CHECKS: {
   },
   "usage-deltas-are-run-local": (fixture, outcome) => {
     for (const [index, run] of outcome.runs.entries()) {
-      const declared = fixture.expected.runs[index].usageTotals?.input;
+      const declared = fixture.scenario.expected.runs[index].usageTotals?.input;
       assert.equal(
         typeof declared,
         "number",
@@ -1164,7 +1718,7 @@ const SCENARIO_CHECKS: {
   },
   "reconciliation-does-not-double-count": (fixture, outcome) => {
     for (const [index, run] of outcome.runs.entries()) {
-      const declared = fixture.expected.runs[index].usageTotals?.input;
+      const declared = fixture.scenario.expected.runs[index].usageTotals?.input;
       assert.equal(
         typeof declared,
         "number",
@@ -1178,7 +1732,7 @@ const SCENARIO_CHECKS: {
     // about this fixture rather than about the runtime: a rig whose snapshot
     // restates what it streamed declares zero and passes because the counter
     // is right, not because it was counting arrivals.
-    const differences = fixture.expected.reconciliationDifferences;
+    const differences = fixture.scenario.expected.reconciliationDifferences;
     assert.equal(
       typeof differences,
       "number",
@@ -1192,7 +1746,7 @@ const SCENARIO_CHECKS: {
   },
   "context-occupancy-is-a-gauge": (fixture, outcome) => {
     for (const [index, run] of outcome.runs.entries()) {
-      const declared = fixture.expected.runs[index].context;
+      const declared = fixture.scenario.expected.runs[index].context;
       assert.ok(
         declared !== undefined,
         "this scenario needs the gauge declared",
@@ -1245,7 +1799,8 @@ const SCENARIO_CHECKS: {
     }
   },
   "projections-stay-within-their-limits": (fixture, outcome) => {
-    const bounds = (fixture.policy ?? DEFAULT_RUNTIME_POLICY).projection;
+    const bounds = (fixture.scenario.policy ?? DEFAULT_RUNTIME_POLICY)
+      .projection;
     for (const run of outcome.runs) {
       assert.ok(run.result.transcript.length <= bounds.maxTranscriptItems);
       assert.ok(run.result.tools.length <= bounds.maxToolEntries);

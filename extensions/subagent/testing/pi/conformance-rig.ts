@@ -39,20 +39,16 @@ import {
   PI_DISPLAY_NAME,
   type PiSessionOptions,
 } from "../../backend/pi/index.ts";
+import { DEFAULT_BACKEND_ID, type Profile } from "../../domain/index.ts";
 import {
-  DEFAULT_BACKEND_ID,
-  DEFAULT_PROJECTION_BOUNDS,
-  type Profile,
-} from "../../domain/index.ts";
-import {
-  DEFAULT_RUNTIME_POLICY,
-  type RuntimePolicy,
-} from "../../runtime/policy.ts";
-import type {
-  BackendConformanceFixture,
-  BackendConformanceFixtureParts,
-  BackendConformanceRig,
-  BackendConformanceScenario,
+  BACKEND_CONFORMANCE_SCENARIO_TABLE,
+  type BackendConformanceRig,
+  type BackendConformanceRigStructure,
+  type BackendConformanceScenario,
+  type BackendConformanceScenarioOverride,
+  type BackendConformanceScenarioRow,
+  composeConformanceFixture,
+  conformanceRigStructure,
 } from "../conformance.ts";
 import type { ResourceCountersSnapshot } from "../fakes/counters.ts";
 import { correlateRuns } from "./correlate.ts";
@@ -89,15 +85,7 @@ const ORDINARY: PiScript = [
   { step: "terminal" },
 ];
 
-/** A policy with the bounds one scenario needs lowered. */
-function lowered(overrides: Partial<RuntimePolicy>): RuntimePolicy {
-  return { ...DEFAULT_RUNTIME_POLICY, ...overrides };
-}
-
-interface PiFixtureParts extends BackendConformanceFixtureParts {
-  readonly scripts: readonly PiScript[];
-  /** Override the ordinary cooperative Pi stop for the ignored-abort fixture. */
-  readonly providerStopsOnRequest?: boolean;
+interface PiInstrumentation {
   /** Hold the first observation so a late Control is admitted deterministically. */
   readonly gateLateControlDrain?: boolean;
   /** Make the session factory refuse, which is how an open fails. */
@@ -256,25 +244,20 @@ function observeDecisions(
   };
 }
 
-function piFixture(parts: PiFixtureParts): BackendConformanceFixture {
-  const {
-    scripts,
-    recordCompetingDecisionAfterDecision = false,
-    emitCleanupObservationOnScopeClose = false,
-    gateLateControlDrain: gateDrain,
-    holdAfterExecute = false,
-    openFails,
-    providerStopsOnRequest,
-    profileFields,
-    ...rest
-  } = parts;
+function piFixture(
+  scripts: readonly PiScript[],
+  row: BackendConformanceScenarioRow,
+  instrumentation: PiInstrumentation | undefined,
+) {
   const standIn = createStandInPiSession({ scripts });
   const live = { count: 0 };
   let opens = 0;
 
   const handle = createPiBackend({
     sessionFactory: async () => {
-      if (openFails) throw new Error("the stand-in refused to open");
+      if (instrumentation?.openFails) {
+        throw new Error("the stand-in refused to open");
+      }
       opens += 1;
       return { session: standIn.session };
     },
@@ -312,766 +295,393 @@ function piFixture(parts: PiFixtureParts): BackendConformanceFixture {
     },
   });
 
-  const gated = gateDrain
+  const gated = instrumentation?.gateLateControlDrain
     ? gateLateControlDrain(correlated, standIn)
     : correlated;
 
   return {
     backend: observeDecisions(gated, {
-      trace: rest.trace,
-      holdAfterExecute,
-      recordCompetingDecisionAfterDecision,
-      emitCleanupObservationOnScopeClose,
+      trace: row.trace,
+      holdAfterExecute: instrumentation?.holdAfterExecute ?? false,
+      recordCompetingDecisionAfterDecision:
+        instrumentation?.recordCompetingDecisionAfterDecision ?? false,
+      emitCleanupObservationOnScopeClose:
+        instrumentation?.emitCleanupObservationOnScopeClose ?? false,
     }),
     profile: {
       ...PROFILE,
-      ...(profileFields === undefined ? {} : { fields: profileFields }),
+      ...(instrumentation?.profileFields === undefined
+        ? {}
+        : { fields: instrumentation.profileFields }),
     },
     counters,
-    providerStopsOnRequest: providerStopsOnRequest ?? true,
-    ...rest,
   };
+}
+
+/** Collect one stand-in script for each Run a scenario drives. */
+const scripts = (...runScripts: readonly PiScript[]): readonly PiScript[] =>
+  runScripts;
+
+/** One Pi-vocabulary script sequence for every shared scenario. */
+const PI_SCRIPTS = {
+  "validation-is-deterministic": scripts(),
+  "open-creates-no-run": scripts(ORDINARY),
+  "capabilities-are-enforced": scripts([
+    { step: "await-steer", confirm: true },
+    { step: "assistant", text: "the answer" },
+    { step: "terminal" },
+  ]),
+  "resume-or-honest-refusal": scripts(ORDINARY, ORDINARY),
+  "close-is-idempotent": scripts(ORDINARY),
+  "close-releases-every-resource": scripts(ORDINARY, ORDINARY),
+  "a-failed-open-leaves-nothing-behind": scripts(),
+  "one-active-run-per-subagent": scripts([{ step: "hang" }]),
+  "observations-reduce-in-accepted-order": scripts(ORDINARY),
+  "exactly-one-ending-is-emitted": scripts([
+    { step: "assistant", text: "the answer" },
+    { step: "terminal" },
+  ]),
+  "cancellation-terminates-with-partial-output": scripts([
+    { step: "assistant", text: "a partial answer" },
+    { step: "tool-start", callId: "c1", name: "bash" },
+    { step: "hang" },
+  ]),
+  "a decided bundle survives a later cancel": scripts([
+    { step: "assistant", text: "the answer" },
+    { step: "terminal" },
+  ]),
+  "result-follows-scope-closure": scripts(ORDINARY),
+  "cleanup-observations-precede-the-core-ending": scripts([
+    { step: "speak-on-abort", text: "a frame nobody asked for" },
+    { step: "assistant", text: "the answer" },
+    { step: "terminal" },
+  ]),
+  "a-failing-sink-cannot-strand-the-execution": scripts([
+    { step: "assistant", text: "first" },
+    { step: "reject" },
+  ]),
+  "a-run-may-settle-with-no-observations": scripts([{ step: "hang" }]),
+  "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop": scripts([
+    { step: "assistant", text: "a partial answer" },
+    { step: "ignore-abort" },
+  ]),
+  "an-execution-settles-when-the-provider-goes-quiet": scripts([
+    { step: "await-steer", confirm: false, settle: false },
+    { step: "terminal" },
+  ]),
+  "observations-carry-no-provider-vocabulary": scripts([
+    { step: "await-steer", confirm: false, reject: true },
+    {
+      step: "assistant",
+      text: "the answer",
+      model: { provider: "fixture", id: "model-a" },
+      usage: { input: 5, output: 2, totalTokens: 100 },
+    },
+    { step: "tool-start", callId: "c1", name: "grep" },
+    { step: "tool-end", callId: "c1", name: "grep", result: "3 hits" },
+    { step: "terminal" },
+  ]),
+  "capacity-rejection-is-immediate": scripts([{ step: "hang" }]),
+  "shutdown-rejects-new-work": scripts(ORDINARY),
+  "a-late-waiter-reads-the-stored-result": scripts(ORDINARY),
+  "an-evicted-result-answers-expired": scripts(ORDINARY),
+  "steering-admission-follows-the-declared-capability": scripts([
+    { step: "await-steer", confirm: true },
+    { step: "await-steer", confirm: true },
+    { step: "assistant", text: "the answer" },
+    { step: "terminal" },
+  ]),
+  "controls-are-delivered-serially-in-order": scripts([
+    { step: "assistant", text: "under way" },
+    { step: "await-steer", confirm: true },
+    { step: "await-steer", confirm: true },
+    { step: "await-steer", confirm: true },
+    { step: "assistant", text: "the answer" },
+    { step: "terminal" },
+  ]),
+  "a-control-cannot-leak-into-the-next-run": scripts(
+    [{ step: "assistant", text: "first" }, { step: "terminal" }],
+    [{ step: "assistant", text: "second" }, { step: "terminal" }],
+  ),
+  "a-user-observation-appears-only-on-confirmation": scripts([
+    { step: "assistant", text: "under way" },
+    { step: "await-steer", confirm: true },
+    { step: "await-steer", confirm: false },
+    { step: "assistant", text: "the answer" },
+    { step: "terminal" },
+  ]),
+  "a-full-mailbox-answers-immediately": scripts([
+    { step: "assistant", text: "under way" },
+    { step: "hang" },
+  ]),
+  "a-closed-mailbox-refuses-after-cancel": scripts([
+    { step: "assistant", text: "under way" },
+    { step: "hang" },
+  ]),
+  "usage-deltas-are-run-local": scripts(ORDINARY),
+  "reconciliation-does-not-double-count": scripts([
+    {
+      step: "assistant",
+      text: "a partial answer",
+      usage: { input: 40, output: 10 },
+    },
+    { step: "restate-usage", usage: { input: 50, output: 12 } },
+    { step: "terminal" },
+  ]),
+  "context-occupancy-is-a-gauge": scripts([
+    { step: "assistant", text: "thinking", usage: { totalTokens: 1_000 } },
+    {
+      step: "assistant",
+      text: "the answer",
+      usage: { totalTokens: 1_800 },
+    },
+    { step: "terminal" },
+  ]),
+  "a-replayed-transcript-adds-no-usage": scripts(
+    [
+      { step: "assistant", text: "first answer", usage: { input: 100 } },
+      { step: "terminal" },
+    ],
+    [
+      { step: "user", text: "the same question, restated" },
+      { step: "tool-result", text: "answered from the retained conversation" },
+      { step: "terminal" },
+    ],
+  ),
+  "a-resumed-run-excludes-prior-usage": scripts(
+    [
+      {
+        step: "assistant",
+        text: "first answer",
+        usage: { input: 100, output: 40 },
+      },
+      { step: "terminal" },
+    ],
+    [
+      {
+        step: "assistant",
+        text: "second answer",
+        usage: { input: 75, output: 25 },
+      },
+      { step: "terminal" },
+    ],
+  ),
+  "only-the-repository-writes-snapshots": scripts(ORDINARY),
+  "projections-stay-within-their-limits": scripts([
+    ...Array.from(
+      { length: 6 },
+      (_unused, index) =>
+        ({ step: "assistant", text: `message ${index}` }) as const,
+    ),
+    { step: "terminal" },
+  ]),
+  "settlement-stores-the-result-exactly-once": scripts([
+    { step: "assistant", text: "the answer" },
+    { step: "terminal" },
+  ]),
+  "wait-and-result-observe-the-same-value": scripts(ORDINARY),
+  "a-notification-follows-storage": scripts(ORDINARY),
+  "a-notification-retry-cannot-duplicate-or-alter-settlement":
+    scripts(ORDINARY),
+} satisfies Record<BackendConformanceScenario, readonly PiScript[]>;
+
+/** Pi mechanisms needed to make particular provider-shaped scripts observable. */
+const PI_INSTRUMENTATION: Partial<
+  Record<BackendConformanceScenario, PiInstrumentation>
+> = {
+  "validation-is-deterministic": { profileFields: { nonsense: "x" } },
+  "a-failed-open-leaves-nothing-behind": { openFails: true },
+  "exactly-one-ending-is-emitted": {
+    holdAfterExecute: true,
+    recordCompetingDecisionAfterDecision: true,
+  },
+  "a decided bundle survives a later cancel": { holdAfterExecute: true },
+  "cleanup-observations-precede-the-core-ending": {
+    holdAfterExecute: true,
+    emitCleanupObservationOnScopeClose: true,
+  },
+  "a-control-cannot-leak-into-the-next-run": { gateLateControlDrain: true },
+  "settlement-stores-the-result-exactly-once": {
+    holdAfterExecute: true,
+    recordCompetingDecisionAfterDecision: true,
+  },
+};
+
+/** Named shared-row fields whose honest Pi shape differs from the common case. */
+const PI_OVERRIDES: Partial<
+  Record<BackendConformanceScenario, BackendConformanceScenarioOverride>
+> = {
+  "validation-is-deterministic": {
+    reason: "Pi validates unknown Profile fields with its backend display name",
+    replace: {
+      expected: {
+        runs: [],
+        profileDiagnostics: [
+          `${PI_DISPLAY_NAME} backend does not recognize field 'nonsense'`,
+        ],
+      },
+    },
+  },
+  "exactly-one-ending-is-emitted": {
+    reason: "Pi records its decision before the rig adds a competing decision",
+    trace: true,
+    replace: { plans: [{ cancel: true, cancelAfterDecision: true }] },
+  },
+  "a decided bundle survives a later cancel": {
+    reason: "Pi's terminal snapshot restates its streamed answer without drift",
+    replace: {
+      expected: {
+        runs: [{ status: "completed", finalOutput: "the answer" }],
+        duplicateDecisions: 0,
+      },
+    },
+  },
+  "cleanup-observations-precede-the-core-ending": {
+    reason:
+      "Pi closes the held native execution after its decision is recorded",
+    trace: true,
+    replace: {
+      plans: [{ cancel: true, cancelAfterDecision: true }],
+      expected: {
+        runs: [
+          {
+            status: "completed",
+            finalOutput: "the answer",
+            transcriptTexts: ["the answer"],
+            usageTotals: { input: 0 },
+            diagnosticCategories: ["other"],
+          },
+        ],
+      },
+    },
+  },
+  "an-execution-settles-when-the-provider-goes-quiet": {
+    reason: "Pi observes its terminal frame directly and needs no test clock",
+    replace: {
+      testClock: false,
+      plans: [
+        { controls: [{ type: "steer", text: "guidance awaiting a turn" }] },
+      ],
+    },
+  },
+  "observations-carry-no-provider-vocabulary": {
+    reason: "Pi exercises confinement with a rejected native steering request",
+    replace: {
+      plans: [{ controls: [{ type: "steer", text: "a rejected steer" }] }],
+      expected: {
+        runs: [{ status: "completed", steerOutcomes: ["accepted"] }],
+      },
+    },
+  },
+  "a-control-cannot-leak-into-the-next-run": {
+    reason: "Pi's eager consumer is gated while the first prompt drains",
+    replace: {
+      plans: [
+        { controls: [{ type: "steer", text: "only for the first Run" }] },
+        {},
+      ],
+      expected: {
+        runs: [
+          {
+            status: "completed",
+            finalOutput: "first",
+            steerOutcomes: ["accepted"],
+            diagnosticCategories: ["control"],
+          },
+          {
+            status: "completed",
+            finalOutput: "second",
+            transcriptTexts: ["second"],
+          },
+        ],
+        controlsReceived: [],
+      },
+    },
+  },
+  "a-full-mailbox-answers-immediately": {
+    reason:
+      "Pi's eager consumer takes one Control while eight fill its mailbox",
+    replace: {
+      plans: [{ floodControls: 8, cancel: true }],
+      expected: { runs: [{ status: "cancelled" }] },
+    },
+  },
+  "usage-deltas-are-run-local": {
+    reason: "Pi counts the ordinary tool-call message and answer as two turns",
+    replace: {
+      expected: {
+        runs: [
+          {
+            status: "completed",
+            usageTotals: { input: 40, output: 10 },
+            turns: 2,
+          },
+        ],
+      },
+    },
+  },
+  "reconciliation-does-not-double-count": {
+    reason: "Pi emits one assistant message before restating its usage",
+    replace: {
+      expected: {
+        runs: [
+          {
+            status: "completed",
+            usageTotals: { input: 50, output: 12 },
+            turns: 1,
+            diagnosticCategories: ["reconciliation-difference"],
+          },
+        ],
+        reconciliationDifferences: 1,
+      },
+    },
+  },
+  "context-occupancy-is-a-gauge": {
+    reason: "Pi reports context occupancy without a context-window size",
+    replace: {
+      expected: {
+        runs: [{ status: "completed", context: { tokens: 1_800 } }],
+      },
+    },
+  },
+  "settlement-stores-the-result-exactly-once": {
+    reason: "Pi records a competing decision only after its answer is decided",
+    trace: true,
+    replace: { plans: [{ cancel: true, cancelAfterDecision: true }] },
+  },
+};
+
+/** Pi declares every capability and skips no shared scenario. */
+const PI_SKIPS: readonly BackendConformanceScenario[] = [];
+
+/** Structural declarations for the Pi conformance rig. */
+export function piConformanceStructure(): BackendConformanceRigStructure {
+  return conformanceRigStructure({
+    name: "PiBackend",
+    scripts: PI_SCRIPTS,
+    skips: PI_SKIPS,
+    overrides: PI_OVERRIDES,
+  });
 }
 
 export function piConformanceRig(): BackendConformanceRig {
   return {
     name: "PiBackend",
-    build(scenario: BackendConformanceScenario) {
-      switch (scenario) {
-        case "validation-is-deterministic":
-          // Pi's validation is the real thing, so the deterministic diagnostic
-          // is a real one: a field the backend has never heard of.
-          return piFixture({
-            scripts: [],
-            profileFields: { nonsense: "x" },
-            plans: [],
-            expected: {
-              runs: [],
-              profileDiagnostics: [
-                `${PI_DISPLAY_NAME} backend does not recognize field 'nonsense'`,
-              ],
-            },
-          });
-
-        case "open-creates-no-run":
-          return piFixture({
-            scripts: [ORDINARY],
-            plans: [],
-            expected: { runs: [] },
-          });
-
-        case "capabilities-are-enforced":
-          return piFixture({
-            scripts: [
-              [
-                { step: "await-steer", confirm: true },
-                { step: "assistant", text: "the answer" },
-                { step: "terminal" },
-              ],
-            ],
-            plans: [
-              { controls: [{ type: "steer", text: "an offered Control" }] },
-            ],
-            expected: {
-              runs: [{ status: "completed", steerOutcomes: ["accepted"] }],
-              controlsReceived: ["an offered Control"],
-            },
-          });
-
-        case "resume-or-honest-refusal":
-          return piFixture({
-            scripts: [ORDINARY, ORDINARY],
-            plans: [{}, {}],
-            expected: {
-              runs: [{ status: "completed" }, { status: "completed" }],
-            },
-          });
-
-        case "close-is-idempotent":
-          // Shutdown closes the Subagent and the Session Scope closes it
-          // again. One disposal, one shutdown event to the child.
-          return piFixture({
-            scripts: [ORDINARY],
-            plans: [{}],
-            expected: { runs: [{ status: "completed" }] },
-          });
-
-        case "close-releases-every-resource":
-          return piFixture({
-            scripts: [ORDINARY, ORDINARY],
-            plans: [{}, {}],
-            expected: {
-              runs: [{ status: "completed" }, { status: "completed" }],
-            },
-          });
-
-        case "a-failed-open-leaves-nothing-behind":
-          return piFixture({
-            scripts: [],
-            openFails: true,
-            plans: [],
-            concurrentStarts: 1,
-            expected: { runs: [], startOutcomes: ["backend unavailable"] },
-          });
-
-        case "one-active-run-per-subagent":
-          return piFixture({
-            scripts: [[{ step: "hang" }]],
-            plans: [{ cancel: true }],
-            resumeWhileRunning: true,
-            expected: {
-              runs: [{ status: "cancelled" }],
-              resumeWhileRunning: "Subagent already running",
-            },
-          });
-
-        case "observations-reduce-in-accepted-order":
-          return piFixture({
-            scripts: [ORDINARY],
-            plans: [{}],
-            expected: {
-              runs: [
-                {
-                  status: "completed",
-                  // The first assistant message is a tool call and nothing
-                  // else, so its text is empty and it is still a message.
-                  transcriptTexts: ["", "the answer"],
-                  finalOutput: "the answer",
-                  toolStatuses: ["completed"],
-                },
-              ],
-            },
-          });
-
-        case "exactly-one-ending-is-emitted": {
-          // Pi records the answer. The rig then records a conflicting second
-          // decision before cancellation interrupts the held execution,
-          // positively exercising the once-only decision slot.
-          const trace: string[] = [];
-          return piFixture({
-            scripts: [
-              [{ step: "assistant", text: "the answer" }, { step: "terminal" }],
-            ],
-            recordCompetingDecisionAfterDecision: true,
-            holdAfterExecute: true,
-            plans: [{ cancel: true, cancelAfterDecision: true }],
-            trace,
-            expected: {
-              runs: [{ status: "completed", finalOutput: "the answer" }],
-            },
-          });
-        }
-
-        case "cancellation-terminates-with-partial-output":
-          return piFixture({
-            scripts: [
-              [
-                { step: "assistant", text: "a partial answer" },
-                { step: "tool-start", callId: "c1", name: "bash" },
-                { step: "hang" },
-              ],
-            ],
-            plans: [{ cancel: true }],
-            expected: {
-              runs: [
-                {
-                  status: "cancelled",
-                  cancellationReason: "requested",
-                  finalOutput: "a partial answer",
-                  toolStatuses: ["cancelled"],
-                },
-              ],
-            },
-          });
-
-        case "a decided bundle survives a later cancel": {
-          const trace: string[] = [];
-          return piFixture({
-            scripts: [
-              [{ step: "assistant", text: "the answer" }, { step: "terminal" }],
-            ],
-            holdAfterExecute: true,
-            plans: [{ cancel: true, cancelAfterDecision: true }],
-            trace,
-            expected: {
-              runs: [{ status: "completed", finalOutput: "the answer" }],
-              duplicateDecisions: 0,
-            },
-          });
-        }
-
-        case "result-follows-scope-closure":
-          return piFixture({
-            scripts: [ORDINARY],
-            plans: [{}],
-            trace: [],
-            expected: { runs: [{ status: "completed" }] },
-          });
-
-        case "cleanup-observations-precede-the-core-ending": {
-          // A test-only execution-scope finalizer emits after the decision.
-          // Recording did not seal intake, so the core orders it before ending.
-          const trace: string[] = [];
-          return piFixture({
-            scripts: [
-              [
-                { step: "speak-on-abort", text: "a frame nobody asked for" },
-                { step: "assistant", text: "the answer" },
-                { step: "terminal" },
-              ],
-            ],
-            emitCleanupObservationOnScopeClose: true,
-            holdAfterExecute: true,
-            plans: [{ cancel: true, cancelAfterDecision: true }],
-            trace,
-            expected: {
-              runs: [
-                {
-                  status: "completed",
-                  finalOutput: "the answer",
-                  transcriptTexts: ["the answer"],
-                  usageTotals: { input: 0 },
-                  diagnosticCategories: ["other"],
-                },
-              ],
-            },
-          });
-        }
-
-        case "a-failing-sink-cannot-strand-the-execution":
-          return piFixture({
-            scripts: [
-              [{ step: "assistant", text: "first" }, { step: "reject" }],
-            ],
-            plans: [{}],
-            expected: {
-              runs: [
-                {
-                  status: "failed",
-                  finalOutput: "first",
-                  diagnosticCategories: ["backend-failure"],
-                },
-              ],
-            },
-          });
-
-        case "a-run-may-settle-with-no-observations":
-          // The brief Pi echoes back is the Run's own goal, and the adapter
-          // omits it — so a Run that did nothing else reported nothing at all.
-          return piFixture({
-            scripts: [[{ step: "hang" }]],
-            plans: [{ cancel: true }],
-            expected: {
-              runs: [{ status: "cancelled", cancellationReason: "requested" }],
-            },
-          });
-
-        case "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop":
-          return piFixture({
-            scripts: [
-              [
-                { step: "assistant", text: "a partial answer" },
-                { step: "ignore-abort" },
-              ],
-            ],
-            testClock: true,
-            policy: lowered({ cleanupBudgetMillis: 2_000 }),
-            plans: [
-              {
-                cancel: true,
-                advanceClockAfterCancelMillis: 2_001,
-                resumeAfterSettlement: true,
-              },
-            ],
-            expected: {
-              runs: [
-                {
-                  status: "cancelled",
-                  cancellationReason: "requested",
-                  finalOutput: "a partial answer",
-                  diagnosticCategories: ["cleanup-escalation"],
-                },
-              ],
-            },
-            providerStopsOnRequest: false,
-          });
-
-        case "an-execution-settles-when-the-provider-goes-quiet":
-          return piFixture({
-            scripts: [
-              [
-                {
-                  step: "await-steer",
-                  confirm: false,
-                  settle: false,
-                },
-                { step: "terminal" },
-              ],
-            ],
-            plans: [
-              {
-                controls: [{ type: "steer", text: "guidance awaiting a turn" }],
-              },
-            ],
-            expected: {
-              runs: [
-                {
-                  status: "completed",
-                  steerOutcomes: ["accepted"],
-                  diagnosticCategories: ["control"],
-                },
-              ],
-              controlsReceived: ["guidance awaiting a turn"],
-            },
-          });
-
-        case "observations-carry-no-provider-vocabulary":
-          return piFixture({
-            scripts: [
-              [
-                { step: "await-steer", confirm: false, reject: true },
-                {
-                  step: "assistant",
-                  text: "the answer",
-                  model: { provider: "fixture", id: "model-a" },
-                  usage: { input: 5, output: 2, totalTokens: 100 },
-                },
-                { step: "tool-start", callId: "c1", name: "grep" },
-                {
-                  step: "tool-end",
-                  callId: "c1",
-                  name: "grep",
-                  result: "3 hits",
-                },
-                { step: "terminal" },
-              ],
-            ],
-            plans: [
-              { controls: [{ type: "steer", text: "a rejected steer" }] },
-            ],
-            expected: {
-              runs: [{ status: "completed", steerOutcomes: ["accepted"] }],
-            },
-          });
-
-        case "capacity-rejection-is-immediate":
-          return piFixture({
-            scripts: [[{ step: "hang" }]],
-            plans: [{ cancel: true }],
-            policy: lowered({ maxActiveRuns: 1 }),
-            concurrentStarts: 2,
-            expected: {
-              runs: [{ status: "cancelled" }],
-              startOutcomes: ["started", "at capacity"],
-            },
-          });
-
-        case "shutdown-rejects-new-work":
-          return piFixture({
-            scripts: [ORDINARY],
-            plans: [],
-            startsAfterClose: 1,
-            expected: { runs: [], startOutcomes: ["shutting down"] },
-          });
-
-        case "a-late-waiter-reads-the-stored-result":
-          return piFixture({
-            scripts: [ORDINARY],
-            plans: [{ waitAfterSettlement: true }],
-            expected: { runs: [{ status: "completed" }] },
-          });
-
-        case "an-evicted-result-answers-expired":
-          return piFixture({
-            scripts: [ORDINARY],
-            plans: [{}],
-            policy: lowered({ maxResultBytes: 4_096, resultStoreBytes: 8_192 }),
-            evictOldest: true,
-            expected: { runs: [{ status: "completed" }] },
-          });
-
-        case "steering-admission-follows-the-declared-capability":
-          return piFixture({
-            scripts: [
-              [
-                { step: "await-steer", confirm: true },
-                { step: "await-steer", confirm: true },
-                { step: "assistant", text: "the answer" },
-                { step: "terminal" },
-              ],
-            ],
-            plans: [
-              {
-                controls: [
-                  { type: "steer", text: "first" },
-                  { type: "steer", text: "second" },
-                ],
-              },
-            ],
-            expected: {
-              runs: [
-                {
-                  status: "completed",
-                  steerOutcomes: ["accepted", "accepted"],
-                },
-              ],
-              controlsReceived: ["first", "second"],
-            },
-          });
-
-        case "controls-are-delivered-serially-in-order":
-          return piFixture({
-            scripts: [
-              [
-                { step: "assistant", text: "under way" },
-                { step: "await-steer", confirm: true },
-                { step: "await-steer", confirm: true },
-                { step: "await-steer", confirm: true },
-                { step: "assistant", text: "the answer" },
-                { step: "terminal" },
-              ],
-            ],
-            plans: [
-              {
-                controls: ["first", "second", "third"].map((text) => ({
-                  type: "steer" as const,
-                  text,
-                })),
-              },
-            ],
-            expected: {
-              runs: [
-                {
-                  status: "completed",
-                  steerOutcomes: ["accepted", "accepted", "accepted"],
-                },
-              ],
-              controlsReceived: ["first", "second", "third"],
-              maxConcurrentControls: 1,
-            },
-          });
-
-        case "a-control-cannot-leak-into-the-next-run":
-          // Both prompts finish without polling for guidance. The Control is
-          // admitted while the first execution is still draining; if the
-          // adapter hands it to settled Pi, the stand-in's idle queue surfaces
-          // it as a user message at the start of the resumed Run.
-          return piFixture({
-            gateLateControlDrain: true,
-            scripts: [
-              [{ step: "assistant", text: "first" }, { step: "terminal" }],
-              [{ step: "assistant", text: "second" }, { step: "terminal" }],
-            ],
-            plans: [
-              { controls: [{ type: "steer", text: "only for the first Run" }] },
-              {},
-            ],
-            expected: {
-              runs: [
-                {
-                  status: "completed",
-                  finalOutput: "first",
-                  steerOutcomes: ["accepted"],
-                  diagnosticCategories: ["control"],
-                },
-                {
-                  status: "completed",
-                  finalOutput: "second",
-                  transcriptTexts: ["second"],
-                },
-              ],
-              controlsReceived: [],
-            },
-          });
-
-        case "a-user-observation-appears-only-on-confirmation":
-          return piFixture({
-            scripts: [
-              [
-                { step: "assistant", text: "under way" },
-                { step: "await-steer", confirm: true },
-                { step: "await-steer", confirm: false },
-                { step: "assistant", text: "the answer" },
-                { step: "terminal" },
-              ],
-            ],
-            plans: [
-              {
-                controls: ["confirmed", "unconfirmed"].map((text) => ({
-                  type: "steer" as const,
-                  text,
-                })),
-              },
-            ],
-            expected: {
-              runs: [
-                {
-                  status: "completed",
-                  transcriptTexts: ["under way", "confirmed", "the answer"],
-                },
-              ],
-              controlsReceived: ["confirmed", "unconfirmed"],
-            },
-          });
-
-        case "a-full-mailbox-answers-immediately":
-          // The session never consumes the first steer, so the consumer is
-          // blocked inside it and the mailbox is what fills up behind it.
-          return piFixture({
-            scripts: [
-              [{ step: "assistant", text: "under way" }, { step: "hang" }],
-            ],
-            policy: lowered({
-              controls: {
-                maxPending: 2,
-                maxMessageBytes: 16 * 1024,
-                maxPendingBytes: 64 * 1024,
-              },
-            }),
-            plans: [{ floodControls: 8, cancel: true }],
-            expected: { runs: [{ status: "cancelled" }] },
-          });
-
-        case "a-closed-mailbox-refuses-after-cancel":
-          return piFixture({
-            scripts: [
-              [{ step: "assistant", text: "under way" }, { step: "hang" }],
-            ],
-            plans: [{ cancel: true, steerAfterCancel: true }],
-            expected: { runs: [{ status: "cancelled" }] },
-          });
-
-        case "usage-deltas-are-run-local":
-          return piFixture({
-            scripts: [ORDINARY],
-            plans: [{}],
-            expected: {
-              runs: [
-                {
-                  status: "completed",
-                  usageTotals: { input: 40, output: 10 },
-                  // Pi counts one turn per assistant message, and the ordinary
-                  // Run has two: the tool call and the answer.
-                  turns: 2,
-                },
-              ],
-            },
-          });
-
-        case "reconciliation-does-not-double-count":
-          // Pi's own drift: the message the session retains is restated with
-          // the authoritative usage, and the terminal frame carries it.
-          return piFixture({
-            scripts: [
-              [
-                {
-                  step: "assistant",
-                  text: "a partial answer",
-                  usage: { input: 40, output: 10 },
-                },
-                { step: "restate-usage", usage: { input: 50, output: 12 } },
-                { step: "terminal" },
-              ],
-            ],
-            plans: [{}],
-            expected: {
-              runs: [
-                {
-                  status: "completed",
-                  usageTotals: { input: 50, output: 12 },
-                  turns: 1,
-                  // The restated usage is genuine drift, so the Run carries
-                  // the diagnostic that names it.
-                  diagnosticCategories: ["reconciliation-difference"],
-                },
-              ],
-              reconciliationDifferences: 1,
-            },
-          });
-
-        case "context-occupancy-is-a-gauge":
-          return piFixture({
-            scripts: [
-              [
-                {
-                  step: "assistant",
-                  text: "thinking",
-                  usage: { totalTokens: 1_000 },
-                },
-                {
-                  step: "assistant",
-                  text: "the answer",
-                  usage: { totalTokens: 1_800 },
-                },
-                { step: "terminal" },
-              ],
-            ],
-            plans: [{}],
-            expected: {
-              runs: [{ status: "completed", context: { tokens: 1_800 } }],
-            },
-          });
-
-        case "a-replayed-transcript-adds-no-usage":
-          // Pi's analogue of a replay: a resumed Run that restates the
-          // question and answers from what the session already holds. It
-          // produces messages and spends nothing, which is the property.
-          return piFixture({
-            scripts: [
-              [
-                {
-                  step: "assistant",
-                  text: "first answer",
-                  usage: { input: 100 },
-                },
-                { step: "terminal" },
-              ],
-              [
-                { step: "user", text: "the same question, restated" },
-                {
-                  step: "tool-result",
-                  text: "answered from the retained conversation",
-                },
-                { step: "terminal" },
-              ],
-            ],
-            plans: [{}, {}],
-            expected: {
-              runs: [
-                {
-                  status: "completed",
-                  usageTotals: { input: 100 },
-                  turns: 1,
-                },
-                { status: "completed", usageTotals: { input: 0 }, turns: 0 },
-              ],
-            },
-          });
-
-        case "a-resumed-run-excludes-prior-usage":
-          // Pi reports usage per message, so Run-locality comes from the
-          // message baseline: the resumed Run's terminal frame carries the
-          // whole conversation and the adapter subtracts what was already
-          // there.
-          return piFixture({
-            scripts: [
-              [
-                {
-                  step: "assistant",
-                  text: "first answer",
-                  usage: { input: 100, output: 40 },
-                },
-                { step: "terminal" },
-              ],
-              [
-                {
-                  step: "assistant",
-                  text: "second answer",
-                  usage: { input: 75, output: 25 },
-                },
-                { step: "terminal" },
-              ],
-            ],
-            plans: [{}, {}],
-            expected: {
-              runs: [
-                {
-                  status: "completed",
-                  usageTotals: { input: 100, output: 40 },
-                },
-                { status: "completed", usageTotals: { input: 75, output: 25 } },
-              ],
-            },
-          });
-
-        case "only-the-repository-writes-snapshots":
-          return piFixture({
-            scripts: [ORDINARY],
-            plans: [{}],
-            expected: { runs: [{ status: "completed" }] },
-          });
-
-        case "projections-stay-within-their-limits":
-          return piFixture({
-            scripts: [
-              [
-                ...Array.from(
-                  { length: 6 },
-                  (_unused, index) =>
-                    ({
-                      step: "assistant",
-                      text: `message ${index}`,
-                    }) as const,
-                ),
-                { step: "terminal" },
-              ],
-            ],
-            policy: lowered({
-              projection: {
-                ...DEFAULT_PROJECTION_BOUNDS,
-                maxTranscriptItems: 2,
-              },
-            }),
-            plans: [{}],
-            expected: {
-              runs: [
-                {
-                  status: "completed",
-                  transcriptTexts: ["message 4", "message 5"],
-                },
-              ],
-            },
-          });
-
-        case "settlement-stores-the-result-exactly-once": {
-          // The rig records a conflicting second decision after Pi's answer.
-          // The duplicate is counted; only one result and notification survive.
-          const trace: string[] = [];
-          return piFixture({
-            scripts: [
-              [{ step: "assistant", text: "the answer" }, { step: "terminal" }],
-            ],
-            recordCompetingDecisionAfterDecision: true,
-            holdAfterExecute: true,
-            plans: [{ cancel: true, cancelAfterDecision: true }],
-            trace,
-            expected: {
-              runs: [{ status: "completed", finalOutput: "the answer" }],
-              notifications: 1,
-            },
-          });
-        }
-
-        case "wait-and-result-observe-the-same-value":
-          return piFixture({
-            scripts: [ORDINARY],
-            plans: [{}],
-            expected: { runs: [{ status: "completed" }] },
-          });
-
-        case "a-notification-follows-storage":
-          return piFixture({
-            scripts: [ORDINARY],
-            plans: [{}],
-            expected: { runs: [{ status: "completed" }], notifications: 1 },
-          });
-
-        case "a-notification-retry-cannot-duplicate-or-alter-settlement":
-          return piFixture({
-            scripts: [ORDINARY],
-            plans: [{}],
-            sinkFailsOnce: true,
-            policy: lowered({
-              deliveryRetryBudget: { attempts: 3, delayMillis: 0 },
-            }),
-            expected: { runs: [{ status: "completed" }], notifications: 1 },
-          });
-      }
+    build(scenario) {
+      if (PI_SKIPS.includes(scenario)) return undefined;
+      const override = PI_OVERRIDES[scenario];
+      return composeConformanceFixture({
+        row: BACKEND_CONFORMANCE_SCENARIO_TABLE[scenario],
+        script: PI_SCRIPTS[scenario],
+        ...(override === undefined ? {} : { override }),
+        build: (script, row) =>
+          piFixture(script, row, PI_INSTRUMENTATION[scenario]),
+      });
     },
   };
 }
 
 /** Pi declares every capability and runs every shared scenario. */
 export function piConformanceSkips(): readonly BackendConformanceScenario[] {
-  return [];
+  return PI_SKIPS;
 }
