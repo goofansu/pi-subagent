@@ -45,6 +45,7 @@ import type {
   ToolEntryStatus,
   UsageTotals,
 } from "../domain/index.ts";
+import { DEFAULT_PROJECTION_BOUNDS } from "../domain/index.ts";
 import { sessionRuntimeLayer } from "../runtime/composition.ts";
 import {
   createRuntimeCounters,
@@ -263,6 +264,457 @@ export type BackendConformanceFixtureParts = Omit<
   BackendConformanceFixture,
   "backend" | "profile" | "counters" | "providerStopsOnRequest"
 >;
+
+/** One provider-neutral row in the shared scenario table. */
+export interface BackendConformanceScenarioRow
+  extends BackendConformanceFixtureParts {
+  /** Override the rig's ordinary cooperative-stop declaration. */
+  readonly providerStopsOnRequest?: boolean;
+}
+
+/** A provider-shaped replacement of named row fields, with its rationale. */
+export interface BackendConformanceScenarioOverride {
+  readonly reason: string;
+  /** Trace storage is fixture-local state, not provider-shaped row data. */
+  readonly replace: Partial<Omit<BackendConformanceScenarioRow, "trace">>;
+}
+
+/** A policy with only the bounds owned by one scenario changed. */
+const lowered = (overrides: Partial<RuntimePolicy>): RuntimePolicy => ({
+  ...DEFAULT_RUNTIME_POLICY,
+  ...overrides,
+});
+
+/**
+ * The suite's one declaration of what every scenario does and expects.
+ *
+ * `satisfies` keeps each row's useful literal shape while making omission of
+ * any scenario a compile error. Provider scripts and instrumentation do not
+ * belong here; rigs add those through `composeConformanceFixture`.
+ */
+export const BACKEND_CONFORMANCE_SCENARIO_TABLE = {
+  "validation-is-deterministic": {
+    plans: [],
+    expected: {
+      runs: [],
+      profileDiagnostics: ["the fixture always says this"],
+    },
+  },
+  "open-creates-no-run": { plans: [], expected: { runs: [] } },
+  "capabilities-are-enforced": {
+    plans: [{ controls: [{ type: "steer", text: "an offered Control" }] }],
+    expected: {
+      runs: [{ status: "completed", steerOutcomes: ["accepted"] }],
+      controlsReceived: ["an offered Control"],
+    },
+  },
+  "resume-or-honest-refusal": {
+    plans: [{}, {}],
+    expected: {
+      runs: [{ status: "completed" }, { status: "completed" }],
+    },
+  },
+  "close-is-idempotent": {
+    plans: [{}],
+    expected: { runs: [{ status: "completed" }] },
+  },
+  "close-releases-every-resource": {
+    plans: [{}, {}],
+    expected: {
+      runs: [{ status: "completed" }, { status: "completed" }],
+    },
+  },
+  "a-failed-open-leaves-nothing-behind": {
+    plans: [],
+    concurrentStarts: 1,
+    expected: { runs: [], startOutcomes: ["backend unavailable"] },
+  },
+  "one-active-run-per-subagent": {
+    plans: [{ cancel: true }],
+    resumeWhileRunning: true,
+    expected: {
+      runs: [{ status: "cancelled" }],
+      resumeWhileRunning: "Subagent already running",
+    },
+  },
+  "observations-reduce-in-accepted-order": {
+    plans: [{}],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          transcriptTexts: ["", "the answer"],
+          finalOutput: "the answer",
+          toolStatuses: ["completed"],
+        },
+      ],
+    },
+  },
+  "exactly-one-ending-is-emitted": {
+    plans: [{}],
+    expected: {
+      runs: [{ status: "completed", finalOutput: "the answer" }],
+    },
+  },
+  "cancellation-terminates-with-partial-output": {
+    plans: [{ cancel: true }],
+    expected: {
+      runs: [
+        {
+          status: "cancelled",
+          cancellationReason: "requested",
+          finalOutput: "a partial answer",
+          toolStatuses: ["cancelled"],
+        },
+      ],
+    },
+  },
+  "a decided bundle survives a later cancel": {
+    plans: [{ cancel: true, cancelAfterDecision: true }],
+    trace: [],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          finalOutput: "the decided answer",
+          diagnosticCategories: ["reconciliation-difference"],
+        },
+      ],
+      reconciliationDifferences: 1,
+      duplicateDecisions: 0,
+    },
+  },
+  "result-follows-scope-closure": {
+    plans: [{}],
+    trace: [],
+    expected: { runs: [{ status: "completed" }] },
+  },
+  "cleanup-observations-precede-the-core-ending": {
+    plans: [{}],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          finalOutput: "the answer",
+          transcriptTexts: ["the answer"],
+          diagnosticCategories: ["other"],
+        },
+      ],
+    },
+  },
+  "a-failing-sink-cannot-strand-the-execution": {
+    plans: [{}],
+    expected: {
+      runs: [
+        {
+          status: "failed",
+          finalOutput: "first",
+          diagnosticCategories: ["backend-failure"],
+        },
+      ],
+    },
+  },
+  "a-run-may-settle-with-no-observations": {
+    plans: [{ cancel: true }],
+    expected: {
+      runs: [{ status: "cancelled", cancellationReason: "requested" }],
+    },
+  },
+  "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop": {
+    testClock: true,
+    policy: lowered({ cleanupBudgetMillis: 2_000 }),
+    plans: [
+      {
+        cancel: true,
+        advanceClockAfterCancelMillis: 2_001,
+        resumeAfterSettlement: true,
+      },
+    ],
+    providerStopsOnRequest: false,
+    expected: {
+      runs: [
+        {
+          status: "cancelled",
+          cancellationReason: "requested",
+          finalOutput: "a partial answer",
+          diagnosticCategories: ["cleanup-escalation"],
+        },
+      ],
+    },
+  },
+  "an-execution-settles-when-the-provider-goes-quiet": {
+    testClock: true,
+    plans: [
+      {
+        controls: [{ type: "steer", text: "guidance awaiting a turn" }],
+        advanceClockMillis: 1_001,
+      },
+    ],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          diagnosticCategories: ["control"],
+          steerOutcomes: ["accepted"],
+        },
+      ],
+      controlsReceived: ["guidance awaiting a turn"],
+    },
+  },
+  "observations-carry-no-provider-vocabulary": {
+    plans: [{}],
+    expected: { runs: [{ status: "completed" }] },
+  },
+  "capacity-rejection-is-immediate": {
+    plans: [{ cancel: true }],
+    policy: lowered({ maxActiveRuns: 1 }),
+    concurrentStarts: 2,
+    expected: {
+      runs: [{ status: "cancelled" }],
+      startOutcomes: ["started", "at capacity"],
+    },
+  },
+  "shutdown-rejects-new-work": {
+    plans: [],
+    startsAfterClose: 1,
+    expected: { runs: [], startOutcomes: ["shutting down"] },
+  },
+  "a-late-waiter-reads-the-stored-result": {
+    plans: [{ waitAfterSettlement: true }],
+    expected: { runs: [{ status: "completed" }] },
+  },
+  "an-evicted-result-answers-expired": {
+    plans: [{}],
+    policy: lowered({ maxResultBytes: 4_096, resultStoreBytes: 8_192 }),
+    evictOldest: true,
+    expected: { runs: [{ status: "completed" }] },
+  },
+  "steering-admission-follows-the-declared-capability": {
+    plans: [
+      {
+        controls: [
+          { type: "steer", text: "first" },
+          { type: "steer", text: "second" },
+        ],
+      },
+    ],
+    expected: {
+      runs: [{ status: "completed", steerOutcomes: ["accepted", "accepted"] }],
+      controlsReceived: ["first", "second"],
+    },
+  },
+  "controls-are-delivered-serially-in-order": {
+    plans: [
+      {
+        controls: ["first", "second", "third"].map((text) => ({
+          type: "steer" as const,
+          text,
+        })),
+      },
+    ],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          steerOutcomes: ["accepted", "accepted", "accepted"],
+        },
+      ],
+      controlsReceived: ["first", "second", "third"],
+      maxConcurrentControls: 1,
+    },
+  },
+  "a-control-cannot-leak-into-the-next-run": {
+    plans: [
+      {
+        controls: [{ type: "steer", text: "never taken" }],
+        cancel: true,
+      },
+      { cancel: true },
+    ],
+    expected: {
+      runs: [
+        {
+          status: "cancelled",
+          finalOutput: "first",
+          steerOutcomes: ["accepted"],
+        },
+        { status: "cancelled", finalOutput: "second" },
+      ],
+      controlsReceived: [],
+    },
+  },
+  "a-user-observation-appears-only-on-confirmation": {
+    plans: [
+      {
+        controls: ["confirmed", "unconfirmed"].map((text) => ({
+          type: "steer" as const,
+          text,
+        })),
+      },
+    ],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          transcriptTexts: ["under way", "confirmed", "the answer"],
+        },
+      ],
+      controlsReceived: ["confirmed", "unconfirmed"],
+    },
+  },
+  "a-full-mailbox-answers-immediately": {
+    policy: lowered({
+      controls: {
+        maxPending: 2,
+        maxMessageBytes: 16 * 1024,
+        maxPendingBytes: 64 * 1024,
+      },
+    }),
+    plans: [{ floodControls: 3, cancel: true }],
+    expected: {
+      runs: [
+        {
+          status: "cancelled",
+          floodOutcomes: ["accepted", "accepted", "mailbox full"],
+        },
+      ],
+    },
+  },
+  "a-closed-mailbox-refuses-after-cancel": {
+    plans: [{ cancel: true, steerAfterCancel: true }],
+    expected: { runs: [{ status: "cancelled" }] },
+  },
+  "usage-deltas-are-run-local": {
+    plans: [{}],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          usageTotals: { input: 40, output: 10 },
+          turns: 1,
+        },
+      ],
+    },
+  },
+  "reconciliation-does-not-double-count": {
+    plans: [{}],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          usageTotals: { input: 50, output: 12 },
+          turns: 2,
+          diagnosticCategories: ["reconciliation-difference"],
+        },
+      ],
+      reconciliationDifferences: 1,
+    },
+  },
+  "context-occupancy-is-a-gauge": {
+    plans: [{}],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          context: { tokens: 1_800, window: 200_000 },
+        },
+      ],
+    },
+  },
+  "a-replayed-transcript-adds-no-usage": {
+    plans: [{}, {}],
+    expected: {
+      runs: [
+        { status: "completed", usageTotals: { input: 100 }, turns: 1 },
+        { status: "completed", usageTotals: { input: 0 }, turns: 0 },
+      ],
+    },
+  },
+  "a-resumed-run-excludes-prior-usage": {
+    plans: [{}, {}],
+    expected: {
+      runs: [
+        { status: "completed", usageTotals: { input: 100, output: 40 } },
+        { status: "completed", usageTotals: { input: 75, output: 25 } },
+      ],
+    },
+  },
+  "only-the-repository-writes-snapshots": {
+    plans: [{}],
+    expected: { runs: [{ status: "completed" }] },
+  },
+  "projections-stay-within-their-limits": {
+    policy: lowered({
+      projection: {
+        ...DEFAULT_PROJECTION_BOUNDS,
+        maxTranscriptItems: 2,
+      },
+    }),
+    plans: [{}],
+    expected: {
+      runs: [
+        {
+          status: "completed",
+          transcriptTexts: ["message 4", "message 5"],
+        },
+      ],
+    },
+  },
+  "settlement-stores-the-result-exactly-once": {
+    plans: [{}],
+    expected: {
+      runs: [{ status: "completed", finalOutput: "the answer" }],
+      notifications: 1,
+    },
+  },
+  "wait-and-result-observe-the-same-value": {
+    plans: [{}],
+    expected: { runs: [{ status: "completed" }] },
+  },
+  "a-notification-follows-storage": {
+    plans: [{}],
+    expected: { runs: [{ status: "completed" }], notifications: 1 },
+  },
+  "a-notification-retry-cannot-duplicate-or-alter-settlement": {
+    plans: [{}],
+    sinkFailsOnce: true,
+    policy: lowered({
+      deliveryRetryBudget: { attempts: 3, delayMillis: 0 },
+    }),
+    expected: { runs: [{ status: "completed" }], notifications: 1 },
+  },
+} satisfies Record<BackendConformanceScenario, BackendConformanceScenarioRow>;
+
+/**
+ * Compose provider-neutral scenario data with one rig's script vocabulary.
+ * Replacements are shallow on purpose: an override names the complete row
+ * fields whose provider-shaped versions it supplies.
+ */
+export function composeConformanceFixture<Script>(options: {
+  readonly row: BackendConformanceScenarioRow;
+  readonly script: Script;
+  readonly override?: BackendConformanceScenarioOverride;
+  readonly build: (
+    script: Script,
+    row: BackendConformanceScenarioRow,
+  ) => BackendConformanceFixture;
+}): BackendConformanceFixture {
+  const reason = options.override?.reason.trim();
+  if (options.override !== undefined && !reason) {
+    throw new Error("a conformance scenario override requires a reason");
+  }
+  if (options.override !== undefined && "trace" in options.override.replace) {
+    throw new Error("a conformance scenario override cannot replace trace");
+  }
+  const row = {
+    ...options.row,
+    ...options.override?.replace,
+    // A table row declares that tracing is needed; each built fixture owns
+    // the fresh mutable storage that records its own ordering evidence.
+    ...(options.row.trace === undefined ? {} : { trace: [] }),
+  };
+  return options.build(options.script, row);
+}
 
 /**
  * Rig-side code implements this.
