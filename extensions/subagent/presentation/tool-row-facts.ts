@@ -7,16 +7,18 @@
  * Neither operation can decide Run meaning or Result hand-off.
  */
 
-import type {
-  CancelOutcome,
-  ResultOutcome,
-  ResumeOutcome,
-  RunId,
-  RunResult,
-  StartOutcome,
-  SteerOutcome,
+import { Schema } from "effect";
+import {
+  type CancelOutcome,
+  EXACT_KEYS,
+  type ResultOutcome,
+  type ResumeOutcome,
+  type RunId,
+  type RunResult,
+  type StartOutcome,
+  type SteerOutcome,
   TerminalRunPhase,
-  WaitOutcome,
+  type WaitOutcome,
 } from "../domain/index.ts";
 
 /** Discriminated, presentation-only facts for every start outcome. */
@@ -48,45 +50,73 @@ export type StartedRunToolRowFacts = Extract<
   { readonly outcome: "started" }
 >;
 
+const IdentifierText = Schema.String.check(
+  Schema.isLengthBetween(1, 128),
+  Schema.isPattern(/^[A-Za-z0-9._:-]+$/),
+);
+const Count = Schema.Finite.check(
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(0),
+);
+
+const ResultRunSummarySchema = Schema.Struct({
+  runId: IdentifierText,
+  agent: Schema.String,
+  status: TerminalRunPhase,
+  outputCharacters: Count,
+});
+
 /** One delivered Result in a compact collection or retrieval summary. */
-export interface ResultRunSummary {
-  readonly runId: string;
-  readonly agent: string;
-  readonly status: TerminalRunPhase;
-  /** Characters retained in the Result's final output. */
-  readonly outputCharacters: number;
-}
+export type ResultRunSummary = typeof ResultRunSummarySchema.Type;
+
+const CollectionWithRunsSchema = Schema.Struct({
+  kind: Schema.Literal("collection"),
+  scope: Schema.Literals(["named", "all-active"]),
+  runs: Schema.Array(ResultRunSummarySchema),
+  stillRunning: Count,
+  unknown: Count,
+  unavailable: Count,
+  noActiveRuns: Schema.Literal(false),
+});
+
+const EmptyCollectionSchema = Schema.Struct({
+  kind: Schema.Literal("collection"),
+  scope: Schema.Literal("all-active"),
+  runs: Schema.Tuple([]),
+  stillRunning: Schema.Literal(0),
+  unknown: Schema.Literal(0),
+  unavailable: Schema.Literal(0),
+  noActiveRuns: Schema.Literal(true),
+});
 
 /** Presentation-only facts for either Wait operation. */
-export interface CollectedRunsToolRowFacts {
-  readonly kind: "collection";
-  /** This is the operation discriminator for the two collection renderers. */
-  readonly scope: "named" | "all-active";
-  readonly runs: readonly ResultRunSummary[];
-  readonly stillRunning: number;
-  readonly unknown: number;
-  readonly unavailable: number;
-  readonly noActiveRuns: boolean;
-}
+const CollectedRunsToolRowFactsSchema = Schema.Union([
+  CollectionWithRunsSchema,
+  EmptyCollectionSchema,
+]);
+export type CollectedRunsToolRowFacts =
+  typeof CollectedRunsToolRowFactsSchema.Type;
 
 /** Presentation-only facts for one `agent_result` outcome. */
-export type ResultToolRowFacts =
-  | {
-      readonly kind: "result";
-      readonly outcome: "available";
-      readonly run: ResultRunSummary;
-    }
-  | {
-      readonly kind: "result";
-      readonly outcome: "still-running" | "unknown";
-      readonly runId: string;
-    }
-  | {
-      readonly kind: "result";
-      readonly outcome: "unavailable";
-      readonly runId: string;
-      readonly status: TerminalRunPhase;
-    };
+const ResultToolRowFactsSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("result"),
+    outcome: Schema.Literal("available"),
+    run: ResultRunSummarySchema,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("result"),
+    outcome: Schema.Literals(["still-running", "unknown"]),
+    runId: IdentifierText,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("result"),
+    outcome: Schema.Literal("unavailable"),
+    runId: IdentifierText,
+    status: TerminalRunPhase,
+  }),
+]);
+export type ResultToolRowFacts = typeof ResultToolRowFactsSchema.Type;
 
 export type ResumeToolRowFacts =
   | {
@@ -107,21 +137,32 @@ export interface SteerToolRowFacts {
 }
 
 /** One cancellation-request admission outcome, separate from settlement. */
-export type CancelRunToolRowOutcome =
-  | { readonly kind: "requested"; readonly runId: string }
-  | { readonly kind: "already requested"; readonly runId: string }
-  | {
-      readonly kind: "already terminal";
-      readonly runId: string;
-      readonly phase: TerminalRunPhase;
-    }
-  | { readonly kind: "unknown"; readonly runId: string };
+const CancelRunToolRowOutcomeSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literals(["requested", "already requested", "unknown"]),
+    runId: IdentifierText,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("already terminal"),
+    runId: IdentifierText,
+    phase: TerminalRunPhase,
+  }),
+]);
+export type CancelRunToolRowOutcome = typeof CancelRunToolRowOutcomeSchema.Type;
 
 /** Discriminated, presentation-only facts for one cancellation operation. */
-export interface CancelToolRowFacts {
-  readonly kind: "cancel";
-  readonly outcomes: readonly CancelRunToolRowOutcome[];
-}
+const CancelToolRowFactsSchema = Schema.Struct({
+  kind: Schema.Literal("cancel"),
+  outcomes: Schema.Array(CancelRunToolRowOutcomeSchema),
+});
+export type CancelToolRowFacts = typeof CancelToolRowFactsSchema.Type;
+
+const AggregateToolRowFactsSchema = Schema.Union([
+  CollectedRunsToolRowFactsSchema,
+  CancelToolRowFactsSchema,
+  ResultToolRowFactsSchema,
+]);
+type AggregateToolRowFacts = typeof AggregateToolRowFactsSchema.Type;
 
 /** The one presentation-owned fact vocabulary for all seven agent tools. */
 export type ToolRowFacts =
@@ -261,9 +302,8 @@ export function cancelToolRowFacts(
 }
 
 function collectedToolRowFacts(
-  scope: CollectedRunsToolRowFacts["scope"],
+  scope: "named" | "all-active",
   outcomes: readonly WaitOutcome[],
-  noActiveRuns: boolean,
 ): CollectedRunsToolRowFacts {
   const runs: ResultRunSummary[] = [];
   let stillRunning = 0;
@@ -292,7 +332,7 @@ function collectedToolRowFacts(
     stillRunning,
     unknown,
     unavailable,
-    noActiveRuns,
+    noActiveRuns: false,
   };
 }
 
@@ -300,19 +340,27 @@ function collectedToolRowFacts(
 export function waitToolRowFacts(
   outcomes: readonly WaitOutcome[],
 ): CollectedRunsToolRowFacts {
-  return collectedToolRowFacts("named", outcomes, false);
+  return collectedToolRowFacts("named", outcomes);
 }
 
 /** Make the presentation decision for every collected wait-all outcome. */
 export function waitAllToolRowFacts(
   outcomes: readonly WaitOutcome[],
 ): CollectedRunsToolRowFacts {
-  return collectedToolRowFacts("all-active", outcomes, false);
+  return collectedToolRowFacts("all-active", outcomes);
 }
 
 /** Make the wait-all presentation decision when there were no active Runs. */
 export function noActiveWaitAllToolRowFacts(): CollectedRunsToolRowFacts {
-  return collectedToolRowFacts("all-active", [], true);
+  return {
+    kind: "collection",
+    scope: "all-active",
+    runs: [],
+    stillRunning: 0,
+    unknown: 0,
+    unavailable: 0,
+    noActiveRuns: true,
+  };
 }
 
 /** Make the presentation decision for every `agent_result` outcome. */
@@ -360,21 +408,11 @@ function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
-const TERMINAL_PHASES: Readonly<Record<TerminalRunPhase, true>> = {
-  completed: true,
-  failed: true,
-  cancelled: true,
-};
-
 function hasOwnKey<K extends string>(
   values: Readonly<Record<K, true>>,
   value: unknown,
 ): value is K {
   return typeof value === "string" && Object.hasOwn(values, value);
-}
-
-function isTerminalPhase(value: unknown): value is TerminalRunPhase {
-  return hasOwnKey(TERMINAL_PHASES, value);
 }
 
 function recordOf(value: unknown): Record<string, unknown> | undefined {
@@ -503,138 +541,40 @@ function decodeSteer(
     : undefined;
 }
 
-function decodeCancelOutcome(
-  value: unknown,
-): CancelRunToolRowOutcome | undefined {
-  const outcome = recordOf(value);
-  if (!outcome || !isIdentifier(outcome.runId)) return undefined;
-  switch (outcome.kind) {
-    case "requested":
-    case "already requested":
-    case "unknown":
-      return hasExactly(outcome, ["kind", "runId"])
-        ? { kind: outcome.kind, runId: outcome.runId }
-        : undefined;
-    case "already terminal":
-      return hasExactly(outcome, ["kind", "runId", "phase"]) &&
-        isTerminalPhase(outcome.phase)
-        ? {
-            kind: "already terminal",
-            runId: outcome.runId,
-            phase: outcome.phase,
-          }
-        : undefined;
+const decodeAggregateToolRowFacts = Schema.decodeUnknownResult(
+  AggregateToolRowFactsSchema,
+  EXACT_KEYS,
+);
+const encodeAggregateToolRowFacts = Schema.encodeUnknownSync(
+  AggregateToolRowFactsSchema,
+  EXACT_KEYS,
+);
+
+/**
+ * Encode Tool-row facts for the host-owned details slot.
+ *
+ * The three schema-backed aggregate kinds cross through their schema encoder.
+ * Start, resume, and steer remain unchanged until their own migration.
+ */
+export function encodeToolRowFacts(value: ToolRowFacts | undefined): unknown {
+  if (value === undefined) return undefined;
+  switch (value.kind) {
+    case "collection":
+    case "cancel":
+    case "result":
+      return encodeAggregateToolRowFacts(value);
+    case "start":
+    case "resume":
+    case "steer":
+      return value;
     default:
-      return undefined;
+      return value satisfies never;
   }
 }
 
-function decodeCancel(
-  value: Record<string, unknown>,
-): CancelToolRowFacts | undefined {
-  if (
-    !hasExactly(value, ["kind", "outcomes"]) ||
-    !Array.isArray(value.outcomes)
-  ) {
-    return undefined;
-  }
-  const outcomes = value.outcomes.map(decodeCancelOutcome);
-  return outcomes.every((outcome) => outcome !== undefined)
-    ? { kind: "cancel", outcomes: outcomes as CancelRunToolRowOutcome[] }
-    : undefined;
-}
-
-function decodeRunSummary(value: unknown): ResultRunSummary | undefined {
-  const run = recordOf(value);
-  return run &&
-    hasExactly(run, ["runId", "agent", "status", "outputCharacters"]) &&
-    isIdentifier(run.runId) &&
-    typeof run.agent === "string" &&
-    isTerminalPhase(run.status) &&
-    isCount(run.outputCharacters)
-    ? {
-        runId: run.runId,
-        agent: run.agent,
-        status: run.status,
-        outputCharacters: run.outputCharacters,
-      }
-    : undefined;
-}
-
-function decodeCollection(
-  value: Record<string, unknown>,
-): CollectedRunsToolRowFacts | undefined {
-  if (
-    !hasExactly(value, [
-      "kind",
-      "scope",
-      "runs",
-      "stillRunning",
-      "unknown",
-      "unavailable",
-      "noActiveRuns",
-    ]) ||
-    (value.scope !== "named" && value.scope !== "all-active") ||
-    !Array.isArray(value.runs) ||
-    !isCount(value.stillRunning) ||
-    !isCount(value.unknown) ||
-    !isCount(value.unavailable) ||
-    typeof value.noActiveRuns !== "boolean"
-  ) {
-    return undefined;
-  }
-  const runs = value.runs.map(decodeRunSummary);
-  if (!runs.every((run) => run !== undefined)) return undefined;
-  if (
-    value.noActiveRuns &&
-    (value.scope !== "all-active" ||
-      runs.length !== 0 ||
-      value.stillRunning !== 0 ||
-      value.unknown !== 0 ||
-      value.unavailable !== 0)
-  ) {
-    return undefined;
-  }
-  return {
-    kind: "collection",
-    scope: value.scope,
-    runs: runs as ResultRunSummary[],
-    stillRunning: value.stillRunning,
-    unknown: value.unknown,
-    unavailable: value.unavailable,
-    noActiveRuns: value.noActiveRuns,
-  };
-}
-
-function decodeResult(
-  value: Record<string, unknown>,
-): ResultToolRowFacts | undefined {
-  switch (value.outcome) {
-    case "available": {
-      if (!hasExactly(value, ["kind", "outcome", "run"])) return undefined;
-      const run = decodeRunSummary(value.run);
-      return run ? { kind: "result", outcome: "available", run } : undefined;
-    }
-    case "still-running":
-    case "unknown":
-      return hasExactly(value, ["kind", "outcome", "runId"]) &&
-        isIdentifier(value.runId)
-        ? { kind: "result", outcome: value.outcome, runId: value.runId }
-        : undefined;
-    case "unavailable":
-      return hasExactly(value, ["kind", "outcome", "runId", "status"]) &&
-        isIdentifier(value.runId) &&
-        isTerminalPhase(value.status)
-        ? {
-            kind: "result",
-            outcome: "unavailable",
-            runId: value.runId,
-            status: value.status,
-          }
-        : undefined;
-    default:
-      return undefined;
-  }
+function decodeAggregate(value: unknown): AggregateToolRowFacts | undefined {
+  const decoded = decodeAggregateToolRowFacts(value);
+  return decoded._tag === "Success" ? decoded.success : undefined;
 }
 
 /**
@@ -656,11 +596,9 @@ export function decodeToolRowFacts(value: unknown): ToolRowFacts | undefined {
       case "steer":
         return decodeSteer(candidate);
       case "cancel":
-        return decodeCancel(candidate);
       case "collection":
-        return decodeCollection(candidate);
       case "result":
-        return decodeResult(candidate);
+        return decodeAggregate(candidate);
       default:
         return undefined;
     }

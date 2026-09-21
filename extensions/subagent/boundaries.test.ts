@@ -908,18 +908,20 @@ export function findBoundaryViolations(
     }
   }
 
-  // 7. Presentation is prose, and prose has no dependencies. A presentation
-  //    file may name another presentation file, the domain, and Pi's own
-  //    packages — which is where the row measuring and the theme come from —
-  //    and nothing else. Not the runtime, not a backend, not a fake, not even
-  //    `effect`: a presentation module that could reach the repository would
+  // 7. Presentation owns prose and Tool-row facts, and has no stateful
+  //    dependencies. A presentation file may name another presentation file,
+  //    the domain, Pi's own packages — which is where row measuring and theme
+  //    come from — and the `Schema` binding used to declare Tool-row facts.
+  //    Nothing else: not the runtime, a backend, a fake, or another Effect
+  //    binding. A presentation module that could reach the repository would
   //    be one edit away from folding state, and v1's dispatcher ended up
   //    owning presentation state for exactly that reason.
   for (const file of listSourceFiles(graph.presentationRoot, {
     includeTests: true,
   })) {
     const test = isTestFile(file);
-    for (const specifier of specifiersOf(file)) {
+    for (const edge of readNamedImports(fs.readFileSync(file, "utf8"))) {
+      const specifier = edge.specifier;
       const target = resolveRelativeSource(file, specifier);
       if (target) {
         if (isInside(target, graph.presentationRoot)) continue;
@@ -937,8 +939,15 @@ export function findBoundaryViolations(
       }
       if (isHostPackage(specifier)) continue;
       if (test && specifier.startsWith("node:")) continue;
+      if (
+        specifier === DOMAIN_PACKAGE &&
+        edge.names.length > 0 &&
+        edge.names.every((name) => name === DOMAIN_PACKAGE_BINDING)
+      ) {
+        continue;
+      }
       violations.add(
-        `${describe(file)} imports package ${specifier}, and a presentation file may name only the domain and Pi`,
+        `${describe(file)} imports package ${specifier}, and a presentation file may name only the domain, Schema, and Pi`,
       );
     }
   }
@@ -1835,12 +1844,15 @@ test("a presentation file importing the runtime, a backend, or a fake is rejecte
   write("extensions/subagent/runtime/repository.ts", "export {};\n");
   write("extensions/subagent/backend/contract.ts", "export {};\n");
   write("extensions/subagent/testing/fakes/backend.ts", "export {};\n");
-  // Prose over the domain, painted with Pi's own primitives: allowed.
+  // Prose over the domain, facts declared with Schema, and Pi's own painting
+  // primitives: allowed.
   write(
     "extensions/subagent/presentation/status.ts",
     [
       'import type {} from "../domain/index.ts";',
+      'import { Schema } from "effect";',
       'import { truncateToWidth } from "@earendil-works/pi-tui";',
+      "void Schema;",
       "void truncateToWidth;",
     ].join("\n"),
   );
@@ -1856,6 +1868,49 @@ test("a presentation file importing the runtime, a backend, or a fake is rejecte
   );
 
   assert.deepEqual(findBoundaryViolations(graph), []);
+
+  // A whole-module reach remains forbidden when the file also has the one
+  // permitted static binding from the same package.
+  for (const wholeModuleReach of [
+    'await import("effect");',
+    'require("effect");',
+  ]) {
+    write(
+      "extensions/subagent/presentation/status.ts",
+      [
+        'import { Schema } from "effect";',
+        wholeModuleReach,
+        "void Schema;",
+      ].join("\n"),
+    );
+    assert.deepEqual(findBoundaryViolations(graph), [
+      `${describe(path.join(graph.presentationRoot, "status.ts"))} imports package effect, and a presentation file may name only the domain, Schema, and Pi`,
+    ]);
+  }
+  write(
+    "extensions/subagent/presentation/status.ts",
+    [
+      'import type {} from "../domain/index.ts";',
+      'import { Schema } from "effect";',
+      'import { truncateToWidth } from "@earendil-works/pi-tui";',
+      "void Schema;",
+      "void truncateToWidth;",
+    ].join("\n"),
+  );
+
+  // Naming no binding is not a Schema import: side effects from the Effect
+  // package are no more admissible here than an Effect runtime binding.
+  write(
+    "extensions/subagent/presentation/effect-side-effect.ts",
+    'import "effect";\n',
+  );
+  assert.deepEqual(findBoundaryViolations(graph), [
+    `${describe(path.join(graph.presentationRoot, "effect-side-effect.ts"))} imports package effect, and a presentation file may name only the domain, Schema, and Pi`,
+  ]);
+  write(
+    "extensions/subagent/presentation/effect-side-effect.ts",
+    "export {};\n",
+  );
 
   // A production presentation file may not, which is the half of the rule the
   // fixture exemption must not widen.
@@ -1891,7 +1946,7 @@ test("a presentation file importing the runtime, a backend, or a fake is rejecte
     "extensions/subagent/presentation/card.ts",
     'import "../backend/contract.ts";\nimport "../testing/fakes/backend.ts";\n',
   );
-  // Not even Effect: presentation runs nothing.
+  // No Effect runtime binding: presentation runs nothing.
   write(
     "extensions/subagent/presentation/prose.ts",
     'import { Effect } from "effect";\nvoid Effect;\n',
@@ -1900,7 +1955,7 @@ test("a presentation file importing the runtime, a backend, or a fake is rejecte
   assert.deepEqual(findBoundaryViolations(graph), [
     `${describe(path.join(graph.presentationRoot, "card.ts"))} imports ${describe(path.join(graph.contractRoot, "contract.ts"))}, and a presentation file may name only the domain and Pi`,
     `${describe(path.join(graph.presentationRoot, "card.ts"))} imports ${describe(path.join(graph.testingRoot, "fakes", "backend.ts"))}, and a presentation file may name only the domain and Pi`,
-    `${describe(path.join(graph.presentationRoot, "prose.ts"))} imports package effect, and a presentation file may name only the domain and Pi`,
+    `${describe(path.join(graph.presentationRoot, "prose.ts"))} imports package effect, and a presentation file may name only the domain, Schema, and Pi`,
     `${describe(path.join(graph.presentationRoot, "rows.ts"))} imports ${describe(path.join(graph.runtimeRoot, "repository.ts"))}, and a presentation file may name only the domain and Pi`,
   ]);
 });

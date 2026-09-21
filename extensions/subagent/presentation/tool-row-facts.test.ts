@@ -13,6 +13,7 @@ import { fixtureResult } from "../testing/presentation-fixtures.ts";
 import {
   cancelToolRowFacts,
   decodeToolRowFacts,
+  encodeToolRowFacts,
   noActiveWaitAllToolRowFacts,
   resultToolRowFacts,
   resumeToolRowFacts,
@@ -103,7 +104,9 @@ test("named Tool-row facts construction covers every domain outcome and round-tr
     ...resultOutcomes.map(resultToolRowFacts),
   ];
 
-  for (const value of facts) assert.deepEqual(decodeToolRowFacts(value), value);
+  for (const value of facts) {
+    assert.deepEqual(decodeToolRowFacts(encodeToolRowFacts(value)), value);
+  }
   assert.deepEqual(
     facts.map((value) =>
       value.kind === "collection" ? `${value.kind}:${value.scope}` : value.kind,
@@ -118,6 +121,42 @@ test("named Tool-row facts construction covers every domain outcome and round-tr
       "collection:all-active",
       ...resultOutcomes.map(() => "result"),
     ],
+  );
+});
+
+test("schema-backed facts reject extra keys at every depth and wrong field types", () => {
+  const collection = waitToolRowFacts(waitOutcomes);
+  const cancellation = cancelToolRowFacts(cancelOutcomes);
+  const available = resultToolRowFacts({ outcome: "result", result });
+
+  const encodedCollection = encodeToolRowFacts(collection) as Record<
+    string,
+    unknown
+  >;
+  const encodedCancellation = encodeToolRowFacts(cancellation) as {
+    readonly outcomes: readonly Record<string, unknown>[];
+  };
+  const encodedAvailable = encodeToolRowFacts(available) as {
+    readonly run: Record<string, unknown>;
+  };
+
+  assert.equal(
+    decodeToolRowFacts({ ...encodedCollection, extra: true }),
+    undefined,
+  );
+  assert.equal(
+    decodeToolRowFacts({
+      ...encodedCancellation,
+      outcomes: [{ ...encodedCancellation.outcomes[0], extra: true }],
+    }),
+    undefined,
+  );
+  assert.equal(
+    decodeToolRowFacts({
+      ...encodedAvailable,
+      run: { ...encodedAvailable.run, outputCharacters: "6" },
+    }),
+    undefined,
   );
 });
 

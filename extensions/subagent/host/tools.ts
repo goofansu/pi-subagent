@@ -34,6 +34,7 @@ import { type SessionFacts, Subagents } from "../application/index.ts";
 import type { RunId } from "../domain/index.ts";
 import {
   agentToolRenderers,
+  encodeToolRowFacts,
   formatSessionNotReady,
 } from "../presentation/index.ts";
 import type { SessionHandle } from "./session-handle.ts";
@@ -98,7 +99,7 @@ interface HostToolResult {
 function hostResult(response: ToolResponse): HostToolResult {
   return {
     content: [{ type: "text", text: response.text }],
-    details: response.details,
+    details: encodeToolRowFacts(response.details),
   };
 }
 

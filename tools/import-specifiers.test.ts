@@ -6,6 +6,7 @@ import { test } from "node:test";
 import {
   hasComputedImport,
   readImportSpecifiers,
+  readNamedImports,
   resolveRelativeSource,
 } from "./import-specifiers.ts";
 
@@ -43,6 +44,28 @@ test("dynamic import and require with a static string are import edges", () => {
     "./c.ts",
     "./d.ts",
     "./e.ts",
+  ]);
+});
+
+test("named and whole-module edges are classified directly in source order", () => {
+  const source = [
+    'export { pipe } from "effect";',
+    'import { Schema } from "effect";',
+    'await import("effect");',
+    'require("effect");',
+    'import legacy = require("effect");',
+    'export * from "effect";',
+    'import "side-effects";',
+  ].join("\n");
+
+  assert.deepEqual(readNamedImports(source), [
+    { specifier: "effect", names: ["*"] },
+    { specifier: "effect", names: ["Schema"] },
+    { specifier: "effect", names: ["*"] },
+    { specifier: "effect", names: ["*"] },
+    { specifier: "effect", names: ["*"] },
+    { specifier: "effect", names: ["*"] },
+    { specifier: "side-effects", names: [] },
   ]);
 });
 
