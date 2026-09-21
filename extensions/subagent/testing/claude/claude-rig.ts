@@ -105,6 +105,8 @@ export interface ClaudeRigOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Replace the runtime clock so adapter-local bounds can be advanced. */
   readonly testClock?: boolean;
+  /** Model an SDK that writes its final diagnostic from Query.close(). */
+  readonly stderrOnQueryClose?: boolean;
 }
 
 export interface ClaudeSessionOutcome<A> {
@@ -158,7 +160,17 @@ export function withClaudeSession<A>(
     loads += 1;
     if (options.openFails) throw new Error("the stand-in SDK refused to load");
     if (options.openHangs) await new Promise<never>(() => {});
-    return standIn.query;
+    if (options.stderrOnQueryClose !== true) return standIn.query;
+    return (parameters) => {
+      const query = standIn.query(parameters);
+      return {
+        [Symbol.asyncIterator]: () => query[Symbol.asyncIterator](),
+        close: () => {
+          query.close();
+          parameters.options?.stderr?.("provider detail from Query.close()");
+        },
+      };
+    };
   };
 
   const handle = createClaudeBackend({
