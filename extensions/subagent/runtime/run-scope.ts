@@ -62,6 +62,7 @@ import {
   arbitrate,
   type SettlementCandidate,
 } from "./arbitration.ts";
+import type { CleanupEscalation } from "./cleanup-escalation.ts";
 import type { RuntimeCounters } from "./counters.ts";
 import {
   type ControlMailbox,
@@ -89,36 +90,30 @@ export const RUN_STAGES = {
 
 export type RunStage = (typeof RUN_STAGES)[keyof typeof RUN_STAGES];
 
-/** Everything one Run fiber needs, gathered so its signature stays readable. */
-export interface RunContext {
-  readonly identity: RunIdentity;
-  readonly input: RunInput;
-  readonly agent: BackendAgent;
+/** Session-long dependencies shared by every Run in one supervisor. */
+export interface RunEnvironment {
   readonly repository: RunRepository["Service"];
   readonly store: ResultStore["Service"];
   readonly counters: RuntimeCounters;
   readonly bounds: ProjectionBounds;
   readonly observationQueueBound: number;
   readonly controlBounds: ControlBounds;
-  readonly startedAt: number;
   /** Reads the clock for the settled-at stamp. */
   readonly now: Effect.Effect<number>;
   /** Appended to by every stage, so ordering is assertable. */
-  readonly trace: (stage: RunStage) => void;
-  /**
-   * Close the native execution scope, bounded however the caller bounds it.
-   *
-   * Returns a diagnostic when the close did not finish inside its budget and
-   * the caller escalated past it. Passing this in keeps the settlement order
-   * in one place and the cleanup policy in another.
-   */
-  readonly closeExecutionScope: (
-    scope: Scope.Closeable,
-  ) => Effect.Effect<RunDiagnostic | undefined>;
+  readonly trace: (identity: RunIdentity, stage: RunStage) => void;
+  /** The module that owns cleanup-budget decisions and escalation. */
+  readonly cleanupEscalation: CleanupEscalation;
   /** How long a cancelled execution may take to leave its fiber. */
   readonly cleanupBudgetMillis: number;
-  /** Apply this Run's one escalation, shared with native-scope cleanup. */
-  readonly escalateRunCleanup: Effect.Effect<RunDiagnostic>;
+}
+
+/** The facts that name one Run and its settlement hook. */
+export interface RunContext {
+  readonly identity: RunIdentity;
+  readonly input: RunInput;
+  readonly agent: BackendAgent;
+  readonly startedAt: number;
   /** Called after the terminal snapshot is published. Delivery hooks in here. */
   readonly onSettled: (result: RunResult) => Effect.Effect<void>;
 }
@@ -273,6 +268,7 @@ export interface RunHandle {
  * `Ref` the settlement path reads. Nothing else writes either.
  */
 function reducerLoop(
+  environment: RunEnvironment,
   context: RunContext,
   intake: ObservationIntake,
   projection: Ref.Ref<RunProjection>,
@@ -284,20 +280,20 @@ function reducerLoop(
       if (Exit.isFailure(next)) return;
       const observation = next.value;
       const folded = yield* Ref.modify(projection, (current) => {
-        const step = reduceRun(current, observation, context.bounds);
+        const step = reduceRun(current, observation, environment.bounds);
         return [step, step.projection];
       });
       reports.push(folded.report);
       if (folded.report.report === "ignored-late") {
-        context.counters.count("lateObservations");
+        environment.counters.count("lateObservations");
       }
       if (
         observation.kind === "reconciliation" &&
         reconciliationDiffered(folded.report)
       ) {
-        context.counters.count("reconciliationDifferences");
+        environment.counters.count("reconciliationDifferences");
       }
-      yield* context.repository.recordProjection(
+      yield* environment.repository.recordProjection(
         context.identity.runId,
         folded.projection,
       );
@@ -363,22 +359,26 @@ type PrepareExecution<E> = (io: {
 }) => Effect.Effect<RunExecution, E>;
 
 function buildRunHandle<E>(
+  environment: RunEnvironment,
   context: RunContext,
   prepareExecution: PrepareExecution<E>,
 ): Effect.Effect<RunHandle, E, Scope.Scope> {
   return Effect.gen(function* () {
-    const { counters, identity } = context;
+    const { counters } = environment;
+    const { identity } = context;
     const parent = yield* Effect.scope;
     const runScope = yield* Scope.fork(parent);
 
     return yield* Effect.gen(function* () {
       const intake = yield* makeIntake(
-        context.observationQueueBound,
+        environment.observationQueueBound,
         counters,
       ).pipe(Scope.provide(runScope));
-      const mailbox = yield* makeMailbox(context.controlBounds, counters).pipe(
-        Scope.provide(runScope),
-      );
+      const mailbox = yield* makeMailbox(
+        environment.controlBounds,
+        counters,
+      ).pipe(Scope.provide(runScope));
+
       const completion = yield* Deferred.make<void>();
       const activation = yield* Deferred.make<void>();
       const projection = yield* Ref.make(createRunProjection());
@@ -424,7 +424,9 @@ function buildRunHandle<E>(
         activate: Effect.asVoid(Deferred.succeed(activation, undefined)),
         // Suspended, so the settlement loop's own bookkeeping belongs to the
         // fiber that runs it rather than to the fiber that built the handle.
-        settle: Effect.suspend(() => runToSettlement(context, resources)),
+        settle: Effect.suspend(() =>
+          runToSettlement(environment, context, resources),
+        ),
       };
     }).pipe(Effect.onError(() => Scope.close(runScope, Exit.void)));
   });
@@ -435,9 +437,10 @@ const synchronousExecuteDiagnostic = (): RunDiagnostic =>
 
 /** Build a start's handle, preserving a synchronous execute throw as admission failure. */
 export function makeRunHandle(
+  environment: RunEnvironment,
   context: RunContext,
 ): Effect.Effect<RunHandle, RunDiagnostic, Scope.Scope> {
-  return buildRunHandle(context, (io) =>
+  return buildRunHandle(environment, context, (io) =>
     Effect.try({
       try: () => context.agent.execute(context.input, io),
       catch: synchronousExecuteDiagnostic,
@@ -454,9 +457,10 @@ export function makeRunHandle(
  * the same arbitration path as an asynchronous backend defect.
  */
 export function makeResumedRunHandle(
+  environment: RunEnvironment,
   context: RunContext,
 ): Effect.Effect<RunHandle, never, Scope.Scope> {
-  return buildRunHandle(context, (io) =>
+  return buildRunHandle(environment, context, (io) =>
     Effect.matchEffect(
       Effect.try({
         try: () => context.agent.execute(context.input, io),
@@ -483,10 +487,12 @@ export function makeResumedRunHandle(
  * delivery has been asked to run.
  */
 function runToSettlement(
+  environment: RunEnvironment,
   context: RunContext,
   resources: RunResources,
 ): Effect.Effect<SettledRun> {
-  const { counters, identity, repository, store } = context;
+  const { counters, repository, store } = environment;
+  const { identity } = context;
   const { completion, executionScope, projection, reports, runScope } =
     resources;
   let committed:
@@ -506,7 +512,7 @@ function runToSettlement(
     const reducer = yield* Effect.acquireRelease(
       Effect.map(
         Effect.forkIn(
-          reducerLoop(context, intake, projection, reports),
+          reducerLoop(environment, context, intake, projection, reports),
           runScope,
         ),
         (fiber) => {
@@ -543,7 +549,7 @@ function runToSettlement(
       Effect.as(Fiber.await(running), false),
       Effect.as(Deferred.await(stop.requested), true),
     );
-    let executionEscalation: RunDiagnostic | undefined;
+    let executionOverran = false;
     let executionCandidate: SettlementCandidate;
     if (!stopWon) {
       executionCandidate = candidateOf(yield* Fiber.await(running));
@@ -551,7 +557,7 @@ function runToSettlement(
       running.interruptUnsafe();
       const stopped = yield* Effect.timeoutOption(
         Fiber.await(running),
-        context.cleanupBudgetMillis,
+        environment.cleanupBudgetMillis,
       );
       if (stopped._tag === "Some") {
         executionCandidate = candidateOf(stopped.value);
@@ -559,7 +565,10 @@ function runToSettlement(
         // Arbitration applies the recorded Cancellation reason from the
         // snapshot it already reads below; this is only the fallback.
         executionCandidate = { source: "interruption", reason: "requested" };
-        executionEscalation = yield* context.escalateRunCleanup;
+        // Disposal still begins at settlement step 4, after candidate capture,
+        // sealing, and finalizing publication. This flag tells that one close
+        // not to charge a second execution-wait budget before escalating.
+        executionOverran = true;
       }
     }
     settlementStarted = true;
@@ -575,15 +584,21 @@ function runToSettlement(
     // 2. `finalizing`, published before any cleanup runs, so nothing shows a
     //    Run as terminal while its finalizers are still going.
     yield* repository.transition(identity.runId, "execution-ended");
-    context.trace(RUN_STAGES.finalizingPublished);
+    environment.trace(identity, RUN_STAGES.finalizingPublished);
 
-    // 3. Close the native execution scope, bounded by whatever the caller
-    //    bounds it by. A close that outlived its budget hands back the
-    //    diagnostic saying so, and settlement carries on with what it has —
-    //    a hung finalizer must not leave a Run in `finalizing` forever.
-    const scopeEscalation = yield* context.closeExecutionScope(executionScope);
-    const escalation = executionEscalation ?? scopeEscalation;
-    context.trace(RUN_STAGES.executionScopeClosed);
+    // 3. Close the native execution scope. If the execution wait already
+    //    overran, disposal starts here but escalation is immediate; otherwise
+    //    the module bounds the close. Either way, an uncooperative finalizer
+    //    cannot leave a Run in `finalizing` forever.
+    const escalation = yield* environment.cleanupEscalation.closeExecutionScope(
+      {
+        subagentId: identity.subagentId,
+        agent: context.agent,
+        scope: executionScope,
+        ...(executionOverran ? { alreadyOverran: true } : {}),
+      },
+    );
+    environment.trace(identity, RUN_STAGES.executionScopeClosed);
 
     // 4. Arbitrate once cleanup is done, then put the terminal observations
     //    through the Run's one ordered intake. The core is their only emitter:
@@ -614,16 +629,16 @@ function runToSettlement(
     }
     terminal.push({ kind: "ending", ending: decided.ending });
     yield* intake.sealWith(terminal);
-    context.trace(RUN_STAGES.intakeSealed);
+    environment.trace(identity, RUN_STAGES.intakeSealed);
 
     // 5. Drain and reduce every accepted observation. Sealing ended the queue,
     //    so the reducer finishes once it has taken the terminal ending.
     yield* Fiber.join(reducer);
-    context.trace(RUN_STAGES.observationsDrained);
+    environment.trace(identity, RUN_STAGES.observationsDrained);
     const folded = yield* Ref.get(projection);
 
     // 6. Produce the bounded candidate result.
-    const settledAt = yield* context.now;
+    const settledAt = yield* environment.now;
     const result = toRunResult({
       identity,
       projection: folded,
@@ -631,18 +646,18 @@ function runToSettlement(
       startedAt: context.startedAt,
       settledAt,
     });
-    context.trace(RUN_STAGES.resultProduced);
+    environment.trace(identity, RUN_STAGES.resultProduced);
 
     // 7. Close the rest of the Run Scope. The intake queue, the mailbox, and
     //    the reducer fiber's bookkeeping all go here — before the commit, so
     //    a Run that is retrievable is a Run that is holding nothing.
     yield* Scope.close(runScope, Exit.void);
-    context.trace(RUN_STAGES.runScopeClosed);
+    environment.trace(identity, RUN_STAGES.runScopeClosed);
 
     // 8. Commit, idempotently.
     const commit = yield* store.commit(result);
     committed = { result: commit.result, ending: decided.ending };
-    context.trace(RUN_STAGES.resultCommitted);
+    environment.trace(identity, RUN_STAGES.resultCommitted);
 
     // 9. Publish the terminal snapshot — only now, so a terminal snapshot
     //     implies a retrievable result.
@@ -658,15 +673,15 @@ function runToSettlement(
         )
       : repository.transition(identity.runId, settlementEvent, settledAt);
     yield* store.releasePin(identity.runId, "publication");
-    context.trace(RUN_STAGES.terminalPublished);
+    environment.trace(identity, RUN_STAGES.terminalPublished);
 
     // 10. Wake anyone waiting. The value they read comes from the store.
     yield* Deferred.succeed(completion, undefined);
-    context.trace(RUN_STAGES.waitersWoken);
+    environment.trace(identity, RUN_STAGES.waitersWoken);
 
     // 11. Initiate delivery.
     yield* context.onSettled(commit.result);
-    context.trace(RUN_STAGES.deliveryInitiated);
+    environment.trace(identity, RUN_STAGES.deliveryInitiated);
 
     return {
       result: commit.result,
@@ -726,13 +741,13 @@ function runToSettlement(
         const diagnosed = reduceRun(
           open,
           { kind: "diagnostic", diagnostic },
-          context.bounds,
+          environment.bounds,
         );
         reports.push(diagnosed.report);
         const ended = reduceRun(
           diagnosed.projection,
           { kind: "ending", ending },
-          context.bounds,
+          environment.bounds,
         );
         reports.push(ended.report);
         yield* Ref.set(projection, ended.projection);
@@ -741,10 +756,16 @@ function runToSettlement(
         // The fallback commit is best-effort, but terminality is not.
         yield* repository.transition(identity.runId, "execution-ended");
         yield* repository.recordProjection(identity.runId, ended.projection);
-        yield* Effect.exit(context.closeExecutionScope(executionScope));
+        yield* Effect.exit(
+          environment.cleanupEscalation.closeExecutionScope({
+            subagentId: identity.subagentId,
+            agent: context.agent,
+            scope: executionScope,
+          }),
+        );
         yield* Effect.exit(Scope.close(runScope, Exit.void));
 
-        const clock = yield* Effect.exit(context.now);
+        const clock = yield* Effect.exit(environment.now);
         const settledAt = Exit.isSuccess(clock)
           ? clock.value
           : context.startedAt;

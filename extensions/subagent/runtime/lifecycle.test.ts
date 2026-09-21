@@ -329,6 +329,60 @@ test("cancel returns before a stuck native stop and settlement bounds its exit",
   assert.equal(outcome.noLeaks, true);
 });
 
+test("a cancelled execution overrun accepts cleanup observations before central terminal sealing", async () => {
+  const policy: RuntimePolicy = {
+    ...DEFAULT_RUNTIME_POLICY,
+    cleanupBudgetMillis: 2_000,
+  };
+  const outcome = await withSession(
+    {
+      policy,
+      testClock: true,
+      steps: [
+        [
+          {
+            step: "emit-in-finalizer",
+            observation: {
+              kind: "message",
+              role: "assistant",
+              parts: [{ kind: "text", text: "said during teardown" }],
+            },
+          },
+          emitText("partial output"),
+          { step: "hang-on-stop" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(yield* rig.supervisor.start(request()));
+        yield* untilUnderWay(rig);
+        yield* quiesce();
+        yield* rig.supervisor.cancel([started.runId]);
+        yield* TestClock.adjust(policy.cleanupBudgetMillis + 1);
+        yield* untilTerminal(rig, started.runId);
+        return {
+          read: yield* rig.supervisor.result(started.runId),
+          counters: rig.supervisor.counters(),
+        };
+      }),
+  );
+
+  assert.equal(outcome.value.read.outcome, "result");
+  if (outcome.value.read.outcome === "result") {
+    assert.equal(outcome.value.read.result.finalOutput, "said during teardown");
+    assert.deepEqual(
+      outcome.value.read.result.diagnostics.map((item) => item.category),
+      ["cleanup-escalation"],
+    );
+  }
+  // The execution wait spent the one budget. Its scope begins closing before
+  // the core seals with reconciliation and ending, so cleanup evidence lands.
+  assert.equal(outcome.value.counters.lateEvents, 0);
+  assert.equal(outcome.value.counters.cleanupEscalations, 1);
+  assert.equal(outcome.noLeaks, true);
+});
+
 test("a stuck execution and execution-scope finalizer escalate only once", async () => {
   const policy: RuntimePolicy = {
     ...DEFAULT_RUNTIME_POLICY,

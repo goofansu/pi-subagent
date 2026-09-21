@@ -316,17 +316,25 @@ observation queue bound, the open budget, the cleanup budget, the delivery
 retry budget, and an optional default Run timeout. Configuration rather than a
 service, so a test lowers a bound by spreading over the defaults.
 
+**Run environment** — the Run repository, Result store, counters, projection
+bounds, observation queue bound, Control bounds, cleanup budget, current-time
+dependency, stage trace, and cleanup escalation module shared by every Run in
+one supervisor. The supervisor composes it once and gives it to each Run Scope
+rather than rebuilding those dependencies in every per-Run context.
+
 **Run Scope** — what one Run holds for its lifetime: a bounded observation
 intake, one reducer fiber, a Control mailbox, a completion `Deferred` that is
-the settlement barrier, and — nested inside it — the native execution scope.
-Closing the Run Scope releases all of them; the nested
-scope can close independently, because a provider turn may end without ending
-the Run. The **Run handle** holds all of that privately and publishes
-operations over it: carry the Run through settlement, open its activation gate,
-admit one Control, and **stop** it — close the mailbox, record the stop request
-and interrupt the execution however far along it is. Only the identity, the
-intake, the folded projection and the completion barrier are readable, so no
-caller can perform half a stop.
+the settlement barrier, and — nested inside it — the native execution scope. It
+reads session-long services, bounds, and the clock from the Run environment the
+supervisor composes once, and receives per Run only its identity, input,
+BackendAgent, started-at stamp, and settlement hook. Closing the Run Scope
+releases all of them; the nested scope can close independently, because a
+provider turn may end without ending the Run. The **Run handle** holds all of
+that privately and publishes operations over it: carry the Run through
+settlement, open its activation gate, admit one Control, and **stop** it — close
+the mailbox, record the stop request and interrupt the execution however far
+along it is. Only the identity, the intake, the folded projection and the
+completion barrier are readable, so no caller can perform half a stop.
 
 **Arbitration** — the pure function that orders the execution's recorded
 decision against the first stop request. A decision recorded first yields its
@@ -343,16 +351,18 @@ appends reconciliation then ending, preserving their FIFO order. Everything
 emitted after sealing is a counted late event and a no-op, so the contract's
 "emit never fails" still holds, including for abandoned or escaped native work.
 
-**Cleanup escalation** — what happens when cleanup outlives its budget. For a
-native execution scope, the Run gets a `cleanup-escalation` diagnostic, the core
+**Cleanup escalation** — what happens when cleanup outlives its budget, decided
+and counted in `runtime/cleanup-escalation.ts` for both cases. For a native
+execution scope, the Run gets a `cleanup-escalation` diagnostic, the core
 closes the BackendAgent, marks its Conversation lost, and continues settlement.
 The same happens when a cancelled native execution does not stop within the
-budget: its fiber is abandoned, its partial output is retained, and the Run
-settles cancelled with its recorded reason. For a Subagent Scope / BackendAgent
-close overrun after its Run has settled, there is no Run to carry a diagnostic:
-the escalation is recorded by the `cleanupEscalations` counter alone. A hung
-execution or finalizer must not leave a Run in `running` or `finalizing` forever
-or prevent Session closure.
+budget: its fiber is
+abandoned, its partial output is retained, and the Run settles cancelled with
+its recorded reason. For a Subagent Scope / BackendAgent close overrun after its
+Run has settled, there is no Run to carry a diagnostic: the escalation is
+recorded by the `cleanupEscalations` counter alone. A hung execution or
+finalizer must not leave a Run in `running` or `finalizing` forever or prevent
+Session closure.
 
 **Subagent records** — what the supervisor knows about each Subagent it owns,
 and the only writer of any of it: the fixed facts (id, Profile, context,
