@@ -275,7 +275,9 @@ export interface BackendConformanceScenarioRow
 /** A provider-shaped replacement of named row fields, with its rationale. */
 export interface BackendConformanceScenarioOverride {
   readonly reason: string;
-  /** Trace storage is fixture-local state, not provider-shaped row data. */
+  /** Request fresh fixture-local trace storage without supplying its contents. */
+  readonly trace?: true;
+  /** Trace storage is declared separately and cannot be replaced or shared. */
   readonly replace: Partial<Omit<BackendConformanceScenarioRow, "trace">>;
 }
 
@@ -706,12 +708,17 @@ export function composeConformanceFixture<Script>(options: {
   if (options.override !== undefined && "trace" in options.override.replace) {
     throw new Error("a conformance scenario override cannot replace trace");
   }
+  if (options.row.trace !== undefined && options.row.trace.length > 0) {
+    throw new Error("a conformance scenario row cannot supply trace contents");
+  }
+  const traceRequested =
+    options.row.trace !== undefined || options.override?.trace === true;
   const row = {
     ...options.row,
     ...options.override?.replace,
-    // A table row declares that tracing is needed; each built fixture owns
-    // the fresh mutable storage that records its own ordering evidence.
-    ...(options.row.trace === undefined ? {} : { trace: [] }),
+    // A row or override declares that tracing is needed; each built fixture
+    // owns fresh mutable storage rather than sharing declaration-time state.
+    ...(traceRequested ? { trace: [] } : {}),
   };
   return options.build(options.script, row);
 }
