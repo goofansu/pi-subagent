@@ -11,6 +11,11 @@ import {
 } from "./agent-tool-renderers.ts";
 import type { RenderableTheme } from "./rows.ts";
 import {
+  CANCEL_PRESENTATION,
+  cancelBuckets,
+  collectionRowPresentation,
+  decodeToolRowFacts,
+  type ResultToolRowFacts,
   resumeToolRowFacts,
   startToolRowFacts,
   steerToolRowFacts,
@@ -232,6 +237,25 @@ test("resume and steer malformed, foreign, and legacy details use readable fallb
   );
 });
 
+test("a decoded facts value chooses its own summary without an operation re-check", () => {
+  const details = steerToolRowFacts(runId("run-foreign"), {
+    outcome: "accepted",
+    runId: runId("run-foreign"),
+  });
+  const rendered = lines(
+    agentToolRenderers("resume").renderResult(
+      { content: [{ type: "text", text: "fallback response" }], details },
+      { expanded: false, isPartial: false },
+      plainTheme,
+      context({}),
+    ),
+    80,
+  )[0];
+
+  assert.match(rendered, new RegExp(`^${details.rowPhrase}`));
+  assert.doesNotMatch(rendered, /fallback response/);
+});
+
 test("a narrow resumed identity drops its field label before clipping the Run id", () => {
   const details = resumeToolRowFacts({
     outcome: "started",
@@ -342,6 +366,36 @@ test("successful start and resume identities read phrase and tone from facts", (
 test("golden: every operation keeps its collapsed row text and styling", () => {
   const run = runId("run-1");
   const subagent = subagentId("subagent-1");
+  const waitDetails = {
+    kind: "collection",
+    scope: "named",
+    runs: [],
+    stillRunning: 1,
+    unknown: 0,
+    unavailable: 0,
+    noActiveRuns: false,
+  } as const;
+  const idleWaitAllDetails = {
+    kind: "collection",
+    scope: "all-active",
+    runs: [],
+    stillRunning: 0,
+    unknown: 0,
+    unavailable: 0,
+    noActiveRuns: true,
+  } as const;
+  const resultDetails = {
+    kind: "result" as const,
+    outcome: "available" as const,
+    rowPhrase: "synthetic result summary",
+    tone: "toolOutput" as const,
+    run: {
+      runId: run,
+      agent: "explore",
+      status: "completed" as const,
+      output: { kind: "visible" as const, characters: 12_345 },
+    },
+  };
   const cases = [
     [
       "start",
@@ -360,50 +414,9 @@ test("golden: every operation keeps its collapsed row text and styling", () => {
       }),
     ],
     ["steer", steerToolRowFacts(run, { outcome: "unknown Run", runId: run })],
-    [
-      "wait",
-      {
-        kind: "collection",
-        scope: "named",
-        runs: [],
-        stillRunning: 1,
-        unknown: 0,
-        unavailable: 0,
-        noActiveRuns: false,
-      },
-    ],
-    [
-      "waitAll",
-      {
-        kind: "collection",
-        scope: "all-active",
-        runs: [],
-        stillRunning: 0,
-        unknown: 0,
-        unavailable: 0,
-        noActiveRuns: true,
-      },
-    ],
-    [
-      "result",
-      {
-        kind: "result",
-        outcome: "available",
-        run: {
-          runId: run,
-          agent: "explore",
-          status: "completed",
-          output: { kind: "visible", characters: 12_345 },
-        },
-      },
-    ],
-    [
-      "cancel",
-      {
-        kind: "cancel",
-        outcomes: [{ kind: "requested", runId: run }],
-      },
-    ],
+    ["wait", waitDetails],
+    ["waitAll", idleWaitAllDetails],
+    ["result", resultDetails],
   ] as const;
   const rendered = Object.fromEntries(
     cases.map(([operation, details]) => [
@@ -421,78 +434,86 @@ test("golden: every operation keeps its collapsed row text and styling", () => {
   );
 
   const hint = " <dim>(</dim> to expand<dim>)</dim>";
+  const styledCollection = (
+    presentation: ReturnType<typeof collectionRowPresentation>,
+  ) => {
+    const text =
+      presentation.answer ?? presentation.clauses.join(presentation.separator);
+    return `<${presentation.tone}>${text}</${presentation.tone}>${hint}`;
+  };
   assert.deepEqual(rendered, {
     start: `<toolTitle>Started explore</toolTitle><dim> · Subagent subagent-1 · Run run-1</dim>${hint}`,
     resume: `<toolTitle>Resumed</toolTitle><dim> · Run run-1</dim>${hint}`,
     steer: `<error>Control refused</error><dim> · unknown Run</dim>${hint}`,
-    wait: `<toolOutput>1 Run still running</toolOutput>${hint}`,
-    waitAll: `<toolOutput>No active Runs</toolOutput>${hint}`,
-    result: `<toolOutput>explore · run-1 · completed · 12.3k characters</toolOutput>${hint}`,
-    cancel: `<toolOutput>Cancellation requested: 1</toolOutput>${hint}`,
+    wait: styledCollection(collectionRowPresentation(waitDetails)),
+    waitAll: styledCollection(collectionRowPresentation(idleWaitAllDetails)),
+    result: `<${resultDetails.tone}>explore · run-1 · completed · ${resultDetails.rowPhrase}</${resultDetails.tone}>${hint}`,
   });
 });
 
-test("aggregate result facts retain exact text and tone for every outcome", () => {
-  const cases = [
-    [
-      {
-        kind: "result",
-        outcome: "available",
-        run: {
-          runId: "run-1",
-          agent: "explore",
-          status: "completed",
-          output: { kind: "visible", characters: 12_345 },
-        },
+test("Result rows retain fact-provided text and tone in each outcome layout", () => {
+  const cases: readonly ResultToolRowFacts[] = [
+    {
+      kind: "result",
+      outcome: "available",
+      rowPhrase: "visible synthetic summary",
+      tone: "toolOutput",
+      run: {
+        runId: "run-1",
+        agent: "explore",
+        status: "completed",
+        output: { kind: "visible", characters: 12_345 },
       },
-      "<toolOutput>explore · run-1 · completed · 12.3k characters</toolOutput>",
-    ],
-    [
-      {
-        kind: "result",
-        outcome: "available",
-        run: {
-          runId: "run-none",
-          agent: "explore",
-          status: "completed",
-          output: { kind: "none" },
-        },
+    },
+    {
+      kind: "result",
+      outcome: "available",
+      rowPhrase: "empty synthetic summary",
+      tone: "warning",
+      run: {
+        runId: "run-none",
+        agent: "explore",
+        status: "completed",
+        output: { kind: "none" },
       },
-      "<toolOutput>explore · run-none · completed · no output</toolOutput>",
-    ],
-    [
-      {
-        kind: "result",
-        outcome: "available",
-        run: {
-          runId: "run-removed",
-          agent: "explore",
-          status: "completed",
-          output: { kind: "removed" },
-        },
+    },
+    {
+      kind: "result",
+      outcome: "available",
+      rowPhrase: "removed synthetic summary",
+      tone: "error",
+      run: {
+        runId: "run-removed",
+        agent: "explore",
+        status: "completed",
+        output: { kind: "removed" },
       },
-      "<toolOutput>explore · run-removed · completed · output removed</toolOutput>",
-    ],
-    [
-      { kind: "result", outcome: "still-running", runId: "run-2" },
-      "<warning>run-2 · still running</warning>",
-    ],
-    [
-      { kind: "result", outcome: "unknown", runId: "run-never" },
-      "<error>run-never · unknown Run</error>",
-    ],
-    [
-      {
-        kind: "result",
-        outcome: "unavailable",
-        runId: "run-3",
-        status: "failed",
-      },
-      "<error>run-3 · Result unavailable · failed</error>",
-    ],
-  ] as const;
+    },
+    {
+      kind: "result",
+      outcome: "still-running",
+      rowPhrase: "pending synthetic summary",
+      tone: "warning",
+      runId: "run-2",
+    },
+    {
+      kind: "result",
+      outcome: "unknown",
+      rowPhrase: "missing synthetic summary",
+      tone: "error",
+      runId: "run-never",
+    },
+    {
+      kind: "result",
+      outcome: "unavailable",
+      rowPhrase: "evicted synthetic summary",
+      tone: "toolTitle",
+      runId: "run-3",
+      status: "failed",
+    },
+  ];
 
-  for (const [details, expected] of cases) {
+  for (const details of cases) {
     const rendered = lines(
       agentToolRenderers("result").renderResult(
         { content: [{ type: "text", text: "complete prose" }], details },
@@ -502,8 +523,38 @@ test("aggregate result facts retain exact text and tone for every outcome", () =
       ),
       120,
     )[0];
-    assert.equal(rendered, `${expected} <dim>(</dim> to expand<dim>)</dim>`);
+    const body =
+      details.outcome === "available"
+        ? `${details.run.agent} · ${details.run.runId} · ${details.run.status} · ${details.rowPhrase}`
+        : details.outcome === "unavailable"
+          ? `${details.runId} · ${details.rowPhrase} · ${details.status}`
+          : `${details.runId} · ${details.rowPhrase}`;
+    assert.equal(
+      rendered,
+      `<${details.tone}>${body}</${details.tone}> <dim>(</dim> to expand<dim>)</dim>`,
+    );
   }
+});
+
+test("Result rows read phrase and tone from facts while keeping identifier layout", () => {
+  const details = {
+    kind: "result" as const,
+    outcome: "still-running" as const,
+    rowPhrase: "awaiting answer",
+    tone: "error" as const,
+    runId: "run-custom",
+  };
+  const rendered = lines(
+    agentToolRenderers("result").renderResult(
+      { content: [{ type: "text", text: "complete prose" }], details },
+      { expanded: false, isPartial: false },
+      markedTheme,
+      context({}),
+    ),
+    80,
+  )[0];
+
+  assert.match(rendered, /^<error>run-custom · awaiting answer<\/error>/);
 });
 
 test("a one-line rejection with no hidden prompt content has no expansion affordance", () => {
@@ -564,34 +615,47 @@ test("cancellation call names deduplicated Runs or a width-fitted count", () => 
   assert.ok(narrow.every((line) => visibleWidth(line) <= 24));
 });
 
-test("cancellation uses the configured hint and omits it for an identical one-line response", () => {
+test("cancellation summary keeps every bucket in the aggregate tone, fits its width, and owns one configured hint", () => {
   const details = {
     kind: "cancel" as const,
-    outcomes: [{ kind: "requested" as const, runId: "run-demo-1" }],
+    outcomes: [
+      { kind: "requested" as const, runId: "run-demo-1" },
+      { kind: "unknown" as const, runId: "run-missing" },
+    ],
   };
+  const summary = cancelBuckets(details)
+    .map(({ rowPhrase, count }) => `${rowPhrase}: ${count}`)
+    .join(" · ");
   const actions: string[] = [];
-  const configured = formatCancellationSummary(
+  const toned = formatCancellationSummary(
     details,
-    plainTheme,
-    80,
+    markedTheme,
+    120,
     (action, description) => {
       actions.push(action);
       return `alt+o ${description}`;
     },
   );
-  assert.equal(configured, "Cancellation requested: 1 (alt+o to expand)");
+  assert.ok(toned.startsWith(`<toolOutput>${summary}</toolOutput>`));
   assert.deepEqual(actions, ["app.tools.expand"]);
-  assert.equal(configured.match(/to expand/g)?.length, 1);
+  assert.equal(toned.match(/to expand/g)?.length, 1);
 
-  assert.equal(
-    formatCancellationSummary(
-      { kind: "cancel", outcomes: [] },
-      plainTheme,
-      80,
-      (_action, description) => `alt+o ${description}`,
-    ),
-    "No run ids were given. (alt+o to expand)",
+  const configured = formatCancellationSummary(
+    details,
+    plainTheme,
+    36,
+    (_action, description) => `alt+o ${description}`,
   );
+  assert.ok(visibleWidth(configured) <= 36);
+
+  const empty = formatCancellationSummary(
+    { kind: "cancel", outcomes: [] },
+    plainTheme,
+    36,
+    (_action, description) => `alt+o ${description}`,
+  );
+  assert.ok(visibleWidth(empty) <= 36);
+  assert.equal(empty.match(/to expand/g)?.length, 1);
 
   const pair = agentToolRenderers("cancel");
   const state: AgentToolRendererState = {};
@@ -602,28 +666,27 @@ test("cancellation uses the configured hint and omits it for an identical one-li
     }),
     80,
   );
-  const result = pair.renderResult(
-    {
-      content: [{ type: "text", text: "Cancellation requested: 1" }],
-      details,
-    },
+  for (const expanded of [false, true]) {
+    const result = pair.renderResult(
+      { content: [{ type: "text", text: summary }], details },
+      { expanded, isPartial: false },
+      plainTheme,
+      context(state, { expanded }),
+    );
+    assert.equal(lines(result, 80).join("\n"), summary);
+    assert.doesNotMatch(lines(result, 80).join("\n"), /to (?:expand|collapse)/);
+  }
+
+  const marked = pair.renderResult(
+    { content: [{ type: "text", text: summary }], details },
     { expanded: false, isPartial: false },
-    plainTheme,
+    markedTheme,
     context(state),
   );
-  assert.equal(lines(result, 80).join("\n"), "Cancellation requested: 1");
-
-  const expanded = pair.renderResult(
-    {
-      content: [{ type: "text", text: "Cancellation requested: 1" }],
-      details,
-    },
-    { expanded: true, isPartial: false },
-    plainTheme,
-    context(state, { expanded: true }),
+  assert.equal(
+    lines(marked, 120).join("\n"),
+    `<toolOutput>${summary}</toolOutput>`,
   );
-  assert.equal(lines(expanded, 80).join("\n"), "Cancellation requested: 1");
-  assert.doesNotMatch(lines(expanded, 80).join("\n"), /to collapse/);
 });
 
 test("empty settled and partial cancellation rows have no inert toggle", () => {
@@ -637,7 +700,7 @@ test("empty settled and partial cancellation rows have no inert toggle", () => {
     {
       result: { content: [], details: { kind: "cancel", outcomes: [] } },
       options: { expanded: false, isPartial: false },
-      expected: "No run ids were given.",
+      expected: CANCEL_PRESENTATION.emptyAnswer,
     },
     {
       result: { content: [], details: { kind: "cancel", outcomes: [] } },
@@ -948,148 +1011,76 @@ test("result-bearing calls retain their operation and identify their scope or ta
   }
 });
 
-test("collection summaries discriminate delivery, timeout, unknown, unavailable, and no-active outcomes", () => {
+test("collection rendering follows the declared tone and fits whole clauses by priority", () => {
+  const details = {
+    kind: "collection" as const,
+    scope: "named" as const,
+    runs: [
+      {
+        runId: "run-1",
+        agent: "explore",
+        status: "completed" as const,
+        output: { kind: "visible" as const, characters: 6 },
+      },
+    ],
+    stillRunning: 2,
+    unknown: 1,
+    unavailable: 1,
+    noActiveRuns: false as const,
+  };
+  const presentation = collectionRowPresentation(details);
   const pair = agentToolRenderers("wait");
-  const cases = [
-    [
-      {
-        kind: "collection",
-        scope: "named",
-        runs: [
-          {
-            runId: "run-1",
-            agent: "explore",
-            status: "completed",
-            output: { kind: "visible", characters: 6 },
-          },
-        ],
-        stillRunning: 0,
-        unknown: 0,
-        unavailable: 0,
-        noActiveRuns: false,
-      },
-      "Delivered 1 Result",
-    ],
-    [
-      {
-        kind: "collection",
-        scope: "named",
-        runs: [
-          {
-            runId: "run-1",
-            agent: "explore",
-            status: "completed",
-            output: { kind: "visible", characters: 6 },
-          },
-        ],
-        stillRunning: 2,
-        unknown: 1,
-        unavailable: 1,
-        noActiveRuns: false,
-      },
-      "Delivered 1 Result · 1 Result unavailable · 2 Runs still running · 1 Run unknown",
-    ],
-    [
-      {
-        kind: "collection",
-        scope: "all-active",
-        runs: [],
-        stillRunning: 0,
-        unknown: 0,
-        unavailable: 0,
-        noActiveRuns: true,
-      },
-      "No active Runs",
-    ],
-  ] as const;
-
-  for (const [details, expected] of cases) {
-    const operationPair = agentToolRenderers(
-      details.scope === "named" ? "wait" : "waitAll",
-    );
-    const collapsed = lines(
-      operationPair.renderResult(
+  const render = (theme: RenderableTheme, width: number) =>
+    lines(
+      pair.renderResult(
         {
-          content: [{ type: "text", text: "Complete model response" }],
+          content: [{ type: "text", text: "complete response" }],
           details,
         },
         { expanded: false, isPartial: false },
-        plainTheme,
+        theme,
         context({}),
       ),
-      120,
+      width,
     ).join("\n");
-    assert.match(
-      collapsed,
-      new RegExp(
-        `^${expected.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")} \\(.*to expand\\)$`,
-      ),
-    );
-    assert.equal(collapsed.match(/to expand/g)?.length, 1);
+
+  const toned = render(markedTheme, 160);
+  assert.match(toned, /^<toolOutput>/);
+  assert.match(toned, /<\/toolOutput>/);
+
+  const summaries = [120, 60, 45].map((width) => {
+    const rendered = render(plainTheme, width);
+    assert.ok(visibleWidth(rendered) <= width);
+    return rendered.replace(/ \(.*to expand\)$/, "");
+  });
+  assert.equal(summaries[0], presentation.clauses.join(presentation.separator));
+  assert.ok(summaries[1].length < summaries[0].length);
+  assert.equal(summaries[2], presentation.priority[0]);
+  for (const summary of summaries) {
+    for (const clause of summary.split(presentation.separator)) {
+      assert.ok(presentation.clauses.includes(clause));
+    }
   }
 
-  const progressive = lines(
-    pair.renderResult(
-      {
-        content: [{ type: "text", text: "complete response" }],
-        details: {
-          kind: "collection",
-          scope: "named",
-          runs: [
-            {
-              runId: "run-1",
-              agent: "explore",
-              status: "completed",
-              output: { kind: "visible", characters: 6 },
-            },
-          ],
-          stillRunning: 1,
-          unknown: 1,
-          unavailable: 0,
-          noActiveRuns: false,
-        },
-      },
+  const idle = {
+    kind: "collection" as const,
+    scope: "all-active" as const,
+    runs: [],
+    stillRunning: 0,
+    unknown: 0,
+    unavailable: 0,
+    noActiveRuns: true as const,
+  };
+  const idleRow = lines(
+    agentToolRenderers("waitAll").renderResult(
+      { content: [{ type: "text", text: "idle" }], details: idle },
       { expanded: false, isPartial: false },
-      plainTheme,
+      markedTheme,
       context({}),
     ),
-    60,
+    120,
   ).join("\n");
-  assert.match(progressive, /^Delivered 1 Result · 1 Run still running/);
-  assert.doesNotMatch(progressive, /unknown/);
-  assert.ok(visibleWidth(progressive) <= 60);
-
-  const narrowTimeout = lines(
-    pair.renderResult(
-      {
-        content: [{ type: "text", text: "complete response" }],
-        details: cases[1][0],
-      },
-      { expanded: false, isPartial: false },
-      plainTheme,
-      context({}),
-    ),
-    45,
-  ).join("\n");
-  assert.match(narrowTimeout, /^2 Runs still running/);
-  assert.doesNotMatch(narrowTimeout, /^Delivered/);
-  assert.ok(visibleWidth(narrowTimeout) <= 45);
-
-  const clippedPriority = lines(
-    pair.renderResult(
-      {
-        content: [{ type: "text", text: "complete response" }],
-        details: cases[1][0],
-      },
-      { expanded: false, isPartial: false },
-      plainTheme,
-      context({}),
-    ),
-    30,
-  ).join("\n");
-  assert.match(clippedPriority, /^2 Runs/);
-  assert.doesNotMatch(clippedPriority, /unknown/);
-  assert.ok(visibleWidth(clippedPriority) <= 30);
+  assert.match(idleRow, /^<toolOutput>/);
 });
 
 test("result-bearing renderers reuse components and repaint the current theme", () => {
@@ -1101,6 +1092,8 @@ test("result-bearing renderers reuse components and repaint the current theme", 
     details: {
       kind: "result" as const,
       outcome: "available" as const,
+      rowPhrase: "repaint synthetic summary",
+      tone: "toolOutput" as const,
       run: {
         runId: "run-1",
         agent: "explore",
@@ -1136,6 +1129,31 @@ test("result-bearing renderers reuse components and repaint the current theme", 
   assert.match(lines(reusedResult, 80).join("\n"), /<toolOutput>/);
 });
 
+test("a legacy Result fact missing only row presentation fields falls back readably", () => {
+  const legacyDetails = {
+    kind: "result",
+    outcome: "still-running",
+    runId: "run-legacy",
+  };
+  assert.equal(decodeToolRowFacts(legacyDetails), undefined);
+
+  const rendered = lines(
+    agentToolRenderers("result").renderResult(
+      {
+        content: [{ type: "text", text: "Readable legacy response\nmore" }],
+        details: legacyDetails,
+      },
+      { expanded: false, isPartial: false },
+      plainTheme,
+      context({}),
+    ),
+    80,
+  ).join("\n");
+
+  assert.match(rendered, /^Readable legacy response \(.*to expand\)$/);
+  assert.doesNotMatch(rendered, /run-legacy/);
+});
+
 test("result-bearing renderers fail open for malformed details and present partial work as unfinished", () => {
   const pair = agentToolRenderers("result");
   for (const details of [
@@ -1162,7 +1180,13 @@ test("result-bearing renderers fail open for malformed details and present parti
     pair.renderResult(
       {
         content: [],
-        details: { kind: "result", outcome: "unknown", runId: "run-never" },
+        details: {
+          kind: "result",
+          outcome: "unknown",
+          rowPhrase: "settled synthetic summary",
+          tone: "error",
+          runId: "run-never",
+        },
       },
       { expanded: false, isPartial: true },
       plainTheme,
@@ -1171,5 +1195,5 @@ test("result-bearing renderers fail open for malformed details and present parti
     80,
   ).join("\n");
   assert.equal(partial, "agent_result is still running.");
-  assert.doesNotMatch(partial, /unknown Run|to expand/);
+  assert.doesNotMatch(partial, /settled synthetic summary|to expand/);
 });

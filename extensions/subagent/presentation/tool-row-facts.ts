@@ -25,17 +25,23 @@ import {
 } from "../domain/index.ts";
 import {
   type CompactFinalOutputSummary,
+  compactFinalOutputSummaryPhrase,
   finalOutputSummary,
 } from "./final-output-section.ts";
 import { formatDiagnosticLine } from "./result-details.ts";
+import { formatResult } from "./run-card.ts";
 
-/** Styling intent for one pass-through operation's collapsed row. */
-export type ToolRowTone = "toolTitle" | "warning" | "error";
+/** Styling intent for one operation outcome's collapsed row. */
+export type ToolRowTone = "toolTitle" | "toolOutput" | "warning" | "error";
 
-interface OutcomePresentation<Outcome, Context> {
+interface OutcomePresentation<
+  Outcome,
+  Context,
+  Tone extends ToolRowTone = ToolRowTone,
+> {
   readonly sentence: (outcome: Outcome, context: Context) => string;
   readonly rowPhrase: (outcome: Outcome) => string;
-  readonly tone: ToolRowTone;
+  readonly tone: Tone;
 }
 
 type OutcomeMember<
@@ -47,10 +53,15 @@ type OutcomeMember<
     : never
   : never;
 
-type OutcomeTable<Outcome extends { readonly outcome: string }, Context> = {
+type OutcomeTable<
+  Outcome extends { readonly outcome: string },
+  Context,
+  Tone extends ToolRowTone = ToolRowTone,
+> = {
   readonly [Name in Outcome["outcome"]]: OutcomePresentation<
     OutcomeMember<Outcome, Name>,
-    Context
+    Context,
+    Tone
   >;
 };
 
@@ -311,12 +322,58 @@ export const STEER_OUTCOME_PRESENTATION = {
   },
 } satisfies OutcomeTable<SteerOutcome, SteerSentenceContext>;
 
-function entryFor<Outcome extends { readonly outcome: string }, Context>(
-  table: OutcomeTable<Outcome, Context>,
+/**
+ * Every Result retrieval outcome's model sentence and collapsed-row presentation.
+ * The mapped type makes an added or removed domain outcome a compile error.
+ */
+export const RESULT_OUTCOME_PRESENTATION = {
+  result: {
+    sentence: (outcome) => formatResult(outcome.result),
+    rowPhrase: (outcome) =>
+      compactFinalOutputSummaryPhrase(
+        finalOutputSummary(interpretFinalOutput(outcome.result)),
+      ),
+    tone: "toolOutput",
+  },
+  ResultExpired: {
+    sentence: (outcome) =>
+      `Run ${outcome.runId} (subagent ${outcome.subagentId}) ${outcome.status}, ` +
+      "but its output was evicted to keep this Session's result store " +
+      "bounded. The Run is still known and its status still answers; the " +
+      "output itself is gone and cannot be recovered.",
+    rowPhrase: () => "Result unavailable",
+    tone: "error",
+  },
+  RunNotTerminal: {
+    sentence: (outcome) =>
+      `Run ${outcome.runId} has not finished yet, so it has no result. Its ` +
+      "completion is delivered to you on its own; agent_wait blocks until " +
+      "then and returns the result directly.",
+    rowPhrase: () => "still running",
+    tone: "warning",
+  },
+  "unknown Run": {
+    sentence: (outcome) =>
+      `No run with id ${outcome.runId}. Check the id against what ` +
+      "agent_start or agent_resume returned.",
+    rowPhrase: () => "unknown Run",
+    tone: "error",
+  },
+} satisfies OutcomeTable<ResultOutcome, undefined>;
+
+function entryFor<
+  Outcome extends { readonly outcome: string },
+  Context,
+  Tone extends ToolRowTone = ToolRowTone,
+>(
+  table: OutcomeTable<Outcome, Context, Tone>,
   outcome: Outcome,
-): OutcomePresentation<Outcome, Context> {
+): OutcomePresentation<Outcome, Context, Tone> {
   return (
-    table as unknown as Record<string, OutcomePresentation<Outcome, Context>>
+    table as unknown as Record<
+      string,
+      OutcomePresentation<Outcome, Context, Tone>
+    >
   )[outcome.outcome];
 }
 
@@ -328,10 +385,14 @@ function sentenceFor<Outcome extends { readonly outcome: string }, Context>(
   return entryFor(table, outcome).sentence(outcome, context);
 }
 
-function rowFor<Outcome extends { readonly outcome: string }, Context>(
-  table: OutcomeTable<Outcome, Context>,
+function rowFor<
+  Outcome extends { readonly outcome: string },
+  Context,
+  Tone extends ToolRowTone,
+>(
+  table: OutcomeTable<Outcome, Context, Tone>,
   outcome: Outcome,
-): { readonly rowPhrase: string; readonly tone: ToolRowTone } {
+): { readonly rowPhrase: string; readonly tone: Tone } {
   const entry = entryFor(table, outcome);
   return { rowPhrase: entry.rowPhrase(outcome), tone: entry.tone };
 }
@@ -364,6 +425,11 @@ export function steerOutcomeSentence(
   return sentenceFor(STEER_OUTCOME_PRESENTATION, outcome, { runId });
 }
 
+/** Format one Result retrieval outcome from the declaration shared with its row facts. */
+export function resultOutcomeSentence(outcome: ResultOutcome): string {
+  return sentenceFor(RESULT_OUTCOME_PRESENTATION, outcome, undefined);
+}
+
 const IdentifierText = Schema.String.check(
   Schema.isLengthBetween(1, 128),
   Schema.isPattern(/^[A-Za-z0-9._:-]+$/),
@@ -372,8 +438,22 @@ const Count = Schema.Finite.check(
   Schema.isInt(),
   Schema.isGreaterThanOrEqualTo(0),
 );
-const ToolRowToneSchema = Schema.Literals(["toolTitle", "warning", "error"]);
+const ToolRowToneSchema = Schema.Literals([
+  "toolTitle",
+  "toolOutput",
+  "warning",
+  "error",
+]);
+const PassThroughToolRowToneSchema = Schema.Literals([
+  "toolTitle",
+  "warning",
+  "error",
+]);
 const PassThroughRowSchema = {
+  rowPhrase: Schema.String.check(Schema.isMinLength(1)),
+  tone: PassThroughToolRowToneSchema,
+};
+const ResultRowSchema = {
   rowPhrase: Schema.String.check(Schema.isMinLength(1)),
   tone: ToolRowToneSchema,
 };
@@ -394,7 +474,7 @@ const StartToolRowFactsSchema = Schema.Union([
   StartedRunToolRowFactsSchema,
   StartRefusalToolRowFactsSchema,
 ]);
-type StartToolRowFacts = typeof StartToolRowFactsSchema.Type;
+export type StartToolRowFacts = typeof StartToolRowFactsSchema.Type;
 export type StartedRunToolRowFacts = typeof StartedRunToolRowFactsSchema.Type;
 
 const ResumedRunToolRowFactsSchema = Schema.Struct({
@@ -411,7 +491,7 @@ const ResumeToolRowFactsSchema = Schema.Union([
   ResumedRunToolRowFactsSchema,
   ResumeRefusalToolRowFactsSchema,
 ]);
-type ResumeToolRowFacts = typeof ResumeToolRowFactsSchema.Type;
+export type ResumeToolRowFacts = typeof ResumeToolRowFactsSchema.Type;
 export type ResumedRunToolRowFacts = typeof ResumedRunToolRowFactsSchema.Type;
 
 const SteerToolRowFactsSchema = Schema.Struct({
@@ -419,7 +499,7 @@ const SteerToolRowFactsSchema = Schema.Struct({
   ...PassThroughRowSchema,
   runId: IdentifierText,
 });
-type SteerToolRowFacts = typeof SteerToolRowFactsSchema.Type;
+export type SteerToolRowFacts = typeof SteerToolRowFactsSchema.Type;
 
 const CompactFinalOutputSummarySchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("none") }),
@@ -460,25 +540,147 @@ const CollectedRunsToolRowFactsSchema = Schema.Union([
 export type CollectedRunsToolRowFacts =
   typeof CollectedRunsToolRowFactsSchema.Type;
 
+/** The four clauses a collection row can report. */
+export type CollectionClauseKind =
+  | "delivered"
+  | "unavailable"
+  | "stillRunning"
+  | "unknown";
+
+interface CollectionClausePresentation {
+  readonly rowPhrase: (count: number) => string;
+}
+
+function counted(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+/**
+ * Every collection clause's wording and pluralisation, beside its facts.
+ *
+ * The mapped type makes adding a collection clause a table-completeness error.
+ * Full order is the stable reading order. Priority order is the order in which
+ * clauses earn space when the full summary does not fit.
+ */
+export const COLLECTION_PRESENTATION = {
+  tone: "toolOutput",
+  idleAnswer: "No active Runs",
+  emptyAnswer: "No Run outcomes",
+  separator: " · ",
+  fullOrder: [
+    "delivered",
+    "unavailable",
+    "stillRunning",
+    "unknown",
+  ] as const satisfies readonly CollectionClauseKind[],
+  priorityOrder: [
+    "stillRunning",
+    "delivered",
+    "unavailable",
+    "unknown",
+  ] as const satisfies readonly CollectionClauseKind[],
+  clauses: {
+    delivered: {
+      rowPhrase: (count) => `Delivered ${counted(count, "Result", "Results")}`,
+    },
+    unavailable: {
+      rowPhrase: (count) =>
+        `${counted(count, "Result", "Results")} unavailable`,
+    },
+    stillRunning: {
+      rowPhrase: (count) => `${counted(count, "Run", "Runs")} still running`,
+    },
+    unknown: {
+      rowPhrase: (count) => `${counted(count, "Run", "Runs")} unknown`,
+    },
+  } satisfies Record<CollectionClauseKind, CollectionClausePresentation>,
+} as const;
+
+export interface CollectionRowPresentation {
+  readonly tone: "toolOutput";
+  readonly separator: string;
+  readonly answer?: string;
+  readonly clauses: readonly string[];
+  readonly priority: readonly string[];
+}
+
+function collectionCount(
+  facts: CollectedRunsToolRowFacts,
+  kind: CollectionClauseKind,
+): number {
+  switch (kind) {
+    case "delivered":
+      return facts.runs.length;
+    case "unavailable":
+      return facts.unavailable;
+    case "stillRunning":
+      return facts.stillRunning;
+    case "unknown":
+      return facts.unknown;
+  }
+}
+
+/** Phrase a collection row without making any width or layout decision. */
+export function collectionRowPresentation(
+  facts: CollectedRunsToolRowFacts,
+): CollectionRowPresentation {
+  if (facts.noActiveRuns) {
+    return {
+      tone: COLLECTION_PRESENTATION.tone,
+      separator: COLLECTION_PRESENTATION.separator,
+      answer: COLLECTION_PRESENTATION.idleAnswer,
+      clauses: [],
+      priority: [],
+    };
+  }
+
+  const phrases = new Map<CollectionClauseKind, string>();
+  for (const kind of COLLECTION_PRESENTATION.fullOrder) {
+    const count = collectionCount(facts, kind);
+    if (count > 0) {
+      phrases.set(kind, COLLECTION_PRESENTATION.clauses[kind].rowPhrase(count));
+    }
+  }
+  const clauses = COLLECTION_PRESENTATION.fullOrder.flatMap((kind) => {
+    const phrase = phrases.get(kind);
+    return phrase === undefined ? [] : [phrase];
+  });
+  return {
+    tone: COLLECTION_PRESENTATION.tone,
+    separator: COLLECTION_PRESENTATION.separator,
+    ...(clauses.length === 0
+      ? { answer: COLLECTION_PRESENTATION.emptyAnswer }
+      : {}),
+    clauses,
+    priority: COLLECTION_PRESENTATION.priorityOrder.flatMap((kind) => {
+      const phrase = phrases.get(kind);
+      return phrase === undefined ? [] : [phrase];
+    }),
+  };
+}
+
 const ResultToolRowFactsSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("result"),
+    ...ResultRowSchema,
     outcome: Schema.Literal("available"),
     run: ResultRunSummarySchema,
   }),
   Schema.Struct({
     kind: Schema.Literal("result"),
+    ...ResultRowSchema,
     outcome: Schema.Literals(["still-running", "unknown"]),
     runId: IdentifierText,
   }),
   Schema.Struct({
     kind: Schema.Literal("result"),
+    ...ResultRowSchema,
     outcome: Schema.Literal("unavailable"),
     runId: IdentifierText,
     status: TerminalRunPhase,
   }),
 ]);
-type ResultToolRowFacts = typeof ResultToolRowFactsSchema.Type;
+export type ResultToolRowFacts = typeof ResultToolRowFactsSchema.Type;
 
 const CancelRunToolRowOutcomeSchema = Schema.Union([
   Schema.Struct({
@@ -493,11 +695,147 @@ const CancelRunToolRowOutcomeSchema = Schema.Union([
 ]);
 type CancelRunToolRowOutcome = typeof CancelRunToolRowOutcomeSchema.Type;
 
+/**
+ * All cancellation-row presentation constants, separate from the iterable
+ * bucket declarations so row metadata cannot become a cancellation bucket.
+ */
+export const CANCEL_PRESENTATION = {
+  tone: "toolOutput",
+  separator: " · ",
+  emptyAnswer: "No run ids were given.",
+  buckets: {
+    requested: { rowPhrase: "Cancellation requested" },
+    "already requested": { rowPhrase: "Already cancelling" },
+    "already terminal": { rowPhrase: "Already finished, result kept" },
+    unknown: { rowPhrase: "Unknown run ids" },
+  } satisfies Record<
+    CancelRunToolRowOutcome["kind"],
+    { readonly rowPhrase: string }
+  >,
+} as const satisfies {
+  readonly tone: "toolOutput";
+  readonly separator: string;
+  readonly emptyAnswer: string;
+  readonly buckets: Record<
+    CancelRunToolRowOutcome["kind"],
+    { readonly rowPhrase: string }
+  >;
+};
+
 const CancelToolRowFactsSchema = Schema.Struct({
   kind: Schema.Literal("cancel"),
   outcomes: Schema.Array(CancelRunToolRowOutcomeSchema),
 });
 export type CancelToolRowFacts = typeof CancelToolRowFactsSchema.Type;
+
+interface CancelIdBucket {
+  readonly kind: "requested" | "already requested" | "unknown";
+  readonly rowPhrase: string;
+  readonly count: number;
+  readonly runIds: readonly string[];
+}
+
+interface CancelTerminalBucket {
+  readonly kind: "already terminal";
+  readonly rowPhrase: string;
+  readonly count: number;
+  readonly runs: readonly {
+    readonly runId: string;
+    readonly phase: "completed" | "failed" | "cancelled";
+  }[];
+}
+
+export type CancelBucket = CancelIdBucket | CancelTerminalBucket;
+
+function unexpectedCancelBucket(outcome: never): never {
+  throw new Error(
+    `no cancellation bucket for ${String((outcome as { kind?: unknown }).kind)}`,
+  );
+}
+
+/**
+ * Group wire-compatible cancellation facts once for both prose and rows.
+ *
+ * Identifiers and terminal phases remain available to the model sentence,
+ * while each bucket also supplies the count and row phrase the compact row
+ * needs. The fixed order lives here alone. An unfamiliar runtime value fails
+ * loudly rather than disappearing from both presentations.
+ */
+export function cancelBuckets(
+  facts: CancelToolRowFacts,
+): readonly CancelBucket[] {
+  const requested: string[] = [];
+  const alreadyRequested: string[] = [];
+  const alreadyTerminal: {
+    readonly runId: string;
+    readonly phase: "completed" | "failed" | "cancelled";
+  }[] = [];
+  const unknown: string[] = [];
+
+  for (const outcome of facts.outcomes) {
+    switch (outcome.kind) {
+      case "requested":
+        requested.push(outcome.runId);
+        break;
+      case "already requested":
+        alreadyRequested.push(outcome.runId);
+        break;
+      case "already terminal":
+        alreadyTerminal.push({ runId: outcome.runId, phase: outcome.phase });
+        break;
+      case "unknown":
+        unknown.push(outcome.runId);
+        break;
+      default:
+        unexpectedCancelBucket(outcome);
+    }
+  }
+
+  return [
+    ...(requested.length === 0
+      ? []
+      : [
+          {
+            kind: "requested" as const,
+            rowPhrase: CANCEL_PRESENTATION.buckets.requested.rowPhrase,
+            count: requested.length,
+            runIds: requested,
+          },
+        ]),
+    ...(alreadyRequested.length === 0
+      ? []
+      : [
+          {
+            kind: "already requested" as const,
+            rowPhrase:
+              CANCEL_PRESENTATION.buckets["already requested"].rowPhrase,
+            count: alreadyRequested.length,
+            runIds: alreadyRequested,
+          },
+        ]),
+    ...(alreadyTerminal.length === 0
+      ? []
+      : [
+          {
+            kind: "already terminal" as const,
+            rowPhrase:
+              CANCEL_PRESENTATION.buckets["already terminal"].rowPhrase,
+            count: alreadyTerminal.length,
+            runs: alreadyTerminal,
+          },
+        ]),
+    ...(unknown.length === 0
+      ? []
+      : [
+          {
+            kind: "unknown" as const,
+            rowPhrase: CANCEL_PRESENTATION.buckets.unknown.rowPhrase,
+            count: unknown.length,
+            runIds: unknown,
+          },
+        ]),
+  ];
+}
 
 const ToolRowFactsSchema = Schema.Union([
   StartToolRowFactsSchema,
@@ -508,6 +846,56 @@ const ToolRowFactsSchema = Schema.Union([
   ResultToolRowFactsSchema,
 ]);
 export type ToolRowFacts = typeof ToolRowFactsSchema.Type;
+
+export interface ToolRowPresentation {
+  readonly rowPhrase: string;
+  readonly tone: ToolRowTone;
+  readonly collection?: {
+    readonly separator: string;
+    readonly clauses: readonly string[];
+    readonly priority: readonly string[];
+  };
+}
+
+/** Phrase cancellation facts without making a width or layout decision. */
+export function cancelRowPresentation(
+  facts: CancelToolRowFacts,
+): ToolRowPresentation {
+  const rowPhrase = cancelBuckets(facts)
+    .map((bucket) => `${bucket.rowPhrase}: ${bucket.count}`)
+    .join(CANCEL_PRESENTATION.separator);
+  return {
+    rowPhrase: rowPhrase || CANCEL_PRESENTATION.emptyAnswer,
+    tone: CANCEL_PRESENTATION.tone,
+  };
+}
+
+/** Read the phrase and tone declared beside any Tool-row facts kind. */
+export function toolRowPresentation(facts: ToolRowFacts): ToolRowPresentation {
+  switch (facts.kind) {
+    case "start":
+    case "resume":
+    case "steer":
+    case "result":
+      return { rowPhrase: facts.rowPhrase, tone: facts.tone };
+    case "cancel":
+      return cancelRowPresentation(facts);
+    case "collection": {
+      const presentation = collectionRowPresentation(facts);
+      return {
+        rowPhrase:
+          presentation.answer ??
+          presentation.clauses.join(presentation.separator),
+        tone: presentation.tone,
+        collection: {
+          separator: presentation.separator,
+          clauses: presentation.clauses,
+          priority: presentation.priority,
+        },
+      };
+    }
+  }
+}
 
 function resultRunSummaryOf(result: RunResult): ResultRunSummary {
   const output: CompactFinalOutputSummary = finalOutputSummary(
@@ -534,10 +922,11 @@ export function startToolRowFacts(
   agent: string,
   outcome: StartOutcome,
 ): StartToolRowFacts {
-  const row = rowFor<StartOutcome, StartSentenceContext>(
-    START_OUTCOME_PRESENTATION,
-    outcome,
-  );
+  const row = rowFor<
+    StartOutcome,
+    StartSentenceContext,
+    Exclude<ToolRowTone, "toolOutput">
+  >(START_OUTCOME_PRESENTATION, outcome);
   return outcome.outcome === "started"
     ? {
         kind: "start",
@@ -556,10 +945,11 @@ export function resumeToolRowFacts(
 ): ResumedRunToolRowFacts;
 export function resumeToolRowFacts(outcome: ResumeOutcome): ResumeToolRowFacts;
 export function resumeToolRowFacts(outcome: ResumeOutcome): ResumeToolRowFacts {
-  const row = rowFor<ResumeOutcome, ResumeSentenceContext>(
-    RESUME_OUTCOME_PRESENTATION,
-    outcome,
-  );
+  const row = rowFor<
+    ResumeOutcome,
+    ResumeSentenceContext,
+    Exclude<ToolRowTone, "toolOutput">
+  >(RESUME_OUTCOME_PRESENTATION, outcome);
   return outcome.outcome === "started"
     ? {
         kind: "resume",
@@ -576,10 +966,11 @@ export function steerToolRowFacts(
   requestedRunId: RunId,
   outcome: SteerOutcome,
 ): SteerToolRowFacts {
-  const row = rowFor<SteerOutcome, SteerSentenceContext>(
-    STEER_OUTCOME_PRESENTATION,
-    outcome,
-  );
+  const row = rowFor<
+    SteerOutcome,
+    SteerSentenceContext,
+    Exclude<ToolRowTone, "toolOutput">
+  >(STEER_OUTCOME_PRESENTATION, outcome);
   return {
     kind: "steer",
     rowPhrase: row.rowPhrase,
@@ -686,24 +1077,44 @@ export function noActiveWaitAllToolRowFacts(): CollectedRunsToolRowFacts {
 }
 
 export function resultToolRowFacts(outcome: ResultOutcome): ResultToolRowFacts {
+  const row = rowFor<ResultOutcome, undefined, ToolRowTone>(
+    RESULT_OUTCOME_PRESENTATION,
+    outcome,
+  );
   switch (outcome.outcome) {
     case "result":
       return {
         kind: "result",
+        rowPhrase: row.rowPhrase,
+        tone: row.tone,
         outcome: "available",
         run: resultRunSummaryOf(outcome.result),
       };
     case "ResultExpired":
       return {
         kind: "result",
+        rowPhrase: row.rowPhrase,
+        tone: row.tone,
         outcome: "unavailable",
         runId: outcome.runId,
         status: outcome.status,
       };
     case "RunNotTerminal":
-      return { kind: "result", outcome: "still-running", runId: outcome.runId };
+      return {
+        kind: "result",
+        rowPhrase: row.rowPhrase,
+        tone: row.tone,
+        outcome: "still-running",
+        runId: outcome.runId,
+      };
     case "unknown Run":
-      return { kind: "result", outcome: "unknown", runId: outcome.runId };
+      return {
+        kind: "result",
+        rowPhrase: row.rowPhrase,
+        tone: row.tone,
+        outcome: "unknown",
+        runId: outcome.runId,
+      };
     default:
       return outcome satisfies never;
   }

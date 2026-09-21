@@ -3,7 +3,18 @@ import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import type { ToolResponse } from "../application/index.ts";
-import { runId } from "../domain/index.ts";
+import { runId, subagentId } from "../domain/index.ts";
+import {
+  compactFinalOutputSummaryPhrase,
+  decodeToolRowFacts,
+  encodeToolRowFacts,
+  presentCancelOutcomes,
+  presentResultOutcome,
+  presentWait,
+  resultToolRowFacts,
+  type ToolRowFacts,
+  toolRowPresentation,
+} from "../presentation/index.ts";
 import { emitText } from "../testing/fakes/script.ts";
 import {
   hostRig,
@@ -41,6 +52,33 @@ const WAIT_RETURNED =
  * collapsed row naming a Run the outcome did not hand back — is one the real
  * façade cannot produce. Everything else here builds a `hostRig`.
  */
+
+function semanticDetails(
+  result: Awaited<ReturnType<StandInHost["call"]>>,
+): ToolRowFacts {
+  const details = decodeToolRowFacts(result.details);
+  assert.ok(details, "the host did not round-trip semantic details");
+  assert.deepEqual(decodeToolRowFacts(encodeToolRowFacts(details)), details);
+  return details;
+}
+
+function assertDeclaredRowPhrase(
+  result: Awaited<ReturnType<StandInHost["call"]>>,
+  rendered: string,
+): void {
+  assert.ok(
+    rendered.includes(toolRowPresentation(semanticDetails(result)).rowPhrase),
+  );
+}
+
+function assertRenderedResponse(
+  result: Awaited<ReturnType<StandInHost["call"]>>,
+  rendered: string,
+): void {
+  const response = result.content.map((part) => part.text ?? "").join("");
+  const normalized = (value: string) => value.replace(/\s+/g, " ").trim();
+  assert.ok(normalized(rendered).includes(normalized(response)));
+}
 
 /** Start a Session and start one Run on the named Profile. */
 async function startedRun(
@@ -602,10 +640,9 @@ test("agent_cancel reports request admission, not terminal cancellation", async 
 
   assert.equal(
     await rig.text("agent_cancel", { ids: [started.runId] }),
-    `Cancellation requested: ${started.runId}. Each Run stops when its ` +
-      "execution and cleanup finish, or settles cancelled once its cleanup " +
-      "outlives the cleanup budget; it keeps whatever output it produced and " +
-      "still sends its own notification.",
+    presentCancelOutcomes([
+      { outcome: "admitted", runId: runId(started.runId) },
+    ]).text,
   );
 });
 
@@ -619,9 +656,11 @@ test("a repeated agent_cancel is idempotent and the first request stands", async
   const started = await startedRun(rig);
   await rig.text("agent_cancel", { ids: [started.runId] });
 
-  assert.match(
+  assert.equal(
     await rig.text("agent_cancel", { ids: [started.runId] }),
-    /Already cancelling: .*The first request stands/s,
+    presentCancelOutcomes([
+      { outcome: "idempotent", runId: runId(started.runId) },
+    ]).text,
   );
 });
 
@@ -637,13 +676,13 @@ test("agent_cancel tells a finished Run from an id that never existed", async (t
     ids: [started.runId, "run-never"],
   });
 
-  assert.match(
+  assert.equal(
     text,
-    new RegExp(
-      `Already finished, result kept: ${started.runId} \\(completed\\)\\.`,
-    ),
+    presentCancelOutcomes([
+      { outcome: "already completed", runId: runId(started.runId) },
+      { outcome: "unknown Run", runId: runId("run-never") },
+    ]).text,
   );
-  assert.match(text, /Unknown run ids: run-never\./);
 });
 
 test("an id named twice in agent_cancel produces one observation", async (t) => {
@@ -712,7 +751,10 @@ test("registered cancellation renderers cover admission outcomes in both expansi
       emptyResult,
       expanded,
     );
-    assert.equal(emptyRow.result.join("\n"), "No run ids were given.");
+    assert.equal(
+      emptyRow.result.join("\n"),
+      toolRowPresentation(semanticDetails(emptyResult)).rowPhrase,
+    );
     assert.doesNotMatch(emptyRow.result.join("\n"), /to expand|to collapse/);
   }
 
@@ -728,19 +770,16 @@ test("registered cancellation renderers cover admission outcomes in both expansi
     oneRow.collapsed.call.join("\n"),
     new RegExp(`agent_cancel ${one.runId}`),
   );
-  assert.match(
-    oneRow.collapsed.result[0],
-    /^Cancellation requested: 1 \(.*to expand\)$/,
-  );
+  assertDeclaredRowPhrase(oneResult, oneRow.collapsed.result[0] ?? "");
 
   const repeatedResult = await rig.call("agent_cancel", oneArgs);
   assert.deepEqual(repeatedResult.details, {
     kind: "cancel",
     outcomes: [{ kind: "already requested", runId: one.runId }],
   });
-  assert.match(
-    renderBoth(oneArgs, repeatedResult).collapsed.result[0],
-    /Already cancelling: 1/,
+  assertDeclaredRowPhrase(
+    repeatedResult,
+    renderBoth(oneArgs, repeatedResult).collapsed.result[0] ?? "",
   );
   const duplicateRunId = one.runId;
   const duplicateArgs = { ids: [duplicateRunId, duplicateRunId] };
@@ -768,9 +807,9 @@ test("registered cancellation renderers cover admission outcomes in both expansi
       { kind: "already terminal", runId: terminalRunId, phase: "completed" },
     ],
   });
-  assert.match(
-    renderBoth(terminalArgs, terminalResult).collapsed.result[0],
-    /Already finished, result kept: 1/,
+  assertDeclaredRowPhrase(
+    terminalResult,
+    renderBoth(terminalArgs, terminalResult).collapsed.result[0] ?? "",
   );
 
   const unknownArgs = { ids: ["run-never"] };
@@ -779,9 +818,9 @@ test("registered cancellation renderers cover admission outcomes in both expansi
     kind: "cancel",
     outcomes: [{ kind: "unknown", runId: "run-never" }],
   });
-  assert.match(
-    renderBoth(unknownArgs, unknownResult).collapsed.result[0],
-    /Unknown run ids: 1/,
+  assertDeclaredRowPhrase(
+    unknownResult,
+    renderBoth(unknownArgs, unknownResult).collapsed.result[0] ?? "",
   );
 
   const mixedRunId = (await startedRun(rig)).runId;
@@ -790,10 +829,7 @@ test("registered cancellation renderers cover admission outcomes in both expansi
   };
   const mixedResult = await rig.call("agent_cancel", mixedArgs);
   const mixedRow = renderBoth(mixedArgs, mixedResult);
-  assert.match(
-    mixedRow.collapsed.result[0],
-    /^Cancellation requested: 1 · Already finished, result kept: 1 · Unknown run ids: 1 /,
-  );
+  assertDeclaredRowPhrase(mixedResult, mixedRow.collapsed.result[0] ?? "");
   assert.doesNotMatch(mixedRow.collapsed.result[0], /cancelled/i);
 });
 
@@ -867,7 +903,10 @@ test("agent_wait renders an unknown id distinctly in both expansion states", asy
 
   assert.equal(
     result.content.map((part) => part.text ?? "").join(""),
-    "Unknown run ids: run-never.",
+    presentWait({
+      scope: "named",
+      outcomes: [{ outcome: "unknown Run", runId: runId("run-never") }],
+    }).text,
   );
   assert.deepEqual(result.details, {
     kind: "collection",
@@ -885,7 +924,7 @@ test("agent_wait renders an unknown id distinctly in both expansion states", asy
     result,
     false,
   );
-  assert.match(collapsed.result.join("\n"), /^1 Run unknown \(.*to expand\)$/);
+  assertDeclaredRowPhrase(result, collapsed.result.join("\n"));
   const expanded = renderRegisteredRow(
     rig.host,
     "agent_wait",
@@ -893,7 +932,11 @@ test("agent_wait renders an unknown id distinctly in both expansion states", asy
     result,
     true,
   );
-  assert.match(expanded.result.join("\n"), /Unknown run ids: run-never\./);
+  assert.ok(
+    expanded.result
+      .join("\n")
+      .includes(result.content.map((part) => part.text ?? "").join("")),
+  );
   assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
 });
 
@@ -1020,19 +1063,23 @@ test("aborting the turn ends only the wait: the Run settles and its result stand
 
   const started = await startedRun(rig);
   const controller = new AbortController();
-  const waiting = rig.text(
+  const waiting = rig.call(
     "agent_wait",
     { ids: [started.runId] },
     { signal: controller.signal },
   );
   controller.abort();
 
-  assert.equal(
-    await waiting,
-    `Still running: ${started.runId}. The wait gave up, not the Runs: each ` +
-      "keeps going and notifies on its own, so do not immediately wait on " +
-      "the same ids again.",
-  );
+  const interrupted = await waiting;
+  assert.deepEqual(semanticDetails(interrupted), {
+    kind: "collection",
+    scope: "named",
+    runs: [],
+    stillRunning: 1,
+    unknown: 0,
+    unavailable: 0,
+    noActiveRuns: false,
+  });
 
   // The Run was left to settle, which is the half of the rule that matters.
   await rig.release("hold");
@@ -1080,10 +1127,7 @@ test("agent_wait crosses registration with discriminated collection details and 
     collapsed.call.join("\n"),
     new RegExp(`agent_wait.*${started.runId}`),
   );
-  assert.match(
-    collapsed.result.join("\n"),
-    /^Delivered 1 Result \(.*to expand\)$/,
-  );
+  assertDeclaredRowPhrase(result, collapsed.result.join("\n"));
   assert.equal(collapsed.result.join("\n").match(/to expand/g)?.length, 1);
 
   const expanded = renderRegisteredRow(
@@ -1146,9 +1190,7 @@ test("agent_wait renders partial mixed-Agent delivery without presenting timeout
     120,
   );
   assert.match(collapsed.call.join("\n"), /agent_wait/);
-  assert.match(collapsed.result.join("\n"), /Delivered 1 Result/);
-  assert.match(collapsed.result.join("\n"), /1 Run still running/);
-  assert.match(collapsed.result.join("\n"), /1 Run unknown/);
+  assertDeclaredRowPhrase(result, collapsed.result.join("\n"));
   assert.doesNotMatch(collapsed.result.join("\n"), /all.*complet/i);
   assert.equal(collapsed.result.join("\n").match(/to expand/g)?.length, 1);
 
@@ -1161,11 +1203,7 @@ test("agent_wait renders partial mixed-Agent delivery without presenting timeout
     120,
   );
   assert.match(expanded.result.join("\n"), new RegExp(RIG_ANSWER));
-  assert.match(
-    expanded.result.join("\n"),
-    new RegExp(`Still running: ${running.runId}`),
-  );
-  assert.match(expanded.result.join("\n"), /Unknown run ids: run-never/);
+  assertRenderedResponse(result, expanded.result.join("\n"));
   assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
 });
 
@@ -1232,10 +1270,7 @@ test("agent_wait_all delivers every active Run's result and consumes each", asyn
     false,
   );
   assert.equal(collapsed.call.join("\n"), "agent_wait_all · all active Runs");
-  assert.match(
-    collapsed.result.join("\n"),
-    /^Delivered 2 Results \(.*to expand\)$/,
-  );
+  assertDeclaredRowPhrase(result, collapsed.result.join("\n"));
   const expanded = renderRegisteredRow(
     rig.host,
     "agent_wait_all",
@@ -1269,9 +1304,7 @@ test("agent_wait_all covers only the Runs that were active when it was called", 
 
   assert.equal(
     text,
-    "No Runs are active in this Session. Every Run started here has already " +
-      "finished and is announced by its own completion notice; use " +
-      "agent_result with a Run id to re-read one.",
+    presentWait({ scope: "all-active", noActiveRuns: true }).text,
   );
   assert.deepEqual(result.details, {
     kind: "collection",
@@ -1290,7 +1323,7 @@ test("agent_wait_all covers only the Runs that were active when it was called", 
     false,
   );
   assert.equal(collapsed.call.join("\n"), "agent_wait_all · all active Runs");
-  assert.match(collapsed.result.join("\n"), /^No active Runs \(.*to expand\)$/);
+  assertDeclaredRowPhrase(result, collapsed.result.join("\n"));
   const expanded = renderRegisteredRow(
     rig.host,
     "agent_wait_all",
@@ -1298,15 +1331,12 @@ test("agent_wait_all covers only the Runs that were active when it was called", 
     result,
     true,
   );
-  assert.match(
-    expanded.result.join("\n"),
-    /No Runs are active in this Session/,
-  );
+  assertRenderedResponse(result, expanded.result.join("\n"));
   assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
   assert.equal(rig.installation.sink.status(runId(earlier.runId)), "pending");
 });
 
-test("agent_wait_all honours its timeout and reports what is still running", async (t) => {
+test("agent_wait_all honours its timeout and reports unfinished Runs", async (t) => {
   const rig = hostRig(t, {
     resumableSteps: [[{ step: "await-gate", gate: "hold" }]],
   });
@@ -1322,12 +1352,7 @@ test("agent_wait_all honours its timeout and reports what is still running", asy
   const result = await rig.call("agent_wait_all", args);
   const text = result.content.map((part) => part.text ?? "").join("");
 
-  assert.equal(
-    text,
-    `Still running: ${started.runId}. The wait gave up, not the Runs: each ` +
-      "keeps going and notifies on its own, so do not immediately wait on " +
-      "the same ids again.",
-  );
+  assert.match(text, new RegExp(started.runId));
   assert.deepEqual(result.details, {
     kind: "collection",
     scope: "all-active",
@@ -1344,10 +1369,7 @@ test("agent_wait_all honours its timeout and reports what is still running", asy
     result,
     false,
   );
-  assert.match(
-    collapsed.result.join("\n"),
-    /^1 Run still running \(.*to expand\)$/,
-  );
+  assertDeclaredRowPhrase(result, collapsed.result.join("\n"));
   const expanded = renderRegisteredRow(
     rig.host,
     "agent_wait_all",
@@ -1355,7 +1377,7 @@ test("agent_wait_all honours its timeout and reports what is still running", asy
     result,
     true,
   );
-  assert.match(expanded.result.join("\n"), /The wait gave up, not the Runs/);
+  assertRenderedResponse(result, expanded.result.join("\n"));
   assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
 });
 
@@ -1434,15 +1456,14 @@ test("agent_result returns the full stored output with its Run identity", async 
       RIG_ANSWER,
     ].join("\n"),
   );
-  assert.deepEqual(result.details, {
-    kind: "result",
-    outcome: "available",
-    run: {
-      runId: started.runId,
-      agent: "explore",
-      status: "completed",
-      output: { kind: "visible", characters: RIG_ANSWER.length },
-    },
+  const details = semanticDetails(result);
+  assert.equal(details.kind, "result");
+  assert.equal(details.outcome, "available");
+  assert.deepEqual(details.run, {
+    runId: started.runId,
+    agent: "explore",
+    status: "completed",
+    output: { kind: "visible", characters: RIG_ANSWER.length },
   });
   const collapsed = renderRegisteredRow(
     rig.host,
@@ -1451,12 +1472,7 @@ test("agent_result returns the full stored output with its Run identity", async 
     result,
     false,
   );
-  assert.match(
-    collapsed.result.join("\n"),
-    new RegExp(
-      `^explore · ${started.runId} · completed · 16 characters \\(.*to expand\\)$`,
-    ),
-  );
+  assertDeclaredRowPhrase(result, collapsed.result.join("\n"));
   const expanded = renderRegisteredRow(
     rig.host,
     "agent_result",
@@ -1480,27 +1496,24 @@ test("agent_result renders a live Run distinctly from unknown in both expansion 
   const cases = [
     {
       args: { id: started.runId },
-      summary: new RegExp(
-        `^${started.runId} · still running \\(.*to expand\\)$`,
-      ),
-      expanded: /has not finished yet, so it has no result/,
-      details: {
-        kind: "result",
-        outcome: "still-running",
-        runId: started.runId,
+      outcome: {
+        outcome: "RunNotTerminal" as const,
+        runId: runId(started.runId),
       },
     },
     {
       args: { id: "run-never" },
-      summary: /^run-never · unknown Run \(.*to expand\)$/,
-      expanded: /^No run with id run-never\./m,
-      details: { kind: "result", outcome: "unknown", runId: "run-never" },
+      outcome: {
+        outcome: "unknown Run" as const,
+        runId: runId("run-never"),
+      },
     },
   ] as const;
 
   for (const entry of cases) {
     const result = await rig.call("agent_result", entry.args);
-    assert.deepEqual(result.details, entry.details);
+    const presentation = presentResultOutcome(entry.outcome);
+    assert.deepEqual(result.details, presentation.facts);
     const collapsed = renderRegisteredRow(
       rig.host,
       "agent_result",
@@ -1509,7 +1522,7 @@ test("agent_result renders a live Run distinctly from unknown in both expansion 
       false,
     );
     assert.equal(collapsed.call.join("\n"), `agent_result · ${entry.args.id}`);
-    assert.match(collapsed.result.join("\n"), entry.summary);
+    assertDeclaredRowPhrase(result, collapsed.result.join("\n"));
     const expanded = renderRegisteredRow(
       rig.host,
       "agent_result",
@@ -1517,7 +1530,7 @@ test("agent_result renders a live Run distinctly from unknown in both expansion 
       result,
       true,
     );
-    assert.match(expanded.result.join("\n"), entry.expanded);
+    assertRenderedResponse(result, expanded.result.join("\n"));
     assert.equal(expanded.result.join("\n").match(/to collapse/g)?.length, 1);
   }
 });
@@ -1601,10 +1614,7 @@ test("a Result the store evicted tells the host nothing either", async (t) => {
     waited,
     false,
   );
-  assert.match(
-    collapsedWait.result.join("\n"),
-    /^1 Result unavailable \(.*to expand\)$/,
-  );
+  assertDeclaredRowPhrase(waited, collapsedWait.result.join("\n"));
   const expandedWait = renderRegisteredRow(
     rig.host,
     "agent_wait",
@@ -1612,21 +1622,24 @@ test("a Result the store evicted tells the host nothing either", async (t) => {
     waited,
     true,
   );
-  assert.match(expandedWait.result.join("\n"), /its output was evicted/);
+  assertRenderedResponse(waited, expandedWait.result.join("\n"));
   assert.equal(expandedWait.result.join("\n").match(/to collapse/g)?.length, 1);
 
   const resultArgs = { id: first.runId };
   const result = await rig.call("agent_result", resultArgs);
-  assert.match(
-    result.content.map((part) => part.text ?? "").join(""),
-    /its output was evicted/,
+  const resultResponseText = result.content
+    .map((part) => part.text ?? "")
+    .join("");
+  assert.ok(resultResponseText.includes(first.runId));
+  assert.deepEqual(
+    result.details,
+    resultToolRowFacts({
+      outcome: "ResultExpired",
+      runId: runId(first.runId),
+      subagentId: subagentId(first.subagentId),
+      status: "completed",
+    }),
   );
-  assert.deepEqual(result.details, {
-    kind: "result",
-    outcome: "unavailable",
-    runId: first.runId,
-    status: "completed",
-  });
   const collapsedResult = renderRegisteredRow(
     rig.host,
     "agent_result",
@@ -1634,12 +1647,7 @@ test("a Result the store evicted tells the host nothing either", async (t) => {
     result,
     false,
   );
-  assert.match(
-    collapsedResult.result.join("\n"),
-    new RegExp(
-      `^${first.runId} · Result unavailable · completed \\(.*to expand\\)$`,
-    ),
-  );
+  assertDeclaredRowPhrase(result, collapsedResult.result.join("\n"));
   const expandedResult = renderRegisteredRow(
     rig.host,
     "agent_result",
@@ -1647,7 +1655,7 @@ test("a Result the store evicted tells the host nothing either", async (t) => {
     result,
     true,
   );
-  assert.match(expandedResult.result.join("\n"), /its output was evicted/);
+  assertRenderedResponse(result, expandedResult.result.join("\n"));
   assert.equal(
     expandedResult.result.join("\n").match(/to collapse/g)?.length,
     1,
@@ -1693,10 +1701,17 @@ test("a Run on the collapsed line alone is not recorded as consumed", async () =
     status: "completed",
     output: { kind: "visible", characters: 10 },
   } as const;
+  const rowPhrase = compactFinalOutputSummaryPhrase(drawn.output);
   const collapsedOnly = handlersOver({
     text: "the answer",
     // Drawn in the row, and stated as handed back by nothing.
-    details: { kind: "result", outcome: "available", run: drawn },
+    details: {
+      kind: "result",
+      outcome: "available",
+      rowPhrase,
+      tone: "toolOutput",
+      run: drawn,
+    },
     deliveredRuns: [],
   });
 
@@ -1709,6 +1724,8 @@ test("a Run on the collapsed line alone is not recorded as consumed", async () =
   assert.deepEqual(result.details, {
     kind: "result",
     outcome: "available",
+    rowPhrase,
+    tone: "toolOutput",
     run: drawn,
   });
   assert.deepEqual(collapsedOnly.consumed, []);
@@ -1768,7 +1785,6 @@ test("the registered-host table covers all seven tools in both states and meanin
     readonly args: unknown;
     readonly result: Awaited<ReturnType<StandInHost["call"]>>;
     readonly call: RegExp;
-    readonly summary: RegExp;
   };
   const cases: Case[] = [];
   const add = async (
@@ -1776,7 +1792,6 @@ test("the registered-host table covers all seven tools in both states and meanin
     name: string,
     args: unknown,
     call: RegExp,
-    summary: RegExp,
     existing?: Awaited<ReturnType<StandInHost["call"]>>,
   ) => {
     cases.push({
@@ -1785,7 +1800,6 @@ test("the registered-host table covers all seven tools in both states and meanin
       args,
       result: existing ?? (await host.call(name, args)),
       call,
-      summary,
     });
   };
 
@@ -1794,7 +1808,6 @@ test("the registered-host table covers all seven tools in both states and meanin
     "agent_start",
     startArgs,
     /agent_start explore/,
-    /^Started/,
     started,
   );
   await add(
@@ -1802,29 +1815,19 @@ test("the registered-host table covers all seven tools in both states and meanin
     "agent_start",
     { ...startArgs, agent: "ghost" },
     /agent_start ghost/,
-    /^Start refused · unknown Agent/,
   );
-  await add(
-    settled.host,
-    "agent_resume",
-    resumeArgs,
-    /agent_resume/,
-    /^Resumed/,
-    resumed,
-  );
+  await add(settled.host, "agent_resume", resumeArgs, /agent_resume/, resumed);
   await add(
     settled.host,
     "agent_resume",
     { ...resumeArgs, id: "subagent-never" },
     /agent_resume subagent-never/,
-    /^Resume refused · unknown Subagent/,
   );
   await add(
     settled.host,
     "agent_wait",
     { ids: [startedIdentity.runId] },
     /agent_wait/,
-    /^Delivered 1 Result/,
   );
   await add(
     live.host,
@@ -1834,64 +1837,45 @@ test("the registered-host table covers all seven tools in both states and meanin
       timeoutSeconds: 0.001,
     },
     /agent_wait/,
-    /Delivered 1 Result.*1 Run still running.*1 Run unknown/,
   );
   await add(
     settled.host,
     "agent_wait_all",
     {},
     /agent_wait_all · all active Runs/,
-    /^No active Runs/,
   );
   await add(
     live.host,
     "agent_wait_all",
     { timeoutSeconds: 0.001 },
     /agent_wait_all · all active Runs/,
-    /^1 Run still running/,
   );
   await add(
     settled.host,
     "agent_result",
     { id: startedIdentity.runId },
     /agent_result/,
-    /completed/,
   );
-  await add(
-    live.host,
-    "agent_result",
-    { id: active.runId },
-    /agent_result/,
-    /still running/,
-  );
+  await add(live.host, "agent_result", { id: active.runId }, /agent_result/);
   await add(
     live.host,
     "agent_steer",
     { id: active.runId, message: "go left" },
     /agent_steer/,
-    /^Accepted into local Control mailbox/,
   );
   await add(
     settled.host,
     "agent_steer",
     { id: startedIdentity.runId, message: "late" },
     /agent_steer/,
-    /^Control refused · Run completed/,
   );
-  await add(
-    live.host,
-    "agent_cancel",
-    { ids: [active.runId] },
-    /agent_cancel/,
-    /^Cancellation requested: 1/,
-  );
+  await add(live.host, "agent_cancel", { ids: [active.runId] }, /agent_cancel/);
   const another = await startedRun(live);
   await add(
     live.host,
     "agent_cancel",
     { ids: [another.runId, delivered.runId, "run-never"] },
     /agent_cancel/,
-    /Cancellation requested: 1.*Already finished, result kept: 1.*Unknown run ids: 1/,
   );
 
   assert.deepEqual(
@@ -1928,7 +1912,7 @@ test("the registered-host table covers all seven tools in both states and meanin
         assert.ok(row.result.join("\n").includes(responseText));
       } else {
         assert.equal(row.result.length, 1);
-        assert.match(row.result[0], entry.summary);
+        assertDeclaredRowPhrase(entry.result, row.result[0] ?? "");
       }
       assert.ok(
         [...row.call, ...row.result].every(

@@ -14,28 +14,27 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type { CompactFinalOutputSummary } from "./final-output-section.ts";
-import { CANCEL_OUTCOME_HEADINGS } from "./prose.ts";
 import {
   contentText,
   formatParentheticalKeyHint,
   type KeyHintRenderer,
 } from "./renderers.ts";
 import type { RenderableTheme } from "./rows.ts";
-import { formatCharacterCount } from "./status.ts";
 import { fitToWidth } from "./text-width.ts";
 import {
   type CancelToolRowFacts,
-  type CollectedRunsToolRowFacts,
+  cancelRowPresentation,
   decodeToolRowFacts,
   type ResumedRunToolRowFacts,
   type StartedRunToolRowFacts,
   type ToolRowFacts,
+  type ToolRowPresentation,
   type ToolRowTone,
+  toolRowPresentation,
 } from "./tool-row-facts.ts";
 
 /** The operation keys of the one agent-tool family. */
-type AgentToolOperation =
+export type AgentToolOperation =
   | "start"
   | "resume"
   | "wait"
@@ -381,21 +380,22 @@ function collapseHint(theme: RenderableTheme, width: number): string {
  */
 function formatStartedIdentity(
   details: StartedRunToolRowFacts,
+  presentation: ToolRowPresentation,
   theme: RenderableTheme,
   width: number,
 ): string {
   const candidates = [
-    theme.fg(details.tone, `${details.rowPhrase} ${details.agent}`) +
+    theme.fg(presentation.tone, `${presentation.rowPhrase} ${details.agent}`) +
       theme.fg(
         "dim",
         ` · Subagent ${details.subagentId} · Run ${details.runId}`,
       ),
-    theme.fg(details.tone, details.rowPhrase) +
+    theme.fg(presentation.tone, presentation.rowPhrase) +
       theme.fg(
         "dim",
         ` · Subagent ${details.subagentId} · Run ${details.runId}`,
       ),
-    theme.fg(details.tone, details.rowPhrase) +
+    theme.fg(presentation.tone, presentation.rowPhrase) +
       theme.fg("dim", ` · ${details.subagentId} · ${details.runId}`),
   ];
   return (
@@ -460,13 +460,12 @@ class UnifiedResultComponent extends CachedComponent {
         readonly sourceText?: string;
       }
     | undefined {
-    const facts = factsForOperation(
-      this.operation,
-      decodeToolRowFacts(this.result.details),
-    );
+    const facts = decodeToolRowFacts(this.result.details);
     if (facts === undefined) return undefined;
     const sourceText =
-      facts.kind === "cancel" ? cancellationSummaryText(facts) : undefined;
+      facts.kind === "cancel"
+        ? cancelRowPresentation(facts).rowPhrase
+        : undefined;
     return {
       line: (width) => toolRowSummary(facts, this.theme, width),
       sourceText,
@@ -575,49 +574,6 @@ class CancelCallComponent extends CachedComponent {
   }
 }
 
-function cancellationSummaryText(details: CancelToolRowFacts): string {
-  const counts = {
-    requested: 0,
-    alreadyRequested: 0,
-    alreadyTerminal: 0,
-    unknown: 0,
-  };
-  for (const outcome of details.outcomes) {
-    switch (outcome.kind) {
-      case "requested":
-        counts.requested += 1;
-        break;
-      case "already requested":
-        counts.alreadyRequested += 1;
-        break;
-      case "already terminal":
-        counts.alreadyTerminal += 1;
-        break;
-      case "unknown":
-        counts.unknown += 1;
-        break;
-    }
-  }
-  const parts: string[] = [];
-  if (counts.requested > 0) {
-    parts.push(`${CANCEL_OUTCOME_HEADINGS.requested}: ${counts.requested}`);
-  }
-  if (counts.alreadyRequested > 0) {
-    parts.push(
-      `${CANCEL_OUTCOME_HEADINGS.alreadyCancelling}: ${counts.alreadyRequested}`,
-    );
-  }
-  if (counts.alreadyTerminal > 0) {
-    parts.push(
-      `${CANCEL_OUTCOME_HEADINGS.alreadyFinished}: ${counts.alreadyTerminal}`,
-    );
-  }
-  if (counts.unknown > 0) {
-    parts.push(`${CANCEL_OUTCOME_HEADINGS.unknownRunIds}: ${counts.unknown}`);
-  }
-  return parts.join(" · ") || CANCEL_OUTCOME_HEADINGS.empty;
-}
-
 /** One-line cancellation admission summary with the configured toggle hint. */
 export function formatCancellationSummary(
   details: CancelToolRowFacts,
@@ -625,8 +581,9 @@ export function formatCancellationSummary(
   width: number,
   renderKeyHint?: KeyHintRenderer,
 ): string {
+  const presentation = cancelRowPresentation(details);
   return collapsedResultLine(
-    theme.fg("toolOutput", cancellationSummaryText(details)),
+    theme.fg(presentation.tone, presentation.rowPhrase),
     theme,
     width,
     true,
@@ -767,96 +724,40 @@ class TargetCallComponent implements Component {
   }
 }
 
-function plural(count: number, one: string, many = `${one}s`): string {
-  return `${count} ${count === 1 ? one : many}`;
-}
-
 function collectionSummary(
-  details: CollectedRunsToolRowFacts,
+  presentation: ToolRowPresentation,
   theme: RenderableTheme,
   width: number,
 ): string {
-  if (details.noActiveRuns) return theme.fg("toolOutput", "No active Runs");
-  const parts: string[] = [];
-  if (details.runs.length > 0) {
-    parts.push(`Delivered ${plural(details.runs.length, "Result")}`);
+  const collection = presentation.collection;
+  if (collection === undefined || collection.clauses.length === 0) {
+    return theme.fg(presentation.tone, presentation.rowPhrase);
   }
-  if (details.unavailable > 0) {
-    parts.push(`${plural(details.unavailable, "Result")} unavailable`);
-  }
-  if (details.stillRunning > 0) {
-    parts.push(`${plural(details.stillRunning, "Run")} still running`);
-  }
-  if (details.unknown > 0) {
-    parts.push(`${plural(details.unknown, "Run")} unknown`);
-  }
-  const full = parts.join(" · ") || "No Run outcomes";
-  if (visibleWidth(full) <= width) return theme.fg("toolOutput", full);
 
-  // Retain as many compatible clauses as fit, considering incompleteness
-  // first, then delivered outcome, then progressively less actionable counts.
-  // Selected clauses return to the stable full-summary order for readability.
-  const priorities = [
-    details.stillRunning > 0
-      ? `${plural(details.stillRunning, "Run")} still running`
-      : undefined,
-    details.runs.length > 0
-      ? `Delivered ${plural(details.runs.length, "Result")}`
-      : undefined,
-    details.unavailable > 0
-      ? `${plural(details.unavailable, "Result")} unavailable`
-      : undefined,
-    details.unknown > 0
-      ? `${plural(details.unknown, "Run")} unknown`
-      : undefined,
-  ].filter((part): part is string => part !== undefined);
+  if (visibleWidth(presentation.rowPhrase) <= width) {
+    return theme.fg(presentation.tone, presentation.rowPhrase);
+  }
+
+  // The facts owner supplies both orders. This loop owns only fitting: clauses
+  // earn space by priority, then return to stable reading order.
   const selected = new Set<string>();
-  for (const part of priorities) {
-    const candidate = parts.filter(
-      (original) => selected.has(original) || original === part,
+  for (const clause of collection.priority) {
+    const candidate = collection.clauses.filter(
+      (original) => selected.has(original) || original === clause,
     );
-    if (visibleWidth(candidate.join(" · ")) > width) break;
-    selected.add(part);
+    if (visibleWidth(candidate.join(collection.separator)) > width) break;
+    selected.add(clause);
   }
-  const retained = parts.filter((part) => selected.has(part)).join(" · ");
+  const retained = collection.clauses
+    .filter((clause) => selected.has(clause))
+    .join(collection.separator);
   return theme.fg(
-    "toolOutput",
-    retained || fitToWidth(priorities[0] ?? full, width, { plain: true }),
+    presentation.tone,
+    retained ||
+      fitToWidth(collection.priority[0] ?? presentation.rowPhrase, width, {
+        plain: true,
+      }),
   );
-}
-
-function resultOutputSummary(summary: CompactFinalOutputSummary): string {
-  switch (summary.kind) {
-    case "none":
-      return "no output";
-    case "removed":
-      return "output removed";
-    case "visible":
-      return formatCharacterCount(summary.characters);
-  }
-}
-
-function factsForOperation(
-  operation: AgentToolOperation,
-  facts: ToolRowFacts | undefined,
-): ToolRowFacts | undefined {
-  if (facts === undefined) return undefined;
-  switch (operation) {
-    case "start":
-    case "resume":
-    case "steer":
-    case "cancel":
-    case "result":
-      return facts.kind === operation ? facts : undefined;
-    case "wait":
-      return facts.kind === "collection" && facts.scope === "named"
-        ? facts
-        : undefined;
-    case "waitAll":
-      return facts.kind === "collection" && facts.scope === "all-active"
-        ? facts
-        : undefined;
-  }
 }
 
 /** Render any decoded Tool-row facts through one summary policy. */
@@ -865,45 +766,38 @@ function toolRowSummary(
   theme: RenderableTheme,
   width: number,
 ): string {
+  const presentation = toolRowPresentation(facts);
   switch (facts.kind) {
     case "start":
       return "subagentId" in facts
-        ? formatStartedIdentity(facts, theme, width)
-        : phraseSummary(facts, theme);
+        ? formatStartedIdentity(facts, presentation, theme, width)
+        : phraseSummary(presentation, theme);
     case "resume":
       return "runId" in facts
-        ? resumedIdentity(facts, theme, width)
-        : phraseSummary(facts, theme);
+        ? resumedIdentity(facts, presentation, theme, width)
+        : phraseSummary(presentation, theme);
     case "steer":
-      return phraseSummary(facts, theme);
-    case "collection":
-      return collectionSummary(facts, theme, width);
+      return phraseSummary(presentation, theme);
     case "cancel":
-      return theme.fg("toolOutput", cancellationSummaryText(facts));
-    case "result":
-      switch (facts.outcome) {
-        case "available": {
-          const output = resultOutputSummary(facts.run.output);
-          const candidates = [
-            `${facts.run.agent} · ${facts.run.runId} · ${facts.run.status} · ${output}`,
-            `${facts.run.agent} · ${facts.run.runId} · ${facts.run.status}`,
-            `${facts.run.runId} · ${facts.run.status}`,
-          ];
-          const text =
-            candidates.find((candidate) => visibleWidth(candidate) <= width) ??
-            fitToWidth(candidates.at(-1) ?? "", width, { plain: true });
-          return theme.fg("toolOutput", text);
-        }
-        case "still-running":
-          return theme.fg("warning", `${facts.runId} · still running`);
-        case "unknown":
-          return theme.fg("error", `${facts.runId} · unknown Run`);
-        case "unavailable":
-          return theme.fg(
-            "error",
-            `${facts.runId} · Result unavailable · ${facts.status}`,
-          );
-      }
+      return theme.fg(presentation.tone, presentation.rowPhrase);
+    case "collection":
+      return collectionSummary(presentation, theme, width);
+    case "result": {
+      const candidates =
+        facts.outcome === "available"
+          ? [
+              `${facts.run.agent} · ${facts.run.runId} · ${facts.run.status} · ${presentation.rowPhrase}`,
+              `${facts.run.agent} · ${facts.run.runId} · ${facts.run.status}`,
+              `${facts.run.runId} · ${facts.run.status}`,
+            ]
+          : facts.outcome === "unavailable"
+            ? [`${facts.runId} · ${presentation.rowPhrase} · ${facts.status}`]
+            : [`${facts.runId} · ${presentation.rowPhrase}`];
+      const text =
+        candidates.find((candidate) => visibleWidth(candidate) <= width) ??
+        fitToWidth(candidates.at(-1) ?? "", width, { plain: true });
+      return theme.fg(presentation.tone, text);
+    }
   }
 }
 
@@ -1026,13 +920,14 @@ class ContinuationCallComponent extends CachedComponent {
 
 function resumedIdentity(
   details: ResumedRunToolRowFacts,
+  presentation: ToolRowPresentation,
   theme: RenderableTheme,
   width: number,
 ): string {
   const candidates = [
-    theme.fg(details.tone, details.rowPhrase) +
+    theme.fg(presentation.tone, presentation.rowPhrase) +
       theme.fg("dim", ` · Run ${details.runId}`),
-    theme.fg(details.tone, details.rowPhrase) +
+    theme.fg(presentation.tone, presentation.rowPhrase) +
       theme.fg("dim", ` · ${details.runId}`),
   ];
   return (

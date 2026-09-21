@@ -23,27 +23,19 @@ import {
   boundRunLabel,
   isTerminalRunPhase,
   labelShortenedDiagnostic,
+  type ResumeOutcome,
   type RunDiagnostic,
   type RunId,
+  type StartOutcome,
 } from "../domain/index.ts";
 import {
-  cancelToolRowFacts,
-  formatCancelOutcomes,
-  formatNoActiveRuns,
-  formatResult,
-  formatResultRejection,
-  formatResumeOutcome,
-  formatStartOutcome,
-  formatSteerOutcome,
-  formatWaitOutcomes,
-  noActiveWaitAllToolRowFacts,
-  resultToolRowFacts,
-  resumeToolRowFacts,
-  startToolRowFacts,
-  steerToolRowFacts,
+  presentCancelOutcomes,
+  presentResultOutcome,
+  presentResumeOutcome,
+  presentStartOutcome,
+  presentSteerOutcome,
+  presentWait,
   type ToolRowFacts,
-  waitAllToolRowFacts,
-  waitToolRowFacts,
 } from "../presentation/index.ts";
 import { ProfileCatalog } from "../runtime/profile-catalog.ts";
 import { RunRepository } from "../runtime/repository.ts";
@@ -194,27 +186,27 @@ const start = (
     // Before the supervisor is even reached: a refusal here reserves nothing,
     // claims nothing, and spends no identifier, which is what the semantics
     // document requires of every rejection that admission could have made.
-    if (request === undefined)
-      return {
-        text: formatStartOutcome(input.agent, EMPTY_LABEL, available),
-        details: startToolRowFacts(input.agent, EMPTY_LABEL),
-        deliveredRuns: [],
-      };
-    const supervisor = yield* SubagentSupervisor;
-    const outcome = yield* supervisor.start({
-      agent: input.agent,
-      ...request,
-      prompt: input.prompt,
-      cwd: facts.cwd,
-      childDepth: facts.childDepth,
-      projectTrusted: facts.projectTrusted,
-      ...(facts.parentModel === undefined
-        ? {}
-        : { parentModel: facts.parentModel }),
-    });
+    let outcome: StartOutcome;
+    if (request === undefined) {
+      outcome = EMPTY_LABEL;
+    } else {
+      const supervisor = yield* SubagentSupervisor;
+      outcome = yield* supervisor.start({
+        agent: input.agent,
+        ...request,
+        prompt: input.prompt,
+        cwd: facts.cwd,
+        childDepth: facts.childDepth,
+        projectTrusted: facts.projectTrusted,
+        ...(facts.parentModel === undefined
+          ? {}
+          : { parentModel: facts.parentModel }),
+      });
+    }
+    const presentation = presentStartOutcome(input.agent, outcome, available);
     return {
-      text: formatStartOutcome(input.agent, outcome, available),
-      details: startToolRowFacts(input.agent, outcome),
+      text: presentation.text,
+      details: presentation.facts,
       deliveredRuns: [],
     };
   });
@@ -225,21 +217,21 @@ const resume = (
 ): Effect.Effect<ToolResponse, never, SubagentsServices> =>
   Effect.gen(function* () {
     const request = labelledRequest(input.description);
-    if (request === undefined)
-      return {
-        text: formatResumeOutcome(input.id, EMPTY_LABEL),
-        details: resumeToolRowFacts(EMPTY_LABEL),
-        deliveredRuns: [],
-      };
-    const supervisor = yield* SubagentSupervisor;
-    const outcome = yield* supervisor.resume({
-      subagentId: input.id,
-      ...request,
-      prompt: input.prompt,
-    });
+    let outcome: ResumeOutcome;
+    if (request === undefined) {
+      outcome = EMPTY_LABEL;
+    } else {
+      const supervisor = yield* SubagentSupervisor;
+      outcome = yield* supervisor.resume({
+        subagentId: input.id,
+        ...request,
+        prompt: input.prompt,
+      });
+    }
+    const presentation = presentResumeOutcome(input.id, outcome);
     return {
-      text: formatResumeOutcome(input.id, outcome),
-      details: resumeToolRowFacts(outcome),
+      text: presentation.text,
+      details: presentation.facts,
       deliveredRuns: [],
     };
   });
@@ -257,9 +249,10 @@ const steer = (
       type: "steer",
       text: input.message,
     });
+    const presentation = presentSteerOutcome(input.id, outcome);
     return {
-      text: formatSteerOutcome(input.id, outcome),
-      details: steerToolRowFacts(input.id, outcome),
+      text: presentation.text,
+      details: presentation.facts,
       deliveredRuns: [],
     };
   });
@@ -271,9 +264,10 @@ const cancel = (
   Effect.gen(function* () {
     const supervisor = yield* SubagentSupervisor;
     const outcomes = yield* supervisor.cancel(distinct(input.ids));
+    const presentation = presentCancelOutcomes(outcomes);
     return {
-      text: formatCancelOutcomes(outcomes),
-      details: cancelToolRowFacts(outcomes),
+      text: presentation.text,
+      details: presentation.facts,
       deliveredRuns: [],
     };
   });
@@ -322,12 +316,10 @@ const collect = (
         ? [outcome.result]
         : [],
     );
+    const presentation = presentWait({ scope, outcomes, agents });
     return {
-      text: formatWaitOutcomes(outcomes, agents),
-      details:
-        scope === "named"
-          ? waitToolRowFacts(outcomes)
-          : waitAllToolRowFacts(outcomes),
+      text: presentation.text,
+      details: presentation.facts,
       deliveredRuns: delivered.map((result) => result.runId),
     };
   });
@@ -356,9 +348,13 @@ const waitAll = (
       .filter((snapshot) => !isTerminalRunPhase(snapshot.phase))
       .map((snapshot) => snapshot.identity.runId);
     if (active.length === 0) {
+      const presentation = presentWait({
+        scope: "all-active",
+        noActiveRuns: true,
+      });
       return {
-        text: formatNoActiveRuns(),
-        details: noActiveWaitAllToolRowFacts(),
+        text: presentation.text,
+        details: presentation.facts,
         deliveredRuns: [],
       };
     }
@@ -372,17 +368,11 @@ const result = (
   Effect.gen(function* () {
     const supervisor = yield* SubagentSupervisor;
     const outcome = yield* supervisor.result(input.id);
-    if (outcome.outcome !== "result") {
-      return {
-        text: formatResultRejection(outcome),
-        details: resultToolRowFacts(outcome),
-        deliveredRuns: [],
-      };
-    }
+    const presentation = presentResultOutcome(outcome);
     return {
-      text: formatResult(outcome.result),
-      details: resultToolRowFacts(outcome),
-      deliveredRuns: [outcome.result.runId],
+      text: presentation.text,
+      details: presentation.facts,
+      deliveredRuns: outcome.outcome === "result" ? [outcome.result.runId] : [],
     };
   });
 

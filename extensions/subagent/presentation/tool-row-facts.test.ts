@@ -11,21 +11,25 @@ import type {
 import { runId, subagentId } from "../domain/index.ts";
 import { fixtureResult } from "../testing/presentation-fixtures.ts";
 import {
-  formatResumeOutcome,
-  formatStartOutcome,
-  formatSteerOutcome,
-} from "./prose.ts";
-import {
+  CANCEL_PRESENTATION,
+  COLLECTION_PRESENTATION,
+  cancelBuckets,
   cancelToolRowFacts,
+  collectionRowPresentation,
   decodeToolRowFacts,
   encodeToolRowFacts,
   noActiveWaitAllToolRowFacts,
+  RESULT_OUTCOME_PRESENTATION,
   RESUME_OUTCOME_PRESENTATION,
+  resultOutcomeSentence,
   resultToolRowFacts,
+  resumeOutcomeSentence,
   resumeToolRowFacts,
   START_OUTCOME_PRESENTATION,
   STEER_OUTCOME_PRESENTATION,
+  startOutcomeSentence,
   startToolRowFacts,
+  steerOutcomeSentence,
   steerToolRowFacts,
   waitAllToolRowFacts,
   waitToolRowFacts,
@@ -107,19 +111,19 @@ test("pass-through table keys construct and round-trip every domain outcome", ()
       startOutcomes,
       (outcome: StartOutcome) => startToolRowFacts("explore", outcome),
       (outcome: StartOutcome) =>
-        formatStartOutcome("explore", outcome, ["explore"]),
+        startOutcomeSentence("explore", outcome, ["explore"]),
     ],
     [
       RESUME_OUTCOME_PRESENTATION,
       resumeOutcomes,
       (outcome: ResumeOutcome) => resumeToolRowFacts(outcome),
-      (outcome: ResumeOutcome) => formatResumeOutcome(sid, outcome),
+      (outcome: ResumeOutcome) => resumeOutcomeSentence(sid, outcome),
     ],
     [
       STEER_OUTCOME_PRESENTATION,
       steerOutcomes,
       (outcome: SteerOutcome) => steerToolRowFacts(rid, outcome),
-      (outcome: SteerOutcome) => formatSteerOutcome(rid, outcome),
+      (outcome: SteerOutcome) => steerOutcomeSentence(rid, outcome),
     ],
   ] as const;
 
@@ -137,6 +141,125 @@ test("pass-through table keys construct and round-trip every domain outcome", ()
       assert.ok(facts.rowPhrase.trim().length > 0);
       assert.ok(formatSentence(outcome as never).trim().length > 0);
     }
+  }
+});
+
+test("every cancel bucket declares a non-empty row phrase beside its facts", () => {
+  const expectedKinds = [
+    "requested",
+    "already requested",
+    "already terminal",
+    "unknown",
+  ] as const;
+
+  assert.deepEqual(Object.keys(CANCEL_PRESENTATION.buckets), expectedKinds);
+  for (const entry of Object.values(CANCEL_PRESENTATION.buckets)) {
+    assert.ok(entry.rowPhrase.trim().length > 0);
+  }
+  assert.ok(CANCEL_PRESENTATION.emptyAnswer.length > 0);
+  assert.ok(CANCEL_PRESENTATION.separator.length > 0);
+
+  const facts = cancelToolRowFacts(cancelOutcomes);
+  assert.deepEqual(cancelBuckets(facts), [
+    {
+      kind: "requested",
+      rowPhrase: CANCEL_PRESENTATION.buckets.requested.rowPhrase,
+      count: 1,
+      runIds: [rid],
+    },
+    {
+      kind: "already requested",
+      rowPhrase: CANCEL_PRESENTATION.buckets["already requested"].rowPhrase,
+      count: 1,
+      runIds: [rid],
+    },
+    {
+      kind: "already terminal",
+      rowPhrase: CANCEL_PRESENTATION.buckets["already terminal"].rowPhrase,
+      count: 3,
+      runs: [
+        { runId: rid, phase: "completed" },
+        { runId: rid, phase: "failed" },
+        { runId: rid, phase: "cancelled" },
+      ],
+    },
+    {
+      kind: "unknown",
+      rowPhrase: CANCEL_PRESENTATION.buckets.unknown.rowPhrase,
+      count: 1,
+      runIds: [rid],
+    },
+  ]);
+});
+
+test("cancel grouping fails loudly for an unfamiliar runtime bucket", () => {
+  assert.throws(
+    () =>
+      cancelBuckets({
+        kind: "cancel",
+        outcomes: [{ kind: "future bucket", runId: rid }],
+      } as never),
+    /no cancellation bucket for future bucket/,
+  );
+});
+
+test("every collection clause declares plural forms and one complete priority order", () => {
+  const clauseKinds = Object.keys(COLLECTION_PRESENTATION.clauses);
+  assert.deepEqual(clauseKinds, [
+    "delivered",
+    "unavailable",
+    "stillRunning",
+    "unknown",
+  ]);
+  assert.equal(COLLECTION_PRESENTATION.idleAnswer, "No active Runs");
+  assert.equal(COLLECTION_PRESENTATION.emptyAnswer, "No Run outcomes");
+  assert.ok(COLLECTION_PRESENTATION.idleAnswer.trim().length > 0);
+  assert.ok(COLLECTION_PRESENTATION.emptyAnswer.trim().length > 0);
+
+  for (const clause of Object.values(COLLECTION_PRESENTATION.clauses)) {
+    assert.ok(clause.rowPhrase(1).trim().length > 0);
+    assert.ok(clause.rowPhrase(2).trim().length > 0);
+    assert.notEqual(clause.rowPhrase(1), clause.rowPhrase(2));
+  }
+  assert.deepEqual(
+    [...COLLECTION_PRESENTATION.priorityOrder].sort(),
+    [...clauseKinds].sort(),
+  );
+  assert.equal(
+    new Set(COLLECTION_PRESENTATION.priorityOrder).size,
+    clauseKinds.length,
+  );
+
+  const presentation = collectionRowPresentation(
+    waitToolRowFacts(waitOutcomes),
+  );
+  assert.equal(presentation.tone, "toolOutput");
+  assert.deepEqual(presentation.clauses, [
+    "Delivered 1 Result",
+    "1 Result unavailable",
+    "1 Run still running",
+    "1 Run unknown",
+  ]);
+  assert.deepEqual(presentation.priority, [
+    "1 Run still running",
+    "Delivered 1 Result",
+    "1 Result unavailable",
+    "1 Run unknown",
+  ]);
+});
+
+test("every Result outcome declares a non-empty sentence, row phrase, and tone", () => {
+  assert.deepEqual(
+    Object.keys(RESULT_OUTCOME_PRESENTATION).sort(),
+    resultOutcomes.map(({ outcome }) => outcome).sort(),
+  );
+  for (const outcome of resultOutcomes) {
+    const facts = resultToolRowFacts(outcome);
+    assert.ok(resultOutcomeSentence(outcome).trim().length > 0);
+    assert.ok(facts.rowPhrase.trim().length > 0);
+    assert.ok(
+      ["toolTitle", "toolOutput", "warning", "error"].includes(facts.tone),
+    );
   }
 });
 
@@ -263,6 +386,8 @@ test("the Tool-row facts decoder accepts all terminal phases and nested cancella
     decodeToolRowFacts(resultToolRowFacts({ outcome: "result", result })),
     {
       kind: "result",
+      rowPhrase: "6 characters",
+      tone: "toolOutput",
       outcome: "available",
       run: {
         runId: result.runId,
@@ -371,6 +496,8 @@ test("the Tool-row facts decoder returns absence and never throws for malformed,
     {
       kind: "result",
       outcome: "available",
+      rowPhrase: "invalid character count",
+      tone: "toolOutput",
       run: {
         runId: rid,
         agent: "explore",
@@ -381,6 +508,8 @@ test("the Tool-row facts decoder returns absence and never throws for malformed,
     {
       kind: "result",
       outcome: "available",
+      rowPhrase: "output removed",
+      tone: "toolOutput",
       run: {
         runId: rid,
         agent: "explore",
@@ -391,6 +520,8 @@ test("the Tool-row facts decoder returns absence and never throws for malformed,
     {
       kind: "result",
       outcome: "unavailable",
+      rowPhrase: "Result unavailable",
+      tone: "error",
       runId: rid,
       status: "finalizing",
     },

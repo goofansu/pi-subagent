@@ -24,11 +24,28 @@ import type {
 } from "../domain/index.ts";
 import { formatResult } from "./run-card.ts";
 import {
+  CANCEL_PRESENTATION,
+  type CancelToolRowFacts,
+  type CollectedRunsToolRowFacts,
+  cancelBuckets,
+  cancelToolRowFacts,
   formatProfileDiagnosticLines,
+  noActiveWaitAllToolRowFacts,
+  type ResultToolRowFacts,
+  type ResumeToolRowFacts,
+  resultOutcomeSentence,
+  resultToolRowFacts,
   resumeOutcomeSentence,
+  resumeToolRowFacts,
+  type StartToolRowFacts,
+  type SteerToolRowFacts,
   startOutcomeSentence,
+  startToolRowFacts,
   steerOutcomeSentence,
+  steerToolRowFacts,
   unknownAgentSentence,
+  waitAllToolRowFacts,
+  waitToolRowFacts,
 } from "./tool-row-facts.ts";
 
 /**
@@ -44,6 +61,11 @@ function unreachable(outcome: never): never {
   );
 }
 
+export interface OperationPresentation<Facts> {
+  readonly text: string;
+  readonly facts: Facts;
+}
+
 /* ------------------------------------------------------------------ */
 /* agent_start                                                         */
 /* ------------------------------------------------------------------ */
@@ -56,49 +78,56 @@ export function formatUnknownAgent(
   return unknownAgentSentence(agent, available);
 }
 
-/** `agent_start`, as prose declared beside its collapsed-row presentation. */
-export function formatStartOutcome(
+/** Present one start outcome as one text-and-facts answer. */
+export function presentStartOutcome(
   agent: string,
   outcome: StartOutcome,
   available: readonly string[],
-): string {
-  return startOutcomeSentence(agent, outcome, available);
+): OperationPresentation<StartToolRowFacts> {
+  return {
+    text: startOutcomeSentence(agent, outcome, available),
+    facts: startToolRowFacts(agent, outcome),
+  };
 }
 
 /* ------------------------------------------------------------------ */
 /* agent_resume                                                        */
 /* ------------------------------------------------------------------ */
 
-export function formatResumeOutcome(
+/** Present one resume outcome as one text-and-facts answer. */
+export function presentResumeOutcome(
   subagentId: SubagentId,
   outcome: ResumeOutcome,
-): string {
-  return resumeOutcomeSentence(subagentId, outcome);
+): OperationPresentation<ResumeToolRowFacts> {
+  return {
+    text: resumeOutcomeSentence(subagentId, outcome),
+    facts: resumeToolRowFacts(outcome),
+  };
 }
 
 /* ------------------------------------------------------------------ */
 /* agent_steer                                                         */
 /* ------------------------------------------------------------------ */
 
-export function formatSteerOutcome(
+/** Present one steer outcome as one text-and-facts answer. */
+export function presentSteerOutcome(
   runId: RunId,
   outcome: SteerOutcome,
-): string {
-  return steerOutcomeSentence(runId, outcome);
+): OperationPresentation<SteerToolRowFacts> {
+  return {
+    text: steerOutcomeSentence(runId, outcome),
+    facts: steerToolRowFacts(runId, outcome),
+  };
 }
 
 /* ------------------------------------------------------------------ */
 /* agent_cancel                                                        */
 /* ------------------------------------------------------------------ */
 
-/** Canonical cancellation bucket names shared by model and collapsed text. */
-export const CANCEL_OUTCOME_HEADINGS = {
-  requested: "Cancellation requested",
-  alreadyCancelling: "Already cancelling",
-  alreadyFinished: "Already finished, result kept",
-  unknownRunIds: "Unknown run ids",
-  empty: "No run ids were given.",
-} as const;
+export interface CancelPresentation {
+  readonly text: string;
+  readonly facts: CancelToolRowFacts;
+}
 
 /**
  * `agent_cancel`, grouped by what happened rather than listed per id.
@@ -106,69 +135,41 @@ export const CANCEL_OUTCOME_HEADINGS = {
  * Cancelling ten Runs and reading ten sentences is worse than reading four
  * groups, and the grouping is what makes the one distinction that matters
  * legible: an admitted *request* is not a terminal cancellation, and the
- * notice that arrives later is.
+ * notice that arrives later is. This is the operation's one presentation
+ * call: prose and facts are made from the same outcomes together.
  */
-export function formatCancelOutcomes(
+export function presentCancelOutcomes(
   outcomes: readonly CancelOutcome[],
-): string {
-  const admitted: RunId[] = [];
-  const idempotent: RunId[] = [];
-  const terminal: { readonly runId: RunId; readonly status: string }[] = [];
-  const unknown: RunId[] = [];
-
-  for (const outcome of outcomes) {
-    switch (outcome.outcome) {
-      case "admitted":
-        admitted.push(outcome.runId);
-        break;
-      case "idempotent":
-        idempotent.push(outcome.runId);
-        break;
-      case "already completed":
-      case "already failed":
-      case "already cancelled":
-        terminal.push({
-          runId: outcome.runId,
-          status: outcome.outcome.slice("already ".length),
-        });
-        break;
-      case "unknown Run":
-        unknown.push(outcome.runId);
-        break;
+): CancelPresentation {
+  const facts = cancelToolRowFacts(outcomes);
+  const parts = cancelBuckets(facts).map((bucket): string => {
+    switch (bucket.kind) {
+      case "requested":
+        return (
+          `${bucket.rowPhrase}: ${bucket.runIds.join(", ")}. Each Run stops when ` +
+          "its execution and cleanup finish, or settles cancelled once its cleanup " +
+          "outlives the cleanup budget; it keeps whatever output it produced and " +
+          "still sends its own notification."
+        );
+      case "already requested":
+        return (
+          `${bucket.rowPhrase}: ${bucket.runIds.join(", ")}. The first request stands ` +
+          "and this one changed nothing."
+        );
+      case "already terminal":
+        return `${bucket.rowPhrase}: ${bucket.runs
+          .map((entry) => `${entry.runId} (${entry.phase})`)
+          .join(", ")}.`;
+      case "unknown":
+        return `${bucket.rowPhrase}: ${bucket.runIds.join(", ")}.`;
       default:
-        unreachable(outcome);
+        return unreachable(bucket);
     }
+  });
+  if (parts.length === 0) {
+    parts.push(CANCEL_PRESENTATION.emptyAnswer);
   }
-
-  const parts: string[] = [];
-  if (admitted.length > 0) {
-    parts.push(
-      `${CANCEL_OUTCOME_HEADINGS.requested}: ${admitted.join(", ")}. Each Run stops when ` +
-        "its execution and cleanup finish, or settles cancelled once its cleanup " +
-        "outlives the cleanup budget; it keeps whatever output it produced and " +
-        "still sends its own notification.",
-    );
-  }
-  if (idempotent.length > 0) {
-    parts.push(
-      `${CANCEL_OUTCOME_HEADINGS.alreadyCancelling}: ${idempotent.join(", ")}. The first request stands ` +
-        "and this one changed nothing.",
-    );
-  }
-  if (terminal.length > 0) {
-    parts.push(
-      `${CANCEL_OUTCOME_HEADINGS.alreadyFinished}: ${terminal
-        .map((entry) => `${entry.runId} (${entry.status})`)
-        .join(", ")}.`,
-    );
-  }
-  if (unknown.length > 0) {
-    parts.push(
-      `${CANCEL_OUTCOME_HEADINGS.unknownRunIds}: ${unknown.join(", ")}.`,
-    );
-  }
-  if (parts.length === 0) parts.push(CANCEL_OUTCOME_HEADINGS.empty);
-  return parts.join(" ");
+  return { text: parts.join(" "), facts };
 }
 
 /* ------------------------------------------------------------------ */
@@ -297,43 +298,64 @@ export function formatNoActiveRuns(): string {
   );
 }
 
+export interface WaitPresentation {
+  readonly text: string;
+  readonly facts: CollectedRunsToolRowFacts;
+}
+
+export type WaitPresentationRequest =
+  | {
+      readonly scope: "named" | "all-active";
+      readonly outcomes: readonly WaitOutcome[];
+      readonly agents?: ReadonlyMap<RunId, string>;
+    }
+  | {
+      readonly scope: "all-active";
+      readonly noActiveRuns: true;
+    };
+
+/**
+ * Present any wait path as one text-and-facts answer.
+ *
+ * The façade chooses which Runs to wait for and independently states which
+ * Results it delivered. This function owns only the two presentation values,
+ * built together so their collection cannot drift.
+ */
+export function presentWait(
+  request: WaitPresentationRequest,
+): WaitPresentation {
+  if ("noActiveRuns" in request) {
+    return {
+      text: formatNoActiveRuns(),
+      facts: noActiveWaitAllToolRowFacts(),
+    };
+  }
+  return {
+    text: formatWaitOutcomes(request.outcomes, request.agents),
+    facts:
+      request.scope === "named"
+        ? waitToolRowFacts(request.outcomes)
+        : waitAllToolRowFacts(request.outcomes),
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /* agent_result                                                        */
 /* ------------------------------------------------------------------ */
 
-/**
- * The three `agent_result` outcomes that are not the Result.
- *
- * A spent identifier and a wrong identifier are different mistakes, and this
- * is where they read differently. Rendering the Result itself is
- * {@link formatResult} in the result-body module, because it is a body rather
- * than a sentence.
- */
-export function formatResultRejection(
-  outcome: Exclude<ResultOutcome, { outcome: "result" }>,
-): string {
-  switch (outcome.outcome) {
-    case "ResultExpired":
-      return (
-        `Run ${outcome.runId} (subagent ${outcome.subagentId}) ${outcome.status}, ` +
-        "but its output was evicted to keep this Session's result store " +
-        "bounded. The Run is still known and its status still answers; the " +
-        "output itself is gone and cannot be recovered."
-      );
-    case "RunNotTerminal":
-      return (
-        `Run ${outcome.runId} has not finished yet, so it has no result. Its ` +
-        "completion is delivered to you on its own; agent_wait blocks until " +
-        "then and returns the result directly."
-      );
-    case "unknown Run":
-      return (
-        `No run with id ${outcome.runId}. Check the id against what ` +
-        "agent_start or agent_resume returned."
-      );
-    default:
-      return unreachable(outcome);
-  }
+export interface ResultPresentation {
+  readonly text: string;
+  readonly facts: ResultToolRowFacts;
+}
+
+/** Present one Result retrieval as one text-and-facts answer. */
+export function presentResultOutcome(
+  outcome: ResultOutcome,
+): ResultPresentation {
+  return {
+    text: resultOutcomeSentence(outcome),
+    facts: resultToolRowFacts(outcome),
+  };
 }
 
 /* ------------------------------------------------------------------ */

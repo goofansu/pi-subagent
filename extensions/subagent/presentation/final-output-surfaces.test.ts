@@ -1,15 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { backendId, EMPTY_USAGE_SNAPSHOT } from "../domain/index.ts";
+import {
+  backendId,
+  EMPTY_USAGE_SNAPSHOT,
+  interpretFinalOutput,
+} from "../domain/index.ts";
 import type { RunInspection } from "../domain/inspection.ts";
 import {
   type FixtureResultOptions,
   fixtureNotification,
   fixtureResult,
 } from "../testing/presentation-fixtures.ts";
+import {
+  compactFinalOutputSummaryPhrase,
+  finalOutputSummary,
+} from "./final-output-section.ts";
 import { inspectionBlocks } from "./inspection.ts";
 import { formatNotificationText } from "./notification-text.ts";
 import { formatResult } from "./run-card.ts";
+import { resultToolRowFacts } from "./tool-row-facts.ts";
 
 function surfaces(options: FixtureResultOptions) {
   const result = fixtureResult(options);
@@ -70,6 +79,28 @@ function assertExtractedLineEqual(
     names.map(() => [expected]),
   );
 }
+
+test("compact final-output summaries own absence, removal, and character-count phrases", () => {
+  const cases = [
+    [fixtureResult(), "no output"],
+    [
+      fixtureResult({ truncation: { truncatedOutputBytes: 7 } }),
+      "output removed",
+    ],
+    [fixtureResult({ finalOutput: "visible answer" }), "14 characters"],
+  ] as const;
+
+  for (const [result, expected] of cases) {
+    const phrase = compactFinalOutputSummaryPhrase(
+      finalOutputSummary(interpretFinalOutput(result)),
+    );
+    assert.equal(phrase, expected);
+    assert.equal(
+      resultToolRowFacts({ outcome: "result", result }).rowPhrase,
+      phrase,
+    );
+  }
+});
 
 test("absent final output reaches Result, notice, and inspection through their preserved framing", () => {
   assertEverySurface({}, [

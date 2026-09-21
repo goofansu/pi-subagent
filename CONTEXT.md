@@ -611,16 +611,18 @@ Tool's model-visible prose so its collapsed transcript row can be drawn. One
 presentation module owns the discriminated union, named construction from every
 operation outcome, and total decoding from the host-owned unknown details slot.
 The union is one Schema declaration that yields its type, constructor target,
-and total decoder. Each pass-through outcome's sentence, row phrase, and tone
-are declared together. Facts are bounded summaries, not domain values or
-authoritative Results: they cannot decide what a Run means, and naming a Run in
-them cannot decide Result hand-off. Only `ToolResponse.deliveredRuns`, read at
-the host boundary, says which Results the parent received.
+and total decoder. Every outcome's phrasing — sentence, row phrase or clauses,
+and tone — is declared beside its facts kind, and the renderer holds no wording.
+Facts are bounded summaries, not domain values or authoritative Results: they
+cannot decide what a Run means, and naming a Run in them cannot decide Result
+hand-off. Only `ToolResponse.deliveredRuns`, read at the host boundary, says
+which Results the parent received.
 
 **Final output section** — the one presentation owner of a Run answer's
-qualifier, body, and explanation. It consumes the Final output retention
-interpretation plus the surface's framing; presentation callers of that
-interpretation consume the section rather than switching on its retention kind.
+qualifier, body, explanation, and the compact summary phrase a collapsed row
+shows. It consumes the Final output retention interpretation plus the surface's
+framing; presentation callers of that interpretation consume the section or
+summary rather than switching on its retention kind.
 
 **RunCard** — the pure presentation of one Run, built from a published index row
 (live, and therefore carrying no output) or from an immutable stored Result

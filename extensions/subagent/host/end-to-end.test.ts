@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runId, subagentId } from "../domain/index.ts";
+import {
+  presentCancelOutcomes,
+  presentResultOutcome,
+  presentWait,
+} from "../presentation/index.ts";
 import { emitText } from "../testing/fakes/script.ts";
 import {
   hostRig,
@@ -93,7 +98,10 @@ for (const fake of BOTH_FAKES) {
     assert.match(waited, new RegExp(RIG_ANSWER));
     assert.equal(
       await rig.text("agent_wait", { ids: ["run-never"] }),
-      "Unknown run ids: run-never.",
+      presentWait({
+        scope: "named",
+        outcomes: [{ outcome: "unknown Run", runId: runId("run-never") }],
+      }).text,
     );
 
     // result: the stored answer, and the unknown-id path.
@@ -101,17 +109,25 @@ for (const fake of BOTH_FAKES) {
       await rig.text("agent_result", { id: ids.runId }),
       new RegExp(RIG_ANSWER),
     );
-    assert.match(
+    assert.equal(
       await rig.text("agent_result", { id: "run-never" }),
-      /^No run with id run-never\./,
+      presentResultOutcome({
+        outcome: "unknown Run",
+        runId: runId("run-never"),
+      }).text,
     );
 
     // cancel: a terminal Run reports as finished, an unknown one as unknown.
     const cancelled = await rig.text("agent_cancel", {
       ids: [ids.runId, "run-never"],
     });
-    assert.match(cancelled, /Already finished, result kept/);
-    assert.match(cancelled, /Unknown run ids: run-never\./);
+    assert.equal(
+      cancelled,
+      presentCancelOutcomes([
+        { outcome: "already completed", runId: runId(ids.runId) },
+        { outcome: "unknown Run", runId: runId("run-never") },
+      ]).text,
+    );
 
     // resume: supported or not, depending on the backend, and unknown for an
     // id that names no Subagent.
@@ -156,7 +172,8 @@ test("a stuck demo execution is cancelled visibly and remains inspectable", asyn
   const cancel = await rig.text("agent_cancel", { ids: [ids.runId] });
   assert.equal(
     cancel,
-    `Cancellation requested: ${ids.runId}. Each Run stops when its execution and cleanup finish, or settles cancelled once its cleanup outlives the cleanup budget; it keeps whatever output it produced and still sends its own notification.`,
+    presentCancelOutcomes([{ outcome: "admitted", runId: runId(ids.runId) }])
+      .text,
   );
   assert.match(rig.host.widgetLines().join("\n"), /cancelling/);
 
@@ -248,7 +265,6 @@ test("when the widget stops listing a Run, agent_result returns its result", asy
   // announced was stored before the notice was built — so it has a result.
   assert.deepEqual(rig.host.widgetLines(), []);
   const result = await rig.text("agent_result", { id: ids.runId });
-  assert.doesNotMatch(result, /has not finished yet/);
   assert.match(result, new RegExp(RIG_ANSWER));
 });
 
@@ -263,9 +279,12 @@ test("a Run that is still on the widget has no result yet, and says so", async (
   await rig.pump();
 
   assert.ok(rig.host.widgetLines().length > 0);
-  assert.match(
+  assert.equal(
     await rig.text("agent_result", { id: ids.runId }),
-    /has not finished yet, so it has no result/,
+    presentResultOutcome({
+      outcome: "RunNotTerminal",
+      runId: runId(ids.runId),
+    }).text,
   );
 });
 
@@ -345,9 +364,14 @@ test("an encode defect retains aggregate attention and reports one unannounceabl
   assert.match(said[0] ?? "", /unannounceable: 1/);
   assert.match(said[0] ?? "", /unreadableResults: 1/);
 
-  assert.match(
+  assert.equal(
     await rig.text("agent_result", { id: ids.runId }),
-    /output itself is gone and cannot be recovered/,
+    presentResultOutcome({
+      outcome: "ResultExpired",
+      runId: runId(ids.runId),
+      subagentId: subagentId(ids.subagentId),
+      status: "failed",
+    }).text,
   );
   await rig.pump();
   assert.equal(

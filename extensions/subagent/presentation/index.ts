@@ -29,19 +29,22 @@ export {
   reduceDashboardPage,
 } from "./dashboard-page.ts";
 
+export { compactFinalOutputSummaryPhrase } from "./final-output-section.ts";
+
 export { formatNotificationText } from "./notification-text.ts";
 
 export {
-  formatCancelOutcomes,
   formatInvalidProfilesWarning,
   formatNoActiveRuns,
-  formatResultRejection,
-  formatResumeOutcome,
   formatSessionNotReady,
-  formatStartOutcome,
-  formatSteerOutcome,
   formatToolInputRejected,
   formatWaitOutcomes,
+  presentCancelOutcomes,
+  presentResultOutcome,
+  presentResumeOutcome,
+  presentStartOutcome,
+  presentSteerOutcome,
+  presentWait,
 } from "./prose.ts";
 
 export { contentText, formatNotificationSummary } from "./renderers.ts";
@@ -57,6 +60,7 @@ export { formatResult } from "./run-card.ts";
 
 export {
   cancelToolRowFacts,
+  decodeToolRowFacts,
   encodeToolRowFacts,
   noActiveWaitAllToolRowFacts,
   resultToolRowFacts,
@@ -64,6 +68,7 @@ export {
   startToolRowFacts,
   steerToolRowFacts,
   type ToolRowFacts,
+  toolRowPresentation,
   waitAllToolRowFacts,
   waitToolRowFacts,
 } from "./tool-row-facts.ts";
