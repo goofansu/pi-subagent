@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Fiber, Queue, Stream } from "effect";
 import { TestClock } from "effect/testing";
-import { bridgeOverflowObservations } from "../backend/native-bridge.ts";
+import { bridgeOverflowObservation } from "../backend/native-bridge.ts";
 import { runId as makeRunId } from "../domain/index.ts";
 import { emitText } from "../testing/fakes/script.ts";
 import {
@@ -917,7 +917,7 @@ test("waiting on an unknown id reports it rather than blocking forever", async (
 /* The native-callback bridge                                      */
 /* ============================================================== */
 
-test("a bridge that cannot wait fails the Run visibly rather than dropping", async () => {
+test("a bridge that cannot wait preserves its overflow diagnostic", async () => {
   const outcome = await Effect.runPromise(
     Effect.gen(function* () {
       const counters = createRuntimeCounters();
@@ -943,9 +943,9 @@ test("a bridge that cannot wait fails the Run visibly rather than dropping", asy
         counters,
       );
 
-      // What a bridge that was refused must emit instead. Dropping is not on
-      // the list, and neither is truncating.
-      const escalation = bridgeOverflowObservations();
+      // What a bridge that was refused must preserve instead. Dropping the
+      // diagnostic is not an option; execution supplies the failed bundle.
+      const escalation = bridgeOverflowObservation();
       const taken = yield* Queue.take(intake.queue);
       return {
         first,
@@ -960,22 +960,8 @@ test("a bridge that cannot wait fails the Run visibly rather than dropping", asy
   assert.equal(outcome.first, true);
   assert.equal(outcome.refused, false);
   assert.equal(outcome.counters.queueOverflows, 1);
-  assert.deepEqual(
-    outcome.escalation.map((observation) => observation.kind),
-    ["diagnostic", "ending"],
-  );
-  assert.equal(
-    outcome.escalation[0].kind === "diagnostic"
-      ? outcome.escalation[0].diagnostic.category
-      : undefined,
-    "queue-overflow",
-  );
-  assert.equal(
-    outcome.escalation[1].kind === "ending"
-      ? outcome.escalation[1].ending.ending
-      : undefined,
-    "failed",
-  );
+  assert.equal(outcome.escalation.kind, "diagnostic");
+  assert.equal(outcome.escalation.diagnostic.category, "queue-overflow");
   // Nothing was lost: the one that fitted is still there to be taken.
   assert.equal(outcome.taken, "message");
 });

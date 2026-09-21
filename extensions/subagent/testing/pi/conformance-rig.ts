@@ -104,6 +104,12 @@ interface PiFixtureParts extends BackendConformanceFixtureParts {
   readonly openFails?: boolean;
   /** Extra Profile frontmatter, for the validation scenario. */
   readonly profileFields?: Readonly<Record<string, unknown>>;
+  /** Keep the wrapped execution open after Pi's execute Effect returns. */
+  readonly holdAfterExecute?: boolean;
+  /** Add a test-only competing candidate after Pi records its decision. */
+  readonly emitCompetingEndingAfterDecision?: boolean;
+  /** Emit from execution-scope cleanup, after settlement has sealed intake. */
+  readonly emitLateObservationOnScopeClose?: boolean;
 }
 
 /**
@@ -172,10 +178,88 @@ function gateLateControlDrain(
   };
 }
 
+interface DecisionInstrumentationOptions {
+  readonly trace: string[] | undefined;
+  readonly holdAfterExecute: boolean;
+  readonly emitCompetingEndingAfterDecision: boolean;
+  readonly emitLateObservationOnScopeClose: boolean;
+}
+
+function observeDecisions(
+  backend: Backend,
+  options: DecisionInstrumentationOptions,
+): Backend {
+  if (
+    options.trace === undefined &&
+    !options.holdAfterExecute &&
+    !options.emitCompetingEndingAfterDecision &&
+    !options.emitLateObservationOnScopeClose
+  ) {
+    return backend;
+  }
+  return {
+    ...backend,
+    open: (profile, subagent) =>
+      Effect.map(
+        backend.open(profile, subagent),
+        (agent): BackendAgent => ({
+          ...agent,
+          execute: (input, io) => {
+            let recorded = false;
+            let execution = agent.execute(input, {
+              ...io,
+              recordDecision: (bundle) =>
+                Effect.gen(function* () {
+                  yield* io.recordDecision(bundle);
+                  recorded = true;
+                  if (!options.emitCompetingEndingAfterDecision) {
+                    options.trace?.push(`decision-recorded:${input.runId}`);
+                  }
+                }),
+            });
+            if (options.emitCompetingEndingAfterDecision) {
+              execution = execution.pipe(
+                Effect.tap((bundle) =>
+                  Effect.gen(function* () {
+                    // This candidate belongs to the conformance fixture, not
+                    // the Pi adapter. Waiting for its normal return keeps the
+                    // adapter's prior observations ahead of the test ending.
+                    yield* io.emit({ kind: "ending", ending: bundle.ending });
+                    yield* Effect.yieldNow;
+                    if (recorded) {
+                      options.trace?.push(`decision-recorded:${input.runId}`);
+                    }
+                  }),
+                ),
+              );
+            }
+            if (options.emitLateObservationOnScopeClose) {
+              execution = Effect.acquireRelease(Effect.void, () =>
+                io.emit({
+                  kind: "diagnostic",
+                  diagnostic: {
+                    category: "backend-failure",
+                    message: "test-only late cleanup observation",
+                  },
+                }),
+              ).pipe(Effect.andThen(execution));
+            }
+            return options.holdAfterExecute
+              ? execution.pipe(Effect.andThen(Effect.never))
+              : execution;
+          },
+        }),
+      ),
+  };
+}
+
 function piFixture(parts: PiFixtureParts): BackendConformanceFixture {
   const {
     scripts,
+    emitCompetingEndingAfterDecision = false,
+    emitLateObservationOnScopeClose = false,
     gateLateControlDrain: gateDrain,
+    holdAfterExecute = false,
     openFails,
     providerStopsOnRequest,
     profileFields,
@@ -225,8 +309,17 @@ function piFixture(parts: PiFixtureParts): BackendConformanceFixture {
     },
   });
 
+  const gated = gateDrain
+    ? gateLateControlDrain(correlated, standIn)
+    : correlated;
+
   return {
-    backend: gateDrain ? gateLateControlDrain(correlated, standIn) : correlated,
+    backend: observeDecisions(gated, {
+      trace: rest.trace,
+      holdAfterExecute,
+      emitCompetingEndingAfterDecision,
+      emitLateObservationOnScopeClose,
+    }),
     profile: {
       ...PROFILE,
       ...(profileFields === undefined ? {} : { fields: profileFields }),
@@ -347,23 +440,24 @@ export function piConformanceRig(): BackendConformanceRig {
             },
           });
 
-        case "exactly-one-ending-wins":
-          // Pi's own version of two competing endings: the session finishes,
-          // and the cancel arrives before the execution has returned. The
-          // announced answer wins and the interruption is the late one.
+        case "exactly-one-ending-wins": {
+          // Pi records the answer. The rig then contributes an old-adapter
+          // compatibility ending before cancellation interrupts the held
+          // execution, positively exercising the competing-ending counter.
+          const trace: string[] = [];
           return piFixture({
             scripts: [
-              [
-                { step: "assistant", text: "the answer" },
-                { step: "terminal" },
-                { step: "hang" },
-              ],
+              [{ step: "assistant", text: "the answer" }, { step: "terminal" }],
             ],
-            plans: [{ cancel: true }],
+            emitCompetingEndingAfterDecision: true,
+            holdAfterExecute: true,
+            plans: [{ cancel: true, cancelAfterDecision: true }],
+            trace,
             expected: {
               runs: [{ status: "completed", finalOutput: "the answer" }],
             },
           });
+        }
 
         case "cancellation-terminates-with-partial-output":
           return piFixture({
@@ -387,22 +481,21 @@ export function piConformanceRig(): BackendConformanceRig {
             },
           });
 
-        case "a decided bundle survives a later cancel":
-          // The adapter still uses its compatibility in-stream ending path in
-          // this ticket; the core keeps that path until Pi records decisions.
+        case "a decided bundle survives a later cancel": {
+          const trace: string[] = [];
           return piFixture({
             scripts: [
-              [
-                { step: "assistant", text: "the answer" },
-                { step: "terminal" },
-                { step: "hang" },
-              ],
+              [{ step: "assistant", text: "the answer" }, { step: "terminal" }],
             ],
-            plans: [{ cancel: true }],
+            holdAfterExecute: true,
+            plans: [{ cancel: true, cancelAfterDecision: true }],
+            trace,
             expected: {
               runs: [{ status: "completed", finalOutput: "the answer" }],
+              duplicateDecisions: 0,
             },
           });
+        }
 
         case "result-follows-scope-closure":
           return piFixture({
@@ -412,20 +505,22 @@ export function piConformanceRig(): BackendConformanceRig {
             expected: { runs: [{ status: "completed" }] },
           });
 
-        case "late-events-cannot-mutate-a-terminal-run":
-          // The session says one more thing while it is being aborted, which
-          // is after the Run captured its ending and sealed its intake. It
-          // reaches the seam, is counted, and changes nothing.
+        case "late-events-cannot-mutate-a-terminal-run": {
+          // A test-only execution-scope finalizer emits after the decision has
+          // caused settlement to seal intake. The seam counts and drops it.
+          const trace: string[] = [];
           return piFixture({
             scripts: [
               [
                 { step: "speak-on-abort", text: "a frame nobody asked for" },
                 { step: "assistant", text: "the answer" },
                 { step: "terminal" },
-                { step: "hang" },
               ],
             ],
-            plans: [{ cancel: true }],
+            emitLateObservationOnScopeClose: true,
+            holdAfterExecute: true,
+            plans: [{ cancel: true, cancelAfterDecision: true }],
+            trace,
             expected: {
               runs: [
                 {
@@ -437,6 +532,7 @@ export function piConformanceRig(): BackendConformanceRig {
               ],
             },
           });
+        }
 
         case "a-failing-sink-cannot-strand-the-execution":
           return piFixture({
@@ -923,23 +1019,25 @@ export function piConformanceRig(): BackendConformanceRig {
             },
           });
 
-        case "settlement-stores-the-result-exactly-once":
-          // Two candidates: the answer the session announced, and the
-          // interruption that arrived after it. One result, one notification.
+        case "settlement-stores-the-result-exactly-once": {
+          // The rig adds a compatibility ending after Pi's recorded answer,
+          // then cancellation contributes another settlement candidate. The
+          // duplicate is counted; only one result and notification survive.
+          const trace: string[] = [];
           return piFixture({
             scripts: [
-              [
-                { step: "assistant", text: "the answer" },
-                { step: "terminal" },
-                { step: "hang" },
-              ],
+              [{ step: "assistant", text: "the answer" }, { step: "terminal" }],
             ],
-            plans: [{ cancel: true }],
+            emitCompetingEndingAfterDecision: true,
+            holdAfterExecute: true,
+            plans: [{ cancel: true, cancelAfterDecision: true }],
+            trace,
             expected: {
               runs: [{ status: "completed", finalOutput: "the answer" }],
               notifications: 1,
             },
           });
+        }
 
         case "wait-and-result-observe-the-same-value":
           return piFixture({

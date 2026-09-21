@@ -9,7 +9,7 @@
 
 import { Effect, type Option, Queue } from "effect";
 import type { RunObservation } from "../../domain/index.ts";
-import { bridgeOverflowObservations } from "../native-bridge.ts";
+import { bridgeOverflowObservation } from "../native-bridge.ts";
 
 /** How many observations may wait for the reducer inside the adapter. */
 export const BRIDGE_BUFFER_BOUND = 4096;
@@ -25,7 +25,7 @@ export interface CallbackBridge {
   readonly take: Effect.Effect<RunObservation>;
   /** Poll one observation without waiting. */
   readonly poll: Effect.Effect<Option.Option<RunObservation>>;
-  /** Overflow observations that could not themselves fit in the full Queue. */
+  /** Overflow diagnostics that could not themselves fit in the full Queue. */
   readonly takeOverflowPolicy: () => readonly RunObservation[];
   /** Stop taking events. Whatever is buffered can still be drained. */
   readonly stop: () => void;
@@ -49,12 +49,10 @@ export function createCallbackBridge(
 
         accepting = false;
         overflowed = true;
-        const policy = bridgeOverflowObservations();
-        const firstRefused = policy.findIndex(
-          (overflowObservation) =>
-            !Queue.offerUnsafe(queue, overflowObservation),
-        );
-        if (firstRefused >= 0) overflowPolicy = policy.slice(firstRefused);
+        const diagnostic = bridgeOverflowObservation();
+        if (!Queue.offerUnsafe(queue, diagnostic)) {
+          overflowPolicy = [diagnostic];
+        }
         return false;
       },
       take: Queue.take(queue),

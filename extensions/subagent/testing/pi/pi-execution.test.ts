@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Fiber, Queue } from "effect";
-import type { ExecutionIO, RunControl } from "../../backend/contract.ts";
+import type {
+  ExecutionIO,
+  RunControl,
+  TerminalBundle,
+} from "../../backend/contract.ts";
 import { runPiExecution } from "../../backend/pi/execution.ts";
 import { createPiProbeCounters } from "../../backend/pi/index.ts";
 import { type RunObservation, runId } from "../../domain/index.ts";
@@ -17,7 +21,7 @@ const ABANDONED_GUIDANCE_DIAGNOSTIC = {
   },
 } as const;
 
-test("normal failure survives interruption during delivery reporting and still clears native input", async () => {
+test("native prompt return records its decision before later interruption", async () => {
   const standIn = createStandInPiSession({
     scripts: [
       [
@@ -30,6 +34,7 @@ test("normal failure survives interruption during delivery reporting and still c
   const reporting = createGate();
   const probe = createPiProbeCounters();
   const observations: RunObservation[] = [];
+  const decisions: TerminalBundle[] = [];
   let reportingStarted = false;
   await Effect.runPromise(
     Effect.scoped(
@@ -49,7 +54,10 @@ test("normal failure survives interruption during delivery reporting and still c
               prompt: "go",
             },
             {
-              recordDecision: () => Effect.void,
+              recordDecision: (bundle) =>
+                Effect.sync(() => {
+                  decisions.push(bundle);
+                }),
               controls: { take: Queue.take(controls) },
               emit: (observation) =>
                 Effect.gen(function* () {
@@ -90,17 +98,31 @@ test("normal failure survives interruption during delivery reporting and still c
       }),
     ),
   );
-  assert.deepEqual(
-    observations.filter((o) => o.kind === "ending"),
-    [
-      {
-        kind: "ending",
-        ending: {
-          ending: "failed",
-          message: "Pi did not complete its message: [redacted]",
-        },
+  assert.deepEqual(decisions, [
+    {
+      ending: {
+        ending: "failed",
+        message: "Pi did not complete its message: [redacted]",
       },
-    ],
+      reconciliation: {
+        finalOutput: "partial",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+        },
+        turns: 1,
+      },
+    },
+  ]);
+  assert.deepEqual(
+    observations.filter(
+      (observation) =>
+        observation.kind === "ending" || observation.kind === "reconciliation",
+    ),
+    [],
   );
   assert.deepEqual(
     observations.flatMap((o) =>
@@ -108,12 +130,12 @@ test("normal failure survives interruption during delivery reporting and still c
     ),
     [
       {
-        category: "control",
-        message: "Pi steering was not delivered: [redacted]",
-      },
-      {
         category: "backend-failure",
         message: "Pi did not complete its message: [redacted]",
+      },
+      {
+        category: "control",
+        message: "Pi steering was not delivered: [redacted]",
       },
     ],
   );
@@ -123,6 +145,57 @@ test("normal failure survives interruption during delivery reporting and still c
     pendingCleanups: 0,
   });
   assert.equal(standIn.session.pendingMessageCount, 0);
+  standIn.session.dispose();
+});
+
+test("interruption before native prompt return records no decision", async () => {
+  const standIn = createStandInPiSession({
+    scripts: [[{ step: "await-gate", gate: "open" }]],
+  });
+  const probe = createPiProbeCounters();
+  const decisions: TerminalBundle[] = [];
+
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const execution = yield* Effect.forkChild(
+          runPiExecution(
+            {
+              session: standIn.session,
+              isClosed: () => false,
+              closeRequested: Effect.never,
+              probe,
+            },
+            {
+              runId: runId("run-interrupted"),
+              description: "interrupted",
+              prompt: "go",
+            },
+            {
+              recordDecision: (bundle) =>
+                Effect.sync(() => {
+                  decisions.push(bundle);
+                }),
+              controls: { take: Effect.never },
+              emit: () => Effect.void,
+            },
+          ),
+        );
+        yield* until(
+          "open prompt",
+          Effect.sync(() => standIn.record().reachedGates.includes("open")),
+        );
+        yield* Fiber.interrupt(execution);
+      }),
+    ),
+  );
+
+  assert.deepEqual(decisions, []);
+  assert.deepEqual(probe.read(), {
+    openSessions: 0,
+    liveSubscriptions: 0,
+    pendingCleanups: 0,
+  });
   standIn.session.dispose();
 });
 

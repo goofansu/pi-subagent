@@ -44,14 +44,6 @@ export interface PiRunFinishReport {
   };
 }
 
-/** Facts only execution can know when interruption takes effect. */
-export interface PiRunInterruptionFacts {
-  readonly pendingNativeMessages: number;
-  readonly activeNativeDeliveries: number;
-  /** Whether execution already began publishing the frozen finish observations. */
-  readonly finishObservationsAnnounced: boolean;
-}
-
 /** The synchronous, total interface of one Run's Pi evidence fold. */
 export interface PiRunEvidence {
   readonly read: (reading: PiRunReading) => readonly RunObservation[];
@@ -59,10 +51,6 @@ export interface PiRunEvidence {
   readonly promptReturned: (
     outcome: "resolved" | "rejected",
   ) => PiRunFinishReport;
-  /** Ordered, still-unannounced ending evidence, or no decision for Arbitration. */
-  readonly interrupted: (
-    facts: PiRunInterruptionFacts,
-  ) => readonly RunObservation[] | undefined;
 }
 
 type TerminalOutcome = "answered" | "incomplete" | "failed" | "aborted";
@@ -275,24 +263,6 @@ function finishFor(
   };
 }
 
-function endingObservations(
-  report: PiRunFinishReport,
-  finishObservationsAnnounced = false,
-): RunObservation[] {
-  return [
-    ...(finishObservationsAnnounced ? [] : report.observations),
-    ...(report.bundle.reconciliation === undefined
-      ? []
-      : [
-          {
-            kind: "reconciliation" as const,
-            reconciliation: report.bundle.reconciliation,
-          },
-        ]),
-    { kind: "ending", ending: report.bundle.ending },
-  ];
-}
-
 export function createPiRunEvidence(
   options: PiRunEvidenceOptions,
 ): PiRunEvidence {
@@ -372,25 +342,6 @@ export function createPiRunEvidence(
     promptReturned: (outcome) => {
       frozen ??= finishFor(outcome, current);
       return frozen;
-    },
-    interrupted: (facts) => {
-      if (frozen !== undefined) {
-        return endingObservations(frozen, facts.finishObservationsAnnounced);
-      }
-      if (
-        current.terminal?.outcome !== "answered" ||
-        facts.activeNativeDeliveries > 0 ||
-        facts.pendingNativeMessages > 0
-      ) {
-        return undefined;
-      }
-      return endingObservations({
-        observations: [],
-        bundle: {
-          ending: answeredEnding(),
-          reconciliation: current.terminal.reconciliation,
-        },
-      });
     },
   };
 }

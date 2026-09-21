@@ -556,7 +556,7 @@ test("a terminal provider abort never answers and core cancellation keeps its re
   }
 });
 
-test("cancellation during post-answer threshold and supported overflow maintenance preserves completion", async () => {
+test("cancellation before prompt return wins during post-answer maintenance", async () => {
   const outcomes = await Promise.all(
     (["threshold", "overflow"] as const).map(async (reason) => {
       const { value } = await withPiSession(
@@ -604,8 +604,8 @@ test("cancellation during post-answer threshold and supported overflow maintenan
   assert.deepEqual(outcomes, [
     {
       outcome: "result",
-      status: "completed",
-      cancellationReason: undefined,
+      status: "cancelled",
+      cancellationReason: "requested",
       finalOutput: "complete threshold answer",
       totals: {
         input: 13,
@@ -618,8 +618,8 @@ test("cancellation during post-answer threshold and supported overflow maintenan
     },
     {
       outcome: "result",
-      status: "completed",
-      cancellationReason: undefined,
+      status: "cancelled",
+      cancellationReason: "requested",
       finalOutput: "complete overflow answer",
       totals: {
         input: 13,
@@ -958,7 +958,7 @@ test("cancellation during a later native execution discards earlier terminal evi
   }
 });
 
-test("terminal evidence from the actual latest native execution survives late cancellation", async () => {
+test("terminal evidence does not decide before native prompt return", async () => {
   const { value } = await withPiSession(
     {
       scripts: [
@@ -985,7 +985,7 @@ test("terminal evidence from the actual latest native execution survives late ca
       }),
   );
 
-  assert.equal(value.status, "completed");
+  assert.equal(value.status, "cancelled");
   assert.equal(value.output, "the answer");
 });
 

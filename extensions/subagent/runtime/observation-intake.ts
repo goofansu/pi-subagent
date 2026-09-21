@@ -123,8 +123,8 @@ export function makeIntake(
  * `backend/native-bridge.ts`, because it is a rule about what an adapter must
  * do. This is the half that belongs with the intake: it returns whether the
  * observation was taken, and a caller that gets `false` must emit
- * `bridgeOverflowObservations()` rather than carry on. Dropping is not on the
- * list.
+ * the bridge's overflow diagnostic rather than carry on. Dropping is not on
+ * the list; the execution's returned bundle supplies the failed ending.
  */
 export function offerWithoutWaiting(
   intake: ObservationIntake,
