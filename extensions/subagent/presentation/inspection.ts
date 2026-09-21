@@ -10,12 +10,12 @@ import {
   finalOutputSection,
   resultFinalOutputFraming,
 } from "./final-output-section.ts";
-import type { RenderableTheme } from "./rows.ts";
 import {
   formatDiagnosticLine,
   formatResultLinkLine,
   formatTruncation,
-} from "./run-card.ts";
+} from "./result-details.ts";
+import type { RenderableTheme } from "./rows.ts";
 import { runPresentationFromSummary } from "./run-presentation.ts";
 import { fitToWidth } from "./text-width.ts";
 import type { HandoffStatus } from "./views.ts";
@@ -116,8 +116,6 @@ export function inspectionBlocks(
     section(capture.outcome === "active" ? "Output so far" : "Final output");
     const output = interpretFinalOutput(stored);
     const truncation = formatTruncation(stored);
-    const showEmptyRecordNote =
-      stored.transcript.length === 0 && truncation === undefined;
     const outputSection = finalOutputSection(
       output,
       result === undefined
@@ -125,12 +123,9 @@ export function inspectionBlocks(
             capture: "active",
             status:
               capture.summary.phase === "finalizing" ? "finalizing" : "running",
-            presentation: { kind: "inspection", showEmptyRecordNote },
+            presentation: { kind: "inspection" },
           }
-        : resultFinalOutputFraming(result, {
-            kind: "inspection",
-            showEmptyRecordNote,
-          }),
+        : resultFinalOutputFraming(result, { kind: "inspection" }),
     );
     if (outputSection.qualifier !== undefined)
       add("literal", outputSection.qualifier);

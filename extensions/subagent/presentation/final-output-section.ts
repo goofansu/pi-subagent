@@ -9,11 +9,15 @@
  * retention.
  */
 
-import type {
-  CancellationReason,
-  DiagnosticCategory,
-  FinalOutputInterpretation,
-  RunResult,
+import {
+  type CancellationReason,
+  type DiagnosticCategory,
+  type FinalOutputInterpretation,
+  type NotificationFinalOutput,
+  notificationFinalOutputOf,
+  type RunId,
+  type RunNotification,
+  type RunResult,
 } from "../domain/index.ts";
 
 export type FinalOutputBlockKind = "markdown" | "literal";
@@ -37,13 +41,16 @@ export interface FinalOutputSection {
 /** How a caller frames the retained value. */
 export type FinalOutputPresentation =
   | { readonly kind: "result" }
+  | { readonly kind: "inspection" }
   | {
-      readonly kind: "inspection";
-      /** Preserve whether this capture currently shows an empty retained record. */
-      readonly showEmptyRecordNote: boolean;
+      readonly kind: "notice-inline";
+      readonly runId: RunId;
     }
-  | { readonly kind: "notice-inline" }
-  | { readonly kind: "notice-preview"; readonly preview: string };
+  | {
+      readonly kind: "notice-preview";
+      readonly runId: RunId;
+      readonly preview: string;
+    };
 
 export type FinalOutputFraming =
   | {
@@ -81,11 +88,14 @@ function qualifier(removedBytes: number): string {
   return `${formatByteCount(removedBytes)} bytes of the final output were cut.`;
 }
 
+type FinalOutputValue = FinalOutputInterpretation | NotificationFinalOutput;
+type RetainedFinalOutput = Extract<
+  FinalOutputValue,
+  { readonly kind: "retained" | "retained-prefix" }
+>;
+
 function retainedText(
-  output: Extract<
-    FinalOutputInterpretation,
-    { readonly kind: "retained" | "retained-prefix" }
-  >,
+  output: RetainedFinalOutput,
   framing: FinalOutputFraming,
 ): string {
   return framing.presentation.kind === "notice-preview"
@@ -109,10 +119,7 @@ function statusBelongsInSection(framing: FinalOutputFraming): boolean {
 }
 
 function retainedBody(
-  output: Extract<
-    FinalOutputInterpretation,
-    { readonly kind: "retained" | "retained-prefix" }
-  >,
+  output: RetainedFinalOutput,
   framing: FinalOutputFraming,
 ): FinalOutputBlock {
   const value = retainedText(output, framing);
@@ -136,13 +143,13 @@ function retainedBody(
 }
 
 function emptyRecordNote(
-  output: FinalOutputInterpretation,
+  output: Extract<FinalOutputValue, { readonly kind: "absent" }>,
   framing: FinalOutputFraming,
 ): FinalOutputBlock | undefined {
   if (
     output.kind !== "absent" ||
-    framing.presentation.kind !== "inspection" ||
-    !framing.presentation.showEmptyRecordNote
+    output.hasTranscriptEvidence ||
+    framing.presentation.kind !== "inspection"
   ) {
     return undefined;
   }
@@ -155,21 +162,141 @@ function emptyRecordNote(
   };
 }
 
+function outputBlock(label: string, output: string): FinalOutputBlock {
+  return { kind: "literal", text: `${label}:\n"""\n${output}\n"""` };
+}
+
+type NoticePresentation = Extract<
+  FinalOutputPresentation,
+  { readonly kind: "notice-inline" | "notice-preview" }
+>;
+type NoticeFraming = FinalOutputFraming & {
+  readonly presentation: NoticePresentation;
+};
+
+function noticeCall(framing: NoticeFraming): string {
+  return `agent_result with {"id":"${framing.presentation.runId}"}`;
+}
+
+function noticeStatusBody(
+  framing: NoticeFraming,
+  retained?: { readonly output: string; readonly label: string },
+): FinalOutputBlock | undefined {
+  const inlined = framing.presentation.kind === "notice-inline";
+  if (framing.status === "failed") {
+    const reason = `Reason: ${framing.failure || "none reported."}`;
+    return {
+      kind: "literal",
+      text:
+        inlined && retained !== undefined
+          ? `${reason}\n\n${outputBlock("Output produced before failure", retained.output).text}`
+          : reason,
+    };
+  }
+  if (framing.status === "cancelled") {
+    return inlined && retained !== undefined
+      ? outputBlock("Output produced before cancellation", retained.output)
+      : undefined;
+  }
+  if (retained === undefined || (!inlined && retained.output === "")) {
+    return undefined;
+  }
+  return inlined
+    ? outputBlock("Output from the subagent", retained.output)
+    : {
+        kind: "literal",
+        text: `${retained.label}:\n"${retained.output}"`,
+      };
+}
+
+function noticeRetainedSection(
+  output: RetainedFinalOutput,
+  framing: NoticeFraming,
+  prefixRemovedBytes?: number,
+): FinalOutputSection {
+  const value = retainedText(output, framing);
+  const body = noticeStatusBody(framing, {
+    output: value,
+    label:
+      prefixRemovedBytes === undefined
+        ? "Preview from the subagent"
+        : "Preview of the retained output prefix",
+  });
+  const call = noticeCall(framing);
+  const inlined = framing.presentation.kind === "notice-inline";
+  const explanation =
+    prefixRemovedBytes === undefined
+      ? inlined
+        ? framing.status === "completed"
+          ? `This is the complete output; nothing further to fetch. ${call} re-reads it with the transcript.`
+          : `This is all the output the Run produced. ${call} re-reads it with the transcript.`
+        : framing.status === "completed"
+          ? `The result is available. Call ${call}.`
+          : `Partial output is available. Call ${call}.`
+      : inlined
+        ? `This is the retained output prefix; ${formatByteCount(prefixRemovedBytes)} bytes were removed by retention bounds. ${call} re-reads it with the transcript.`
+        : `A retained output prefix is available; ${formatByteCount(prefixRemovedBytes)} bytes were removed by retention bounds. Call ${call}.`;
+  return { ...(body === undefined ? {} : { body }), explanation };
+}
+
+function noticeRemovedSection(
+  output: Extract<FinalOutputValue, { readonly kind: "removed" }>,
+  framing: NoticeFraming,
+): FinalOutputSection {
+  const body = noticeStatusBody(framing);
+  return {
+    ...(body === undefined ? {} : { body }),
+    explanation: `Final output was produced, but none remains in the Run record; ${formatByteCount(output.removedBytes)} bytes were removed by retention bounds.${
+      output.hasTranscriptEvidence
+        ? " Supporting transcript evidence remains."
+        : ""
+    } Call ${noticeCall(framing)}.`,
+  };
+}
+
+function noticeAbsentSection(
+  output: Extract<FinalOutputValue, { readonly kind: "absent" }>,
+  framing: NoticeFraming,
+): FinalOutputSection {
+  const body = noticeStatusBody(framing);
+  return {
+    ...(body === undefined ? {} : { body }),
+    explanation: output.hasTranscriptEvidence
+      ? `No final output was produced. Supporting transcript evidence is available. Call ${noticeCall(framing)}.`
+      : `No output was produced. The Run record is available. Call ${noticeCall(framing)}.`,
+  };
+}
+
+function isNoticeFraming(
+  framing: FinalOutputFraming,
+): framing is NoticeFraming {
+  return (
+    framing.presentation.kind === "notice-inline" ||
+    framing.presentation.kind === "notice-preview"
+  );
+}
+
 /** Build the qualifier, body, and explanation for one final-output section. */
 export function finalOutputSection(
-  output: FinalOutputInterpretation,
+  output: FinalOutputValue,
   framing: FinalOutputFraming,
 ): FinalOutputSection {
   switch (output.kind) {
     case "retained":
+      return isNoticeFraming(framing)
+        ? noticeRetainedSection(output, framing)
+        : { body: retainedBody(output, framing) };
     case "retained-prefix":
-      return {
-        ...(output.kind === "retained-prefix"
-          ? { qualifier: qualifier(output.removedBytes) }
-          : {}),
-        body: retainedBody(output, framing),
-      };
+      return isNoticeFraming(framing)
+        ? noticeRetainedSection(output, framing, output.removedBytes)
+        : {
+            qualifier: qualifier(output.removedBytes),
+            body: retainedBody(output, framing),
+          };
     case "removed": {
+      if (isNoticeFraming(framing)) {
+        return noticeRemovedSection(output, framing);
+      }
       const retentionQualifier = qualifier(output.removedBytes);
       if (framing.capture === "active") {
         return {
@@ -206,6 +333,9 @@ export function finalOutputSection(
       };
     }
     case "absent": {
+      if (isNoticeFraming(framing)) {
+        return noticeAbsentSection(output, framing);
+      }
       const recordNote = emptyRecordNote(output, framing);
       if (framing.capture === "active") {
         return {
@@ -237,6 +367,37 @@ export function finalOutputSection(
       return { explanation: COMPLETED_WITHOUT_OUTPUT };
     }
   }
+}
+
+/** Build the self-contained answer section carried by a Notification. */
+export function notificationFinalOutputSection(
+  notice: RunNotification,
+): FinalOutputSection {
+  const presentation: FinalOutputPresentation =
+    notice.output === undefined
+      ? { kind: "notice-preview", runId: notice.runId, preview: notice.preview }
+      : { kind: "notice-inline", runId: notice.runId };
+  const framing: FinalOutputFraming =
+    notice.status === "completed"
+      ? { capture: "terminal", status: "completed", presentation }
+      : notice.status === "failed"
+        ? {
+            capture: "terminal",
+            status: "failed",
+            presentation,
+            ...(notice.errorMessage === undefined
+              ? {}
+              : { failure: notice.errorMessage }),
+          }
+        : {
+            capture: "terminal",
+            status: "cancelled",
+            presentation,
+            ...(notice.cancellationReason === undefined
+              ? {}
+              : { cancellationReason: notice.cancellationReason }),
+          };
+  return finalOutputSection(notificationFinalOutputOf(notice), framing);
 }
 
 /** Plain lines for callers that do not preserve semantic block kinds. */

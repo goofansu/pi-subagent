@@ -32,7 +32,8 @@ import type {
   SubagentId,
   WaitOutcome,
 } from "../domain/index.ts";
-import { formatDiagnosticLine, formatResult } from "./run-card.ts";
+import { formatDiagnosticLine } from "./result-details.ts";
+import { formatResult } from "./run-card.ts";
 
 /**
  * The end of an exhaustive switch.

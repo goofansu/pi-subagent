@@ -262,6 +262,59 @@ export const RunNotification = Schema.Struct({
 
 export type RunNotification = typeof RunNotification.Type;
 
+/**
+ * The final-output facts a self-sufficient Notification can state honestly.
+ *
+ * Retained values carry their visible text. Transcript evidence is only
+ * inferable when no output remains: `partial` then means supporting transcript
+ * evidence survived, while `record-only` means it did not. We deliberately do
+ * not invent a false evidence flag for retained output, where availability
+ * cannot distinguish it.
+ */
+export type NotificationFinalOutput =
+  | { readonly kind: "retained"; readonly output: string }
+  | {
+      readonly kind: "retained-prefix";
+      readonly removedBytes: number;
+      readonly output: string;
+    }
+  | { readonly kind: "absent"; readonly hasTranscriptEvidence: boolean }
+  | {
+      readonly kind: "removed";
+      readonly removedBytes: number;
+      readonly hasTranscriptEvidence: boolean;
+    };
+
+/** Interpret the output facts already carried by a Notification. */
+export function notificationFinalOutputOf(
+  notice: RunNotification,
+): NotificationFinalOutput {
+  switch (notice.outputRetention.kind) {
+    case "absent":
+      return {
+        kind: "absent",
+        hasTranscriptEvidence: notice.resultAvailability === "partial",
+      };
+    case "removed":
+      return {
+        kind: "removed",
+        removedBytes: notice.outputRetention.removedBytes,
+        hasTranscriptEvidence: notice.resultAvailability === "partial",
+      };
+    case "retained":
+      return {
+        kind: "retained",
+        output: notice.output ?? notice.preview,
+      };
+    case "retained-prefix":
+      return {
+        kind: "retained-prefix",
+        removedBytes: notice.outputRetention.removedBytes,
+        output: notice.output ?? notice.preview,
+      };
+  }
+}
+
 /** Build the notice for one stored result. Nothing is invented. */
 export function toRunNotification(result: RunResult): RunNotification {
   const accounting = toNotificationAccounting(result.usage, result.model);

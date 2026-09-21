@@ -44,13 +44,14 @@
  */
 
 import type {
-  FinalOutputRetention,
   NotificationAccounting,
-  ResultAvailability,
-  RunId,
   RunNotification,
 } from "../domain/index.ts";
 import { completionViewOfNotification } from "./completion-view.ts";
+import {
+  finalOutputSectionLines,
+  notificationFinalOutputSection,
+} from "./final-output-section.ts";
 import {
   formatDuration,
   formatTokenCount,
@@ -93,84 +94,6 @@ function formatNotificationIdentity(notice: RunNotification): string {
 }
 
 /**
- * How every notice tells a model where the rest of the answer is.
- *
- * Two sentences: what it will find, then the exact call that fetches it. The
- * argument shape is spelled out so the parent copies rather than composes —
- * a model that has to assemble `{"id": …}` from prose is a model that can
- * assemble it wrongly — and the call keeps its own sentence in all three, so
- * the habit reads the same whatever the availability.
- *
- * When the notice carries the output whole, `inlined` turns the pointer from
- * an instruction into a note: there is nothing further to fetch, and the call
- * is named only as the way to read the Run again — its transcript, its cost,
- * or this same output later. The verb "Call" is deliberately absent from
- * those two sentences, because it is the word the habit is keyed on.
- *
- * The pointer owns absent/removed meaning. A record-only Result can mean no
- * output was produced or that bounding removed all of it; retained transcript
- * evidence is named as supporting evidence, never as final output. This is why
- * a completed Run with an empty preview has no body.
- *
- * Present for every terminal status, `cancelled` included: a cancelled Run
- * keeps the output it produced before it was stopped, and a timeout or a
- * shutdown cancels Runs the parent never asked to cancel, so "you already know
- * the id you cancelled" was never true of every cancellation.
- */
-export function formatResultPointer(
-  runId: RunId,
-  availability: ResultAvailability,
-  retention: FinalOutputRetention,
-  inlined = false,
-): string {
-  const call = `agent_result with {"id":"${runId}"}`;
-  switch (retention.kind) {
-    case "removed":
-      return `Final output was produced, but none remains in the Run record; ${retention.removedBytes.toLocaleString("en-US")} bytes were removed by retention bounds.${
-        availability === "partial"
-          ? " Supporting transcript evidence remains."
-          : ""
-      } Call ${call}.`;
-    case "absent":
-      return availability === "partial"
-        ? `No final output was produced. Supporting transcript evidence is available. Call ${call}.`
-        : `No output was produced. The Run record is available. Call ${call}.`;
-    case "retained-prefix": {
-      const qualification = `${retention.removedBytes.toLocaleString("en-US")} bytes were removed by retention bounds`;
-      return inlined
-        ? `This is the retained output prefix; ${qualification}. ${call} re-reads it with the transcript.`
-        : `A retained output prefix is available; ${qualification}. Call ${call}.`;
-    }
-    case "retained":
-      switch (availability) {
-        case "complete":
-          return inlined
-            ? `This is the complete output; nothing further to fetch. ${call} re-reads it with the transcript.`
-            : `The result is available. Call ${call}.`;
-        case "partial":
-          return inlined
-            ? `This is all the output the Run produced. ${call} re-reads it with the transcript.`
-            : `Partial output is available. Call ${call}.`;
-        case "record-only":
-          // Unreachable for a derived notice: retained visible output is never
-          // record-only. Keep the formatter total for decoded domain values.
-          return `The Run record is available. Call ${call}.`;
-      }
-  }
-}
-
-/**
- * The whole output, set off from the runtime's own sentences.
- *
- * A labelled block between two fence lines rather than a quoted string: the
- * output is multi-line Markdown, and a closing quote at the end of a
- * paragraph is easy to lose. The fence is the boundary a reader scans for.
- */
-function formatOutputBlock(label: string, output: string): string {
-  return `${label}:\n"""\n${output}\n"""`;
-}
-
-/**
  * The trailing accounting line, from the notice's accounting value.
  *
  * Cost, tokens, turns, then the model. Whether there was anything to account
@@ -206,59 +129,12 @@ export function formatNotificationAccounting(
   return parts.join(" · ");
 }
 
-/**
- * The one section that varies, and the only place a status is asked about.
- *
- * `undefined` rather than an empty string, so an absent body leaves no blank
- * line behind it: a cancelled notice reads as three sections and not as four
- * with a hole in the middle.
- */
-function formatNotificationBody(notice: RunNotification): string | undefined {
-  switch (notice.status) {
-    case "completed":
-      if (notice.output !== undefined) {
-        return formatOutputBlock("Output from the subagent", notice.output);
-      }
-      // No body when there is nothing to preview. The pointer says a Run
-      // record is available and says "no output was produced" once, which is
-      // the whole reason this branch has an absence rather than a sentence.
-      return notice.preview === ""
-        ? undefined
-        : `${
-            notice.outputRetention.kind === "retained-prefix"
-              ? "Preview of the retained output prefix"
-              : "Preview from the subagent"
-          }:\n"${notice.preview}"`;
-    case "failed": {
-      const reason = `Reason: ${notice.errorMessage || "none reported."}`;
-      return notice.output === undefined
-        ? reason
-        : `${reason}\n\n${formatOutputBlock("Output produced before failure", notice.output)}`;
-    }
-    case "cancelled":
-      // The reason is in the header. A cancelled Run's partial output is here
-      // when it is short, and behind `agent_result` — which the pointer says —
-      // when it is not.
-      return notice.output === undefined
-        ? undefined
-        : formatOutputBlock(
-            "Output produced before cancellation",
-            notice.output,
-          );
-  }
-}
-
 /** What the model reads when one of its Runs finishes. */
 export function formatNotificationText(notice: RunNotification): string {
+  const output = notificationFinalOutputSection(notice);
   return [
     `${formatNotificationHeader(notice)}\n\n${formatNotificationIdentity(notice)}`,
-    formatNotificationBody(notice),
-    formatResultPointer(
-      notice.runId,
-      notice.resultAvailability,
-      notice.outputRetention,
-      notice.output !== undefined,
-    ),
+    ...finalOutputSectionLines(output),
     notice.accounting === undefined
       ? undefined
       : formatNotificationAccounting(notice.accounting),

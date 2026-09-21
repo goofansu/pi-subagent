@@ -386,7 +386,12 @@ test("empty retained output is distinguished from output that was never produced
     .map((block) => block.text)
     .join("\n");
   assert.match(truncatedTranscriptOnly, /No output produced yet\./);
-  assert.doesNotMatch(truncatedTranscriptOnly, /retained yet/);
+  // A drop counter proves historical loss, not retained transcript evidence.
+  // The domain flag therefore keeps this an honestly empty current record.
+  assert.match(
+    truncatedTranscriptOnly,
+    /Active snapshot available but empty: no output or transcript retained yet\./,
+  );
 
   const genuinelyEmpty = inspectionBlocks(
     {

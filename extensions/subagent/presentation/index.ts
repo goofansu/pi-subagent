@@ -33,6 +33,7 @@ export * from "./inspection.ts";
 export * from "./notification-text.ts";
 export * from "./prose.ts";
 export * from "./renderers.ts";
+export * from "./result-details.ts";
 export * from "./rows.ts";
 export * from "./run-card.ts";
 export * from "./run-line.ts";

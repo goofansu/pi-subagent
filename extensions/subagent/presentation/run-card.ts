@@ -23,13 +23,7 @@
  * should see only what happened.
  */
 
-import type {
-  ResultLink,
-  RunDiagnostic,
-  RunResult,
-  ToolEntry,
-  TranscriptItem,
-} from "../domain/index.ts";
+import type { RunResult, ToolEntry, TranscriptItem } from "../domain/index.ts";
 import {
   interpretFinalOutput,
   type NotificationAccounting,
@@ -41,10 +35,15 @@ import {
   type FinalOutputSection,
   finalOutputSection,
   finalOutputSectionLines,
-  formatByteCount,
   resultFinalOutputFraming,
 } from "./final-output-section.ts";
 import { formatNotificationAccounting } from "./notification-text.ts";
+import {
+  formatDiagnosticLine,
+  formatResultLinkLine,
+  formatTruncation,
+} from "./result-details.ts";
+
 import {
   formatRunPhase,
   formatTokenCount,
@@ -141,16 +140,6 @@ export function formatToolEntry(entry: ToolEntry): string {
   );
 }
 
-/** One diagnostic as a line: the category, then what it said. */
-export function formatDiagnosticLine(diagnostic: RunDiagnostic): string {
-  return `${diagnostic.category}: ${diagnostic.message}`;
-}
-
-/** One link as a line: what kind of thing it points at, and where. */
-export function formatResultLinkLine(link: ResultLink): string {
-  return `${link.label} (${link.kind}): ${link.target}`;
-}
-
 /** The context gauge, with its window when the backend reported one. */
 export function formatContextGauge(context: {
   readonly tokens: number;
@@ -163,44 +152,6 @@ export function formatContextGauge(context: {
   }
   const percent = Math.round((context.tokens / context.window) * 100);
   return `context ${used} / ${formatTokenCount(context.window)} (${percent}%)`;
-}
-
-/**
- * What bounding removed, when it removed anything.
- *
- * A bounded projection is honest about being bounded, and this is where that
- * honesty reaches a reader. Silence means nothing was dropped.
- */
-export function formatTruncation(
-  result: Pick<RunResult, "truncation">,
-): string | undefined {
-  const dropped: string[] = [];
-  const { truncation } = result;
-  if (truncation.droppedTranscriptItems > 0) {
-    dropped.push(`${truncation.droppedTranscriptItems} transcript items`);
-  }
-  if (truncation.droppedToolEntries > 0) {
-    dropped.push(`${truncation.droppedToolEntries} tool entries`);
-  }
-  if (truncation.droppedDiagnostics > 0) {
-    dropped.push(`${truncation.droppedDiagnostics} diagnostics`);
-  }
-  if (truncation.droppedLinks > 0) {
-    dropped.push(`${truncation.droppedLinks} links`);
-  }
-  if (truncation.truncatedTranscriptBytes > 0) {
-    dropped.push(
-      `${formatByteCount(truncation.truncatedTranscriptBytes)} bytes of transcript text`,
-    );
-  }
-  if (truncation.truncatedToolOutputBytes > 0) {
-    dropped.push(
-      `${formatByteCount(truncation.truncatedToolOutputBytes)} bytes of tool output`,
-    );
-  }
-  return dropped.length > 0
-    ? `Dropped to stay within bounds: ${dropped.join(", ")}.`
-    : undefined;
 }
 
 /** The last few transcript items, oldest first. */

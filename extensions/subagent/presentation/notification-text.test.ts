@@ -13,13 +13,13 @@ import {
   toNotificationAccounting,
 } from "../domain/index.ts";
 import {
+  type FixtureResultOptions,
   fixtureNotification,
   fixtureUsage,
 } from "../testing/presentation-fixtures.ts";
 import {
   formatNotificationAccounting,
   formatNotificationText,
-  formatResultPointer,
 } from "./notification-text.ts";
 
 test("N-1: a completed notice carries a short output whole, and says nothing further need be fetched", () => {
@@ -355,44 +355,51 @@ test("every terminal status ends with the availability sentence and the exact ca
   }
 });
 
-test("N-10: the pointer says what a model will find, in each of the three availabilities", () => {
-  const runId = fixtureNotification({}).runId;
-  assert.equal(
-    formatResultPointer(runId, "complete", { kind: "retained" }),
-    'The result is available. Call agent_result with {"id":"run-1"}.',
+test("ADR-0033: each derived availability keeps its exact public pointer", () => {
+  const overInline = "x".repeat(NOTIFICATION_INLINE_MAX_BYTES + 1);
+  const complete = formatNotificationText(
+    fixtureNotification({ finalOutput: overInline }),
   );
-  assert.equal(
-    formatResultPointer(runId, "partial", { kind: "retained" }),
-    'Partial output is available. Call agent_result with {"id":"run-1"}.',
+  const partial = formatNotificationText(
+    fixtureNotification({
+      ending: failedEnding("boom"),
+      finalOutput: overInline,
+    }),
   );
-  assert.equal(
-    formatResultPointer(runId, "record-only", { kind: "absent" }),
-    'No output was produced. The Run record is available. Call agent_result with {"id":"run-1"}.',
+  const recordOnly = formatNotificationText(fixtureNotification({}));
+
+  assert.match(
+    complete,
+    /The result is available\. Call agent_result with \{"id":"run-1"\}\.$/,
+  );
+  assert.match(
+    partial,
+    /Partial output is available\. Call agent_result with \{"id":"run-1"\}\.$/,
+  );
+  assert.match(
+    recordOnly,
+    /No output was produced\. The Run record is available\. Call agent_result with \{"id":"run-1"\}\.$/,
   );
 });
 
-test("N-10: an inlined pointer is a note rather than an instruction, and never says Call", () => {
-  const runId = fixtureNotification({}).runId;
-  assert.equal(
-    formatResultPointer(runId, "complete", { kind: "retained" }, true),
-    "This is the complete output; nothing further to fetch. agent_result " +
-      'with {"id":"run-1"} re-reads it with the transcript.',
-  );
-  assert.equal(
-    formatResultPointer(runId, "partial", { kind: "retained" }, true),
-    "This is all the output the Run produced. agent_result with " +
-      '{"id":"run-1"} re-reads it with the transcript.',
-  );
-  // Record-only has nothing to inline, so the flag changes nothing.
-  assert.equal(
-    formatResultPointer(runId, "record-only", { kind: "absent" }, true),
-    formatResultPointer(runId, "record-only", { kind: "absent" }),
-  );
-  for (const availability of ["complete", "partial"] as const) {
-    assert.doesNotMatch(
-      formatResultPointer(runId, availability, { kind: "retained" }, true),
-      /\bCall\b/,
-    );
+test("ADR-0037: every inlined pointer is a note and never instructs Call", () => {
+  for (const options of [
+    { finalOutput: "whole answer" },
+    { ending: failedEnding("boom"), finalOutput: "partial answer" },
+    {
+      ending: cancelledEnding("requested"),
+      finalOutput: "partial answer",
+    },
+    {
+      finalOutput: "retained prefix",
+      truncation: { truncatedOutputBytes: 7 },
+    },
+  ] satisfies readonly FixtureResultOptions[]) {
+    const notice = fixtureNotification(options);
+    assert.notEqual(notice.output, undefined);
+    const pointer = formatNotificationText(notice).split("\n\n").at(-1) ?? "";
+    assert.match(pointer, /agent_result with \{"id":"run-1"\} re-reads it/);
+    assert.doesNotMatch(pointer, /\bCall\b/);
   }
 });
 
