@@ -20,7 +20,6 @@ import {
 import { fixtureResult } from "../testing/presentation-fixtures.ts";
 import {
   formatNoActiveRuns,
-  formatResultRejection,
   formatToolInputRejected,
   formatUnknownAgent,
   formatWaitOutcomes,
@@ -34,7 +33,7 @@ import {
 } from "./prose.ts";
 import { formatResult } from "./run-card.ts";
 import {
-  CANCEL_BUCKET_PRESENTATION,
+  CANCEL_PRESENTATION,
   resumeOutcomeSentence,
   startOutcomeSentence,
   steerOutcomeSentence,
@@ -367,14 +366,14 @@ test("agent_cancel separates request, idempotence, terminal, and unknown", () =>
 
   assert.equal(
     presentCancelOutcomes(outcomes).text,
-    `${CANCEL_BUCKET_PRESENTATION.requested.rowPhrase}: run-1. Each Run stops when its execution and ` +
+    `${CANCEL_PRESENTATION.buckets.requested.rowPhrase}: run-1. Each Run stops when its execution and ` +
       "cleanup finish, or settles cancelled once its cleanup outlives the " +
       "cleanup budget; it keeps whatever output it produced and still sends " +
       "its own notification. " +
-      `${CANCEL_BUCKET_PRESENTATION["already requested"].rowPhrase}: run-2. The first request stands and this one ` +
+      `${CANCEL_PRESENTATION.buckets["already requested"].rowPhrase}: run-2. The first request stands and this one ` +
       "changed nothing. " +
-      `${CANCEL_BUCKET_PRESENTATION["already terminal"].rowPhrase}: run-3 (completed). ` +
-      `${CANCEL_BUCKET_PRESENTATION.unknown.rowPhrase}: run-4.`,
+      `${CANCEL_PRESENTATION.buckets["already terminal"].rowPhrase}: run-3 (completed). ` +
+      `${CANCEL_PRESENTATION.buckets.unknown.rowPhrase}: run-4.`,
   );
 });
 
@@ -416,10 +415,7 @@ test("agent_cancel covers every outcome and every terminal status", () => {
 });
 
 test("agent_cancel with no ids says so", () => {
-  assert.equal(
-    presentCancelOutcomes([]).text,
-    CANCEL_BUCKET_PRESENTATION.empty.rowPhrase,
-  );
+  assert.equal(presentCancelOutcomes([]).text, CANCEL_PRESENTATION.emptyAnswer);
 });
 
 // ── agent_wait and agent_wait_all ────────────────────────────────────────────
@@ -575,7 +571,7 @@ test("one Result presentation call pairs model text and row facts", () => {
   const outcome = { outcome: "RunNotTerminal", runId: RUN } as const;
   const presentation = presentResultOutcome(outcome);
 
-  assert.equal(presentation.text, formatResultRejection(outcome));
+  assert.match(presentation.text, /has not finished yet/);
   assert.deepEqual(presentation.facts, {
     kind: "result",
     outcome: "still-running",
@@ -586,13 +582,16 @@ test("one Result presentation call pairs model text and row facts", () => {
 });
 
 test("a spent id and a wrong id read differently", () => {
-  const expired = formatResultRejection({
+  const expired = presentResultOutcome({
     outcome: "ResultExpired",
     runId: RUN,
     subagentId: SUBAGENT,
     status: "completed",
-  });
-  const unknown = formatResultRejection({ outcome: "unknown Run", runId: RUN });
+  }).text;
+  const unknown = presentResultOutcome({
+    outcome: "unknown Run",
+    runId: RUN,
+  }).text;
 
   assert.equal(
     expired,
@@ -613,20 +612,20 @@ test("agent_result covers every rejection, and the union's fourth member is the 
   const rendered = new Map<string, string>([
     [
       "ResultExpired",
-      formatResultRejection({
+      presentResultOutcome({
         outcome: "ResultExpired",
         runId: RUN,
         subagentId: SUBAGENT,
         status: "cancelled",
-      }),
+      }).text,
     ],
     [
       "RunNotTerminal",
-      formatResultRejection({ outcome: "RunNotTerminal", runId: RUN }),
+      presentResultOutcome({ outcome: "RunNotTerminal", runId: RUN }).text,
     ],
     [
       "unknown Run",
-      formatResultRejection({ outcome: "unknown Run", runId: RUN }),
+      presentResultOutcome({ outcome: "unknown Run", runId: RUN }).text,
     ],
   ]);
 

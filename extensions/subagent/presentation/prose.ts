@@ -24,7 +24,7 @@ import type {
 } from "../domain/index.ts";
 import { formatResult } from "./run-card.ts";
 import {
-  CANCEL_BUCKET_PRESENTATION,
+  CANCEL_PRESENTATION,
   type CancelToolRowFacts,
   type CollectedRunsToolRowFacts,
   cancelBuckets,
@@ -167,7 +167,7 @@ export function presentCancelOutcomes(
     }
   });
   if (parts.length === 0) {
-    parts.push(CANCEL_BUCKET_PRESENTATION.empty.rowPhrase);
+    parts.push(CANCEL_PRESENTATION.emptyAnswer);
   }
   return { text: parts.join(" "), facts };
 }
@@ -342,20 +342,6 @@ export function presentWait(
 /* ------------------------------------------------------------------ */
 /* agent_result                                                        */
 /* ------------------------------------------------------------------ */
-
-/**
- * The three `agent_result` outcomes that are not the Result.
- *
- * A spent identifier and a wrong identifier are different mistakes, and this
- * is where they read differently. Rendering the Result itself is
- * {@link formatResult} in the result-body module, because it is a body rather
- * than a sentence.
- */
-export function formatResultRejection(
-  outcome: Exclude<ResultOutcome, { outcome: "result" }>,
-): string {
-  return resultOutcomeSentence(outcome);
-}
 
 export interface ResultPresentation {
   readonly text: string;

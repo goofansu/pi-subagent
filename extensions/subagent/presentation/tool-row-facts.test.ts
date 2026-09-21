@@ -11,7 +11,7 @@ import type {
 import { runId, subagentId } from "../domain/index.ts";
 import { fixtureResult } from "../testing/presentation-fixtures.ts";
 import {
-  CANCEL_BUCKET_PRESENTATION,
+  CANCEL_PRESENTATION,
   COLLECTION_PRESENTATION,
   cancelBuckets,
   cancelToolRowFacts,
@@ -152,31 +152,30 @@ test("every cancel bucket declares a non-empty row phrase beside its facts", () 
     "unknown",
   ] as const;
 
-  assert.deepEqual(Object.keys(CANCEL_BUCKET_PRESENTATION), [
-    ...expectedKinds,
-    "empty",
-  ]);
-  for (const entry of Object.values(CANCEL_BUCKET_PRESENTATION)) {
+  assert.deepEqual(Object.keys(CANCEL_PRESENTATION.buckets), expectedKinds);
+  for (const entry of Object.values(CANCEL_PRESENTATION.buckets)) {
     assert.ok(entry.rowPhrase.trim().length > 0);
   }
+  assert.ok(CANCEL_PRESENTATION.emptyAnswer.length > 0);
+  assert.ok(CANCEL_PRESENTATION.separator.length > 0);
 
   const facts = cancelToolRowFacts(cancelOutcomes);
   assert.deepEqual(cancelBuckets(facts), [
     {
       kind: "requested",
-      rowPhrase: CANCEL_BUCKET_PRESENTATION.requested.rowPhrase,
+      rowPhrase: CANCEL_PRESENTATION.buckets.requested.rowPhrase,
       count: 1,
       runIds: [rid],
     },
     {
       kind: "already requested",
-      rowPhrase: CANCEL_BUCKET_PRESENTATION["already requested"].rowPhrase,
+      rowPhrase: CANCEL_PRESENTATION.buckets["already requested"].rowPhrase,
       count: 1,
       runIds: [rid],
     },
     {
       kind: "already terminal",
-      rowPhrase: CANCEL_BUCKET_PRESENTATION["already terminal"].rowPhrase,
+      rowPhrase: CANCEL_PRESENTATION.buckets["already terminal"].rowPhrase,
       count: 3,
       runs: [
         { runId: rid, phase: "completed" },
@@ -186,7 +185,7 @@ test("every cancel bucket declares a non-empty row phrase beside its facts", () 
     },
     {
       kind: "unknown",
-      rowPhrase: CANCEL_BUCKET_PRESENTATION.unknown.rowPhrase,
+      rowPhrase: CANCEL_PRESENTATION.buckets.unknown.rowPhrase,
       count: 1,
       runIds: [rid],
     },

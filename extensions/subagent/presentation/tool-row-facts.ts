@@ -696,24 +696,31 @@ const CancelRunToolRowOutcomeSchema = Schema.Union([
 export type CancelRunToolRowOutcome = typeof CancelRunToolRowOutcomeSchema.Type;
 
 /**
- * The cancellation buckets' shared wording, declared beside their facts.
- *
- * `empty` is the answer when there are no buckets. The other keys are the
- * normalized facts kinds, so adding a bucket to the facts requires adding its
- * row phrase here too.
+ * All cancellation-row presentation constants, separate from the iterable
+ * bucket declarations so row metadata cannot become a cancellation bucket.
  */
-export const CANCEL_BUCKET_PRESENTATION = {
-  requested: { rowPhrase: "Cancellation requested" },
-  "already requested": { rowPhrase: "Already cancelling" },
-  "already terminal": { rowPhrase: "Already finished, result kept" },
-  unknown: { rowPhrase: "Unknown run ids" },
-  empty: { rowPhrase: "No run ids were given." },
-} as const satisfies Record<
-  CancelRunToolRowOutcome["kind"] | "empty",
-  {
-    readonly rowPhrase: string;
-  }
->;
+export const CANCEL_PRESENTATION = {
+  tone: "toolOutput",
+  separator: " · ",
+  emptyAnswer: "No run ids were given.",
+  buckets: {
+    requested: { rowPhrase: "Cancellation requested" },
+    "already requested": { rowPhrase: "Already cancelling" },
+    "already terminal": { rowPhrase: "Already finished, result kept" },
+    unknown: { rowPhrase: "Unknown run ids" },
+  } satisfies Record<
+    CancelRunToolRowOutcome["kind"],
+    { readonly rowPhrase: string }
+  >,
+} as const satisfies {
+  readonly tone: "toolOutput";
+  readonly separator: string;
+  readonly emptyAnswer: string;
+  readonly buckets: Record<
+    CancelRunToolRowOutcome["kind"],
+    { readonly rowPhrase: string }
+  >;
+};
 
 const CancelToolRowFactsSchema = Schema.Struct({
   kind: Schema.Literal("cancel"),
@@ -790,7 +797,7 @@ export function cancelBuckets(
       : [
           {
             kind: "requested" as const,
-            rowPhrase: CANCEL_BUCKET_PRESENTATION.requested.rowPhrase,
+            rowPhrase: CANCEL_PRESENTATION.buckets.requested.rowPhrase,
             count: requested.length,
             runIds: requested,
           },
@@ -801,7 +808,7 @@ export function cancelBuckets(
           {
             kind: "already requested" as const,
             rowPhrase:
-              CANCEL_BUCKET_PRESENTATION["already requested"].rowPhrase,
+              CANCEL_PRESENTATION.buckets["already requested"].rowPhrase,
             count: alreadyRequested.length,
             runIds: alreadyRequested,
           },
@@ -811,7 +818,8 @@ export function cancelBuckets(
       : [
           {
             kind: "already terminal" as const,
-            rowPhrase: CANCEL_BUCKET_PRESENTATION["already terminal"].rowPhrase,
+            rowPhrase:
+              CANCEL_PRESENTATION.buckets["already terminal"].rowPhrase,
             count: alreadyTerminal.length,
             runs: alreadyTerminal,
           },
@@ -821,7 +829,7 @@ export function cancelBuckets(
       : [
           {
             kind: "unknown" as const,
-            rowPhrase: CANCEL_BUCKET_PRESENTATION.unknown.rowPhrase,
+            rowPhrase: CANCEL_PRESENTATION.buckets.unknown.rowPhrase,
             count: unknown.length,
             runIds: unknown,
           },
@@ -855,10 +863,10 @@ export function cancelRowPresentation(
 ): ToolRowPresentation {
   const rowPhrase = cancelBuckets(facts)
     .map((bucket) => `${bucket.rowPhrase}: ${bucket.count}`)
-    .join(" · ");
+    .join(CANCEL_PRESENTATION.separator);
   return {
-    rowPhrase: rowPhrase || CANCEL_BUCKET_PRESENTATION.empty.rowPhrase,
-    tone: "toolOutput",
+    rowPhrase: rowPhrase || CANCEL_PRESENTATION.emptyAnswer,
+    tone: CANCEL_PRESENTATION.tone,
   };
 }
 

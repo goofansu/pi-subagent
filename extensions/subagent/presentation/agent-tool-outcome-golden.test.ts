@@ -20,16 +20,15 @@ import {
   agentToolRenderers,
 } from "./agent-tool-renderers.ts";
 import {
-  formatResultRejection,
   presentCancelOutcomes,
+  presentResultOutcome,
   presentResumeOutcome,
   presentStartOutcome,
   presentSteerOutcome,
   presentWait,
 } from "./prose.ts";
 import type { RenderableTheme } from "./rows.ts";
-import { formatResult } from "./run-card.ts";
-import { resultToolRowFacts, type ToolRowFacts } from "./tool-row-facts.ts";
+import type { ToolRowFacts } from "./tool-row-facts.ts";
 
 initTheme(undefined, false);
 
@@ -287,18 +286,18 @@ function resultCases(): readonly GoldenCase[] {
     { outcome: "RunNotTerminal", runId: RUN },
     { outcome: "unknown Run", runId: RUN },
   ];
-  return outcomes.map((outcome, index) => ({
-    name:
-      outcome.outcome === "result"
-        ? `result/available-${["visible", "none", "removed"][index]}`
-        : `result/${outcome.outcome}`,
-    operation: "result",
-    text:
-      outcome.outcome === "result"
-        ? formatResult(outcome.result)
-        : formatResultRejection(outcome),
-    facts: resultToolRowFacts(outcome),
-  }));
+  return outcomes.map((outcome, index) => {
+    const presentation = presentResultOutcome(outcome);
+    return {
+      name:
+        outcome.outcome === "result"
+          ? `result/available-${["visible", "none", "removed"][index]}`
+          : `result/${outcome.outcome}`,
+      operation: "result",
+      text: presentation.text,
+      facts: presentation.facts,
+    };
+  });
 }
 
 function allCases(): readonly GoldenCase[] {

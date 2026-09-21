@@ -11,9 +11,11 @@ import {
 } from "./agent-tool-renderers.ts";
 import type { RenderableTheme } from "./rows.ts";
 import {
-  CANCEL_BUCKET_PRESENTATION,
+  CANCEL_PRESENTATION,
   cancelBuckets,
   collectionRowPresentation,
+  decodeToolRowFacts,
+  type ResultToolRowFacts,
   resumeToolRowFacts,
   startToolRowFacts,
   steerToolRowFacts,
@@ -382,6 +384,18 @@ test("golden: every operation keeps its collapsed row text and styling", () => {
     unavailable: 0,
     noActiveRuns: true,
   } as const;
+  const resultDetails = {
+    kind: "result" as const,
+    outcome: "available" as const,
+    rowPhrase: "synthetic result summary",
+    tone: "toolOutput" as const,
+    run: {
+      runId: run,
+      agent: "explore",
+      status: "completed" as const,
+      output: { kind: "visible" as const, characters: 12_345 },
+    },
+  };
   const cases = [
     [
       "start",
@@ -402,21 +416,7 @@ test("golden: every operation keeps its collapsed row text and styling", () => {
     ["steer", steerToolRowFacts(run, { outcome: "unknown Run", runId: run })],
     ["wait", waitDetails],
     ["waitAll", idleWaitAllDetails],
-    [
-      "result",
-      {
-        kind: "result",
-        outcome: "available",
-        rowPhrase: "12.3k characters",
-        tone: "toolOutput",
-        run: {
-          runId: run,
-          agent: "explore",
-          status: "completed",
-          output: { kind: "visible", characters: 12_345 },
-        },
-      },
-    ],
+    ["result", resultDetails],
   ] as const;
   const rendered = Object.fromEntries(
     cases.map(([operation, details]) => [
@@ -447,91 +447,73 @@ test("golden: every operation keeps its collapsed row text and styling", () => {
     steer: `<error>Control refused</error><dim> · unknown Run</dim>${hint}`,
     wait: styledCollection(collectionRowPresentation(waitDetails)),
     waitAll: styledCollection(collectionRowPresentation(idleWaitAllDetails)),
-    result: `<toolOutput>explore · run-1 · completed · 12.3k characters</toolOutput>${hint}`,
+    result: `<${resultDetails.tone}>explore · run-1 · completed · ${resultDetails.rowPhrase}</${resultDetails.tone}>${hint}`,
   });
 });
 
-test("aggregate result facts retain exact text and tone for every outcome", () => {
-  const cases = [
-    [
-      {
-        kind: "result",
-        outcome: "available",
-        rowPhrase: "12.3k characters",
-        tone: "toolOutput",
-        run: {
-          runId: "run-1",
-          agent: "explore",
-          status: "completed",
-          output: { kind: "visible", characters: 12_345 },
-        },
+test("Result rows retain fact-provided text and tone in each outcome layout", () => {
+  const cases: readonly ResultToolRowFacts[] = [
+    {
+      kind: "result",
+      outcome: "available",
+      rowPhrase: "visible synthetic summary",
+      tone: "toolOutput",
+      run: {
+        runId: "run-1",
+        agent: "explore",
+        status: "completed",
+        output: { kind: "visible", characters: 12_345 },
       },
-      "<toolOutput>explore · run-1 · completed · 12.3k characters</toolOutput>",
-    ],
-    [
-      {
-        kind: "result",
-        outcome: "available",
-        rowPhrase: "no output",
-        tone: "toolOutput",
-        run: {
-          runId: "run-none",
-          agent: "explore",
-          status: "completed",
-          output: { kind: "none" },
-        },
+    },
+    {
+      kind: "result",
+      outcome: "available",
+      rowPhrase: "empty synthetic summary",
+      tone: "warning",
+      run: {
+        runId: "run-none",
+        agent: "explore",
+        status: "completed",
+        output: { kind: "none" },
       },
-      "<toolOutput>explore · run-none · completed · no output</toolOutput>",
-    ],
-    [
-      {
-        kind: "result",
-        outcome: "available",
-        rowPhrase: "output removed",
-        tone: "toolOutput",
-        run: {
-          runId: "run-removed",
-          agent: "explore",
-          status: "completed",
-          output: { kind: "removed" },
-        },
+    },
+    {
+      kind: "result",
+      outcome: "available",
+      rowPhrase: "removed synthetic summary",
+      tone: "error",
+      run: {
+        runId: "run-removed",
+        agent: "explore",
+        status: "completed",
+        output: { kind: "removed" },
       },
-      "<toolOutput>explore · run-removed · completed · output removed</toolOutput>",
-    ],
-    [
-      {
-        kind: "result",
-        outcome: "still-running",
-        rowPhrase: "still running",
-        tone: "warning",
-        runId: "run-2",
-      },
-      "<warning>run-2 · still running</warning>",
-    ],
-    [
-      {
-        kind: "result",
-        outcome: "unknown",
-        rowPhrase: "unknown Run",
-        tone: "error",
-        runId: "run-never",
-      },
-      "<error>run-never · unknown Run</error>",
-    ],
-    [
-      {
-        kind: "result",
-        outcome: "unavailable",
-        rowPhrase: "Result unavailable",
-        tone: "error",
-        runId: "run-3",
-        status: "failed",
-      },
-      "<error>run-3 · Result unavailable · failed</error>",
-    ],
-  ] as const;
+    },
+    {
+      kind: "result",
+      outcome: "still-running",
+      rowPhrase: "pending synthetic summary",
+      tone: "warning",
+      runId: "run-2",
+    },
+    {
+      kind: "result",
+      outcome: "unknown",
+      rowPhrase: "missing synthetic summary",
+      tone: "error",
+      runId: "run-never",
+    },
+    {
+      kind: "result",
+      outcome: "unavailable",
+      rowPhrase: "evicted synthetic summary",
+      tone: "toolTitle",
+      runId: "run-3",
+      status: "failed",
+    },
+  ];
 
-  for (const [details, expected] of cases) {
+  for (const details of cases) {
     const rendered = lines(
       agentToolRenderers("result").renderResult(
         { content: [{ type: "text", text: "complete prose" }], details },
@@ -541,7 +523,16 @@ test("aggregate result facts retain exact text and tone for every outcome", () =
       ),
       120,
     )[0];
-    assert.equal(rendered, `${expected} <dim>(</dim> to expand<dim>)</dim>`);
+    const body =
+      details.outcome === "available"
+        ? `${details.run.agent} · ${details.run.runId} · ${details.run.status} · ${details.rowPhrase}`
+        : details.outcome === "unavailable"
+          ? `${details.runId} · ${details.rowPhrase} · ${details.status}`
+          : `${details.runId} · ${details.rowPhrase}`;
+    assert.equal(
+      rendered,
+      `<${details.tone}>${body}</${details.tone}> <dim>(</dim> to expand<dim>)</dim>`,
+    );
   }
 });
 
@@ -709,7 +700,7 @@ test("empty settled and partial cancellation rows have no inert toggle", () => {
     {
       result: { content: [], details: { kind: "cancel", outcomes: [] } },
       options: { expanded: false, isPartial: false },
-      expected: CANCEL_BUCKET_PRESENTATION.empty.rowPhrase,
+      expected: CANCEL_PRESENTATION.emptyAnswer,
     },
     {
       result: { content: [], details: { kind: "cancel", outcomes: [] } },
@@ -1101,7 +1092,7 @@ test("result-bearing renderers reuse components and repaint the current theme", 
     details: {
       kind: "result" as const,
       outcome: "available" as const,
-      rowPhrase: "17 characters",
+      rowPhrase: "repaint synthetic summary",
       tone: "toolOutput" as const,
       run: {
         runId: "run-1",
@@ -1138,6 +1129,31 @@ test("result-bearing renderers reuse components and repaint the current theme", 
   assert.match(lines(reusedResult, 80).join("\n"), /<toolOutput>/);
 });
 
+test("a legacy Result fact missing only row presentation fields falls back readably", () => {
+  const legacyDetails = {
+    kind: "result",
+    outcome: "still-running",
+    runId: "run-legacy",
+  };
+  assert.equal(decodeToolRowFacts(legacyDetails), undefined);
+
+  const rendered = lines(
+    agentToolRenderers("result").renderResult(
+      {
+        content: [{ type: "text", text: "Readable legacy response\nmore" }],
+        details: legacyDetails,
+      },
+      { expanded: false, isPartial: false },
+      plainTheme,
+      context({}),
+    ),
+    80,
+  ).join("\n");
+
+  assert.match(rendered, /^Readable legacy response \(.*to expand\)$/);
+  assert.doesNotMatch(rendered, /run-legacy/);
+});
+
 test("result-bearing renderers fail open for malformed details and present partial work as unfinished", () => {
   const pair = agentToolRenderers("result");
   for (const details of [
@@ -1167,7 +1183,7 @@ test("result-bearing renderers fail open for malformed details and present parti
         details: {
           kind: "result",
           outcome: "unknown",
-          rowPhrase: "unknown Run",
+          rowPhrase: "settled synthetic summary",
           tone: "error",
           runId: "run-never",
         },
@@ -1179,5 +1195,5 @@ test("result-bearing renderers fail open for malformed details and present parti
     80,
   ).join("\n");
   assert.equal(partial, "agent_result is still running.");
-  assert.doesNotMatch(partial, /unknown Run|to expand/);
+  assert.doesNotMatch(partial, /settled synthetic summary|to expand/);
 });
