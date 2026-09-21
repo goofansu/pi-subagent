@@ -27,12 +27,10 @@ import {
   type CancelToolRowFacts,
   type CollectedRunsToolRowFacts,
   decodeToolRowFacts,
-  type ResultToolRowFacts,
   type ResumedRunToolRowFacts,
-  type ResumeToolRowFacts,
   type StartedRunToolRowFacts,
-  type StartToolRowFacts,
-  type SteerToolRowFacts,
+  type ToolRowFacts,
+  type ToolRowTone,
 } from "./tool-row-facts.ts";
 
 /** The operation keys of the one agent-tool family. */
@@ -405,8 +403,8 @@ function formatStartedIdentity(
   );
 }
 
-function passThroughSummary(
-  details: StartToolRowFacts | ResumeToolRowFacts | SteerToolRowFacts,
+function phraseSummary(
+  details: { readonly rowPhrase: string; readonly tone: ToolRowTone },
   theme: RenderableTheme,
 ): string {
   const separator = details.rowPhrase.indexOf(" · ");
@@ -414,36 +412,6 @@ function passThroughSummary(
   return (
     theme.fg(details.tone, details.rowPhrase.slice(0, separator)) +
     theme.fg("dim", details.rowPhrase.slice(separator))
-  );
-}
-
-function startSummary(
-  details: StartToolRowFacts,
-  theme: RenderableTheme,
-  width: number,
-): string {
-  return "subagentId" in details
-    ? formatStartedIdentity(details, theme, width)
-    : passThroughSummary(details, theme);
-}
-
-/** A compact successful start with its row's one configured expansion hint. */
-export function formatStartedRunSummary(
-  details: StartedRunToolRowFacts,
-  theme: RenderableTheme,
-  width: number,
-  renderKeyHint?: KeyHintRenderer,
-): string {
-  return collapsedResultLine(
-    formatStartedIdentity(
-      details,
-      theme,
-      collapsedSummaryWidth(theme, width, true, renderKeyHint),
-    ),
-    theme,
-    width,
-    true,
-    renderKeyHint,
   );
 }
 
@@ -491,41 +459,17 @@ class UnifiedResultComponent extends CachedComponent {
         readonly sourceText?: string;
       }
     | undefined {
-    const facts = decodeToolRowFacts(this.result.details);
-    switch (this.operation) {
-      case "start":
-        return facts?.kind === "start"
-          ? { line: (width) => startSummary(facts, this.theme, width) }
-          : undefined;
-      case "resume":
-        return facts?.kind === "resume"
-          ? { line: (width) => resumeSummary(facts, this.theme, width) }
-          : undefined;
-      case "steer":
-        return facts?.kind === "steer"
-          ? { line: () => steerSummary(facts, this.theme) }
-          : undefined;
-      case "cancel": {
-        if (facts?.kind !== "cancel") return undefined;
-        const sourceText = cancellationSummaryText(facts);
-        return {
-          line: () => this.theme.fg("toolOutput", sourceText),
-          sourceText,
-        };
-      }
-      case "result":
-        return facts?.kind === "result"
-          ? { line: (width) => retrievalSummary(facts, this.theme, width) }
-          : undefined;
-      case "wait":
-        return facts?.kind === "collection" && facts.scope === "named"
-          ? { line: (width) => collectionSummary(facts, this.theme, width) }
-          : undefined;
-      case "waitAll":
-        return facts?.kind === "collection" && facts.scope === "all-active"
-          ? { line: (width) => collectionSummary(facts, this.theme, width) }
-          : undefined;
-    }
+    const facts = factsForOperation(
+      this.operation,
+      decodeToolRowFacts(this.result.details),
+    );
+    if (facts === undefined) return undefined;
+    const sourceText =
+      facts.kind === "cancel" ? cancellationSummaryText(facts) : undefined;
+    return {
+      line: (width) => toolRowSummary(facts, this.theme, width),
+      sourceText,
+    };
   }
 
   protected renderUncached(width: number): readonly string[] {
@@ -880,32 +824,73 @@ function collectionSummary(
   );
 }
 
-function retrievalSummary(
-  details: ResultToolRowFacts,
+function factsForOperation(
+  operation: AgentToolOperation,
+  facts: ToolRowFacts | undefined,
+): ToolRowFacts | undefined {
+  if (facts === undefined) return undefined;
+  switch (operation) {
+    case "start":
+    case "resume":
+    case "steer":
+    case "cancel":
+    case "result":
+      return facts.kind === operation ? facts : undefined;
+    case "wait":
+      return facts.kind === "collection" && facts.scope === "named"
+        ? facts
+        : undefined;
+    case "waitAll":
+      return facts.kind === "collection" && facts.scope === "all-active"
+        ? facts
+        : undefined;
+  }
+}
+
+/** Render any decoded Tool-row facts through one summary policy. */
+function toolRowSummary(
+  facts: ToolRowFacts,
   theme: RenderableTheme,
   width: number,
 ): string {
-  switch (details.outcome) {
-    case "available": {
-      const candidates = [
-        `${details.run.agent} · ${details.run.runId} · ${details.run.status} · ${formatCharacterCount(details.run.outputCharacters)}`,
-        `${details.run.agent} · ${details.run.runId} · ${details.run.status}`,
-        `${details.run.runId} · ${details.run.status}`,
-      ];
-      const text =
-        candidates.find((candidate) => visibleWidth(candidate) <= width) ??
-        fitToWidth(candidates.at(-1) ?? "", width, { plain: true });
-      return theme.fg("toolOutput", text);
-    }
-    case "still-running":
-      return theme.fg("warning", `${details.runId} · still running`);
-    case "unknown":
-      return theme.fg("error", `${details.runId} · unknown Run`);
-    case "unavailable":
-      return theme.fg(
-        "error",
-        `${details.runId} · Result unavailable · ${details.status}`,
-      );
+  switch (facts.kind) {
+    case "start":
+      return "subagentId" in facts
+        ? formatStartedIdentity(facts, theme, width)
+        : phraseSummary(facts, theme);
+    case "resume":
+      return "runId" in facts
+        ? resumedIdentity(facts, theme, width)
+        : phraseSummary(facts, theme);
+    case "steer":
+      return phraseSummary(facts, theme);
+    case "collection":
+      return collectionSummary(facts, theme, width);
+    case "cancel":
+      return theme.fg("toolOutput", cancellationSummaryText(facts));
+    case "result":
+      switch (facts.outcome) {
+        case "available": {
+          const candidates = [
+            `${facts.run.agent} · ${facts.run.runId} · ${facts.run.status} · ${formatCharacterCount(facts.run.outputCharacters)}`,
+            `${facts.run.agent} · ${facts.run.runId} · ${facts.run.status}`,
+            `${facts.run.runId} · ${facts.run.status}`,
+          ];
+          const text =
+            candidates.find((candidate) => visibleWidth(candidate) <= width) ??
+            fitToWidth(candidates.at(-1) ?? "", width, { plain: true });
+          return theme.fg("toolOutput", text);
+        }
+        case "still-running":
+          return theme.fg("warning", `${facts.runId} · still running`);
+        case "unknown":
+          return theme.fg("error", `${facts.runId} · unknown Run`);
+        case "unavailable":
+          return theme.fg(
+            "error",
+            `${facts.runId} · Result unavailable · ${facts.status}`,
+          );
+      }
   }
 }
 
@@ -1041,43 +1026,6 @@ function resumedIdentity(
     candidates.find((candidate) => visibleWidth(candidate) <= width) ??
     fitToWidth(candidates.at(-1) ?? "", width)
   );
-}
-
-/** A compact resumed identity with the row's one configured expansion hint. */
-export function formatResumedRunSummary(
-  details: ResumedRunToolRowFacts,
-  theme: RenderableTheme,
-  width: number,
-  renderKeyHint?: KeyHintRenderer,
-): string {
-  return collapsedResultLine(
-    resumedIdentity(
-      details,
-      theme,
-      collapsedSummaryWidth(theme, width, true, renderKeyHint),
-    ),
-    theme,
-    width,
-    true,
-    renderKeyHint,
-  );
-}
-
-function resumeSummary(
-  details: ResumeToolRowFacts,
-  theme: RenderableTheme,
-  width: number,
-): string {
-  return "runId" in details
-    ? resumedIdentity(details, theme, width)
-    : passThroughSummary(details, theme);
-}
-
-function steerSummary(
-  details: SteerToolRowFacts,
-  theme: RenderableTheme,
-): string {
-  return passThroughSummary(details, theme);
 }
 
 function continuationPair(

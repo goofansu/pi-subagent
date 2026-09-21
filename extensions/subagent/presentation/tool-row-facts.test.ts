@@ -134,8 +134,8 @@ test("pass-through table keys construct and round-trip every domain outcome", ()
       assert.ok(outcome, `missing fixture for ${key}`);
       const facts = construct(outcome as never);
       assert.deepEqual(decodeToolRowFacts(encodeToolRowFacts(facts)), facts);
-      assert.ok(facts.rowPhrase.length > 0);
-      assert.ok(formatSentence(outcome as never).length > 0);
+      assert.ok(facts.rowPhrase.trim().length > 0);
+      assert.ok(formatSentence(outcome as never).trim().length > 0);
     }
   }
 });
