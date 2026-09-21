@@ -28,6 +28,7 @@ import {
   type CollectedRunsToolRowFacts,
   decodeToolRowFacts,
   type ResultToolRowFacts,
+  type ResumedRunToolRowFacts,
   type ResumeToolRowFacts,
   type StartedRunToolRowFacts,
   type StartToolRowFacts,
@@ -385,17 +386,17 @@ function formatStartedIdentity(
   width: number,
 ): string {
   const candidates = [
-    theme.fg("toolTitle", `Started ${details.agent}`) +
+    theme.fg(details.tone, `${details.rowPhrase} ${details.agent}`) +
       theme.fg(
         "dim",
         ` · Subagent ${details.subagentId} · Run ${details.runId}`,
       ),
-    theme.fg("toolTitle", "Started") +
+    theme.fg(details.tone, details.rowPhrase) +
       theme.fg(
         "dim",
         ` · Subagent ${details.subagentId} · Run ${details.runId}`,
       ),
-    theme.fg("toolTitle", "Started") +
+    theme.fg(details.tone, details.rowPhrase) +
       theme.fg("dim", ` · ${details.subagentId} · ${details.runId}`),
   ];
   return (
@@ -404,33 +405,26 @@ function formatStartedIdentity(
   );
 }
 
+function passThroughSummary(
+  details: StartToolRowFacts | ResumeToolRowFacts | SteerToolRowFacts,
+  theme: RenderableTheme,
+): string {
+  const separator = details.rowPhrase.indexOf(" · ");
+  if (separator < 0) return theme.fg(details.tone, details.rowPhrase);
+  return (
+    theme.fg(details.tone, details.rowPhrase.slice(0, separator)) +
+    theme.fg("dim", details.rowPhrase.slice(separator))
+  );
+}
+
 function startSummary(
   details: StartToolRowFacts,
   theme: RenderableTheme,
   width: number,
 ): string {
-  if (details.outcome === "started") {
-    return formatStartedIdentity(details, theme, width);
-  }
-  const [tone, reason] = (() => {
-    switch (details.outcome) {
-      case "unknown agent":
-        return ["error", "unknown Agent"] as const;
-      case "invalid profile":
-        return ["error", "invalid Profile"] as const;
-      case "empty label":
-        return ["error", "empty Label"] as const;
-      case "at capacity":
-        return ["warning", "at capacity"] as const;
-      case "shutting down":
-        return ["warning", "Session shutting down"] as const;
-      case "delegation-depth exceeded":
-        return ["warning", `delegation depth ${details.depth}`] as const;
-      case "backend unavailable":
-        return ["error", "backend unavailable"] as const;
-    }
-  })();
-  return theme.fg(tone, "Start refused") + theme.fg("dim", ` · ${reason}`);
+  return "subagentId" in details
+    ? formatStartedIdentity(details, theme, width)
+    : passThroughSummary(details, theme);
 }
 
 /** A compact successful start with its row's one configured expansion hint. */
@@ -1032,20 +1026,16 @@ class ContinuationCallComponent extends CachedComponent {
   }
 }
 
-type ResumedRunToolRowFacts = Extract<
-  ResumeToolRowFacts,
-  { readonly outcome: "started" }
->;
-
 function resumedIdentity(
   details: ResumedRunToolRowFacts,
   theme: RenderableTheme,
   width: number,
 ): string {
   const candidates = [
-    theme.fg("toolTitle", "Resumed") +
+    theme.fg(details.tone, details.rowPhrase) +
       theme.fg("dim", ` · Run ${details.runId}`),
-    theme.fg("toolTitle", "Resumed") + theme.fg("dim", ` · ${details.runId}`),
+    theme.fg(details.tone, details.rowPhrase) +
+      theme.fg("dim", ` · ${details.runId}`),
   ];
   return (
     candidates.find((candidate) => visibleWidth(candidate) <= width) ??
@@ -1078,96 +1068,16 @@ function resumeSummary(
   theme: RenderableTheme,
   width: number,
 ): string {
-  switch (details.outcome) {
-    case "started":
-      return resumedIdentity(details, theme, width);
-    case "unknown Subagent":
-      return (
-        theme.fg("error", "Resume refused") +
-        theme.fg("dim", " · unknown Subagent")
-      );
-    case "Subagent already running":
-      return (
-        theme.fg("warning", "Resume refused") +
-        theme.fg("dim", " · already running")
-      );
-    case "empty label":
-      return (
-        theme.fg("error", "Resume refused") + theme.fg("dim", " · empty Label")
-      );
-    case "resume unsupported":
-      return (
-        theme.fg("warning", "Resume refused") +
-        theme.fg("dim", " · unsupported")
-      );
-    case "conversation lost":
-      return (
-        theme.fg("error", "Resume refused") +
-        theme.fg("dim", " · Conversation lost")
-      );
-    case "at capacity":
-      return (
-        theme.fg("warning", "Resume refused") +
-        theme.fg("dim", " · at capacity")
-      );
-    case "shutting down":
-      return (
-        theme.fg("warning", "Resume refused") +
-        theme.fg("dim", " · Session shutting down")
-      );
-  }
+  return "runId" in details
+    ? resumedIdentity(details, theme, width)
+    : passThroughSummary(details, theme);
 }
 
 function steerSummary(
   details: SteerToolRowFacts,
   theme: RenderableTheme,
 ): string {
-  switch (details.outcome) {
-    case "accepted":
-      return theme.fg("toolTitle", "Accepted into local Control mailbox");
-    case "mailbox full":
-      return (
-        theme.fg("warning", "Control refused") +
-        theme.fg("dim", " · mailbox full")
-      );
-    case "mailbox closed":
-      return (
-        theme.fg("warning", "Control refused") +
-        theme.fg("dim", " · mailbox closed")
-      );
-    case "unsupported":
-      return (
-        theme.fg("warning", "Control refused") +
-        theme.fg("dim", " · unsupported")
-      );
-    case "invalid":
-      return (
-        theme.fg("error", "Control refused") + theme.fg("dim", " · invalid")
-      );
-    case "already completed":
-      return (
-        theme.fg("warning", "Control refused") +
-        theme.fg("dim", " · Run completed")
-      );
-    case "already failed":
-      return (
-        theme.fg("error", "Control refused") + theme.fg("dim", " · Run failed")
-      );
-    case "already cancelled":
-      return (
-        theme.fg("warning", "Control refused") +
-        theme.fg("dim", " · Run cancelled")
-      );
-    case "unknown Run":
-      return (
-        theme.fg("error", "Control refused") + theme.fg("dim", " · unknown Run")
-      );
-    case "shutting down":
-      return (
-        theme.fg("warning", "Control refused") +
-        theme.fg("dim", " · Session shutting down")
-      );
-  }
+  return passThroughSummary(details, theme);
 }
 
 function continuationPair(

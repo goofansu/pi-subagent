@@ -11,44 +11,353 @@ import { Schema } from "effect";
 import {
   type CancelOutcome,
   EXACT_KEYS,
+  type ProfileDiagnostic,
   type ResultOutcome,
   type ResumeOutcome,
   type RunId,
   type RunResult,
   type StartOutcome,
   type SteerOutcome,
+  type SubagentId,
   TerminalRunPhase,
   type WaitOutcome,
 } from "../domain/index.ts";
+import { formatDiagnosticLine } from "./run-card.ts";
 
-/** Discriminated, presentation-only facts for every start outcome. */
-export type StartToolRowFacts =
-  | {
-      readonly kind: "start";
-      readonly outcome: "started";
-      readonly agent: string;
-      readonly subagentId: string;
-      readonly runId: string;
-    }
-  | {
-      readonly kind: "start";
-      readonly outcome: Exclude<
-        StartOutcome["outcome"],
-        "started" | "delegation-depth exceeded"
-      >;
-      readonly agent: string;
-    }
-  | {
-      readonly kind: "start";
-      readonly outcome: "delegation-depth exceeded";
-      readonly agent: string;
-      readonly depth: number;
-    };
+/** Styling intent for one pass-through operation's collapsed row. */
+export type ToolRowTone = "toolTitle" | "warning" | "error";
 
-export type StartedRunToolRowFacts = Extract<
-  StartToolRowFacts,
-  { readonly outcome: "started" }
->;
+interface OutcomePresentation<Outcome, Context> {
+  readonly sentence: (outcome: Outcome, context: Context) => string;
+  readonly rowPhrase: (outcome: Outcome) => string;
+  readonly tone: ToolRowTone;
+}
+
+type OutcomeMember<
+  Outcome extends { readonly outcome: string },
+  Name extends Outcome["outcome"],
+> = Outcome extends unknown
+  ? Name extends Outcome["outcome"]
+    ? Omit<Outcome, "outcome"> & { readonly outcome: Name }
+    : never
+  : never;
+
+type OutcomeTable<Outcome extends { readonly outcome: string }, Context> = {
+  readonly [Name in Outcome["outcome"]]: OutcomePresentation<
+    OutcomeMember<Outcome, Name>,
+    Context
+  >;
+};
+
+interface StartSentenceContext {
+  readonly agent: string;
+  readonly available: readonly string[];
+}
+
+interface ResumeSentenceContext {
+  readonly subagentId: SubagentId;
+}
+
+interface SteerSentenceContext {
+  readonly runId: RunId;
+}
+
+function runPointer(runId: RunId): string {
+  return (
+    `Use run id ${runId} for agent_wait, agent_result, agent_cancel, and ` +
+    "agent_steer."
+  );
+}
+
+const NOTIFICATION_PROMISE =
+  "Its completion is delivered to you automatically when the Run finishes; " +
+  "continue independent work until then, and wait only if nothing else " +
+  "remains.";
+
+const LOCAL_ADMISSION_ONLY =
+  "The complete message was synchronously admitted to this Run's local " +
+  "bounded mailbox, and that is all acceptance means: it does not mean the " +
+  "backend dequeued it, a provider accepted it, or a model consumed it. Do " +
+  "not resend this steering message in a retry loop.";
+
+/** Profile diagnostics as the shared model-visible list lines. */
+export function formatProfileDiagnosticLines(
+  diagnostics: readonly ProfileDiagnostic[],
+): readonly string[] {
+  return diagnostics.map(
+    (diagnostic) => `- ${diagnostic.filePath}: ${diagnostic.reason}`,
+  );
+}
+
+/** The unknown-agent diagnostic, which needs to name what does exist. */
+export function unknownAgentSentence(
+  agent: string,
+  available: readonly string[],
+): string {
+  return `Unknown agent: "${agent}". Available: ${available.join(", ") || "none"}`;
+}
+
+/**
+ * Every start outcome's model sentence and collapsed-row presentation.
+ * The mapped type makes an added or removed domain outcome a compile error.
+ */
+export const START_OUTCOME_PRESENTATION = {
+  started: {
+    sentence: (outcome, context) =>
+      `Started ${context.agent}:\nsubagent id ${outcome.subagentId}\n` +
+      `run id ${outcome.runId}\n\n` +
+      `${runPointer(outcome.runId)} ${NOTIFICATION_PROMISE}`,
+    rowPhrase: () => "Started",
+    tone: "toolTitle",
+  },
+  "unknown agent": {
+    sentence: (outcome, context) =>
+      unknownAgentSentence(outcome.agent, context.available),
+    rowPhrase: () => "Start refused · unknown Agent",
+    tone: "error",
+  },
+  "invalid profile": {
+    sentence: (outcome, context) =>
+      [
+        `Cannot start ${context.agent}: its Profile is not usable. Nothing was started.`,
+        ...formatProfileDiagnosticLines(outcome.diagnostics),
+      ].join("\n"),
+    rowPhrase: () => "Start refused · invalid Profile",
+    tone: "error",
+  },
+  "empty label": {
+    sentence: (_outcome, context) =>
+      `Cannot start ${context.agent}: its description is empty. No Run was started ` +
+      "and no id was handed out. Send a one-line description of the task: " +
+      "it is the label this Run is shown under everywhere.",
+    rowPhrase: () => "Start refused · empty Label",
+    tone: "error",
+  },
+  "at capacity": {
+    sentence: (_outcome, context) =>
+      `Cannot start ${context.agent}: this Session is already running as many ` +
+      "Subagent Runs as it allows. Nothing was queued and no Run was " +
+      "started. Wait for a Run to finish, or cancel one, then try again.",
+    rowPhrase: () => "Start refused · at capacity",
+    tone: "warning",
+  },
+  "shutting down": {
+    sentence: (_outcome, context) =>
+      `Cannot start ${context.agent}: this Session is shutting down. No Run was ` +
+      "started and nothing was queued.",
+    rowPhrase: () => "Start refused · Session shutting down",
+    tone: "warning",
+  },
+  "delegation-depth exceeded": {
+    sentence: (outcome, context) =>
+      `Cannot start ${context.agent}: delegation is already ${outcome.depth} ` +
+      "levels deep, which is as far as it goes. No Run was started. Do this " +
+      "work directly instead of delegating it again.",
+    rowPhrase: (outcome) => `Start refused · delegation depth ${outcome.depth}`,
+    tone: "warning",
+  },
+  "backend unavailable": {
+    sentence: (outcome, context) =>
+      `Cannot start ${context.agent}: its backend could not be opened ` +
+      `(${formatDiagnosticLine(outcome.diagnostic)}). No Run was started and ` +
+      "no id was handed out. Retrying may work; a different agent will work " +
+      "if this backend is down.",
+    rowPhrase: () => "Start refused · backend unavailable",
+    tone: "error",
+  },
+} satisfies OutcomeTable<StartOutcome, StartSentenceContext>;
+
+/** Every resume outcome's model sentence and collapsed-row presentation. */
+export const RESUME_OUTCOME_PRESENTATION = {
+  started: {
+    sentence: (outcome, context) =>
+      `Resumed subagent ${context.subagentId}:\nrun id ${outcome.runId}\n\n` +
+      "agent_resume returns immediately, not with the answer. " +
+      `${runPointer(outcome.runId)} ${NOTIFICATION_PROMISE}`,
+    rowPhrase: () => "Resumed",
+    tone: "toolTitle",
+  },
+  "unknown Subagent": {
+    sentence: (outcome) =>
+      `Cannot resume subagent ${outcome.subagentId}: unknown Subagent. ` +
+      "Use a Subagent id returned by agent_start in this Session, not a Run id.",
+    rowPhrase: () => "Resume refused · unknown Subagent",
+    tone: "error",
+  },
+  "Subagent already running": {
+    sentence: (outcome) =>
+      `Cannot resume subagent ${outcome.subagentId}: it already has an ` +
+      "active Run. The request was not queued and no provider work was " +
+      "started. Wait for that Run to finish, then resume.",
+    rowPhrase: () => "Resume refused · already running",
+    tone: "warning",
+  },
+  "empty label": {
+    sentence: (_outcome, context) =>
+      `Cannot resume subagent ${context.subagentId}: its description is empty. No ` +
+      "Run was started and nothing was queued. Send a one-line description " +
+      "of this Run: it is the label this Run is shown under everywhere.",
+    rowPhrase: () => "Resume refused · empty Label",
+    tone: "error",
+  },
+  "resume unsupported": {
+    sentence: (_outcome, context) =>
+      `Cannot resume subagent ${context.subagentId}: its backend does not support ` +
+      "resume. No Run or provider work was started. Start a new Subagent to " +
+      "continue this work.",
+    rowPhrase: () => "Resume refused · unsupported",
+    tone: "warning",
+  },
+  "conversation lost": {
+    sentence: (_outcome, context) =>
+      `Cannot resume subagent ${context.subagentId}: its Conversation was lost. ` +
+      "No Run or provider work was started. Start a new Subagent to continue.",
+    rowPhrase: () => "Resume refused · Conversation lost",
+    tone: "error",
+  },
+  "at capacity": {
+    sentence: (_outcome, context) =>
+      `Cannot resume subagent ${context.subagentId}: this Session is already ` +
+      "running as many Subagent Runs as it allows. Nothing was queued. Wait " +
+      "for a Run to finish, or cancel one, then try again.",
+    rowPhrase: () => "Resume refused · at capacity",
+    tone: "warning",
+  },
+  "shutting down": {
+    sentence: (_outcome, context) =>
+      `Cannot resume subagent ${context.subagentId}: this Session is shutting down. ` +
+      "No Run was started and nothing was queued.",
+    rowPhrase: () => "Resume refused · Session shutting down",
+    tone: "warning",
+  },
+} satisfies OutcomeTable<ResumeOutcome, ResumeSentenceContext>;
+
+/** Every steer outcome's model sentence and collapsed-row presentation. */
+export const STEER_OUTCOME_PRESENTATION = {
+  accepted: {
+    sentence: (outcome) =>
+      `Steering accepted for run ${outcome.runId}. ${LOCAL_ADMISSION_ONLY}`,
+    rowPhrase: () => "Accepted into local Control mailbox",
+    tone: "toolTitle",
+  },
+  "mailbox full": {
+    sentence: (outcome) =>
+      `Cannot steer run ${outcome.runId}: its Control mailbox is full. ` +
+      "Nothing was truncated and nothing was dropped silently. Do not retry " +
+      "steering in a loop.",
+    rowPhrase: () => "Control refused · mailbox full",
+    tone: "warning",
+  },
+  invalid: {
+    sentence: (outcome, context) =>
+      `Cannot steer run ${context.runId}: invalid message — ${outcome.reason}.`,
+    rowPhrase: () => "Control refused · invalid",
+    tone: "error",
+  },
+  unsupported: {
+    sentence: (outcome) =>
+      `Cannot steer run ${outcome.runId}: its backend declared no steering ` +
+      "Control. No message was admitted, and no later attempt on this Run " +
+      "will be.",
+    rowPhrase: () => "Control refused · unsupported",
+    tone: "warning",
+  },
+  "mailbox closed": {
+    sentence: (outcome) =>
+      `Cannot steer run ${outcome.runId}: its Control mailbox is closed. ` +
+      "The Run is settling, was cancelled, or the Session is shutting down.",
+    rowPhrase: () => "Control refused · mailbox closed",
+    tone: "warning",
+  },
+  "already completed": {
+    sentence: (outcome) =>
+      `Cannot steer run ${outcome.runId}: it is ${outcome.outcome}. ` +
+      "Use agent_result with that Run id to read what it produced.",
+    rowPhrase: () => "Control refused · Run completed",
+    tone: "warning",
+  },
+  "already failed": {
+    sentence: (outcome) =>
+      `Cannot steer run ${outcome.runId}: it is ${outcome.outcome}. ` +
+      "Use agent_result with that Run id to read what it produced.",
+    rowPhrase: () => "Control refused · Run failed",
+    tone: "error",
+  },
+  "already cancelled": {
+    sentence: (outcome) =>
+      `Cannot steer run ${outcome.runId}: it is ${outcome.outcome}. ` +
+      "Use agent_result with that Run id to read what it produced.",
+    rowPhrase: () => "Control refused · Run cancelled",
+    tone: "warning",
+  },
+  "unknown Run": {
+    sentence: (outcome) =>
+      `Cannot steer run ${outcome.runId}: unknown Run. Check the id against ` +
+      "what agent_start or agent_resume returned.",
+    rowPhrase: () => "Control refused · unknown Run",
+    tone: "error",
+  },
+  "shutting down": {
+    sentence: (_outcome, context) =>
+      `Cannot steer run ${context.runId}: this Session is shutting down. No message ` +
+      "was admitted.",
+    rowPhrase: () => "Control refused · Session shutting down",
+    tone: "warning",
+  },
+} satisfies OutcomeTable<SteerOutcome, SteerSentenceContext>;
+
+function entryFor<Outcome extends { readonly outcome: string }, Context>(
+  table: OutcomeTable<Outcome, Context>,
+  outcome: Outcome,
+): OutcomePresentation<Outcome, Context> {
+  return (
+    table as unknown as Record<string, OutcomePresentation<Outcome, Context>>
+  )[outcome.outcome];
+}
+
+function sentenceFor<Outcome extends { readonly outcome: string }, Context>(
+  table: OutcomeTable<Outcome, Context>,
+  outcome: Outcome,
+  context: Context,
+): string {
+  return entryFor(table, outcome).sentence(outcome, context);
+}
+
+function rowFor<Outcome extends { readonly outcome: string }, Context>(
+  table: OutcomeTable<Outcome, Context>,
+  outcome: Outcome,
+): { readonly rowPhrase: string; readonly tone: ToolRowTone } {
+  const entry = entryFor(table, outcome);
+  return { rowPhrase: entry.rowPhrase(outcome), tone: entry.tone };
+}
+
+/** Format one start outcome from the declaration shared with its row facts. */
+export function startOutcomeSentence(
+  agent: string,
+  outcome: StartOutcome,
+  available: readonly string[],
+): string {
+  return sentenceFor(START_OUTCOME_PRESENTATION, outcome, {
+    agent,
+    available,
+  });
+}
+
+/** Format one resume outcome from the declaration shared with its row facts. */
+export function resumeOutcomeSentence(
+  subagentId: SubagentId,
+  outcome: ResumeOutcome,
+): string {
+  return sentenceFor(RESUME_OUTCOME_PRESENTATION, outcome, { subagentId });
+}
+
+/** Format one steer outcome from the declaration shared with its row facts. */
+export function steerOutcomeSentence(
+  runId: RunId,
+  outcome: SteerOutcome,
+): string {
+  return sentenceFor(STEER_OUTCOME_PRESENTATION, outcome, { runId });
+}
 
 const IdentifierText = Schema.String.check(
   Schema.isLengthBetween(1, 128),
@@ -58,6 +367,54 @@ const Count = Schema.Finite.check(
   Schema.isInt(),
   Schema.isGreaterThanOrEqualTo(0),
 );
+const ToolRowToneSchema = Schema.Literals(["toolTitle", "warning", "error"]);
+const PassThroughRowSchema = {
+  rowPhrase: Schema.String.check(Schema.isMinLength(1)),
+  tone: ToolRowToneSchema,
+};
+
+const StartedRunToolRowFactsSchema = Schema.Struct({
+  kind: Schema.Literal("start"),
+  ...PassThroughRowSchema,
+  agent: Schema.String,
+  subagentId: IdentifierText,
+  runId: IdentifierText,
+});
+const StartRefusalToolRowFactsSchema = Schema.Struct({
+  kind: Schema.Literal("start"),
+  ...PassThroughRowSchema,
+  agent: Schema.String,
+});
+const StartToolRowFactsSchema = Schema.Union([
+  StartedRunToolRowFactsSchema,
+  StartRefusalToolRowFactsSchema,
+]);
+export type StartToolRowFacts = typeof StartToolRowFactsSchema.Type;
+export type StartedRunToolRowFacts = typeof StartedRunToolRowFactsSchema.Type;
+
+const ResumedRunToolRowFactsSchema = Schema.Struct({
+  kind: Schema.Literal("resume"),
+  ...PassThroughRowSchema,
+  subagentId: IdentifierText,
+  runId: IdentifierText,
+});
+const ResumeRefusalToolRowFactsSchema = Schema.Struct({
+  kind: Schema.Literal("resume"),
+  ...PassThroughRowSchema,
+});
+const ResumeToolRowFactsSchema = Schema.Union([
+  ResumedRunToolRowFactsSchema,
+  ResumeRefusalToolRowFactsSchema,
+]);
+export type ResumeToolRowFacts = typeof ResumeToolRowFactsSchema.Type;
+export type ResumedRunToolRowFacts = typeof ResumedRunToolRowFactsSchema.Type;
+
+const SteerToolRowFactsSchema = Schema.Struct({
+  kind: Schema.Literal("steer"),
+  ...PassThroughRowSchema,
+  runId: IdentifierText,
+});
+export type SteerToolRowFacts = typeof SteerToolRowFactsSchema.Type;
 
 const ResultRunSummarySchema = Schema.Struct({
   runId: IdentifierText,
@@ -65,8 +422,6 @@ const ResultRunSummarySchema = Schema.Struct({
   status: TerminalRunPhase,
   outputCharacters: Count,
 });
-
-/** One delivered Result in a compact collection or retrieval summary. */
 export type ResultRunSummary = typeof ResultRunSummarySchema.Type;
 
 const CollectionWithRunsSchema = Schema.Struct({
@@ -78,7 +433,6 @@ const CollectionWithRunsSchema = Schema.Struct({
   unavailable: Count,
   noActiveRuns: Schema.Literal(false),
 });
-
 const EmptyCollectionSchema = Schema.Struct({
   kind: Schema.Literal("collection"),
   scope: Schema.Literal("all-active"),
@@ -88,8 +442,6 @@ const EmptyCollectionSchema = Schema.Struct({
   unavailable: Schema.Literal(0),
   noActiveRuns: Schema.Literal(true),
 });
-
-/** Presentation-only facts for either Wait operation. */
 const CollectedRunsToolRowFactsSchema = Schema.Union([
   CollectionWithRunsSchema,
   EmptyCollectionSchema,
@@ -97,7 +449,6 @@ const CollectedRunsToolRowFactsSchema = Schema.Union([
 export type CollectedRunsToolRowFacts =
   typeof CollectedRunsToolRowFactsSchema.Type;
 
-/** Presentation-only facts for one `agent_result` outcome. */
 const ResultToolRowFactsSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("result"),
@@ -118,25 +469,6 @@ const ResultToolRowFactsSchema = Schema.Union([
 ]);
 export type ResultToolRowFacts = typeof ResultToolRowFactsSchema.Type;
 
-export type ResumeToolRowFacts =
-  | {
-      readonly kind: "resume";
-      readonly outcome: "started";
-      readonly subagentId: string;
-      readonly runId: string;
-    }
-  | {
-      readonly kind: "resume";
-      readonly outcome: Exclude<ResumeOutcome["outcome"], "started">;
-    };
-
-export interface SteerToolRowFacts {
-  readonly kind: "steer";
-  readonly outcome: SteerOutcome["outcome"];
-  readonly runId: string;
-}
-
-/** One cancellation-request admission outcome, separate from settlement. */
 const CancelRunToolRowOutcomeSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literals(["requested", "already requested", "unknown"]),
@@ -150,30 +482,22 @@ const CancelRunToolRowOutcomeSchema = Schema.Union([
 ]);
 export type CancelRunToolRowOutcome = typeof CancelRunToolRowOutcomeSchema.Type;
 
-/** Discriminated, presentation-only facts for one cancellation operation. */
 const CancelToolRowFactsSchema = Schema.Struct({
   kind: Schema.Literal("cancel"),
   outcomes: Schema.Array(CancelRunToolRowOutcomeSchema),
 });
 export type CancelToolRowFacts = typeof CancelToolRowFactsSchema.Type;
 
-const AggregateToolRowFactsSchema = Schema.Union([
+const ToolRowFactsSchema = Schema.Union([
+  StartToolRowFactsSchema,
+  ResumeToolRowFactsSchema,
+  SteerToolRowFactsSchema,
   CollectedRunsToolRowFactsSchema,
   CancelToolRowFactsSchema,
   ResultToolRowFactsSchema,
 ]);
-type AggregateToolRowFacts = typeof AggregateToolRowFactsSchema.Type;
+export type ToolRowFacts = typeof ToolRowFactsSchema.Type;
 
-/** The one presentation-owned fact vocabulary for all seven agent tools. */
-export type ToolRowFacts =
-  | StartToolRowFacts
-  | ResumeToolRowFacts
-  | SteerToolRowFacts
-  | CollectedRunsToolRowFacts
-  | ResultToolRowFacts
-  | CancelToolRowFacts;
-
-/** Build the shared compact vocabulary from one immutable Result. */
 function resultRunSummaryOf(result: RunResult): ResultRunSummary {
   return {
     runId: result.runId,
@@ -186,57 +510,51 @@ function resultRunSummaryOf(result: RunResult): ResultRunSummary {
 /** Make the presentation decision for every `agent_start` outcome. */
 export function startToolRowFacts(
   agent: string,
+  outcome: Extract<StartOutcome, { readonly outcome: "started" }>,
+): StartedRunToolRowFacts;
+export function startToolRowFacts(
+  agent: string,
+  outcome: StartOutcome,
+): StartToolRowFacts;
+export function startToolRowFacts(
+  agent: string,
   outcome: StartOutcome,
 ): StartToolRowFacts {
-  switch (outcome.outcome) {
-    case "started":
-      return {
+  const row = rowFor<StartOutcome, StartSentenceContext>(
+    START_OUTCOME_PRESENTATION,
+    outcome,
+  );
+  return outcome.outcome === "started"
+    ? {
         kind: "start",
-        outcome: "started",
+        rowPhrase: row.rowPhrase,
+        tone: row.tone,
         agent,
         subagentId: outcome.subagentId,
         runId: outcome.runId,
-      };
-    case "unknown agent":
-    case "invalid profile":
-    case "empty label":
-    case "at capacity":
-    case "shutting down":
-    case "backend unavailable":
-      return { kind: "start", outcome: outcome.outcome, agent };
-    case "delegation-depth exceeded":
-      return {
-        kind: "start",
-        outcome: outcome.outcome,
-        agent,
-        depth: outcome.depth,
-      };
-    default:
-      return outcome satisfies never;
-  }
+      }
+    : { kind: "start", rowPhrase: row.rowPhrase, tone: row.tone, agent };
 }
 
 /** Make the presentation decision for every `agent_resume` outcome. */
+export function resumeToolRowFacts(
+  outcome: Extract<ResumeOutcome, { readonly outcome: "started" }>,
+): ResumedRunToolRowFacts;
+export function resumeToolRowFacts(outcome: ResumeOutcome): ResumeToolRowFacts;
 export function resumeToolRowFacts(outcome: ResumeOutcome): ResumeToolRowFacts {
-  switch (outcome.outcome) {
-    case "started":
-      return {
+  const row = rowFor<ResumeOutcome, ResumeSentenceContext>(
+    RESUME_OUTCOME_PRESENTATION,
+    outcome,
+  );
+  return outcome.outcome === "started"
+    ? {
         kind: "resume",
-        outcome: "started",
+        rowPhrase: row.rowPhrase,
+        tone: row.tone,
         subagentId: outcome.subagentId,
         runId: outcome.runId,
-      };
-    case "unknown Subagent":
-    case "Subagent already running":
-    case "empty label":
-    case "resume unsupported":
-    case "conversation lost":
-    case "at capacity":
-    case "shutting down":
-      return { kind: "resume", outcome: outcome.outcome };
-    default:
-      return outcome satisfies never;
-  }
+      }
+    : { kind: "resume", rowPhrase: row.rowPhrase, tone: row.tone };
 }
 
 /** Make the presentation decision for every `agent_steer` outcome. */
@@ -244,25 +562,18 @@ export function steerToolRowFacts(
   requestedRunId: RunId,
   outcome: SteerOutcome,
 ): SteerToolRowFacts {
-  switch (outcome.outcome) {
-    case "accepted":
-    case "mailbox full":
-    case "unsupported":
-    case "mailbox closed":
-    case "already completed":
-    case "already failed":
-    case "already cancelled":
-    case "unknown Run":
-      return { kind: "steer", outcome: outcome.outcome, runId: outcome.runId };
-    case "invalid":
-    case "shutting down":
-      return { kind: "steer", outcome: outcome.outcome, runId: requestedRunId };
-    default:
-      return outcome satisfies never;
-  }
+  const row = rowFor<SteerOutcome, SteerSentenceContext>(
+    STEER_OUTCOME_PRESENTATION,
+    outcome,
+  );
+  return {
+    kind: "steer",
+    rowPhrase: row.rowPhrase,
+    tone: row.tone,
+    runId: "runId" in outcome ? outcome.runId : requestedRunId,
+  };
 }
 
-/** Make the presentation decision for every nested `agent_cancel` outcome. */
 export function cancelToolRowFacts(
   outcomes: readonly CancelOutcome[],
 ): CancelToolRowFacts {
@@ -336,21 +647,18 @@ function collectedToolRowFacts(
   };
 }
 
-/** Make the presentation decision for every named-Wait outcome. */
 export function waitToolRowFacts(
   outcomes: readonly WaitOutcome[],
 ): CollectedRunsToolRowFacts {
   return collectedToolRowFacts("named", outcomes);
 }
 
-/** Make the presentation decision for every collected wait-all outcome. */
 export function waitAllToolRowFacts(
   outcomes: readonly WaitOutcome[],
 ): CollectedRunsToolRowFacts {
   return collectedToolRowFacts("all-active", outcomes);
 }
 
-/** Make the wait-all presentation decision when there were no active Runs. */
 export function noActiveWaitAllToolRowFacts(): CollectedRunsToolRowFacts {
   return {
     kind: "collection",
@@ -363,7 +671,6 @@ export function noActiveWaitAllToolRowFacts(): CollectedRunsToolRowFacts {
   };
 }
 
-/** Make the presentation decision for every `agent_result` outcome. */
 export function resultToolRowFacts(outcome: ResultOutcome): ResultToolRowFacts {
   switch (outcome.outcome) {
     case "result":
@@ -380,11 +687,7 @@ export function resultToolRowFacts(outcome: ResultOutcome): ResultToolRowFacts {
         status: outcome.status,
       };
     case "RunNotTerminal":
-      return {
-        kind: "result",
-        outcome: "still-running",
-        runId: outcome.runId,
-      };
+      return { kind: "result", outcome: "still-running", runId: outcome.runId };
     case "unknown Run":
       return { kind: "result", outcome: "unknown", runId: outcome.runId };
     default:
@@ -392,216 +695,19 @@ export function resultToolRowFacts(outcome: ResultOutcome): ResultToolRowFacts {
   }
 }
 
-const IDENTIFIER_PATTERN = /^[A-Za-z0-9._:-]+$/;
-const IDENTIFIER_MAX_LENGTH = 128;
+const decodeFacts = Schema.decodeUnknownResult(ToolRowFactsSchema, EXACT_KEYS);
+const encodeFacts = Schema.encodeUnknownSync(ToolRowFactsSchema, EXACT_KEYS);
 
-function isIdentifier(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= IDENTIFIER_MAX_LENGTH &&
-    IDENTIFIER_PATTERN.test(value)
-  );
-}
-
-function isCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
-}
-
-function hasOwnKey<K extends string>(
-  values: Readonly<Record<K, true>>,
-  value: unknown,
-): value is K {
-  return typeof value === "string" && Object.hasOwn(values, value);
-}
-
-function recordOf(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function hasExactly(
-  value: Record<string, unknown>,
-  keys: readonly string[],
-): boolean {
-  const own = Object.keys(value);
-  return (
-    own.length === keys.length && keys.every((key) => Object.hasOwn(value, key))
-  );
-}
-
-const START_REFUSALS: Readonly<
-  Record<
-    Exclude<StartOutcome["outcome"], "started" | "delegation-depth exceeded">,
-    true
-  >
-> = {
-  "unknown agent": true,
-  "invalid profile": true,
-  "empty label": true,
-  "at capacity": true,
-  "shutting down": true,
-  "backend unavailable": true,
-};
-
-const RESUME_REFUSALS: Readonly<
-  Record<Exclude<ResumeOutcome["outcome"], "started">, true>
-> = {
-  "unknown Subagent": true,
-  "Subagent already running": true,
-  "empty label": true,
-  "resume unsupported": true,
-  "conversation lost": true,
-  "at capacity": true,
-  "shutting down": true,
-};
-
-const STEER_OUTCOMES: Readonly<Record<SteerOutcome["outcome"], true>> = {
-  accepted: true,
-  "mailbox full": true,
-  invalid: true,
-  unsupported: true,
-  "mailbox closed": true,
-  "already completed": true,
-  "already failed": true,
-  "already cancelled": true,
-  "unknown Run": true,
-  "shutting down": true,
-};
-
-function decodeStart(
-  value: Record<string, unknown>,
-): StartToolRowFacts | undefined {
-  if (typeof value.agent !== "string") return undefined;
-  if (value.outcome === "started") {
-    return hasExactly(value, [
-      "kind",
-      "outcome",
-      "agent",
-      "subagentId",
-      "runId",
-    ]) &&
-      isIdentifier(value.subagentId) &&
-      isIdentifier(value.runId)
-      ? {
-          kind: "start",
-          outcome: "started",
-          agent: value.agent,
-          subagentId: value.subagentId,
-          runId: value.runId,
-        }
-      : undefined;
-  }
-  if (value.outcome === "delegation-depth exceeded") {
-    return hasExactly(value, ["kind", "outcome", "agent", "depth"]) &&
-      isCount(value.depth)
-      ? {
-          kind: "start",
-          outcome: value.outcome,
-          agent: value.agent,
-          depth: value.depth,
-        }
-      : undefined;
-  }
-  return hasExactly(value, ["kind", "outcome", "agent"]) &&
-    hasOwnKey(START_REFUSALS, value.outcome)
-    ? { kind: "start", outcome: value.outcome, agent: value.agent }
-    : undefined;
-}
-
-function decodeResume(
-  value: Record<string, unknown>,
-): ResumeToolRowFacts | undefined {
-  if (value.outcome === "started") {
-    return hasExactly(value, ["kind", "outcome", "subagentId", "runId"]) &&
-      isIdentifier(value.subagentId) &&
-      isIdentifier(value.runId)
-      ? {
-          kind: "resume",
-          outcome: "started",
-          subagentId: value.subagentId,
-          runId: value.runId,
-        }
-      : undefined;
-  }
-  return hasExactly(value, ["kind", "outcome"]) &&
-    hasOwnKey(RESUME_REFUSALS, value.outcome)
-    ? { kind: "resume", outcome: value.outcome }
-    : undefined;
-}
-
-function decodeSteer(
-  value: Record<string, unknown>,
-): SteerToolRowFacts | undefined {
-  return hasExactly(value, ["kind", "outcome", "runId"]) &&
-    hasOwnKey(STEER_OUTCOMES, value.outcome) &&
-    isIdentifier(value.runId)
-    ? { kind: "steer", outcome: value.outcome, runId: value.runId }
-    : undefined;
-}
-
-const decodeAggregateToolRowFacts = Schema.decodeUnknownResult(
-  AggregateToolRowFactsSchema,
-  EXACT_KEYS,
-);
-const encodeAggregateToolRowFacts = Schema.encodeUnknownSync(
-  AggregateToolRowFactsSchema,
-  EXACT_KEYS,
-);
-
-/**
- * Encode Tool-row facts for the host-owned details slot.
- *
- * The three schema-backed aggregate kinds cross through their schema encoder.
- * Start, resume, and steer remain unchanged until their own migration.
- */
+/** Encode Tool-row facts for the host-owned details slot. */
 export function encodeToolRowFacts(value: ToolRowFacts | undefined): unknown {
-  if (value === undefined) return undefined;
-  switch (value.kind) {
-    case "collection":
-    case "cancel":
-    case "result":
-      return encodeAggregateToolRowFacts(value);
-    case "start":
-    case "resume":
-    case "steer":
-      return value;
-    default:
-      return value satisfies never;
-  }
+  return value === undefined ? undefined : encodeFacts(value);
 }
 
-function decodeAggregate(value: unknown): AggregateToolRowFacts | undefined {
-  const decoded = decodeAggregateToolRowFacts(value);
-  return decoded._tag === "Success" ? decoded.success : undefined;
-}
-
-/**
- * Decode host-owned unknown details into Tool-row facts.
- *
- * Every operation discriminator and nested field is checked. Malformed,
- * foreign, legacy, and even accessor/proxy values return absence; none can
- * make this boundary throw.
- */
+/** Decode host-owned unknown details into Tool-row facts without throwing. */
 export function decodeToolRowFacts(value: unknown): ToolRowFacts | undefined {
   try {
-    const candidate = recordOf(value);
-    if (!candidate) return undefined;
-    switch (candidate.kind) {
-      case "start":
-        return decodeStart(candidate);
-      case "resume":
-        return decodeResume(candidate);
-      case "steer":
-        return decodeSteer(candidate);
-      case "cancel":
-      case "collection":
-      case "result":
-        return decodeAggregate(candidate);
-      default:
-        return undefined;
-    }
+    const decoded = decodeFacts(value);
+    return decoded._tag === "Success" ? decoded.success : undefined;
   } catch {
     return undefined;
   }

@@ -11,12 +11,20 @@ import type {
 import { runId, subagentId } from "../domain/index.ts";
 import { fixtureResult } from "../testing/presentation-fixtures.ts";
 import {
+  formatResumeOutcome,
+  formatStartOutcome,
+  formatSteerOutcome,
+} from "./prose.ts";
+import {
   cancelToolRowFacts,
   decodeToolRowFacts,
   encodeToolRowFacts,
   noActiveWaitAllToolRowFacts,
+  RESUME_OUTCOME_PRESENTATION,
   resultToolRowFacts,
   resumeToolRowFacts,
+  START_OUTCOME_PRESENTATION,
+  STEER_OUTCOME_PRESENTATION,
   startToolRowFacts,
   steerToolRowFacts,
   waitAllToolRowFacts,
@@ -92,11 +100,48 @@ const resultOutcomes: readonly ResultOutcome[] = [
   { outcome: "unknown Run", runId: rid },
 ];
 
-test("named Tool-row facts construction covers every domain outcome and round-trips", () => {
+test("pass-through table keys construct and round-trip every domain outcome", () => {
+  const cases = [
+    [
+      START_OUTCOME_PRESENTATION,
+      startOutcomes,
+      (outcome: StartOutcome) => startToolRowFacts("explore", outcome),
+      (outcome: StartOutcome) =>
+        formatStartOutcome("explore", outcome, ["explore"]),
+    ],
+    [
+      RESUME_OUTCOME_PRESENTATION,
+      resumeOutcomes,
+      (outcome: ResumeOutcome) => resumeToolRowFacts(outcome),
+      (outcome: ResumeOutcome) => formatResumeOutcome(sid, outcome),
+    ],
+    [
+      STEER_OUTCOME_PRESENTATION,
+      steerOutcomes,
+      (outcome: SteerOutcome) => steerToolRowFacts(rid, outcome),
+      (outcome: SteerOutcome) => formatSteerOutcome(rid, outcome),
+    ],
+  ] as const;
+
+  for (const [table, outcomes, construct, formatSentence] of cases) {
+    const keys = Object.keys(table);
+    assert.deepEqual(
+      keys.sort(),
+      outcomes.map(({ outcome }) => outcome).sort(),
+    );
+    for (const key of keys) {
+      const outcome = outcomes.find((candidate) => candidate.outcome === key);
+      assert.ok(outcome, `missing fixture for ${key}`);
+      const facts = construct(outcome as never);
+      assert.deepEqual(decodeToolRowFacts(encodeToolRowFacts(facts)), facts);
+      assert.ok(facts.rowPhrase.length > 0);
+      assert.ok(formatSentence(outcome as never).length > 0);
+    }
+  }
+});
+
+test("named aggregate facts construction round-trips", () => {
   const facts = [
-    ...startOutcomes.map((outcome) => startToolRowFacts("explore", outcome)),
-    ...resumeOutcomes.map(resumeToolRowFacts),
-    ...steerOutcomes.map((outcome) => steerToolRowFacts(rid, outcome)),
     ...cancelOutcomes.map((outcome) => cancelToolRowFacts([outcome])),
     waitToolRowFacts(waitOutcomes),
     waitAllToolRowFacts(waitOutcomes),
@@ -112,9 +157,6 @@ test("named Tool-row facts construction covers every domain outcome and round-tr
       value.kind === "collection" ? `${value.kind}:${value.scope}` : value.kind,
     ),
     [
-      ...startOutcomes.map(() => "start"),
-      ...resumeOutcomes.map(() => "resume"),
-      ...steerOutcomes.map(() => "steer"),
       ...cancelOutcomes.map(() => "cancel"),
       "collection:named",
       "collection:all-active",

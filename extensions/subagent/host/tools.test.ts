@@ -144,7 +144,8 @@ test("a successful agent_start crosses registration, details, and both renderer 
   );
   assert.deepEqual(result.details, {
     kind: "start",
-    outcome: "started",
+    rowPhrase: "Started",
+    tone: "toolTitle",
     agent: "explore",
     subagentId: ids.subagentId,
     runId: ids.runId,
@@ -195,7 +196,8 @@ test("a rejected agent_start remains readable through its registered renderer", 
   const result = await rig.call("agent_start", args);
   assert.deepEqual(result.details, {
     kind: "start",
-    outcome: "unknown agent",
+    rowPhrase: "Start refused · unknown Agent",
+    tone: "error",
     agent: "ghost",
   });
   const collapsed = renderRegisteredRow(
@@ -290,7 +292,8 @@ test("successful agent_resume crosses registration, semantic details, and both r
   assert.ok(resumedRunId);
   assert.deepEqual(result.details, {
     kind: "resume",
-    outcome: "started",
+    rowPhrase: "Resumed",
+    tone: "toolTitle",
     subagentId: first.subagentId,
     runId: resumedRunId,
   });
@@ -345,7 +348,8 @@ test("a refused agent_resume stays semantic in both expansion states", async (t)
 
   assert.deepEqual(result.details, {
     kind: "resume",
-    outcome: "Subagent already running",
+    rowPhrase: "Resume refused · already running",
+    tone: "warning",
   });
   const collapsed = renderRegisteredRow(
     rig.host,
@@ -458,7 +462,8 @@ test("successful agent_steer crosses registration and states local admission in 
   );
   assert.deepEqual(result.details, {
     kind: "steer",
-    outcome: "accepted",
+    rowPhrase: "Accepted into local Control mailbox",
+    tone: "toolTitle",
     runId: started.runId,
   });
 
@@ -510,7 +515,8 @@ test("a refused agent_steer stays semantic in both expansion states", async (t) 
 
   assert.deepEqual(result.details, {
     kind: "steer",
-    outcome: "already completed",
+    rowPhrase: "Control refused · Run completed",
+    tone: "warning",
     runId: started.runId,
   });
   const collapsed = renderRegisteredRow(
@@ -1968,7 +1974,8 @@ test("agent_start refuses an empty description, and spends no identifier doing i
     );
     assert.deepEqual(refused.details, {
       kind: "start",
-      outcome: "empty label",
+      rowPhrase: "Start refused · empty Label",
+      tone: "error",
       agent: "explore",
     });
   }
@@ -2002,7 +2009,8 @@ test("agent_resume renders an empty-label refusal semantically and leaves the Su
   );
   assert.deepEqual(result.details, {
     kind: "resume",
-    outcome: "empty label",
+    rowPhrase: "Resume refused · empty Label",
+    tone: "error",
   });
   const collapsed = renderRegisteredRow(
     rig.host,
