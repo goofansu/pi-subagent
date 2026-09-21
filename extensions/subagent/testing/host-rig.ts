@@ -184,7 +184,7 @@ export interface HostRig {
   /**
    * Give the Session's fibers turns to run, without letting real time pass.
    *
-   * The reducer, the settlement coordinator, and the widget's subscriber are
+   * The reducer, the settlement path, and the widget's subscriber are
    * all fibers, and a host call that returns does not mean they have caught
    * up. Where a test asserts on something they produce — a widget row, a
    * counter — it has to let them run first, and yielding is how that is done

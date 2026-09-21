@@ -917,6 +917,52 @@ test("waiting on an unknown id reports it rather than blocking forever", async (
 /* The native-callback bridge                                      */
 /* ============================================================== */
 
+test("sealing atomically appends the core ending after accepted cleanup and drops later emits", async () => {
+  const outcome = await Effect.runPromise(
+    Effect.gen(function* () {
+      const counters = createRuntimeCounters();
+      const intake = yield* makeIntake(1, counters);
+      yield* intake.emit({
+        kind: "diagnostic",
+        diagnostic: { category: "other", message: "cleanup first" },
+      });
+
+      const sealing = yield* Effect.forkChild(
+        intake.sealWith([
+          {
+            kind: "reconciliation",
+            reconciliation: { finalOutput: "the answer" },
+          },
+          { kind: "ending", ending: { ending: "answered" } },
+        ]),
+      );
+      while (!intake.sealed()) yield* Effect.yieldNow;
+
+      // Accepted as an operation, but sealing has already stopped acceptance.
+      yield* intake.emit({
+        kind: "message",
+        role: "assistant",
+        parts: [{ kind: "text", text: "too late" }],
+      });
+
+      const first = yield* Queue.take(intake.queue);
+      const second = yield* Queue.take(intake.queue);
+      const third = yield* Queue.take(intake.queue);
+      yield* Fiber.join(sealing);
+      const afterEnd = yield* Effect.exit(Queue.take(intake.queue));
+      return {
+        kinds: [first.kind, second.kind, third.kind],
+        afterEnd: afterEnd._tag,
+        counters: counters.counters(),
+      };
+    }).pipe(Effect.scoped),
+  );
+
+  assert.deepEqual(outcome.kinds, ["diagnostic", "reconciliation", "ending"]);
+  assert.equal(outcome.afterEnd, "Failure");
+  assert.equal(outcome.counters.lateEvents, 1);
+});
+
 test("a bridge that cannot wait preserves its overflow diagnostic", async () => {
   const outcome = await Effect.runPromise(
     Effect.gen(function* () {

@@ -7,9 +7,9 @@
  *
  * {@link SupervisorCounters} are *diagnostics*: things that happened which
  * nobody had to be told about at the time, but which say whether the runtime
- * is behaving. A duplicate settlement attempt is not an error — it is the
- * normal outcome of two endings racing — but a Session with thousands of them
- * is a Session with a bug.
+ * is behaving. A duplicate decision is not an error — an execution may record
+ * before its normal return — but a Session with thousands of them is worth
+ * inspecting.
  *
  * The {@link RuntimeProbe} is a *leak check*: what is still alive. Every race,
  * backpressure, fault, and leak test ends by asserting the probe reads zero
@@ -21,8 +21,6 @@
 export interface SupervisorCounters {
   /** A second decision was recorded after the execution's first one stood. */
   readonly duplicateDecisions: number;
-  /** A second terminal candidate arrived for a Run that already had one. */
-  readonly duplicateSettlements: number;
   /**
    * An observation was emitted after intake was sealed.
    *
@@ -35,9 +33,8 @@ export interface SupervisorCounters {
   /**
    * An observation was reduced into a projection that was already terminal.
    *
-   * The backend announced its ending and then kept going. It reached the
-   * reducer and changed nothing, which is a different fact from an emit that
-   * never got that far.
+   * An observation reached a projection that was already terminal and changed
+   * nothing, which is a different fact from an emit that never got that far.
    */
   readonly lateObservations: number;
   /** A non-blocking bridge could not hand an observation over. */
@@ -48,10 +45,8 @@ export interface SupervisorCounters {
    * A terminal snapshot disagreed with what was streamed.
    *
    * One increment per applied reconciliation that changed at least one
-   * projection field, however many fields it changed, and on either path a
-   * snapshot can arrive by: inside the terminal bundle, or announced through
-   * the intake when a cancel reached a Run that had already finished. A
-   * snapshot that restated the stream is not counted, and neither is one the
+   * projection field, however many fields it changed. A snapshot that restated
+   * the stream is not counted, and neither is one the
    * reducer ignored as late — so a Session that answered a hundred Runs whose
    * snapshots agreed with their streams reads zero.
    *
@@ -63,8 +58,6 @@ export interface SupervisorCounters {
   readonly deliveryFailures: number;
   /** An observation did not decode at the backend seam. */
   readonly seamDecodeFailures: number;
-  /** An ending arrived after one had already won. */
-  readonly lateEndings: number;
   /**
    * A terminal Run's stored result could not be read back.
    *
@@ -115,10 +108,9 @@ export type CounterClass = "defect" | "incident" | "expected";
  * debugging guide, where it lived as prose that the health line did not read
  * and could not be held to.
  *
- * `duplicateSettlements` and `lateEndings` are *expected*, which moves them
- * against the guide's earlier tables and the guide follows: two endings racing
- * is the normal outcome of a cancellation, and both counters' own doc comments
- * above say so.
+ * Duplicate decisions, sealed-intake events, reducer-late observations,
+ * reconciliation differences, and evictions are expected rather than defects:
+ * each records a bounded race or policy taking effect as designed.
  */
 export const COUNTER_CLASSES: Readonly<
   Record<SupervisorCounter, CounterClass>
@@ -132,17 +124,14 @@ export const COUNTER_CLASSES: Readonly<
   cleanupEscalations: "incident",
   deliveryFailures: "incident",
   duplicateDecisions: "expected",
-  duplicateSettlements: "expected",
   lateEvents: "expected",
   lateObservations: "expected",
-  lateEndings: "expected",
   reconciliationDifferences: "expected",
   evictions: "expected",
 };
 
 const ZERO_COUNTERS: SupervisorCounters = {
   duplicateDecisions: 0,
-  duplicateSettlements: 0,
   lateEvents: 0,
   lateObservations: 0,
   queueOverflows: 0,
@@ -150,7 +139,6 @@ const ZERO_COUNTERS: SupervisorCounters = {
   reconciliationDifferences: 0,
   deliveryFailures: 0,
   seamDecodeFailures: 0,
-  lateEndings: 0,
   unreadableResults: 0,
   duplicateCommits: 0,
   conflictingCommits: 0,

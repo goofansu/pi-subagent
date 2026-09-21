@@ -586,7 +586,8 @@ test("a scripted late observation is ignored and changes nothing", async () => {
   // from an emit that never got that far.
   assert.ok(value.counters.lateObservations >= 1);
   assert.equal(value.counters.lateEvents, 0);
-  assert.ok(value.counters.lateEndings >= 1);
+  // Arbitration no longer treats an adapter-authored ending as a candidate;
+  // this malformed fake exists only to preserve the reducer's absorbing rule.
 });
 
 test("a tool result is its own transcript item and is not the Run's answer", async () => {

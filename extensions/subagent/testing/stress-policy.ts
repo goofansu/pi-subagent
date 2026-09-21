@@ -56,17 +56,18 @@ export const STEER = "also look left";
 /**
  * The counters a healthy Session must never register at all.
  *
- * Each of these is a *defect* rather than a bound being reached: a Run settled
- * twice, a result committed twice or committed differently, a stored result
+ * Each of these is a *defect* rather than a bound being reached: a result
+ * committed twice or committed differently, a stored result
  * that would not read back, an observation that did not decode at the seam, an
  * observation dropped because a non-blocking bridge could not hand it over, or
  * a late observation that reached the reducer after the projection was already
  * terminal.
  *
  * `lateObservations` is here and `lateEvents` is not, and the difference is the
- * point: an emit the *sealed intake* dropped is normal — an adapter emitting
- * from its own finalizer does it on every Run — while one that got as far as
- * the reducer means sealing did not happen when it should have.
+ * point: execution-scope finalizers now emit before sealing, but abandoned or
+ * otherwise escaped native work can still call the total `emit` operation
+ * afterwards. The sealed intake counts and drops that event; an observation
+ * that reached the reducer after ending means terminal ordering failed.
  *
  * `reconciliationDifferences` is deliberately **not** here — but not because a
  * busy Session is expected to raise it. It counts the Runs whose terminal
@@ -78,7 +79,6 @@ export const STEER = "also look left";
  * at which it does so rather than a zero to assert.
  */
 const MUST_STAY_ZERO = [
-  "duplicateSettlements",
   "duplicateCommits",
   "conflictingCommits",
   "unreadableResults",

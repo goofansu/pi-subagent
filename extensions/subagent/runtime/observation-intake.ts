@@ -54,11 +54,12 @@ export interface ObservationIntake {
   /** Take the next accepted observation. Fails with `Done` once sealed. */
   readonly queue: Queue.Queue<RunObservation, Cause.Done>;
   /**
-   * Stop accepting, and let the reducer drain what is already in.
-   *
-   * Idempotent, because settlement may reach it from more than one direction.
+   * Atomically stop acceptance, append the core's terminal observations, and
+   * end the queue. Observations accepted earlier remain ahead of this suffix.
    */
-  readonly seal: () => Effect.Effect<void>;
+  readonly sealWith: (
+    terminal: readonly RunObservation[],
+  ) => Effect.Effect<void>;
   readonly sealed: () => boolean;
 }
 
@@ -105,11 +106,25 @@ export function makeIntake(
     return {
       emit,
       queue,
-      seal: () =>
+      sealWith: (terminal) =>
         Effect.suspend(() => {
           if (sealed) return Effect.void;
+          // Close acceptance before offering the terminal suffix. An emit
+          // that starts afterwards is late; an offer already accepted keeps
+          // its FIFO place ahead of the suffix, even when backpressure made it
+          // wait.
           sealed = true;
-          return Effect.asVoid(Queue.end(queue));
+          return Effect.uninterruptible(
+            Effect.gen(function* () {
+              for (const observation of terminal) {
+                // This suffix is core-authored and already typed. Decoding is
+                // the adapter seam's job; the intake must not turn the core's
+                // one ending into a diagnostic.
+                yield* Queue.offer(queue, observation);
+              }
+              yield* Queue.end(queue);
+            }),
+          );
         }),
       sealed: () => sealed,
     };

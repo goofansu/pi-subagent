@@ -241,3 +241,32 @@ ordinary scoped interruption rather than relying on escalation.
 The shared conformance suite's 39th scenario proves that cancel returns
 immediately and settlement bounds a provider stop that does not return. The
 ADR-0028 shape test remains unchanged.
+
+### 2026-09-21 — executions record decided Terminal bundles
+
+The Backend and BackendAgent member sets remain unchanged. `ExecutionIO` gains
+`recordDecision`, which records the Terminal bundle an execution has decided.
+The first call stands; later calls are counted no-ops. Returning a bundle
+without recording one records the same decision at return time, preserving
+`execute`'s return type and lack of an error channel.
+
+Recording a decision neither seals observation intake nor ends the Run. The
+core orders the decision against the first stop request, then is the sole
+emitter of terminal reconciliation and ending: reconciliation first, ending
+exactly once, while one intake operation atomically stops acceptance and
+appends that ending last. Adapters construct observations of neither terminal
+kind. For Pi, native prompt return is the decision boundary: terminal provider
+evidence observed during post-answer maintenance is not itself a decision, so
+a cancellation admitted before the prompt returns still wins.
+
+Retiring adapter-authored terminal observations also retires the
+`duplicateSettlements` and `lateEndings` counters; duplicate decisions and the
+Result store's duplicate/conflicting commit counters now describe the reachable
+facts. The former cross-backend late-event scenario becomes a cleanup-ordering
+scenario, while a direct intake test retains positive coverage that a genuinely
+post-seal event is counted and cannot mutate the Run.
+
+The shared conformance suite's 40th scenario proves that a decided bundle
+survives a later cancel on both fake backends and on the Pi and Claude adapters.
+The count is 40, rather than the feature spec's stale 39, because the fixed base
+already included the bounded-cancellation scenario above as number 39.

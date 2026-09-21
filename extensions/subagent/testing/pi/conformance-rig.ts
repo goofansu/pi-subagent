@@ -106,10 +106,10 @@ interface PiFixtureParts extends BackendConformanceFixtureParts {
   readonly profileFields?: Readonly<Record<string, unknown>>;
   /** Keep the wrapped execution open after Pi's execute Effect returns. */
   readonly holdAfterExecute?: boolean;
-  /** Add a test-only competing candidate after Pi records its decision. */
-  readonly emitCompetingEndingAfterDecision?: boolean;
-  /** Emit from execution-scope cleanup, after settlement has sealed intake. */
-  readonly emitLateObservationOnScopeClose?: boolean;
+  /** Record a test-only second decision after Pi records its own. */
+  readonly recordCompetingDecisionAfterDecision?: boolean;
+  /** Emit from execution-scope cleanup before the core terminal observations. */
+  readonly emitCleanupObservationOnScopeClose?: boolean;
 }
 
 /**
@@ -181,8 +181,8 @@ function gateLateControlDrain(
 interface DecisionInstrumentationOptions {
   readonly trace: string[] | undefined;
   readonly holdAfterExecute: boolean;
-  readonly emitCompetingEndingAfterDecision: boolean;
-  readonly emitLateObservationOnScopeClose: boolean;
+  readonly recordCompetingDecisionAfterDecision: boolean;
+  readonly emitCleanupObservationOnScopeClose: boolean;
 }
 
 function observeDecisions(
@@ -192,8 +192,8 @@ function observeDecisions(
   if (
     options.trace === undefined &&
     !options.holdAfterExecute &&
-    !options.emitCompetingEndingAfterDecision &&
-    !options.emitLateObservationOnScopeClose
+    !options.recordCompetingDecisionAfterDecision &&
+    !options.emitCleanupObservationOnScopeClose
   ) {
     return backend;
   }
@@ -212,19 +212,22 @@ function observeDecisions(
                 Effect.gen(function* () {
                   yield* io.recordDecision(bundle);
                   recorded = true;
-                  if (!options.emitCompetingEndingAfterDecision) {
+                  if (!options.recordCompetingDecisionAfterDecision) {
                     options.trace?.push(`decision-recorded:${input.runId}`);
                   }
                 }),
             });
-            if (options.emitCompetingEndingAfterDecision) {
+            if (options.recordCompetingDecisionAfterDecision) {
               execution = execution.pipe(
                 Effect.tap((bundle) =>
                   Effect.gen(function* () {
-                    // This candidate belongs to the conformance fixture, not
-                    // the Pi adapter. Waiting for its normal return keeps the
-                    // adapter's prior observations ahead of the test ending.
-                    yield* io.emit({ kind: "ending", ending: bundle.ending });
+                    // This duplicate belongs to the conformance fixture, not
+                    // the Pi adapter. The core keeps the adapter's first
+                    // decision and counts this second one as a no-op.
+                    yield* io.recordDecision({
+                      ...bundle,
+                      ending: { ending: "cancelled", reason: "shutdown" },
+                    });
                     yield* Effect.yieldNow;
                     if (recorded) {
                       options.trace?.push(`decision-recorded:${input.runId}`);
@@ -233,13 +236,13 @@ function observeDecisions(
                 ),
               );
             }
-            if (options.emitLateObservationOnScopeClose) {
+            if (options.emitCleanupObservationOnScopeClose) {
               execution = Effect.acquireRelease(Effect.void, () =>
                 io.emit({
                   kind: "diagnostic",
                   diagnostic: {
-                    category: "backend-failure",
-                    message: "test-only late cleanup observation",
+                    category: "other",
+                    message: "test-only cleanup observation",
                   },
                 }),
               ).pipe(Effect.andThen(execution));
@@ -256,8 +259,8 @@ function observeDecisions(
 function piFixture(parts: PiFixtureParts): BackendConformanceFixture {
   const {
     scripts,
-    emitCompetingEndingAfterDecision = false,
-    emitLateObservationOnScopeClose = false,
+    recordCompetingDecisionAfterDecision = false,
+    emitCleanupObservationOnScopeClose = false,
     gateLateControlDrain: gateDrain,
     holdAfterExecute = false,
     openFails,
@@ -317,8 +320,8 @@ function piFixture(parts: PiFixtureParts): BackendConformanceFixture {
     backend: observeDecisions(gated, {
       trace: rest.trace,
       holdAfterExecute,
-      emitCompetingEndingAfterDecision,
-      emitLateObservationOnScopeClose,
+      recordCompetingDecisionAfterDecision,
+      emitCleanupObservationOnScopeClose,
     }),
     profile: {
       ...PROFILE,
@@ -440,16 +443,16 @@ export function piConformanceRig(): BackendConformanceRig {
             },
           });
 
-        case "exactly-one-ending-wins": {
-          // Pi records the answer. The rig then contributes an old-adapter
-          // compatibility ending before cancellation interrupts the held
-          // execution, positively exercising the competing-ending counter.
+        case "exactly-one-ending-is-emitted": {
+          // Pi records the answer. The rig then records a conflicting second
+          // decision before cancellation interrupts the held execution,
+          // positively exercising the once-only decision slot.
           const trace: string[] = [];
           return piFixture({
             scripts: [
               [{ step: "assistant", text: "the answer" }, { step: "terminal" }],
             ],
-            emitCompetingEndingAfterDecision: true,
+            recordCompetingDecisionAfterDecision: true,
             holdAfterExecute: true,
             plans: [{ cancel: true, cancelAfterDecision: true }],
             trace,
@@ -505,9 +508,9 @@ export function piConformanceRig(): BackendConformanceRig {
             expected: { runs: [{ status: "completed" }] },
           });
 
-        case "late-events-cannot-mutate-a-terminal-run": {
-          // A test-only execution-scope finalizer emits after the decision has
-          // caused settlement to seal intake. The seam counts and drops it.
+        case "cleanup-observations-precede-the-core-ending": {
+          // A test-only execution-scope finalizer emits after the decision.
+          // Recording did not seal intake, so the core orders it before ending.
           const trace: string[] = [];
           return piFixture({
             scripts: [
@@ -517,7 +520,7 @@ export function piConformanceRig(): BackendConformanceRig {
                 { step: "terminal" },
               ],
             ],
-            emitLateObservationOnScopeClose: true,
+            emitCleanupObservationOnScopeClose: true,
             holdAfterExecute: true,
             plans: [{ cancel: true, cancelAfterDecision: true }],
             trace,
@@ -528,6 +531,7 @@ export function piConformanceRig(): BackendConformanceRig {
                   finalOutput: "the answer",
                   transcriptTexts: ["the answer"],
                   usageTotals: { input: 0 },
+                  diagnosticCategories: ["other"],
                 },
               ],
             },
@@ -1020,15 +1024,14 @@ export function piConformanceRig(): BackendConformanceRig {
           });
 
         case "settlement-stores-the-result-exactly-once": {
-          // The rig adds a compatibility ending after Pi's recorded answer,
-          // then cancellation contributes another settlement candidate. The
-          // duplicate is counted; only one result and notification survive.
+          // The rig records a conflicting second decision after Pi's answer.
+          // The duplicate is counted; only one result and notification survive.
           const trace: string[] = [];
           return piFixture({
             scripts: [
               [{ step: "assistant", text: "the answer" }, { step: "terminal" }],
             ],
-            emitCompetingEndingAfterDecision: true,
+            recordCompetingDecisionAfterDecision: true,
             holdAfterExecute: true,
             plans: [{ cancel: true, cancelAfterDecision: true }],
             trace,

@@ -91,10 +91,9 @@ test("settlement goes in the roadmap's order, and the result is committed before
   );
 
   assert.deepEqual(value, [
-    RUN_STAGES.candidateCaptured,
-    RUN_STAGES.intakeSealed,
     RUN_STAGES.finalizingPublished,
     RUN_STAGES.executionScopeClosed,
+    RUN_STAGES.intakeSealed,
     RUN_STAGES.observationsDrained,
     RUN_STAGES.resultProduced,
     RUN_STAGES.runScopeClosed,
@@ -542,43 +541,10 @@ test("a defect in the execution settles the Run as failed with its observations 
   assert.equal(noLeaks, true);
 });
 
-test("an ending announced in the stream wins, and the bundle's is late", async () => {
-  const { value } = await withSession(
-    {
-      steps: [
-        [
-          emitText("the answer"),
-          { step: "announce-ending", ending: { ending: "answered" } },
-          emitText("said after the ending"),
-          { step: "fail", message: "and then it said it failed" },
-        ],
-      ],
-    },
-    (rig) =>
-      Effect.gen(function* () {
-        const started = startedRun(yield* rig.supervisor.start(request()));
-        yield* untilTerminal(rig, started.runId);
-        return {
-          result: yield* rig.supervisor.result(started.runId),
-          counters: rig.supervisor.counters(),
-        };
-      }),
-  );
-
-  assert.equal(value?.result.outcome, "result");
-  if (value?.result.outcome !== "result") return;
-  // First ending wins.
-  assert.equal(value.result.result.status, "completed");
-  assert.equal(value.result.result.finalOutput, "the answer");
-  assert.ok(value.counters.lateEndings >= 1);
-  // The bundle was a second candidate for a Run that already had one.
-  assert.ok(value.counters.duplicateSettlements >= 1);
-});
-
-test("emitting after intake is sealed is a no-op that counts a late event", async () => {
-  // The fake emits from its execution scope's finalizer, which runs after
-  // settlement has sealed intake. The contract says emit never fails, so this
-  // has to be a counted no-op rather than a throw at an adapter on its way out.
+test("execution cleanup may report a diagnostic before the core emits the ending", async () => {
+  // Recording or returning a decision does not seal intake. The execution
+  // scope closes first, so a cleanup diagnostic is ordered before the core's
+  // terminal observations rather than discarded as late.
   const { value } = await withSession(
     {
       steps: [
@@ -586,9 +552,11 @@ test("emitting after intake is sealed is a no-op that counts a late event", asyn
           {
             step: "emit-in-finalizer",
             observation: {
-              kind: "message",
-              role: "assistant",
-              parts: [{ kind: "text", text: "said during teardown" }],
+              kind: "diagnostic",
+              diagnostic: {
+                category: "other",
+                message: "reported during teardown",
+              },
             },
           },
           emitText("the answer"),
@@ -607,7 +575,6 @@ test("emitting after intake is sealed is a no-op that counts a late event", asyn
 
   assert.equal(value?.first.outcome, "result");
   if (value?.first.outcome !== "result") return;
-  // The late observation reached nothing.
   assert.equal(value.first.result.finalOutput, "the answer");
   assert.deepEqual(
     value.first.result.transcript.map((item) =>
@@ -617,7 +584,10 @@ test("emitting after intake is sealed is a no-op that counts a late event", asyn
     ),
     ["the answer"],
   );
-  assert.equal(value.counters.lateEvents, 1);
+  assert.deepEqual(value.first.result.diagnostics, [
+    { category: "other", message: "reported during teardown" },
+  ]);
+  assert.equal(value.counters.lateEvents, 0);
   // And repeated reads give the same immutable value.
   assert.equal(value.again.outcome, "result");
   if (value.again.outcome === "result") {

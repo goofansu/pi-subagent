@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import {
   hasComputedImport,
   listSourceFiles,
@@ -600,6 +601,34 @@ function namesIdentifier(source: string, identifier: string): boolean {
   return new RegExp(`\\b${identifier}\\b`).test(source);
 }
 
+/** Literal terminal `kind` property assignments, read from syntax, not text. */
+function constructedTerminalObservationKinds(source: string): string[] {
+  const sourceFile = ts.createSourceFile(
+    "adapter-boundary.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const kinds: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isPropertyAssignment(node) &&
+      ((ts.isIdentifier(node.name) && node.name.text === "kind") ||
+        (ts.isStringLiteral(node.name) && node.name.text === "kind")) &&
+      (ts.isStringLiteral(node.initializer) ||
+        ts.isNoSubstitutionTemplateLiteral(node.initializer)) &&
+      (node.initializer.text === "ending" ||
+        node.initializer.text === "reconciliation")
+    ) {
+      kinds.push(node.initializer.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return kinds;
+}
+
 /**
  * The runtime files allowed to import `Layer`.
  *
@@ -908,7 +937,24 @@ export function findBoundaryViolations(
     }
   }
 
-  // 7. Presentation is prose, and prose has no dependencies. A presentation
+  // 7. Adapters report a decided Terminal bundle; only the core constructs
+  //    terminal observations. This deliberately recognizes literal `kind`
+  //    property assignments: comments and comparisons may name the kinds,
+  //    while arbitrary helper or spread dataflow is outside this guard.
+  for (const adapterRoot of [graph.piAdapterRoot, graph.claudeAdapterRoot]) {
+    for (const file of listSourceFiles(adapterRoot, { includeTests: false })) {
+      const kinds = constructedTerminalObservationKinds(
+        fs.readFileSync(file, "utf8"),
+      );
+      for (const kind of new Set(kinds)) {
+        violations.add(
+          `${describe(file)} constructs an observation of terminal kind ${kind}, and adapters report terminal bundles instead`,
+        );
+      }
+    }
+  }
+
+  // 8. Presentation is prose, and prose has no dependencies. A presentation
   //    file may name another presentation file, the domain, and Pi's own
   //    packages — which is where the row measuring and the theme come from —
   //    and nothing else. Not the runtime, not a backend, not a fake, not even
@@ -1826,6 +1872,45 @@ test("a test may name mechanism vocabulary, because a test has to run things", (
   );
 
   assert.deepEqual(findBoundaryViolations(graph), []);
+});
+
+test("an adapter constructing a terminal observation is rejected", (t) => {
+  const { graph, write } = fixtureGraph(t, "adapter-terminal-observation");
+  write("extensions/subagent/index.ts", "export {};\n");
+  write(
+    "extensions/subagent/backend/pi/execution.ts",
+    [
+      '// Merely discussing { kind: "ending" } is allowed.',
+      'export const kind = "ending";',
+      'export const comparison = kind === "ending";',
+      "",
+    ].join("\n"),
+  );
+  write(
+    "extensions/subagent/backend/claude/execution.ts",
+    [
+      "// A reconciliation observation would be terminal.",
+      'export const kind = "reconciliation";',
+      'export const comparison = kind === "reconciliation";',
+      "",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findBoundaryViolations(graph), []);
+
+  write(
+    "extensions/subagent/backend/pi/execution.ts",
+    'export const ending = { kind: "ending", ending: { ending: "answered" } };\n',
+  );
+  write(
+    "extensions/subagent/backend/claude/execution.ts",
+    'export const reconciliation = { "kind": `reconciliation`, reconciliation: {} };\n',
+  );
+
+  assert.deepEqual(findBoundaryViolations(graph), [
+    `${describe(path.join(graph.claudeAdapterRoot, "execution.ts"))} constructs an observation of terminal kind reconciliation, and adapters report terminal bundles instead`,
+    `${describe(path.join(graph.piAdapterRoot, "execution.ts"))} constructs an observation of terminal kind ending, and adapters report terminal bundles instead`,
+  ]);
 });
 
 test("a presentation file importing the runtime, a backend, or a fake is rejected", (t) => {

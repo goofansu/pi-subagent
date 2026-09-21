@@ -124,16 +124,16 @@ interface ClaudeFixtureParts extends BackendConformanceFixtureParts {
   readonly profileFields?: Readonly<Record<string, unknown>>;
   /** Trace calls to the execution decision seam for cancellation ordering. */
   readonly traceDecisions?: boolean;
-  /** Add an old-adapter compatibility ending after the recorded decision. */
-  readonly emitCompetingEndingAfterDecision?: boolean;
-  /** Emit from execution-scope cleanup after settlement seals the intake. */
-  readonly emitLateObservationOnScopeClose?: boolean;
+  /** Record a test-only second decision after Claude records its own. */
+  readonly recordCompetingDecisionAfterDecision?: boolean;
+  /** Emit from execution-scope cleanup before the core terminal observations. */
+  readonly emitCleanupObservationOnScopeClose?: boolean;
 }
 
 interface DecisionInstrumentation {
   readonly trace?: string[];
-  readonly emitCompetingEndingAfterDecision: boolean;
-  readonly emitLateObservationOnScopeClose: boolean;
+  readonly recordCompetingDecisionAfterDecision: boolean;
+  readonly emitCleanupObservationOnScopeClose: boolean;
 }
 
 function observeDecisions(
@@ -153,21 +153,24 @@ function observeDecisions(
               recordDecision: (bundle) =>
                 Effect.gen(function* () {
                   yield* io.recordDecision(bundle);
-                  if (instrumentation.emitCompetingEndingAfterDecision) {
-                    yield* io.emit({ kind: "ending", ending: bundle.ending });
+                  if (instrumentation.recordCompetingDecisionAfterDecision) {
+                    yield* io.recordDecision({
+                      ...bundle,
+                      ending: { ending: "cancelled", reason: "shutdown" },
+                    });
                   }
                   instrumentation.trace?.push(
                     `decision-recorded:${input.runId}`,
                   );
                 }),
             });
-            if (instrumentation.emitLateObservationOnScopeClose) {
+            if (instrumentation.emitCleanupObservationOnScopeClose) {
               execution = Effect.acquireRelease(Effect.void, () =>
                 io.emit({
                   kind: "diagnostic",
                   diagnostic: {
-                    category: "backend-failure",
-                    message: "test-only late cleanup observation",
+                    category: "other",
+                    message: "test-only cleanup observation",
                   },
                 }),
               ).pipe(Effect.andThen(execution));
@@ -185,8 +188,8 @@ function claudeFixture(parts: ClaudeFixtureParts): BackendConformanceFixture {
     openFails,
     profileFields,
     traceDecisions = false,
-    emitCompetingEndingAfterDecision = false,
-    emitLateObservationOnScopeClose = false,
+    recordCompetingDecisionAfterDecision = false,
+    emitCleanupObservationOnScopeClose = false,
     ...rest
   } = parts;
   const standIn = createStandInClaudeQuery({ scripts });
@@ -236,13 +239,13 @@ function claudeFixture(parts: ClaudeFixtureParts): BackendConformanceFixture {
   });
   const instrumentDecisions =
     traceDecisions ||
-    emitCompetingEndingAfterDecision ||
-    emitLateObservationOnScopeClose;
+    recordCompetingDecisionAfterDecision ||
+    emitCleanupObservationOnScopeClose;
   const backend = instrumentDecisions
     ? observeDecisions(correlated, {
         trace: rest.trace,
-        emitCompetingEndingAfterDecision,
-        emitLateObservationOnScopeClose,
+        recordCompetingDecisionAfterDecision,
+        emitCleanupObservationOnScopeClose,
       })
     : correlated;
 
@@ -376,9 +379,9 @@ export function claudeConformanceRig(): BackendConformanceRig {
             },
           });
 
-        case "exactly-one-ending-wins": {
-          // The rig adds an old-adapter compatibility ending after Claude's
-          // decision, then cancellation contributes the competing candidate.
+        case "exactly-one-ending-is-emitted": {
+          // The rig records a conflicting second decision after Claude's
+          // own; the once-only decision slot keeps the first.
           const trace: string[] = [];
           return claudeFixture({
             scripts: [
@@ -389,7 +392,7 @@ export function claudeConformanceRig(): BackendConformanceRig {
                 { step: "hang" },
               ],
             ],
-            emitCompetingEndingAfterDecision: true,
+            recordCompetingDecisionAfterDecision: true,
             plans: [{ cancel: true, cancelAfterDecision: true }],
             trace,
             expected: {
@@ -458,9 +461,9 @@ export function claudeConformanceRig(): BackendConformanceRig {
             expected: { runs: [{ status: "completed" }] },
           });
 
-        case "late-events-cannot-mutate-a-terminal-run": {
-          // A rig-owned execution-scope finalizer emits after settlement has
-          // sealed intake. Claude itself emits no terminal observation.
+        case "cleanup-observations-precede-the-core-ending": {
+          // A rig-owned execution-scope finalizer emits after the decision.
+          // Recording did not seal intake, so the core orders it before ending.
           const trace: string[] = [];
           return claudeFixture({
             scripts: [
@@ -471,7 +474,7 @@ export function claudeConformanceRig(): BackendConformanceRig {
                 { step: "hang" },
               ],
             ],
-            emitLateObservationOnScopeClose: true,
+            emitCleanupObservationOnScopeClose: true,
             plans: [{ cancel: true, cancelAfterDecision: true }],
             trace,
             expected: {
@@ -480,6 +483,7 @@ export function claudeConformanceRig(): BackendConformanceRig {
                   status: "completed",
                   finalOutput: "the answer",
                   transcriptTexts: ["the answer"],
+                  diagnosticCategories: ["other"],
                 },
               ],
             },
@@ -1112,7 +1116,7 @@ export function claudeConformanceRig(): BackendConformanceRig {
                 { step: "hang" },
               ],
             ],
-            emitCompetingEndingAfterDecision: true,
+            recordCompetingDecisionAfterDecision: true,
             plans: [{ cancel: true, cancelAfterDecision: true }],
             trace,
             expected: {

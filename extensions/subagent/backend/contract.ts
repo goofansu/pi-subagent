@@ -151,10 +151,9 @@ export interface ExecutionIO {
   /**
    * Report one observation. Ordered and lossless within the Run.
    *
-   * After the Run's terminal candidate is captured and its intake is sealed,
-   * an emit is still accepted but discarded and counted as late; it never
-   * fails. This lets execution-scope finalizers report without racing
-   * settlement.
+   * Recording a decision does not seal the intake. Once the core atomically
+   * stops acceptance while appending the Run's terminal observations, an emit
+   * is still accepted but discarded and counted as late; it never fails.
    */
   readonly emit: (observation: RunObservation) => Effect.Effect<void>;
   readonly controls: ControlFeed;
@@ -163,9 +162,10 @@ export interface ExecutionIO {
 /**
  * How an execution finished, plus its authoritative snapshot if it has one.
  *
- * The bundle is a *report*, not a settlement: the core applies it to the
- * projection and performs the terminal transition. An adapter that could
- * settle its own Run would be able to settle it twice.
+ * The execution records this bundle when it decides, or returns it for the
+ * core to record at return time. It is a *report*, not a settlement: the core
+ * applies it to the projection and performs the terminal transition. An
+ * adapter that could settle its own Run would be able to settle it twice.
  */
 export interface TerminalBundle {
   readonly ending: RunEnding;

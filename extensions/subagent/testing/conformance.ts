@@ -85,11 +85,11 @@ export const SUBAGENT_CONFORMANCE_SCENARIOS = [
 
 export const RUN_CONFORMANCE_SCENARIOS = [
   "observations-reduce-in-accepted-order",
-  "exactly-one-ending-wins",
+  "exactly-one-ending-is-emitted",
   "cancellation-terminates-with-partial-output",
   "a decided bundle survives a later cancel",
   "result-follows-scope-closure",
-  "late-events-cannot-mutate-a-terminal-run",
+  "cleanup-observations-precede-the-core-ending",
   "a-failing-sink-cannot-strand-the-execution",
   "a-run-may-settle-with-no-observations",
   "cancel-returns-immediately-and-settlement-bounds-an-ignored-stop",
@@ -886,12 +886,12 @@ const SCENARIO_CHECKS: {
     }
     assert.ok(fixture.expected.runs[0]?.transcriptTexts !== undefined);
   },
-  "exactly-one-ending-wins": (_fixture, outcome) => {
-    // More than one ending was produced, and exactly one of them decided the
-    // Run: the rest were reported late.
+  "exactly-one-ending-is-emitted": (_fixture, outcome) => {
+    // More than one decision was recorded, but the first supplied the one
+    // ending the core emitted and stored.
     assert.ok(
-      outcome.counters.lateEndings >= 1,
-      "no competing ending was arbitrated",
+      outcome.counters.duplicateDecisions >= 1,
+      "no competing decision was recorded",
     );
     for (const run of outcome.runs) assert.equal(run.resultOutcome, "result");
   },
@@ -929,31 +929,19 @@ const SCENARIO_CHECKS: {
       "the snapshot was published before the commit",
     );
   },
-  "late-events-cannot-mutate-a-terminal-run": (_fixture, outcome) => {
-    // Something arrived after the ending and changed nothing. The shared
-    // expectations already checked *what* the Run says; this is that
-    // something late actually happened, so the check is not vacuous.
-    //
-    // Any of the three counters satisfies it, because *where* a late report
-    // is stopped depends on the fixture's event path and not on the property:
-    //
-    // - The fake fixtures emit observations after an announced ending; the
-    //   reducer catches and counts them as late **observations**.
-    // - The Pi and Claude fixtures emit from a test-owned execution-scope
-    //   finalizer after intake is sealed; the seam catches and counts a late
-    //   **event**. Neither adapter manufactures a terminal observation for it.
-    // - A fixture may instead introduce a competing ending after the Run has
-    //   already chosen one; arbitration counts that as a late **ending**.
-    //
-    // All three counters prove the same invariant: the late report reached
-    // the appropriate guard and could not mutate the terminal Run.
-    assert.ok(
-      outcome.counters.lateObservations +
-        outcome.counters.lateEvents +
-        outcome.counters.lateEndings >=
-        1,
-      "the fixture produced nothing late at all",
-    );
+  "cleanup-observations-precede-the-core-ending": (_fixture, outcome) => {
+    // Recording a decision does not seal intake. The fixture reports from
+    // execution-scope cleanup, and the core orders that observation before its
+    // terminal reconciliation and ending.
+    for (const run of outcome.runs) {
+      assert.ok(
+        run.result.diagnostics.some(
+          (diagnostic) => diagnostic.category === "other",
+        ),
+        "the cleanup observation was sealed out before the core ending",
+      );
+    }
+    assert.equal(outcome.counters.lateEvents, 0);
   },
   "a-failing-sink-cannot-strand-the-execution": (fixture, outcome) => {
     // M1 made the observation sink fail. M2's intake cannot fail — `emit`
@@ -1269,12 +1257,11 @@ const SCENARIO_CHECKS: {
   },
   "settlement-stores-the-result-exactly-once": (_fixture, outcome) => {
     for (const run of outcome.runs) assert.equal(run.resultOutcome, "result");
-    // Two endings competed — so the Run had a second candidate to settle
-    // with, and a duplicate settlement attempt was counted rather than acted
-    // on. What it must *not* have done is commit twice.
+    // Two decisions competed and the once-only decision slot kept the first.
+    // What settlement must *not* have done is commit twice.
     assert.ok(
-      outcome.counters.duplicateSettlements >= 1,
-      "no second candidate arrived, so nothing proves the property",
+      outcome.counters.duplicateDecisions >= 1,
+      "no second decision arrived, so nothing proves the property",
     );
     assert.equal(outcome.counters.conflictingCommits, 0);
     assert.equal(outcome.counters.duplicateCommits, 0);
@@ -1314,7 +1301,8 @@ const SCENARIO_CHECKS: {
     );
     assert.equal(outcome.notifications.length, outcome.runs.length);
     for (const run of outcome.runs) assert.equal(run.resultOutcome, "result");
-    assert.equal(outcome.counters.duplicateSettlements, 0);
+    assert.equal(outcome.counters.duplicateCommits, 0);
+    assert.equal(outcome.counters.conflictingCommits, 0);
   },
 };
 
