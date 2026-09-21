@@ -394,7 +394,7 @@ const StartToolRowFactsSchema = Schema.Union([
   StartedRunToolRowFactsSchema,
   StartRefusalToolRowFactsSchema,
 ]);
-export type StartToolRowFacts = typeof StartToolRowFactsSchema.Type;
+type StartToolRowFacts = typeof StartToolRowFactsSchema.Type;
 export type StartedRunToolRowFacts = typeof StartedRunToolRowFactsSchema.Type;
 
 const ResumedRunToolRowFactsSchema = Schema.Struct({
@@ -411,7 +411,7 @@ const ResumeToolRowFactsSchema = Schema.Union([
   ResumedRunToolRowFactsSchema,
   ResumeRefusalToolRowFactsSchema,
 ]);
-export type ResumeToolRowFacts = typeof ResumeToolRowFactsSchema.Type;
+type ResumeToolRowFacts = typeof ResumeToolRowFactsSchema.Type;
 export type ResumedRunToolRowFacts = typeof ResumedRunToolRowFactsSchema.Type;
 
 const SteerToolRowFactsSchema = Schema.Struct({
@@ -419,7 +419,7 @@ const SteerToolRowFactsSchema = Schema.Struct({
   ...PassThroughRowSchema,
   runId: IdentifierText,
 });
-export type SteerToolRowFacts = typeof SteerToolRowFactsSchema.Type;
+type SteerToolRowFacts = typeof SteerToolRowFactsSchema.Type;
 
 const CompactFinalOutputSummarySchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("none") }),
@@ -433,7 +433,7 @@ const ResultRunSummarySchema = Schema.Struct({
   status: TerminalRunPhase,
   output: CompactFinalOutputSummarySchema,
 });
-export type ResultRunSummary = typeof ResultRunSummarySchema.Type;
+type ResultRunSummary = typeof ResultRunSummarySchema.Type;
 
 const CollectionWithRunsSchema = Schema.Struct({
   kind: Schema.Literal("collection"),
@@ -478,7 +478,7 @@ const ResultToolRowFactsSchema = Schema.Union([
     status: TerminalRunPhase,
   }),
 ]);
-export type ResultToolRowFacts = typeof ResultToolRowFactsSchema.Type;
+type ResultToolRowFacts = typeof ResultToolRowFactsSchema.Type;
 
 const CancelRunToolRowOutcomeSchema = Schema.Union([
   Schema.Struct({
@@ -491,7 +491,7 @@ const CancelRunToolRowOutcomeSchema = Schema.Union([
     phase: TerminalRunPhase,
   }),
 ]);
-export type CancelRunToolRowOutcome = typeof CancelRunToolRowOutcomeSchema.Type;
+type CancelRunToolRowOutcome = typeof CancelRunToolRowOutcomeSchema.Type;
 
 const CancelToolRowFactsSchema = Schema.Struct({
   kind: Schema.Literal("cancel"),

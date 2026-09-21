@@ -20,9 +20,9 @@ import {
   type RunResult,
 } from "../domain/index.ts";
 
-export type FinalOutputBlockKind = "markdown" | "literal";
+type FinalOutputBlockKind = "markdown" | "literal";
 
-export interface FinalOutputBlock {
+interface FinalOutputBlock {
   readonly kind: FinalOutputBlockKind;
   readonly text: string;
 }
@@ -45,7 +45,7 @@ export interface FinalOutputSection {
 }
 
 /** How a caller frames the retained value. */
-export type FinalOutputPresentation =
+type FinalOutputPresentation =
   | { readonly kind: "result" }
   | { readonly kind: "inspection" }
   | {
@@ -58,7 +58,7 @@ export type FinalOutputPresentation =
       readonly preview: string;
     };
 
-export type FinalOutputFraming =
+type FinalOutputFraming =
   | {
       readonly capture: "active";
       readonly status: "running" | "finalizing";
@@ -83,7 +83,7 @@ const COMPLETED_WITHOUT_OUTPUT = "The Run finished without output.";
 const INSPECTION_WITHOUT_OUTPUT = "No final output was produced.";
 
 /** The dedicated final-output field existed, but bounding removed all of it. */
-export const NO_FINAL_OUTPUT_REMAINS = "No final output remains in the Result.";
+const NO_FINAL_OUTPUT_REMAINS = "No final output remains in the Result.";
 
 /** A byte count with stable thousands separators for presentation prose. */
 export function formatByteCount(amount: number): string {

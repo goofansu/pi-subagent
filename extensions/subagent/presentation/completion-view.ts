@@ -33,7 +33,7 @@ import type {
 import { runElapsedMillis } from "./status.ts";
 
 /** What a terminal Run is, to anything that prints its status and duration. */
-export interface RunCompletionView {
+interface RunCompletionView {
   readonly runId: RunId;
   readonly subagentId: SubagentId;
   readonly agent: string;

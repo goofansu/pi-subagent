@@ -67,13 +67,13 @@ import type { RunRowView } from "./views.ts";
  */
 export const RECENT_TRANSCRIPT_ITEMS = 6;
 
-export type RunCardSource =
+type RunCardSource =
   /** A Run that is still going, read from the published index. */
   | { readonly from: "live"; readonly row: RunRowView; readonly now: number }
   /** A Run that settled, read from its one immutable Result. */
   | { readonly from: "result"; readonly result: RunResult };
 
-export interface RunCard {
+interface RunCard {
   readonly runId: string;
   readonly subagentId: string;
   readonly agent: string;
@@ -117,7 +117,7 @@ export interface RunCard {
 }
 
 /** One transcript item as a line: who said it, and what. */
-export function formatTranscriptItem(item: TranscriptItem): string {
+function formatTranscriptItem(item: TranscriptItem): string {
   const text = transcriptItemText(item).trim();
   const calls = item.parts
     .filter((part) => part.kind === "tool_call")
@@ -141,7 +141,7 @@ export function formatToolEntry(entry: ToolEntry): string {
 }
 
 /** The context gauge, with its window when the backend reported one. */
-export function formatContextGauge(context: {
+function formatContextGauge(context: {
   readonly tokens: number;
   readonly window?: number;
 }): string | undefined {
@@ -257,7 +257,7 @@ export function runCard(source: RunCardSource): RunCard {
  * answer belongs to. A reader who has three ids in front of them and no idea
  * which is which has been given three strings.
  */
-export function runCardIdentity(card: RunCard): string {
+function runCardIdentity(card: RunCard): string {
   return `${card.agent} (subagent ${card.subagentId}), run ${card.runId}`;
 }
 
