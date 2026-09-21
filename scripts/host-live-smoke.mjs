@@ -26,6 +26,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -127,31 +128,80 @@ function runPi(prompt) {
 
     let out = "";
     let err = "";
-    const timer = setTimeout(() => {
+    let stdoutBuffer = "";
+    let finished = false;
+    let inputEnded = false;
+    const events = [];
+    const decoder = new StringDecoder("utf8");
+
+    const finish = (action) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      action();
+    };
+    const fail = (error) => {
       child.kill("SIGKILL");
-      reject(new Error(`the host live gate timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
+      finish(() => reject(error));
+    };
+    const acceptLine = (line) => {
+      const framed = line.endsWith("\r") ? line.slice(0, -1) : line;
+      if (framed.length === 0) return;
+      let event;
+      try {
+        event = JSON.parse(framed);
+      } catch (error) {
+        fail(
+          new Error(
+            `Pi emitted invalid RPC JSON: ${framed}`,
+            error instanceof Error ? { cause: error } : undefined,
+          ),
+        );
+        return;
+      }
+      events.push(event);
+      if (event.type === "agent_settled" && !inputEnded) {
+        inputEnded = true;
+        child.stdin.end();
+      }
+    };
+    const acceptChunk = (text) => {
+      stdoutBuffer += text;
+      while (true) {
+        const newline = stdoutBuffer.indexOf("\n");
+        if (newline === -1) return;
+        acceptLine(stdoutBuffer.slice(0, newline));
+        stdoutBuffer = stdoutBuffer.slice(newline + 1);
+      }
+    };
+
+    const timer = setTimeout(
+      () =>
+        fail(new Error(`the host live gate timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
     timer.unref();
 
     child.stdout.on("data", (chunk) => {
       out += String(chunk);
+      acceptChunk(decoder.write(chunk));
+    });
+    child.stdout.on("end", () => {
+      acceptChunk(decoder.end());
+      if (stdoutBuffer.length > 0) acceptLine(stdoutBuffer);
     });
     child.stderr.on("data", (chunk) => {
       err += String(chunk);
     });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code, out, err });
-    });
+    child.stdin.on("error", fail);
+    child.on("error", (error) => finish(() => reject(error)));
+    child.on("close", (code) =>
+      finish(() => resolve({ code, out, err, events })),
+    );
 
     child.stdin.write(
       `${JSON.stringify({ id: "r1", type: "prompt", message: prompt })}\n`,
     );
-    child.stdin.end();
   });
 }
 
@@ -173,13 +223,58 @@ try {
     "replied with.",
   ].join(" ");
 
-  const { code, out, err } = await runPi(prompt);
+  const { code, out, err, events } = await runPi(prompt);
   const transcript = `${out}\n${err}`;
+  const toolStarted = (name) =>
+    events.some(
+      (event) =>
+        event.type === "tool_execution_start" && event.toolName === name,
+    );
+  const toolResultText = (name) =>
+    events
+      .filter(
+        (event) =>
+          event.type === "tool_execution_end" && event.toolName === name,
+      )
+      .flatMap((event) => event.result?.content ?? [])
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n");
+  const finalAssistantText = events
+    .filter(
+      (event) =>
+        event.type === "message_end" && event.message?.role === "assistant",
+    )
+    .at(-1)
+    ?.message.content.filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
 
   check("the Pi process exited cleanly", code === 0);
-  check("agent_start was called", /agent_start/.test(transcript));
-  check("agent_wait was called", /agent_wait/.test(transcript));
-  check("the subagent's answer came back", transcript.includes(marker));
+  check(
+    "the prompt was accepted",
+    events.some(
+      (event) =>
+        event.type === "response" &&
+        event.id === "r1" &&
+        event.command === "prompt" &&
+        event.success === true,
+    ),
+  );
+  check(
+    "the parent Run fully settled",
+    events.some((event) => event.type === "agent_settled"),
+  );
+  check("agent_start was called", toolStarted("agent_start"));
+  check("agent_wait was called", toolStarted("agent_wait"));
+  check(
+    "agent_wait returned the subagent's answer",
+    toolResultText("agent_wait").includes(marker),
+  );
+  check(
+    "the parent reported the subagent's answer",
+    finalAssistantText?.includes(marker) === true,
+  );
   // The v1 tree it used to check for is gone, and so is the check: there is
   // one extension now, and "the entry point that loaded is the only one there
   // is" is not something a transcript can disagree with.
