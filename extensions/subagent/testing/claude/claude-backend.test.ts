@@ -9,6 +9,7 @@ import {
   CONTROL_NOT_DELIVERED_CATEGORY,
   claudeProbeIsClear,
   MISSING_CLAUDE_RESULT_MESSAGE,
+  RESULT_ERROR_CATEGORY,
   SDK_STDERR_CATEGORY,
   TURN_BOUNDARY_WAIT_MILLIS,
 } from "../../backend/claude/index.ts";
@@ -1135,6 +1136,32 @@ test("a result the provider marked as an error fails with a confined diagnostic"
   assert.deepEqual(
     value.diagnostics.map((diagnostic) => diagnostic.category),
     ["backend-failure"],
+  );
+});
+
+test("SDK stderr written by final Query.close is not lost", async () => {
+  const { value } = await withClaudeSession(
+    {
+      scripts: [[{ step: "init" }, { step: "result", isError: true }]],
+      stderrOnQueryClose: true,
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(
+          yield* rig.supervisor.start(claudeRigRequest()),
+        );
+        yield* untilTerminal(rig, started.runId);
+        return resultOf(yield* rig.supervisor.result(started.runId));
+      }),
+  );
+
+  assert.equal(value.status, "failed");
+  assert.deepEqual(
+    value.diagnostics.map((diagnostic) => diagnostic.message),
+    [
+      `${RESULT_ERROR_CATEGORY}: [redacted]`,
+      `${SDK_STDERR_CATEGORY}: [redacted]`,
+    ],
   );
 });
 

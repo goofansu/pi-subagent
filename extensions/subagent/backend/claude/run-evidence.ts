@@ -18,16 +18,29 @@ import {
   type ClaudeTranslator,
   confined,
   confinedControl,
+  isClaudeIdentity,
 } from "./translate.ts";
 
 export const MISSING_CLAUDE_RESULT_MESSAGE =
   "the Claude query ended without a terminal result";
 export const RESULT_ERROR_CATEGORY = "Claude query reported an error";
 export const QUERY_FAILED_CATEGORY = "Claude query failed";
+export const QUERY_START_CATEGORY = "Claude query could not be started";
 export const CONTROL_NOT_DELIVERED_CATEGORY =
   "Claude guidance was not delivered";
 export const CLAUDE_ATTACHMENT_FAILED_MESSAGE =
   "the retained Claude conversation could not be attached to this Run";
+export const CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE =
+  "the Claude query reported no usable conversation identity";
+export const SDK_STDERR_CATEGORY = "the Claude SDK reported diagnostics";
+
+/** The retained identity operations whose meaning belongs to this fold. */
+export interface ClaudeEvidenceConversation {
+  /** Retain the identity this Run's boundary frame carried. */
+  readonly retain: (identity: string) => void;
+  /** Mark the conversation lost. Monotonic: nothing moves back. */
+  readonly lose: () => void;
+}
 
 /** Facts execution can witness without interpreting provider wire shapes. */
 export type ClaudeRunReading =
@@ -39,14 +52,11 @@ export type ClaudeRunReading =
     }
   | { readonly kind: "control-refused" }
   | { readonly kind: "turn-boundary-timeout" }
+  | { readonly kind: "sdk-stderr" }
+  | { readonly kind: "interrupted" }
+  | { readonly kind: "query-start-failed" }
   | { readonly kind: "query-ended" }
-  | { readonly kind: "query-threw" }
-  | {
-      /** A decision still owned by execution in this slice, such as identity. */
-      readonly kind: "external-fatal";
-      readonly bundle: TerminalBundle;
-      readonly observations?: readonly RunObservation[];
-    };
+  | { readonly kind: "query-threw" };
 
 export type ClaudeRunStep =
   | { readonly step: "continue" }
@@ -63,7 +73,8 @@ export interface ClaudeRunReport {
 
 export interface ClaudeRunEvidenceOptions {
   readonly promptUuid: string;
-  readonly resumed: boolean;
+  readonly retainedIdentity?: string;
+  readonly conversation: ClaudeEvidenceConversation;
   readonly translator: ClaudeTranslator;
 }
 
@@ -95,14 +106,30 @@ export function createClaudeRunEvidence(
   options: ClaudeRunEvidenceOptions,
 ): ClaudeRunEvidence {
   const owned = new Set([options.promptUuid]);
+  let identity = options.retainedIdentity;
+  let attached = identity === undefined;
   let visible: VisibleControl | undefined;
   let sawSuccessfulResult = false;
+  let stderrPending = false;
+  let stderrReported = false;
   let terminal:
     | Extract<ClaudeRunStep, { step: "decided" | "fatal" }>
     | undefined;
   let inputOpen = true;
 
   const current = (): ClaudeRunStep => terminal ?? { step: "continue" };
+
+  const takeStderr = (): readonly RunObservation[] => {
+    if (!stderrPending || stderrReported) return [];
+    stderrPending = false;
+    stderrReported = true;
+    return [
+      {
+        kind: "diagnostic",
+        diagnostic: confined(SDK_STDERR_CATEGORY),
+      },
+    ];
+  };
 
   const report = (
     observations: readonly RunObservation[],
@@ -121,10 +148,30 @@ export function createClaudeRunEvidence(
     if (terminal === undefined) {
       terminal = next;
       visible = undefined;
-      return report(observations, next, true);
+      return report([...observations, ...takeStderr()], next, true);
     }
-    return report([], terminal);
+    return report(takeStderr(), terminal);
   };
+
+  const resumeSensitiveFailure = (
+    freshMessage: string,
+    loseConversation: boolean,
+  ): Extract<ClaudeRunStep, { step: "fatal" }> => {
+    if (loseConversation) options.conversation.lose();
+    return {
+      step: "fatal",
+      bundle: {
+        ending: failedEnding(
+          options.retainedIdentity === undefined
+            ? freshMessage
+            : CLAUDE_ATTACHMENT_FAILED_MESSAGE,
+        ),
+      },
+    };
+  };
+
+  const failIdentity = (): ClaudeRunReport =>
+    finish(resumeSensitiveFailure(CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE, true));
 
   /** Snapshot answered evidence at the boundary that actually decides the Run. */
   const answeredBundle = (): TerminalBundle => ({
@@ -154,13 +201,33 @@ export function createClaudeRunEvidence(
 
   const readFrame = (reading: ClaudeFrameReading): ClaudeRunReport => {
     if (terminal !== undefined) return report([], terminal);
+    if (reading.isReplay) return report([]);
+    if (!attached && !reading.isIdentityBoundary) return report([]);
+
+    if (reading.isIdentityBoundary) {
+      if (
+        !isClaudeIdentity(reading.identity) ||
+        (identity !== undefined && reading.identity !== identity)
+      ) {
+        return failIdentity();
+      }
+      identity ??= reading.identity;
+      attached = true;
+      options.conversation.retain(reading.identity);
+    } else if (
+      reading.identity !== undefined &&
+      (!isClaudeIdentity(reading.identity) ||
+        (identity !== undefined && reading.identity !== identity))
+    ) {
+      return failIdentity();
+    }
 
     const observations: RunObservation[] = [];
-    if (reading.kind === "user") {
+    if (reading.kind === "user" && !reading.isToolResult) {
       observations.push(...confirm(reading.uuid));
-      // A steering echo is confirmation and nothing else. Non-tool user
+      // A steering echo is confirmation and nothing else. Other non-tool user
       // frames are input echoes, including ones this Run does not own.
-      if (!reading.isToolResult) return report(observations);
+      return report(observations);
     }
     if (reading.kind === "result") {
       observations.push(...confirm(reading.correlation));
@@ -192,7 +259,15 @@ export function createClaudeRunEvidence(
 
   return {
     read: (reading) => {
-      if (terminal !== undefined) return report([], terminal);
+      if (reading.kind === "sdk-stderr") {
+        if (!stderrReported) stderrPending = true;
+        return report(terminal === undefined ? [] : takeStderr(), current());
+      }
+      if (reading.kind === "interrupted") {
+        return report(takeStderr(), current());
+      }
+      if (terminal !== undefined) return report(takeStderr(), terminal);
+
       switch (reading.kind) {
         case "frame":
           return readFrame(reading.frame);
@@ -217,6 +292,16 @@ export function createClaudeRunEvidence(
             : { ending: failedEnding(MISSING_CLAUDE_RESULT_MESSAGE) };
           return finish({ step: "decided", bundle }, [diagnostic]);
         }
+        case "query-start-failed": {
+          const diagnostic = confined(QUERY_START_CATEGORY);
+          return finish(
+            resumeSensitiveFailure(
+              diagnostic.message,
+              options.retainedIdentity !== undefined,
+            ),
+            [{ kind: "diagnostic", diagnostic }],
+          );
+        }
         case "query-ended":
           if (sawSuccessfulResult) {
             return finish({ step: "decided", bundle: answeredBundle() });
@@ -228,24 +313,13 @@ export function createClaudeRunEvidence(
         case "query-threw": {
           const diagnostic = confined(QUERY_FAILED_CATEGORY);
           return finish(
-            {
-              step: "fatal",
-              bundle: {
-                ending: failedEnding(
-                  options.resumed
-                    ? CLAUDE_ATTACHMENT_FAILED_MESSAGE
-                    : diagnostic.message,
-                ),
-              },
-            },
+            resumeSensitiveFailure(
+              diagnostic.message,
+              options.retainedIdentity !== undefined,
+            ),
             [{ kind: "diagnostic", diagnostic }],
           );
         }
-        case "external-fatal":
-          return finish(
-            { step: "fatal", bundle: reading.bundle },
-            reading.observations,
-          );
       }
     },
     controlSlotFree: () => visible === undefined,

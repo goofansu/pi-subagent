@@ -21,10 +21,7 @@ export {
   createClaudeBackend,
 } from "./backend.ts";
 export {
-  CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE,
   CLOSED_BEFORE_EXECUTION_MESSAGE,
-  QUERY_START_CATEGORY,
-  SDK_STDERR_CATEGORY,
   TURN_BOUNDARY_WAIT_MILLIS,
 } from "./execution.ts";
 export {
@@ -64,6 +61,8 @@ export type {
 } from "./query.ts";
 export {
   CLAUDE_ATTACHMENT_FAILED_MESSAGE,
+  CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE,
+  type ClaudeEvidenceConversation,
   type ClaudeRunEvidence,
   type ClaudeRunEvidenceOptions,
   type ClaudeRunReading,
@@ -73,7 +72,9 @@ export {
   createClaudeRunEvidence,
   MISSING_CLAUDE_RESULT_MESSAGE,
   QUERY_FAILED_CATEGORY,
+  QUERY_START_CATEGORY,
   RESULT_ERROR_CATEGORY,
+  SDK_STDERR_CATEGORY,
 } from "./run-evidence.ts";
 export {
   CLAUDE_DIAGNOSTIC_REDACTED,

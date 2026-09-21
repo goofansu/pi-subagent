@@ -10,7 +10,7 @@
  *   with a `result` frame. So a Run with guidance still outstanding is *not*
  *   over when a result arrives: it stays active, the next Control goes in, and
  *   the Run settles on the result that finds nothing outstanding. That is
- *   ADR-0018 meeting ADR-0025 — the execution decides when the Run is
+ *   ADR-0018 meeting ADR-0025 — the Run evidence fold decides when the Run is
  *   semantically complete, and the core still performs the terminal
  *   transition.
  * - **Confirmation requires provider evidence.** A Control that was admitted
@@ -18,13 +18,13 @@
  *   observation only when the provider echoes the client's own uuid, or a
  *   result frame names that uuid as the turn it answered. A transcript showing
  *   guidance the model never saw is the one lie this seam must not tell.
- * - **The conversation identity is acquired here.** A Claude BackendAgent has
- *   no provider-side open: it begins holding nothing and acquires its identity
- *   from the first identity-bearing frame of its first Run. A missing,
- *   malformed, or *different* identity at that boundary fails the Run and
- *   marks the conversation lost — it never falls back to a fresh conversation,
- *   because a resumed Run silently answering from an empty context is worse
- *   than a resumed Run that says it could not attach.
+ * - **The conversation identity is folded here.** A Claude BackendAgent has no
+ *   provider-side open: it begins holding nothing, and the Run evidence fold
+ *   acquires its identity from the first identity-bearing frame of its first
+ *   Run. A missing, malformed, or *different* identity at that boundary fails
+ *   the Run and marks the conversation lost — it never falls back to a fresh
+ *   conversation, because a resumed Run silently answering from an empty
+ *   context is worse than a resumed Run that says it could not attach.
  * - **A cancelled Run can legitimately end with nothing.** The spike aborted a
  *   Query 50 ms in and got no frames at all, not even the init frame. So this
  *   execution has to be able to settle with zero observations and leave the
@@ -45,28 +45,15 @@ import {
 import type { ClaudeProbeCounters } from "./probe.ts";
 import type { ClaudeQuery, ClaudeQueryStream, Options } from "./query.ts";
 import {
-  CLAUDE_ATTACHMENT_FAILED_MESSAGE,
   type ClaudeRunReport,
   type ClaudeRunStep,
   createClaudeRunEvidence,
 } from "./run-evidence.ts";
-import {
-  confined,
-  createClaudeTranslator,
-  isClaudeIdentity,
-  readClaudeFrame,
-} from "./translate.ts";
+import { createClaudeTranslator, readClaudeFrame } from "./translate.ts";
 
 /** What a Run says when its BackendAgent was closed under it. */
 export const CLOSED_BEFORE_EXECUTION_MESSAGE =
   "the Claude BackendAgent was closed before this Run could start";
-
-/** What a fresh Run says when its init frame carries no usable identity. */
-export const CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE =
-  "the Claude query reported no usable conversation identity";
-
-/** What a Query that could not be started reports. */
-export const QUERY_START_CATEGORY = "Claude query could not be started";
 
 /**
  * How long silence may follow a Turn boundary with guidance outstanding.
@@ -75,9 +62,6 @@ export const QUERY_START_CATEGORY = "Claude query could not be started";
  * ordinary model startup room while still giving ADR-0025 a finite bound.
  */
 export const TURN_BOUNDARY_WAIT_MILLIS = 30_000;
-
-/** What the SDK's own stderr reports, without keeping a word of it. */
-export const SDK_STDERR_CATEGORY = "the Claude SDK reported diagnostics";
 
 /** The retained conversation, as the execution is allowed to see it. */
 export interface ClaudeConversation {
@@ -123,10 +107,6 @@ export function runClaudeExecution(
     /** Woken when the fold says the one provider-visible Control slot freed. */
     const slotWaiters: (() => void)[] = [];
 
-    let identity = resumed;
-    let attached = resumed === undefined;
-    let sawStderr = false;
-
     /* ---- the input stream, and the Query, as scoped resources ---- */
 
     const stream = yield* Effect.acquireRelease(
@@ -144,9 +124,12 @@ export function runClaudeExecution(
     const promptUuid = globalThis.crypto.randomUUID();
     const evidence = createClaudeRunEvidence({
       promptUuid,
-      resumed: resumed !== undefined,
+      ...(resumed === undefined ? {} : { retainedIdentity: resumed }),
+      conversation,
       translator,
     });
+    /** Fold output produced by the SDK's synchronous stderr callback. */
+    const pendingSdkReports: ClaudeRunReport[] = [];
     stream.push(claudeInputMessage(input.prompt, promptUuid));
 
     // The execution owns the controller, which is what makes "the Query cannot
@@ -168,70 +151,6 @@ export function runClaudeExecution(
         }),
     );
 
-    const started = yield* Effect.acquireRelease(
-      Effect.sync(
-        ():
-          | { readonly outcome: "started"; readonly query: ClaudeQueryStream }
-          | { readonly outcome: "failed" } => {
-          try {
-            const query = context.query({
-              prompt: stream,
-              options: context.buildOptions({
-                abort,
-                ...(resumed === undefined ? {} : { resume: resumed }),
-                stderr: (data) => {
-                  // Only *whether* the SDK said something is kept. The text is
-                  // provider-authored and stays here, unread.
-                  sawStderr ||= typeof data === "string" && data.length > 0;
-                },
-              }),
-            });
-            probe.acquired("liveQueries");
-            return { outcome: "started", query };
-          } catch {
-            // The provider's own text stops here. See the module comment.
-            return { outcome: "failed" };
-          }
-        },
-      ),
-      (open) =>
-        Effect.sync(() => {
-          if (open.outcome !== "started") return;
-          try {
-            open.query.close();
-          } catch {
-            // The ordered semantic outcome stays authoritative over cleanup.
-          }
-          probe.released("liveQueries");
-        }),
-    );
-
-    /**
-     * Report that the SDK wrote to stderr, once, whatever ends the Run.
-     *
-     * The flag is cleared as it is reported, because both the return path and
-     * the interrupt handler call this: an interruption landing between the
-     * emit and the return would otherwise put the same diagnostic on the Run
-     * twice.
-     */
-    const emitStderrOnce = (): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        if (!sawStderr) return;
-        sawStderr = false;
-        yield* io.emit({
-          kind: "diagnostic",
-          diagnostic: confined(SDK_STDERR_CATEGORY),
-        });
-      });
-
-    const withStderr = (
-      bundle: TerminalBundle,
-    ): Effect.Effect<TerminalBundle> =>
-      Effect.gen(function* () {
-        yield* emitStderrOnce();
-        return bundle;
-      });
-
     /**
      * The one shutdown ritual for the client-owned input. The fold has already
      * stopped acceptance, discarded outstanding guidance, and freed its slot
@@ -244,7 +163,7 @@ export function runClaudeExecution(
     };
 
     /** Publish one synchronous fold report in its declared order. */
-    const applyReport = (report: ClaudeRunReport): Effect.Effect<void> =>
+    const publishReport = (report: ClaudeRunReport): Effect.Effect<void> =>
       Effect.gen(function* () {
         for (const observation of report.observations) {
           yield* io.emit(observation);
@@ -256,6 +175,21 @@ export function runClaudeExecution(
         shutdownInput();
         if (report.next.step === "decided") {
           yield* io.recordDecision(report.next.bundle);
+        }
+      });
+
+    /**
+     * Publish a report, then any stderr report produced while publication
+     * yielded to ExecutionIO. No callback can interleave after the final empty
+     * check without another yield, so a fatal return cannot strand evidence.
+     */
+    const applyReport = (report: ClaudeRunReport): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        yield* publishReport(report);
+        for (;;) {
+          const pending = pendingSdkReports.shift();
+          if (pending === undefined) return;
+          yield* publishReport(pending);
         }
       });
 
@@ -280,188 +214,197 @@ export function runClaudeExecution(
         return terminalBundleFrom(report);
       });
 
-    /** Identity remains execution evidence in this ticket's slice. */
-    const failIdentity = (): Effect.Effect<TerminalBundle> => {
-      conversation.lose();
-      return applyTerminalReport(
-        evidence.read({
-          kind: "external-fatal",
-          bundle: {
-            ending: failedEnding(
-              resumed === undefined
-                ? CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE
-                : CLAUDE_ATTACHMENT_FAILED_MESSAGE,
-            ),
-          },
-        }),
-      );
-    };
+    type QueryStart =
+      | { readonly outcome: "started"; readonly query: ClaudeQueryStream }
+      | { readonly outcome: "failed" };
 
-    if (started.outcome !== "started") {
-      if (resumed !== undefined) conversation.lose();
-      const diagnostic = confined(QUERY_START_CATEGORY);
-      const report = evidence.read({
-        kind: "external-fatal",
-        observations: [{ kind: "diagnostic", diagnostic }],
-        bundle: {
-          ending: failedEnding(
-            resumed === undefined
-              ? diagnostic.message
-              : CLAUDE_ATTACHMENT_FAILED_MESSAGE,
-          ),
-        },
-      });
-      const bundle = yield* applyTerminalReport(report);
-      return yield* withStderr(bundle);
-    }
-
-    /* ---- steering: one Control provider-visible at a time ---- */
-
-    /**
-     * Take one Control at a time, and only when one can actually be pushed.
-     * The mailbox remains the one bounded queue; the fold owns only the single
-     * provider-visible slot.
-     */
-    const steerLoop = Effect.gen(function* () {
-      for (;;) {
-        while (
-          !evidence.controlSlotFree() &&
-          evidence.takenControlProducesAnything()
-        ) {
-          yield* Effect.promise(
-            () =>
-              new Promise<void>((resolve) => {
-                slotWaiters.push(resolve);
-              }),
-          );
-        }
-        const control = yield* io.controls.take;
-        if (control === undefined) return;
-        if (
-          !evidence.takenControlProducesAnything() ||
-          conversation.isClosed()
-        ) {
-          // The Run is settling. A Control taken now produces nothing at all.
-          continue;
-        }
-        const uuid = globalThis.crypto.randomUUID();
-        // `later` lets the provider finish its current turn before guidance.
-        if (!stream.push(claudeInputMessage(control.text, uuid, "later"))) {
-          yield* applyReport(evidence.read({ kind: "control-refused" }));
-          continue;
-        }
-        yield* applyReport(
-          evidence.read({
-            kind: "control-visible",
-            text: control.text,
-            uuid,
+    const acquireQuery = Effect.sync((): QueryStart => {
+      try {
+        const query = context.query({
+          prompt: stream,
+          options: context.buildOptions({
+            abort,
+            ...(resumed === undefined ? {} : { resume: resumed }),
+            stderr: (data) => {
+              // Provider-authored text stays unread. The fold retains only
+              // the fact that the SDK wrote a non-empty diagnostic.
+              if (typeof data === "string" && data.length > 0) {
+                const report = evidence.read({ kind: "sdk-stderr" });
+                if (report.observations.length > 0) {
+                  pendingSdkReports.push(report);
+                }
+              }
+            },
           }),
-        );
+        });
+        probe.acquired("liveQueries");
+        return { outcome: "started", query };
+      } catch {
+        // The provider's own text stops here. See the module comment.
+        return { outcome: "failed" };
       }
     });
 
-    /* ---- the frame loop ---- */
-
-    const frames = started.query[Symbol.asyncIterator]();
-
-    /** One frame, or the end of the stream, or the exception that ended it. */
-    const nextFrame = Effect.promise(
-      (): Promise<
-        | { readonly step: "frame"; readonly frame: unknown }
-        | { readonly step: "done" }
-        | { readonly step: "threw" }
-      > =>
-        frames.next().then(
-          (result) =>
-            result.done === true
-              ? ({ step: "done" } as const)
-              : ({ step: "frame", frame: result.value } as const),
-          () => ({ step: "threw" }) as const,
-        ),
-    );
-
-    const body = Effect.gen(function* () {
-      const steering = yield* Effect.forkChild(steerLoop);
-      const drive = Effect.gen(function* () {
-        let next: ClaudeRunStep = { step: "continue" };
-        for (;;) {
-          const frame =
-            next.step === "await-turn-boundary"
-              ? yield* Effect.timeout(
-                  nextFrame,
-                  TURN_BOUNDARY_WAIT_MILLIS,
-                ).pipe(
-                  Effect.match({
-                    onFailure: () => ({ step: "timeout" }) as const,
-                    onSuccess: (read) => read,
-                  }),
-                )
-              : yield* nextFrame;
-
-          if (frame.step === "timeout") {
-            return yield* applyTerminalReport(
-              evidence.read({ kind: "turn-boundary-timeout" }),
-            );
-          }
-          if (frame.step === "done") {
-            return yield* applyTerminalReport(
-              evidence.read({ kind: "query-ended" }),
-            );
-          }
-          if (frame.step === "threw") {
-            if (next.step !== "decided" && resumed !== undefined) {
-              // A resumed Query that died before deciding is a failed
-              // attachment however far it got.
-              conversation.lose();
-            }
-            return yield* applyTerminalReport(
-              evidence.read({ kind: "query-threw" }),
-            );
-          }
-
-          // Once decided, only drain the Query so it can wind down gracefully.
-          if (next.step === "decided") continue;
-
-          const reading = readClaudeFrame(frame.frame);
-          // Identity attachment and replay dropping remain execution evidence
-          // in this slice; the fold receives only frames this Run owns.
-          if (reading.isReplay) continue;
-          if (!attached && !reading.isIdentityBoundary) continue;
-
-          if (reading.isIdentityBoundary) {
-            if (
-              !isClaudeIdentity(reading.identity) ||
-              (identity !== undefined && reading.identity !== identity)
-            ) {
-              return yield* failIdentity();
-            }
-            identity ??= reading.identity;
-            attached = true;
-            conversation.retain(reading.identity);
-          } else if (
-            reading.identity !== undefined &&
-            (!isClaudeIdentity(reading.identity) ||
-              (identity !== undefined && reading.identity !== identity))
-          ) {
-            return yield* failIdentity();
-          }
-
-          const report = evidence.read({ kind: "frame", frame: reading });
-          yield* applyReport(report);
-          next = report.next;
-          if (next.step === "fatal") return next.bundle;
+    const releaseQuery = (open: QueryStart): Effect.Effect<void> =>
+      Effect.sync(() => {
+        if (open.outcome !== "started") return;
+        try {
+          open.query.close();
+        } catch {
+          // The ordered semantic outcome stays authoritative over cleanup.
+        } finally {
+          abort.abort();
         }
+        probe.released("liveQueries");
       });
 
-      const bundle = yield* drive;
-      yield* Fiber.interrupt(steering);
-      return yield* withStderr(bundle);
-    });
+    const useQuery = (started: QueryStart): Effect.Effect<TerminalBundle> =>
+      Effect.gen(function* () {
+        if (started.outcome !== "started") {
+          return yield* applyTerminalReport(
+            evidence.read({ kind: "query-start-failed" }),
+          );
+        }
 
-    // The decision was frozen synchronously at the Turn boundary. Interruption
-    // has no terminal ceremony left: it may only preserve the SDK's once-only
-    // stderr diagnostic before the core arbitrates the recorded decision and
-    // the stop request.
-    return yield* Effect.onInterrupt(body, () => emitStderrOnce());
+        /* ---- steering: one Control provider-visible at a time ---- */
+
+        /**
+         * Take one Control at a time, and only when one can actually be pushed.
+         * The mailbox remains the one bounded queue; the fold owns only the single
+         * provider-visible slot.
+         */
+        const steerLoop = Effect.gen(function* () {
+          for (;;) {
+            while (
+              !evidence.controlSlotFree() &&
+              evidence.takenControlProducesAnything()
+            ) {
+              yield* Effect.promise(
+                () =>
+                  new Promise<void>((resolve) => {
+                    slotWaiters.push(resolve);
+                  }),
+              );
+            }
+            const control = yield* io.controls.take;
+            if (control === undefined) return;
+            if (
+              !evidence.takenControlProducesAnything() ||
+              conversation.isClosed()
+            ) {
+              // The Run is settling. A Control taken now produces nothing at all.
+              continue;
+            }
+            const uuid = globalThis.crypto.randomUUID();
+            // `later` lets the provider finish its current turn before guidance.
+            if (!stream.push(claudeInputMessage(control.text, uuid, "later"))) {
+              yield* applyReport(evidence.read({ kind: "control-refused" }));
+              continue;
+            }
+            yield* applyReport(
+              evidence.read({
+                kind: "control-visible",
+                text: control.text,
+                uuid,
+              }),
+            );
+          }
+        });
+
+        /* ---- the frame loop ---- */
+
+        const frames = started.query[Symbol.asyncIterator]();
+
+        /** One frame, or the end of the stream, or the exception that ended it. */
+        const nextFrame = Effect.promise(
+          (): Promise<
+            | { readonly step: "frame"; readonly frame: unknown }
+            | { readonly step: "done" }
+            | { readonly step: "threw" }
+          > =>
+            frames.next().then(
+              (result) =>
+                result.done === true
+                  ? ({ step: "done" } as const)
+                  : ({ step: "frame", frame: result.value } as const),
+              () => ({ step: "threw" }) as const,
+            ),
+        );
+
+        const body = Effect.gen(function* () {
+          const steering = yield* Effect.forkChild(steerLoop);
+          const drive = (next: ClaudeRunStep): Effect.Effect<TerminalBundle> =>
+            Effect.gen(function* () {
+              const frame =
+                next.step === "await-turn-boundary"
+                  ? yield* Effect.timeout(
+                      nextFrame,
+                      TURN_BOUNDARY_WAIT_MILLIS,
+                    ).pipe(
+                      Effect.match({
+                        onFailure: () => ({ step: "timeout" }) as const,
+                        onSuccess: (read) => read,
+                      }),
+                    )
+                  : yield* nextFrame;
+
+              if (frame.step === "timeout") {
+                return yield* applyTerminalReport(
+                  evidence.read({ kind: "turn-boundary-timeout" }),
+                );
+              }
+              if (frame.step === "done") {
+                return yield* applyTerminalReport(
+                  evidence.read({ kind: "query-ended" }),
+                );
+              }
+              if (frame.step === "threw") {
+                return yield* applyTerminalReport(
+                  evidence.read({ kind: "query-threw" }),
+                );
+              }
+
+              // Once decided, only drain the Query so it can wind down gracefully.
+              if (next.step === "decided") {
+                return yield* Effect.suspend(() => drive(next));
+              }
+
+              const report = evidence.read({
+                kind: "frame",
+                frame: readClaudeFrame(frame.frame),
+              });
+              yield* applyReport(report);
+              if (report.next.step === "fatal") return report.next.bundle;
+              return yield* Effect.suspend(() => drive(report.next));
+            });
+
+          const bundle = yield* drive({ step: "continue" });
+          yield* Fiber.interrupt(steering);
+          return bundle;
+        });
+
+        return yield* body;
+      });
+
+    const execution = Effect.acquireUseRelease(
+      acquireQuery,
+      useQuery,
+      releaseQuery,
+    );
+    const drainFoldOutput = (): Effect.Effect<void> =>
+      applyReport(evidence.read({ kind: "interrupted" }));
+
+    // Query.close() is the last execution-owned opportunity for the SDK to
+    // synchronously write to stderr. acquireUseRelease runs it before this
+    // final fold drain on both return and interruption, so no callback can
+    // leave once-only diagnostic output stranded in execution.
+    return yield* Effect.onInterrupt(
+      Effect.gen(function* () {
+        const bundle = yield* execution;
+        yield* drainFoldOutput();
+        return bundle;
+      }),
+      drainFoldOutput,
+    );
   });
 }
