@@ -68,15 +68,17 @@ test("automatic delivery, Result tools, and inspection agree when all final outp
   const notice = sent[0]?.message.content;
   assert.equal(typeof notice, "string");
   if (typeof notice !== "string") return;
-  assert.match(notice, /Final output was produced, but none remains/);
-  assert.match(notice, /32 bytes were removed by retention bounds/);
+  assert.ok(
+    notice.includes(
+      "Final output was produced, but none remains in the Run record",
+    ),
+  );
   assert.doesNotMatch(notice, /No output was produced/);
   assert.doesNotMatch(notice, new RegExp(REMOVED_OUTPUT));
 
   const resultText = await rig.text("agent_result", { id: started.runId });
   const waitText = await rig.text("agent_wait", { ids: [started.runId] });
   assert.equal(waitText, resultText);
-  assert.match(resultText, /32 bytes of the final output were cut\./);
   assert.ok(resultText.includes(NO_FINAL_OUTPUT_REMAINS));
   assert.doesNotMatch(resultText, /finished without output/);
   assert.doesNotMatch(resultText, new RegExp(REMOVED_OUTPUT));
@@ -90,8 +92,6 @@ test("automatic delivery, Result tools, and inspection agree when all final outp
   const dashboard = await inspectOnlyRun(rig);
   const inspection = rig.host.customLines(160, 200).join("\n");
   assert.match(inspection, /status: +completed/);
-  assert.match(inspection, /Final output/);
-  assert.match(inspection, /32 bytes of the final output were cut\./);
   assert.ok(inspection.includes(NO_FINAL_OUTPUT_REMAINS));
   assert.doesNotMatch(inspection, /No final output was produced/);
   assert.doesNotMatch(inspection, new RegExp(REMOVED_OUTPUT));

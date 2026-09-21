@@ -11,6 +11,7 @@
 
 import { Schema } from "effect";
 import type { TruncationRecord } from "./projection.ts";
+import { type TranscriptItem, transcriptItemText } from "./transcript.ts";
 
 const RemovedBytes = Schema.Finite.check(
   Schema.isInt(),
@@ -33,7 +34,7 @@ export const FinalOutputRetention = Schema.Union([
 
 export type FinalOutputRetention = typeof FinalOutputRetention.Type;
 
-export type FinalOutputInterpretation =
+type FinalOutputRetentionInterpretation =
   | { readonly kind: "absent" }
   | { readonly kind: "retained"; readonly output: string }
   | {
@@ -42,6 +43,11 @@ export type FinalOutputInterpretation =
       readonly output: string;
     }
   | { readonly kind: "removed"; readonly removedBytes: number };
+
+/** What remains of the answer and of the transcript evidence supporting it. */
+export type FinalOutputInterpretation = FinalOutputRetentionInterpretation & {
+  readonly hasTranscriptEvidence: boolean;
+};
 
 /** Strip retained text for the small meaning carried on a Notification. */
 export function finalOutputRetentionOf(
@@ -63,28 +69,37 @@ export function finalOutputRetentionOf(
 /**
  * Interpret final-output presence and retention loss once.
  *
- * Whitespace-only text has no visible output. For visible retained text the
- * original string is returned untouched, so rendering does not normalize an
- * agent's Markdown. Truncation evidence wins over apparent emptiness: it proves
- * that output existed even when no visible byte remains.
+ * Whitespace-only text has no visible output or transcript evidence. A
+ * tool-call part is evidence even when its item has no visible text. For
+ * visible retained output the original string is returned untouched, so
+ * rendering does not normalize an agent's Markdown. Truncation evidence wins
+ * over apparent emptiness: it proves that output existed even when no visible
+ * byte remains.
  */
 export function interpretFinalOutput(value: {
   readonly finalOutput: string;
+  readonly transcript: readonly TranscriptItem[];
   readonly truncation: Pick<TruncationRecord, "truncatedOutputBytes">;
 }): FinalOutputInterpretation {
   const removedBytes = value.truncation.truncatedOutputBytes;
   const hasVisibleOutput = value.finalOutput.trim() !== "";
+  const hasTranscriptEvidence = value.transcript.some(
+    (item) =>
+      transcriptItemText(item).trim() !== "" ||
+      item.parts.some((part) => part.kind === "tool_call"),
+  );
 
-  if (hasVisibleOutput) {
-    return removedBytes > 0
+  const retention: FinalOutputRetentionInterpretation = hasVisibleOutput
+    ? removedBytes > 0
       ? {
           kind: "retained-prefix",
           removedBytes,
           output: value.finalOutput,
         }
-      : { kind: "retained", output: value.finalOutput };
-  }
-  return removedBytes > 0
-    ? { kind: "removed", removedBytes }
-    : { kind: "absent" };
+      : { kind: "retained", output: value.finalOutput }
+    : removedBytes > 0
+      ? { kind: "removed", removedBytes }
+      : { kind: "absent" };
+
+  return { ...retention, hasTranscriptEvidence };
 }

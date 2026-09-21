@@ -5,8 +5,10 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   backendId,
   CANCELLATION_REASONS,
+  cancelledEnding,
   createRunProjection,
   EMPTY_USAGE_SNAPSHOT,
+  failedEnding,
   runId,
   subagentId,
 } from "../domain/index.ts";
@@ -131,6 +133,47 @@ test("inspection shows completed and failed outcomes without retained cancellati
         );
         if (stored) assert.match(output, /preserved output/);
       }
+});
+
+test("inspection keeps terminal answer framing status-neutral", () => {
+  for (const ending of [failedEnding("boom"), cancelledEnding("shutdown")]) {
+    const retained = inspectionBlocks(
+      {
+        ...capture,
+        outcome: "result",
+        summary: {
+          ...capture.summary,
+          phase: ending.ending === "failed" ? "failed" : "cancelled",
+        },
+        result: fixtureResult({ ending, finalOutput: "bare answer" }),
+      },
+      "resolved",
+    );
+    assert.deepEqual(sectionBlocks(retained, "Final output")[0], {
+      kind: "markdown",
+      text: "bare answer",
+    });
+
+    const absent = inspectionBlocks(
+      {
+        ...capture,
+        outcome: "result",
+        summary: {
+          ...capture.summary,
+          phase: ending.ending === "failed" ? "failed" : "cancelled",
+        },
+        result: fixtureResult({ ending }),
+      },
+      "resolved",
+    );
+    const output = sectionBlocks(absent, "Final output");
+    assert.equal(output[0]?.kind, "literal");
+    assert.equal(output[0]?.text, "No final output was produced.");
+    assert.doesNotMatch(
+      output.map((block) => block.text).join("\n"),
+      /before producing|before finishing|Failure:/,
+    );
+  }
 });
 
 test("inspection presents aligned at-a-glance facts with normalized totals", () => {
@@ -259,7 +302,6 @@ test("inspection puts operational facts before answer and supporting evidence", 
     "4 links",
     "5 bytes of transcript text",
     "6 bytes of tool output",
-    "7 bytes of the final output",
   ])
     assert.ok(truncation?.includes(expected), expected);
   assert.ok(
@@ -344,7 +386,12 @@ test("empty retained output is distinguished from output that was never produced
     .map((block) => block.text)
     .join("\n");
   assert.match(truncatedTranscriptOnly, /No output produced yet\./);
-  assert.doesNotMatch(truncatedTranscriptOnly, /retained yet/);
+  // A drop counter proves historical loss, not retained transcript evidence.
+  // The domain flag therefore keeps this an honestly empty current record.
+  assert.match(
+    truncatedTranscriptOnly,
+    /Active snapshot available but empty: no output or transcript retained yet\./,
+  );
 
   const genuinelyEmpty = inspectionBlocks(
     {

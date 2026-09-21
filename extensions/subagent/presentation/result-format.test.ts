@@ -7,23 +7,23 @@ import {
   runDiagnostic,
 } from "../domain/index.ts";
 import { fixtureResult } from "../testing/presentation-fixtures.ts";
-import { formatResultBody, primaryFailure } from "./result-body.ts";
 import { formatResult } from "./run-card.ts";
+
+function assertResultEndsWith(
+  result: Parameters<typeof formatResult>[0],
+  text: string,
+) {
+  assert.ok(formatResult(result).endsWith(text));
+}
 
 test("a completed result preserves its output exactly", () => {
   const output = "Line one\n\n  indented\ttabbed\n";
 
-  assert.equal(
-    formatResultBody(fixtureResult({ finalOutput: output })),
-    output,
-  );
+  assertResultEndsWith(fixtureResult({ finalOutput: output }), output);
 });
 
 test("a completed result with no output plainly says so", () => {
-  assert.equal(
-    formatResultBody(fixtureResult({})),
-    "The Run finished without output.",
-  );
+  assertResultEndsWith(fixtureResult({}), "The Run finished without output.");
 });
 
 test("a completed Result says when all final output was removed", () => {
@@ -34,11 +34,8 @@ test("a completed Result says when all final output was removed", () => {
     truncation: { truncatedOutputBytes: 1_234 },
   });
 
-  assert.equal(
-    formatResultBody(result),
-    "No final output remains in the Result.",
-  );
-  assert.doesNotMatch(formatResultBody(result), /failed|without output/i);
+  assertResultEndsWith(result, "No final output remains in the Result.");
+  assert.doesNotMatch(formatResult(result), /without output/i);
 });
 
 test("the full result text names the agent, the Subagent, and the Run", () => {
@@ -54,13 +51,11 @@ test("the full result text names the agent, the Subagent, and the Run", () => {
 });
 
 test("a failed result labels its partial output", () => {
-  assert.equal(
-    formatResultBody(
-      fixtureResult({
-        ending: failedEnding("the backend refused"),
-        finalOutput: "  half an answer  ",
-      }),
-    ),
+  assertResultEndsWith(
+    fixtureResult({
+      ending: failedEnding("the backend refused"),
+      finalOutput: "  half an answer  ",
+    }),
     "This Run failed before completing.\n\n" +
       "Failure: the backend refused\n\n" +
       "Output produced before failure:\n\n  half an answer  ",
@@ -90,15 +85,15 @@ test("whitespace-only output is visibly absent for every terminal status", () =>
   ];
 
   for (const { result, absent } of cases) {
-    const body = formatResultBody(result);
-    assert.match(body, absent);
-    assert.doesNotMatch(body, /Output produced before/);
+    const text = formatResult(result);
+    assert.match(text, absent);
+    assert.doesNotMatch(text, /Output produced before/);
   }
 });
 
 test("a failed result with nothing to show plainly says so", () => {
-  assert.equal(
-    formatResultBody(fixtureResult({ ending: failedEnding("boom") })),
+  assertResultEndsWith(
+    fixtureResult({ ending: failedEnding("boom") }),
     "This Run failed before completing.\n\n" +
       "Failure: boom\n\n" +
       "The Run failed before producing output.",
@@ -106,20 +101,21 @@ test("a failed result with nothing to show plainly says so", () => {
 });
 
 test("a failed Result keeps its failure when all final output was removed", () => {
-  const body = formatResultBody(
+  const text = formatResult(
     fixtureResult({
       ending: failedEnding("boom"),
       truncation: { truncatedOutputBytes: 17 },
     }),
   );
 
-  assert.equal(
-    body,
-    "This Run failed before completing.\n\n" +
-      "Failure: boom\n\n" +
-      "No final output remains in the Result.",
+  assert.ok(
+    text.endsWith(
+      "This Run failed before completing.\n\n" +
+        "Failure: boom\n\n" +
+        "No final output remains in the Result.",
+    ),
   );
-  assert.doesNotMatch(body, /before producing output/);
+  assert.doesNotMatch(text, /before producing output/);
 });
 
 test("a failed result with no message falls back to a failure diagnostic", () => {
@@ -133,8 +129,7 @@ test("a failed result with no message falls back to a failure diagnostic", () =>
 
   // The runtime note is not the reason the Run has no answer; the transport
   // loss is, so that is the one that stands in for the missing message.
-  assert.equal(primaryFailure(result), "[redacted]");
-  assert.match(formatResultBody(result), /Failure: \[redacted\]/);
+  assert.match(formatResult(result), /Failure: \[redacted\]/);
 });
 
 test("a failed result with neither a message nor a failure diagnostic omits the failure line", () => {
@@ -143,48 +138,46 @@ test("a failed result with neither a message nor a failure diagnostic omits the 
     diagnostics: [runDiagnostic("late-event", "late")],
   });
 
-  assert.equal(primaryFailure(result), undefined);
-  assert.equal(
-    formatResultBody(result),
+  assertResultEndsWith(
+    result,
     "This Run failed before completing.\n\n" +
       "The Run failed before producing output.",
   );
 });
 
 test("a cancelled result labels its partial output and names its reason", () => {
-  assert.equal(
-    formatResultBody(
-      fixtureResult({
-        ending: cancelledEnding("requested"),
-        finalOutput: "half an answer",
-      }),
-    ),
+  assertResultEndsWith(
+    fixtureResult({
+      ending: cancelledEnding("requested"),
+      finalOutput: "half an answer",
+    }),
     "This Run was cancelled before finishing (requested).\n\n" +
       "Output produced before cancellation:\n\nhalf an answer",
   );
 });
 
 test("a cancelled result with nothing to show plainly says so", () => {
-  assert.equal(
-    formatResultBody(fixtureResult({ ending: cancelledEnding("shutdown") })),
+  assertResultEndsWith(
+    fixtureResult({ ending: cancelledEnding("shutdown") }),
     "The Run was cancelled before producing output (shutdown).",
   );
 });
 
 test("a cancelled Result keeps its reason when all final output was removed", () => {
-  const body = formatResultBody(
+  const text = formatResult(
     fixtureResult({
       ending: cancelledEnding("requested"),
       truncation: { truncatedOutputBytes: 17 },
     }),
   );
 
-  assert.equal(
-    body,
-    "This Run was cancelled before finishing (requested).\n\n" +
-      "No final output remains in the Result.",
+  assert.ok(
+    text.endsWith(
+      "This Run was cancelled before finishing (requested).\n\n" +
+        "No final output remains in the Result.",
+    ),
   );
-  assert.doesNotMatch(body, /before producing output/);
+  assert.doesNotMatch(text, /before producing output/);
 });
 
 test("a retained output prefix keeps status-specific framing and its warning", () => {

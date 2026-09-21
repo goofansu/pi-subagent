@@ -41,6 +41,7 @@
 import { Schema } from "effect";
 import { boundOneLine, byteLength } from "./bounding.ts";
 import {
+  type FinalOutputInterpretation,
   FinalOutputRetention,
   finalOutputRetentionOf,
   interpretFinalOutput,
@@ -48,7 +49,6 @@ import {
 import { RunId, SubagentId } from "./ids.ts";
 import { CancellationReason, TerminalRunPhase } from "./phases.ts";
 import { RUN_LABEL_MAX_BYTES, type RunResult } from "./result.ts";
-import { transcriptItemText } from "./transcript.ts";
 import type { UsageSnapshot } from "./usage.ts";
 
 /** Long enough to recognize the answer, short enough not to be it. */
@@ -103,7 +103,8 @@ export const ResultAvailability = Schema.Literals([
 export type ResultAvailability = typeof ResultAvailability.Type;
 
 /**
- * Read availability off a stored Result.
+ * Derive availability from a Run's status and the joint interpretation of
+ * what answer and supporting transcript evidence remain.
  *
  * The **output** decides it rather than the status alone. A completed Run that
  * produced no final answer but left meaningful transcript evidence is
@@ -113,18 +114,15 @@ export type ResultAvailability = typeof ResultAvailability.Type;
  * model can read, and a Run interrupted mid-answer often has the second
  * without the first.
  */
-export function resultAvailabilityOf(result: RunResult): ResultAvailability {
-  const output = interpretFinalOutput(result);
+export function resultAvailabilityOf(
+  status: TerminalRunPhase,
+  output: FinalOutputInterpretation,
+): ResultAvailability {
   const hasRetainedOutput = "output" in output;
-  if (result.status === "completed" && hasRetainedOutput) {
-    return "complete";
-  }
-  const hasTranscriptEvidence = result.transcript.some(
-    (item) =>
-      transcriptItemText(item).trim() !== "" ||
-      item.parts.some((part) => part.kind === "tool_call"),
-  );
-  return hasRetainedOutput || hasTranscriptEvidence ? "partial" : "record-only";
+  if (status === "completed" && hasRetainedOutput) return "complete";
+  return hasRetainedOutput || output.hasTranscriptEvidence
+    ? "partial"
+    : "record-only";
 }
 
 /**
@@ -264,6 +262,59 @@ export const RunNotification = Schema.Struct({
 
 export type RunNotification = typeof RunNotification.Type;
 
+/**
+ * The final-output facts a self-sufficient Notification can state honestly.
+ *
+ * Retained values carry their visible text. Transcript evidence is only
+ * inferable when no output remains: `partial` then means supporting transcript
+ * evidence survived, while `record-only` means it did not. We deliberately do
+ * not invent a false evidence flag for retained output, where availability
+ * cannot distinguish it.
+ */
+export type NotificationFinalOutput =
+  | { readonly kind: "retained"; readonly output: string }
+  | {
+      readonly kind: "retained-prefix";
+      readonly removedBytes: number;
+      readonly output: string;
+    }
+  | { readonly kind: "absent"; readonly hasTranscriptEvidence: boolean }
+  | {
+      readonly kind: "removed";
+      readonly removedBytes: number;
+      readonly hasTranscriptEvidence: boolean;
+    };
+
+/** Interpret the output facts already carried by a Notification. */
+export function notificationFinalOutputOf(
+  notice: RunNotification,
+): NotificationFinalOutput {
+  switch (notice.outputRetention.kind) {
+    case "absent":
+      return {
+        kind: "absent",
+        hasTranscriptEvidence: notice.resultAvailability === "partial",
+      };
+    case "removed":
+      return {
+        kind: "removed",
+        removedBytes: notice.outputRetention.removedBytes,
+        hasTranscriptEvidence: notice.resultAvailability === "partial",
+      };
+    case "retained":
+      return {
+        kind: "retained",
+        output: notice.output ?? notice.preview,
+      };
+    case "retained-prefix":
+      return {
+        kind: "retained-prefix",
+        removedBytes: notice.outputRetention.removedBytes,
+        output: notice.output ?? notice.preview,
+      };
+  }
+}
+
 /** Build the notice for one stored result. Nothing is invented. */
 export function toRunNotification(result: RunResult): RunNotification {
   const accounting = toNotificationAccounting(result.usage, result.model);
@@ -274,7 +325,7 @@ export function toRunNotification(result: RunResult): RunNotification {
     agent: result.agent,
     label: boundOneLine(result.description, RUN_LABEL_MAX_BYTES),
     status: result.status,
-    resultAvailability: resultAvailabilityOf(result),
+    resultAvailability: resultAvailabilityOf(result.status, finalOutput),
     outputRetention: finalOutputRetentionOf(finalOutput),
     ...("output" in finalOutput &&
     byteLength(finalOutput.output) <= NOTIFICATION_INLINE_MAX_BYTES

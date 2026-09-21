@@ -1049,7 +1049,7 @@ test("agent_wait crosses registration with discriminated collection details and 
         runId: started.runId,
         agent: "explore",
         status: "completed",
-        outputCharacters: RIG_ANSWER.length,
+        output: { kind: "visible", characters: RIG_ANSWER.length },
       },
     ],
     stillRunning: 0,
@@ -1118,7 +1118,7 @@ test("agent_wait renders partial mixed-Agent delivery without presenting timeout
         runId: delivered.runId,
         agent: "explore",
         status: "completed",
-        outputCharacters: RIG_ANSWER.length,
+        output: { kind: "visible", characters: RIG_ANSWER.length },
       },
     ],
     stillRunning: 1,
@@ -1199,13 +1199,13 @@ test("agent_wait_all delivers every active Run's result and consumes each", asyn
         runId: first.runId,
         agent: "explore",
         status: "completed",
-        outputCharacters: "first answer".length,
+        output: { kind: "visible", characters: "first answer".length },
       },
       {
         runId: second.runId,
         agent: "once",
         status: "completed",
-        outputCharacters: "second answer".length,
+        output: { kind: "visible", characters: "second answer".length },
       },
     ],
     stillRunning: 0,
@@ -1430,7 +1430,7 @@ test("agent_result returns the full stored output with its Run identity", async 
       runId: started.runId,
       agent: "explore",
       status: "completed",
-      outputCharacters: RIG_ANSWER.length,
+      output: { kind: "visible", characters: RIG_ANSWER.length },
     },
   });
   const collapsed = renderRegisteredRow(
@@ -1680,7 +1680,7 @@ test("a Run on the collapsed line alone is not recorded as consumed", async () =
     runId: "run-drawn",
     agent: "explore",
     status: "completed",
-    outputCharacters: 10,
+    output: { kind: "visible", characters: 10 },
   } as const;
   const collapsedOnly = handlersOver({
     text: "the answer",

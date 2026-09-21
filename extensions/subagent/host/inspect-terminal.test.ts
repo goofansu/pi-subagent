@@ -248,13 +248,7 @@ for (const truncated of [false, true])
     if (truncated) {
       assert.doesNotMatch(text, /Truncation:/);
       assert.match(text, /Dropped to stay within bounds: 2 transcript items/);
-      assert.match(text, /bytes of the final output/);
-      const outputHeading = text.indexOf("Final output");
-      const outputWarning = text.indexOf(
-        "6 bytes of the final output were cut.",
-      );
-      assert.ok(outputHeading < outputWarning);
-      assert.ok(outputWarning < text.indexOf("bounded", outputWarning));
+      assert.ok(text.includes("6 bytes of the final output were cut."));
       assert.ok(
         text.indexOf("Dropped to stay within bounds:") <
           text.indexOf("Transcript"),

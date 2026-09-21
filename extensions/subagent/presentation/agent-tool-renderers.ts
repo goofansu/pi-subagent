@@ -14,6 +14,7 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import type { CompactFinalOutputSummary } from "./final-output-section.ts";
 import { CANCEL_OUTCOME_HEADINGS } from "./prose.ts";
 import {
   contentText,
@@ -886,6 +887,17 @@ function collectionSummary(
   );
 }
 
+function resultOutputSummary(summary: CompactFinalOutputSummary): string {
+  switch (summary.kind) {
+    case "none":
+      return "no output";
+    case "removed":
+      return "output removed";
+    case "visible":
+      return formatCharacterCount(summary.characters);
+  }
+}
+
 function retrievalSummary(
   details: ResultToolRowFacts,
   theme: RenderableTheme,
@@ -893,8 +905,9 @@ function retrievalSummary(
 ): string {
   switch (details.outcome) {
     case "available": {
+      const output = resultOutputSummary(details.run.output);
       const candidates = [
-        `${details.run.agent} · ${details.run.runId} · ${details.run.status} · ${formatCharacterCount(details.run.outputCharacters)}`,
+        `${details.run.agent} · ${details.run.runId} · ${details.run.status} · ${output}`,
         `${details.run.agent} · ${details.run.runId} · ${details.run.status}`,
         `${details.run.runId} · ${details.run.status}`,
       ];

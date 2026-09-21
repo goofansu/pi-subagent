@@ -23,21 +23,27 @@
  * should see only what happened.
  */
 
-import type {
-  ResultLink,
-  RunDiagnostic,
-  RunResult,
-  ToolEntry,
-  TranscriptItem,
-} from "../domain/index.ts";
+import type { RunResult, ToolEntry, TranscriptItem } from "../domain/index.ts";
 import {
+  interpretFinalOutput,
   type NotificationAccounting,
   toNotificationAccounting,
   transcriptItemText,
 } from "../domain/index.ts";
 import { completionViewOfResult } from "./completion-view.ts";
+import {
+  type FinalOutputSection,
+  finalOutputSection,
+  finalOutputSectionLines,
+  resultFinalOutputFraming,
+} from "./final-output-section.ts";
 import { formatNotificationAccounting } from "./notification-text.ts";
-import { formatResultBody } from "./result-body.ts";
+import {
+  formatDiagnosticLine,
+  formatResultLinkLine,
+  formatTruncation,
+} from "./result-details.ts";
+
 import {
   formatRunPhase,
   formatTokenCount,
@@ -100,8 +106,6 @@ export interface RunCard {
   readonly links?: readonly string[];
   /** What bounding dropped, when it dropped anything. */
   readonly truncation?: string;
-  /** A direct warning immediately before a bounded final output. */
-  readonly outputTruncation?: string;
   /**
    * The Run's answer, present only for a terminal card.
    *
@@ -109,7 +113,7 @@ export interface RunCard {
    * carry output, so a live card that claimed to have it would be reading
    * something it is not allowed to read.
    */
-  readonly output?: string;
+  readonly finalOutput?: FinalOutputSection;
 }
 
 /** One transcript item as a line: who said it, and what. */
@@ -136,16 +140,6 @@ export function formatToolEntry(entry: ToolEntry): string {
   );
 }
 
-/** One diagnostic as a line: the category, then what it said. */
-export function formatDiagnosticLine(diagnostic: RunDiagnostic): string {
-  return `${diagnostic.category}: ${diagnostic.message}`;
-}
-
-/** One link as a line: what kind of thing it points at, and where. */
-export function formatResultLinkLine(link: ResultLink): string {
-  return `${link.label} (${link.kind}): ${link.target}`;
-}
-
 /** The context gauge, with its window when the backend reported one. */
 export function formatContextGauge(context: {
   readonly tokens: number;
@@ -158,63 +152,6 @@ export function formatContextGauge(context: {
   }
   const percent = Math.round((context.tokens / context.window) * 100);
   return `context ${used} / ${formatTokenCount(context.window)} (${percent}%)`;
-}
-
-/** A byte count with stable thousands separators for prose. */
-function formatByteCount(amount: number): string {
-  return amount.toLocaleString("en-US");
-}
-
-/** Warn that the retained final output is incomplete, using inspection vocabulary. */
-export function formatOutputTruncation(
-  truncatedBytes: number,
-): string | undefined {
-  return truncatedBytes > 0
-    ? `${formatByteCount(truncatedBytes)} bytes of the final output were cut.`
-    : undefined;
-}
-
-/**
- * What bounding removed, when it removed anything.
- *
- * A bounded projection is honest about being bounded, and this is where that
- * honesty reaches a reader. Silence means nothing was dropped.
- */
-export function formatTruncation(
-  result: Pick<RunResult, "truncation">,
-): string | undefined {
-  const dropped: string[] = [];
-  const { truncation } = result;
-  if (truncation.droppedTranscriptItems > 0) {
-    dropped.push(`${truncation.droppedTranscriptItems} transcript items`);
-  }
-  if (truncation.droppedToolEntries > 0) {
-    dropped.push(`${truncation.droppedToolEntries} tool entries`);
-  }
-  if (truncation.droppedDiagnostics > 0) {
-    dropped.push(`${truncation.droppedDiagnostics} diagnostics`);
-  }
-  if (truncation.droppedLinks > 0) {
-    dropped.push(`${truncation.droppedLinks} links`);
-  }
-  if (truncation.truncatedTranscriptBytes > 0) {
-    dropped.push(
-      `${formatByteCount(truncation.truncatedTranscriptBytes)} bytes of transcript text`,
-    );
-  }
-  if (truncation.truncatedToolOutputBytes > 0) {
-    dropped.push(
-      `${formatByteCount(truncation.truncatedToolOutputBytes)} bytes of tool output`,
-    );
-  }
-  if (truncation.truncatedOutputBytes > 0) {
-    dropped.push(
-      `${formatByteCount(truncation.truncatedOutputBytes)} bytes of the final output`,
-    );
-  }
-  return dropped.length > 0
-    ? `Dropped to stay within bounds: ${dropped.join(", ")}.`
-    : undefined;
 }
 
 /** The last few transcript items, oldest first. */
@@ -283,8 +220,9 @@ export function runCard(source: RunCardSource): RunCard {
   );
   const links = omitWhenEmpty(result.links.map(formatResultLinkLine));
   const truncation = formatTruncation(result);
-  const outputTruncation = formatOutputTruncation(
-    result.truncation.truncatedOutputBytes,
+  const finalOutput = finalOutputSection(
+    interpretFinalOutput(result),
+    resultFinalOutputFraming(result),
   );
   // Status and duration through the completion view, which is the same value
   // the widget's settled row and the notice header read.
@@ -307,8 +245,7 @@ export function runCard(source: RunCardSource): RunCard {
     ...(diagnostics === undefined ? {} : { diagnostics }),
     ...(links === undefined ? {} : { links }),
     ...(truncation === undefined ? {} : { truncation }),
-    ...(outputTruncation === undefined ? {} : { outputTruncation }),
-    output: formatResultBody(result),
+    finalOutput,
   };
 }
 
@@ -357,12 +294,10 @@ export function runCardLines(card: RunCard): readonly string[] {
     ...section("Links", card.links),
     ...(card.truncation === undefined ? [] : ["", card.truncation]),
   ];
-  if (card.output === undefined) return lines;
+  if (card.finalOutput === undefined) return lines;
   return [
     ...lines,
-    ...(card.outputTruncation === undefined ? [] : ["", card.outputTruncation]),
-    "",
-    card.output,
+    ...finalOutputSectionLines(card.finalOutput).flatMap((line) => ["", line]),
   ];
 }
 

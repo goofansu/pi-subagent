@@ -121,6 +121,38 @@ test("named Tool-row facts construction covers every domain outcome and round-tr
   );
 });
 
+test("Result Tool-row facts summarize final-output interpretation without carrying output", () => {
+  const cases = [
+    [fixtureResult(), { kind: "none" }],
+    [fixtureResult({ finalOutput: " \n\t " }), { kind: "none" }],
+    [
+      fixtureResult({
+        finalOutput: "",
+        truncation: { truncatedOutputBytes: 23 },
+      }),
+      { kind: "removed" },
+    ],
+    [
+      fixtureResult({ finalOutput: "answer" }),
+      { kind: "visible", characters: 6 },
+    ],
+    [
+      fixtureResult({
+        finalOutput: "prefix",
+        truncation: { truncatedOutputBytes: 23 },
+      }),
+      { kind: "visible", characters: 6 },
+    ],
+  ] as const;
+
+  for (const [fixture, output] of cases) {
+    const facts = resultToolRowFacts({ outcome: "result", result: fixture });
+    assert.equal(facts.outcome, "available");
+    if (facts.outcome === "available")
+      assert.deepEqual(facts.run.output, output);
+  }
+});
+
 test("the Tool-row facts decoder accepts all terminal phases and nested cancellation outcomes", () => {
   for (const phase of ["completed", "failed", "cancelled"] as const) {
     const facts = {
@@ -139,7 +171,7 @@ test("the Tool-row facts decoder accepts all terminal phases and nested cancella
         runId: result.runId,
         agent: "explore",
         status: "completed",
-        outputCharacters: 6,
+        output: { kind: "visible", characters: 6 },
       },
     },
   );
@@ -231,7 +263,7 @@ test("the Tool-row facts decoder returns absence and never throws for malformed,
           runId: rid,
           agent: "explore",
           status: "running",
-          outputCharacters: 1,
+          output: { kind: "visible", characters: 1 },
         },
       ],
       stillRunning: 0,
@@ -246,7 +278,17 @@ test("the Tool-row facts decoder returns absence and never throws for malformed,
         runId: rid,
         agent: "explore",
         status: "completed",
-        outputCharacters: Infinity,
+        output: { kind: "visible", characters: Infinity },
+      },
+    },
+    {
+      kind: "result",
+      outcome: "available",
+      run: {
+        runId: rid,
+        agent: "explore",
+        status: "completed",
+        output: { kind: "removed", characters: 1 },
       },
     },
     {

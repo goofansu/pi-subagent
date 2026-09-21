@@ -32,7 +32,8 @@ import type {
   SubagentId,
   WaitOutcome,
 } from "../domain/index.ts";
-import { formatDiagnosticLine, formatResult } from "./run-card.ts";
+import { formatDiagnosticLine } from "./result-details.ts";
+import { formatResult } from "./run-card.ts";
 
 /**
  * The end of an exhaustive switch.
@@ -475,8 +476,8 @@ export function formatNoActiveRuns(): string {
  *
  * A spent identifier and a wrong identifier are different mistakes, and this
  * is where they read differently. Rendering the Result itself is
- * {@link formatResult} in the result-body module, because it is a body rather
- * than a sentence.
+ * {@link formatResult} in the RunCard module, because it is a card rather than
+ * a sentence.
  */
 export function formatResultRejection(
   outcome: Exclude<ResultOutcome, { outcome: "result" }>,

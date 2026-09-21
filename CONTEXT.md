@@ -595,6 +595,11 @@ cannot decide what a Run means, and naming a Run in them cannot decide Result
 hand-off. Only `ToolResponse.deliveredRuns`, read at the host boundary, says
 which Results the parent received.
 
+**Final output section** — the one presentation owner of a Run answer's
+qualifier, body, and explanation. It consumes the Final output retention
+interpretation plus the surface's framing; presentation callers of that
+interpretation consume the section rather than switching on its retention kind.
+
 **RunCard** — the pure presentation of one Run, built from a published index row
 (live, and therefore carrying no output) or from an immutable stored Result
 (terminal, and therefore carrying everything). It is where Run presentation
