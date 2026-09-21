@@ -95,13 +95,11 @@ export interface BoundaryGraph {
   /** Pure prose and row formatting, which may name only the domain and Pi. */
   readonly presentationRoot: string;
   /**
-   * The presentation module's barrel: the module's one door.
+   * The presentation module's barrel: the exact door outside consumers use.
    *
-   * Named here because "every file in the module is reachable through it" is a
-   * property one `export *` line can take away silently. The dashboard was
-   * built against three presentation files by path while ten other consumers
-   * entered through the barrel, and nothing failed; the next surface would have
-   * done the same.
+   * Named here so an import from outside the module can be checked against one
+   * target. Siblings and colocated tests may still reach implementation files
+   * directly; every other consumer enters through this file.
    */
   readonly presentationBarrelFile: string;
   /** The `Subagents` façade, between presentation and the host. */
@@ -1352,27 +1350,25 @@ export function findBoundaryViolations(
     }
   }
 
-  // 23. The presentation module's barrel names every file in the module. The
-  //     barrel is the module's interface, and an interface with a second door
-  //     is not one: ten consumers entered through it while the dashboard
-  //     reached past it into three files by path, and the only thing that ever
-  //     said so was a review. A file missing from the barrel is also how the
-  //     two `RunSummary` types came to exist — the collision is what stopped
-  //     the barrel growing, and nothing made the omission visible. Tests are
-  //     exempt: a colocated test names the file it is about.
+  // 23. The presentation barrel is the module's one door from the outside.
+  //     The interface is its deliberate named-export list, not every file the
+  //     implementation happens to contain. Production and test consumers
+  //     outside presentation therefore reach exactly the barrel; siblings and
+  //     colocated tests remain free to import implementation files by path.
   const barrel = graph.presentationBarrelFile;
-  if (fs.existsSync(barrel)) {
-    const reexported = new Set(
-      readImportSpecifiers(fs.readFileSync(barrel, "utf8"))
-        .map((specifier) => resolveRelativeSource(barrel, specifier))
-        .filter((target): target is string => target !== undefined),
-    );
-    for (const file of listSourceFiles(graph.presentationRoot, {
-      includeTests: false,
-    })) {
-      if (file === barrel || reexported.has(file)) continue;
+  for (const file of listSourceFiles(treeRoot, { includeTests: true })) {
+    if (isInside(file, graph.presentationRoot)) continue;
+    for (const specifier of specifiersOf(file)) {
+      const target = resolveRelativeSource(file, specifier);
+      if (
+        target === undefined ||
+        !isInside(target, graph.presentationRoot) ||
+        target === barrel
+      ) {
+        continue;
+      }
       violations.add(
-        `${describe(file)} is not re-exported by ${describe(barrel)}, so the presentation module has a second door`,
+        `${describe(file)} imports ${describe(target)}, and the presentation module is entered through ${describe(barrel)}`,
       );
     }
   }
@@ -2745,41 +2741,56 @@ test("the dashboard may name domain types but never Effect, application queries,
   ]);
 });
 
-test("a presentation file the barrel does not name is rejected", (t) => {
-  const { graph, write } = fixtureGraph(t, "presentation-barrel");
+test("a host production file may not import a presentation file by path", (t) => {
+  const { graph, write } = fixtureGraph(t, "presentation-host-import");
   write("extensions/subagent/index.ts", "export {};\n");
-  write("extensions/subagent/domain/index.ts", "export {};\n");
+  write("extensions/subagent/presentation/index.ts", "export {};\n");
   write("extensions/subagent/presentation/rows.ts", "export {};\n");
-  write("extensions/subagent/presentation/status.ts", "export {};\n");
   write(
-    "extensions/subagent/presentation/index.ts",
-    ['export * from "./rows.ts";', 'export * from "./status.ts";'].join("\n"),
+    "extensions/subagent/host/widget.ts",
+    'import "../presentation/rows.ts";\n',
   );
-  // A colocated test names the file it is about, so the barrel never names it
-  // and the rule must not ask it to.
+
+  assert.deepEqual(findBoundaryViolations(graph), [
+    `${describe(path.join(graph.hostRoot, "widget.ts"))} imports ${describe(path.join(graph.presentationRoot, "rows.ts"))}, and the presentation module is entered through ${describe(graph.presentationBarrelFile)}`,
+  ]);
+});
+
+test("a host test may not import a presentation file by path", (t) => {
+  const { graph, write } = fixtureGraph(t, "presentation-host-test-import");
+  write("extensions/subagent/index.ts", "export {};\n");
+  write("extensions/subagent/presentation/index.ts", "export {};\n");
+  write("extensions/subagent/presentation/rows.ts", "export {};\n");
   write(
-    "extensions/subagent/presentation/rows.test.ts",
-    'import "./rows.ts";\n',
+    "extensions/subagent/host/widget.test.ts",
+    'import "../presentation/rows.ts";\n',
+  );
+
+  assert.deepEqual(findBoundaryViolations(graph), [
+    `${describe(path.join(graph.hostRoot, "widget.test.ts"))} imports ${describe(path.join(graph.presentationRoot, "rows.ts"))}, and the presentation module is entered through ${describe(graph.presentationBarrelFile)}`,
+  ]);
+});
+
+test("an outside consumer may import the presentation barrel", (t) => {
+  const { graph, write } = fixtureGraph(t, "presentation-barrel-import");
+  write("extensions/subagent/index.ts", "export {};\n");
+  write("extensions/subagent/presentation/index.ts", "export {};\n");
+  write(
+    "extensions/subagent/host/widget.ts",
+    'import "../presentation/index.ts";\n',
   );
 
   assert.deepEqual(findBoundaryViolations(graph), []);
+});
 
-  // The way the dashboard was built: a new surface beside the barrel rather
-  // than through it.
-  write("extensions/subagent/presentation/history.ts", "export {};\n");
-
-  assert.deepEqual(findBoundaryViolations(graph), [
-    `${describe(path.join(graph.presentationRoot, "history.ts"))} is not re-exported by ${describe(graph.presentationBarrelFile)}, so the presentation module has a second door`,
-  ]);
-
-  // Naming it closes the door again.
+test("a colocated presentation test may import its subject by path", (t) => {
+  const { graph, write } = fixtureGraph(t, "presentation-colocated-test");
+  write("extensions/subagent/index.ts", "export {};\n");
+  write("extensions/subagent/presentation/index.ts", "export {};\n");
+  write("extensions/subagent/presentation/rows.ts", "export {};\n");
   write(
-    "extensions/subagent/presentation/index.ts",
-    [
-      'export * from "./history.ts";',
-      'export * from "./rows.ts";',
-      'export * from "./status.ts";',
-    ].join("\n"),
+    "extensions/subagent/presentation/rows.test.ts",
+    'import "./rows.ts";\n',
   );
 
   assert.deepEqual(findBoundaryViolations(graph), []);

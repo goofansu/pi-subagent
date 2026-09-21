@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runId } from "../domain/index.ts";
-import {
-  NO_FINAL_OUTPUT_REMAINS,
-  WAIT_RETURNED,
-} from "../presentation/index.ts";
 import { emitText } from "../testing/fakes/script.ts";
 import {
   hostRig,
@@ -16,6 +12,9 @@ import {
 const ENTER = "\r";
 const ESC = "\x1b";
 const REMOVED_OUTPUT = "OUTPUT_THAT_WILL_NOT_BE_RETAINED";
+const WAIT_RETURNED =
+  "This wait has returned: every Run it covered is terminal, nothing outstanding.";
+const NO_FINAL_OUTPUT_REMAINS = "No final output remains in the Result.";
 
 async function inspectOnlyRun(rig: ReturnType<typeof hostRig>) {
   const closed = rig.host.command("subagent", "dashboard");

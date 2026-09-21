@@ -4,7 +4,6 @@ import { stripVTControlCharacters } from "node:util";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import type { ToolResponse } from "../application/index.ts";
 import { runId } from "../domain/index.ts";
-import { WAIT_RETURNED } from "../presentation/index.ts";
 import { emitText } from "../testing/fakes/script.ts";
 import {
   hostRig,
@@ -23,6 +22,9 @@ import {
 import { STRESS_POLICY } from "../testing/stress-policy.ts";
 import { createSessionHandle, type SessionHandle } from "./session-handle.ts";
 import { registerSubagentTools } from "./tools.ts";
+
+const WAIT_RETURNED =
+  "This wait has returned: every Run it covered is terminal, nothing outstanding.";
 
 /**
  * Every public operation, driven through the registered handler.

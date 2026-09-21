@@ -513,6 +513,13 @@ provider mechanism an adapter exists to absorb. The core still cannot name
 either word, and no adapter may name the two runtime words. The boundary test
 enforces every half, so the exit-gate rule is checked rather than reviewed.
 
+**Presentation interface** — the barrel's named-export list is the presentation
+module's interface — what the host, the application façade, and the entry point
+may read. Every other name in the module is implementation, reachable by
+siblings and colocated tests and by nothing outside. The barrel is a seam by
+rule: the boundary test rejects an import of a presentation file by path from
+outside the module.
+
 **Session handle** — the one process-level variable holding the current
 Session's managed runtime, or none. Pi registers tools, commands, and renderers
 once per process while a Session starts and ends many times inside it, and this
