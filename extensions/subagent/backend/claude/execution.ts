@@ -229,6 +229,9 @@ export function runClaudeExecution(
         } catch {
           // The ordered semantic outcome stays authoritative over cleanup.
         } finally {
+          // Close can synchronously write stderr, so Query release precedes
+          // the final fold drain. Keep abort beside close as the other half of
+          // this execution-owned Query's cleanup.
           abort.abort();
         }
         probe.released("liveQueries");

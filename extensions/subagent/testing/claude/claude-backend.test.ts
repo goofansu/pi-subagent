@@ -570,6 +570,86 @@ test("cancelling an unfinished guided Turn remains cancelled and keeps both Turn
   );
 });
 
+test("a Query-end decision after a guided Turn boundary survives a later cancel", async () => {
+  const { value } = await withClaudeSession(
+    {
+      scripts: [
+        [
+          { step: "init" },
+          { step: "assistant", messageId: "msg_1", text: "the answer" },
+          { step: "await-input" },
+          { step: "result", text: "the answer", correlate: "prompt" },
+          { step: "await-gate", gate: "end-query" },
+        ],
+      ],
+    },
+    (rig) =>
+      Effect.gen(function* () {
+        const started = startedRun(
+          yield* rig.supervisor.start(claudeRigRequest()),
+        );
+        yield* untilQueried(rig);
+        yield* until(
+          "the assistant output before guidance is pushed",
+          Effect.map(rig.supervisor.inspectRun(started.runId), (inspection) =>
+            inspection.outcome === "active"
+              ? inspection.content.finalOutput === "the answer"
+              : false,
+          ),
+        );
+        const steered = yield* rig.supervisor.steer(started.runId, {
+          type: "steer",
+          text: "inspect the boundary",
+        });
+        yield* untilPushed(rig);
+        yield* until(
+          "the prompt-correlated result to become a Turn boundary",
+          Effect.map(rig.supervisor.inspectRun(started.runId), (inspection) =>
+            inspection.outcome === "active"
+              ? inspection.usage.turns === 1
+              : false,
+          ),
+        );
+        const decisionsAtBoundary = rig.decisions().length;
+
+        // Exhausting the script ends the Query without a second result frame.
+        rig.standIn.gate("end-query").release();
+        yield* until(
+          "Query end to record the answered decision",
+          Effect.sync(() => rig.decisions().length === 1),
+        );
+        const decisions = rig.decisions();
+        yield* rig.supervisor.cancel([started.runId]);
+        yield* untilTerminal(rig, started.runId);
+        return {
+          steered: steered.outcome,
+          decisionsAtBoundary,
+          decisions,
+          result: resultOf(yield* rig.supervisor.result(started.runId)),
+        };
+      }),
+  );
+
+  assert.equal(value.steered, "accepted");
+  assert.equal(value.decisionsAtBoundary, 0);
+  assert.deepEqual(value.decisions, [
+    {
+      ending: { ending: "answered" },
+      reconciliation: {
+        turns: 1,
+        model: STAND_IN_MODEL,
+        finalOutput: "the answer",
+      },
+    },
+  ]);
+  assert.equal(value.result.status, "completed");
+  assert.equal(value.result.finalOutput, "the answer");
+  assert.deepEqual(
+    value.result.transcript.map((item) => item.role),
+    ["assistant"],
+  );
+});
+
 test("a successful result already observed survives a later cancel", async () => {
   const { value } = await withClaudeSession(
     {
