@@ -935,22 +935,18 @@ const SCENARIO_CHECKS: {
     // something late actually happened, so the check is not vacuous.
     //
     // Any of the three counters satisfies it, because *where* a late report
-    // is stopped depends on the backend's event channel and not on the
-    // property:
+    // is stopped depends on the fixture's event path and not on the property:
     //
-    // - A backend still talking while the reducer drains is caught by the
-    //   reducer and counted as a late **observation**.
-    // - One whose provider says its last word during native cleanup, after
-    //   the intake has been sealed, is caught at the seam and counted as a
-    //   late **event**.
-    // - One whose event channel is created and destroyed with the Run Scope
-    //   cannot talk late at all. Nothing reaches the seam, and the late thing
-    //   is the *interruption* — arbitrated against an ending the Run already
-    //   had, and counted as a late **ending**.
+    // - The fake fixtures emit observations after an announced ending; the
+    //   reducer catches and counts them as late **observations**.
+    // - The Pi and Claude fixtures emit from a test-owned execution-scope
+    //   finalizer after intake is sealed; the seam catches and counts a late
+    //   **event**. Neither adapter manufactures a terminal observation for it.
+    // - A fixture may instead introduce a competing ending after the Run has
+    //   already chosen one; arbitration counts that as a late **ending**.
     //
-    // All three are the property. The third is Claude's, and it is the
-    // strongest of the three rather than a weaker pass: a channel that dies
-    // with the Run cannot mutate a terminal Run by construction.
+    // All three counters prove the same invariant: the late report reached
+    // the appropriate guard and could not mutate the terminal Run.
     assert.ok(
       outcome.counters.lateObservations +
         outcome.counters.lateEvents +

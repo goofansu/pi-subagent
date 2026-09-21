@@ -9,6 +9,7 @@ import {
   CONTROL_NOT_DELIVERED_CATEGORY,
   claudeProbeIsClear,
   MISSING_CLAUDE_RESULT_MESSAGE,
+  SDK_STDERR_CATEGORY,
   TURN_BOUNDARY_WAIT_MILLIS,
 } from "../../backend/claude/index.ts";
 import type { RunId, RunResult } from "../../domain/index.ts";
@@ -676,6 +677,7 @@ test("a result frame with guidance still outstanding is a Turn boundary, not set
             correlate: "prompt",
             models: { [STAND_IN_MODEL]: { input: 100, output: 20 } },
           },
+          { step: "await-gate", gate: "after-first-boundary" },
           { step: "echo-input" },
           { step: "assistant", messageId: "msg_2", text: "the steered answer" },
           {
@@ -698,20 +700,41 @@ test("a result frame with guidance still outstanding is a Turn boundary, not set
           type: "steer",
           text: "and mention the tests",
         });
+        yield* untilPushed(rig);
+        yield* quiesce();
+        const atFirstBoundary = yield* rig.repository.lookup(started.runId);
+        const decisionsAtFirstBoundary = rig.decisions().length;
+        rig.standIn.gate("after-first-boundary").release();
         yield* untilTerminal(rig, started.runId);
-        return resultOf(yield* rig.supervisor.result(started.runId));
+        return {
+          atFirstBoundary,
+          decisionsAtFirstBoundary,
+          decisions: rig.decisions(),
+          result: resultOf(yield* rig.supervisor.result(started.runId)),
+        };
       }),
   );
 
+  // The first result is only a Turn boundary: guidance is outstanding, so no
+  // decision is recorded and the Run remains active.
+  assert.equal(value.atFirstBoundary.state, "active");
+  assert.equal(value.decisionsAtFirstBoundary, 0);
+  // The boundary with nothing outstanding records exactly one decision.
+  assert.equal(value.decisions.length, 1);
+  assert.equal(value.decisions[0]?.ending.ending, "answered");
+  assert.equal(
+    value.decisions[0]?.reconciliation?.finalOutput,
+    "the steered answer",
+  );
   // One Run, two provider turns, and the answer is the second one.
-  assert.equal(value.status, "completed");
-  assert.equal(value.finalOutput, "the steered answer");
-  assert.equal(value.usage.turns, 2);
+  assert.equal(value.result.status, "completed");
+  assert.equal(value.result.finalOutput, "the steered answer");
+  assert.equal(value.result.usage.turns, 2);
   // Both result frames were differenced rather than summed.
-  assert.equal(value.usage.totals.input, 180);
-  assert.equal(value.usage.totals.output, 45);
+  assert.equal(value.result.usage.totals.input, 180);
+  assert.equal(value.result.usage.totals.output, 45);
   assert.deepEqual(
-    value.transcript.map((item) => item.role),
+    value.result.transcript.map((item) => item.role),
     ["assistant", "user", "assistant"],
   );
 });
@@ -942,6 +965,7 @@ test("a Run cancelled before any frame settles cancelled with nothing at all", a
           result: resultOf(yield* rig.supervisor.result(started.runId)),
           resumed: resumed.outcome,
           retained: rig.probe().retainedIdentities,
+          decisions: rig.decisions(),
         };
       }),
   );
@@ -951,6 +975,7 @@ test("a Run cancelled before any frame settles cancelled with nothing at all", a
   assert.deepEqual(value.result.transcript, []);
   assert.equal(value.result.finalOutput, "");
   assert.equal(value.result.usage.turns, 0);
+  assert.deepEqual(value.decisions, []);
   // And the BackendAgent is still unopened, so the Subagent is honestly
   // non-resumable rather than broken.
   assert.equal(value.retained, 0);
@@ -1035,6 +1060,7 @@ test("a successful result already observed survives a later cancel", async () =>
         [
           { step: "init" },
           { step: "assistant", messageId: "msg_1", text: "the answer" },
+          { step: "stderr", text: "provider-authored detail" },
           { step: "result", text: "the answer" },
           { step: "hang" },
         ],
@@ -1046,14 +1072,36 @@ test("a successful result already observed survives a later cancel", async () =>
           yield* rig.supervisor.start(claudeRigRequest()),
         );
         yield* untilQueried(rig);
+        yield* until(
+          "the completed Turn to record its decision",
+          Effect.sync(() => rig.decisions().length === 1),
+        );
+        const decisions = rig.decisions();
         yield* rig.supervisor.cancel([started.runId]);
         yield* untilTerminal(rig, started.runId);
-        return resultOf(yield* rig.supervisor.result(started.runId));
+        return {
+          decisions,
+          result: resultOf(yield* rig.supervisor.result(started.runId)),
+        };
       }),
   );
 
-  assert.equal(value.status, "completed");
-  assert.equal(value.finalOutput, "the answer");
+  assert.deepEqual(value.decisions, [
+    {
+      ending: { ending: "answered" },
+      reconciliation: {
+        turns: 1,
+        model: STAND_IN_MODEL,
+        finalOutput: "the answer",
+      },
+    },
+  ]);
+  assert.equal(value.result.status, "completed");
+  assert.equal(value.result.finalOutput, "the answer");
+  assert.deepEqual(
+    value.result.diagnostics.map((diagnostic) => diagnostic.message),
+    [`${SDK_STDERR_CATEGORY}: [redacted]`],
+  );
 });
 
 test("a result the provider marked as an error fails with a confined diagnostic", async () => {
