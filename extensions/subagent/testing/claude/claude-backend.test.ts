@@ -1,17 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect } from "effect";
-import { TestClock } from "effect/testing";
 import {
   CLAUDE_ATTACHMENT_FAILED_MESSAGE,
   CLAUDE_CAPABILITIES,
-  CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE,
-  CONTROL_NOT_DELIVERED_CATEGORY,
   claudeProbeIsClear,
-  MISSING_CLAUDE_RESULT_MESSAGE,
   RESULT_ERROR_CATEGORY,
   SDK_STDERR_CATEGORY,
-  TURN_BOUNDARY_WAIT_MILLIS,
 } from "../../backend/claude/index.ts";
 import type { RunId, RunResult } from "../../domain/index.ts";
 import { DEFAULT_RUNTIME_POLICY } from "../../runtime/policy.ts";
@@ -24,11 +19,7 @@ import {
   untilTerminal,
   withClaudeSession,
 } from "./claude-rig.ts";
-import {
-  OTHER_STAND_IN_IDENTITY,
-  STAND_IN_IDENTITY,
-  STAND_IN_MODEL,
-} from "./stand-in-query.ts";
+import { STAND_IN_IDENTITY, STAND_IN_MODEL } from "./stand-in-query.ts";
 
 /**
  * The Claude behaviours the shared suite cannot ask about.
@@ -305,309 +296,8 @@ test("closing twice aborts the live Query once", async () => {
 });
 
 /* ============================================================== */
-/* Replay, and the attachment boundary                             */
+/* Attachment loss after a resumed Query                           */
 /* ============================================================== */
-
-test("a resumed Query's replayed history is not part of the resumed Run", async () => {
-  const { value } = await withClaudeSession(
-    {
-      scripts: [
-        [
-          { step: "init" },
-          { step: "assistant", messageId: "msg_1", text: "the first answer" },
-          {
-            step: "result",
-            text: "the first answer",
-            models: { [STAND_IN_MODEL]: { input: 100, output: 40 } },
-          },
-        ],
-        [
-          // Everything before the boundary belongs to the earlier
-          // conversation. The provider does not flag it, so the pre-boundary
-          // drop is what has to catch it.
-          { step: "history", role: "user", text: "the old question" },
-          { step: "history", role: "assistant", text: "the first answer" },
-          // And a frame the provider *does* flag, after the boundary.
-          { step: "init" },
-          { step: "assistant", text: "replayed again", replay: true },
-          { step: "assistant", messageId: "msg_2", text: "the second answer" },
-          {
-            step: "result",
-            text: "the second answer",
-            models: { [STAND_IN_MODEL]: { input: 150, output: 55 } },
-          },
-        ],
-      ],
-    },
-    (rig) =>
-      Effect.gen(function* () {
-        const first = startedRun(
-          yield* rig.supervisor.start(claudeRigRequest()),
-        );
-        yield* untilTerminal(rig, first.runId);
-        const resumed = startedRun(
-          yield* rig.supervisor.resume({
-            subagentId: first.subagentId,
-            description: "again",
-            prompt: "and again",
-          }),
-        );
-        yield* untilTerminal(rig, resumed.runId);
-        return {
-          first: resultOf(yield* rig.supervisor.result(first.runId)),
-          second: resultOf(yield* rig.supervisor.result(resumed.runId)),
-        };
-      }),
-  );
-
-  // The resumed Run's transcript holds only its own work: no replayed history
-  // item, and no duplicate of the first Run's answer.
-  assert.deepEqual(
-    value.second.transcript.map((item) =>
-      item.parts
-        .filter((part) => part.kind === "text")
-        .map((part) => (part.kind === "text" ? part.text : ""))
-        .join(""),
-    ),
-    ["the second answer"],
-  );
-  // And it is charged the difference rather than the whole conversation: the
-  // provider's reading is cumulative, and the translator starts from zero.
-  assert.equal(value.first.usage.totals.input, 100);
-  assert.equal(value.second.usage.totals.input, 150);
-  assert.equal(value.second.usage.turns, 1);
-});
-
-test("an identity that differs from the retained one fails without falling back", async () => {
-  const { value } = await withClaudeSession(
-    {
-      scripts: [
-        ANSWERED,
-        [
-          // A Query that attached to some other conversation. Answering from
-          // it would be a Run silently reporting someone else's context.
-          { step: "init", identity: OTHER_STAND_IN_IDENTITY },
-          { step: "assistant", text: "an answer from the wrong conversation" },
-          { step: "result", text: "an answer from the wrong conversation" },
-        ],
-      ],
-    },
-    (rig) =>
-      Effect.gen(function* () {
-        const first = startedRun(
-          yield* rig.supervisor.start(claudeRigRequest()),
-        );
-        yield* untilTerminal(rig, first.runId);
-        const resumed = startedRun(
-          yield* rig.supervisor.resume({
-            subagentId: first.subagentId,
-            description: "again",
-            prompt: "and again",
-          }),
-        );
-        yield* untilTerminal(rig, resumed.runId);
-        const failed = resultOf(yield* rig.supervisor.result(resumed.runId));
-        const again = yield* rig.supervisor.resume({
-          subagentId: first.subagentId,
-          description: "once more",
-          prompt: "once more",
-        });
-        return { failed, again: again.outcome };
-      }),
-  );
-
-  assert.equal(value.failed.status, "failed");
-  assert.equal(value.failed.errorMessage, CLAUDE_ATTACHMENT_FAILED_MESSAGE);
-  // Nothing from the wrong conversation reached the transcript.
-  assert.deepEqual(value.failed.transcript, []);
-  // And the loss is monotonic: the conversation does not come back.
-  assert.equal(value.again, "conversation lost");
-});
-
-test("a fresh Run with a malformed init identity names that failure", async () => {
-  const { value } = await withClaudeSession(
-    {
-      scripts: [
-        [
-          { step: "init", identity: "not-a-conversation-identity" },
-          { step: "assistant", text: "an answer" },
-          { step: "result", text: "an answer" },
-        ],
-      ],
-    },
-    (rig) =>
-      Effect.gen(function* () {
-        const started = startedRun(
-          yield* rig.supervisor.start(claudeRigRequest()),
-        );
-        yield* untilTerminal(rig, started.runId);
-        return resultOf(yield* rig.supervisor.result(started.runId));
-      }),
-  );
-
-  assert.equal(value.status, "failed");
-  assert.equal(value.errorMessage, CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE);
-});
-
-/* ============================================================== */
-/* Steering: confirmation, and the Turn boundary                   */
-/* ============================================================== */
-
-test("guidance becomes a user observation only when the provider echoes it", async () => {
-  const { value } = await withClaudeSession(
-    {
-      scripts: [
-        [
-          { step: "init" },
-          { step: "assistant", messageId: "msg_1", text: "under way" },
-          { step: "await-input", echo: true },
-          { step: "assistant", messageId: "msg_2", text: "the answer" },
-          { step: "result", text: "the answer", correlate: "awaited" },
-        ],
-      ],
-    },
-    (rig) =>
-      Effect.gen(function* () {
-        const started = startedRun(
-          yield* rig.supervisor.start(claudeRigRequest()),
-        );
-        yield* untilQueried(rig);
-        const steered = yield* rig.supervisor.steer(started.runId, {
-          type: "steer",
-          text: "also mention the tests",
-        });
-        yield* untilTerminal(rig, started.runId);
-        return {
-          steered: steered.outcome,
-          result: resultOf(yield* rig.supervisor.result(started.runId)),
-          record: rig.standIn.record(),
-        };
-      }),
-  );
-
-  assert.equal(value.steered, "accepted");
-  // Pushed with `later`, so the provider finishes the turn it is on first.
-  assert.deepEqual(value.record.controls, ["also mention the tests"]);
-  assert.equal(value.record.inputs[1]?.priority, "later");
-  assert.deepEqual(
-    value.result.transcript
-      .filter((item) => item.role === "user")
-      .map((item) =>
-        item.parts
-          .filter((part) => part.kind === "text")
-          .map((part) => (part.kind === "text" ? part.text : ""))
-          .join(""),
-      ),
-    ["also mention the tests"],
-  );
-});
-
-test("guidance the provider never acknowledges is delivered and never claimed", async () => {
-  const { value } = await withClaudeSession(
-    {
-      scripts: [
-        [
-          { step: "init" },
-          { step: "assistant", messageId: "msg_1", text: "under way" },
-          // Taken, never echoed, and the result cannot correlate it.
-          { step: "await-input" },
-          { step: "assistant", messageId: "msg_2", text: "the answer" },
-          { step: "result", text: "the answer", correlate: "unowned" },
-        ],
-      ],
-    },
-    (rig) =>
-      Effect.gen(function* () {
-        const started = startedRun(
-          yield* rig.supervisor.start(claudeRigRequest()),
-        );
-        yield* untilQueried(rig);
-        yield* rig.supervisor.steer(started.runId, {
-          type: "steer",
-          text: "guidance nobody confirmed",
-        });
-        yield* untilPushed(rig);
-        yield* untilTerminal(rig, started.runId);
-        return {
-          result: resultOf(yield* rig.supervisor.result(started.runId)),
-          controls: rig.standIn.record().controls,
-        };
-      }),
-  );
-
-  // The Control reached the provider — admission said accepted, and it did.
-  assert.deepEqual(value.controls, ["guidance nobody confirmed"]);
-  // A result that could not be tied to an input this Run owns cannot prove
-  // the guidance belongs to a later turn, so the answer stands and no user
-  // observation is fabricated.
-  assert.equal(value.result.status, "completed");
-  assert.equal(value.result.finalOutput, "the answer");
-  assert.deepEqual(
-    value.result.transcript.filter((item) => item.role === "user"),
-    [],
-  );
-});
-
-test("a result frame's correlation confirms guidance the provider never echoed", async () => {
-  // The second kind of provider evidence, and the only one on this path: the
-  // Query takes the Control and answers it without ever emitting a user frame
-  // for it, and the result names its uuid as the input the turn answered.
-  // Without this the Run would have delivered guidance the model acted on and
-  // reported nothing about it.
-  const { value } = await withClaudeSession(
-    {
-      scripts: [
-        [
-          { step: "init" },
-          { step: "assistant", messageId: "msg_1", text: "under way" },
-          { step: "await-input" },
-          { step: "assistant", messageId: "msg_2", text: "the steered answer" },
-          {
-            step: "result",
-            text: "the steered answer",
-            numTurns: 2,
-            correlate: "awaited",
-          },
-        ],
-      ],
-    },
-    (rig) =>
-      Effect.gen(function* () {
-        const started = startedRun(
-          yield* rig.supervisor.start(claudeRigRequest()),
-        );
-        yield* untilQueried(rig);
-        yield* rig.supervisor.steer(started.runId, {
-          type: "steer",
-          text: "confirmed by correlation alone",
-        });
-        yield* untilTerminal(rig, started.runId);
-        return {
-          result: resultOf(yield* rig.supervisor.result(started.runId)),
-          record: rig.standIn.record(),
-        };
-      }),
-  );
-
-  // No user frame was ever emitted, so the echo path cannot be what confirmed
-  // it.
-  assert.equal(
-    value.result.transcript.filter((item) => item.role === "user").length,
-    1,
-  );
-  // The user message lands *after* the answer it shaped, and that is honest
-  // rather than a bug: the result frame is the moment the adapter learned the
-  // guidance had been seen, and reordering the transcript on a guess about
-  // when the model actually read it would be fiction. An echo, when the
-  // provider sends one, arrives earlier and is ordered earlier.
-  assert.deepEqual(
-    value.result.transcript.map((item) => item.role),
-    ["assistant", "assistant", "user"],
-  );
-  assert.deepEqual(value.record.controls, ["confirmed by correlation alone"]);
-  assert.equal(value.result.status, "completed");
-  assert.equal(value.result.finalOutput, "the steered answer");
-});
 
 test("a resumed Query that dies mid-stream marks the conversation lost", async () => {
   // Loss has to be monotonic across *every* way an attachment can fail, not
@@ -661,187 +351,9 @@ test("a resumed Query that dies mid-stream marks the conversation lost", async (
   assert.equal(value.retained, 0);
 });
 
-test("a result frame with guidance still outstanding is a Turn boundary, not settlement", async () => {
-  const { value } = await withClaudeSession(
-    {
-      scripts: [
-        [
-          { step: "init" },
-          { step: "assistant", messageId: "msg_1", text: "the first answer" },
-          // The Control has been pushed but not yet seen, and this result
-          // answers the *prompt*. The Run must stay active.
-          { step: "await-input" },
-          {
-            step: "result",
-            text: "the first answer",
-            numTurns: 1,
-            correlate: "prompt",
-            models: { [STAND_IN_MODEL]: { input: 100, output: 20 } },
-          },
-          { step: "await-gate", gate: "after-first-boundary" },
-          { step: "echo-input" },
-          { step: "assistant", messageId: "msg_2", text: "the steered answer" },
-          {
-            step: "result",
-            text: "the steered answer",
-            numTurns: 2,
-            correlate: "awaited",
-            models: { [STAND_IN_MODEL]: { input: 180, output: 45 } },
-          },
-        ],
-      ],
-    },
-    (rig) =>
-      Effect.gen(function* () {
-        const started = startedRun(
-          yield* rig.supervisor.start(claudeRigRequest()),
-        );
-        yield* untilQueried(rig);
-        yield* rig.supervisor.steer(started.runId, {
-          type: "steer",
-          text: "and mention the tests",
-        });
-        yield* untilPushed(rig);
-        yield* quiesce();
-        const atFirstBoundary = yield* rig.repository.lookup(started.runId);
-        const decisionsAtFirstBoundary = rig.decisions().length;
-        rig.standIn.gate("after-first-boundary").release();
-        yield* untilTerminal(rig, started.runId);
-        return {
-          atFirstBoundary,
-          decisionsAtFirstBoundary,
-          decisions: rig.decisions(),
-          result: resultOf(yield* rig.supervisor.result(started.runId)),
-        };
-      }),
-  );
-
-  // The first result is only a Turn boundary: guidance is outstanding, so no
-  // decision is recorded and the Run remains active.
-  assert.equal(value.atFirstBoundary.state, "active");
-  assert.equal(value.decisionsAtFirstBoundary, 0);
-  // The boundary with nothing outstanding records exactly one decision.
-  assert.equal(value.decisions.length, 1);
-  assert.equal(value.decisions[0]?.ending.ending, "answered");
-  assert.equal(
-    value.decisions[0]?.reconciliation?.finalOutput,
-    "the steered answer",
-  );
-  // One Run, two provider turns, and the answer is the second one.
-  assert.equal(value.result.status, "completed");
-  assert.equal(value.result.finalOutput, "the steered answer");
-  assert.equal(value.result.usage.turns, 2);
-  // Both result frames were differenced rather than summed.
-  assert.equal(value.result.usage.totals.input, 180);
-  assert.equal(value.result.usage.totals.output, 45);
-  assert.deepEqual(
-    value.result.transcript.map((item) => item.role),
-    ["assistant", "user", "assistant"],
-  );
-});
-
-test("silence after a Turn boundary abandons guidance and settles", async () => {
-  const { value } = await withClaudeSession(
-    {
-      testClock: true,
-      scripts: [
-        [
-          { step: "init" },
-          { step: "assistant", messageId: "msg_1", text: "the first answer" },
-          { step: "await-input" },
-          {
-            step: "result",
-            text: "the first answer",
-            correlate: "prompt",
-          },
-          { step: "hang" },
-        ],
-      ],
-    },
-    (rig) =>
-      Effect.gen(function* () {
-        const started = startedRun(
-          yield* rig.supervisor.start(claudeRigRequest()),
-        );
-        yield* untilQueried(rig);
-        yield* rig.supervisor.steer(started.runId, {
-          type: "steer",
-          text: "guidance awaiting another turn",
-        });
-        yield* untilPushed(rig);
-        yield* quiesce();
-        yield* TestClock.adjust(TURN_BOUNDARY_WAIT_MILLIS + 1);
-        yield* untilTerminal(rig, started.runId);
-        yield* quiesce();
-        return {
-          result: resultOf(yield* rig.supervisor.result(started.runId)),
-          record: rig.standIn.record(),
-        };
-      }),
-  );
-
-  assert.equal(value.result.status, "completed");
-  assert.deepEqual(
-    value.result.diagnostics.map((diagnostic) => ({
-      category: diagnostic.category,
-      message: diagnostic.message,
-    })),
-    [
-      {
-        category: "control",
-        message: `${CONTROL_NOT_DELIVERED_CATEGORY}: [redacted]`,
-      },
-    ],
-  );
-  assert.equal(value.record.openInputs, 0);
-});
-
-test("a frame after the Turn boundary disarms its one-frame wait", async () => {
-  const { value } = await withClaudeSession(
-    {
-      testClock: true,
-      scripts: [
-        [
-          { step: "init" },
-          { step: "await-input" },
-          { step: "result", text: "first", correlate: "prompt" },
-          { step: "echo-input" },
-          { step: "await-gate", gate: "finish" },
-          { step: "result", text: "done", correlate: "awaited" },
-        ],
-      ],
-    },
-    (rig) =>
-      Effect.gen(function* () {
-        const started = startedRun(
-          yield* rig.supervisor.start(claudeRigRequest()),
-        );
-        yield* untilQueried(rig);
-        yield* rig.supervisor.steer(started.runId, {
-          type: "steer",
-          text: "guidance answered after the boundary",
-        });
-        yield* untilPushed(rig);
-        yield* quiesce();
-        yield* TestClock.adjust(TURN_BOUNDARY_WAIT_MILLIS + 1);
-        const beforeFinish = yield* rig.repository.lookup(started.runId);
-        rig.standIn.gate("finish").release();
-        yield* untilTerminal(rig, started.runId);
-        return {
-          beforeFinish,
-          result: resultOf(yield* rig.supervisor.result(started.runId)),
-        };
-      }),
-  );
-
-  assert.equal(value.beforeFinish.state, "active");
-  assert.equal(value.result.status, "completed");
-  assert.deepEqual(
-    value.result.diagnostics.map((diagnostic) => diagnostic.category),
-    ["reconciliation-difference"],
-  );
-  assert.equal(value.result.finalOutput, "done");
-});
+/* ============================================================== */
+/* Steering delivery and per-Run Query routing                     */
+/* ============================================================== */
 
 test("only one Control is provider-visible at a time", async () => {
   const { value } = await withClaudeSession(
@@ -876,6 +388,10 @@ test("only one Control is provider-visible at a time", async () => {
   );
 
   assert.deepEqual(value.record.controls, ["first", "second", "third"]);
+  assert.deepEqual(
+    value.record.inputs.slice(1).map((input) => input.priority),
+    ["later", "later", "later"],
+  );
   // The delivery-side assertion the Pi gate could not make: the adapter waits
   // for the provider's acknowledgement before pushing the next one.
   assert.equal(value.record.maxConcurrentControls, 1);
@@ -1105,40 +621,6 @@ test("a successful result already observed survives a later cancel", async () =>
   );
 });
 
-test("a result the provider marked as an error fails with a confined diagnostic", async () => {
-  const { value } = await withClaudeSession(
-    {
-      scripts: [
-        [
-          { step: "init" },
-          {
-            step: "result",
-            isError: true,
-            text: "the provider's own explanation, with a path in it",
-          },
-        ],
-      ],
-    },
-    (rig) =>
-      Effect.gen(function* () {
-        const started = startedRun(
-          yield* rig.supervisor.start(claudeRigRequest()),
-        );
-        yield* untilTerminal(rig, started.runId);
-        return resultOf(yield* rig.supervisor.result(started.runId));
-      }),
-  );
-
-  assert.equal(value.status, "failed");
-  assert.match(value.errorMessage ?? "", /Claude query reported an error/);
-  assert.match(value.errorMessage ?? "", /\[redacted\]/);
-  assert.doesNotMatch(value.errorMessage ?? "", /path in it/);
-  assert.deepEqual(
-    value.diagnostics.map((diagnostic) => diagnostic.category),
-    ["backend-failure"],
-  );
-});
-
 test("SDK stderr written by final Query.close is not lost", async () => {
   const { value } = await withClaudeSession(
     {
@@ -1163,63 +645,6 @@ test("SDK stderr written by final Query.close is not lost", async () => {
       `${SDK_STDERR_CATEGORY}: [redacted]`,
     ],
   );
-});
-
-test("a Query that ends without a result fails with a fixed message", async () => {
-  const { value } = await withClaudeSession(
-    {
-      scripts: [
-        [
-          { step: "init" },
-          { step: "assistant", messageId: "msg_1", text: "a partial answer" },
-        ],
-      ],
-    },
-    (rig) =>
-      Effect.gen(function* () {
-        const started = startedRun(
-          yield* rig.supervisor.start(claudeRigRequest()),
-        );
-        yield* untilTerminal(rig, started.runId);
-        return resultOf(yield* rig.supervisor.result(started.runId));
-      }),
-  );
-
-  assert.equal(value.status, "failed");
-  assert.equal(value.errorMessage, MISSING_CLAUDE_RESULT_MESSAGE);
-  // What it did observe is kept.
-  assert.equal(value.finalOutput, "a partial answer");
-});
-
-test("SDK stderr becomes one bounded diagnostic and keeps not a word of itself", async () => {
-  const { value } = await withClaudeSession(
-    {
-      scripts: [
-        [
-          { step: "init" },
-          { step: "stderr", text: "a warning naming /Users/someone/secret" },
-          { step: "stderr", text: "and another one" },
-          { step: "assistant", messageId: "msg_1", text: "the answer" },
-          { step: "result", text: "the answer" },
-        ],
-      ],
-    },
-    (rig) =>
-      Effect.gen(function* () {
-        const started = startedRun(
-          yield* rig.supervisor.start(claudeRigRequest()),
-        );
-        yield* untilTerminal(rig, started.runId);
-        return resultOf(yield* rig.supervisor.result(started.runId));
-      }),
-  );
-
-  assert.equal(value.status, "completed");
-  assert.deepEqual(
-    value.diagnostics.map((diagnostic) => diagnostic.message),
-    ["the Claude SDK reported diagnostics: [redacted]"],
-  );
-  assert.doesNotMatch(JSON.stringify(value), /secret/);
 });
 
 /* ============================================================== */

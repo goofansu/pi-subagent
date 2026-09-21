@@ -335,6 +335,7 @@ test("a timed-out Turn-boundary wait discards guidance and diagnoses non-deliver
 
   const timedOut = fold.read({ kind: "turn-boundary-timeout" });
   assert.equal(timedOut.next.step, "decided");
+  assert.equal(timedOut.inputClosed, true);
   if (timedOut.next.step === "decided") {
     assert.deepEqual(timedOut.next.bundle.reconciliation, {
       turns: 1,

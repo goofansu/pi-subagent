@@ -640,17 +640,26 @@ Recording native prompt return freezes the decision synchronously. A translated
 Pi reading is adapter-local input to this fold; it is neither a provider event
 nor a core Observation.
 
+**Claude Run evidence** — the in-process, Run-scoped fold inside the Claude
+adapter that turns translated frame readings and execution-witnessed facts into
+ordered Observations and one next step: continue, await the Turn boundary,
+decided, or fatal. It owns identity attachment, replay dropping, the Control
+slot's confirmation and discard rules, result classification, and the once-only
+stderr diagnostic. It reads no wire shape, performs no I/O, and settles
+nothing.
+
 **Claude adapter** — everything this codebase knows about Claude, in
 `backend/claude/`.
-The SDK's `query` function, its forty-member frame union, its options bag, its
-streamed input message, and the provider's own `AbortController` all stop
-there. The boundary test enforces it by *specifier* rather than by binding —
-stricter than the Pi rule, because `@anthropic-ai/claude-agent-sdk` is a
-provider and nothing else, while Pi's package is also the host API — and it
-admits the SDK nowhere outside the directory, not even in the adapter's own
-test doubles, which take the SDK's types through the aliases the adapter
-re-exports. The adapter does not know the runtime, the host, presentation, or
-the *other adapter* exists.
+The directory holds the translator, the Claude Run evidence fold, and execution,
+so a Run reads translate → fold → execute. The SDK's `query` function, its
+forty-member frame union, its options bag, its streamed input message, and the
+provider's own `AbortController` all stop there. The boundary test enforces SDK
+confinement by *specifier* rather than by binding — stricter than the Pi rule,
+because `@anthropic-ai/claude-agent-sdk` is a provider and nothing else, while
+Pi's package is also the host API — and it admits the SDK nowhere outside the
+directory, not even in the adapter's own test doubles, which take the SDK's
+types through the aliases the adapter re-exports. The adapter does not know the
+runtime, the host, presentation, or the *other adapter* exists.
 
 **Conversation identity** — the single opaque string a Claude BackendAgent
 retains for its Subagent's life. It is the whole of what "resume" means for
@@ -678,16 +687,17 @@ a replay. At the boundary a missing, malformed, or *different* identity fails
 the Run with a fixed attachment message and marks the conversation lost. It
 never falls back to a fresh conversation, because a resumed Run silently
 answering from an empty context is worse than one that says it could not
-attach.
+attach. Claude Run evidence decides attachment and replay dropping at this
+boundary.
 
 **Turn boundary** — a provider result frame that ends a *turn* rather than the
 Run. Claude's steering enters a live Query through the same input stream the
 prompt came from, and the provider answers each turn with its own result frame.
 So a Run with guidance still outstanding stays active across a result the
 provider correlated to an input the Run owns, and settles on the result that
-finds nothing outstanding. The execution decides when the Run is semantically
-complete; the core still performs the terminal transition. ADR-0018 meeting
-ADR-0025.
+finds nothing outstanding. Claude Run evidence decides whether a result is a
+Turn boundary or a terminal answer; the core still performs the terminal
+transition. ADR-0018 meeting ADR-0025.
 
 **Client-owned input stream** — the async iterable one Claude Run creates,
 pushes its prompt and each admitted Control into, and closes. The SDK only
@@ -701,7 +711,8 @@ from the mailbox and only when the slot is free, so guidance the provider is
 not ready for stays in the mailbox where ADR-0026 puts the bound and where a
 caller learns at once that there is no room. An adapter that drained the
 mailbox into an array of its own would have moved the queue somewhere with
-neither a bound nor an answer.
+neither a bound nor an answer. Claude Run evidence owns the slot's confirmation
+and discard decisions; execution only waits for and pushes its visible Control.
 
 **Confirmation** — the provider evidence that turns an admitted Control into a
 `user` observation: a user frame echoing the uuid the client pushed, or a result
@@ -709,6 +720,8 @@ frame naming that uuid as the input its turn answered. Nothing else counts. A
 Control the provider never acknowledges was still *accepted*, which is what the
 caller was told, and it appears nowhere in the transcript — a transcript
 showing guidance the model never saw is the one lie this seam must not tell.
+Claude Run evidence alone turns either form of confirmation into that
+observation.
 
 **Adapter tally** — BackendAgents an adapter opened, and closes that took
 effect. Beside the native probe and deliberately not part of it: it answers a

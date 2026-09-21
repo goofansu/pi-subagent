@@ -1,37 +1,13 @@
 /**
- * One Run, executed as one streaming Claude Query.
+ * One Run's streaming Claude Query resources and I/O.
  *
- * Claude is the backend the contract was shaped around and the one that tests
- * it hardest, and four things about this file are consequences of that rather
- * than choices:
- *
- * - **A result frame is a Turn boundary, not settlement.** Steering enters the
- *   Query through its own input stream, and the provider answers each turn
- *   with a `result` frame. So a Run with guidance still outstanding is *not*
- *   over when a result arrives: it stays active, the next Control goes in, and
- *   the Run settles on the result that finds nothing outstanding. That is
- *   ADR-0018 meeting ADR-0025 — the Run evidence fold decides when the Run is
- *   semantically complete, and the core still performs the terminal
- *   transition.
- * - **Confirmation requires provider evidence.** A Control that was admitted
- *   has been *accepted*, which is what the caller was told. It becomes a `user`
- *   observation only when the provider echoes the client's own uuid, or a
- *   result frame names that uuid as the turn it answered. A transcript showing
- *   guidance the model never saw is the one lie this seam must not tell.
- * - **The conversation identity is folded here.** A Claude BackendAgent has no
- *   provider-side open: it begins holding nothing, and the Run evidence fold
- *   acquires its identity from the first identity-bearing frame of its first
- *   Run. A missing, malformed, or *different* identity at that boundary fails
- *   the Run and marks the conversation lost — it never falls back to a fresh
- *   conversation, because a resumed Run silently answering from an empty
- *   context is worse than a resumed Run that says it could not attach.
- * - **A cancelled Run can legitimately end with nothing.** The spike aborted a
- *   Query 50 ms in and got no frames at all, not even the init frame. So this
- *   execution has to be able to settle with zero observations and leave the
- *   BackendAgent unopened, and the core has to be able to accept that.
- *
- * What this module never does is settle its own Run. It returns a bundle; the
- * core decides.
+ * This module owns only the client input stream, Query and abort lifetimes,
+ * Control-feed waiting and pushing, bounded frame reads, and publication
+ * through ExecutionIO. Claude Run evidence owns what every translated frame or
+ * execution-witnessed fact means: identity and replay, confirmation and the
+ * Control slot, Turn boundaries, terminal classification, and stderr
+ * diagnostics. Execution follows the fold's next step and never settles the
+ * Run; it reports a Terminal bundle for the core to arbitrate.
  */
 
 import { Effect, Fiber, type Scope } from "effect";
