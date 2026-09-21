@@ -35,7 +35,7 @@ import {
 } from "./tool-row-facts.ts";
 
 /** The operation keys of the one agent-tool family. */
-export type AgentToolOperation =
+type AgentToolOperation =
   | "start"
   | "resume"
   | "wait"
@@ -49,7 +49,7 @@ export interface AgentToolRendererState {
   callHidden?: boolean;
 }
 
-export interface AgentToolRenderContext {
+interface AgentToolRenderContext {
   readonly args: unknown;
   readonly lastComponent?: Component;
   readonly state: AgentToolRendererState;
@@ -58,18 +58,18 @@ export interface AgentToolRenderContext {
   readonly argsComplete: boolean;
 }
 
-export interface AgentToolResultOptions {
+interface AgentToolResultOptions {
   readonly expanded: boolean;
   readonly isPartial: boolean;
 }
 
-export interface AgentToolRenderableResult {
+interface AgentToolRenderableResult {
   readonly content: unknown;
   readonly details?: unknown;
 }
 
 /** A complete pair is the only unit a registration can obtain. */
-export interface AgentToolRendererPair {
+interface AgentToolRendererPair {
   readonly renderCall: (
     args: unknown,
     theme: RenderableTheme,

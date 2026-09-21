@@ -11,34 +11,65 @@
  * and what keeps state out of it: v1's dispatcher ended up owning presentation
  * state because presentation could reach the thing that owned lifecycle.
  *
- * This barrel is the module's one interface: every file in the module is
- * exported here, and every consumer outside `presentation/` enters through it
- * rather than naming a file by path. A consumer that reached a file by path
- * would be building against an implementation detail, and the next surface
- * would find a precedent for it.
- *
- * Unlike the import restriction above, that is a convention and not a checked
- * rule: no boundary rule rejects a consumer reaching past this file, so a new
- * presentation file belongs in the list below when it is written.
+ * This barrel is the module's one interface: it names what the host, the
+ * application façade, and the entry point may read. Every other name in the
+ * module is implementation, reachable by siblings and colocated tests but not
+ * by consumers outside `presentation/`. The boundary test enforces that seam.
  */
 
-export * from "./agent-tool-renderers.ts";
-export * from "./banner.ts";
-export * from "./completion-view.ts";
-export * from "./dashboard-page.ts";
-export * from "./dashboard-panel.ts";
-export * from "./final-output-section.ts";
-export * from "./history.ts";
-export * from "./inspection.ts";
-export * from "./notification-text.ts";
-export * from "./prose.ts";
-export * from "./renderers.ts";
-export * from "./result-details.ts";
-export * from "./rows.ts";
-export * from "./run-card.ts";
-export * from "./run-line.ts";
-export * from "./run-presentation.ts";
-export * from "./status.ts";
-export * from "./text-width.ts";
-export * from "./tool-row-facts.ts";
-export * from "./views.ts";
+export { agentToolRenderers } from "./agent-tool-renderers.ts";
+
+export type { DashboardIdentity } from "./banner.ts";
+
+export {
+  type DashboardKey,
+  type DashboardPageChrome,
+  type DashboardPageEvent,
+  emptyDashboardPage,
+  reduceDashboardPage,
+} from "./dashboard-page.ts";
+
+export { formatNotificationText } from "./notification-text.ts";
+
+export {
+  formatCancelOutcomes,
+  formatInvalidProfilesWarning,
+  formatNoActiveRuns,
+  formatResultRejection,
+  formatResumeOutcome,
+  formatSessionNotReady,
+  formatStartOutcome,
+  formatSteerOutcome,
+  formatToolInputRejected,
+  formatWaitOutcomes,
+} from "./prose.ts";
+
+export { contentText, formatNotificationSummary } from "./renderers.ts";
+
+export {
+  formatRowSummary,
+  type RenderableTheme,
+  renderRunRows,
+  widgetSummary,
+} from "./rows.ts";
+
+export { formatResult } from "./run-card.ts";
+
+export {
+  cancelToolRowFacts,
+  encodeToolRowFacts,
+  noActiveWaitAllToolRowFacts,
+  resultToolRowFacts,
+  resumeToolRowFacts,
+  startToolRowFacts,
+  steerToolRowFacts,
+  type ToolRowFacts,
+  waitAllToolRowFacts,
+  waitToolRowFacts,
+} from "./tool-row-facts.ts";
+
+export {
+  type HandoffStatus,
+  handoffEndedBadly,
+  type RunRowView,
+} from "./views.ts";

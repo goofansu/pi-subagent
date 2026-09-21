@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { stripVTControlCharacters } from "node:util";
 import { Deferred, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 import { inspectRun } from "../application/observation.ts";
@@ -10,10 +9,6 @@ import {
   type RunId,
   subagentId,
 } from "../domain/index.ts";
-import {
-  inspectionBlocks,
-  renderInspection,
-} from "../presentation/inspection.ts";
 import { emitText } from "../testing/fakes/script.ts";
 import {
   quiesce,
@@ -25,7 +20,6 @@ import {
   untilUnderWay,
   withSession,
 } from "../testing/session-rig.ts";
-import { PLAIN_THEME } from "../testing/stand-in-host.ts";
 import { DEFAULT_RUNTIME_POLICY, type RuntimePolicy } from "./policy.ts";
 
 /**
@@ -159,20 +153,11 @@ test("a cancel arriving after the execution fiber exited settles on the answer",
         assert.equal(capture.outcome, "result");
         if (capture.outcome !== "result")
           throw new Error("Expected captured Result");
+        assert.equal(capture.summary.phase, "completed");
         assert.equal(capture.summary.cancellationReason, "requested");
+        assert.equal(capture.result.finalOutput, "the answer");
+        assert.equal(capture.result.cancellationReason, undefined);
         assert.deepEqual(capture.result, read.result);
-        // This rendering assertion intentionally stays in the race test: the
-        // regression is specifically runtime settlement observed and then
-        // presented through inspection. Keep it to terminal truth, output,
-        // and absence of cancellation wording so copy changes stay elsewhere.
-        const rendered = renderInspection(
-          inspectionBlocks(capture, "pending"),
-          100,
-          PLAIN_THEME,
-          true,
-        )
-          .map(stripVTControlCharacters)
-          .join("\n");
         assert.deepEqual(yield* rig.store.pinsOf(run.runId), pinsBefore);
         assert.deepEqual(yield* rig.supervisor.result(run.runId), read);
         const settlement = yield* settled(rig, [run.runId]);
@@ -188,7 +173,6 @@ test("a cancel arriving after the execution fiber exited settles on the answer",
           status: read.result.status,
           output: read.result.finalOutput,
           reason: read.result.cancellationReason,
-          rendered,
         };
       }),
   );
@@ -199,12 +183,6 @@ test("a cancel arriving after the execution fiber exited settles on the answer",
   assert.equal(outcome.value.output, "the answer");
   assert.equal(outcome.value.reason, undefined);
   assert.equal(outcome.value.notifications, 1);
-  assert.match(outcome.value.rendered, /status: +completed\n/);
-  assert.match(outcome.value.rendered, /Final output\n.*the answer/);
-  assert.doesNotMatch(
-    outcome.value.rendered,
-    /requested|shutdown|timeout|cancelling|cancelled/,
-  );
 });
 
 /* -------------------------------------------------------------- */

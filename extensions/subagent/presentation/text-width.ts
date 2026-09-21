@@ -5,7 +5,7 @@ import {
 } from "@earendil-works/pi-tui";
 
 /** How terminal text fitting should treat a line. */
-export interface FitOptions {
+interface FitOptions {
   /** Pad the result to the full width, so list columns line up. */
   readonly pad?: boolean;
   /**
