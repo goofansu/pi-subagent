@@ -48,6 +48,39 @@ model while the parent uses an extension-defined provider, `agent_start` fails
 because that provider is unavailable to the child. Pin a built-in or
 `models.json` model in the Profile instead.
 
+## Agent profile format
+
+To add an agent or replace a bundled one, create a Markdown file in
+`~/.pi/agent/agents/` (or `$PI_CODING_AGENT_DIR/agents/` if configured). The
+filename is the agent name: `reviewer.md` defines `reviewer`. Profiles are not
+loaded from individual projects.
+
+```markdown
+---
+description: Reviews changes for bugs and missing tests
+backend: claude
+model: sonnet
+effort: high
+tools: Read, Grep, Glob
+---
+
+Review the changes. Report actionable bugs and missing tests with file references.
+Do not modify files.
+```
+
+| Field | What to set |
+| --- | --- |
+| `description` | A short explanation of when to use this agent. Required. |
+| `backend` | `pi` (default) or `claude`. |
+| `model` | For Pi, a model ID or `provider/model-id`; omitted, it uses the caller's model. For Claude, use `fable`, `opus`, `sonnet`, or `haiku`; omitted, it uses Claude's default. Full Claude model IDs are not accepted. |
+| `effort` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. |
+| `tools` | A comma-separated list of tool names for that backend. Omit to use its defaults. Pi and Claude use different tool names. |
+| `appendSystemPrompt` | Defaults to `true`, adding the profile's instructions to the backend's standard instructions. Set `false` to replace them. |
+
+The text below the frontmatter is the agent's required system prompt. Profiles
+are loaded and validated when the Session starts; invalid profiles are reported
+then. A same-name user Profile replaces the complete bundled Profile.
+
 ## Trust and Claude settings
 
 For the safest default, I recommend setting Pi's `defaultProjectTrust` to
