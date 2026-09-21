@@ -839,6 +839,56 @@ const ToolRowFactsSchema = Schema.Union([
 ]);
 export type ToolRowFacts = typeof ToolRowFactsSchema.Type;
 
+export interface ToolRowPresentation {
+  readonly rowPhrase: string;
+  readonly tone: ToolRowTone;
+  readonly collection?: {
+    readonly separator: string;
+    readonly clauses: readonly string[];
+    readonly priority: readonly string[];
+  };
+}
+
+/** Phrase cancellation facts without making a width or layout decision. */
+export function cancelRowPresentation(
+  facts: CancelToolRowFacts,
+): ToolRowPresentation {
+  const rowPhrase = cancelBuckets(facts)
+    .map((bucket) => `${bucket.rowPhrase}: ${bucket.count}`)
+    .join(" · ");
+  return {
+    rowPhrase: rowPhrase || CANCEL_BUCKET_PRESENTATION.empty.rowPhrase,
+    tone: "toolOutput",
+  };
+}
+
+/** Read the phrase and tone declared beside any Tool-row facts kind. */
+export function toolRowPresentation(facts: ToolRowFacts): ToolRowPresentation {
+  switch (facts.kind) {
+    case "start":
+    case "resume":
+    case "steer":
+    case "result":
+      return { rowPhrase: facts.rowPhrase, tone: facts.tone };
+    case "cancel":
+      return cancelRowPresentation(facts);
+    case "collection": {
+      const presentation = collectionRowPresentation(facts);
+      return {
+        rowPhrase:
+          presentation.answer ??
+          presentation.clauses.join(presentation.separator),
+        tone: presentation.tone,
+        collection: {
+          separator: presentation.separator,
+          clauses: presentation.clauses,
+          priority: presentation.priority,
+        },
+      };
+    }
+  }
+}
+
 function resultRunSummaryOf(result: RunResult): ResultRunSummary {
   const output: CompactFinalOutputSummary = finalOutputSummary(
     interpretFinalOutput(result),

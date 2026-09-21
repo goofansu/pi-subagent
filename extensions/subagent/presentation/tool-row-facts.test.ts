@@ -11,11 +11,6 @@ import type {
 import { runId, subagentId } from "../domain/index.ts";
 import { fixtureResult } from "../testing/presentation-fixtures.ts";
 import {
-  formatResumeOutcome,
-  formatStartOutcome,
-  formatSteerOutcome,
-} from "./prose.ts";
-import {
   CANCEL_BUCKET_PRESENTATION,
   COLLECTION_PRESENTATION,
   cancelBuckets,
@@ -28,10 +23,13 @@ import {
   RESUME_OUTCOME_PRESENTATION,
   resultOutcomeSentence,
   resultToolRowFacts,
+  resumeOutcomeSentence,
   resumeToolRowFacts,
   START_OUTCOME_PRESENTATION,
   STEER_OUTCOME_PRESENTATION,
+  startOutcomeSentence,
   startToolRowFacts,
+  steerOutcomeSentence,
   steerToolRowFacts,
   waitAllToolRowFacts,
   waitToolRowFacts,
@@ -113,19 +111,19 @@ test("pass-through table keys construct and round-trip every domain outcome", ()
       startOutcomes,
       (outcome: StartOutcome) => startToolRowFacts("explore", outcome),
       (outcome: StartOutcome) =>
-        formatStartOutcome("explore", outcome, ["explore"]),
+        startOutcomeSentence("explore", outcome, ["explore"]),
     ],
     [
       RESUME_OUTCOME_PRESENTATION,
       resumeOutcomes,
       (outcome: ResumeOutcome) => resumeToolRowFacts(outcome),
-      (outcome: ResumeOutcome) => formatResumeOutcome(sid, outcome),
+      (outcome: ResumeOutcome) => resumeOutcomeSentence(sid, outcome),
     ],
     [
       STEER_OUTCOME_PRESENTATION,
       steerOutcomes,
       (outcome: SteerOutcome) => steerToolRowFacts(rid, outcome),
-      (outcome: SteerOutcome) => formatSteerOutcome(rid, outcome),
+      (outcome: SteerOutcome) => steerOutcomeSentence(rid, outcome),
     ],
   ] as const;
 

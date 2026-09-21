@@ -21,21 +21,15 @@ import {
 } from "./agent-tool-renderers.ts";
 import {
   formatResultRejection,
-  formatResumeOutcome,
-  formatStartOutcome,
-  formatSteerOutcome,
   presentCancelOutcomes,
+  presentResumeOutcome,
+  presentStartOutcome,
+  presentSteerOutcome,
   presentWait,
 } from "./prose.ts";
 import type { RenderableTheme } from "./rows.ts";
 import { formatResult } from "./run-card.ts";
-import {
-  resultToolRowFacts,
-  resumeToolRowFacts,
-  startToolRowFacts,
-  steerToolRowFacts,
-  type ToolRowFacts,
-} from "./tool-row-facts.ts";
+import { resultToolRowFacts, type ToolRowFacts } from "./tool-row-facts.ts";
 
 initTheme(undefined, false);
 
@@ -78,12 +72,18 @@ function startCases(): readonly GoldenCase[] {
       diagnostic: { category: "backend-failure", message: "unavailable" },
     },
   ];
-  return outcomes.map((outcome) => ({
-    name: `start/${outcome.outcome}`,
-    operation: "start",
-    text: formatStartOutcome("explore", outcome, ["explore", "review"]),
-    facts: startToolRowFacts("explore", outcome),
-  }));
+  return outcomes.map((outcome) => {
+    const presentation = presentStartOutcome("explore", outcome, [
+      "explore",
+      "review",
+    ]);
+    return {
+      name: `start/${outcome.outcome}`,
+      operation: "start",
+      text: presentation.text,
+      facts: presentation.facts,
+    };
+  });
 }
 
 function resumeCases(): readonly GoldenCase[] {
@@ -97,12 +97,15 @@ function resumeCases(): readonly GoldenCase[] {
     { outcome: "at capacity" },
     { outcome: "shutting down" },
   ];
-  return outcomes.map((outcome) => ({
-    name: `resume/${outcome.outcome}`,
-    operation: "resume",
-    text: formatResumeOutcome(SUBAGENT, outcome),
-    facts: resumeToolRowFacts(outcome),
-  }));
+  return outcomes.map((outcome) => {
+    const presentation = presentResumeOutcome(SUBAGENT, outcome);
+    return {
+      name: `resume/${outcome.outcome}`,
+      operation: "resume",
+      text: presentation.text,
+      facts: presentation.facts,
+    };
+  });
 }
 
 function steerCases(): readonly GoldenCase[] {
@@ -118,12 +121,15 @@ function steerCases(): readonly GoldenCase[] {
     { outcome: "unknown Run", runId: RUN },
     { outcome: "shutting down" },
   ];
-  return outcomes.map((outcome) => ({
-    name: `steer/${outcome.outcome}`,
-    operation: "steer",
-    text: formatSteerOutcome(RUN, outcome),
-    facts: steerToolRowFacts(RUN, outcome),
-  }));
+  return outcomes.map((outcome) => {
+    const presentation = presentSteerOutcome(RUN, outcome);
+    return {
+      name: `steer/${outcome.outcome}`,
+      operation: "steer",
+      text: presentation.text,
+      facts: presentation.facts,
+    };
+  });
 }
 
 function cancelCases(): readonly GoldenCase[] {

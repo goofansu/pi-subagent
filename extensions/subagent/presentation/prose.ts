@@ -32,11 +32,17 @@ import {
   formatProfileDiagnosticLines,
   noActiveWaitAllToolRowFacts,
   type ResultToolRowFacts,
+  type ResumeToolRowFacts,
   resultOutcomeSentence,
   resultToolRowFacts,
   resumeOutcomeSentence,
+  resumeToolRowFacts,
+  type StartToolRowFacts,
+  type SteerToolRowFacts,
   startOutcomeSentence,
+  startToolRowFacts,
   steerOutcomeSentence,
+  steerToolRowFacts,
   unknownAgentSentence,
   waitAllToolRowFacts,
   waitToolRowFacts,
@@ -55,6 +61,11 @@ function unreachable(outcome: never): never {
   );
 }
 
+export interface OperationPresentation<Facts> {
+  readonly text: string;
+  readonly facts: Facts;
+}
+
 /* ------------------------------------------------------------------ */
 /* agent_start                                                         */
 /* ------------------------------------------------------------------ */
@@ -67,35 +78,46 @@ export function formatUnknownAgent(
   return unknownAgentSentence(agent, available);
 }
 
-/** `agent_start`, as prose declared beside its collapsed-row presentation. */
-export function formatStartOutcome(
+/** Present one start outcome as one text-and-facts answer. */
+export function presentStartOutcome(
   agent: string,
   outcome: StartOutcome,
   available: readonly string[],
-): string {
-  return startOutcomeSentence(agent, outcome, available);
+): OperationPresentation<StartToolRowFacts> {
+  return {
+    text: startOutcomeSentence(agent, outcome, available),
+    facts: startToolRowFacts(agent, outcome),
+  };
 }
 
 /* ------------------------------------------------------------------ */
 /* agent_resume                                                        */
 /* ------------------------------------------------------------------ */
 
-export function formatResumeOutcome(
+/** Present one resume outcome as one text-and-facts answer. */
+export function presentResumeOutcome(
   subagentId: SubagentId,
   outcome: ResumeOutcome,
-): string {
-  return resumeOutcomeSentence(subagentId, outcome);
+): OperationPresentation<ResumeToolRowFacts> {
+  return {
+    text: resumeOutcomeSentence(subagentId, outcome),
+    facts: resumeToolRowFacts(outcome),
+  };
 }
 
 /* ------------------------------------------------------------------ */
 /* agent_steer                                                         */
 /* ------------------------------------------------------------------ */
 
-export function formatSteerOutcome(
+/** Present one steer outcome as one text-and-facts answer. */
+export function presentSteerOutcome(
   runId: RunId,
   outcome: SteerOutcome,
-): string {
-  return steerOutcomeSentence(runId, outcome);
+): OperationPresentation<SteerToolRowFacts> {
+  return {
+    text: steerOutcomeSentence(runId, outcome),
+    facts: steerToolRowFacts(runId, outcome),
+  };
 }
 
 /* ------------------------------------------------------------------ */

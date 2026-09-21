@@ -22,16 +22,15 @@ import {
 import type { RenderableTheme } from "./rows.ts";
 import { fitToWidth } from "./text-width.ts";
 import {
-  CANCEL_BUCKET_PRESENTATION,
   type CancelToolRowFacts,
-  type CollectedRunsToolRowFacts,
-  cancelBuckets,
-  collectionRowPresentation,
+  cancelRowPresentation,
   decodeToolRowFacts,
   type ResumedRunToolRowFacts,
   type StartedRunToolRowFacts,
   type ToolRowFacts,
+  type ToolRowPresentation,
   type ToolRowTone,
+  toolRowPresentation,
 } from "./tool-row-facts.ts";
 
 /** The operation keys of the one agent-tool family. */
@@ -381,21 +380,22 @@ function collapseHint(theme: RenderableTheme, width: number): string {
  */
 function formatStartedIdentity(
   details: StartedRunToolRowFacts,
+  presentation: ToolRowPresentation,
   theme: RenderableTheme,
   width: number,
 ): string {
   const candidates = [
-    theme.fg(details.tone, `${details.rowPhrase} ${details.agent}`) +
+    theme.fg(presentation.tone, `${presentation.rowPhrase} ${details.agent}`) +
       theme.fg(
         "dim",
         ` · Subagent ${details.subagentId} · Run ${details.runId}`,
       ),
-    theme.fg(details.tone, details.rowPhrase) +
+    theme.fg(presentation.tone, presentation.rowPhrase) +
       theme.fg(
         "dim",
         ` · Subagent ${details.subagentId} · Run ${details.runId}`,
       ),
-    theme.fg(details.tone, details.rowPhrase) +
+    theme.fg(presentation.tone, presentation.rowPhrase) +
       theme.fg("dim", ` · ${details.subagentId} · ${details.runId}`),
   ];
   return (
@@ -460,13 +460,12 @@ class UnifiedResultComponent extends CachedComponent {
         readonly sourceText?: string;
       }
     | undefined {
-    const facts = factsForOperation(
-      this.operation,
-      decodeToolRowFacts(this.result.details),
-    );
+    const facts = decodeToolRowFacts(this.result.details);
     if (facts === undefined) return undefined;
     const sourceText =
-      facts.kind === "cancel" ? cancellationSummaryText(facts) : undefined;
+      facts.kind === "cancel"
+        ? cancelRowPresentation(facts).rowPhrase
+        : undefined;
     return {
       line: (width) => toolRowSummary(facts, this.theme, width),
       sourceText,
@@ -575,13 +574,6 @@ class CancelCallComponent extends CachedComponent {
   }
 }
 
-function cancellationSummaryText(details: CancelToolRowFacts): string {
-  const clauses = cancelBuckets(details).map(
-    ({ rowPhrase, count }) => `${rowPhrase}: ${count}`,
-  );
-  return clauses.join(" · ") || CANCEL_BUCKET_PRESENTATION.empty.rowPhrase;
-}
-
 /** One-line cancellation admission summary with the configured toggle hint. */
 export function formatCancellationSummary(
   details: CancelToolRowFacts,
@@ -589,8 +581,9 @@ export function formatCancellationSummary(
   width: number,
   renderKeyHint?: KeyHintRenderer,
 ): string {
+  const presentation = cancelRowPresentation(details);
   return collapsedResultLine(
-    theme.fg("toolOutput", cancellationSummaryText(details)),
+    theme.fg(presentation.tone, presentation.rowPhrase),
     theme,
     width,
     true,
@@ -732,59 +725,39 @@ class TargetCallComponent implements Component {
 }
 
 function collectionSummary(
-  details: CollectedRunsToolRowFacts,
+  presentation: ToolRowPresentation,
   theme: RenderableTheme,
   width: number,
 ): string {
-  const presentation = collectionRowPresentation(details);
-  if (presentation.answer !== undefined) {
-    return theme.fg(presentation.tone, presentation.answer);
+  const collection = presentation.collection;
+  if (collection === undefined || collection.clauses.length === 0) {
+    return theme.fg(presentation.tone, presentation.rowPhrase);
   }
 
-  const full = presentation.clauses.join(presentation.separator);
-  if (visibleWidth(full) <= width) return theme.fg(presentation.tone, full);
+  if (visibleWidth(presentation.rowPhrase) <= width) {
+    return theme.fg(presentation.tone, presentation.rowPhrase);
+  }
 
   // The facts owner supplies both orders. This loop owns only fitting: clauses
   // earn space by priority, then return to stable reading order.
   const selected = new Set<string>();
-  for (const clause of presentation.priority) {
-    const candidate = presentation.clauses.filter(
+  for (const clause of collection.priority) {
+    const candidate = collection.clauses.filter(
       (original) => selected.has(original) || original === clause,
     );
-    if (visibleWidth(candidate.join(presentation.separator)) > width) break;
+    if (visibleWidth(candidate.join(collection.separator)) > width) break;
     selected.add(clause);
   }
-  const retained = presentation.clauses
+  const retained = collection.clauses
     .filter((clause) => selected.has(clause))
-    .join(presentation.separator);
+    .join(collection.separator);
   return theme.fg(
     presentation.tone,
     retained ||
-      fitToWidth(presentation.priority[0] ?? full, width, { plain: true }),
+      fitToWidth(collection.priority[0] ?? presentation.rowPhrase, width, {
+        plain: true,
+      }),
   );
-}
-
-function factsForOperation(
-  operation: AgentToolOperation,
-  facts: ToolRowFacts | undefined,
-): ToolRowFacts | undefined {
-  if (facts === undefined) return undefined;
-  switch (operation) {
-    case "start":
-    case "resume":
-    case "steer":
-    case "cancel":
-    case "result":
-      return facts.kind === operation ? facts : undefined;
-    case "wait":
-      return facts.kind === "collection" && facts.scope === "named"
-        ? facts
-        : undefined;
-    case "waitAll":
-      return facts.kind === "collection" && facts.scope === "all-active"
-        ? facts
-        : undefined;
-  }
 }
 
 /** Render any decoded Tool-row facts through one summary policy. */
@@ -793,36 +766,37 @@ function toolRowSummary(
   theme: RenderableTheme,
   width: number,
 ): string {
+  const presentation = toolRowPresentation(facts);
   switch (facts.kind) {
     case "start":
       return "subagentId" in facts
-        ? formatStartedIdentity(facts, theme, width)
-        : phraseSummary(facts, theme);
+        ? formatStartedIdentity(facts, presentation, theme, width)
+        : phraseSummary(presentation, theme);
     case "resume":
       return "runId" in facts
-        ? resumedIdentity(facts, theme, width)
-        : phraseSummary(facts, theme);
+        ? resumedIdentity(facts, presentation, theme, width)
+        : phraseSummary(presentation, theme);
     case "steer":
-      return phraseSummary(facts, theme);
-    case "collection":
-      return collectionSummary(facts, theme, width);
+      return phraseSummary(presentation, theme);
     case "cancel":
-      return theme.fg("toolOutput", cancellationSummaryText(facts));
+      return theme.fg(presentation.tone, presentation.rowPhrase);
+    case "collection":
+      return collectionSummary(presentation, theme, width);
     case "result": {
       const candidates =
         facts.outcome === "available"
           ? [
-              `${facts.run.agent} · ${facts.run.runId} · ${facts.run.status} · ${facts.rowPhrase}`,
+              `${facts.run.agent} · ${facts.run.runId} · ${facts.run.status} · ${presentation.rowPhrase}`,
               `${facts.run.agent} · ${facts.run.runId} · ${facts.run.status}`,
               `${facts.run.runId} · ${facts.run.status}`,
             ]
           : facts.outcome === "unavailable"
-            ? [`${facts.runId} · ${facts.rowPhrase} · ${facts.status}`]
-            : [`${facts.runId} · ${facts.rowPhrase}`];
+            ? [`${facts.runId} · ${presentation.rowPhrase} · ${facts.status}`]
+            : [`${facts.runId} · ${presentation.rowPhrase}`];
       const text =
         candidates.find((candidate) => visibleWidth(candidate) <= width) ??
         fitToWidth(candidates.at(-1) ?? "", width, { plain: true });
-      return theme.fg(facts.tone, text);
+      return theme.fg(presentation.tone, text);
     }
   }
 }
@@ -946,13 +920,14 @@ class ContinuationCallComponent extends CachedComponent {
 
 function resumedIdentity(
   details: ResumedRunToolRowFacts,
+  presentation: ToolRowPresentation,
   theme: RenderableTheme,
   width: number,
 ): string {
   const candidates = [
-    theme.fg(details.tone, details.rowPhrase) +
+    theme.fg(presentation.tone, presentation.rowPhrase) +
       theme.fg("dim", ` · Run ${details.runId}`),
-    theme.fg(details.tone, details.rowPhrase) +
+    theme.fg(presentation.tone, presentation.rowPhrase) +
       theme.fg("dim", ` · ${details.runId}`),
   ];
   return (

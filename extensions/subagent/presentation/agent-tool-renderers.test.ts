@@ -235,6 +235,25 @@ test("resume and steer malformed, foreign, and legacy details use readable fallb
   );
 });
 
+test("a decoded facts value chooses its own summary without an operation re-check", () => {
+  const details = steerToolRowFacts(runId("run-foreign"), {
+    outcome: "accepted",
+    runId: runId("run-foreign"),
+  });
+  const rendered = lines(
+    agentToolRenderers("resume").renderResult(
+      { content: [{ type: "text", text: "fallback response" }], details },
+      { expanded: false, isPartial: false },
+      plainTheme,
+      context({}),
+    ),
+    80,
+  )[0];
+
+  assert.match(rendered, new RegExp(`^${details.rowPhrase}`));
+  assert.doesNotMatch(rendered, /fallback response/);
+});
+
 test("a narrow resumed identity drops its field label before clipping the Run id", () => {
   const details = resumeToolRowFacts({
     outcome: "started",
@@ -605,11 +624,17 @@ test("cancellation call names deduplicated Runs or a width-fitted count", () => 
   assert.ok(narrow.every((line) => visibleWidth(line) <= 24));
 });
 
-test("cancellation summary uses the aggregate tone, fits its width, and owns one configured hint", () => {
+test("cancellation summary keeps every bucket in the aggregate tone, fits its width, and owns one configured hint", () => {
   const details = {
     kind: "cancel" as const,
-    outcomes: [{ kind: "requested" as const, runId: "run-demo-1" }],
+    outcomes: [
+      { kind: "requested" as const, runId: "run-demo-1" },
+      { kind: "unknown" as const, runId: "run-missing" },
+    ],
   };
+  const summary = cancelBuckets(details)
+    .map(({ rowPhrase, count }) => `${rowPhrase}: ${count}`)
+    .join(" · ");
   const actions: string[] = [];
   const toned = formatCancellationSummary(
     details,
@@ -620,7 +645,7 @@ test("cancellation summary uses the aggregate tone, fits its width, and owns one
       return `alt+o ${description}`;
     },
   );
-  assert.match(toned, /^<toolOutput>/);
+  assert.ok(toned.startsWith(`<toolOutput>${summary}</toolOutput>`));
   assert.deepEqual(actions, ["app.tools.expand"]);
   assert.equal(toned.match(/to expand/g)?.length, 1);
 
@@ -641,9 +666,6 @@ test("cancellation summary uses the aggregate tone, fits its width, and owns one
   assert.ok(visibleWidth(empty) <= 36);
   assert.equal(empty.match(/to expand/g)?.length, 1);
 
-  const summary = cancelBuckets(details)
-    .map(({ rowPhrase, count }) => `${rowPhrase}: ${count}`)
-    .join(" · ");
   const pair = agentToolRenderers("cancel");
   const state: AgentToolRendererState = {};
   lines(
@@ -663,6 +685,17 @@ test("cancellation summary uses the aggregate tone, fits its width, and owns one
     assert.equal(lines(result, 80).join("\n"), summary);
     assert.doesNotMatch(lines(result, 80).join("\n"), /to (?:expand|collapse)/);
   }
+
+  const marked = pair.renderResult(
+    { content: [{ type: "text", text: summary }], details },
+    { expanded: false, isPartial: false },
+    markedTheme,
+    context(state),
+  );
+  assert.equal(
+    lines(marked, 120).join("\n"),
+    `<toolOutput>${summary}</toolOutput>`,
+  );
 });
 
 test("empty settled and partial cancellation rows have no inert toggle", () => {

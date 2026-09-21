@@ -21,19 +21,24 @@ import { fixtureResult } from "../testing/presentation-fixtures.ts";
 import {
   formatNoActiveRuns,
   formatResultRejection,
-  formatResumeOutcome,
-  formatStartOutcome,
-  formatSteerOutcome,
   formatToolInputRejected,
   formatUnknownAgent,
   formatWaitOutcomes,
   presentCancelOutcomes,
   presentResultOutcome,
+  presentResumeOutcome,
+  presentStartOutcome,
+  presentSteerOutcome,
   presentWait,
   WAIT_RETURNED as RETURNED,
 } from "./prose.ts";
 import { formatResult } from "./run-card.ts";
-import { CANCEL_BUCKET_PRESENTATION } from "./tool-row-facts.ts";
+import {
+  CANCEL_BUCKET_PRESENTATION,
+  resumeOutcomeSentence,
+  startOutcomeSentence,
+  steerOutcomeSentence,
+} from "./tool-row-facts.ts";
 
 const RUN = runId("run-1");
 const OTHER_RUN = runId("run-2");
@@ -68,7 +73,7 @@ test("agent_start renders the started ids as prose a model can act on", () => {
   };
 
   assert.equal(
-    formatStartOutcome("explore", outcome, AVAILABLE),
+    startOutcomeSentence("explore", outcome, AVAILABLE),
     "Started explore:\n" +
       "subagent id subagent-1\n" +
       "run id run-1\n\n" +
@@ -102,7 +107,7 @@ test("agent_start has one sentence per rejection, naming what to do next", () =>
   for (const outcome of outcomes) {
     rendered.set(
       outcome.outcome,
-      formatStartOutcome("explore", outcome, AVAILABLE),
+      startOutcomeSentence("explore", outcome, AVAILABLE),
     );
   }
 
@@ -150,7 +155,7 @@ test("an empty catalog says so rather than naming nothing", () => {
 
 test("a backend diagnostic authored by the core keeps its message", () => {
   assert.match(
-    formatStartOutcome(
+    startOutcomeSentence(
       "explore",
       {
         outcome: "backend unavailable",
@@ -180,7 +185,7 @@ test("agent_resume renders unknown, running, empty, unsupported, lost, capacity,
     { outcome: "shutting down" },
   ];
   for (const outcome of outcomes) {
-    rendered.set(outcome.outcome, formatResumeOutcome(SUBAGENT, outcome));
+    rendered.set(outcome.outcome, resumeOutcomeSentence(SUBAGENT, outcome));
   }
 
   coversEveryOutcome(RESUME_OUTCOMES, rendered);
@@ -232,7 +237,10 @@ test("agent_resume renders unknown, running, empty, unsupported, lost, capacity,
 // ── agent_steer ──────────────────────────────────────────────────────────────
 
 test("agent_steer states that acceptance is local admission only", () => {
-  const accepted = formatSteerOutcome(RUN, { outcome: "accepted", runId: RUN });
+  const accepted = steerOutcomeSentence(RUN, {
+    outcome: "accepted",
+    runId: RUN,
+  });
 
   assert.equal(
     accepted,
@@ -263,7 +271,7 @@ test("agent_steer uses the mailbox vocabulary and covers every outcome", () => {
     { outcome: "shutting down" },
   ];
   for (const outcome of outcomes) {
-    rendered.set(outcome.outcome, formatSteerOutcome(RUN, outcome));
+    rendered.set(outcome.outcome, steerOutcomeSentence(RUN, outcome));
   }
 
   coversEveryOutcome(STEER_OUTCOMES, rendered);
@@ -303,6 +311,48 @@ test("agent_steer uses the mailbox vocabulary and covers every outcome", () => {
     "Cannot steer run run-1: this Session is shutting down. No message was " +
       "admitted.",
   );
+});
+
+test("pass-through operations present model text and row facts together", () => {
+  const start = presentStartOutcome(
+    "explore",
+    { outcome: "started", runId: RUN, subagentId: SUBAGENT },
+    AVAILABLE,
+  );
+  assert.equal(
+    start.text,
+    startOutcomeSentence(
+      "explore",
+      { outcome: "started", runId: RUN, subagentId: SUBAGENT },
+      AVAILABLE,
+    ),
+  );
+  assert.equal(start.facts.kind, "start");
+
+  const resume = presentResumeOutcome(SUBAGENT, {
+    outcome: "started",
+    runId: RUN,
+    subagentId: SUBAGENT,
+  });
+  assert.equal(
+    resume.text,
+    resumeOutcomeSentence(SUBAGENT, {
+      outcome: "started",
+      runId: RUN,
+      subagentId: SUBAGENT,
+    }),
+  );
+  assert.equal(resume.facts.kind, "resume");
+
+  const steer = presentSteerOutcome(RUN, {
+    outcome: "accepted",
+    runId: RUN,
+  });
+  assert.equal(
+    steer.text,
+    steerOutcomeSentence(RUN, { outcome: "accepted", runId: RUN }),
+  );
+  assert.equal(steer.facts.kind, "steer");
 });
 
 // ── agent_cancel ─────────────────────────────────────────────────────────────
@@ -598,13 +648,13 @@ test("a start and a resume refuse an empty description in their own family's wor
   // a typed outcome — and it says what to send instead, because a model that
   // reads "empty" and not "send one" has no next move.
   assert.equal(
-    formatStartOutcome("explore", { outcome: "empty label" }, AVAILABLE),
+    startOutcomeSentence("explore", { outcome: "empty label" }, AVAILABLE),
     "Cannot start explore: its description is empty. No Run was started and " +
       "no id was handed out. Send a one-line description of the task: it is " +
       "the label this Run is shown under everywhere.",
   );
   assert.equal(
-    formatResumeOutcome(SUBAGENT, { outcome: "empty label" }),
+    resumeOutcomeSentence(SUBAGENT, { outcome: "empty label" }),
     "Cannot resume subagent subagent-1: its description is empty. No Run was " +
       "started and nothing was queued. Send a one-line description of this " +
       "Run: it is the label this Run is shown under everywhere.",
