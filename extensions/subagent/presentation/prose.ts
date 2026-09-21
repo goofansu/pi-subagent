@@ -31,6 +31,9 @@ import {
   cancelToolRowFacts,
   formatProfileDiagnosticLines,
   noActiveWaitAllToolRowFacts,
+  type ResultToolRowFacts,
+  resultOutcomeSentence,
+  resultToolRowFacts,
   resumeOutcomeSentence,
   startOutcomeSentence,
   steerOutcomeSentence,
@@ -329,28 +332,22 @@ export function presentWait(
 export function formatResultRejection(
   outcome: Exclude<ResultOutcome, { outcome: "result" }>,
 ): string {
-  switch (outcome.outcome) {
-    case "ResultExpired":
-      return (
-        `Run ${outcome.runId} (subagent ${outcome.subagentId}) ${outcome.status}, ` +
-        "but its output was evicted to keep this Session's result store " +
-        "bounded. The Run is still known and its status still answers; the " +
-        "output itself is gone and cannot be recovered."
-      );
-    case "RunNotTerminal":
-      return (
-        `Run ${outcome.runId} has not finished yet, so it has no result. Its ` +
-        "completion is delivered to you on its own; agent_wait blocks until " +
-        "then and returns the result directly."
-      );
-    case "unknown Run":
-      return (
-        `No run with id ${outcome.runId}. Check the id against what ` +
-        "agent_start or agent_resume returned."
-      );
-    default:
-      return unreachable(outcome);
-  }
+  return resultOutcomeSentence(outcome);
+}
+
+export interface ResultPresentation {
+  readonly text: string;
+  readonly facts: ResultToolRowFacts;
+}
+
+/** Present one Result retrieval as one text-and-facts answer. */
+export function presentResultOutcome(
+  outcome: ResultOutcome,
+): ResultPresentation {
+  return {
+    text: resultOutcomeSentence(outcome),
+    facts: resultToolRowFacts(outcome),
+  };
 }
 
 /* ------------------------------------------------------------------ */

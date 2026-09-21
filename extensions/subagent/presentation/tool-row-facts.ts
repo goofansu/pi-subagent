@@ -25,17 +25,23 @@ import {
 } from "../domain/index.ts";
 import {
   type CompactFinalOutputSummary,
+  compactFinalOutputSummaryPhrase,
   finalOutputSummary,
 } from "./final-output-section.ts";
 import { formatDiagnosticLine } from "./result-details.ts";
+import { formatResult } from "./run-card.ts";
 
-/** Styling intent for one pass-through operation's collapsed row. */
-export type ToolRowTone = "toolTitle" | "warning" | "error";
+/** Styling intent for one operation outcome's collapsed row. */
+export type ToolRowTone = "toolTitle" | "toolOutput" | "warning" | "error";
 
-interface OutcomePresentation<Outcome, Context> {
+interface OutcomePresentation<
+  Outcome,
+  Context,
+  Tone extends ToolRowTone = ToolRowTone,
+> {
   readonly sentence: (outcome: Outcome, context: Context) => string;
   readonly rowPhrase: (outcome: Outcome) => string;
-  readonly tone: ToolRowTone;
+  readonly tone: Tone;
 }
 
 type OutcomeMember<
@@ -47,10 +53,15 @@ type OutcomeMember<
     : never
   : never;
 
-type OutcomeTable<Outcome extends { readonly outcome: string }, Context> = {
+type OutcomeTable<
+  Outcome extends { readonly outcome: string },
+  Context,
+  Tone extends ToolRowTone = ToolRowTone,
+> = {
   readonly [Name in Outcome["outcome"]]: OutcomePresentation<
     OutcomeMember<Outcome, Name>,
-    Context
+    Context,
+    Tone
   >;
 };
 
@@ -311,12 +322,58 @@ export const STEER_OUTCOME_PRESENTATION = {
   },
 } satisfies OutcomeTable<SteerOutcome, SteerSentenceContext>;
 
-function entryFor<Outcome extends { readonly outcome: string }, Context>(
-  table: OutcomeTable<Outcome, Context>,
+/**
+ * Every Result retrieval outcome's model sentence and collapsed-row presentation.
+ * The mapped type makes an added or removed domain outcome a compile error.
+ */
+export const RESULT_OUTCOME_PRESENTATION = {
+  result: {
+    sentence: (outcome) => formatResult(outcome.result),
+    rowPhrase: (outcome) =>
+      compactFinalOutputSummaryPhrase(
+        finalOutputSummary(interpretFinalOutput(outcome.result)),
+      ),
+    tone: "toolOutput",
+  },
+  ResultExpired: {
+    sentence: (outcome) =>
+      `Run ${outcome.runId} (subagent ${outcome.subagentId}) ${outcome.status}, ` +
+      "but its output was evicted to keep this Session's result store " +
+      "bounded. The Run is still known and its status still answers; the " +
+      "output itself is gone and cannot be recovered.",
+    rowPhrase: () => "Result unavailable",
+    tone: "error",
+  },
+  RunNotTerminal: {
+    sentence: (outcome) =>
+      `Run ${outcome.runId} has not finished yet, so it has no result. Its ` +
+      "completion is delivered to you on its own; agent_wait blocks until " +
+      "then and returns the result directly.",
+    rowPhrase: () => "still running",
+    tone: "warning",
+  },
+  "unknown Run": {
+    sentence: (outcome) =>
+      `No run with id ${outcome.runId}. Check the id against what ` +
+      "agent_start or agent_resume returned.",
+    rowPhrase: () => "unknown Run",
+    tone: "error",
+  },
+} satisfies OutcomeTable<ResultOutcome, undefined>;
+
+function entryFor<
+  Outcome extends { readonly outcome: string },
+  Context,
+  Tone extends ToolRowTone = ToolRowTone,
+>(
+  table: OutcomeTable<Outcome, Context, Tone>,
   outcome: Outcome,
-): OutcomePresentation<Outcome, Context> {
+): OutcomePresentation<Outcome, Context, Tone> {
   return (
-    table as unknown as Record<string, OutcomePresentation<Outcome, Context>>
+    table as unknown as Record<
+      string,
+      OutcomePresentation<Outcome, Context, Tone>
+    >
   )[outcome.outcome];
 }
 
@@ -328,10 +385,14 @@ function sentenceFor<Outcome extends { readonly outcome: string }, Context>(
   return entryFor(table, outcome).sentence(outcome, context);
 }
 
-function rowFor<Outcome extends { readonly outcome: string }, Context>(
-  table: OutcomeTable<Outcome, Context>,
+function rowFor<
+  Outcome extends { readonly outcome: string },
+  Context,
+  Tone extends ToolRowTone,
+>(
+  table: OutcomeTable<Outcome, Context, Tone>,
   outcome: Outcome,
-): { readonly rowPhrase: string; readonly tone: ToolRowTone } {
+): { readonly rowPhrase: string; readonly tone: Tone } {
   const entry = entryFor(table, outcome);
   return { rowPhrase: entry.rowPhrase(outcome), tone: entry.tone };
 }
@@ -364,6 +425,11 @@ export function steerOutcomeSentence(
   return sentenceFor(STEER_OUTCOME_PRESENTATION, outcome, { runId });
 }
 
+/** Format one Result retrieval outcome from the declaration shared with its row facts. */
+export function resultOutcomeSentence(outcome: ResultOutcome): string {
+  return sentenceFor(RESULT_OUTCOME_PRESENTATION, outcome, undefined);
+}
+
 const IdentifierText = Schema.String.check(
   Schema.isLengthBetween(1, 128),
   Schema.isPattern(/^[A-Za-z0-9._:-]+$/),
@@ -372,8 +438,22 @@ const Count = Schema.Finite.check(
   Schema.isInt(),
   Schema.isGreaterThanOrEqualTo(0),
 );
-const ToolRowToneSchema = Schema.Literals(["toolTitle", "warning", "error"]);
+const ToolRowToneSchema = Schema.Literals([
+  "toolTitle",
+  "toolOutput",
+  "warning",
+  "error",
+]);
+const PassThroughToolRowToneSchema = Schema.Literals([
+  "toolTitle",
+  "warning",
+  "error",
+]);
 const PassThroughRowSchema = {
+  rowPhrase: Schema.String.check(Schema.isMinLength(1)),
+  tone: PassThroughToolRowToneSchema,
+};
+const ResultRowSchema = {
   rowPhrase: Schema.String.check(Schema.isMinLength(1)),
   tone: ToolRowToneSchema,
 };
@@ -582,16 +662,19 @@ export function collectionRowPresentation(
 const ResultToolRowFactsSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("result"),
+    ...ResultRowSchema,
     outcome: Schema.Literal("available"),
     run: ResultRunSummarySchema,
   }),
   Schema.Struct({
     kind: Schema.Literal("result"),
+    ...ResultRowSchema,
     outcome: Schema.Literals(["still-running", "unknown"]),
     runId: IdentifierText,
   }),
   Schema.Struct({
     kind: Schema.Literal("result"),
+    ...ResultRowSchema,
     outcome: Schema.Literal("unavailable"),
     runId: IdentifierText,
     status: TerminalRunPhase,
@@ -781,10 +864,11 @@ export function startToolRowFacts(
   agent: string,
   outcome: StartOutcome,
 ): StartToolRowFacts {
-  const row = rowFor<StartOutcome, StartSentenceContext>(
-    START_OUTCOME_PRESENTATION,
-    outcome,
-  );
+  const row = rowFor<
+    StartOutcome,
+    StartSentenceContext,
+    Exclude<ToolRowTone, "toolOutput">
+  >(START_OUTCOME_PRESENTATION, outcome);
   return outcome.outcome === "started"
     ? {
         kind: "start",
@@ -803,10 +887,11 @@ export function resumeToolRowFacts(
 ): ResumedRunToolRowFacts;
 export function resumeToolRowFacts(outcome: ResumeOutcome): ResumeToolRowFacts;
 export function resumeToolRowFacts(outcome: ResumeOutcome): ResumeToolRowFacts {
-  const row = rowFor<ResumeOutcome, ResumeSentenceContext>(
-    RESUME_OUTCOME_PRESENTATION,
-    outcome,
-  );
+  const row = rowFor<
+    ResumeOutcome,
+    ResumeSentenceContext,
+    Exclude<ToolRowTone, "toolOutput">
+  >(RESUME_OUTCOME_PRESENTATION, outcome);
   return outcome.outcome === "started"
     ? {
         kind: "resume",
@@ -823,10 +908,11 @@ export function steerToolRowFacts(
   requestedRunId: RunId,
   outcome: SteerOutcome,
 ): SteerToolRowFacts {
-  const row = rowFor<SteerOutcome, SteerSentenceContext>(
-    STEER_OUTCOME_PRESENTATION,
-    outcome,
-  );
+  const row = rowFor<
+    SteerOutcome,
+    SteerSentenceContext,
+    Exclude<ToolRowTone, "toolOutput">
+  >(STEER_OUTCOME_PRESENTATION, outcome);
   return {
     kind: "steer",
     rowPhrase: row.rowPhrase,
@@ -933,24 +1019,44 @@ export function noActiveWaitAllToolRowFacts(): CollectedRunsToolRowFacts {
 }
 
 export function resultToolRowFacts(outcome: ResultOutcome): ResultToolRowFacts {
+  const row = rowFor<ResultOutcome, undefined, ToolRowTone>(
+    RESULT_OUTCOME_PRESENTATION,
+    outcome,
+  );
   switch (outcome.outcome) {
     case "result":
       return {
         kind: "result",
+        rowPhrase: row.rowPhrase,
+        tone: row.tone,
         outcome: "available",
         run: resultRunSummaryOf(outcome.result),
       };
     case "ResultExpired":
       return {
         kind: "result",
+        rowPhrase: row.rowPhrase,
+        tone: row.tone,
         outcome: "unavailable",
         runId: outcome.runId,
         status: outcome.status,
       };
     case "RunNotTerminal":
-      return { kind: "result", outcome: "still-running", runId: outcome.runId };
+      return {
+        kind: "result",
+        rowPhrase: row.rowPhrase,
+        tone: row.tone,
+        outcome: "still-running",
+        runId: outcome.runId,
+      };
     case "unknown Run":
-      return { kind: "result", outcome: "unknown", runId: outcome.runId };
+      return {
+        kind: "result",
+        rowPhrase: row.rowPhrase,
+        tone: row.tone,
+        outcome: "unknown",
+        runId: outcome.runId,
+      };
     default:
       return outcome satisfies never;
   }

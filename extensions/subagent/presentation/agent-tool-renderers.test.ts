@@ -388,6 +388,8 @@ test("golden: every operation keeps its collapsed row text and styling", () => {
       {
         kind: "result",
         outcome: "available",
+        rowPhrase: "12.3k characters",
+        tone: "toolOutput",
         run: {
           runId: run,
           agent: "explore",
@@ -436,6 +438,8 @@ test("aggregate result facts retain exact text and tone for every outcome", () =
       {
         kind: "result",
         outcome: "available",
+        rowPhrase: "12.3k characters",
+        tone: "toolOutput",
         run: {
           runId: "run-1",
           agent: "explore",
@@ -449,6 +453,8 @@ test("aggregate result facts retain exact text and tone for every outcome", () =
       {
         kind: "result",
         outcome: "available",
+        rowPhrase: "no output",
+        tone: "toolOutput",
         run: {
           runId: "run-none",
           agent: "explore",
@@ -462,6 +468,8 @@ test("aggregate result facts retain exact text and tone for every outcome", () =
       {
         kind: "result",
         outcome: "available",
+        rowPhrase: "output removed",
+        tone: "toolOutput",
         run: {
           runId: "run-removed",
           agent: "explore",
@@ -472,17 +480,31 @@ test("aggregate result facts retain exact text and tone for every outcome", () =
       "<toolOutput>explore · run-removed · completed · output removed</toolOutput>",
     ],
     [
-      { kind: "result", outcome: "still-running", runId: "run-2" },
+      {
+        kind: "result",
+        outcome: "still-running",
+        rowPhrase: "still running",
+        tone: "warning",
+        runId: "run-2",
+      },
       "<warning>run-2 · still running</warning>",
     ],
     [
-      { kind: "result", outcome: "unknown", runId: "run-never" },
+      {
+        kind: "result",
+        outcome: "unknown",
+        rowPhrase: "unknown Run",
+        tone: "error",
+        runId: "run-never",
+      },
       "<error>run-never · unknown Run</error>",
     ],
     [
       {
         kind: "result",
         outcome: "unavailable",
+        rowPhrase: "Result unavailable",
+        tone: "error",
         runId: "run-3",
         status: "failed",
       },
@@ -502,6 +524,27 @@ test("aggregate result facts retain exact text and tone for every outcome", () =
     )[0];
     assert.equal(rendered, `${expected} <dim>(</dim> to expand<dim>)</dim>`);
   }
+});
+
+test("Result rows read phrase and tone from facts while keeping identifier layout", () => {
+  const details = {
+    kind: "result" as const,
+    outcome: "still-running" as const,
+    rowPhrase: "awaiting answer",
+    tone: "error" as const,
+    runId: "run-custom",
+  };
+  const rendered = lines(
+    agentToolRenderers("result").renderResult(
+      { content: [{ type: "text", text: "complete prose" }], details },
+      { expanded: false, isPartial: false },
+      markedTheme,
+      context({}),
+    ),
+    80,
+  )[0];
+
+  assert.match(rendered, /^<error>run-custom · awaiting answer<\/error>/);
 });
 
 test("a one-line rejection with no hidden prompt content has no expansion affordance", () => {
@@ -1025,6 +1068,8 @@ test("result-bearing renderers reuse components and repaint the current theme", 
     details: {
       kind: "result" as const,
       outcome: "available" as const,
+      rowPhrase: "17 characters",
+      tone: "toolOutput" as const,
       run: {
         runId: "run-1",
         agent: "explore",
@@ -1086,7 +1131,13 @@ test("result-bearing renderers fail open for malformed details and present parti
     pair.renderResult(
       {
         content: [],
-        details: { kind: "result", outcome: "unknown", runId: "run-never" },
+        details: {
+          kind: "result",
+          outcome: "unknown",
+          rowPhrase: "unknown Run",
+          tone: "error",
+          runId: "run-never",
+        },
       },
       { expanded: false, isPartial: true },
       plainTheme,

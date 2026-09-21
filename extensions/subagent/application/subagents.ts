@@ -27,14 +27,12 @@ import {
   type RunId,
 } from "../domain/index.ts";
 import {
-  formatResult,
-  formatResultRejection,
   formatResumeOutcome,
   formatStartOutcome,
   formatSteerOutcome,
   presentCancelOutcomes,
+  presentResultOutcome,
   presentWait,
-  resultToolRowFacts,
   resumeToolRowFacts,
   startToolRowFacts,
   steerToolRowFacts,
@@ -370,17 +368,11 @@ const result = (
   Effect.gen(function* () {
     const supervisor = yield* SubagentSupervisor;
     const outcome = yield* supervisor.result(input.id);
-    if (outcome.outcome !== "result") {
-      return {
-        text: formatResultRejection(outcome),
-        details: resultToolRowFacts(outcome),
-        deliveredRuns: [],
-      };
-    }
+    const presentation = presentResultOutcome(outcome);
     return {
-      text: formatResult(outcome.result),
-      details: resultToolRowFacts(outcome),
-      deliveredRuns: [outcome.result.runId],
+      text: presentation.text,
+      details: presentation.facts,
+      deliveredRuns: outcome.outcome === "result" ? [outcome.result.runId] : [],
     };
   });
 

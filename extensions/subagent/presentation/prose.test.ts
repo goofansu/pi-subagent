@@ -28,6 +28,7 @@ import {
   formatUnknownAgent,
   formatWaitOutcomes,
   presentCancelOutcomes,
+  presentResultOutcome,
   presentWait,
   WAIT_RETURNED as RETURNED,
 } from "./prose.ts";
@@ -519,6 +520,20 @@ test("a wait with no ids says so, and a wait-all with nothing active says where 
 });
 
 // ── agent_result ─────────────────────────────────────────────────────────────
+
+test("one Result presentation call pairs model text and row facts", () => {
+  const outcome = { outcome: "RunNotTerminal", runId: RUN } as const;
+  const presentation = presentResultOutcome(outcome);
+
+  assert.equal(presentation.text, formatResultRejection(outcome));
+  assert.deepEqual(presentation.facts, {
+    kind: "result",
+    outcome: "still-running",
+    rowPhrase: "still running",
+    tone: "warning",
+    runId: RUN,
+  });
+});
 
 test("a spent id and a wrong id read differently", () => {
   const expired = formatResultRejection({

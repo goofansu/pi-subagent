@@ -1435,6 +1435,8 @@ test("agent_result returns the full stored output with its Run identity", async 
   assert.deepEqual(result.details, {
     kind: "result",
     outcome: "available",
+    rowPhrase: "16 characters",
+    tone: "toolOutput",
     run: {
       runId: started.runId,
       agent: "explore",
@@ -1485,6 +1487,8 @@ test("agent_result renders a live Run distinctly from unknown in both expansion 
       details: {
         kind: "result",
         outcome: "still-running",
+        rowPhrase: "still running",
+        tone: "warning",
         runId: started.runId,
       },
     },
@@ -1492,7 +1496,13 @@ test("agent_result renders a live Run distinctly from unknown in both expansion 
       args: { id: "run-never" },
       summary: /^run-never · unknown Run \(.*to expand\)$/,
       expanded: /^No run with id run-never\./m,
-      details: { kind: "result", outcome: "unknown", runId: "run-never" },
+      details: {
+        kind: "result",
+        outcome: "unknown",
+        rowPhrase: "unknown Run",
+        tone: "error",
+        runId: "run-never",
+      },
     },
   ] as const;
 
@@ -1622,6 +1632,8 @@ test("a Result the store evicted tells the host nothing either", async (t) => {
   assert.deepEqual(result.details, {
     kind: "result",
     outcome: "unavailable",
+    rowPhrase: "Result unavailable",
+    tone: "error",
     runId: first.runId,
     status: "completed",
   });
@@ -1694,7 +1706,13 @@ test("a Run on the collapsed line alone is not recorded as consumed", async () =
   const collapsedOnly = handlersOver({
     text: "the answer",
     // Drawn in the row, and stated as handed back by nothing.
-    details: { kind: "result", outcome: "available", run: drawn },
+    details: {
+      kind: "result",
+      outcome: "available",
+      rowPhrase: "10 characters",
+      tone: "toolOutput",
+      run: drawn,
+    },
     deliveredRuns: [],
   });
 
@@ -1707,6 +1725,8 @@ test("a Run on the collapsed line alone is not recorded as consumed", async () =
   assert.deepEqual(result.details, {
     kind: "result",
     outcome: "available",
+    rowPhrase: "10 characters",
+    tone: "toolOutput",
     run: drawn,
   });
   assert.deepEqual(collapsedOnly.consumed, []);

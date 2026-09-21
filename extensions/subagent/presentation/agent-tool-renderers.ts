@@ -14,14 +14,12 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type { CompactFinalOutputSummary } from "./final-output-section.ts";
 import {
   contentText,
   formatParentheticalKeyHint,
   type KeyHintRenderer,
 } from "./renderers.ts";
 import type { RenderableTheme } from "./rows.ts";
-import { formatCharacterCount } from "./status.ts";
 import { fitToWidth } from "./text-width.ts";
 import {
   CANCEL_BUCKET_PRESENTATION,
@@ -766,17 +764,6 @@ function collectionSummary(
   );
 }
 
-function resultOutputSummary(summary: CompactFinalOutputSummary): string {
-  switch (summary.kind) {
-    case "none":
-      return "no output";
-    case "removed":
-      return "output removed";
-    case "visible":
-      return formatCharacterCount(summary.characters);
-  }
-}
-
 function factsForOperation(
   operation: AgentToolOperation,
   facts: ToolRowFacts | undefined,
@@ -821,30 +808,22 @@ function toolRowSummary(
       return collectionSummary(facts, theme, width);
     case "cancel":
       return theme.fg("toolOutput", cancellationSummaryText(facts));
-    case "result":
-      switch (facts.outcome) {
-        case "available": {
-          const output = resultOutputSummary(facts.run.output);
-          const candidates = [
-            `${facts.run.agent} · ${facts.run.runId} · ${facts.run.status} · ${output}`,
-            `${facts.run.agent} · ${facts.run.runId} · ${facts.run.status}`,
-            `${facts.run.runId} · ${facts.run.status}`,
-          ];
-          const text =
-            candidates.find((candidate) => visibleWidth(candidate) <= width) ??
-            fitToWidth(candidates.at(-1) ?? "", width, { plain: true });
-          return theme.fg("toolOutput", text);
-        }
-        case "still-running":
-          return theme.fg("warning", `${facts.runId} · still running`);
-        case "unknown":
-          return theme.fg("error", `${facts.runId} · unknown Run`);
-        case "unavailable":
-          return theme.fg(
-            "error",
-            `${facts.runId} · Result unavailable · ${facts.status}`,
-          );
-      }
+    case "result": {
+      const candidates =
+        facts.outcome === "available"
+          ? [
+              `${facts.run.agent} · ${facts.run.runId} · ${facts.run.status} · ${facts.rowPhrase}`,
+              `${facts.run.agent} · ${facts.run.runId} · ${facts.run.status}`,
+              `${facts.run.runId} · ${facts.run.status}`,
+            ]
+          : facts.outcome === "unavailable"
+            ? [`${facts.runId} · ${facts.rowPhrase} · ${facts.status}`]
+            : [`${facts.runId} · ${facts.rowPhrase}`];
+      const text =
+        candidates.find((candidate) => visibleWidth(candidate) <= width) ??
+        fitToWidth(candidates.at(-1) ?? "", width, { plain: true });
+      return theme.fg(facts.tone, text);
+    }
   }
 }
 

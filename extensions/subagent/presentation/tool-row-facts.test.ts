@@ -24,7 +24,9 @@ import {
   decodeToolRowFacts,
   encodeToolRowFacts,
   noActiveWaitAllToolRowFacts,
+  RESULT_OUTCOME_PRESENTATION,
   RESUME_OUTCOME_PRESENTATION,
+  resultOutcomeSentence,
   resultToolRowFacts,
   resumeToolRowFacts,
   START_OUTCOME_PRESENTATION,
@@ -249,6 +251,21 @@ test("every collection clause declares plural forms and one complete priority or
   ]);
 });
 
+test("every Result outcome declares a non-empty sentence, row phrase, and tone", () => {
+  assert.deepEqual(
+    Object.keys(RESULT_OUTCOME_PRESENTATION).sort(),
+    resultOutcomes.map(({ outcome }) => outcome).sort(),
+  );
+  for (const outcome of resultOutcomes) {
+    const facts = resultToolRowFacts(outcome);
+    assert.ok(resultOutcomeSentence(outcome).trim().length > 0);
+    assert.ok(facts.rowPhrase.trim().length > 0);
+    assert.ok(
+      ["toolTitle", "toolOutput", "warning", "error"].includes(facts.tone),
+    );
+  }
+});
+
 test("named aggregate facts construction round-trips", () => {
   const facts = [
     ...cancelOutcomes.map((outcome) => cancelToolRowFacts([outcome])),
@@ -372,6 +389,8 @@ test("the Tool-row facts decoder accepts all terminal phases and nested cancella
     decodeToolRowFacts(resultToolRowFacts({ outcome: "result", result })),
     {
       kind: "result",
+      rowPhrase: "6 characters",
+      tone: "toolOutput",
       outcome: "available",
       run: {
         runId: result.runId,
@@ -480,6 +499,8 @@ test("the Tool-row facts decoder returns absence and never throws for malformed,
     {
       kind: "result",
       outcome: "available",
+      rowPhrase: "invalid character count",
+      tone: "toolOutput",
       run: {
         runId: rid,
         agent: "explore",
@@ -490,6 +511,8 @@ test("the Tool-row facts decoder returns absence and never throws for malformed,
     {
       kind: "result",
       outcome: "available",
+      rowPhrase: "output removed",
+      tone: "toolOutput",
       run: {
         runId: rid,
         agent: "explore",
@@ -500,6 +523,8 @@ test("the Tool-row facts decoder returns absence and never throws for malformed,
     {
       kind: "result",
       outcome: "unavailable",
+      rowPhrase: "Result unavailable",
+      tone: "error",
       runId: rid,
       status: "finalizing",
     },

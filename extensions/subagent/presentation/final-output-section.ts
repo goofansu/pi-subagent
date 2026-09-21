@@ -19,6 +19,7 @@ import {
   type RunNotification,
   type RunResult,
 } from "../domain/index.ts";
+import { formatCharacterCount } from "./status.ts";
 
 export type FinalOutputBlockKind = "markdown" | "literal";
 
@@ -405,6 +406,20 @@ export function finalOutputSummary(
   output: FinalOutputInterpretation,
 ): CompactFinalOutputSummary {
   return dispatchFinalOutput(output, { kind: "summary" });
+}
+
+/** Phrase the bounded summary shown by a collapsed Result row. */
+export function compactFinalOutputSummaryPhrase(
+  summary: CompactFinalOutputSummary,
+): string {
+  switch (summary.kind) {
+    case "none":
+      return "no output";
+    case "removed":
+      return "output removed";
+    case "visible":
+      return formatCharacterCount(summary.characters);
+  }
 }
 
 /** Build the qualifier, body, and explanation for one final-output section. */
