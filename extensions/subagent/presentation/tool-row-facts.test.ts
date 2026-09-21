@@ -11,11 +11,20 @@ import type {
 import { runId, subagentId } from "../domain/index.ts";
 import { fixtureResult } from "../testing/presentation-fixtures.ts";
 import {
+  formatResumeOutcome,
+  formatStartOutcome,
+  formatSteerOutcome,
+} from "./prose.ts";
+import {
   cancelToolRowFacts,
   decodeToolRowFacts,
+  encodeToolRowFacts,
   noActiveWaitAllToolRowFacts,
+  RESUME_OUTCOME_PRESENTATION,
   resultToolRowFacts,
   resumeToolRowFacts,
+  START_OUTCOME_PRESENTATION,
+  STEER_OUTCOME_PRESENTATION,
   startToolRowFacts,
   steerToolRowFacts,
   waitAllToolRowFacts,
@@ -91,11 +100,48 @@ const resultOutcomes: readonly ResultOutcome[] = [
   { outcome: "unknown Run", runId: rid },
 ];
 
-test("named Tool-row facts construction covers every domain outcome and round-trips", () => {
+test("pass-through table keys construct and round-trip every domain outcome", () => {
+  const cases = [
+    [
+      START_OUTCOME_PRESENTATION,
+      startOutcomes,
+      (outcome: StartOutcome) => startToolRowFacts("explore", outcome),
+      (outcome: StartOutcome) =>
+        formatStartOutcome("explore", outcome, ["explore"]),
+    ],
+    [
+      RESUME_OUTCOME_PRESENTATION,
+      resumeOutcomes,
+      (outcome: ResumeOutcome) => resumeToolRowFacts(outcome),
+      (outcome: ResumeOutcome) => formatResumeOutcome(sid, outcome),
+    ],
+    [
+      STEER_OUTCOME_PRESENTATION,
+      steerOutcomes,
+      (outcome: SteerOutcome) => steerToolRowFacts(rid, outcome),
+      (outcome: SteerOutcome) => formatSteerOutcome(rid, outcome),
+    ],
+  ] as const;
+
+  for (const [table, outcomes, construct, formatSentence] of cases) {
+    const keys = Object.keys(table);
+    assert.deepEqual(
+      keys.sort(),
+      outcomes.map(({ outcome }) => outcome).sort(),
+    );
+    for (const key of keys) {
+      const outcome = outcomes.find((candidate) => candidate.outcome === key);
+      assert.ok(outcome, `missing fixture for ${key}`);
+      const facts = construct(outcome as never);
+      assert.deepEqual(decodeToolRowFacts(encodeToolRowFacts(facts)), facts);
+      assert.ok(facts.rowPhrase.trim().length > 0);
+      assert.ok(formatSentence(outcome as never).trim().length > 0);
+    }
+  }
+});
+
+test("named aggregate facts construction round-trips", () => {
   const facts = [
-    ...startOutcomes.map((outcome) => startToolRowFacts("explore", outcome)),
-    ...resumeOutcomes.map(resumeToolRowFacts),
-    ...steerOutcomes.map((outcome) => steerToolRowFacts(rid, outcome)),
     ...cancelOutcomes.map((outcome) => cancelToolRowFacts([outcome])),
     waitToolRowFacts(waitOutcomes),
     waitAllToolRowFacts(waitOutcomes),
@@ -103,15 +149,14 @@ test("named Tool-row facts construction covers every domain outcome and round-tr
     ...resultOutcomes.map(resultToolRowFacts),
   ];
 
-  for (const value of facts) assert.deepEqual(decodeToolRowFacts(value), value);
+  for (const value of facts) {
+    assert.deepEqual(decodeToolRowFacts(encodeToolRowFacts(value)), value);
+  }
   assert.deepEqual(
     facts.map((value) =>
       value.kind === "collection" ? `${value.kind}:${value.scope}` : value.kind,
     ),
     [
-      ...startOutcomes.map(() => "start"),
-      ...resumeOutcomes.map(() => "resume"),
-      ...steerOutcomes.map(() => "steer"),
       ...cancelOutcomes.map(() => "cancel"),
       "collection:named",
       "collection:all-active",
@@ -148,9 +193,61 @@ test("Result Tool-row facts summarize final-output interpretation without carryi
   for (const [fixture, output] of cases) {
     const facts = resultToolRowFacts({ outcome: "result", result: fixture });
     assert.equal(facts.outcome, "available");
-    if (facts.outcome === "available")
+    if (facts.outcome === "available") {
       assert.deepEqual(facts.run.output, output);
+    }
   }
+});
+
+test("schema-backed facts reject extra keys at every depth and wrong field types", () => {
+  const collection = waitToolRowFacts(waitOutcomes);
+  const cancellation = cancelToolRowFacts(cancelOutcomes);
+  const available = resultToolRowFacts({ outcome: "result", result });
+
+  const encodedCollection = encodeToolRowFacts(collection) as Record<
+    string,
+    unknown
+  >;
+  const encodedCancellation = encodeToolRowFacts(cancellation) as {
+    readonly outcomes: readonly Record<string, unknown>[];
+  };
+  const encodedAvailable = encodeToolRowFacts(available) as {
+    readonly run: {
+      readonly output: Record<string, unknown>;
+    };
+  };
+
+  assert.equal(
+    decodeToolRowFacts({ ...encodedCollection, extra: true }),
+    undefined,
+  );
+  assert.equal(
+    decodeToolRowFacts({
+      ...encodedCancellation,
+      outcomes: [{ ...encodedCancellation.outcomes[0], extra: true }],
+    }),
+    undefined,
+  );
+  assert.equal(
+    decodeToolRowFacts({
+      ...encodedAvailable,
+      run: {
+        ...encodedAvailable.run,
+        output: { ...encodedAvailable.run.output, extra: true },
+      },
+    }),
+    undefined,
+  );
+  assert.equal(
+    decodeToolRowFacts({
+      ...encodedAvailable,
+      run: {
+        ...encodedAvailable.run,
+        output: { kind: "visible", characters: "6" },
+      },
+    }),
+    undefined,
+  );
 });
 
 test("the Tool-row facts decoder accepts all terminal phases and nested cancellation outcomes", () => {

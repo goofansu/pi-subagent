@@ -3,14 +3,18 @@ import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
+import { runId, subagentId } from "../domain/index.ts";
 import {
   type AgentToolRendererState,
   agentToolRenderers,
   formatCancellationSummary,
-  formatResumedRunSummary,
-  formatStartedRunSummary,
 } from "./agent-tool-renderers.ts";
 import type { RenderableTheme } from "./rows.ts";
+import {
+  resumeToolRowFacts,
+  startToolRowFacts,
+  steerToolRowFacts,
+} from "./tool-row-facts.ts";
 
 initTheme(undefined, false);
 
@@ -71,13 +75,11 @@ const successfulResult = {
       text: "Started explore:\nsubagent id subagent-demo-1\nrun id run-demo-1\n\nComplete guidance.",
     },
   ],
-  details: {
-    kind: "start" as const,
-    outcome: "started" as const,
-    agent: "explore",
-    subagentId: "subagent-demo-1",
-    runId: "run-demo-1",
-  },
+  details: startToolRowFacts("explore", {
+    outcome: "started",
+    subagentId: subagentId("subagent-demo-1"),
+    runId: runId("run-demo-1"),
+  }),
 };
 
 test("a single-line prompt is limited to five visual lines with an honest marker", () => {
@@ -230,104 +232,278 @@ test("resume and steer malformed, foreign, and legacy details use readable fallb
   );
 });
 
-test("a narrow resumed summary drops its field label before clipping the Run id", () => {
-  const line = formatResumedRunSummary(
-    {
-      kind: "resume",
-      outcome: "started",
-      subagentId: "subagent-abcd-123",
-      runId: "run-abcd-456",
-    },
-    plainTheme,
+test("a narrow resumed identity drops its field label before clipping the Run id", () => {
+  const details = resumeToolRowFacts({
+    outcome: "started",
+    subagentId: subagentId("subagent-abcd-123"),
+    runId: runId("run-abcd-456"),
+  });
+  const line = lines(
+    agentToolRenderers("resume").renderResult(
+      { content: [{ type: "text", text: "complete prose" }], details },
+      { expanded: false, isPartial: false },
+      plainTheme,
+      context({ callHidden: true }),
+    ),
     38,
-    (_action, description) => `o ${description}`,
-  );
+  )[0];
 
-  assert.equal(line, "Resumed · run-abcd-456 (o to expand)");
+  assert.match(line, /^Resumed · run-abcd-456/);
   assert.ok(visibleWidth(line) <= 38);
   assert.doesNotMatch(line, /· Run /);
 });
 
-test("every start and resume refusal and Control admission outcome has a distinct semantic line", () => {
-  const start = agentToolRenderers("start");
-  const startDetails = [
-    { kind: "start", outcome: "unknown agent", agent: "ghost" },
-    { kind: "start", outcome: "invalid profile", agent: "explore" },
-    { kind: "start", outcome: "empty label", agent: "explore" },
-    { kind: "start", outcome: "at capacity", agent: "explore" },
-    { kind: "start", outcome: "shutting down", agent: "explore" },
-    {
-      kind: "start",
-      outcome: "delegation-depth exceeded",
-      agent: "explore",
-      depth: 2,
-    },
-    { kind: "start", outcome: "backend unavailable", agent: "explore" },
+test("pass-through facts render with their declared tone", () => {
+  const requestedRunId = runId("run-1");
+  const cases = [
+    [
+      "steer",
+      steerToolRowFacts(requestedRunId, {
+        outcome: "accepted",
+        runId: requestedRunId,
+      }),
+      "toolTitle",
+    ],
+    [
+      "start",
+      startToolRowFacts("ghost", {
+        outcome: "unknown agent",
+        agent: "ghost",
+      }),
+      "error",
+    ],
+    [
+      "start",
+      startToolRowFacts("explore", { outcome: "at capacity" }),
+      "warning",
+    ],
   ] as const;
-  const startLines = startDetails.map((details) =>
-    lines(
-      start.renderResult(
-        { content: [{ type: "text", text: "complete prose" }], details },
-        { expanded: false, isPartial: false },
-        plainTheme,
-        context({}),
-      ),
-      100,
-    )[0].replace(/ \(.*to expand\)$/, ""),
-  );
-  assert.equal(new Set(startLines).size, startDetails.length);
-  assert.ok(startLines.every((line) => line.startsWith("Start refused")));
 
-  const resume = agentToolRenderers("resume");
-  const resumeDetails = [
-    { kind: "resume", outcome: "unknown Subagent" },
-    { kind: "resume", outcome: "Subagent already running" },
-    { kind: "resume", outcome: "empty label" },
-    { kind: "resume", outcome: "resume unsupported" },
-    { kind: "resume", outcome: "conversation lost" },
-    { kind: "resume", outcome: "at capacity" },
-    { kind: "resume", outcome: "shutting down" },
-  ] as const;
-  const resumeLines = resumeDetails.map((details) =>
-    lines(
-      resume.renderResult(
+  for (const [operation, details, tone] of cases) {
+    const rendered = lines(
+      agentToolRenderers(operation).renderResult(
         { content: [{ type: "text", text: "complete prose" }], details },
         { expanded: false, isPartial: false },
-        plainTheme,
+        markedTheme,
         context({}),
       ),
       100,
-    )[0].replace(/ \(.*to expand\)$/, ""),
-  );
-  assert.equal(new Set(resumeLines).size, resumeDetails.length);
+    )[0];
+    assert.match(rendered, new RegExp(`^<${tone}>`));
+  }
+});
 
-  const steer = agentToolRenderers("steer");
-  const steerDetails = [
-    { kind: "steer", outcome: "accepted", runId: "run-1" },
-    { kind: "steer", outcome: "mailbox full", runId: "run-1" },
-    { kind: "steer", outcome: "mailbox closed", runId: "run-1" },
-    { kind: "steer", outcome: "unsupported", runId: "run-1" },
-    { kind: "steer", outcome: "invalid", runId: "run-1" },
-    { kind: "steer", outcome: "already completed", runId: "run-1" },
-    { kind: "steer", outcome: "already failed", runId: "run-1" },
-    { kind: "steer", outcome: "already cancelled", runId: "run-1" },
-    { kind: "steer", outcome: "unknown Run", runId: "run-1" },
-    { kind: "steer", outcome: "shutting down", runId: "run-1" },
+test("successful start and resume identities read phrase and tone from facts", () => {
+  const run = runId("run-2");
+  const subagent = subagentId("subagent-1");
+  const cases = [
+    [
+      "start",
+      {
+        ...startToolRowFacts("explore", {
+          outcome: "started",
+          subagentId: subagent,
+          runId: run,
+        }),
+        rowPhrase: "Launched",
+        tone: "warning",
+      },
+      "<warning>Launched explore</warning><dim> · Subagent subagent-1 · Run run-2</dim>",
+    ],
+    [
+      "resume",
+      {
+        ...resumeToolRowFacts({
+          outcome: "started",
+          subagentId: subagent,
+          runId: run,
+        }),
+        rowPhrase: "Continued",
+        tone: "error",
+      },
+      "<error>Continued</error><dim> · Run run-2</dim>",
+    ],
   ] as const;
-  const steerLines = steerDetails.map((details) =>
-    lines(
-      steer.renderResult(
+
+  for (const [operation, details, expected] of cases) {
+    const rendered = lines(
+      agentToolRenderers(operation).renderResult(
         { content: [{ type: "text", text: "complete prose" }], details },
         { expanded: false, isPartial: false },
-        plainTheme,
+        markedTheme,
         context({}),
       ),
-      100,
-    )[0].replace(/ \(.*to expand\)$/, ""),
+      120,
+    )[0];
+    assert.equal(rendered, `${expected} <dim>(</dim> to expand<dim>)</dim>`);
+  }
+});
+
+test("golden: every operation keeps its collapsed row text and styling", () => {
+  const run = runId("run-1");
+  const subagent = subagentId("subagent-1");
+  const cases = [
+    [
+      "start",
+      startToolRowFacts("explore", {
+        outcome: "started",
+        subagentId: subagent,
+        runId: run,
+      }),
+    ],
+    [
+      "resume",
+      resumeToolRowFacts({
+        outcome: "started",
+        subagentId: subagent,
+        runId: run,
+      }),
+    ],
+    ["steer", steerToolRowFacts(run, { outcome: "unknown Run", runId: run })],
+    [
+      "wait",
+      {
+        kind: "collection",
+        scope: "named",
+        runs: [],
+        stillRunning: 1,
+        unknown: 0,
+        unavailable: 0,
+        noActiveRuns: false,
+      },
+    ],
+    [
+      "waitAll",
+      {
+        kind: "collection",
+        scope: "all-active",
+        runs: [],
+        stillRunning: 0,
+        unknown: 0,
+        unavailable: 0,
+        noActiveRuns: true,
+      },
+    ],
+    [
+      "result",
+      {
+        kind: "result",
+        outcome: "available",
+        run: {
+          runId: run,
+          agent: "explore",
+          status: "completed",
+          output: { kind: "visible", characters: 12_345 },
+        },
+      },
+    ],
+    [
+      "cancel",
+      {
+        kind: "cancel",
+        outcomes: [{ kind: "requested", runId: run }],
+      },
+    ],
+  ] as const;
+  const rendered = Object.fromEntries(
+    cases.map(([operation, details]) => [
+      operation,
+      lines(
+        agentToolRenderers(operation).renderResult(
+          { content: [{ type: "text", text: "complete prose" }], details },
+          { expanded: false, isPartial: false },
+          markedTheme,
+          context({}),
+        ),
+        120,
+      )[0],
+    ]),
   );
-  assert.equal(new Set(steerLines).size, steerDetails.length);
-  assert.equal(steerLines[0], "Accepted into local Control mailbox");
-  assert.doesNotMatch(steerLines[0], /provider|model/i);
+
+  const hint = " <dim>(</dim> to expand<dim>)</dim>";
+  assert.deepEqual(rendered, {
+    start: `<toolTitle>Started explore</toolTitle><dim> · Subagent subagent-1 · Run run-1</dim>${hint}`,
+    resume: `<toolTitle>Resumed</toolTitle><dim> · Run run-1</dim>${hint}`,
+    steer: `<error>Control refused</error><dim> · unknown Run</dim>${hint}`,
+    wait: `<toolOutput>1 Run still running</toolOutput>${hint}`,
+    waitAll: `<toolOutput>No active Runs</toolOutput>${hint}`,
+    result: `<toolOutput>explore · run-1 · completed · 12.3k characters</toolOutput>${hint}`,
+    cancel: `<toolOutput>Cancellation requested: 1</toolOutput>${hint}`,
+  });
+});
+
+test("aggregate result facts retain exact text and tone for every outcome", () => {
+  const cases = [
+    [
+      {
+        kind: "result",
+        outcome: "available",
+        run: {
+          runId: "run-1",
+          agent: "explore",
+          status: "completed",
+          output: { kind: "visible", characters: 12_345 },
+        },
+      },
+      "<toolOutput>explore · run-1 · completed · 12.3k characters</toolOutput>",
+    ],
+    [
+      {
+        kind: "result",
+        outcome: "available",
+        run: {
+          runId: "run-none",
+          agent: "explore",
+          status: "completed",
+          output: { kind: "none" },
+        },
+      },
+      "<toolOutput>explore · run-none · completed · no output</toolOutput>",
+    ],
+    [
+      {
+        kind: "result",
+        outcome: "available",
+        run: {
+          runId: "run-removed",
+          agent: "explore",
+          status: "completed",
+          output: { kind: "removed" },
+        },
+      },
+      "<toolOutput>explore · run-removed · completed · output removed</toolOutput>",
+    ],
+    [
+      { kind: "result", outcome: "still-running", runId: "run-2" },
+      "<warning>run-2 · still running</warning>",
+    ],
+    [
+      { kind: "result", outcome: "unknown", runId: "run-never" },
+      "<error>run-never · unknown Run</error>",
+    ],
+    [
+      {
+        kind: "result",
+        outcome: "unavailable",
+        runId: "run-3",
+        status: "failed",
+      },
+      "<error>run-3 · Result unavailable · failed</error>",
+    ],
+  ] as const;
+
+  for (const [details, expected] of cases) {
+    const rendered = lines(
+      agentToolRenderers("result").renderResult(
+        { content: [{ type: "text", text: "complete prose" }], details },
+        { expanded: false, isPartial: false },
+        markedTheme,
+        context({}),
+      ),
+      120,
+    )[0];
+    assert.equal(rendered, `${expected} <dim>(</dim> to expand<dim>)</dim>`);
+  }
 });
 
 test("a one-line rejection with no hidden prompt content has no expansion affordance", () => {
@@ -346,29 +522,27 @@ test("a one-line rejection with no hidden prompt content has no expansion afford
   assert.equal(lines(result, 80).join("\n"), 'Unknown agent: "ghost".');
 });
 
-test("a narrow compact success keeps both actionable ids ahead of a long Agent", () => {
-  const width = 72;
-  const line = formatStartedRunSummary(
-    {
-      kind: "start",
-      outcome: "started",
-      agent: "standards-reviewer",
-      subagentId: "subagent-abcd-123",
-      runId: "run-abcd-456",
-    },
-    plainTheme,
+test("a narrow compact success drops Agent and field labels before either id", () => {
+  const width = 60;
+  const details = startToolRowFacts("standards-reviewer", {
+    outcome: "started",
+    subagentId: subagentId("subagent-abcd-123"),
+    runId: runId("run-abcd-456"),
+  });
+  const line = lines(
+    agentToolRenderers("start").renderResult(
+      { content: [{ type: "text", text: "complete prose" }], details },
+      { expanded: false, isPartial: false },
+      plainTheme,
+      context({ callHidden: true }),
+    ),
     width,
-    (_action, description) => `ctrl+shift+o ${description}`,
-  );
+  )[0];
 
-  assert.equal(
-    line,
-    "Started · subagent-abcd-123 · run-abcd-456 (ctrl+shift+o to expand)",
-  );
-  assert.equal(visibleWidth(line), 67);
+  assert.equal(line, "Started · subagent-abcd-123 · run-abcd-456 ( to expand)");
   assert.ok(visibleWidth(line) <= width);
-  assert.doesNotMatch(line, /standards-reviewer/);
-  assert.equal(line.match(/to expand/g)?.length, 1);
+  assert.match(line, /subagent-abcd-123 · run-abcd-456/);
+  assert.doesNotMatch(line, /standards-reviewer|Subagent |Run /);
 });
 
 test("cancellation call names deduplicated Runs or a width-fitted count", () => {
@@ -499,12 +673,11 @@ test("reused continuation and cancel renderers repaint the current theme", () =>
       args: { id: "subagent-1", description: "continue", prompt: "again" },
       result: {
         content: [{ type: "text", text: "resume prose" }],
-        details: {
-          kind: "resume" as const,
-          outcome: "started" as const,
-          subagentId: "subagent-1",
-          runId: "run-2",
-        },
+        details: resumeToolRowFacts({
+          outcome: "started",
+          subagentId: subagentId("subagent-1"),
+          runId: runId("run-2"),
+        }),
       },
       resultTone: /<toolTitle>/,
     },
@@ -513,11 +686,10 @@ test("reused continuation and cancel renderers repaint the current theme", () =>
       args: { id: "run-1", message: "continue" },
       result: {
         content: [{ type: "text", text: "steer prose" }],
-        details: {
-          kind: "steer" as const,
-          outcome: "accepted" as const,
-          runId: "run-1",
-        },
+        details: steerToolRowFacts(runId("run-1"), {
+          outcome: "accepted",
+          runId: runId("run-1"),
+        }),
       },
       resultTone: /<toolTitle>/,
     },
@@ -702,12 +874,11 @@ test("start, resume, and steer partial results never present settled semantics",
       "resume",
       {
         content: [{ type: "text", text: "Resumed subagent-1" }],
-        details: {
-          kind: "resume",
+        details: resumeToolRowFacts({
           outcome: "started",
-          subagentId: "subagent-1",
-          runId: "run-2",
-        },
+          subagentId: subagentId("subagent-1"),
+          runId: runId("run-2"),
+        }),
       },
       /agent_resume is still running\./,
       /Resumed|run-2/,
@@ -716,7 +887,10 @@ test("start, resume, and steer partial results never present settled semantics",
       "steer",
       {
         content: [{ type: "text", text: "Steering accepted" }],
-        details: { kind: "steer", outcome: "accepted", runId: "run-1" },
+        details: steerToolRowFacts(runId("run-1"), {
+          outcome: "accepted",
+          runId: runId("run-1"),
+        }),
       },
       /agent_steer is still running\./,
       /Accepted|Steering accepted/,
@@ -918,85 +1092,6 @@ test("collection summaries discriminate delivery, timeout, unknown, unavailable,
   assert.ok(visibleWidth(clippedPriority) <= 30);
 });
 
-test("agent_result summaries distinguish available, running, unknown, and unavailable outcomes", () => {
-  const pair = agentToolRenderers("result");
-  const cases = [
-    [
-      {
-        kind: "result",
-        outcome: "available",
-        run: {
-          runId: "run-1",
-          agent: "explore",
-          status: "completed",
-          output: { kind: "visible", characters: 12_345 },
-        },
-      },
-      "explore · run-1 · completed · 12.3k characters",
-    ],
-    [
-      {
-        kind: "result",
-        outcome: "available",
-        run: {
-          runId: "run-none",
-          agent: "explore",
-          status: "completed",
-          output: { kind: "none" },
-        },
-      },
-      "explore · run-none · completed · no output",
-    ],
-    [
-      {
-        kind: "result",
-        outcome: "available",
-        run: {
-          runId: "run-removed",
-          agent: "explore",
-          status: "completed",
-          output: { kind: "removed" },
-        },
-      },
-      "explore · run-removed · completed · output removed",
-    ],
-    [
-      { kind: "result", outcome: "still-running", runId: "run-2" },
-      "run-2 · still running",
-    ],
-    [
-      { kind: "result", outcome: "unknown", runId: "run-never" },
-      "run-never · unknown Run",
-    ],
-    [
-      {
-        kind: "result",
-        outcome: "unavailable",
-        runId: "run-3",
-        status: "failed",
-      },
-      "run-3 · Result unavailable · failed",
-    ],
-  ] as const;
-
-  for (const [details, expected] of cases) {
-    const collapsed = lines(
-      pair.renderResult(
-        {
-          content: [{ type: "text", text: "Complete model response" }],
-          details,
-        },
-        { expanded: false, isPartial: false },
-        plainTheme,
-        context({}),
-      ),
-      100,
-    ).join("\n");
-    assert.ok(collapsed.startsWith(expected));
-    assert.equal(collapsed.match(/to expand/g)?.length, 1);
-  }
-});
-
 test("result-bearing renderers reuse components and repaint the current theme", () => {
   const state: AgentToolRendererState = {};
   const pair = agentToolRenderers("result");
@@ -1010,7 +1105,7 @@ test("result-bearing renderers reuse components and repaint the current theme", 
         runId: "run-1",
         agent: "explore",
         status: "completed" as const,
-        output: { kind: "visible", characters: 17 },
+        output: { kind: "visible" as const, characters: 17 },
       },
     },
   };

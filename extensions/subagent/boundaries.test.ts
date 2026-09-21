@@ -954,18 +954,20 @@ export function findBoundaryViolations(
     }
   }
 
-  // 8. Presentation is prose, and prose has no dependencies. A presentation
-  //    file may name another presentation file, the domain, and Pi's own
-  //    packages — which is where the row measuring and the theme come from —
-  //    and nothing else. Not the runtime, not a backend, not a fake, not even
-  //    `effect`: a presentation module that could reach the repository would
+  // 8. Presentation owns prose and Tool-row facts, and has no stateful
+  //    dependencies. A presentation file may name another presentation file,
+  //    the domain, Pi's own packages — which is where row measuring and theme
+  //    come from — and the `Schema` binding used to declare Tool-row facts.
+  //    Nothing else: not the runtime, a backend, a fake, or another Effect
+  //    binding. A presentation module that could reach the repository would
   //    be one edit away from folding state, and v1's dispatcher ended up
   //    owning presentation state for exactly that reason.
   for (const file of listSourceFiles(graph.presentationRoot, {
     includeTests: true,
   })) {
     const test = isTestFile(file);
-    for (const specifier of specifiersOf(file)) {
+    for (const edge of readNamedImports(fs.readFileSync(file, "utf8"))) {
+      const specifier = edge.specifier;
       const target = resolveRelativeSource(file, specifier);
       if (target) {
         if (isInside(target, graph.presentationRoot)) continue;
@@ -983,13 +985,20 @@ export function findBoundaryViolations(
       }
       if (isHostPackage(specifier)) continue;
       if (test && specifier.startsWith("node:")) continue;
+      if (
+        specifier === DOMAIN_PACKAGE &&
+        edge.names.length > 0 &&
+        edge.names.every((name) => name === DOMAIN_PACKAGE_BINDING)
+      ) {
+        continue;
+      }
       violations.add(
-        `${describe(file)} imports package ${specifier}, and a presentation file may name only the domain and Pi`,
+        `${describe(file)} imports package ${specifier}, and a presentation file may name only the domain, Schema, and Pi`,
       );
     }
   }
 
-  // 8. The application module is the façade: it maps decoded input to
+  // 9. The application module is the façade: it maps decoded input to
   //     supervisor requests and outcomes to prose. So it may name the domain,
   //     the runtime's services, presentation, and Effect — and no Pi package,
   //     because a façade that knew the host would be the host.
@@ -1022,7 +1031,7 @@ export function findBoundaryViolations(
     }
   }
 
-  // 9. The host does not reach around the runtime. Every backend a Session
+  // 10. The host does not reach around the runtime. Every backend a Session
   //     has is named by the composition root and handed to the runtime; a
   //     host handler that could import a `Backend` could open one, and then
   //     two things would own BackendAgent lifetime.
@@ -1045,7 +1054,7 @@ export function findBoundaryViolations(
     }
   }
 
-  // 10. The runtime does not know the host exists. `CompletionDelivery`
+  // 11. The runtime does not know the host exists. `CompletionDelivery`
   //     reaches its Session through the `NotificationSink` interface and
   //     nothing else, which is what let M3 supply the real Session push
   //     without changing delivery — and a runtime file that could import the
@@ -1069,7 +1078,7 @@ export function findBoundaryViolations(
     }
   }
 
-  // 11. One schema library. Every schema is declared with Effect Schema, and
+  // 12. One schema library. Every schema is declared with Effect Schema, and
   //     the dependency v1 still needs must not creep back in through a tool
   //     parameter document or a custom message payload.
   for (const file of listSourceFiles(treeRoot, { includeTests: true })) {
@@ -1085,7 +1094,7 @@ export function findBoundaryViolations(
     }
   }
 
-  // 12. Pi's SDK session vocabulary lives in the Pi adapter and nowhere else.
+  // 13. Pi's SDK session vocabulary lives in the Pi adapter and nowhere else.
   //     Pi's *host* API is a different thing that happens to ship in the same
   //     package, so the rule is by binding rather than by package: naming
   //     `createAgentSession` outside the adapter is a violation and naming
@@ -1103,7 +1112,7 @@ export function findBoundaryViolations(
     }
   }
 
-  // 13. The adapter stays behind the contract in both directions. Only the
+  // 14. The adapter stays behind the contract in both directions. Only the
   //     composition root and the adapter's own tests may reach into it, and it
   //     may not reach the runtime, the host, presentation, or the façade —
   //     which is what keeps "a backend change is an adapter-local change" a
@@ -1139,7 +1148,7 @@ export function findBoundaryViolations(
     }
   }
 
-  // 14. The same two directions for the Claude adapter. The sibling edge —
+  // 15. The same two directions for the Claude adapter. The sibling edge —
   //     one adapter naming the other — needs no rule of its own: rule 15's
   //     importer list does not admit the Claude adapter, so a Claude module
   //     reaching for Pi is already rejected there, and the reverse is rejected
@@ -1175,7 +1184,7 @@ export function findBoundaryViolations(
     }
   }
 
-  // 15. Nothing in the extension spawns a child process. Every backend it
+  // 16. Nothing in the extension spawns a child process. Every backend it
   //     ships runs its children in-process or through a provider SDK, so a
   //     module reaching for `node:child_process` would own a process the
   //     Session cannot see, wait on, or kill.
@@ -1188,7 +1197,7 @@ export function findBoundaryViolations(
     }
   }
 
-  // 16. The widget observes; it does not deliver. A settled Run's row lasts
+  // 17. The widget observes; it does not deliver. A settled Run's row lasts
   //     until its completion notice lands, which is the push sink's fact — so
   //     the widget is handed two functions for it and may not name the sink or
   //     delivery itself. A widget that could import either could push a
@@ -1207,7 +1216,7 @@ export function findBoundaryViolations(
     }
   }
 
-  // 17. Delivery does not say "landed", and does not say "consumed" either. It
+  // 18. Delivery does not say "landed", and does not say "consumed" either. It
   //     knows pending, handed off, exhausted, and unannounceable; the Session
   //     push sink knows the rest. This is a scan for two words rather than an
   //     import check
@@ -1235,7 +1244,7 @@ export function findBoundaryViolations(
     }
   }
 
-  // 18. The notification formatter depends on the domain notice and nothing
+  // 19. The notification formatter depends on the domain notice and nothing
   //     else. Presentation as a whole may name Pi's packages, because a
   //     widget row has to measure a width and pick a theme colour; the notice
   //     is prose a *model* reads, so it needs neither. Fencing it this
@@ -1261,7 +1270,7 @@ export function findBoundaryViolations(
     }
   }
 
-  // 19. The supervisor holds no state of its own. Admission, the Subagent
+  // 20. The supervisor holds no state of its own. Admission, the Subagent
   //     records, and the waiter ledger each own the state whose invariant they
   //     carry, and what is left in the supervisor is the order the operations
   //     happen in. A reference, a map, or a set constructed there would be a
@@ -1278,7 +1287,7 @@ export function findBoundaryViolations(
     }
   }
 
-  // 20. The dashboard sees the Session through its read-only observation
+  // 21. The dashboard sees the Session through its read-only observation
   //     interface. It may name domain, host, and presentation types, but it may
   //     not recover the old arbitrary Effect runner or know which application
   //     query or runtime publication implements observation.
@@ -1299,7 +1308,7 @@ export function findBoundaryViolations(
     }
   }
 
-  // 21. No host module but the composition root names a runtime service. Four
+  // 22. No host module but the composition root names a runtime service. Four
   //     host surfaces read this Session — the widget, the dashboard's
   //     observation source, `/subagent doctor` and the shallow status — and
   //     they used to reach the runtime four different ways, which is how one
@@ -1330,7 +1339,7 @@ export function findBoundaryViolations(
     }
   }
 
-  // 22. The presentation module's barrel names every file in the module. The
+  // 23. The presentation module's barrel names every file in the module. The
   //     barrel is the module's interface, and an interface with a second door
   //     is not one: ten consumers entered through it while the dashboard
   //     reached past it into three files by path, and the only thing that ever
@@ -1355,7 +1364,7 @@ export function findBoundaryViolations(
     }
   }
 
-  // 23. An edge this checker cannot see is an edge no rule above can hold.
+  // 24. An edge this checker cannot see is an edge no rule above can hold.
   //     Every rule here is a rule about specifiers, so one `await import(url)`
   //     with a computed argument would let any of them be broken without
   //     failing anything — a presentation file could reach the runtime, an
@@ -1920,12 +1929,15 @@ test("a presentation file importing the runtime, a backend, or a fake is rejecte
   write("extensions/subagent/runtime/repository.ts", "export {};\n");
   write("extensions/subagent/backend/contract.ts", "export {};\n");
   write("extensions/subagent/testing/fakes/backend.ts", "export {};\n");
-  // Prose over the domain, painted with Pi's own primitives: allowed.
+  // Prose over the domain, facts declared with Schema, and Pi's own painting
+  // primitives: allowed.
   write(
     "extensions/subagent/presentation/status.ts",
     [
       'import type {} from "../domain/index.ts";',
+      'import { Schema } from "effect";',
       'import { truncateToWidth } from "@earendil-works/pi-tui";',
+      "void Schema;",
       "void truncateToWidth;",
     ].join("\n"),
   );
@@ -1941,6 +1953,49 @@ test("a presentation file importing the runtime, a backend, or a fake is rejecte
   );
 
   assert.deepEqual(findBoundaryViolations(graph), []);
+
+  // A whole-module reach remains forbidden when the file also has the one
+  // permitted static binding from the same package.
+  for (const wholeModuleReach of [
+    'await import("effect");',
+    'require("effect");',
+  ]) {
+    write(
+      "extensions/subagent/presentation/status.ts",
+      [
+        'import { Schema } from "effect";',
+        wholeModuleReach,
+        "void Schema;",
+      ].join("\n"),
+    );
+    assert.deepEqual(findBoundaryViolations(graph), [
+      `${describe(path.join(graph.presentationRoot, "status.ts"))} imports package effect, and a presentation file may name only the domain, Schema, and Pi`,
+    ]);
+  }
+  write(
+    "extensions/subagent/presentation/status.ts",
+    [
+      'import type {} from "../domain/index.ts";',
+      'import { Schema } from "effect";',
+      'import { truncateToWidth } from "@earendil-works/pi-tui";',
+      "void Schema;",
+      "void truncateToWidth;",
+    ].join("\n"),
+  );
+
+  // Naming no binding is not a Schema import: side effects from the Effect
+  // package are no more admissible here than an Effect runtime binding.
+  write(
+    "extensions/subagent/presentation/effect-side-effect.ts",
+    'import "effect";\n',
+  );
+  assert.deepEqual(findBoundaryViolations(graph), [
+    `${describe(path.join(graph.presentationRoot, "effect-side-effect.ts"))} imports package effect, and a presentation file may name only the domain, Schema, and Pi`,
+  ]);
+  write(
+    "extensions/subagent/presentation/effect-side-effect.ts",
+    "export {};\n",
+  );
 
   // A production presentation file may not, which is the half of the rule the
   // fixture exemption must not widen.
@@ -1976,7 +2031,7 @@ test("a presentation file importing the runtime, a backend, or a fake is rejecte
     "extensions/subagent/presentation/card.ts",
     'import "../backend/contract.ts";\nimport "../testing/fakes/backend.ts";\n',
   );
-  // Not even Effect: presentation runs nothing.
+  // No Effect runtime binding: presentation runs nothing.
   write(
     "extensions/subagent/presentation/prose.ts",
     'import { Effect } from "effect";\nvoid Effect;\n',
@@ -1985,7 +2040,7 @@ test("a presentation file importing the runtime, a backend, or a fake is rejecte
   assert.deepEqual(findBoundaryViolations(graph), [
     `${describe(path.join(graph.presentationRoot, "card.ts"))} imports ${describe(path.join(graph.contractRoot, "contract.ts"))}, and a presentation file may name only the domain and Pi`,
     `${describe(path.join(graph.presentationRoot, "card.ts"))} imports ${describe(path.join(graph.testingRoot, "fakes", "backend.ts"))}, and a presentation file may name only the domain and Pi`,
-    `${describe(path.join(graph.presentationRoot, "prose.ts"))} imports package effect, and a presentation file may name only the domain and Pi`,
+    `${describe(path.join(graph.presentationRoot, "prose.ts"))} imports package effect, and a presentation file may name only the domain, Schema, and Pi`,
     `${describe(path.join(graph.presentationRoot, "rows.ts"))} imports ${describe(path.join(graph.runtimeRoot, "repository.ts"))}, and a presentation file may name only the domain and Pi`,
   ]);
 });

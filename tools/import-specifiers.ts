@@ -220,9 +220,11 @@ export interface NamedImport {
  * the v2 domain module and Effect's `Schema`, so the walker learns to read one
  * level finer.
  *
- * Only static `import` declarations carry named bindings. A dynamic `import()`
- * or a `require()` reaches the whole module, so each is reported as a
- * namespace import of it.
+ * Only static ES `import` declarations carry named bindings. A dynamic
+ * `import()`, `require()`, export-from, or import-equals reaches the module as
+ * a whole, so each is reported as a namespace import. Edges are classified
+ * directly in source order: one edge cannot hide or reclassify another edge
+ * that happens to name the same specifier.
  */
 export function readNamedImports(source: string): NamedImport[] {
   const sourceFile = ts.createSourceFile(
@@ -233,15 +235,30 @@ export function readNamedImports(source: string): NamedImport[] {
     ts.ScriptKind.TS,
   );
   const imports: NamedImport[] = [];
+  const staticString = (
+    node: ts.Node | undefined,
+  ): node is ts.StringLiteralLike =>
+    Boolean(
+      node &&
+        (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)),
+    );
+  const isRequireCallee = (node: ts.Expression): boolean =>
+    (ts.isIdentifier(node) && node.text === "require") ||
+    (ts.isPropertyAccessExpression(node) && node.name.text === "require") ||
+    (ts.isElementAccessExpression(node) &&
+      staticString(node.argumentExpression) &&
+      node.argumentExpression.text === "require");
+  const addWholeModule = (node: ts.StringLiteralLike | undefined): void => {
+    if (node) imports.push({ specifier: node.text, names: ["*"] });
+  };
 
   const visit = (node: ts.Node): void => {
     if (
       ts.isImportDeclaration(node) &&
       ts.isStringLiteral(node.moduleSpecifier)
     ) {
-      const specifier = node.moduleSpecifier.text;
-      const clause = node.importClause;
       const names: string[] = [];
+      const clause = node.importClause;
       if (clause?.name) names.push("default");
       const bindings = clause?.namedBindings;
       if (bindings && ts.isNamespaceImport(bindings)) names.push("*");
@@ -250,20 +267,34 @@ export function readNamedImports(source: string): NamedImport[] {
           names.push((element.propertyName ?? element.name).text);
         }
       }
-      imports.push({ specifier, names });
+      imports.push({ specifier: node.moduleSpecifier.text, names });
+    } else if (ts.isExportDeclaration(node)) {
+      addWholeModule(
+        node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)
+          ? node.moduleSpecifier
+          : undefined,
+      );
+    } else if (ts.isImportEqualsDeclaration(node)) {
+      const reference = node.moduleReference;
+      addWholeModule(
+        ts.isExternalModuleReference(reference) &&
+          ts.isStringLiteral(reference.expression)
+          ? reference.expression
+          : undefined,
+      );
+    } else if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword
+    ) {
+      const [argument] = node.arguments;
+      addWholeModule(argument && staticString(argument) ? argument : undefined);
+    } else if (ts.isCallExpression(node) && isRequireCallee(node.expression)) {
+      const [argument] = node.arguments;
+      addWholeModule(argument && staticString(argument) ? argument : undefined);
     }
     ts.forEachChild(node, visit);
   };
 
   visit(sourceFile);
-
-  // Whatever the syntax-level reader found that is not a static import is a
-  // whole-module reach: report it as a namespace import so no rule can be
-  // sidestepped by writing `await import("effect")`.
-  const statics = new Set(imports.map((entry) => entry.specifier));
-  for (const specifier of readImportSpecifiers(source)) {
-    if (statics.has(specifier)) continue;
-    imports.push({ specifier, names: ["*"] });
-  }
   return imports;
 }

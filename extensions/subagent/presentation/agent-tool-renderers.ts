@@ -28,11 +28,10 @@ import {
   type CancelToolRowFacts,
   type CollectedRunsToolRowFacts,
   decodeToolRowFacts,
-  type ResultToolRowFacts,
-  type ResumeToolRowFacts,
+  type ResumedRunToolRowFacts,
   type StartedRunToolRowFacts,
-  type StartToolRowFacts,
-  type SteerToolRowFacts,
+  type ToolRowFacts,
+  type ToolRowTone,
 } from "./tool-row-facts.ts";
 
 /** The operation keys of the one agent-tool family. */
@@ -386,17 +385,17 @@ function formatStartedIdentity(
   width: number,
 ): string {
   const candidates = [
-    theme.fg("toolTitle", `Started ${details.agent}`) +
+    theme.fg(details.tone, `${details.rowPhrase} ${details.agent}`) +
       theme.fg(
         "dim",
         ` · Subagent ${details.subagentId} · Run ${details.runId}`,
       ),
-    theme.fg("toolTitle", "Started") +
+    theme.fg(details.tone, details.rowPhrase) +
       theme.fg(
         "dim",
         ` · Subagent ${details.subagentId} · Run ${details.runId}`,
       ),
-    theme.fg("toolTitle", "Started") +
+    theme.fg(details.tone, details.rowPhrase) +
       theme.fg("dim", ` · ${details.subagentId} · ${details.runId}`),
   ];
   return (
@@ -405,52 +404,15 @@ function formatStartedIdentity(
   );
 }
 
-function startSummary(
-  details: StartToolRowFacts,
+function phraseSummary(
+  details: { readonly rowPhrase: string; readonly tone: ToolRowTone },
   theme: RenderableTheme,
-  width: number,
 ): string {
-  if (details.outcome === "started") {
-    return formatStartedIdentity(details, theme, width);
-  }
-  const [tone, reason] = (() => {
-    switch (details.outcome) {
-      case "unknown agent":
-        return ["error", "unknown Agent"] as const;
-      case "invalid profile":
-        return ["error", "invalid Profile"] as const;
-      case "empty label":
-        return ["error", "empty Label"] as const;
-      case "at capacity":
-        return ["warning", "at capacity"] as const;
-      case "shutting down":
-        return ["warning", "Session shutting down"] as const;
-      case "delegation-depth exceeded":
-        return ["warning", `delegation depth ${details.depth}`] as const;
-      case "backend unavailable":
-        return ["error", "backend unavailable"] as const;
-    }
-  })();
-  return theme.fg(tone, "Start refused") + theme.fg("dim", ` · ${reason}`);
-}
-
-/** A compact successful start with its row's one configured expansion hint. */
-export function formatStartedRunSummary(
-  details: StartedRunToolRowFacts,
-  theme: RenderableTheme,
-  width: number,
-  renderKeyHint?: KeyHintRenderer,
-): string {
-  return collapsedResultLine(
-    formatStartedIdentity(
-      details,
-      theme,
-      collapsedSummaryWidth(theme, width, true, renderKeyHint),
-    ),
-    theme,
-    width,
-    true,
-    renderKeyHint,
+  const separator = details.rowPhrase.indexOf(" · ");
+  if (separator < 0) return theme.fg(details.tone, details.rowPhrase);
+  return (
+    theme.fg(details.tone, details.rowPhrase.slice(0, separator)) +
+    theme.fg("dim", details.rowPhrase.slice(separator))
   );
 }
 
@@ -498,41 +460,17 @@ class UnifiedResultComponent extends CachedComponent {
         readonly sourceText?: string;
       }
     | undefined {
-    const facts = decodeToolRowFacts(this.result.details);
-    switch (this.operation) {
-      case "start":
-        return facts?.kind === "start"
-          ? { line: (width) => startSummary(facts, this.theme, width) }
-          : undefined;
-      case "resume":
-        return facts?.kind === "resume"
-          ? { line: (width) => resumeSummary(facts, this.theme, width) }
-          : undefined;
-      case "steer":
-        return facts?.kind === "steer"
-          ? { line: () => steerSummary(facts, this.theme) }
-          : undefined;
-      case "cancel": {
-        if (facts?.kind !== "cancel") return undefined;
-        const sourceText = cancellationSummaryText(facts);
-        return {
-          line: () => this.theme.fg("toolOutput", sourceText),
-          sourceText,
-        };
-      }
-      case "result":
-        return facts?.kind === "result"
-          ? { line: (width) => retrievalSummary(facts, this.theme, width) }
-          : undefined;
-      case "wait":
-        return facts?.kind === "collection" && facts.scope === "named"
-          ? { line: (width) => collectionSummary(facts, this.theme, width) }
-          : undefined;
-      case "waitAll":
-        return facts?.kind === "collection" && facts.scope === "all-active"
-          ? { line: (width) => collectionSummary(facts, this.theme, width) }
-          : undefined;
-    }
+    const facts = factsForOperation(
+      this.operation,
+      decodeToolRowFacts(this.result.details),
+    );
+    if (facts === undefined) return undefined;
+    const sourceText =
+      facts.kind === "cancel" ? cancellationSummaryText(facts) : undefined;
+    return {
+      line: (width) => toolRowSummary(facts, this.theme, width),
+      sourceText,
+    };
   }
 
   protected renderUncached(width: number): readonly string[] {
@@ -898,33 +836,74 @@ function resultOutputSummary(summary: CompactFinalOutputSummary): string {
   }
 }
 
-function retrievalSummary(
-  details: ResultToolRowFacts,
+function factsForOperation(
+  operation: AgentToolOperation,
+  facts: ToolRowFacts | undefined,
+): ToolRowFacts | undefined {
+  if (facts === undefined) return undefined;
+  switch (operation) {
+    case "start":
+    case "resume":
+    case "steer":
+    case "cancel":
+    case "result":
+      return facts.kind === operation ? facts : undefined;
+    case "wait":
+      return facts.kind === "collection" && facts.scope === "named"
+        ? facts
+        : undefined;
+    case "waitAll":
+      return facts.kind === "collection" && facts.scope === "all-active"
+        ? facts
+        : undefined;
+  }
+}
+
+/** Render any decoded Tool-row facts through one summary policy. */
+function toolRowSummary(
+  facts: ToolRowFacts,
   theme: RenderableTheme,
   width: number,
 ): string {
-  switch (details.outcome) {
-    case "available": {
-      const output = resultOutputSummary(details.run.output);
-      const candidates = [
-        `${details.run.agent} · ${details.run.runId} · ${details.run.status} · ${output}`,
-        `${details.run.agent} · ${details.run.runId} · ${details.run.status}`,
-        `${details.run.runId} · ${details.run.status}`,
-      ];
-      const text =
-        candidates.find((candidate) => visibleWidth(candidate) <= width) ??
-        fitToWidth(candidates.at(-1) ?? "", width, { plain: true });
-      return theme.fg("toolOutput", text);
-    }
-    case "still-running":
-      return theme.fg("warning", `${details.runId} · still running`);
-    case "unknown":
-      return theme.fg("error", `${details.runId} · unknown Run`);
-    case "unavailable":
-      return theme.fg(
-        "error",
-        `${details.runId} · Result unavailable · ${details.status}`,
-      );
+  switch (facts.kind) {
+    case "start":
+      return "subagentId" in facts
+        ? formatStartedIdentity(facts, theme, width)
+        : phraseSummary(facts, theme);
+    case "resume":
+      return "runId" in facts
+        ? resumedIdentity(facts, theme, width)
+        : phraseSummary(facts, theme);
+    case "steer":
+      return phraseSummary(facts, theme);
+    case "collection":
+      return collectionSummary(facts, theme, width);
+    case "cancel":
+      return theme.fg("toolOutput", cancellationSummaryText(facts));
+    case "result":
+      switch (facts.outcome) {
+        case "available": {
+          const output = resultOutputSummary(facts.run.output);
+          const candidates = [
+            `${facts.run.agent} · ${facts.run.runId} · ${facts.run.status} · ${output}`,
+            `${facts.run.agent} · ${facts.run.runId} · ${facts.run.status}`,
+            `${facts.run.runId} · ${facts.run.status}`,
+          ];
+          const text =
+            candidates.find((candidate) => visibleWidth(candidate) <= width) ??
+            fitToWidth(candidates.at(-1) ?? "", width, { plain: true });
+          return theme.fg("toolOutput", text);
+        }
+        case "still-running":
+          return theme.fg("warning", `${facts.runId} · still running`);
+        case "unknown":
+          return theme.fg("error", `${facts.runId} · unknown Run`);
+        case "unavailable":
+          return theme.fg(
+            "error",
+            `${facts.runId} · Result unavailable · ${facts.status}`,
+          );
+      }
   }
 }
 
@@ -1045,142 +1024,21 @@ class ContinuationCallComponent extends CachedComponent {
   }
 }
 
-type ResumedRunToolRowFacts = Extract<
-  ResumeToolRowFacts,
-  { readonly outcome: "started" }
->;
-
 function resumedIdentity(
   details: ResumedRunToolRowFacts,
   theme: RenderableTheme,
   width: number,
 ): string {
   const candidates = [
-    theme.fg("toolTitle", "Resumed") +
+    theme.fg(details.tone, details.rowPhrase) +
       theme.fg("dim", ` · Run ${details.runId}`),
-    theme.fg("toolTitle", "Resumed") + theme.fg("dim", ` · ${details.runId}`),
+    theme.fg(details.tone, details.rowPhrase) +
+      theme.fg("dim", ` · ${details.runId}`),
   ];
   return (
     candidates.find((candidate) => visibleWidth(candidate) <= width) ??
     fitToWidth(candidates.at(-1) ?? "", width)
   );
-}
-
-/** A compact resumed identity with the row's one configured expansion hint. */
-export function formatResumedRunSummary(
-  details: ResumedRunToolRowFacts,
-  theme: RenderableTheme,
-  width: number,
-  renderKeyHint?: KeyHintRenderer,
-): string {
-  return collapsedResultLine(
-    resumedIdentity(
-      details,
-      theme,
-      collapsedSummaryWidth(theme, width, true, renderKeyHint),
-    ),
-    theme,
-    width,
-    true,
-    renderKeyHint,
-  );
-}
-
-function resumeSummary(
-  details: ResumeToolRowFacts,
-  theme: RenderableTheme,
-  width: number,
-): string {
-  switch (details.outcome) {
-    case "started":
-      return resumedIdentity(details, theme, width);
-    case "unknown Subagent":
-      return (
-        theme.fg("error", "Resume refused") +
-        theme.fg("dim", " · unknown Subagent")
-      );
-    case "Subagent already running":
-      return (
-        theme.fg("warning", "Resume refused") +
-        theme.fg("dim", " · already running")
-      );
-    case "empty label":
-      return (
-        theme.fg("error", "Resume refused") + theme.fg("dim", " · empty Label")
-      );
-    case "resume unsupported":
-      return (
-        theme.fg("warning", "Resume refused") +
-        theme.fg("dim", " · unsupported")
-      );
-    case "conversation lost":
-      return (
-        theme.fg("error", "Resume refused") +
-        theme.fg("dim", " · Conversation lost")
-      );
-    case "at capacity":
-      return (
-        theme.fg("warning", "Resume refused") +
-        theme.fg("dim", " · at capacity")
-      );
-    case "shutting down":
-      return (
-        theme.fg("warning", "Resume refused") +
-        theme.fg("dim", " · Session shutting down")
-      );
-  }
-}
-
-function steerSummary(
-  details: SteerToolRowFacts,
-  theme: RenderableTheme,
-): string {
-  switch (details.outcome) {
-    case "accepted":
-      return theme.fg("toolTitle", "Accepted into local Control mailbox");
-    case "mailbox full":
-      return (
-        theme.fg("warning", "Control refused") +
-        theme.fg("dim", " · mailbox full")
-      );
-    case "mailbox closed":
-      return (
-        theme.fg("warning", "Control refused") +
-        theme.fg("dim", " · mailbox closed")
-      );
-    case "unsupported":
-      return (
-        theme.fg("warning", "Control refused") +
-        theme.fg("dim", " · unsupported")
-      );
-    case "invalid":
-      return (
-        theme.fg("error", "Control refused") + theme.fg("dim", " · invalid")
-      );
-    case "already completed":
-      return (
-        theme.fg("warning", "Control refused") +
-        theme.fg("dim", " · Run completed")
-      );
-    case "already failed":
-      return (
-        theme.fg("error", "Control refused") + theme.fg("dim", " · Run failed")
-      );
-    case "already cancelled":
-      return (
-        theme.fg("warning", "Control refused") +
-        theme.fg("dim", " · Run cancelled")
-      );
-    case "unknown Run":
-      return (
-        theme.fg("error", "Control refused") + theme.fg("dim", " · unknown Run")
-      );
-    case "shutting down":
-      return (
-        theme.fg("warning", "Control refused") +
-        theme.fg("dim", " · Session shutting down")
-      );
-  }
 }
 
 function continuationPair(
