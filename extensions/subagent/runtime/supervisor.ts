@@ -107,6 +107,7 @@ import {
   makeResumedRunHandle,
   makeRunHandle,
   type RunContext,
+  type RunEnvironment,
   type RunHandle,
 } from "./run-scope.ts";
 import {
@@ -409,6 +410,19 @@ const makeSupervisor = (settings: SessionSettings) =>
     );
 
     const now = clock.currentTimeMillis;
+    /** Session-long dependencies shared by every Run this supervisor starts. */
+    const runEnvironment: RunEnvironment = {
+      repository,
+      store,
+      counters,
+      bounds: policy.projection,
+      observationQueueBound: policy.observationQueueBound,
+      controlBounds: policy.controls,
+      now,
+      trace: (identity, stage) => stages.push(`${identity.runId}:${stage}`),
+      cleanupEscalation: cleanup,
+      cleanupBudgetMillis: policy.cleanupBudgetMillis,
+    };
 
     /* ------------------------------------------------------------ */
     /* Running a Run                                                 */
@@ -499,17 +513,7 @@ const makeSupervisor = (settings: SessionSettings) =>
           prompt,
         },
         agent,
-        repository,
-        store,
-        counters,
-        bounds: policy.projection,
-        observationQueueBound: policy.observationQueueBound,
-        controlBounds: policy.controls,
         startedAt,
-        now,
-        trace: (stage) => stages.push(`${identity.runId}:${stage}`),
-        cleanupEscalation: cleanup,
-        cleanupBudgetMillis: policy.cleanupBudgetMillis,
         onSettled: () => settled(identity.runId),
       };
     };
@@ -652,7 +656,7 @@ const makeSupervisor = (settings: SessionSettings) =>
         yield* Effect.uninterruptible(
           Effect.gen(function* () {
             const handle = yield* Effect.matchEffect(
-              makeRunHandle(runContext).pipe(
+              makeRunHandle(runEnvironment, runContext).pipe(
                 Scope.provide(opened.scope),
                 Effect.onError(() => Scope.close(opened.scope, Exit.void)),
               ),
@@ -843,9 +847,10 @@ const makeSupervisor = (settings: SessionSettings) =>
         });
         yield* Effect.uninterruptible(
           Effect.gen(function* () {
-            const handle = yield* makeResumedRunHandle(runContext).pipe(
-              Scope.provide(record.scope),
-            );
+            const handle = yield* makeResumedRunHandle(
+              runEnvironment,
+              runContext,
+            ).pipe(Scope.provide(record.scope));
             // Handle attachment and the running phase precede publication:
             // from the first instant the repository can say active, every
             // operation can reach this exact Run through the records module.

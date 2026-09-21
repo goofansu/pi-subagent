@@ -16,7 +16,12 @@ import {
 import { DEFAULT_RUNTIME_POLICY } from "./policy.ts";
 import { RunRepository } from "./repository.ts";
 import { ResultStore } from "./result-store.ts";
-import { makeRunHandle, type RunContext, type RunHandle } from "./run-scope.ts";
+import {
+  makeRunHandle,
+  type RunContext,
+  type RunEnvironment,
+  type RunHandle,
+} from "./run-scope.ts";
 
 /**
  * The Run handle's stop protocol, on the near side of the fork.
@@ -76,21 +81,13 @@ function withRunHandle<A>(
     const startedAt = yield* Effect.clockWith(
       (clock) => clock.currentTimeMillis,
     );
-    const context: RunContext = {
-      identity,
-      input: {
-        runId,
-        description: identity.description,
-        prompt: "have a look",
-      },
-      agent,
+    const environment: RunEnvironment = {
       repository,
       store,
       counters,
       bounds: DEFAULT_RUNTIME_POLICY.projection,
       observationQueueBound: DEFAULT_RUNTIME_POLICY.observationQueueBound,
       controlBounds: DEFAULT_RUNTIME_POLICY.controls,
-      startedAt,
       now: Effect.clockWith((clock) => clock.currentTimeMillis),
       trace: () => {},
       cleanupEscalation: {
@@ -103,10 +100,20 @@ function withRunHandle<A>(
         closeBackendAgent: () => Effect.void,
       },
       cleanupBudgetMillis: DEFAULT_RUNTIME_POLICY.cleanupBudgetMillis,
+    };
+    const context: RunContext = {
+      identity,
+      input: {
+        runId,
+        description: identity.description,
+        prompt: "have a look",
+      },
+      agent,
+      startedAt,
       onSettled: () => Effect.void,
     };
 
-    const handle = yield* makeRunHandle(context);
+    const handle = yield* makeRunHandle(environment, context);
     yield* repository.publish(identity, startedAt, context.input.prompt);
     return yield* body({ handle, backend });
   }).pipe(

@@ -125,26 +125,30 @@ export function makeCoordinator(
   );
 }
 
-/** Everything one Run fiber needs, gathered so its signature stays readable. */
-export interface RunContext {
-  readonly identity: RunIdentity;
-  readonly input: RunInput;
-  readonly agent: BackendAgent;
+/** Session-long dependencies shared by every Run in one supervisor. */
+export interface RunEnvironment {
   readonly repository: RunRepository["Service"];
   readonly store: ResultStore["Service"];
   readonly counters: RuntimeCounters;
   readonly bounds: ProjectionBounds;
   readonly observationQueueBound: number;
   readonly controlBounds: ControlBounds;
-  readonly startedAt: number;
   /** Reads the clock for the settled-at stamp. */
   readonly now: Effect.Effect<number>;
   /** Appended to by every stage, so ordering is assertable. */
-  readonly trace: (stage: RunStage) => void;
+  readonly trace: (identity: RunIdentity, stage: RunStage) => void;
   /** The module that owns cleanup-budget decisions and escalation. */
   readonly cleanupEscalation: CleanupEscalation;
   /** How long a cancelled execution may take to leave its fiber. */
   readonly cleanupBudgetMillis: number;
+}
+
+/** The facts that name one Run and its settlement hook. */
+export interface RunContext {
+  readonly identity: RunIdentity;
+  readonly input: RunInput;
+  readonly agent: BackendAgent;
+  readonly startedAt: number;
   /** Called after the terminal snapshot is published. Delivery hooks in here. */
   readonly onSettled: (result: RunResult) => Effect.Effect<void>;
 }
@@ -266,6 +270,7 @@ export interface RunHandle {
  * `Ref` the settlement path reads. Nothing else writes either.
  */
 function reducerLoop(
+  environment: RunEnvironment,
   context: RunContext,
   intake: ObservationIntake,
   projection: Ref.Ref<RunProjection>,
@@ -278,12 +283,12 @@ function reducerLoop(
       if (Exit.isFailure(next)) return;
       const observation = next.value;
       const folded = yield* Ref.modify(projection, (current) => {
-        const step = reduceRun(current, observation, context.bounds);
+        const step = reduceRun(current, observation, environment.bounds);
         return [step, step.projection];
       });
       reports.push(folded.report);
       if (folded.report.report === "ignored-late") {
-        context.counters.count("lateObservations");
+        environment.counters.count("lateObservations");
       }
       // The other arrival path. An adapter whose work finished before a cancel
       // reached it announces its snapshot through the intake rather than in a
@@ -293,9 +298,9 @@ function reducerLoop(
         observation.kind === "reconciliation" &&
         reconciliationDiffered(folded.report)
       ) {
-        context.counters.count("reconciliationDifferences");
+        environment.counters.count("reconciliationDifferences");
       }
-      yield* context.repository.recordProjection(
+      yield* environment.repository.recordProjection(
         context.identity.runId,
         folded.projection,
       );
@@ -372,22 +377,25 @@ type PrepareExecution<E> = (io: {
 }) => Effect.Effect<RunExecution, E>;
 
 function buildRunHandle<E>(
+  environment: RunEnvironment,
   context: RunContext,
   prepareExecution: PrepareExecution<E>,
 ): Effect.Effect<RunHandle, E, Scope.Scope> {
   return Effect.gen(function* () {
-    const { counters, identity } = context;
+    const { counters } = environment;
+    const { identity } = context;
     const parent = yield* Effect.scope;
     const runScope = yield* Scope.fork(parent);
 
     return yield* Effect.gen(function* () {
       const intake = yield* makeIntake(
-        context.observationQueueBound,
+        environment.observationQueueBound,
         counters,
       ).pipe(Scope.provide(runScope));
-      const mailbox = yield* makeMailbox(context.controlBounds, counters).pipe(
-        Scope.provide(runScope),
-      );
+      const mailbox = yield* makeMailbox(
+        environment.controlBounds,
+        counters,
+      ).pipe(Scope.provide(runScope));
       const coordinator = yield* makeCoordinator(counters);
       const completion = yield* Deferred.make<void>();
       const activation = yield* Deferred.make<void>();
@@ -428,7 +436,9 @@ function buildRunHandle<E>(
         activate: Effect.asVoid(Deferred.succeed(activation, undefined)),
         // Suspended, so the settlement loop's own bookkeeping belongs to the
         // fiber that runs it rather than to the fiber that built the handle.
-        settle: Effect.suspend(() => runToSettlement(context, resources)),
+        settle: Effect.suspend(() =>
+          runToSettlement(environment, context, resources),
+        ),
       };
     }).pipe(Effect.onError(() => Scope.close(runScope, Exit.void)));
   });
@@ -439,9 +449,10 @@ const synchronousExecuteDiagnostic = (): RunDiagnostic =>
 
 /** Build a start's handle, preserving a synchronous execute throw as admission failure. */
 export function makeRunHandle(
+  environment: RunEnvironment,
   context: RunContext,
 ): Effect.Effect<RunHandle, RunDiagnostic, Scope.Scope> {
-  return buildRunHandle(context, (io) =>
+  return buildRunHandle(environment, context, (io) =>
     Effect.try({
       try: () => context.agent.execute(context.input, io),
       catch: synchronousExecuteDiagnostic,
@@ -458,9 +469,10 @@ export function makeRunHandle(
  * the same arbitration path as an asynchronous backend defect.
  */
 export function makeResumedRunHandle(
+  environment: RunEnvironment,
   context: RunContext,
 ): Effect.Effect<RunHandle, never, Scope.Scope> {
-  return buildRunHandle(context, (io) =>
+  return buildRunHandle(environment, context, (io) =>
     Effect.matchEffect(
       Effect.try({
         try: () => context.agent.execute(context.input, io),
@@ -487,10 +499,12 @@ export function makeResumedRunHandle(
  * delivery has been asked to run.
  */
 function runToSettlement(
+  environment: RunEnvironment,
   context: RunContext,
   resources: RunResources,
 ): Effect.Effect<SettledRun> {
-  const { counters, identity, repository, store } = context;
+  const { counters, repository, store } = environment;
+  const { identity } = context;
   const { completion, executionScope, projection, reports, runScope } =
     resources;
   let committed:
@@ -510,7 +524,14 @@ function runToSettlement(
     const reducer = yield* Effect.acquireRelease(
       Effect.map(
         Effect.forkIn(
-          reducerLoop(context, intake, projection, reports, coordinator),
+          reducerLoop(
+            environment,
+            context,
+            intake,
+            projection,
+            reports,
+            coordinator,
+          ),
           runScope,
         ),
         (fiber) => {
@@ -555,7 +576,7 @@ function runToSettlement(
       running.interruptUnsafe();
       const stopped = yield* Effect.timeoutOption(
         Fiber.await(running),
-        context.cleanupBudgetMillis,
+        environment.cleanupBudgetMillis,
       );
       if (stopped._tag === "Some") {
         executionCandidate = candidateOf(stopped.value);
@@ -576,36 +597,38 @@ function runToSettlement(
     // 1. Capture the candidate.
     yield* coordinator.capture(executionCandidate);
     const candidate = yield* Deferred.await(coordinator.captured);
-    context.trace(RUN_STAGES.candidateCaptured);
+    environment.trace(identity, RUN_STAGES.candidateCaptured);
 
     // 2. Seal intake and close the mailbox. Everything emitted after this is
     //    a late event, and nothing more can be admitted to steer a Run that
     //    has already decided how it ended.
     yield* intake.seal();
     yield* mailbox.close();
-    context.trace(RUN_STAGES.intakeSealed);
+    environment.trace(identity, RUN_STAGES.intakeSealed);
 
     // 3. `finalizing`, published before any cleanup runs, so nothing shows a
     //    Run as terminal while its finalizers are still going.
     yield* repository.transition(identity.runId, "execution-ended");
-    context.trace(RUN_STAGES.finalizingPublished);
+    environment.trace(identity, RUN_STAGES.finalizingPublished);
 
     // 4. Close the native execution scope. If the execution wait already
     //    overran, disposal starts here but escalation is immediate; otherwise
     //    the module bounds the close. Either way, an uncooperative finalizer
     //    cannot leave a Run in `finalizing` forever.
-    const escalation = yield* context.cleanupEscalation.closeExecutionScope({
-      subagentId: identity.subagentId,
-      agent: context.agent,
-      scope: executionScope,
-      ...(executionOverran ? { alreadyOverran: true } : {}),
-    });
-    context.trace(RUN_STAGES.executionScopeClosed);
+    const escalation = yield* environment.cleanupEscalation.closeExecutionScope(
+      {
+        subagentId: identity.subagentId,
+        agent: context.agent,
+        scope: executionScope,
+        ...(executionOverran ? { alreadyOverran: true } : {}),
+      },
+    );
+    environment.trace(identity, RUN_STAGES.executionScopeClosed);
 
     // 5. Drain and reduce every accepted observation. Sealing ended the queue,
     //    so the reducer finishes once it has taken what was already in.
     yield* Fiber.join(reducer);
-    context.trace(RUN_STAGES.observationsDrained);
+    environment.trace(identity, RUN_STAGES.observationsDrained);
 
     // 6. Reconciliation, then the ending. Both go through the reducer's own
     //    rules rather than a second implementation of them.
@@ -636,7 +659,7 @@ function runToSettlement(
 
     let folded = yield* Ref.get(projection);
     for (const observation of extra) {
-      const step = reduceRun(folded, observation, context.bounds);
+      const step = reduceRun(folded, observation, environment.bounds);
       folded = step.projection;
       reports.push(step.report);
       if (
@@ -650,7 +673,7 @@ function runToSettlement(
     yield* repository.recordProjection(identity.runId, folded);
 
     // 7. Produce the bounded candidate result.
-    const settledAt = yield* context.now;
+    const settledAt = yield* environment.now;
     const result = toRunResult({
       identity,
       projection: folded,
@@ -658,13 +681,13 @@ function runToSettlement(
       startedAt: context.startedAt,
       settledAt,
     });
-    context.trace(RUN_STAGES.resultProduced);
+    environment.trace(identity, RUN_STAGES.resultProduced);
 
     // 8. Close the rest of the Run Scope. The intake queue, the mailbox, and
     //    the reducer fiber's bookkeeping all go here — before the commit, so
     //    a Run that is retrievable is a Run that is holding nothing.
     yield* Scope.close(runScope, Exit.void);
-    context.trace(RUN_STAGES.runScopeClosed);
+    environment.trace(identity, RUN_STAGES.runScopeClosed);
 
     // 9. Commit, idempotently.
     const commit = yield* store.commit(result);
@@ -674,7 +697,7 @@ function runToSettlement(
       // the backend. The first one stands and the attempt is counted.
       counters.count("duplicateSettlements");
     }
-    context.trace(RUN_STAGES.resultCommitted);
+    environment.trace(identity, RUN_STAGES.resultCommitted);
 
     // 10. Publish the terminal snapshot — only now, so a terminal snapshot
     //     implies a retrievable result.
@@ -690,15 +713,15 @@ function runToSettlement(
         )
       : repository.transition(identity.runId, settlementEvent, settledAt);
     yield* store.releasePin(identity.runId, "publication");
-    context.trace(RUN_STAGES.terminalPublished);
+    environment.trace(identity, RUN_STAGES.terminalPublished);
 
     // 11. Wake anyone waiting. The value they read comes from the store.
     yield* Deferred.succeed(completion, undefined);
-    context.trace(RUN_STAGES.waitersWoken);
+    environment.trace(identity, RUN_STAGES.waitersWoken);
 
     // 12. Initiate delivery.
     yield* context.onSettled(commit.result);
-    context.trace(RUN_STAGES.deliveryInitiated);
+    environment.trace(identity, RUN_STAGES.deliveryInitiated);
 
     return {
       result: commit.result,
@@ -759,13 +782,13 @@ function runToSettlement(
         const diagnosed = reduceRun(
           open,
           { kind: "diagnostic", diagnostic },
-          context.bounds,
+          environment.bounds,
         );
         reports.push(diagnosed.report);
         const ended = reduceRun(
           diagnosed.projection,
           { kind: "ending", ending },
-          context.bounds,
+          environment.bounds,
         );
         reports.push(ended.report);
         yield* Ref.set(projection, ended.projection);
@@ -775,7 +798,7 @@ function runToSettlement(
         yield* repository.transition(identity.runId, "execution-ended");
         yield* repository.recordProjection(identity.runId, ended.projection);
         yield* Effect.exit(
-          context.cleanupEscalation.closeExecutionScope({
+          environment.cleanupEscalation.closeExecutionScope({
             subagentId: identity.subagentId,
             agent: context.agent,
             scope: executionScope,
@@ -783,7 +806,7 @@ function runToSettlement(
         );
         yield* Effect.exit(Scope.close(runScope, Exit.void));
 
-        const clock = yield* Effect.exit(context.now);
+        const clock = yield* Effect.exit(environment.now);
         const settledAt = Exit.isSuccess(clock)
           ? clock.value
           : context.startedAt;

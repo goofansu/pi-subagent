@@ -315,17 +315,26 @@ observation queue bound, the open budget, the cleanup budget, the delivery
 retry budget, and an optional default Run timeout. Configuration rather than a
 service, so a test lowers a bound by spreading over the defaults.
 
+**Run environment** — the Run repository, Result store, counters, projection
+bounds, observation queue bound, Control bounds, cleanup budget, current-time
+dependency, stage trace, and cleanup escalation module shared by every Run in
+one supervisor. The supervisor composes it once and gives it to each Run Scope
+rather than rebuilding those dependencies in every per-Run context.
+
 **Run Scope** — what one Run holds for its lifetime: a bounded observation
 intake, one reducer fiber, a Control mailbox, a completion `Deferred` that is
 the settlement barrier, a settlement coordinator, and — nested inside it — the
-native execution scope. Closing the Run Scope releases all of them; the nested
-scope can close independently, because a provider turn may end without ending
-the Run. The **Run handle** holds all of that privately and publishes
-operations over it: carry the Run through settlement, open its activation gate,
-admit one Control, and **stop** it — close the mailbox, record the stop request
-and interrupt the execution however far along it is. Only the identity, the
-intake, the folded projection and the completion barrier are readable, so no
-caller can perform half a stop.
+native execution scope. It reads session-long services, bounds, and the clock
+from the Run environment the supervisor composes once, and receives per Run
+only its identity, input, BackendAgent, started-at stamp, and settlement hook.
+Closing the Run Scope releases all of them; the nested scope can close
+independently, because a provider turn may end without ending the Run. The
+**Run handle** holds all of that privately and publishes operations over it:
+carry the Run through settlement, open its activation gate, admit one Control,
+and **stop** it — close the mailbox, record the stop request and interrupt the
+execution however far along it is. Only the identity, the intake, the folded
+projection and the completion barrier are readable, so no caller can perform
+half a stop.
 
 **Settlement coordinator** — the per-Run thing that captures exactly one
 terminal **candidate** into a `Deferred`. Later candidates increment a
