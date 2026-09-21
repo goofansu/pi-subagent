@@ -17,8 +17,10 @@ import {
 } from "./prose.ts";
 import {
   CANCEL_BUCKET_PRESENTATION,
+  COLLECTION_PRESENTATION,
   cancelBuckets,
   cancelToolRowFacts,
+  collectionRowPresentation,
   decodeToolRowFacts,
   encodeToolRowFacts,
   noActiveWaitAllToolRowFacts,
@@ -200,6 +202,51 @@ test("cancel grouping fails loudly for an unfamiliar runtime bucket", () => {
       } as never),
     /no cancellation bucket for future bucket/,
   );
+});
+
+test("every collection clause declares plural forms and one complete priority order", () => {
+  const clauseKinds = Object.keys(COLLECTION_PRESENTATION.clauses);
+  assert.deepEqual(clauseKinds, [
+    "delivered",
+    "unavailable",
+    "stillRunning",
+    "unknown",
+  ]);
+  assert.equal(COLLECTION_PRESENTATION.idleAnswer, "No active Runs");
+  assert.equal(COLLECTION_PRESENTATION.emptyAnswer, "No Run outcomes");
+  assert.ok(COLLECTION_PRESENTATION.idleAnswer.trim().length > 0);
+  assert.ok(COLLECTION_PRESENTATION.emptyAnswer.trim().length > 0);
+
+  for (const clause of Object.values(COLLECTION_PRESENTATION.clauses)) {
+    assert.ok(clause.rowPhrase(1).trim().length > 0);
+    assert.ok(clause.rowPhrase(2).trim().length > 0);
+    assert.notEqual(clause.rowPhrase(1), clause.rowPhrase(2));
+  }
+  assert.deepEqual(
+    [...COLLECTION_PRESENTATION.priorityOrder].sort(),
+    [...clauseKinds].sort(),
+  );
+  assert.equal(
+    new Set(COLLECTION_PRESENTATION.priorityOrder).size,
+    clauseKinds.length,
+  );
+
+  const presentation = collectionRowPresentation(
+    waitToolRowFacts(waitOutcomes),
+  );
+  assert.equal(presentation.tone, "toolOutput");
+  assert.deepEqual(presentation.clauses, [
+    "Delivered 1 Result",
+    "1 Result unavailable",
+    "1 Run still running",
+    "1 Run unknown",
+  ]);
+  assert.deepEqual(presentation.priority, [
+    "1 Run still running",
+    "Delivered 1 Result",
+    "1 Result unavailable",
+    "1 Run unknown",
+  ]);
 });
 
 test("named aggregate facts construction round-trips", () => {

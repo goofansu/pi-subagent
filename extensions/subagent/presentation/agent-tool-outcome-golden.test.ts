@@ -20,25 +20,21 @@ import {
   agentToolRenderers,
 } from "./agent-tool-renderers.ts";
 import {
-  formatNoActiveRuns,
   formatResultRejection,
   formatResumeOutcome,
   formatStartOutcome,
   formatSteerOutcome,
-  formatWaitOutcomes,
   presentCancelOutcomes,
+  presentWait,
 } from "./prose.ts";
 import type { RenderableTheme } from "./rows.ts";
 import { formatResult } from "./run-card.ts";
 import {
-  noActiveWaitAllToolRowFacts,
   resultToolRowFacts,
   resumeToolRowFacts,
   startToolRowFacts,
   steerToolRowFacts,
   type ToolRowFacts,
-  waitAllToolRowFacts,
-  waitToolRowFacts,
 } from "./tool-row-facts.ts";
 
 initTheme(undefined, false);
@@ -244,21 +240,22 @@ function waitCases(operation: "wait" | "waitAll"): readonly GoldenCase[] {
     ],
     ["empty", []],
   ];
-  return cases.map(([name, outcomes]) => ({
-    name: `${operation}/${name}`,
-    operation,
-    text: formatWaitOutcomes(
+  return cases.map(([name, outcomes]) => {
+    const presentation = presentWait({
+      scope: operation === "wait" ? "named" : "all-active",
       outcomes,
-      new Map([
+      agents: new Map([
         [RUN, "explore"],
         [OTHER_RUN, "review"],
       ]),
-    ),
-    facts:
-      operation === "wait"
-        ? waitToolRowFacts(outcomes)
-        : waitAllToolRowFacts(outcomes),
-  }));
+    });
+    return {
+      name: `${operation}/${name}`,
+      operation,
+      text: presentation.text,
+      facts: presentation.facts,
+    };
+  });
 }
 
 function resultCases(): readonly GoldenCase[] {
@@ -306,12 +303,18 @@ function allCases(): readonly GoldenCase[] {
     ...cancelCases(),
     ...waitCases("wait"),
     ...waitCases("waitAll"),
-    {
-      name: "waitAll/no active Runs",
-      operation: "waitAll",
-      text: formatNoActiveRuns(),
-      facts: noActiveWaitAllToolRowFacts(),
-    },
+    (() => {
+      const presentation = presentWait({
+        scope: "all-active",
+        noActiveRuns: true,
+      });
+      return {
+        name: "waitAll/no active Runs",
+        operation: "waitAll" as const,
+        text: presentation.text,
+        facts: presentation.facts,
+      };
+    })(),
     ...resultCases(),
   ];
 }

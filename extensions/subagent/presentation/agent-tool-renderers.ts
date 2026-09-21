@@ -28,6 +28,7 @@ import {
   type CancelToolRowFacts,
   type CollectedRunsToolRowFacts,
   cancelBuckets,
+  collectionRowPresentation,
   decodeToolRowFacts,
   type ResumedRunToolRowFacts,
   type StartedRunToolRowFacts,
@@ -732,61 +733,36 @@ class TargetCallComponent implements Component {
   }
 }
 
-function plural(count: number, one: string, many = `${one}s`): string {
-  return `${count} ${count === 1 ? one : many}`;
-}
-
 function collectionSummary(
   details: CollectedRunsToolRowFacts,
   theme: RenderableTheme,
   width: number,
 ): string {
-  if (details.noActiveRuns) return theme.fg("toolOutput", "No active Runs");
-  const parts: string[] = [];
-  if (details.runs.length > 0) {
-    parts.push(`Delivered ${plural(details.runs.length, "Result")}`);
+  const presentation = collectionRowPresentation(details);
+  if (presentation.answer !== undefined) {
+    return theme.fg(presentation.tone, presentation.answer);
   }
-  if (details.unavailable > 0) {
-    parts.push(`${plural(details.unavailable, "Result")} unavailable`);
-  }
-  if (details.stillRunning > 0) {
-    parts.push(`${plural(details.stillRunning, "Run")} still running`);
-  }
-  if (details.unknown > 0) {
-    parts.push(`${plural(details.unknown, "Run")} unknown`);
-  }
-  const full = parts.join(" · ") || "No Run outcomes";
-  if (visibleWidth(full) <= width) return theme.fg("toolOutput", full);
 
-  // Retain as many compatible clauses as fit, considering incompleteness
-  // first, then delivered outcome, then progressively less actionable counts.
-  // Selected clauses return to the stable full-summary order for readability.
-  const priorities = [
-    details.stillRunning > 0
-      ? `${plural(details.stillRunning, "Run")} still running`
-      : undefined,
-    details.runs.length > 0
-      ? `Delivered ${plural(details.runs.length, "Result")}`
-      : undefined,
-    details.unavailable > 0
-      ? `${plural(details.unavailable, "Result")} unavailable`
-      : undefined,
-    details.unknown > 0
-      ? `${plural(details.unknown, "Run")} unknown`
-      : undefined,
-  ].filter((part): part is string => part !== undefined);
+  const full = presentation.clauses.join(presentation.separator);
+  if (visibleWidth(full) <= width) return theme.fg(presentation.tone, full);
+
+  // The facts owner supplies both orders. This loop owns only fitting: clauses
+  // earn space by priority, then return to stable reading order.
   const selected = new Set<string>();
-  for (const part of priorities) {
-    const candidate = parts.filter(
-      (original) => selected.has(original) || original === part,
+  for (const clause of presentation.priority) {
+    const candidate = presentation.clauses.filter(
+      (original) => selected.has(original) || original === clause,
     );
-    if (visibleWidth(candidate.join(" · ")) > width) break;
-    selected.add(part);
+    if (visibleWidth(candidate.join(presentation.separator)) > width) break;
+    selected.add(clause);
   }
-  const retained = parts.filter((part) => selected.has(part)).join(" · ");
+  const retained = presentation.clauses
+    .filter((clause) => selected.has(clause))
+    .join(presentation.separator);
   return theme.fg(
-    "toolOutput",
-    retained || fitToWidth(priorities[0] ?? full, width, { plain: true }),
+    presentation.tone,
+    retained ||
+      fitToWidth(presentation.priority[0] ?? full, width, { plain: true }),
   );
 }
 

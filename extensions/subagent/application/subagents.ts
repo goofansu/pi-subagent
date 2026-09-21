@@ -27,22 +27,18 @@ import {
   type RunId,
 } from "../domain/index.ts";
 import {
-  formatNoActiveRuns,
   formatResult,
   formatResultRejection,
   formatResumeOutcome,
   formatStartOutcome,
   formatSteerOutcome,
-  formatWaitOutcomes,
-  noActiveWaitAllToolRowFacts,
   presentCancelOutcomes,
+  presentWait,
   resultToolRowFacts,
   resumeToolRowFacts,
   startToolRowFacts,
   steerToolRowFacts,
   type ToolRowFacts,
-  waitAllToolRowFacts,
-  waitToolRowFacts,
 } from "../presentation/index.ts";
 import { ProfileCatalog } from "../runtime/profile-catalog.ts";
 import { RunRepository } from "../runtime/repository.ts";
@@ -322,12 +318,10 @@ const collect = (
         ? [outcome.result]
         : [],
     );
+    const presentation = presentWait({ scope, outcomes, agents });
     return {
-      text: formatWaitOutcomes(outcomes, agents),
-      details:
-        scope === "named"
-          ? waitToolRowFacts(outcomes)
-          : waitAllToolRowFacts(outcomes),
+      text: presentation.text,
+      details: presentation.facts,
       deliveredRuns: delivered.map((result) => result.runId),
     };
   });
@@ -356,9 +350,13 @@ const waitAll = (
       .filter((snapshot) => !isTerminalRunPhase(snapshot.phase))
       .map((snapshot) => snapshot.identity.runId);
     if (active.length === 0) {
+      const presentation = presentWait({
+        scope: "all-active",
+        noActiveRuns: true,
+      });
       return {
-        text: formatNoActiveRuns(),
-        details: noActiveWaitAllToolRowFacts(),
+        text: presentation.text,
+        details: presentation.facts,
         deliveredRuns: [],
       };
     }

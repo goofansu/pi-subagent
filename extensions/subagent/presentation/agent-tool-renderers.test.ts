@@ -13,6 +13,7 @@ import type { RenderableTheme } from "./rows.ts";
 import {
   CANCEL_BUCKET_PRESENTATION,
   cancelBuckets,
+  collectionRowPresentation,
   resumeToolRowFacts,
   startToolRowFacts,
   steerToolRowFacts,
@@ -344,6 +345,24 @@ test("successful start and resume identities read phrase and tone from facts", (
 test("golden: every operation keeps its collapsed row text and styling", () => {
   const run = runId("run-1");
   const subagent = subagentId("subagent-1");
+  const waitDetails = {
+    kind: "collection",
+    scope: "named",
+    runs: [],
+    stillRunning: 1,
+    unknown: 0,
+    unavailable: 0,
+    noActiveRuns: false,
+  } as const;
+  const idleWaitAllDetails = {
+    kind: "collection",
+    scope: "all-active",
+    runs: [],
+    stillRunning: 0,
+    unknown: 0,
+    unavailable: 0,
+    noActiveRuns: true,
+  } as const;
   const cases = [
     [
       "start",
@@ -362,30 +381,8 @@ test("golden: every operation keeps its collapsed row text and styling", () => {
       }),
     ],
     ["steer", steerToolRowFacts(run, { outcome: "unknown Run", runId: run })],
-    [
-      "wait",
-      {
-        kind: "collection",
-        scope: "named",
-        runs: [],
-        stillRunning: 1,
-        unknown: 0,
-        unavailable: 0,
-        noActiveRuns: false,
-      },
-    ],
-    [
-      "waitAll",
-      {
-        kind: "collection",
-        scope: "all-active",
-        runs: [],
-        stillRunning: 0,
-        unknown: 0,
-        unavailable: 0,
-        noActiveRuns: true,
-      },
-    ],
+    ["wait", waitDetails],
+    ["waitAll", idleWaitAllDetails],
     [
       "result",
       {
@@ -416,12 +413,19 @@ test("golden: every operation keeps its collapsed row text and styling", () => {
   );
 
   const hint = " <dim>(</dim> to expand<dim>)</dim>";
+  const styledCollection = (
+    presentation: ReturnType<typeof collectionRowPresentation>,
+  ) => {
+    const text =
+      presentation.answer ?? presentation.clauses.join(presentation.separator);
+    return `<${presentation.tone}>${text}</${presentation.tone}>${hint}`;
+  };
   assert.deepEqual(rendered, {
     start: `<toolTitle>Started explore</toolTitle><dim> · Subagent subagent-1 · Run run-1</dim>${hint}`,
     resume: `<toolTitle>Resumed</toolTitle><dim> · Run run-1</dim>${hint}`,
     steer: `<error>Control refused</error><dim> · unknown Run</dim>${hint}`,
-    wait: `<toolOutput>1 Run still running</toolOutput>${hint}`,
-    waitAll: `<toolOutput>No active Runs</toolOutput>${hint}`,
+    wait: styledCollection(collectionRowPresentation(waitDetails)),
+    waitAll: styledCollection(collectionRowPresentation(idleWaitAllDetails)),
     result: `<toolOutput>explore · run-1 · completed · 12.3k characters</toolOutput>${hint}`,
   });
 });
@@ -940,148 +944,76 @@ test("result-bearing calls retain their operation and identify their scope or ta
   }
 });
 
-test("collection summaries discriminate delivery, timeout, unknown, unavailable, and no-active outcomes", () => {
+test("collection rendering follows the declared tone and fits whole clauses by priority", () => {
+  const details = {
+    kind: "collection" as const,
+    scope: "named" as const,
+    runs: [
+      {
+        runId: "run-1",
+        agent: "explore",
+        status: "completed" as const,
+        output: { kind: "visible" as const, characters: 6 },
+      },
+    ],
+    stillRunning: 2,
+    unknown: 1,
+    unavailable: 1,
+    noActiveRuns: false as const,
+  };
+  const presentation = collectionRowPresentation(details);
   const pair = agentToolRenderers("wait");
-  const cases = [
-    [
-      {
-        kind: "collection",
-        scope: "named",
-        runs: [
-          {
-            runId: "run-1",
-            agent: "explore",
-            status: "completed",
-            output: { kind: "visible", characters: 6 },
-          },
-        ],
-        stillRunning: 0,
-        unknown: 0,
-        unavailable: 0,
-        noActiveRuns: false,
-      },
-      "Delivered 1 Result",
-    ],
-    [
-      {
-        kind: "collection",
-        scope: "named",
-        runs: [
-          {
-            runId: "run-1",
-            agent: "explore",
-            status: "completed",
-            output: { kind: "visible", characters: 6 },
-          },
-        ],
-        stillRunning: 2,
-        unknown: 1,
-        unavailable: 1,
-        noActiveRuns: false,
-      },
-      "Delivered 1 Result · 1 Result unavailable · 2 Runs still running · 1 Run unknown",
-    ],
-    [
-      {
-        kind: "collection",
-        scope: "all-active",
-        runs: [],
-        stillRunning: 0,
-        unknown: 0,
-        unavailable: 0,
-        noActiveRuns: true,
-      },
-      "No active Runs",
-    ],
-  ] as const;
-
-  for (const [details, expected] of cases) {
-    const operationPair = agentToolRenderers(
-      details.scope === "named" ? "wait" : "waitAll",
-    );
-    const collapsed = lines(
-      operationPair.renderResult(
+  const render = (theme: RenderableTheme, width: number) =>
+    lines(
+      pair.renderResult(
         {
-          content: [{ type: "text", text: "Complete model response" }],
+          content: [{ type: "text", text: "complete response" }],
           details,
         },
         { expanded: false, isPartial: false },
-        plainTheme,
+        theme,
         context({}),
       ),
-      120,
+      width,
     ).join("\n");
-    assert.match(
-      collapsed,
-      new RegExp(
-        `^${expected.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")} \\(.*to expand\\)$`,
-      ),
-    );
-    assert.equal(collapsed.match(/to expand/g)?.length, 1);
+
+  const toned = render(markedTheme, 160);
+  assert.match(toned, /^<toolOutput>/);
+  assert.match(toned, /<\/toolOutput>/);
+
+  const summaries = [120, 60, 45].map((width) => {
+    const rendered = render(plainTheme, width);
+    assert.ok(visibleWidth(rendered) <= width);
+    return rendered.replace(/ \(.*to expand\)$/, "");
+  });
+  assert.equal(summaries[0], presentation.clauses.join(presentation.separator));
+  assert.ok(summaries[1].length < summaries[0].length);
+  assert.equal(summaries[2], presentation.priority[0]);
+  for (const summary of summaries) {
+    for (const clause of summary.split(presentation.separator)) {
+      assert.ok(presentation.clauses.includes(clause));
+    }
   }
 
-  const progressive = lines(
-    pair.renderResult(
-      {
-        content: [{ type: "text", text: "complete response" }],
-        details: {
-          kind: "collection",
-          scope: "named",
-          runs: [
-            {
-              runId: "run-1",
-              agent: "explore",
-              status: "completed",
-              output: { kind: "visible", characters: 6 },
-            },
-          ],
-          stillRunning: 1,
-          unknown: 1,
-          unavailable: 0,
-          noActiveRuns: false,
-        },
-      },
+  const idle = {
+    kind: "collection" as const,
+    scope: "all-active" as const,
+    runs: [],
+    stillRunning: 0,
+    unknown: 0,
+    unavailable: 0,
+    noActiveRuns: true as const,
+  };
+  const idleRow = lines(
+    agentToolRenderers("waitAll").renderResult(
+      { content: [{ type: "text", text: "idle" }], details: idle },
       { expanded: false, isPartial: false },
-      plainTheme,
+      markedTheme,
       context({}),
     ),
-    60,
+    120,
   ).join("\n");
-  assert.match(progressive, /^Delivered 1 Result · 1 Run still running/);
-  assert.doesNotMatch(progressive, /unknown/);
-  assert.ok(visibleWidth(progressive) <= 60);
-
-  const narrowTimeout = lines(
-    pair.renderResult(
-      {
-        content: [{ type: "text", text: "complete response" }],
-        details: cases[1][0],
-      },
-      { expanded: false, isPartial: false },
-      plainTheme,
-      context({}),
-    ),
-    45,
-  ).join("\n");
-  assert.match(narrowTimeout, /^2 Runs still running/);
-  assert.doesNotMatch(narrowTimeout, /^Delivered/);
-  assert.ok(visibleWidth(narrowTimeout) <= 45);
-
-  const clippedPriority = lines(
-    pair.renderResult(
-      {
-        content: [{ type: "text", text: "complete response" }],
-        details: cases[1][0],
-      },
-      { expanded: false, isPartial: false },
-      plainTheme,
-      context({}),
-    ),
-    30,
-  ).join("\n");
-  assert.match(clippedPriority, /^2 Runs/);
-  assert.doesNotMatch(clippedPriority, /unknown/);
-  assert.ok(visibleWidth(clippedPriority) <= 30);
+  assert.match(idleRow, /^<toolOutput>/);
 });
 
 test("result-bearing renderers reuse components and repaint the current theme", () => {

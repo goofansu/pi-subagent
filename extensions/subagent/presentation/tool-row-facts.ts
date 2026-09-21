@@ -460,6 +460,125 @@ const CollectedRunsToolRowFactsSchema = Schema.Union([
 export type CollectedRunsToolRowFacts =
   typeof CollectedRunsToolRowFactsSchema.Type;
 
+/** The four clauses a collection row can report. */
+export type CollectionClauseKind =
+  | "delivered"
+  | "unavailable"
+  | "stillRunning"
+  | "unknown";
+
+interface CollectionClausePresentation {
+  readonly rowPhrase: (count: number) => string;
+}
+
+function counted(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+/**
+ * Every collection clause's wording and pluralisation, beside its facts.
+ *
+ * The mapped type makes adding a collection clause a table-completeness error.
+ * Full order is the stable reading order. Priority order is the order in which
+ * clauses earn space when the full summary does not fit.
+ */
+export const COLLECTION_PRESENTATION = {
+  tone: "toolOutput",
+  idleAnswer: "No active Runs",
+  emptyAnswer: "No Run outcomes",
+  separator: " · ",
+  fullOrder: [
+    "delivered",
+    "unavailable",
+    "stillRunning",
+    "unknown",
+  ] as const satisfies readonly CollectionClauseKind[],
+  priorityOrder: [
+    "stillRunning",
+    "delivered",
+    "unavailable",
+    "unknown",
+  ] as const satisfies readonly CollectionClauseKind[],
+  clauses: {
+    delivered: {
+      rowPhrase: (count) => `Delivered ${counted(count, "Result", "Results")}`,
+    },
+    unavailable: {
+      rowPhrase: (count) =>
+        `${counted(count, "Result", "Results")} unavailable`,
+    },
+    stillRunning: {
+      rowPhrase: (count) => `${counted(count, "Run", "Runs")} still running`,
+    },
+    unknown: {
+      rowPhrase: (count) => `${counted(count, "Run", "Runs")} unknown`,
+    },
+  } satisfies Record<CollectionClauseKind, CollectionClausePresentation>,
+} as const;
+
+export interface CollectionRowPresentation {
+  readonly tone: "toolOutput";
+  readonly separator: string;
+  readonly answer?: string;
+  readonly clauses: readonly string[];
+  readonly priority: readonly string[];
+}
+
+function collectionCount(
+  facts: CollectedRunsToolRowFacts,
+  kind: CollectionClauseKind,
+): number {
+  switch (kind) {
+    case "delivered":
+      return facts.runs.length;
+    case "unavailable":
+      return facts.unavailable;
+    case "stillRunning":
+      return facts.stillRunning;
+    case "unknown":
+      return facts.unknown;
+  }
+}
+
+/** Phrase a collection row without making any width or layout decision. */
+export function collectionRowPresentation(
+  facts: CollectedRunsToolRowFacts,
+): CollectionRowPresentation {
+  if (facts.noActiveRuns) {
+    return {
+      tone: COLLECTION_PRESENTATION.tone,
+      separator: COLLECTION_PRESENTATION.separator,
+      answer: COLLECTION_PRESENTATION.idleAnswer,
+      clauses: [],
+      priority: [],
+    };
+  }
+
+  const phrases = new Map<CollectionClauseKind, string>();
+  for (const kind of COLLECTION_PRESENTATION.fullOrder) {
+    const count = collectionCount(facts, kind);
+    if (count > 0) {
+      phrases.set(kind, COLLECTION_PRESENTATION.clauses[kind].rowPhrase(count));
+    }
+  }
+  const clauses = COLLECTION_PRESENTATION.fullOrder.flatMap((kind) => {
+    const phrase = phrases.get(kind);
+    return phrase === undefined ? [] : [phrase];
+  });
+  return {
+    tone: COLLECTION_PRESENTATION.tone,
+    separator: COLLECTION_PRESENTATION.separator,
+    ...(clauses.length === 0
+      ? { answer: COLLECTION_PRESENTATION.emptyAnswer }
+      : {}),
+    clauses,
+    priority: COLLECTION_PRESENTATION.priorityOrder.flatMap((kind) => {
+      const phrase = phrases.get(kind);
+      return phrase === undefined ? [] : [phrase];
+    }),
+  };
+}
+
 const ResultToolRowFactsSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("result"),

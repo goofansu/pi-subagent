@@ -26,13 +26,17 @@ import { formatResult } from "./run-card.ts";
 import {
   CANCEL_BUCKET_PRESENTATION,
   type CancelToolRowFacts,
+  type CollectedRunsToolRowFacts,
   cancelBuckets,
   cancelToolRowFacts,
   formatProfileDiagnosticLines,
+  noActiveWaitAllToolRowFacts,
   resumeOutcomeSentence,
   startOutcomeSentence,
   steerOutcomeSentence,
   unknownAgentSentence,
+  waitAllToolRowFacts,
+  waitToolRowFacts,
 } from "./tool-row-facts.ts";
 
 /**
@@ -267,6 +271,47 @@ export function formatNoActiveRuns(): string {
     "finished and is announced by its own completion notice; use agent_result " +
     "with a Run id to re-read one."
   );
+}
+
+export interface WaitPresentation {
+  readonly text: string;
+  readonly facts: CollectedRunsToolRowFacts;
+}
+
+export type WaitPresentationRequest =
+  | {
+      readonly scope: "named" | "all-active";
+      readonly outcomes: readonly WaitOutcome[];
+      readonly agents?: ReadonlyMap<RunId, string>;
+    }
+  | {
+      readonly scope: "all-active";
+      readonly noActiveRuns: true;
+    };
+
+/**
+ * Present any wait path as one text-and-facts answer.
+ *
+ * The façade chooses which Runs to wait for and independently states which
+ * Results it delivered. This function owns only the two presentation values,
+ * built together so their collection cannot drift.
+ */
+export function presentWait(
+  request: WaitPresentationRequest,
+): WaitPresentation {
+  if ("noActiveRuns" in request) {
+    return {
+      text: formatNoActiveRuns(),
+      facts: noActiveWaitAllToolRowFacts(),
+    };
+  }
+  return {
+    text: formatWaitOutcomes(request.outcomes, request.agents),
+    facts:
+      request.scope === "named"
+        ? waitToolRowFacts(request.outcomes)
+        : waitAllToolRowFacts(request.outcomes),
+  };
 }
 
 /* ------------------------------------------------------------------ */

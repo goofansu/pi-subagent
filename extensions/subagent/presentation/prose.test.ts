@@ -28,6 +28,7 @@ import {
   formatUnknownAgent,
   formatWaitOutcomes,
   presentCancelOutcomes,
+  presentWait,
   WAIT_RETURNED as RETURNED,
 } from "./prose.ts";
 import { formatResult } from "./run-card.ts";
@@ -475,6 +476,36 @@ test("a wait covers every outcome and reports an unnamed Run by id", () => {
     rendered.get("terminal"),
     `run-1: failed, ${EVICTED}\n\n${RETURNED}`,
   );
+});
+
+test("one wait presentation call pairs text and facts for every wait path", () => {
+  const named = presentWait({
+    scope: "named",
+    outcomes: [{ outcome: "still running", runId: RUN }],
+  });
+  assert.equal(
+    named.text,
+    formatWaitOutcomes([{ outcome: "still running", runId: RUN }]),
+  );
+  assert.equal(named.facts.scope, "named");
+  assert.equal(named.facts.stillRunning, 1);
+
+  const allActive = presentWait({
+    scope: "all-active",
+    outcomes: [{ outcome: "unknown Run", runId: RUN }],
+  });
+  assert.equal(
+    allActive.text,
+    formatWaitOutcomes([{ outcome: "unknown Run", runId: RUN }]),
+  );
+  assert.equal(allActive.facts.scope, "all-active");
+  assert.equal(allActive.facts.unknown, 1);
+  assert.equal(allActive.facts.noActiveRuns, false);
+
+  const idle = presentWait({ scope: "all-active", noActiveRuns: true });
+  assert.equal(idle.text, formatNoActiveRuns());
+  assert.equal(idle.facts.scope, "all-active");
+  assert.equal(idle.facts.noActiveRuns, true);
 });
 
 test("a wait with no ids says so, and a wait-all with nothing active says where the answers went", () => {
