@@ -267,12 +267,16 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
             },
           });
 
-        case "exactly-one-ending-wins":
+        case "exactly-one-ending-is-emitted":
           return fixtureOf(
             kind,
             scripts([
               emitText("the answer"),
-              { step: "announce-ending", ending: { ending: "answered" } },
+              { step: "decide", ending: { ending: "answered" } },
+              {
+                step: "decide",
+                ending: { ending: "cancelled", reason: "shutdown" },
+              },
               {
                 step: "complete",
                 ending: { ending: "cancelled", reason: "shutdown" },
@@ -280,7 +284,7 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
             ]),
             {
               plans: [{}],
-              // The first ending wins; the bundle's later one is reported late.
+              // The first decision supplies the one ending the core emits.
               expected: {
                 runs: [{ status: "completed", finalOutput: "the answer" }],
               },
@@ -312,6 +316,33 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
             },
           );
 
+        case "a decided bundle survives a later cancel":
+          return fixtureOf(
+            kind,
+            scripts([
+              {
+                step: "decide",
+                reconciliation: { finalOutput: "the decided answer" },
+              },
+              { step: "await-gate", gate: "hold" },
+            ]),
+            {
+              plans: [{ cancel: true, cancelAfterDecision: true }],
+              trace: [],
+              expected: {
+                runs: [
+                  {
+                    status: "completed",
+                    finalOutput: "the decided answer",
+                    diagnosticCategories: ["reconciliation-difference"],
+                  },
+                ],
+                reconciliationDifferences: 1,
+                duplicateDecisions: 0,
+              },
+            },
+          );
+
         case "result-follows-scope-closure":
           return fixtureOf(kind, scripts(ORDINARY), {
             plans: [{}],
@@ -319,14 +350,21 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
             expected: { runs: [{ status: "completed" }] },
           });
 
-        case "late-events-cannot-mutate-a-terminal-run":
+        case "cleanup-observations-precede-the-core-ending":
           return fixtureOf(
             kind,
             scripts([
+              {
+                step: "emit-in-finalizer",
+                observation: {
+                  kind: "diagnostic",
+                  diagnostic: {
+                    category: "other",
+                    message: "test-only cleanup observation",
+                  },
+                },
+              },
               emitText("the answer"),
-              { step: "announce-ending", ending: { ending: "answered" } },
-              emitText("a frame nobody asked for"),
-              { step: "cumulative-usage", total: { input: 9_999 } },
               { step: "complete" },
             ]),
             {
@@ -337,7 +375,7 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
                     status: "completed",
                     finalOutput: "the answer",
                     transcriptTexts: ["the answer"],
-                    usageTotals: { input: 0 },
+                    diagnosticCategories: ["other"],
                   },
                 ],
               },
@@ -876,14 +914,14 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
           );
 
         case "settlement-stores-the-result-exactly-once":
-          // Two endings compete, so a runtime that settled twice would have
-          // something to settle twice *with*. A script with one ending would
-          // make the counter zero by construction.
+          // Two decisions compete, so the once-only decision slot and the
+          // one-commit settlement path are exercised together.
           return fixtureOf(
             kind,
             scripts([
               emitText("the answer"),
-              { step: "announce-ending", ending: { ending: "answered" } },
+              { step: "decide", ending: { ending: "answered" } },
+              { step: "decide", ending: { ending: "failed" } },
               { step: "complete", ending: { ending: "failed" } },
             ]),
             {

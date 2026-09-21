@@ -248,7 +248,6 @@ export function runClaudeExecution(
         }),
     );
 
-    /** The stderr diagnostic, at most one, immediately before the bundle. */
     /**
      * Report that the SDK wrote to stderr, once, whatever ends the Run.
      *
@@ -426,6 +425,16 @@ export function runClaudeExecution(
       stream.close();
     };
 
+    /** The successful bundle, read from the translator at the call boundary. */
+    const answeredBundle = (): TerminalBundle => ({
+      ending: answeredEnding(),
+      reconciliation: reconcile(translator),
+    });
+
+    /** Freeze the successful result at the boundary that made it final. */
+    const recordAnsweredDecision = (): Effect.Effect<void> =>
+      io.recordDecision(answeredBundle());
+
     const body = Effect.gen(function* () {
       const steering = yield* Effect.forkChild(steerLoop);
       for (;;) {
@@ -441,6 +450,7 @@ export function runClaudeExecution(
           discardOutstanding();
           yield* io.emit(notDelivered);
           semanticComplete = true;
+          yield* recordAnsweredDecision();
           accepting = false;
           freeSlot();
           stream.close();
@@ -564,6 +574,7 @@ export function runClaudeExecution(
           continue;
         }
         semanticComplete = true;
+        yield* recordAnsweredDecision();
         accepting = false;
         freeSlot();
         stream.close();
@@ -574,37 +585,18 @@ export function runClaudeExecution(
       yield* Fiber.interrupt(steering);
       if (fatal !== undefined) return yield* withStderr(fatal);
       if (successfulResult) {
-        return yield* withStderr({
-          ending: answeredEnding(),
-          reconciliation: reconcile(translator),
-        });
+        return yield* withStderr(answeredBundle());
       }
       return yield* withStderr({
         ending: failedEnding(MISSING_CLAUDE_RESULT_MESSAGE),
       });
     });
 
-    /**
-     * What a cancelled Run still has to say before its intake is sealed.
-     *
-     * Only semantic completion establishes the Run's answer. A successful
-     * result may instead be an adapter-local Turn boundary while accepted
-     * guidance is still outstanding; in that case interruption must leave
-     * arbitration to the recorded cancellation. Once semantic completion has
-     * been reached, announcing its reconciliation and Ending preserves the
-     * answer from a cancellation request that arrived genuinely late.
-     */
-    const announceOnInterrupt = Effect.gen(function* () {
-      yield* emitStderrOnce();
-      if (!semanticComplete) return;
-      yield* io.emit({
-        kind: "reconciliation",
-        reconciliation: reconcile(translator),
-      });
-      yield* io.emit({ kind: "ending", ending: answeredEnding() });
-    });
-
-    return yield* Effect.onInterrupt(body, () => announceOnInterrupt);
+    // The decision was frozen synchronously at the Turn boundary. Interruption
+    // has no terminal ceremony left: it may only preserve the SDK's once-only
+    // stderr diagnostic before the core arbitrates the recorded decision and
+    // the stop request.
+    return yield* Effect.onInterrupt(body, () => emitStderrOnce());
   });
 }
 

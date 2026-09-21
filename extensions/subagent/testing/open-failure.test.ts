@@ -183,6 +183,7 @@ test("either fake can hang in the execution scope's finalizer", async () => {
           .execute(
             { runId: runId("run-1"), description: "d", prompt: "p" },
             {
+              recordDecision: () => Effect.void,
               emit: () => Effect.void,
               controls: { take: Effect.succeed(undefined) },
             },

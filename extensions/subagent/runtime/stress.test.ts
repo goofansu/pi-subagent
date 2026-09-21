@@ -83,8 +83,8 @@ const MID_FLIGHT_ROUNDS = 40;
  * The two messages plus the steer echo overrun a transcript bound of two; the
  * tool call and its progress overrun a tool bound of one; each text is longer
  * than the 32-byte part bound. The finalizer emit is registered *first*, so it
- * fires however the Run ends — which is what makes a cancelled Run produce a
- * late event too.
+ * fires however the Run ends. A decision does not seal intake, so this cleanup
+ * observation is accepted before the core's terminal observations.
  */
 const chatter: readonly FakeStep[] = [
   {
@@ -254,9 +254,10 @@ for (const resumable of [true, false]) {
       value.counters.evictions > 0,
       "the store budget was never reached, so eviction was not exercised",
     );
-    assert.ok(
-      value.counters.lateEvents >= CYCLES,
-      `${value.counters.lateEvents} late events across ${CYCLES} cycles that each emitted at least one in a finalizer`,
+    assert.equal(
+      value.counters.lateEvents,
+      0,
+      "execution cleanup observations were unexpectedly counted as late",
     );
 
     // The backend released everything it acquired, which is the adapter half

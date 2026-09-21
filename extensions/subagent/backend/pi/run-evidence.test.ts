@@ -382,73 +382,6 @@ test("baseline subtraction and restatement consume equal semantic occurrences by
   assert.equal(reconciliation?.finalOutput, "two");
 });
 
-for (const outcome of outcomes) {
-  for (const outstanding of ["none", "queued", "in-flight"] as const) {
-    test(`interruption: ${outcome} evidence with ${outstanding} guidance`, () => {
-      const evidence = createPiRunEvidence({ goal: "goal", baseline: [] });
-      const answer = message("assistant", "work", { outcome });
-      evidence.read({ kind: "message", message: answer });
-      evidence.read({ kind: "terminal", messages: [answer] });
-      const observations = evidence.interrupted({
-        pendingNativeMessages: outstanding === "queued" ? 1 : 0,
-        activeNativeDeliveries: outstanding === "in-flight" ? 1 : 0,
-        finishObservationsAnnounced: false,
-      });
-
-      if (outcome !== "answered" || outstanding !== "none") {
-        assert.equal(observations, undefined);
-      } else {
-        assert.deepEqual(
-          observations?.map((one) => one.kind),
-          ["reconciliation", "ending"],
-        );
-        assert.deepEqual(observations?.at(-1), {
-          kind: "ending",
-          ending: { ending: "answered" },
-        });
-      }
-    });
-  }
-}
-
-test("interruption reports only the frozen observations execution has not announced", () => {
-  const evidence = createPiRunEvidence({ goal: "goal", baseline: [] });
-  const failed = message("assistant", "partial", { outcome: "failed" });
-  evidence.read({ kind: "message", message: failed });
-  evidence.read({ kind: "terminal", messages: [failed] });
-  const finish = evidence.promptReturned("resolved");
-
-  assert.deepEqual(finish.observations, [
-    {
-      kind: "diagnostic",
-      diagnostic: {
-        category: "backend-failure",
-        message: "Pi reported a failed message: [redacted]",
-      },
-    },
-  ]);
-  assert.deepEqual(
-    evidence
-      .interrupted({
-        pendingNativeMessages: 0,
-        activeNativeDeliveries: 0,
-        finishObservationsAnnounced: false,
-      })
-      ?.map((observation) => observation.kind),
-    ["diagnostic", "reconciliation", "ending"],
-  );
-  assert.deepEqual(
-    evidence
-      .interrupted({
-        pendingNativeMessages: 0,
-        activeNativeDeliveries: 0,
-        finishObservationsAnnounced: true,
-      })
-      ?.map((observation) => observation.kind),
-    ["reconciliation", "ending"],
-  );
-});
-
 test("native prompt return freezes the normal decision before later readings", () => {
   const evidence = createPiRunEvidence({ goal: "goal", baseline: [] });
   const answer = message("assistant", "answer", { outcome: "answered" });
@@ -462,14 +395,5 @@ test("native prompt return freezes the normal decision before later readings", (
   evidence.read({ kind: "terminal", messages: [lateFailure] });
 
   assert.strictEqual(evidence.promptReturned("rejected"), frozen);
-  assert.deepEqual(
-    evidence
-      .interrupted({
-        pendingNativeMessages: 9,
-        activeNativeDeliveries: 9,
-        finishObservationsAnnounced: false,
-      })
-      ?.at(-1),
-    { kind: "ending", ending: { ending: "answered" } },
-  );
+  assert.deepEqual(frozen.bundle.ending, { ending: "answered" });
 });

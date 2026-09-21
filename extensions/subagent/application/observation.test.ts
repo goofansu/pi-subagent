@@ -266,7 +266,8 @@ test("the Session's counters and its runtime probe read through the same seam", 
   // A live Session holds its Run's fibers; the probe says so rather than
   // judging it, and the number that matters is the one read after the close.
   assert.ok(outcome.value.live.liveRunFibers >= 1);
-  assert.equal(outcome.value.counters.duplicateSettlements, 0);
+  assert.equal(outcome.value.counters.duplicateCommits, 0);
+  assert.equal(outcome.value.counters.conflictingCommits, 0);
   assert.equal(outcome.value.counters.queueOverflows, 0);
   assert.equal(outcome.noLeaks, true);
 });

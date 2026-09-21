@@ -19,9 +19,9 @@ import type { SupervisorCounters } from "./counters.ts";
  * `reconciliationDifferences` used to count arrivals: every Run on a backend
  * that always sends a snapshot raised it, so the counter read as a count of
  * answered Runs and said nothing about the backend. These tests hold it to its
- * name on both paths a snapshot can arrive by — inside the terminal bundle,
- * and announced through the intake when a cancel reaches a Run that had
- * already finished — and hold the per-Run diagnostic to the same rule.
+ * name on the core's one terminal-bundle path, and hold the per-Run diagnostic
+ * to the same rule. The late-observation case below separately preserves the
+ * reducer's absorbing behavior for malformed input.
  *
  * Nothing here sleeps.
  */
@@ -105,50 +105,6 @@ test("a snapshot that changed several fields counts one difference and names the
     difference(value.diagnostics),
     "terminal snapshot changed finalOutput, usage, turns, model",
   );
-});
-
-test("a reconciliation announced through the intake is counted like one in the bundle", async () => {
-  // The seam an adapter uses when a cancel reaches a Run whose work already
-  // finished: it emits the snapshot and the ending it implies through the
-  // intake rather than returning them in a terminal bundle. Before this, the
-  // intake path was not counted at all.
-  const { value, noLeaks } = await answered([
-    emitText("a partial answer"),
-    {
-      step: "emit",
-      observation: {
-        kind: "reconciliation",
-        reconciliation: { finalOutput: "the real answer" },
-      },
-    },
-    { step: "complete" },
-  ]);
-
-  assert.ok(noLeaks);
-  assert.equal(value.finalOutput, "the real answer");
-  assert.equal(value.counters.reconciliationDifferences, 1);
-  assert.equal(
-    difference(value.diagnostics),
-    "terminal snapshot changed finalOutput",
-  );
-});
-
-test("a reconciliation announced through the intake that agrees is not counted", async () => {
-  const { value, noLeaks } = await answered([
-    emitText("the answer"),
-    {
-      step: "emit",
-      observation: {
-        kind: "reconciliation",
-        reconciliation: { finalOutput: "the answer" },
-      },
-    },
-    { step: "complete" },
-  ]);
-
-  assert.ok(noLeaks);
-  assert.equal(value.counters.reconciliationDifferences, 0);
-  assert.equal(difference(value.diagnostics), undefined);
 });
 
 test("a reconciliation the reducer ignored as late is not counted", async () => {

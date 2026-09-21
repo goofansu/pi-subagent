@@ -35,15 +35,9 @@ test("there are exactly three counter classes", () => {
   assert.deepEqual([...classes].sort(), ["defect", "expected", "incident"]);
 });
 
-test("the counters two endings racing produce are expected, not defects", () => {
-  // The move this taxonomy makes against the guide's earlier tables, and the
-  // reason the health line stopped summing: a cancelled Run normally produces
-  // both of these, and a Session that reported `attention needed` for them
-  // would say something is wrong every time anybody cancels anything.
-  const expected: readonly SupervisorCounter[] = [
-    "duplicateSettlements",
-    "lateEndings",
-  ];
+test("a duplicate decision is expected rather than a defect", () => {
+  // Recording before return makes the returned bundle a benign second call.
+  const expected: readonly SupervisorCounter[] = ["duplicateDecisions"];
 
   for (const counter of expected) {
     assert.equal(COUNTER_CLASSES[counter], "expected", counter);

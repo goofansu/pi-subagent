@@ -22,6 +22,11 @@ import {
   type ClaudeQueryLoader,
   createClaudeBackend,
 } from "../../backend/claude/index.ts";
+import type {
+  Backend,
+  BackendAgent,
+  TerminalBundle,
+} from "../../backend/contract.ts";
 import { backendId, type Profile } from "../../domain/index.ts";
 import {
   createRuntimeCounters,
@@ -83,6 +88,8 @@ export interface ClaudeRig extends BackendSessionServices {
   readonly tally: () => ClaudeAdapterTally;
   /** How many times the SDK loader was asked for a query function. */
   readonly loads: () => number;
+  /** Terminal bundles the Claude execution recorded at a Turn boundary. */
+  readonly decisions: () => readonly TerminalBundle[];
 }
 
 export interface ClaudeRigOptions {
@@ -110,6 +117,32 @@ export interface ClaudeSessionOutcome<A> {
   readonly noLeaks: boolean;
 }
 
+/** Observe the Claude execution's decision seam without changing its I/O. */
+function observeDecisions(
+  backend: Backend,
+  decisions: TerminalBundle[],
+): Backend {
+  return {
+    ...backend,
+    open: (profile, subagent) =>
+      Effect.map(
+        backend.open(profile, subagent),
+        (agent): BackendAgent => ({
+          ...agent,
+          execute: (input, io) =>
+            agent.execute(input, {
+              ...io,
+              recordDecision: (bundle) =>
+                Effect.gen(function* () {
+                  yield* io.recordDecision(bundle);
+                  decisions.push(bundle);
+                }),
+            }),
+        }),
+      ),
+  };
+}
+
 /** Build a Session over the Claude backend, run a body, and close it. */
 export function withClaudeSession<A>(
   options: ClaudeRigOptions,
@@ -118,6 +151,7 @@ export function withClaudeSession<A>(
   const standIn = createStandInClaudeQuery({ scripts: options.scripts ?? [] });
   const sink = createFakeNotificationSink();
   const counters = createRuntimeCounters();
+  const decisions: TerminalBundle[] = [];
   let loads = 0;
 
   const loadQuery: ClaudeQueryLoader = async () => {
@@ -134,7 +168,10 @@ export function withClaudeSession<A>(
 
   return withBackendSession(
     {
-      backend: correlateRuns(handle.backend, standIn),
+      backend: observeDecisions(
+        correlateRuns(handle.backend, standIn),
+        decisions,
+      ),
       profiles: {
         from: "list",
         profiles: options.profiles ?? [CLAUDE_RIG_PROFILE],
@@ -155,6 +192,7 @@ export function withClaudeSession<A>(
         probe: handle.probe,
         tally: handle.tally,
         loads: () => loads,
+        decisions: () => decisions,
       }),
   ).then((outcome) => ({
     ...outcome,

@@ -296,8 +296,7 @@ test("C-3: a Session whose only raised counters are expected ones is healthy", (
       counters: {
         lateEvents: 20,
         reconciliationDifferences: 2,
-        duplicateSettlements: 3,
-        lateEndings: 3,
+        duplicateDecisions: 3,
         lateObservations: 1,
         evictions: 4,
       },

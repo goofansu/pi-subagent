@@ -759,10 +759,10 @@ test("race: a notification that fails while the result is stored changes nothing
 });
 
 /* -------------------------------------------------------------- */
-/* 8. Late callback versus Run Scope closure                       */
+/* 8. Cleanup observation versus Run Scope closure                */
 /* -------------------------------------------------------------- */
 
-test("race: an observation emitted from a finalizer reaches nothing and breaks nothing", async () => {
+test("race: a cleanup diagnostic is accepted before the core terminal observations", async () => {
   const outcome = await withSession(
     {
       steps: [
@@ -770,9 +770,8 @@ test("race: an observation emitted from a finalizer reaches nothing and breaks n
           {
             step: "emit-in-finalizer",
             observation: {
-              kind: "message",
-              role: "assistant",
-              parts: [{ kind: "text", text: "said during teardown" }],
+              kind: "diagnostic",
+              diagnostic: { category: "other", message: "cleanup finished" },
             },
           },
           emitText("the answer"),
@@ -793,10 +792,10 @@ test("race: an observation emitted from a finalizer reaches nothing and breaks n
       }),
   );
 
-  assertSettledCleanly(outcome, "late callback versus scope closure");
+  assertSettledCleanly(outcome, "cleanup observation versus scope closure");
   assert.equal(outcome.value.output, "the answer");
   assert.equal(outcome.value.items, 1);
-  assert.equal(outcome.value.counters.lateEvents, 1);
+  assert.equal(outcome.value.counters.lateEvents, 0);
 });
 
 /* -------------------------------------------------------------- */

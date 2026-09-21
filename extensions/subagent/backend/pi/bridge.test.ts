@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Option } from "effect";
-import { bridgeOverflowObservations } from "../native-bridge.ts";
+import { bridgeOverflowObservation } from "../native-bridge.ts";
 import { createCallbackBridge } from "./bridge.ts";
 
 test("a refused offer closes the bridge and preserves the overflow policy", async () => {
@@ -32,6 +32,6 @@ test("a refused offer closes the bridge and preserves the overflow policy", asyn
     activity: "first",
   });
   assert.equal(result.empty, true);
-  assert.deepEqual(result.policy, bridgeOverflowObservations());
+  assert.deepEqual(result.policy, [bridgeOverflowObservation()]);
   assert.deepEqual(result.policyAfterTake, []);
 });

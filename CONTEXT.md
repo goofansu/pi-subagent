@@ -289,10 +289,11 @@ what the `reconciliation-difference` diagnostic and the
 `reconciliationDifferences` counter are both counting.
 [ADR-0025](docs/adr/0025-v2-terminal-settlement.md).
 
-**Terminal bundle** — what one backend execution resolves to: an ending plus an
-optional terminal reconciliation. It is a *report*, not a settlement — the
-core applies it and performs the terminal transition, because an adapter that
-could settle its own Run could settle it twice.
+**Terminal bundle** — what one backend execution decides: an ending plus an
+optional terminal reconciliation. The execution records it as a decision or
+returns it, and either way the core applies it and performs the terminal
+transition. It is a *report*, not a settlement, because an adapter that could
+settle its own Run could settle it twice.
 
 **Capabilities** — the three booleans a BackendAgent declares when it is
 opened: `resume`, `steer`, and `terminalTranscriptSnapshot`. Declared rather
@@ -317,8 +318,8 @@ service, so a test lowers a bound by spreading over the defaults.
 
 **Run Scope** — what one Run holds for its lifetime: a bounded observation
 intake, one reducer fiber, a Control mailbox, a completion `Deferred` that is
-the settlement barrier, a settlement coordinator, and — nested inside it — the
-native execution scope. Closing the Run Scope releases all of them; the nested
+the settlement barrier, and — nested inside it — the native execution scope.
+Closing the Run Scope releases all of them; the nested
 scope can close independently, because a provider turn may end without ending
 the Run. The **Run handle** holds all of that privately and publishes
 operations over it: carry the Run through settlement, open its activation gate,
@@ -327,25 +328,20 @@ and interrupt the execution however far along it is. Only the identity, the
 intake, the folded projection and the completion barrier are readable, so no
 caller can perform half a stop.
 
-**Settlement coordinator** — the per-Run thing that captures exactly one
-terminal **candidate** into a `Deferred`. Later candidates increment a
-duplicate-settlement counter and change nothing. That is what "a Run settles
-exactly once" means when four things — a returned bundle, an interruption, a
-defect, and an in-stream `ending` — can each decide a Run is over at the same
-moment.
-
-**Arbitration** — the pure function that decides which candidate the Run
-actually had. An ending already reduced from the stream wins; a bundle the
-execution returned wins over a cancellation request that arrived afterwards; an
-interruption that took effect first yields `cancelled` with the *first*
+**Arbitration** — the pure function that orders the execution's recorded
+decision against the first stop request. A decision recorded first yields its
+bundle's ending; a stop recorded first yields `cancelled` with the *first*
 recorded reason; a defect yields `failed` with a redacted `backend-failure`
-diagnostic. Pure and tested alone, so the rule is decided in one place rather
-than inferred from a race.
+diagnostic. A returned bundle is recorded as the same decision at return time.
+Pure and tested alone, so the rule is decided in one place rather than inferred
+from a race.
 
-**Sealing** — closing a Run's observation intake at the moment its candidate is
-captured. Everything emitted afterwards is a counted late event and a no-op, so
-the contract's "emit never fails" holds for an adapter emitting from its own
-finalizer.
+**Sealing** — atomically stopping acceptance while the core appends its one
+arbitrated ending as the final queued observation. Recording a decision does
+not seal: execution cleanup may still report observations before the core
+appends reconciliation then ending, preserving their FIFO order. Everything
+emitted after sealing is a counted late event and a no-op, so the contract's
+"emit never fails" still holds, including for abandoned or escaped native work.
 
 **Cleanup escalation** — what happens when cleanup outlives its budget. For a
 native execution scope, the Run gets a `cleanup-escalation` diagnostic, the core
@@ -624,13 +620,13 @@ the runtime, the host, or presentation exist.
 that accumulates translated Pi readings into the Run meaning Pi alone can
 supply: echoed-goal omission, message occurrence identity, native generations,
 recovery and terminal classification, Run-wide reconciliation, diagnostic
-suppression, and normal or interruption decisions. It reads neither Pi wire
-shapes nor resources, performs no I/O, and settles nothing. Its outputs are
-ordered core **Observations** plus a **terminal bundle**, or no adapter decision
-when interruption leaves **Arbitration** authoritative. Recording native
-prompt return freezes its normal decision synchronously. A translated Pi
-reading is adapter-local input to this fold; it is neither a provider event nor
-a core Observation.
+suppression, and the normal decision the execution records. It reads neither
+Pi wire shapes nor resources, performs no I/O, and settles nothing. Its outputs
+are ordered core **Observations** plus that normal **Terminal bundle**, or no
+adapter decision when interruption leaves **Arbitration** authoritative.
+Recording native prompt return freezes the decision synchronously. A translated
+Pi reading is adapter-local input to this fold; it is neither a provider event
+nor a core Observation.
 
 **Claude adapter** — everything this codebase knows about Claude, in
 `backend/claude/`.

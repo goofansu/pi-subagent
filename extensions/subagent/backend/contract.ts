@@ -141,12 +141,19 @@ export interface RunInput {
 /** Where an execution reports to, and where it takes guidance from. */
 export interface ExecutionIO {
   /**
+   * Record the Terminal bundle this execution has decided.
+   *
+   * The first decision stands. Later calls are accepted as counted no-ops.
+   * Recording neither seals observation intake nor ends the Run: the execution
+   * still returns or is interrupted, and the core performs settlement.
+   */
+  readonly recordDecision: (bundle: TerminalBundle) => Effect.Effect<void>;
+  /**
    * Report one observation. Ordered and lossless within the Run.
    *
-   * After the Run's terminal candidate is captured and its intake is sealed,
-   * an emit is still accepted but discarded and counted as late; it never
-   * fails. This lets execution-scope finalizers report without racing
-   * settlement.
+   * Recording a decision does not seal the intake. Once the core atomically
+   * stops acceptance while appending the Run's terminal observations, an emit
+   * is still accepted but discarded and counted as late; it never fails.
    */
   readonly emit: (observation: RunObservation) => Effect.Effect<void>;
   readonly controls: ControlFeed;
@@ -155,9 +162,10 @@ export interface ExecutionIO {
 /**
  * How an execution finished, plus its authoritative snapshot if it has one.
  *
- * The bundle is a *report*, not a settlement: the core applies it to the
- * projection and performs the terminal transition. An adapter that could
- * settle its own Run would be able to settle it twice.
+ * The execution records this bundle when it decides, or returns it for the
+ * core to record at return time. It is a *report*, not a settlement: the core
+ * applies it to the projection and performs the terminal transition. An
+ * adapter that could settle its own Run would be able to settle it twice.
  */
 export interface TerminalBundle {
   readonly ending: RunEnding;
@@ -263,7 +271,11 @@ export const BACKEND_CAPABILITY_MEMBERS = [
 
 export const RUN_INPUT_MEMBERS = ["runId", "description", "prompt"] as const;
 
-export const EXECUTION_IO_MEMBERS = ["emit", "controls"] as const;
+export const EXECUTION_IO_MEMBERS = [
+  "recordDecision",
+  "emit",
+  "controls",
+] as const;
 
 export const CONTROL_FEED_MEMBERS = ["take"] as const;
 

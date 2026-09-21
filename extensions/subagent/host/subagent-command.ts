@@ -21,7 +21,7 @@
  *
  * Two kinds of block, and the split is the point. The **counters** are things
  * that happened and nobody had to be told about at the time; a Session with
- * thousands of duplicate settlements is a Session with a bug, and this is
+ * thousands of conflicting commits is a Session with a bug, and this is
  * where a maintainer sees that. The **probes** are what is still alive: the
  * runtime's own, which says whether the core leaked a fiber or a queue, and
  * one per backend adapter, which says whether that provider's own handles are

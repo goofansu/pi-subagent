@@ -5,7 +5,7 @@
  * exactly one thing writes them. That is the whole design: v1's shared mutable
  * Run record (ADR-0004) let four different modules reach the same object, and
  * the cost was that no single place knew what a Run currently looked like.
- * Here the reducer fiber and the settlement coordinator call methods;
+ * Here the reducer fiber and the settlement path call methods;
  * adapters, delivery, and presentation never do.
  *
  * The index is published through a `SubscriptionRef`. Two different things are

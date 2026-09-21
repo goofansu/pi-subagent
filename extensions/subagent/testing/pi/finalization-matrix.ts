@@ -123,12 +123,6 @@ export const boundaryScenarios: readonly BoundaryScenario[] = [
     status: "completed",
   },
   {
-    name: "complete answer cancelled during maintenance",
-    script: [...firstComplete, ...recoveryStart, ...boundary],
-    cancel: true,
-    status: "completed",
-  },
-  {
     name: "complete answer maintenance fails",
     script: [
       ...firstComplete,

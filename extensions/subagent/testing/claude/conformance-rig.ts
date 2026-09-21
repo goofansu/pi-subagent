@@ -41,6 +41,7 @@
  * is skipped.
  */
 
+import { Effect } from "effect";
 import {
   CLAUDE_BACKEND_ID,
   CLAUDE_DISPLAY_NAME,
@@ -48,6 +49,7 @@ import {
   createClaudeBackend,
   TURN_BOUNDARY_WAIT_MILLIS,
 } from "../../backend/claude/index.ts";
+import type { Backend, BackendAgent } from "../../backend/contract.ts";
 import {
   backendId,
   DEFAULT_PROJECTION_BOUNDS,
@@ -120,10 +122,76 @@ interface ClaudeFixtureParts extends BackendConformanceFixtureParts {
   readonly openFails?: boolean;
   /** Extra Profile frontmatter, for the validation scenario. */
   readonly profileFields?: Readonly<Record<string, unknown>>;
+  /** Trace calls to the execution decision seam for cancellation ordering. */
+  readonly traceDecisions?: boolean;
+  /** Record a test-only second decision after Claude records its own. */
+  readonly recordCompetingDecisionAfterDecision?: boolean;
+  /** Emit from execution-scope cleanup before the core terminal observations. */
+  readonly emitCleanupObservationOnScopeClose?: boolean;
+}
+
+interface DecisionInstrumentation {
+  readonly trace?: string[];
+  readonly recordCompetingDecisionAfterDecision: boolean;
+  readonly emitCleanupObservationOnScopeClose: boolean;
+}
+
+function observeDecisions(
+  backend: Backend,
+  instrumentation: DecisionInstrumentation,
+): Backend {
+  return {
+    ...backend,
+    open: (profile, subagent) =>
+      Effect.map(
+        backend.open(profile, subagent),
+        (agent): BackendAgent => ({
+          ...agent,
+          execute: (input, io) => {
+            let execution = agent.execute(input, {
+              ...io,
+              recordDecision: (bundle) =>
+                Effect.gen(function* () {
+                  yield* io.recordDecision(bundle);
+                  if (instrumentation.recordCompetingDecisionAfterDecision) {
+                    yield* io.recordDecision({
+                      ...bundle,
+                      ending: { ending: "cancelled", reason: "shutdown" },
+                    });
+                  }
+                  instrumentation.trace?.push(
+                    `decision-recorded:${input.runId}`,
+                  );
+                }),
+            });
+            if (instrumentation.emitCleanupObservationOnScopeClose) {
+              execution = Effect.acquireRelease(Effect.void, () =>
+                io.emit({
+                  kind: "diagnostic",
+                  diagnostic: {
+                    category: "other",
+                    message: "test-only cleanup observation",
+                  },
+                }),
+              ).pipe(Effect.andThen(execution));
+            }
+            return execution;
+          },
+        }),
+      ),
+  };
 }
 
 function claudeFixture(parts: ClaudeFixtureParts): BackendConformanceFixture {
-  const { scripts, openFails, profileFields, ...rest } = parts;
+  const {
+    scripts,
+    openFails,
+    profileFields,
+    traceDecisions = false,
+    recordCompetingDecisionAfterDecision = false,
+    emitCleanupObservationOnScopeClose = false,
+    ...rest
+  } = parts;
   const standIn = createStandInClaudeQuery({ scripts });
   const live = { count: 0 };
 
@@ -161,15 +229,28 @@ function claudeFixture(parts: ClaudeFixtureParts): BackendConformanceFixture {
     };
   };
 
+  const correlated = correlateRuns(handle.backend, standIn, {
+    began: () => {
+      live.count += 1;
+    },
+    ended: () => {
+      live.count -= 1;
+    },
+  });
+  const instrumentDecisions =
+    traceDecisions ||
+    recordCompetingDecisionAfterDecision ||
+    emitCleanupObservationOnScopeClose;
+  const backend = instrumentDecisions
+    ? observeDecisions(correlated, {
+        trace: rest.trace,
+        recordCompetingDecisionAfterDecision,
+        emitCleanupObservationOnScopeClose,
+      })
+    : correlated;
+
   return {
-    backend: correlateRuns(handle.backend, standIn, {
-      began: () => {
-        live.count += 1;
-      },
-      ended: () => {
-        live.count -= 1;
-      },
-    }),
+    backend,
     profile: {
       ...PROFILE,
       ...(profileFields === undefined ? {} : { fields: profileFields }),
@@ -298,10 +379,10 @@ export function claudeConformanceRig(): BackendConformanceRig {
             },
           });
 
-        case "exactly-one-ending-wins":
-          // Claude's own version of two competing endings: the Query reports
-          // its result, and the cancel arrives before the execution has
-          // returned. The announced answer wins and the interruption is late.
+        case "exactly-one-ending-is-emitted": {
+          // The rig records a conflicting second decision after Claude's
+          // own; the once-only decision slot keeps the first.
+          const trace: string[] = [];
           return claudeFixture({
             scripts: [
               [
@@ -311,11 +392,14 @@ export function claudeConformanceRig(): BackendConformanceRig {
                 { step: "hang" },
               ],
             ],
-            plans: [{ cancel: true }],
+            recordCompetingDecisionAfterDecision: true,
+            plans: [{ cancel: true, cancelAfterDecision: true }],
+            trace,
             expected: {
               runs: [{ status: "completed", finalOutput: "the answer" }],
             },
           });
+        }
 
         case "cancellation-terminates-with-partial-output":
           return claudeFixture({
@@ -348,6 +432,27 @@ export function claudeConformanceRig(): BackendConformanceRig {
             },
           });
 
+        case "a decided bundle survives a later cancel": {
+          const trace: string[] = [];
+          return claudeFixture({
+            scripts: [
+              [
+                { step: "init" },
+                { step: "assistant", messageId: "msg_1", text: "the answer" },
+                { step: "result", text: "the answer" },
+                { step: "hang" },
+              ],
+            ],
+            plans: [{ cancel: true, cancelAfterDecision: true }],
+            trace,
+            traceDecisions: true,
+            expected: {
+              runs: [{ status: "completed", finalOutput: "the answer" }],
+              duplicateDecisions: 0,
+            },
+          });
+        }
+
         case "result-follows-scope-closure":
           return claudeFixture({
             scripts: [ORDINARY],
@@ -356,10 +461,10 @@ export function claudeConformanceRig(): BackendConformanceRig {
             expected: { runs: [{ status: "completed" }] },
           });
 
-        case "late-events-cannot-mutate-a-terminal-run":
-          // The Query reports its answer and then keeps the stream open. The
-          // cancel that follows finds a Run that already has an ending, so the
-          // announced answer wins and the interruption is the late one.
+        case "cleanup-observations-precede-the-core-ending": {
+          // A rig-owned execution-scope finalizer emits after the decision.
+          // Recording did not seal intake, so the core orders it before ending.
+          const trace: string[] = [];
           return claudeFixture({
             scripts: [
               [
@@ -369,17 +474,21 @@ export function claudeConformanceRig(): BackendConformanceRig {
                 { step: "hang" },
               ],
             ],
-            plans: [{ cancel: true }],
+            emitCleanupObservationOnScopeClose: true,
+            plans: [{ cancel: true, cancelAfterDecision: true }],
+            trace,
             expected: {
               runs: [
                 {
                   status: "completed",
                   finalOutput: "the answer",
                   transcriptTexts: ["the answer"],
+                  diagnosticCategories: ["other"],
                 },
               ],
             },
           });
+        }
 
         case "a-failing-sink-cannot-strand-the-execution":
           // The Query dies mid-stream, which is the transport failure the
@@ -996,7 +1105,8 @@ export function claudeConformanceRig(): BackendConformanceRig {
             },
           });
 
-        case "settlement-stores-the-result-exactly-once":
+        case "settlement-stores-the-result-exactly-once": {
+          const trace: string[] = [];
           return claudeFixture({
             scripts: [
               [
@@ -1006,12 +1116,15 @@ export function claudeConformanceRig(): BackendConformanceRig {
                 { step: "hang" },
               ],
             ],
-            plans: [{ cancel: true }],
+            recordCompetingDecisionAfterDecision: true,
+            plans: [{ cancel: true, cancelAfterDecision: true }],
+            trace,
             expected: {
               runs: [{ status: "completed", finalOutput: "the answer" }],
               notifications: 1,
             },
           });
+        }
 
         case "wait-and-result-observe-the-same-value":
           return claudeFixture({

@@ -1,14 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  answeredEnding,
-  cancelledEnding,
-  failedEnding,
-} from "../domain/index.ts";
+import { answeredEnding, failedEnding } from "../domain/index.ts";
 import { arbitrate, DEFECT_FALLBACK_MESSAGE } from "./arbitration.ts";
 
 /**
- * The four rules, one test each.
+ * The three rules, one test each.
  *
  * These are the races the roadmap names, decided as arithmetic rather than as
  * timing. Every one of them is also a race test later, driven through the
@@ -17,36 +13,93 @@ import { arbitrate, DEFECT_FALLBACK_MESSAGE } from "./arbitration.ts";
  * Both are worth having, and this is the cheaper one to read.
  */
 
-test("an answered bundle wins over a cancellation that arrived afterwards", () => {
+test("a normal return is arbitrated as a decision recorded at return time", () => {
   const decided = arbitrate({
-    candidate: { source: "bundle", bundle: { ending: answeredEnding() } },
+    candidate: { source: "execution-return" },
+    decision: {
+      source: "recorded-decision",
+      bundle: { ending: answeredEnding() },
+      beforeStop: true,
+    },
     cancellation: { reason: "requested" },
   });
 
   assert.deepEqual(decided, {
     ending: { ending: "answered" },
-    from: "bundle",
-    late: false,
+    from: "recorded-decision",
   });
 });
 
-test("a bundle that failed still wins over a cancellation request", () => {
+test("a recorded decision before the first stop wins with its bundle", () => {
   const decided = arbitrate({
-    candidate: {
-      source: "bundle",
-      bundle: { ending: failedEnding("the model refused") },
+    candidate: { source: "interruption", reason: "requested" },
+    decision: {
+      source: "recorded-decision",
+      bundle: { ending: answeredEnding() },
+      beforeStop: true,
     },
     cancellation: { reason: "shutdown" },
   });
 
-  assert.equal(decided.from, "bundle");
+  assert.deepEqual(decided, {
+    ending: { ending: "answered" },
+    from: "recorded-decision",
+  });
+});
+
+test("a first stop before a recorded decision wins with its first reason", () => {
+  const decided = arbitrate({
+    candidate: { source: "execution-return" },
+    decision: {
+      source: "recorded-decision",
+      bundle: { ending: answeredEnding() },
+      beforeStop: false,
+    },
+    cancellation: { reason: "shutdown" },
+  });
+
+  assert.deepEqual(decided, {
+    ending: { ending: "cancelled", reason: "shutdown" },
+    from: "interruption",
+  });
+});
+
+test("an execution defect overrides a recorded decision", () => {
+  const decided = arbitrate({
+    candidate: { source: "defect" },
+    decision: {
+      source: "recorded-decision",
+      bundle: { ending: answeredEnding() },
+      beforeStop: true,
+    },
+  });
+
+  assert.deepEqual(decided, {
+    ending: { ending: "failed", message: DEFECT_FALLBACK_MESSAGE },
+    from: "defect",
+    diagnostic: { category: "backend-failure", message: "[redacted]" },
+  });
+});
+
+test("a failed decision recorded before stop keeps its failed ending", () => {
+  const decided = arbitrate({
+    candidate: { source: "execution-return" },
+    decision: {
+      source: "recorded-decision",
+      bundle: { ending: failedEnding("the model refused") },
+      beforeStop: true,
+    },
+    cancellation: { reason: "shutdown" },
+  });
+
+  assert.equal(decided.from, "recorded-decision");
   assert.deepEqual(decided.ending, {
     ending: "failed",
     message: "the model refused",
   });
 });
 
-test("an interruption before a bundle yields cancelled with the first reason", () => {
+test("an interruption without a decision yields cancelled with the first reason", () => {
   const decided = arbitrate({
     candidate: { source: "interruption", reason: "shutdown" },
     // A user cancelled first; shutdown then interrupted the fiber. The reason
@@ -58,7 +111,6 @@ test("an interruption before a bundle yields cancelled with the first reason", (
   assert.deepEqual(decided, {
     ending: { ending: "cancelled", reason: "requested" },
     from: "interruption",
-    late: false,
   });
 });
 
@@ -78,7 +130,6 @@ test("a defect yields failed with a redacted diagnostic", () => {
   assert.deepEqual(decided, {
     ending: { ending: "failed", message: DEFECT_FALLBACK_MESSAGE },
     from: "defect",
-    late: false,
     diagnostic: { category: "backend-failure", message: "[redacted]" },
   });
   // Whatever the adapter threw stays with the adapter: nothing here has a
@@ -86,60 +137,14 @@ test("a defect yields failed with a redacted diagnostic", () => {
   assert.equal(decided.diagnostic?.message, "[redacted]");
 });
 
-test("a bundle ending after an in-stream ending is reported late", () => {
-  const decided = arbitrate({
-    announced: answeredEnding(),
-    candidate: {
-      source: "bundle",
-      bundle: { ending: failedEnding("said one thing, returned another") },
-    },
-  });
-
-  assert.deepEqual(decided, {
-    ending: { ending: "answered" },
-    from: "in-stream",
-    late: true,
-  });
-});
-
-test("an in-stream ending survives a later interruption and a later defect", () => {
-  const announced = cancelledEnding("requested");
-
-  const interrupted = arbitrate({
-    announced,
-    candidate: { source: "interruption", reason: "shutdown" },
-  });
-  assert.deepEqual(interrupted.ending, announced);
-  assert.equal(interrupted.late, true);
-  assert.equal(interrupted.diagnostic, undefined);
-
-  const died = arbitrate({ announced, candidate: { source: "defect" } });
-  assert.deepEqual(died.ending, announced);
-  assert.equal(died.late, true);
-  // The ending stands, and the adapter dying afterwards is still recorded.
-  assert.equal(died.diagnostic?.category, "backend-failure");
-});
-
-test("an in-stream ending captured as the candidate decides the same way", () => {
-  // The coordinator captured it before the reducer wrote it back, so it
-  // arrives as the candidate rather than as `announced`. Same answer.
-  const decided = arbitrate({
-    candidate: {
-      source: "in-stream-ending",
-      ending: cancelledEnding("timeout"),
-    },
-  });
-
-  assert.deepEqual(decided, {
-    ending: { ending: "cancelled", reason: "timeout" },
-    from: "in-stream",
-    late: false,
-  });
-});
-
 test("arbitration is a function of its arguments and nothing else", () => {
   const input = {
-    candidate: { source: "bundle", bundle: { ending: answeredEnding() } },
+    candidate: { source: "execution-return" },
+    decision: {
+      source: "recorded-decision",
+      bundle: { ending: answeredEnding() },
+      beforeStop: true,
+    },
     cancellation: { reason: "timeout" },
   } as const;
 

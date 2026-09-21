@@ -19,11 +19,10 @@
  *   cleanup budget. An overrun escalates through M2's path rather than through
  *   Pi-specific pending state; v1 needed that bookkeeping because it had no
  *   bounded escalation, and this does not.
- * - **A terminal outcome keeps its meaning across interruption.** The
- *   interrupt handler emits the snapshot and its classified ending, so a
- *   finalized decision survives. An open prompt preserves only a current
- *   answer with no outstanding task input; incomplete or failed responses
- *   leave arbitration to the core's cancellation and its recorded reason.
+ * - **Native prompt return records the decision.** The evidence fold classifies
+ *   the completed prompt and execution immediately hands that terminal bundle
+ *   to the core. Interruption before prompt return records no decision; after
+ *   return, core Arbitration preserves the already-recorded bundle.
  *
  * The one thing this module never does is settle its own Run. It returns a
  * bundle; the core decides.
@@ -184,35 +183,10 @@ export function runPiExecution(
         );
       }),
     );
-    // Reporting can yield to the core's bounded intake. Mark the frozen
-    // finish observations before the first yield so interruption resumes with
-    // reconciliation and ending rather than duplicating a diagnostic.
-    let finishObservationsAnnounced = false;
-    const announceFinishObservations = (report: PiRunFinishReport) =>
-      Effect.gen(function* () {
-        if (finishObservationsAnnounced) return;
-        finishObservationsAnnounced = true;
-        for (const observation of report.observations) {
-          yield* io.emit(observation);
-        }
-      });
-
-    /** Snapshot semantics before any drain, child interruption or native cleanup. */
-    let interruptAnnounced = false;
-    const announceOnInterrupt = Effect.gen(function* () {
-      if (interruptAnnounced) return;
-      interruptAnnounced = true;
-      const observations = evidence.interrupted({
-        pendingNativeMessages: session.pendingMessageCount,
-        activeNativeDeliveries: nativeDeliveries,
-        finishObservationsAnnounced,
-      });
+    /** Stop intake and preserve every observation accepted before interruption. */
+    const drainOnInterrupt = Effect.gen(function* () {
       bridge.stop();
       yield* drainAvailable;
-      if (observations === undefined) return;
-      for (const observation of observations) {
-        yield* io.emit(observation);
-      }
     });
 
     // Deliveries begun and not yet finished. The drain loop will not call a
@@ -279,15 +253,22 @@ export function runPiExecution(
         startNativePrompt(session, input.prompt, settlement),
       );
       const outcome = yield* Deferred.await(settlement).pipe(
-        Effect.onInterrupt(() => announceOnInterrupt),
         Effect.tap((settled) =>
-          Effect.sync(() => {
-            if (settled.kind === "native") {
-              normalFinish = evidence.promptReturned(
-                settled.error === undefined ? "resolved" : "rejected",
-              );
-            }
-          }),
+          settled.kind === "native"
+            ? Effect.uninterruptible(
+                Effect.gen(function* () {
+                  normalFinish = evidence.promptReturned(
+                    settled.error === undefined ? "resolved" : "rejected",
+                  );
+                  yield* io.recordDecision(normalFinish.bundle);
+                  // A decision does not seal observation intake. Preserve its
+                  // diagnostics even when cancellation follows immediately.
+                  for (const observation of normalFinish.observations) {
+                    yield* io.emit(observation);
+                  }
+                }),
+              )
+            : Effect.void,
         ),
       );
 
@@ -342,11 +323,10 @@ export function runPiExecution(
         evidence.promptReturned(
           outcome.error === undefined ? "resolved" : "rejected",
         );
-      yield* announceFinishObservations(decision);
       return decision.bundle;
     });
 
-    return yield* Effect.onInterrupt(body, () => announceOnInterrupt);
+    return yield* Effect.onInterrupt(body, () => drainOnInterrupt);
   });
 }
 
