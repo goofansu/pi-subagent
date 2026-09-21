@@ -27,6 +27,12 @@ export interface FinalOutputBlock {
   readonly text: string;
 }
 
+/** The bounded final-output meaning needed by a collapsed Result row. */
+export type CompactFinalOutputSummary =
+  | { readonly kind: "none" }
+  | { readonly kind: "removed" }
+  | { readonly kind: "visible"; readonly characters: number };
+
 export interface FinalOutputSection {
   /** A retention warning, placed immediately before the body or explanation. */
   readonly qualifier?: string;
@@ -276,24 +282,47 @@ function isNoticeFraming(
   );
 }
 
-/** Build the qualifier, body, and explanation for one final-output section. */
-export function finalOutputSection(
+type FinalOutputDispatchMode =
+  | { readonly kind: "summary" }
+  | { readonly kind: "section"; readonly framing: FinalOutputFraming };
+
+function dispatchFinalOutput(
   output: FinalOutputValue,
-  framing: FinalOutputFraming,
-): FinalOutputSection {
+  mode: Extract<FinalOutputDispatchMode, { readonly kind: "summary" }>,
+): CompactFinalOutputSummary;
+function dispatchFinalOutput(
+  output: FinalOutputValue,
+  mode: Extract<FinalOutputDispatchMode, { readonly kind: "section" }>,
+): FinalOutputSection;
+function dispatchFinalOutput(
+  output: FinalOutputValue,
+  mode: FinalOutputDispatchMode,
+): CompactFinalOutputSummary | FinalOutputSection {
   switch (output.kind) {
-    case "retained":
+    case "retained": {
+      if (mode.kind === "summary") {
+        return { kind: "visible", characters: output.output.length };
+      }
+      const { framing } = mode;
       return isNoticeFraming(framing)
         ? noticeRetainedSection(output, framing)
         : { body: retainedBody(output, framing) };
-    case "retained-prefix":
+    }
+    case "retained-prefix": {
+      if (mode.kind === "summary") {
+        return { kind: "visible", characters: output.output.length };
+      }
+      const { framing } = mode;
       return isNoticeFraming(framing)
         ? noticeRetainedSection(output, framing, output.removedBytes)
         : {
             qualifier: qualifier(output.removedBytes),
             body: retainedBody(output, framing),
           };
+    }
     case "removed": {
+      if (mode.kind === "summary") return { kind: "removed" };
+      const { framing } = mode;
       if (isNoticeFraming(framing)) {
         return noticeRemovedSection(output, framing);
       }
@@ -333,6 +362,8 @@ export function finalOutputSection(
       };
     }
     case "absent": {
+      if (mode.kind === "summary") return { kind: "none" };
+      const { framing } = mode;
       if (isNoticeFraming(framing)) {
         return noticeAbsentSection(output, framing);
       }
@@ -367,6 +398,21 @@ export function finalOutputSection(
       return { explanation: COMPLETED_WITHOUT_OUTPUT };
     }
   }
+}
+
+/** Build the bounded summary used by compact final-output surfaces. */
+export function finalOutputSummary(
+  output: FinalOutputInterpretation,
+): CompactFinalOutputSummary {
+  return dispatchFinalOutput(output, { kind: "summary" });
+}
+
+/** Build the qualifier, body, and explanation for one final-output section. */
+export function finalOutputSection(
+  output: FinalOutputValue,
+  framing: FinalOutputFraming,
+): FinalOutputSection {
+  return dispatchFinalOutput(output, { kind: "section", framing });
 }
 
 /** Build the self-contained answer section carried by a Notification. */

@@ -7,17 +7,22 @@
  * Neither operation can decide Run meaning or Result hand-off.
  */
 
-import type {
-  CancelOutcome,
-  ResultOutcome,
-  ResumeOutcome,
-  RunId,
-  RunResult,
-  StartOutcome,
-  SteerOutcome,
-  TerminalRunPhase,
-  WaitOutcome,
+import {
+  type CancelOutcome,
+  interpretFinalOutput,
+  type ResultOutcome,
+  type ResumeOutcome,
+  type RunId,
+  type RunResult,
+  type StartOutcome,
+  type SteerOutcome,
+  type TerminalRunPhase,
+  type WaitOutcome,
 } from "../domain/index.ts";
+import {
+  type CompactFinalOutputSummary,
+  finalOutputSummary,
+} from "./final-output-section.ts";
 
 /** Discriminated, presentation-only facts for every start outcome. */
 export type StartToolRowFacts =
@@ -53,8 +58,7 @@ export interface ResultRunSummary {
   readonly runId: string;
   readonly agent: string;
   readonly status: TerminalRunPhase;
-  /** Characters retained in the Result's final output. */
-  readonly outputCharacters: number;
+  readonly output: CompactFinalOutputSummary;
 }
 
 /** Presentation-only facts for either Wait operation. */
@@ -138,7 +142,7 @@ function resultRunSummaryOf(result: RunResult): ResultRunSummary {
     runId: result.runId,
     agent: result.agent,
     status: result.status,
-    outputCharacters: result.finalOutput.length,
+    output: finalOutputSummary(interpretFinalOutput(result)),
   };
 }
 
@@ -544,19 +548,45 @@ function decodeCancel(
     : undefined;
 }
 
+function decodeOutputSummary(
+  value: unknown,
+): CompactFinalOutputSummary | undefined {
+  const candidate = recordOf(value);
+  if (!candidate) return undefined;
+  switch (candidate.kind) {
+    case "none":
+    case "removed":
+      return hasExactly(candidate, ["kind"])
+        ? { kind: candidate.kind }
+        : undefined;
+    case "visible":
+      return hasExactly(candidate, ["kind", "characters"]) &&
+        isCount(candidate.characters)
+        ? { kind: "visible", characters: candidate.characters }
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
 function decodeRunSummary(value: unknown): ResultRunSummary | undefined {
   const run = recordOf(value);
-  return run &&
-    hasExactly(run, ["runId", "agent", "status", "outputCharacters"]) &&
-    isIdentifier(run.runId) &&
-    typeof run.agent === "string" &&
-    isTerminalPhase(run.status) &&
-    isCount(run.outputCharacters)
+  if (
+    !run ||
+    !hasExactly(run, ["runId", "agent", "status", "output"]) ||
+    !isIdentifier(run.runId) ||
+    typeof run.agent !== "string" ||
+    !isTerminalPhase(run.status)
+  ) {
+    return undefined;
+  }
+  const output = decodeOutputSummary(run.output);
+  return output
     ? {
         runId: run.runId,
         agent: run.agent,
         status: run.status,
-        outputCharacters: run.outputCharacters,
+        output,
       }
     : undefined;
 }

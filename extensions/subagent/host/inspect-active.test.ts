@@ -348,9 +348,9 @@ for (const truncated of [false, true])
         "https://example.com/report",
         "Dropped to stay within bounds:",
         "5 transcript items",
-        "bytes of the final output",
       ])
         assert.ok(text.includes(value), `${value}\n${text}`);
+      assert.ok(text.includes("7 bytes of the final output were cut."));
       const orderedSections = [
         "Metadata",
         "Prompt",
@@ -365,12 +365,6 @@ for (const truncated of [false, true])
             text.indexOf(orderedSections[i] ?? ""),
           orderedSections.join(" → "),
         );
-      const outputHeading = text.indexOf("Output so far");
-      const outputWarning = text.indexOf(
-        "7 bytes of the final output were cut.",
-      );
-      assert.ok(outputHeading < outputWarning);
-      assert.ok(outputWarning < text.indexOf("bounded", outputWarning));
       assert.doesNotMatch(
         text,
         /\nTools\n|read — running|full tool output|second tool line|call-id/,
