@@ -1,0 +1,429 @@
+{
+  "start/started": {
+    "modelText": "Started explore:\nsubagent id subagent-1\nrun id run-1\n\nUse run id run-1 for agent_wait, agent_result, agent_cancel, and agent_steer. Its completion is delivered to you automatically when the Run finishes; continue independent work until then, and wait only if nothing else remains.",
+    "collapsedRows": {
+      "48": "Started · subagent-1 · run-1 ( to expand)",
+      "120": "Started explore · Subagent subagent-1 · Run run-1 ( to expand)"
+    }
+  },
+  "start/unknown agent": {
+    "modelText": "Unknown agent: \"ghost\". Available: explore, review",
+    "collapsedRows": {
+      "48": "Start refused · unknown Agent ( to expand)",
+      "120": "Start refused · unknown Agent ( to expand)"
+    }
+  },
+  "start/invalid profile": {
+    "modelText": "Cannot start explore: its Profile is not usable. Nothing was started.",
+    "collapsedRows": {
+      "48": "Start refused · invalid Profile ( to expand)",
+      "120": "Start refused · invalid Profile ( to expand)"
+    }
+  },
+  "start/empty label": {
+    "modelText": "Cannot start explore: its description is empty. No Run was started and no id was handed out. Send a one-line description of the task: it is the label this Run is shown under everywhere.",
+    "collapsedRows": {
+      "48": "Start refused · empty Label ( to expand)",
+      "120": "Start refused · empty Label ( to expand)"
+    }
+  },
+  "start/at capacity": {
+    "modelText": "Cannot start explore: this Session is already running as many Subagent Runs as it allows. Nothing was queued and no Run was started. Wait for a Run to finish, or cancel one, then try again.",
+    "collapsedRows": {
+      "48": "Start refused · at capacity ( to expand)",
+      "120": "Start refused · at capacity ( to expand)"
+    }
+  },
+  "start/shutting down": {
+    "modelText": "Cannot start explore: this Session is shutting down. No Run was started and nothing was queued.",
+    "collapsedRows": {
+      "48": "Start refused · Session shutting d… ( to expand)",
+      "120": "Start refused · Session shutting down ( to expand)"
+    }
+  },
+  "start/delegation-depth exceeded": {
+    "modelText": "Cannot start explore: delegation is already 2 levels deep, which is as far as it goes. No Run was started. Do this work directly instead of delegating it again.",
+    "collapsedRows": {
+      "48": "Start refused · delegation depth 2 ( to expand)",
+      "120": "Start refused · delegation depth 2 ( to expand)"
+    }
+  },
+  "start/backend unavailable": {
+    "modelText": "Cannot start explore: its backend could not be opened (backend-failure: unavailable). No Run was started and no id was handed out. Retrying may work; a different agent will work if this backend is down.",
+    "collapsedRows": {
+      "48": "Start refused · backend unavailable ( to expand)",
+      "120": "Start refused · backend unavailable ( to expand)"
+    }
+  },
+  "resume/started": {
+    "modelText": "Resumed subagent subagent-1:\nrun id run-1\n\nagent_resume returns immediately, not with the answer. Use run id run-1 for agent_wait, agent_result, agent_cancel, and agent_steer. Its completion is delivered to you automatically when the Run finishes; continue independent work until then, and wait only if nothing else remains.",
+    "collapsedRows": {
+      "48": "Resumed · Run run-1 ( to expand)",
+      "120": "Resumed · Run run-1 ( to expand)"
+    }
+  },
+  "resume/unknown Subagent": {
+    "modelText": "Cannot resume subagent subagent-1: unknown Subagent. Use a Subagent id returned by agent_start in this Session, not a Run id.",
+    "collapsedRows": {
+      "48": "Resume refused · unknown Subagent ( to expand)",
+      "120": "Resume refused · unknown Subagent ( to expand)"
+    }
+  },
+  "resume/Subagent already running": {
+    "modelText": "Cannot resume subagent subagent-1: it already has an active Run. The request was not queued and no provider work was started. Wait for that Run to finish, then resume.",
+    "collapsedRows": {
+      "48": "Resume refused · already running ( to expand)",
+      "120": "Resume refused · already running ( to expand)"
+    }
+  },
+  "resume/empty label": {
+    "modelText": "Cannot resume subagent subagent-1: its description is empty. No Run was started and nothing was queued. Send a one-line description of this Run: it is the label this Run is shown under everywhere.",
+    "collapsedRows": {
+      "48": "Resume refused · empty Label ( to expand)",
+      "120": "Resume refused · empty Label ( to expand)"
+    }
+  },
+  "resume/resume unsupported": {
+    "modelText": "Cannot resume subagent subagent-1: its backend does not support resume. No Run or provider work was started. Start a new Subagent to continue this work.",
+    "collapsedRows": {
+      "48": "Resume refused · unsupported ( to expand)",
+      "120": "Resume refused · unsupported ( to expand)"
+    }
+  },
+  "resume/conversation lost": {
+    "modelText": "Cannot resume subagent subagent-1: its Conversation was lost. No Run or provider work was started. Start a new Subagent to continue.",
+    "collapsedRows": {
+      "48": "Resume refused · Conversation lost ( to expand)",
+      "120": "Resume refused · Conversation lost ( to expand)"
+    }
+  },
+  "resume/at capacity": {
+    "modelText": "Cannot resume subagent subagent-1: this Session is already running as many Subagent Runs as it allows. Nothing was queued. Wait for a Run to finish, or cancel one, then try again.",
+    "collapsedRows": {
+      "48": "Resume refused · at capacity ( to expand)",
+      "120": "Resume refused · at capacity ( to expand)"
+    }
+  },
+  "resume/shutting down": {
+    "modelText": "Cannot resume subagent subagent-1: this Session is shutting down. No Run was started and nothing was queued.",
+    "collapsedRows": {
+      "48": "Resume refused · Session shutting … ( to expand)",
+      "120": "Resume refused · Session shutting down ( to expand)"
+    }
+  },
+  "steer/accepted": {
+    "modelText": "Steering accepted for run run-1. The complete message was synchronously admitted to this Run's local bounded mailbox, and that is all acceptance means: it does not mean the backend dequeued it, a provider accepted it, or a model consumed it. Do not resend this steering message in a retry loop.",
+    "collapsedRows": {
+      "48": "Accepted into local Control mailbox ( to expand)",
+      "120": "Accepted into local Control mailbox ( to expand)"
+    }
+  },
+  "steer/mailbox full": {
+    "modelText": "Cannot steer run run-1: its Control mailbox is full. Nothing was truncated and nothing was dropped silently. Do not retry steering in a loop.",
+    "collapsedRows": {
+      "48": "Control refused · mailbox full ( to expand)",
+      "120": "Control refused · mailbox full ( to expand)"
+    }
+  },
+  "steer/invalid": {
+    "modelText": "Cannot steer run run-1: invalid message — empty.",
+    "collapsedRows": {
+      "48": "Control refused · invalid ( to expand)",
+      "120": "Control refused · invalid ( to expand)"
+    }
+  },
+  "steer/unsupported": {
+    "modelText": "Cannot steer run run-1: its backend declared no steering Control. No message was admitted, and no later attempt on this Run will be.",
+    "collapsedRows": {
+      "48": "Control refused · unsupported ( to expand)",
+      "120": "Control refused · unsupported ( to expand)"
+    }
+  },
+  "steer/mailbox closed": {
+    "modelText": "Cannot steer run run-1: its Control mailbox is closed. The Run is settling, was cancelled, or the Session is shutting down.",
+    "collapsedRows": {
+      "48": "Control refused · mailbox closed ( to expand)",
+      "120": "Control refused · mailbox closed ( to expand)"
+    }
+  },
+  "steer/already completed": {
+    "modelText": "Cannot steer run run-1: it is already completed. Use agent_result with that Run id to read what it produced.",
+    "collapsedRows": {
+      "48": "Control refused · Run completed ( to expand)",
+      "120": "Control refused · Run completed ( to expand)"
+    }
+  },
+  "steer/already failed": {
+    "modelText": "Cannot steer run run-1: it is already failed. Use agent_result with that Run id to read what it produced.",
+    "collapsedRows": {
+      "48": "Control refused · Run failed ( to expand)",
+      "120": "Control refused · Run failed ( to expand)"
+    }
+  },
+  "steer/already cancelled": {
+    "modelText": "Cannot steer run run-1: it is already cancelled. Use agent_result with that Run id to read what it produced.",
+    "collapsedRows": {
+      "48": "Control refused · Run cancelled ( to expand)",
+      "120": "Control refused · Run cancelled ( to expand)"
+    }
+  },
+  "steer/unknown Run": {
+    "modelText": "Cannot steer run run-1: unknown Run. Check the id against what agent_start or agent_resume returned.",
+    "collapsedRows": {
+      "48": "Control refused · unknown Run ( to expand)",
+      "120": "Control refused · unknown Run ( to expand)"
+    }
+  },
+  "steer/shutting down": {
+    "modelText": "Cannot steer run run-1: this Session is shutting down. No message was admitted.",
+    "collapsedRows": {
+      "48": "Control refused · Session shutting… ( to expand)",
+      "120": "Control refused · Session shutting down ( to expand)"
+    }
+  },
+  "cancel/admitted": {
+    "modelText": "Cancellation requested: run-1. Each Run stops when its execution and cleanup finish, or settles cancelled once its cleanup outlives the cleanup budget; it keeps whatever output it produced and still sends its own notification.",
+    "collapsedRows": {
+      "48": "Cancellation requested: 1 ( to expand)",
+      "120": "Cancellation requested: 1 ( to expand)"
+    }
+  },
+  "cancel/idempotent": {
+    "modelText": "Already cancelling: run-1. The first request stands and this one changed nothing.",
+    "collapsedRows": {
+      "48": "Already cancelling: 1 ( to expand)",
+      "120": "Already cancelling: 1 ( to expand)"
+    }
+  },
+  "cancel/already completed": {
+    "modelText": "Already finished, result kept: run-1 (completed).",
+    "collapsedRows": {
+      "48": "Already finished, result kept: 1 ( to expand)",
+      "120": "Already finished, result kept: 1 ( to expand)"
+    }
+  },
+  "cancel/already failed": {
+    "modelText": "Already finished, result kept: run-1 (failed).",
+    "collapsedRows": {
+      "48": "Already finished, result kept: 1 ( to expand)",
+      "120": "Already finished, result kept: 1 ( to expand)"
+    }
+  },
+  "cancel/already cancelled": {
+    "modelText": "Already finished, result kept: run-1 (cancelled).",
+    "collapsedRows": {
+      "48": "Already finished, result kept: 1 ( to expand)",
+      "120": "Already finished, result kept: 1 ( to expand)"
+    }
+  },
+  "cancel/unknown Run": {
+    "modelText": "Unknown run ids: run-1.",
+    "collapsedRows": {
+      "48": "Unknown run ids: 1 ( to expand)",
+      "120": "Unknown run ids: 1 ( to expand)"
+    }
+  },
+  "cancel/mixed buckets": {
+    "modelText": "Cancellation requested: run-1. Each Run stops when its execution and cleanup finish, or settles cancelled once its cleanup outlives the cleanup budget; it keeps whatever output it produced and still sends its own notification. Already cancelling: run-2. The first request stands and this one changed nothing. Already finished, result kept: run-3 (failed). Unknown run ids: run-4.",
+    "collapsedRows": {
+      "48": "Cancellation requested: 1 · Alread… ( to expand)",
+      "120": "Cancellation requested: 1 · Already cancelling: 1 · Already finished, result kept: 1 · Unknown run ids: 1 ( to expand)"
+    }
+  },
+  "cancel/empty": {
+    "modelText": "No run ids were given.",
+    "collapsedRows": {
+      "48": "No run ids were given.",
+      "120": "No run ids were given."
+    }
+  },
+  "wait/delivered": {
+    "modelText": "explore (subagent subagent-1), run run-1:\nlook around · pi · completed in 12.4s\n\nanswer\n\nThis wait has returned: every Run it covered is terminal, nothing outstanding.",
+    "collapsedRows": {
+      "48": "Delivered 1 Result ( to expand)",
+      "120": "Delivered 1 Result ( to expand)"
+    }
+  },
+  "wait/unavailable": {
+    "modelText": "explore (run-1): failed, but its output was evicted to keep this Session's result store bounded and cannot be recovered.\n\nThis wait has returned: every Run it covered is terminal, nothing outstanding.",
+    "collapsedRows": {
+      "48": "1 Result unavailable ( to expand)",
+      "120": "1 Result unavailable ( to expand)"
+    }
+  },
+  "wait/cancelled/requested": {
+    "modelText": "explore (run-1): cancelled (requested), but its output was evicted to keep this Session's result store bounded and cannot be recovered.\n\nThis wait has returned: every Run it covered is terminal, nothing outstanding.",
+    "collapsedRows": {
+      "48": "1 Result unavailable ( to expand)",
+      "120": "1 Result unavailable ( to expand)"
+    }
+  },
+  "wait/cancelled/shutdown": {
+    "modelText": "explore (run-1): cancelled (shutdown), but its output was evicted to keep this Session's result store bounded and cannot be recovered.\n\nThis wait has returned: every Run it covered is terminal, nothing outstanding.",
+    "collapsedRows": {
+      "48": "1 Result unavailable ( to expand)",
+      "120": "1 Result unavailable ( to expand)"
+    }
+  },
+  "wait/cancelled/timeout": {
+    "modelText": "explore (run-1): cancelled (timeout), but its output was evicted to keep this Session's result store bounded and cannot be recovered.\n\nThis wait has returned: every Run it covered is terminal, nothing outstanding.",
+    "collapsedRows": {
+      "48": "1 Result unavailable ( to expand)",
+      "120": "1 Result unavailable ( to expand)"
+    }
+  },
+  "wait/cancelled/no reason": {
+    "modelText": "explore (run-1): cancelled, but its output was evicted to keep this Session's result store bounded and cannot be recovered.\n\nThis wait has returned: every Run it covered is terminal, nothing outstanding.",
+    "collapsedRows": {
+      "48": "1 Result unavailable ( to expand)",
+      "120": "1 Result unavailable ( to expand)"
+    }
+  },
+  "wait/still running": {
+    "modelText": "Still running: run-1. The wait gave up, not the Runs: each keeps going and notifies on its own, so do not immediately wait on the same ids again.",
+    "collapsedRows": {
+      "48": "1 Run still running ( to expand)",
+      "120": "1 Run still running ( to expand)"
+    }
+  },
+  "wait/unknown Run": {
+    "modelText": "Unknown run ids: run-1.",
+    "collapsedRows": {
+      "48": "1 Run unknown ( to expand)",
+      "120": "1 Run unknown ( to expand)"
+    }
+  },
+  "wait/mixed": {
+    "modelText": "explore (subagent subagent-1), run run-1:\nlook around · pi · completed in 12.4s\n\nanswer\n\nreview (run-2): failed, but its output was evicted to keep this Session's result store bounded and cannot be recovered.\n\nStill running: run-2. The wait gave up, not the Runs: each keeps going and notifies on its own, so do not immediately wait on the same ids again.\n\nUnknown run ids: run-3.",
+    "collapsedRows": {
+      "48": "1 Run still running ( to expand)",
+      "120": "Delivered 1 Result · 1 Result unavailable · 1 Run still running · 1 Run unknown ( to expand)"
+    }
+  },
+  "wait/empty": {
+    "modelText": "No run ids were given.",
+    "collapsedRows": {
+      "48": "No Run outcomes ( to expand)",
+      "120": "No Run outcomes ( to expand)"
+    }
+  },
+  "waitAll/delivered": {
+    "modelText": "explore (subagent subagent-1), run run-1:\nlook around · pi · completed in 12.4s\n\nanswer\n\nThis wait has returned: every Run it covered is terminal, nothing outstanding.",
+    "collapsedRows": {
+      "48": "Delivered 1 Result ( to expand)",
+      "120": "Delivered 1 Result ( to expand)"
+    }
+  },
+  "waitAll/unavailable": {
+    "modelText": "explore (run-1): failed, but its output was evicted to keep this Session's result store bounded and cannot be recovered.\n\nThis wait has returned: every Run it covered is terminal, nothing outstanding.",
+    "collapsedRows": {
+      "48": "1 Result unavailable ( to expand)",
+      "120": "1 Result unavailable ( to expand)"
+    }
+  },
+  "waitAll/cancelled/requested": {
+    "modelText": "explore (run-1): cancelled (requested), but its output was evicted to keep this Session's result store bounded and cannot be recovered.\n\nThis wait has returned: every Run it covered is terminal, nothing outstanding.",
+    "collapsedRows": {
+      "48": "1 Result unavailable ( to expand)",
+      "120": "1 Result unavailable ( to expand)"
+    }
+  },
+  "waitAll/cancelled/shutdown": {
+    "modelText": "explore (run-1): cancelled (shutdown), but its output was evicted to keep this Session's result store bounded and cannot be recovered.\n\nThis wait has returned: every Run it covered is terminal, nothing outstanding.",
+    "collapsedRows": {
+      "48": "1 Result unavailable ( to expand)",
+      "120": "1 Result unavailable ( to expand)"
+    }
+  },
+  "waitAll/cancelled/timeout": {
+    "modelText": "explore (run-1): cancelled (timeout), but its output was evicted to keep this Session's result store bounded and cannot be recovered.\n\nThis wait has returned: every Run it covered is terminal, nothing outstanding.",
+    "collapsedRows": {
+      "48": "1 Result unavailable ( to expand)",
+      "120": "1 Result unavailable ( to expand)"
+    }
+  },
+  "waitAll/cancelled/no reason": {
+    "modelText": "explore (run-1): cancelled, but its output was evicted to keep this Session's result store bounded and cannot be recovered.\n\nThis wait has returned: every Run it covered is terminal, nothing outstanding.",
+    "collapsedRows": {
+      "48": "1 Result unavailable ( to expand)",
+      "120": "1 Result unavailable ( to expand)"
+    }
+  },
+  "waitAll/still running": {
+    "modelText": "Still running: run-1. The wait gave up, not the Runs: each keeps going and notifies on its own, so do not immediately wait on the same ids again.",
+    "collapsedRows": {
+      "48": "1 Run still running ( to expand)",
+      "120": "1 Run still running ( to expand)"
+    }
+  },
+  "waitAll/unknown Run": {
+    "modelText": "Unknown run ids: run-1.",
+    "collapsedRows": {
+      "48": "1 Run unknown ( to expand)",
+      "120": "1 Run unknown ( to expand)"
+    }
+  },
+  "waitAll/mixed": {
+    "modelText": "explore (subagent subagent-1), run run-1:\nlook around · pi · completed in 12.4s\n\nanswer\n\nreview (run-2): failed, but its output was evicted to keep this Session's result store bounded and cannot be recovered.\n\nStill running: run-2. The wait gave up, not the Runs: each keeps going and notifies on its own, so do not immediately wait on the same ids again.\n\nUnknown run ids: run-3.",
+    "collapsedRows": {
+      "48": "1 Run still running ( to expand)",
+      "120": "Delivered 1 Result · 1 Result unavailable · 1 Run still running · 1 Run unknown ( to expand)"
+    }
+  },
+  "waitAll/empty": {
+    "modelText": "No run ids were given.",
+    "collapsedRows": {
+      "48": "No Run outcomes ( to expand)",
+      "120": "No Run outcomes ( to expand)"
+    }
+  },
+  "waitAll/no active Runs": {
+    "modelText": "No Runs are active in this Session. Every Run started here has already finished and is announced by its own completion notice; use agent_result with a Run id to re-read one.",
+    "collapsedRows": {
+      "48": "No active Runs ( to expand)",
+      "120": "No active Runs ( to expand)"
+    }
+  },
+  "result/available-visible": {
+    "modelText": "explore (subagent subagent-1), run run-1:\nlook around · pi · completed in 12.4s\n\nanswer",
+    "collapsedRows": {
+      "48": "explore · run-1 · completed ( to expand)",
+      "120": "explore · run-1 · completed · 6 characters ( to expand)"
+    }
+  },
+  "result/available-none": {
+    "modelText": "explore (subagent subagent-1), run run-1:\nlook around · pi · completed in 12.4s\n\nThe Run finished without output.",
+    "collapsedRows": {
+      "48": "explore · run-1 · completed ( to expand)",
+      "120": "explore · run-1 · completed · no output ( to expand)"
+    }
+  },
+  "result/available-removed": {
+    "modelText": "explore (subagent subagent-1), run run-1:\nlook around · pi · completed in 12.4s\n\n7 bytes of the final output were cut.\n\nNo final output remains in the Result.",
+    "collapsedRows": {
+      "48": "explore · run-1 · completed ( to expand)",
+      "120": "explore · run-1 · completed · output removed ( to expand)"
+    }
+  },
+  "result/ResultExpired": {
+    "modelText": "Run run-1 (subagent subagent-1) failed, but its output was evicted to keep this Session's result store bounded. The Run is still known and its status still answers; the output itself is gone and cannot be recovered.",
+    "collapsedRows": {
+      "48": "run-1 · Result unavailable · failed ( to expand)",
+      "120": "run-1 · Result unavailable · failed ( to expand)"
+    }
+  },
+  "result/RunNotTerminal": {
+    "modelText": "Run run-1 has not finished yet, so it has no result. Its completion is delivered to you on its own; agent_wait blocks until then and returns the result directly.",
+    "collapsedRows": {
+      "48": "run-1 · still running ( to expand)",
+      "120": "run-1 · still running ( to expand)"
+    }
+  },
+  "result/unknown Run": {
+    "modelText": "No run with id run-1. Check the id against what agent_start or agent_resume returned.",
+    "collapsedRows": {
+      "48": "run-1 · unknown Run ( to expand)",
+      "120": "run-1 · unknown Run ( to expand)"
+    }
+  }
+}

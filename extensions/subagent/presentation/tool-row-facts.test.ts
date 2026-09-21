@@ -16,6 +16,8 @@ import {
   formatSteerOutcome,
 } from "./prose.ts";
 import {
+  CANCEL_BUCKET_PRESENTATION,
+  cancelBuckets,
   cancelToolRowFacts,
   decodeToolRowFacts,
   encodeToolRowFacts,
@@ -138,6 +140,66 @@ test("pass-through table keys construct and round-trip every domain outcome", ()
       assert.ok(formatSentence(outcome as never).trim().length > 0);
     }
   }
+});
+
+test("every cancel bucket declares a non-empty row phrase beside its facts", () => {
+  const expectedKinds = [
+    "requested",
+    "already requested",
+    "already terminal",
+    "unknown",
+  ] as const;
+
+  assert.deepEqual(Object.keys(CANCEL_BUCKET_PRESENTATION), [
+    ...expectedKinds,
+    "empty",
+  ]);
+  for (const entry of Object.values(CANCEL_BUCKET_PRESENTATION)) {
+    assert.ok(entry.rowPhrase.trim().length > 0);
+  }
+
+  const facts = cancelToolRowFacts(cancelOutcomes);
+  assert.deepEqual(cancelBuckets(facts), [
+    {
+      kind: "requested",
+      rowPhrase: CANCEL_BUCKET_PRESENTATION.requested.rowPhrase,
+      count: 1,
+      runIds: [rid],
+    },
+    {
+      kind: "already requested",
+      rowPhrase: CANCEL_BUCKET_PRESENTATION["already requested"].rowPhrase,
+      count: 1,
+      runIds: [rid],
+    },
+    {
+      kind: "already terminal",
+      rowPhrase: CANCEL_BUCKET_PRESENTATION["already terminal"].rowPhrase,
+      count: 3,
+      runs: [
+        { runId: rid, phase: "completed" },
+        { runId: rid, phase: "failed" },
+        { runId: rid, phase: "cancelled" },
+      ],
+    },
+    {
+      kind: "unknown",
+      rowPhrase: CANCEL_BUCKET_PRESENTATION.unknown.rowPhrase,
+      count: 1,
+      runIds: [rid],
+    },
+  ]);
+});
+
+test("cancel grouping fails loudly for an unfamiliar runtime bucket", () => {
+  assert.throws(
+    () =>
+      cancelBuckets({
+        kind: "cancel",
+        outcomes: [{ kind: "future bucket", runId: rid }],
+      } as never),
+    /no cancellation bucket for future bucket/,
+  );
 });
 
 test("named aggregate facts construction round-trips", () => {

@@ -493,11 +493,139 @@ const CancelRunToolRowOutcomeSchema = Schema.Union([
 ]);
 export type CancelRunToolRowOutcome = typeof CancelRunToolRowOutcomeSchema.Type;
 
+/**
+ * The cancellation buckets' shared wording, declared beside their facts.
+ *
+ * `empty` is the answer when there are no buckets. The other keys are the
+ * normalized facts kinds, so adding a bucket to the facts requires adding its
+ * row phrase here too.
+ */
+export const CANCEL_BUCKET_PRESENTATION = {
+  requested: { rowPhrase: "Cancellation requested" },
+  "already requested": { rowPhrase: "Already cancelling" },
+  "already terminal": { rowPhrase: "Already finished, result kept" },
+  unknown: { rowPhrase: "Unknown run ids" },
+  empty: { rowPhrase: "No run ids were given." },
+} as const satisfies Record<
+  CancelRunToolRowOutcome["kind"] | "empty",
+  {
+    readonly rowPhrase: string;
+  }
+>;
+
 const CancelToolRowFactsSchema = Schema.Struct({
   kind: Schema.Literal("cancel"),
   outcomes: Schema.Array(CancelRunToolRowOutcomeSchema),
 });
 export type CancelToolRowFacts = typeof CancelToolRowFactsSchema.Type;
+
+interface CancelIdBucket {
+  readonly kind: "requested" | "already requested" | "unknown";
+  readonly rowPhrase: string;
+  readonly count: number;
+  readonly runIds: readonly string[];
+}
+
+interface CancelTerminalBucket {
+  readonly kind: "already terminal";
+  readonly rowPhrase: string;
+  readonly count: number;
+  readonly runs: readonly {
+    readonly runId: string;
+    readonly phase: "completed" | "failed" | "cancelled";
+  }[];
+}
+
+export type CancelBucket = CancelIdBucket | CancelTerminalBucket;
+
+function unexpectedCancelBucket(outcome: never): never {
+  throw new Error(
+    `no cancellation bucket for ${String((outcome as { kind?: unknown }).kind)}`,
+  );
+}
+
+/**
+ * Group wire-compatible cancellation facts once for both prose and rows.
+ *
+ * Identifiers and terminal phases remain available to the model sentence,
+ * while each bucket also supplies the count and row phrase the compact row
+ * needs. The fixed order lives here alone. An unfamiliar runtime value fails
+ * loudly rather than disappearing from both presentations.
+ */
+export function cancelBuckets(
+  facts: CancelToolRowFacts,
+): readonly CancelBucket[] {
+  const requested: string[] = [];
+  const alreadyRequested: string[] = [];
+  const alreadyTerminal: {
+    readonly runId: string;
+    readonly phase: "completed" | "failed" | "cancelled";
+  }[] = [];
+  const unknown: string[] = [];
+
+  for (const outcome of facts.outcomes) {
+    switch (outcome.kind) {
+      case "requested":
+        requested.push(outcome.runId);
+        break;
+      case "already requested":
+        alreadyRequested.push(outcome.runId);
+        break;
+      case "already terminal":
+        alreadyTerminal.push({ runId: outcome.runId, phase: outcome.phase });
+        break;
+      case "unknown":
+        unknown.push(outcome.runId);
+        break;
+      default:
+        unexpectedCancelBucket(outcome);
+    }
+  }
+
+  return [
+    ...(requested.length === 0
+      ? []
+      : [
+          {
+            kind: "requested" as const,
+            rowPhrase: CANCEL_BUCKET_PRESENTATION.requested.rowPhrase,
+            count: requested.length,
+            runIds: requested,
+          },
+        ]),
+    ...(alreadyRequested.length === 0
+      ? []
+      : [
+          {
+            kind: "already requested" as const,
+            rowPhrase:
+              CANCEL_BUCKET_PRESENTATION["already requested"].rowPhrase,
+            count: alreadyRequested.length,
+            runIds: alreadyRequested,
+          },
+        ]),
+    ...(alreadyTerminal.length === 0
+      ? []
+      : [
+          {
+            kind: "already terminal" as const,
+            rowPhrase: CANCEL_BUCKET_PRESENTATION["already terminal"].rowPhrase,
+            count: alreadyTerminal.length,
+            runs: alreadyTerminal,
+          },
+        ]),
+    ...(unknown.length === 0
+      ? []
+      : [
+          {
+            kind: "unknown" as const,
+            rowPhrase: CANCEL_BUCKET_PRESENTATION.unknown.rowPhrase,
+            count: unknown.length,
+            runIds: unknown,
+          },
+        ]),
+  ];
+}
 
 const ToolRowFactsSchema = Schema.Union([
   StartToolRowFactsSchema,

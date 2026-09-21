@@ -15,7 +15,6 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { CompactFinalOutputSummary } from "./final-output-section.ts";
-import { CANCEL_OUTCOME_HEADINGS } from "./prose.ts";
 import {
   contentText,
   formatParentheticalKeyHint,
@@ -25,8 +24,10 @@ import type { RenderableTheme } from "./rows.ts";
 import { formatCharacterCount } from "./status.ts";
 import { fitToWidth } from "./text-width.ts";
 import {
+  CANCEL_BUCKET_PRESENTATION,
   type CancelToolRowFacts,
   type CollectedRunsToolRowFacts,
+  cancelBuckets,
   decodeToolRowFacts,
   type ResumedRunToolRowFacts,
   type StartedRunToolRowFacts,
@@ -576,46 +577,10 @@ class CancelCallComponent extends CachedComponent {
 }
 
 function cancellationSummaryText(details: CancelToolRowFacts): string {
-  const counts = {
-    requested: 0,
-    alreadyRequested: 0,
-    alreadyTerminal: 0,
-    unknown: 0,
-  };
-  for (const outcome of details.outcomes) {
-    switch (outcome.kind) {
-      case "requested":
-        counts.requested += 1;
-        break;
-      case "already requested":
-        counts.alreadyRequested += 1;
-        break;
-      case "already terminal":
-        counts.alreadyTerminal += 1;
-        break;
-      case "unknown":
-        counts.unknown += 1;
-        break;
-    }
-  }
-  const parts: string[] = [];
-  if (counts.requested > 0) {
-    parts.push(`${CANCEL_OUTCOME_HEADINGS.requested}: ${counts.requested}`);
-  }
-  if (counts.alreadyRequested > 0) {
-    parts.push(
-      `${CANCEL_OUTCOME_HEADINGS.alreadyCancelling}: ${counts.alreadyRequested}`,
-    );
-  }
-  if (counts.alreadyTerminal > 0) {
-    parts.push(
-      `${CANCEL_OUTCOME_HEADINGS.alreadyFinished}: ${counts.alreadyTerminal}`,
-    );
-  }
-  if (counts.unknown > 0) {
-    parts.push(`${CANCEL_OUTCOME_HEADINGS.unknownRunIds}: ${counts.unknown}`);
-  }
-  return parts.join(" · ") || CANCEL_OUTCOME_HEADINGS.empty;
+  const clauses = cancelBuckets(details).map(
+    ({ rowPhrase, count }) => `${rowPhrase}: ${count}`,
+  );
+  return clauses.join(" · ") || CANCEL_BUCKET_PRESENTATION.empty.rowPhrase;
 }
 
 /** One-line cancellation admission summary with the configured toggle hint. */

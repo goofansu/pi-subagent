@@ -11,6 +11,8 @@ import {
 } from "./agent-tool-renderers.ts";
 import type { RenderableTheme } from "./rows.ts";
 import {
+  CANCEL_BUCKET_PRESENTATION,
+  cancelBuckets,
   resumeToolRowFacts,
   startToolRowFacts,
   steerToolRowFacts,
@@ -397,13 +399,6 @@ test("golden: every operation keeps its collapsed row text and styling", () => {
         },
       },
     ],
-    [
-      "cancel",
-      {
-        kind: "cancel",
-        outcomes: [{ kind: "requested", runId: run }],
-      },
-    ],
   ] as const;
   const rendered = Object.fromEntries(
     cases.map(([operation, details]) => [
@@ -428,7 +423,6 @@ test("golden: every operation keeps its collapsed row text and styling", () => {
     wait: `<toolOutput>1 Run still running</toolOutput>${hint}`,
     waitAll: `<toolOutput>No active Runs</toolOutput>${hint}`,
     result: `<toolOutput>explore · run-1 · completed · 12.3k characters</toolOutput>${hint}`,
-    cancel: `<toolOutput>Cancellation requested: 1</toolOutput>${hint}`,
   });
 });
 
@@ -564,35 +558,45 @@ test("cancellation call names deduplicated Runs or a width-fitted count", () => 
   assert.ok(narrow.every((line) => visibleWidth(line) <= 24));
 });
 
-test("cancellation uses the configured hint and omits it for an identical one-line response", () => {
+test("cancellation summary uses the aggregate tone, fits its width, and owns one configured hint", () => {
   const details = {
     kind: "cancel" as const,
     outcomes: [{ kind: "requested" as const, runId: "run-demo-1" }],
   };
   const actions: string[] = [];
-  const configured = formatCancellationSummary(
+  const toned = formatCancellationSummary(
     details,
-    plainTheme,
-    80,
+    markedTheme,
+    120,
     (action, description) => {
       actions.push(action);
       return `alt+o ${description}`;
     },
   );
-  assert.equal(configured, "Cancellation requested: 1 (alt+o to expand)");
+  assert.match(toned, /^<toolOutput>/);
   assert.deepEqual(actions, ["app.tools.expand"]);
-  assert.equal(configured.match(/to expand/g)?.length, 1);
+  assert.equal(toned.match(/to expand/g)?.length, 1);
 
-  assert.equal(
-    formatCancellationSummary(
-      { kind: "cancel", outcomes: [] },
-      plainTheme,
-      80,
-      (_action, description) => `alt+o ${description}`,
-    ),
-    "No run ids were given. (alt+o to expand)",
+  const configured = formatCancellationSummary(
+    details,
+    plainTheme,
+    36,
+    (_action, description) => `alt+o ${description}`,
   );
+  assert.ok(visibleWidth(configured) <= 36);
 
+  const empty = formatCancellationSummary(
+    { kind: "cancel", outcomes: [] },
+    plainTheme,
+    36,
+    (_action, description) => `alt+o ${description}`,
+  );
+  assert.ok(visibleWidth(empty) <= 36);
+  assert.equal(empty.match(/to expand/g)?.length, 1);
+
+  const summary = cancelBuckets(details)
+    .map(({ rowPhrase, count }) => `${rowPhrase}: ${count}`)
+    .join(" · ");
   const pair = agentToolRenderers("cancel");
   const state: AgentToolRendererState = {};
   lines(
@@ -602,28 +606,16 @@ test("cancellation uses the configured hint and omits it for an identical one-li
     }),
     80,
   );
-  const result = pair.renderResult(
-    {
-      content: [{ type: "text", text: "Cancellation requested: 1" }],
-      details,
-    },
-    { expanded: false, isPartial: false },
-    plainTheme,
-    context(state),
-  );
-  assert.equal(lines(result, 80).join("\n"), "Cancellation requested: 1");
-
-  const expanded = pair.renderResult(
-    {
-      content: [{ type: "text", text: "Cancellation requested: 1" }],
-      details,
-    },
-    { expanded: true, isPartial: false },
-    plainTheme,
-    context(state, { expanded: true }),
-  );
-  assert.equal(lines(expanded, 80).join("\n"), "Cancellation requested: 1");
-  assert.doesNotMatch(lines(expanded, 80).join("\n"), /to collapse/);
+  for (const expanded of [false, true]) {
+    const result = pair.renderResult(
+      { content: [{ type: "text", text: summary }], details },
+      { expanded, isPartial: false },
+      plainTheme,
+      context(state, { expanded }),
+    );
+    assert.equal(lines(result, 80).join("\n"), summary);
+    assert.doesNotMatch(lines(result, 80).join("\n"), /to (?:expand|collapse)/);
+  }
 });
 
 test("empty settled and partial cancellation rows have no inert toggle", () => {
@@ -637,7 +629,7 @@ test("empty settled and partial cancellation rows have no inert toggle", () => {
     {
       result: { content: [], details: { kind: "cancel", outcomes: [] } },
       options: { expanded: false, isPartial: false },
-      expected: "No run ids were given.",
+      expected: CANCEL_BUCKET_PRESENTATION.empty.rowPhrase,
     },
     {
       result: { content: [], details: { kind: "cancel", outcomes: [] } },

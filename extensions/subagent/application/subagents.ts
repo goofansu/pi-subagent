@@ -27,8 +27,6 @@ import {
   type RunId,
 } from "../domain/index.ts";
 import {
-  cancelToolRowFacts,
-  formatCancelOutcomes,
   formatNoActiveRuns,
   formatResult,
   formatResultRejection,
@@ -37,6 +35,7 @@ import {
   formatSteerOutcome,
   formatWaitOutcomes,
   noActiveWaitAllToolRowFacts,
+  presentCancelOutcomes,
   resultToolRowFacts,
   resumeToolRowFacts,
   startToolRowFacts,
@@ -271,9 +270,10 @@ const cancel = (
   Effect.gen(function* () {
     const supervisor = yield* SubagentSupervisor;
     const outcomes = yield* supervisor.cancel(distinct(input.ids));
+    const presentation = presentCancelOutcomes(outcomes);
     return {
-      text: formatCancelOutcomes(outcomes),
-      details: cancelToolRowFacts(outcomes),
+      text: presentation.text,
+      details: presentation.facts,
       deliveredRuns: [],
     };
   });

@@ -19,7 +19,6 @@ import {
 } from "../domain/index.ts";
 import { fixtureResult } from "../testing/presentation-fixtures.ts";
 import {
-  formatCancelOutcomes,
   formatNoActiveRuns,
   formatResultRejection,
   formatResumeOutcome,
@@ -28,9 +27,11 @@ import {
   formatToolInputRejected,
   formatUnknownAgent,
   formatWaitOutcomes,
+  presentCancelOutcomes,
   WAIT_RETURNED as RETURNED,
 } from "./prose.ts";
 import { formatResult } from "./run-card.ts";
+import { CANCEL_BUCKET_PRESENTATION } from "./tool-row-facts.ts";
 
 const RUN = runId("run-1");
 const OTHER_RUN = runId("run-2");
@@ -313,16 +314,34 @@ test("agent_cancel separates request, idempotence, terminal, and unknown", () =>
   ];
 
   assert.equal(
-    formatCancelOutcomes(outcomes),
-    "Cancellation requested: run-1. Each Run stops when its execution and " +
+    presentCancelOutcomes(outcomes).text,
+    `${CANCEL_BUCKET_PRESENTATION.requested.rowPhrase}: run-1. Each Run stops when its execution and ` +
       "cleanup finish, or settles cancelled once its cleanup outlives the " +
       "cleanup budget; it keeps whatever output it produced and still sends " +
       "its own notification. " +
-      "Already cancelling: run-2. The first request stands and this one " +
+      `${CANCEL_BUCKET_PRESENTATION["already requested"].rowPhrase}: run-2. The first request stands and this one ` +
       "changed nothing. " +
-      "Already finished, result kept: run-3 (completed). " +
-      "Unknown run ids: run-4.",
+      `${CANCEL_BUCKET_PRESENTATION["already terminal"].rowPhrase}: run-3 (completed). ` +
+      `${CANCEL_BUCKET_PRESENTATION.unknown.rowPhrase}: run-4.`,
   );
+});
+
+test("agent_cancel presents model text and row facts together", () => {
+  const outcomes: CancelOutcome[] = [
+    { outcome: "admitted", runId: RUN },
+    { outcome: "unknown Run", runId: OTHER_RUN },
+  ];
+  const presentation = presentCancelOutcomes(outcomes);
+
+  assert.match(presentation.text, /run-1/);
+  assert.match(presentation.text, /run-2/);
+  assert.deepEqual(presentation.facts, {
+    kind: "cancel",
+    outcomes: [
+      { kind: "requested", runId: RUN },
+      { kind: "unknown", runId: OTHER_RUN },
+    ],
+  });
 });
 
 test("agent_cancel covers every outcome and every terminal status", () => {
@@ -336,7 +355,7 @@ test("agent_cancel covers every outcome and every terminal status", () => {
     { outcome: "unknown Run", runId: RUN },
   ];
   for (const outcome of outcomes) {
-    rendered.set(outcome.outcome, formatCancelOutcomes([outcome]));
+    rendered.set(outcome.outcome, presentCancelOutcomes([outcome]).text);
   }
 
   coversEveryOutcome(CANCEL_OUTCOMES, rendered);
@@ -345,7 +364,10 @@ test("agent_cancel covers every outcome and every terminal status", () => {
 });
 
 test("agent_cancel with no ids says so", () => {
-  assert.equal(formatCancelOutcomes([]), "No run ids were given.");
+  assert.equal(
+    presentCancelOutcomes([]).text,
+    CANCEL_BUCKET_PRESENTATION.empty.rowPhrase,
+  );
 });
 
 // ── agent_wait and agent_wait_all ────────────────────────────────────────────

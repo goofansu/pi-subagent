@@ -24,6 +24,10 @@ import type {
 } from "../domain/index.ts";
 import { formatResult } from "./run-card.ts";
 import {
+  CANCEL_BUCKET_PRESENTATION,
+  type CancelToolRowFacts,
+  cancelBuckets,
+  cancelToolRowFacts,
   formatProfileDiagnosticLines,
   resumeOutcomeSentence,
   startOutcomeSentence,
@@ -91,14 +95,10 @@ export function formatSteerOutcome(
 /* agent_cancel                                                        */
 /* ------------------------------------------------------------------ */
 
-/** Canonical cancellation bucket names shared by model and collapsed text. */
-export const CANCEL_OUTCOME_HEADINGS = {
-  requested: "Cancellation requested",
-  alreadyCancelling: "Already cancelling",
-  alreadyFinished: "Already finished, result kept",
-  unknownRunIds: "Unknown run ids",
-  empty: "No run ids were given.",
-} as const;
+export interface CancelPresentation {
+  readonly text: string;
+  readonly facts: CancelToolRowFacts;
+}
 
 /**
  * `agent_cancel`, grouped by what happened rather than listed per id.
@@ -106,69 +106,41 @@ export const CANCEL_OUTCOME_HEADINGS = {
  * Cancelling ten Runs and reading ten sentences is worse than reading four
  * groups, and the grouping is what makes the one distinction that matters
  * legible: an admitted *request* is not a terminal cancellation, and the
- * notice that arrives later is.
+ * notice that arrives later is. This is the operation's one presentation
+ * call: prose and facts are made from the same outcomes together.
  */
-export function formatCancelOutcomes(
+export function presentCancelOutcomes(
   outcomes: readonly CancelOutcome[],
-): string {
-  const admitted: RunId[] = [];
-  const idempotent: RunId[] = [];
-  const terminal: { readonly runId: RunId; readonly status: string }[] = [];
-  const unknown: RunId[] = [];
-
-  for (const outcome of outcomes) {
-    switch (outcome.outcome) {
-      case "admitted":
-        admitted.push(outcome.runId);
-        break;
-      case "idempotent":
-        idempotent.push(outcome.runId);
-        break;
-      case "already completed":
-      case "already failed":
-      case "already cancelled":
-        terminal.push({
-          runId: outcome.runId,
-          status: outcome.outcome.slice("already ".length),
-        });
-        break;
-      case "unknown Run":
-        unknown.push(outcome.runId);
-        break;
+): CancelPresentation {
+  const facts = cancelToolRowFacts(outcomes);
+  const parts = cancelBuckets(facts).map((bucket): string => {
+    switch (bucket.kind) {
+      case "requested":
+        return (
+          `${bucket.rowPhrase}: ${bucket.runIds.join(", ")}. Each Run stops when ` +
+          "its execution and cleanup finish, or settles cancelled once its cleanup " +
+          "outlives the cleanup budget; it keeps whatever output it produced and " +
+          "still sends its own notification."
+        );
+      case "already requested":
+        return (
+          `${bucket.rowPhrase}: ${bucket.runIds.join(", ")}. The first request stands ` +
+          "and this one changed nothing."
+        );
+      case "already terminal":
+        return `${bucket.rowPhrase}: ${bucket.runs
+          .map((entry) => `${entry.runId} (${entry.phase})`)
+          .join(", ")}.`;
+      case "unknown":
+        return `${bucket.rowPhrase}: ${bucket.runIds.join(", ")}.`;
       default:
-        unreachable(outcome);
+        return unreachable(bucket);
     }
+  });
+  if (parts.length === 0) {
+    parts.push(CANCEL_BUCKET_PRESENTATION.empty.rowPhrase);
   }
-
-  const parts: string[] = [];
-  if (admitted.length > 0) {
-    parts.push(
-      `${CANCEL_OUTCOME_HEADINGS.requested}: ${admitted.join(", ")}. Each Run stops when ` +
-        "its execution and cleanup finish, or settles cancelled once its cleanup " +
-        "outlives the cleanup budget; it keeps whatever output it produced and " +
-        "still sends its own notification.",
-    );
-  }
-  if (idempotent.length > 0) {
-    parts.push(
-      `${CANCEL_OUTCOME_HEADINGS.alreadyCancelling}: ${idempotent.join(", ")}. The first request stands ` +
-        "and this one changed nothing.",
-    );
-  }
-  if (terminal.length > 0) {
-    parts.push(
-      `${CANCEL_OUTCOME_HEADINGS.alreadyFinished}: ${terminal
-        .map((entry) => `${entry.runId} (${entry.status})`)
-        .join(", ")}.`,
-    );
-  }
-  if (unknown.length > 0) {
-    parts.push(
-      `${CANCEL_OUTCOME_HEADINGS.unknownRunIds}: ${unknown.join(", ")}.`,
-    );
-  }
-  if (parts.length === 0) parts.push(CANCEL_OUTCOME_HEADINGS.empty);
-  return parts.join(" ");
+  return { text: parts.join(" "), facts };
 }
 
 /* ------------------------------------------------------------------ */
