@@ -19,12 +19,13 @@ import type { Backend, BackendAgent } from "../../backend/contract.ts";
 import { backendId, type Profile } from "../../domain/index.ts";
 import {
   BACKEND_CONFORMANCE_SCENARIO_TABLE,
-  type BackendConformanceFixture,
   type BackendConformanceRig,
+  type BackendConformanceRigStructure,
   type BackendConformanceScenario,
   type BackendConformanceScenarioOverride,
   type BackendConformanceScenarioRow,
   composeConformanceFixture,
+  conformanceRigStructure,
 } from "../conformance.ts";
 import { correlateRuns } from "../correlate.ts";
 import type { ResourceCountersSnapshot } from "../fakes/counters.ts";
@@ -126,8 +127,7 @@ function claudeFixture(
   scripts: readonly ClaudeScript[],
   row: BackendConformanceScenarioRow,
   instrumentation: ClaudeInstrumentation | undefined,
-): BackendConformanceFixture {
-  const { providerStopsOnRequest = true, ...parts } = row;
+) {
   const standIn = createStandInClaudeQuery({ scripts });
   const live = { count: 0 };
 
@@ -172,7 +172,7 @@ function claudeFixture(
     instrumentation?.emitCleanupObservationOnScopeClose === true;
   const backend = instrumentDecisions
     ? observeDecisions(correlated, {
-        trace: parts.trace,
+        trace: row.trace,
         recordCompetingDecisionAfterDecision:
           instrumentation?.recordCompetingDecisionAfterDecision ?? false,
         emitCleanupObservationOnScopeClose:
@@ -189,8 +189,6 @@ function claudeFixture(
         : { fields: instrumentation.profileFields }),
     },
     counters,
-    providerStopsOnRequest,
-    ...parts,
   };
 }
 
@@ -640,6 +638,16 @@ const CLAUDE_OVERRIDES: Partial<
 
 /** Claude declares every capability and skips no shared scenario. */
 const CLAUDE_SKIPS: readonly BackendConformanceScenario[] = [];
+
+/** Structural declarations for the Claude conformance rig. */
+export function claudeConformanceStructure(): BackendConformanceRigStructure {
+  return conformanceRigStructure({
+    name: "ClaudeBackend",
+    scripts: CLAUDE_SCRIPTS,
+    skips: CLAUDE_SKIPS,
+    overrides: CLAUDE_OVERRIDES,
+  });
+}
 
 export function claudeConformanceRig(): BackendConformanceRig {
   return {

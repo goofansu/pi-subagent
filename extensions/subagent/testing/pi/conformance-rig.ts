@@ -42,12 +42,13 @@ import {
 import { DEFAULT_BACKEND_ID, type Profile } from "../../domain/index.ts";
 import {
   BACKEND_CONFORMANCE_SCENARIO_TABLE,
-  type BackendConformanceFixture,
   type BackendConformanceRig,
+  type BackendConformanceRigStructure,
   type BackendConformanceScenario,
   type BackendConformanceScenarioOverride,
   type BackendConformanceScenarioRow,
   composeConformanceFixture,
+  conformanceRigStructure,
 } from "../conformance.ts";
 import type { ResourceCountersSnapshot } from "../fakes/counters.ts";
 import { correlateRuns } from "./correlate.ts";
@@ -247,8 +248,7 @@ function piFixture(
   scripts: readonly PiScript[],
   row: BackendConformanceScenarioRow,
   instrumentation: PiInstrumentation | undefined,
-): BackendConformanceFixture {
-  const { providerStopsOnRequest = true, ...parts } = row;
+) {
   const standIn = createStandInPiSession({ scripts });
   const live = { count: 0 };
   let opens = 0;
@@ -301,7 +301,7 @@ function piFixture(
 
   return {
     backend: observeDecisions(gated, {
-      trace: parts.trace,
+      trace: row.trace,
       holdAfterExecute: instrumentation?.holdAfterExecute ?? false,
       recordCompetingDecisionAfterDecision:
         instrumentation?.recordCompetingDecisionAfterDecision ?? false,
@@ -315,8 +315,6 @@ function piFixture(
         : { fields: instrumentation.profileFields }),
     },
     counters,
-    providerStopsOnRequest,
-    ...parts,
   };
 }
 
@@ -655,6 +653,16 @@ const PI_OVERRIDES: Partial<
 
 /** Pi declares every capability and skips no shared scenario. */
 const PI_SKIPS: readonly BackendConformanceScenario[] = [];
+
+/** Structural declarations for the Pi conformance rig. */
+export function piConformanceStructure(): BackendConformanceRigStructure {
+  return conformanceRigStructure({
+    name: "PiBackend",
+    scripts: PI_SCRIPTS,
+    skips: PI_SKIPS,
+    overrides: PI_OVERRIDES,
+  });
+}
 
 export function piConformanceRig(): BackendConformanceRig {
   return {

@@ -22,12 +22,13 @@ import {
 } from "../../domain/index.ts";
 import {
   BACKEND_CONFORMANCE_SCENARIO_TABLE,
-  type BackendConformanceFixture,
   type BackendConformanceRig,
+  type BackendConformanceRigStructure,
   type BackendConformanceScenario,
   type BackendConformanceScenarioOverride,
   type BackendConformanceScenarioRow,
   composeConformanceFixture,
+  conformanceRigStructure,
 } from "../conformance.ts";
 import {
   createFakeOneShotBackend,
@@ -102,11 +103,10 @@ function fixtureOf(
   runScripts: readonly FakeRunScript[],
   row: BackendConformanceScenarioRow,
   instrumentation: FakeInstrumentation | undefined,
-): BackendConformanceFixture {
-  const { providerStopsOnRequest = true, ...parts } = row;
+) {
   const handle = build(kind, {
     scripts: runScripts,
-    ...(parts.trace === undefined ? {} : { trace: parts.trace }),
+    ...(row.trace === undefined ? {} : { trace: row.trace }),
     ...(instrumentation?.diagnose === undefined
       ? {}
       : { diagnose: instrumentation.diagnose }),
@@ -119,8 +119,6 @@ function fixtureOf(
     backend: handle.backend,
     profile: { ...profile, backend: handle.backend.id },
     counters: handle.counters,
-    providerStopsOnRequest,
-    ...parts,
   };
 }
 
@@ -413,6 +411,19 @@ const ONE_SHOT_OVERRIDES: Partial<
     },
   },
 };
+
+/** Structural declarations for one of the two fake conformance rigs. */
+export function fakeConformanceStructure(
+  kind: FakeKind,
+): BackendConformanceRigStructure {
+  const oneShot = kind === "one-shot";
+  return conformanceRigStructure({
+    name: oneShot ? "FakeOneShotBackend" : "FakeResumableBackend",
+    scripts: FAKE_SCRIPTS,
+    skips: oneShot ? ONE_SHOT_SKIPS : [],
+    overrides: oneShot ? ONE_SHOT_OVERRIDES : {},
+  });
+}
 
 export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
   const skips = kind === "one-shot" ? ONE_SHOT_SKIPS : [];

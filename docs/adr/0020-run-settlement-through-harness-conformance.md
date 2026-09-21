@@ -4,7 +4,7 @@
 
 ## Status after M7 (2026-09-03)
 
-**Settlement through conformance is what the shared suite is.** This ADR's rule — that Run settlement is proven by a capability-aware suite every backend runs rather than per adapter — is the shared conformance suite: thirty-seven scenarios, both fakes and both real adapters, no skip that a declared capability does not drive. The 1.x harness conformance kit it named was deleted at M7.
+**Settlement through conformance is what the shared suite is.** This ADR's rule — that Run settlement is proven by a capability-aware suite every backend runs rather than per adapter — is the shared conformance suite: thirty-seven scenarios, both fakes and both real adapters, no skip that a declared capability does not drive. The suite's scenario table is declared once. The 1.x harness conformance kit it named was deleted at M7.
 
 The glossary in [CONTEXT.md](../../CONTEXT.md) records what replaced each 1.x
 abstraction and how the product is built now. Everything else here is kept

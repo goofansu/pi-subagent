@@ -502,6 +502,13 @@ unresolved waiters, and open BackendAgents. Every race, backpressure, fault,
 and leak test asserts it reads zero after the Session Scope closes, which turns
 "nothing leaked" from a hope into an assertion.
 
+**Conformance scenario table** — the one declaration, per scenario, of what the
+shared backend conformance suite does and expects, typed over the scenario list.
+
+**Conformance rig** — a backend's adapter to the shared conformance suite. It
+supplies a script vocabulary, counters, Run correlation, instrumentation, an
+explicit skip list, and reasoned overrides for provider-shaped differences.
+
 **Host boundary** — the `host/` module plus the entry point: the one place
 where a Pi callback crosses into Effect. It is the only place
 `Effect.runPromise` and `ManagedRuntime` may appear, and the only place that
