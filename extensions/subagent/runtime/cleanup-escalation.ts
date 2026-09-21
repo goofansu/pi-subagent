@@ -130,17 +130,17 @@ export function makeCleanupEscalation(
   ): Effect.Effect<void> =>
     Effect.suspend(() => {
       const record = records.get(subagentId);
-      if (record === undefined || record.agent !== agent) {
-        return Effect.die(
-          new Error(`${subagentId} has no matching BackendAgent record`),
-        );
-      }
-      // The Subagent Scope owns the BackendAgent and anything else its adapter
-      // acquired. Closing that scope is therefore the complete agent close.
+      // Normally the Subagent Scope owns the BackendAgent and everything else
+      // its adapter acquired, so closing that scope is the complete close. A
+      // record may already be gone (or no longer name this agent) during
+      // disposal; close the supplied agent directly rather than turning
+      // bounded Session cleanup into a defect.
+      const close =
+        record !== undefined && record.agent === agent
+          ? Scope.close(record.scope, Exit.void)
+          : agent.close();
       return Effect.gen(function* () {
-        const closed = yield* finishesWithinBudget(
-          Scope.close(record.scope, Exit.void),
-        );
+        const closed = yield* finishesWithinBudget(close);
         if (!closed) counters.count("cleanupEscalations");
       });
     });

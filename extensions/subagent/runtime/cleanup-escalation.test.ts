@@ -30,6 +30,22 @@ interface CleanupRig {
   readonly closes: () => number;
 }
 
+function closingAgent(
+  close: Effect.Effect<void>,
+  onClose: () => void,
+): BackendAgent {
+  return {
+    capabilities: {
+      resume: true,
+      steer: false,
+      terminalTranscriptSnapshot: false,
+    },
+    admitResume: () => "admitted",
+    execute: () => Effect.die("cleanup tests do not execute a Run"),
+    close: () => Effect.sync(onClose).pipe(Effect.andThen(close)),
+  };
+}
+
 function withCleanup<A>(
   close: Effect.Effect<void> = Effect.void,
   body: (rig: CleanupRig) => Effect.Effect<A>,
@@ -38,19 +54,9 @@ function withCleanup<A>(
   const records = makeSubagentRecords();
   const id = subagentId("subagent-cleanup");
   let closeCalls = 0;
-  const agent: BackendAgent = {
-    capabilities: {
-      resume: true,
-      steer: false,
-      terminalTranscriptSnapshot: false,
-    },
-    admitResume: () => "admitted",
-    execute: () => Effect.die("cleanup tests do not execute a Run"),
-    close: () =>
-      Effect.sync(() => {
-        closeCalls += 1;
-      }).pipe(Effect.andThen(close)),
-  };
+  const agent = closingAgent(close, () => {
+    closeCalls += 1;
+  });
 
   return Effect.runPromise(
     Effect.gen(function* () {
@@ -242,4 +248,62 @@ test("a post-settlement BackendAgent close overrun counts once and yields nothin
   assert.equal(value.result, undefined);
   assert.equal(value.counters.cleanupEscalations, 1);
   assert.equal(value.closes, 1);
+});
+
+test("a missing record falls back to a bounded close of the supplied BackendAgent", async () => {
+  const gate = await Effect.runPromise(Deferred.make<void>());
+  const value = await withCleanup(
+    Effect.uninterruptible(Deferred.await(gate)),
+    (rig) =>
+      Effect.gen(function* () {
+        rig.records.clear();
+        const closing = yield* Effect.forkChild(
+          rig.cleanup.closeBackendAgent(rig.agent, rig.id),
+        );
+        yield* TestClock.adjust(1_001);
+        const result = yield* Fiber.join(closing);
+        yield* Deferred.succeed(gate, undefined);
+        return {
+          result,
+          counters: rig.counters.counters(),
+          closes: rig.closes(),
+        };
+      }),
+  );
+
+  assert.equal(value.result, undefined);
+  assert.equal(value.counters.cleanupEscalations, 1);
+  assert.equal(value.closes, 1);
+});
+
+test("a mismatched record falls back to a bounded close of the supplied BackendAgent", async () => {
+  const gate = await Effect.runPromise(Deferred.make<void>());
+  const value = await withCleanup(Effect.void, (rig) =>
+    Effect.gen(function* () {
+      let suppliedCloses = 0;
+      const supplied = closingAgent(
+        Effect.uninterruptible(Deferred.await(gate)),
+        () => {
+          suppliedCloses += 1;
+        },
+      );
+      const closing = yield* Effect.forkChild(
+        rig.cleanup.closeBackendAgent(supplied, rig.id),
+      );
+      yield* TestClock.adjust(1_001);
+      const result = yield* Fiber.join(closing);
+      yield* Deferred.succeed(gate, undefined);
+      return {
+        result,
+        counters: rig.counters.counters(),
+        recordAgentCloses: rig.closes(),
+        suppliedCloses,
+      };
+    }),
+  );
+
+  assert.equal(value.result, undefined);
+  assert.equal(value.counters.cleanupEscalations, 1);
+  assert.equal(value.recordAgentCloses, 0);
+  assert.equal(value.suppliedCloses, 1);
 });
