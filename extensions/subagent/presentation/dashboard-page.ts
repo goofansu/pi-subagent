@@ -60,10 +60,10 @@ import type { RenderableTheme } from "./rows.ts";
 import type { HandoffStatus } from "./views.ts";
 
 /** Whether the read this page is showing is in flight, answered, or lost. */
-export type DashboardPageStatus = "loading" | "ready" | "error";
+type DashboardPageStatus = "loading" | "ready" | "error";
 
 /** Which of the dashboard's three screens a page is. */
-export type DashboardPageKind = "overview" | "history" | "inspection";
+type DashboardPageKind = "overview" | "history" | "inspection";
 
 /**
  * Everything the dashboard knows about where it is: which page, what that page
@@ -231,7 +231,7 @@ export interface DashboardPageChrome {
  * that the dashboard is done, `draw` that what is on screen is stale. The host
  * owns all three mechanisms and none of the decisions.
  */
-export type DashboardPageAsk = "nothing" | "draw" | "read" | "close";
+type DashboardPageAsk = "nothing" | "draw" | "read" | "close";
 
 /**
  * A step: the page the event leads to, the screen it draws to, and what is
@@ -243,7 +243,7 @@ export type DashboardPageAsk = "nothing" | "draw" | "read" | "close";
  * painting here as well would paint the same page twice for every publication
  * a burst brings.
  */
-export interface DashboardPageStep {
+interface DashboardPageStep {
   readonly page: DashboardPage;
   readonly lines: readonly string[];
   readonly ask: DashboardPageAsk;
