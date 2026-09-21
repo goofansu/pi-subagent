@@ -6,11 +6,13 @@ import {
   type TranscriptItem,
 } from "../domain/index.ts";
 import type { RunInspection } from "../domain/inspection.ts";
-import { NO_FINAL_OUTPUT_REMAINS } from "./result-body.ts";
+import {
+  finalOutputSection,
+  resultFinalOutputFraming,
+} from "./final-output-section.ts";
 import type { RenderableTheme } from "./rows.ts";
 import {
   formatDiagnosticLine,
-  formatOutputTruncation,
   formatResultLinkLine,
   formatTruncation,
 } from "./run-card.ts";
@@ -113,40 +115,31 @@ export function inspectionBlocks(
   if (stored) {
     section(capture.outcome === "active" ? "Output so far" : "Final output");
     const output = interpretFinalOutput(stored);
-    const outputTruncation = formatOutputTruncation(
-      stored.truncation.truncatedOutputBytes,
-    );
     const truncation = formatTruncation(stored);
-    if (outputTruncation !== undefined) add("literal", outputTruncation);
-    switch (output.kind) {
-      case "retained":
-      case "retained-prefix":
-        add("markdown", output.output);
-        break;
-      case "removed":
-        add(
-          "literal",
-          capture.outcome === "active"
-            ? "No output remains in this snapshot."
-            : NO_FINAL_OUTPUT_REMAINS,
-        );
-        break;
-      case "absent":
-        add(
-          "literal",
-          capture.outcome === "active"
-            ? "No output produced yet."
-            : "No final output was produced.",
-        );
-        if (stored.transcript.length === 0 && truncation === undefined)
-          add(
-            "literal",
-            capture.outcome === "active"
-              ? "Active snapshot available but empty: no output or transcript retained yet."
-              : "Result available but empty: no output or transcript was retained.",
-          );
-        break;
-    }
+    const showEmptyRecordNote =
+      stored.transcript.length === 0 && truncation === undefined;
+    const outputSection = finalOutputSection(
+      output,
+      result === undefined
+        ? {
+            capture: "active",
+            status:
+              capture.summary.phase === "finalizing" ? "finalizing" : "running",
+            presentation: { kind: "inspection", showEmptyRecordNote },
+          }
+        : resultFinalOutputFraming(result, {
+            kind: "inspection",
+            showEmptyRecordNote,
+          }),
+    );
+    if (outputSection.qualifier !== undefined)
+      add("literal", outputSection.qualifier);
+    if (outputSection.body !== undefined)
+      add(outputSection.body.kind, outputSection.body.text);
+    if (outputSection.explanation !== undefined)
+      add("literal", outputSection.explanation);
+    if (outputSection.recordNote !== undefined)
+      add(outputSection.recordNote.kind, outputSection.recordNote.text);
     if (truncation) add("literal", truncation);
     if (stored.errorMessage !== undefined) {
       section("Error");

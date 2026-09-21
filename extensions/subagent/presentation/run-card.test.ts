@@ -14,6 +14,7 @@ import {
   fixtureUsage,
 } from "../testing/presentation-fixtures.ts";
 import {
+  formatResult,
   formatToolEntry,
   RECENT_TRANSCRIPT_ITEMS,
   runCard,
@@ -51,7 +52,7 @@ test("a live card comes from a snapshot and carries no output", () => {
     accounting: "1.2k in · 3 turns",
   });
   // The published index does not carry output, so a live card cannot claim to.
-  assert.equal(card.output, undefined);
+  assert.equal(card.finalOutput, undefined);
 });
 
 test("a live card of a finalizing Run says finalizing, not completed", () => {
@@ -84,7 +85,9 @@ test("a terminal card comes from the stored Result and carries the answer", () =
     status: "completed in 12.4s",
     tone: "success",
     accounting: "12.3k in / 4.5k out · 3 turns · claude-sonnet-4-6",
-    output: "done",
+    finalOutput: {
+      body: { kind: "markdown", text: "done" },
+    },
   });
 });
 
@@ -100,10 +103,16 @@ test("a terminal card carries the failed and cancelled tones and bodies", () => 
 
   assert.equal(failed.tone, "error");
   assert.equal(failed.status, "failed after 12.4s");
-  assert.match(failed.output ?? "", /^This Run failed before completing\./);
+  assert.match(
+    failed.finalOutput?.body?.text ?? "",
+    /^This Run failed before completing\./,
+  );
   assert.equal(cancelled.tone, "error");
   assert.equal(cancelled.status, "cancelled after 12.4s");
-  assert.match(cancelled.output ?? "", /^The Run was cancelled/);
+  assert.match(
+    cancelled.finalOutput?.explanation ?? "",
+    /^The Run was cancelled/,
+  );
 });
 
 test("terminal cards explain when all final output was removed", () => {
@@ -128,18 +137,21 @@ test("terminal cards explain when all final output was removed", () => {
 
   for (const card of [completed, failed, cancelled]) {
     assert.equal(
-      card.outputTruncation,
+      card.finalOutput?.qualifier,
       "17 bytes of the final output were cut.",
     );
-    assert.match(card.output ?? "", /No final output remains in the Result\./);
+    assert.match(
+      card.finalOutput?.explanation ?? "",
+      /No final output remains in the Result\./,
+    );
     assert.doesNotMatch(
-      card.output ?? "",
+      card.finalOutput?.explanation ?? "",
       /before producing output|without output/,
     );
   }
-  assert.match(failed.output ?? "", /Failure: boom/);
+  assert.match(failed.finalOutput?.body?.text ?? "", /Failure: boom/);
   assert.match(
-    cancelled.output ?? "",
+    cancelled.finalOutput?.body?.text ?? "",
     /cancelled before finishing \(shutdown\)/,
   );
 });
@@ -246,12 +258,26 @@ test("the expanded card carries every section a Run reported", () => {
     "Links:",
     "  session file (native-session): /tmp/session.json",
     "",
-    "Dropped to stay within bounds: 4 transcript items, 1 tool entries, 53,616 bytes of transcript text, 17 bytes of tool output, 4,464 bytes of the final output.",
+    "Dropped to stay within bounds: 4 transcript items, 1 tool entries, 53,616 bytes of transcript text, 17 bytes of tool output.",
     "",
     "4,464 bytes of the final output were cut.",
     "",
     "the answer",
   ]);
+});
+
+test("a retained prefix states its cut exactly once", () => {
+  const text = formatResult(
+    fixtureResult({
+      finalOutput: "answer pre",
+      truncation: { truncatedOutputBytes: 4_464 },
+    }),
+  );
+
+  assert.equal(
+    text.match(/4,464 bytes of the final output were cut\./g)?.length,
+    1,
+  );
 });
 
 test("a Run that reported nothing shows only what it has", () => {

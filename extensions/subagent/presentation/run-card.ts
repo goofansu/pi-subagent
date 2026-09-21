@@ -31,13 +31,20 @@ import type {
   TranscriptItem,
 } from "../domain/index.ts";
 import {
+  interpretFinalOutput,
   type NotificationAccounting,
   toNotificationAccounting,
   transcriptItemText,
 } from "../domain/index.ts";
 import { completionViewOfResult } from "./completion-view.ts";
+import {
+  type FinalOutputSection,
+  finalOutputSection,
+  finalOutputSectionLines,
+  formatByteCount,
+  resultFinalOutputFraming,
+} from "./final-output-section.ts";
 import { formatNotificationAccounting } from "./notification-text.ts";
-import { formatResultBody } from "./result-body.ts";
 import {
   formatRunPhase,
   formatTokenCount,
@@ -100,8 +107,6 @@ export interface RunCard {
   readonly links?: readonly string[];
   /** What bounding dropped, when it dropped anything. */
   readonly truncation?: string;
-  /** A direct warning immediately before a bounded final output. */
-  readonly outputTruncation?: string;
   /**
    * The Run's answer, present only for a terminal card.
    *
@@ -109,7 +114,7 @@ export interface RunCard {
    * carry output, so a live card that claimed to have it would be reading
    * something it is not allowed to read.
    */
-  readonly output?: string;
+  readonly finalOutput?: FinalOutputSection;
 }
 
 /** One transcript item as a line: who said it, and what. */
@@ -160,20 +165,6 @@ export function formatContextGauge(context: {
   return `context ${used} / ${formatTokenCount(context.window)} (${percent}%)`;
 }
 
-/** A byte count with stable thousands separators for prose. */
-function formatByteCount(amount: number): string {
-  return amount.toLocaleString("en-US");
-}
-
-/** Warn that the retained final output is incomplete, using inspection vocabulary. */
-export function formatOutputTruncation(
-  truncatedBytes: number,
-): string | undefined {
-  return truncatedBytes > 0
-    ? `${formatByteCount(truncatedBytes)} bytes of the final output were cut.`
-    : undefined;
-}
-
 /**
  * What bounding removed, when it removed anything.
  *
@@ -205,11 +196,6 @@ export function formatTruncation(
   if (truncation.truncatedToolOutputBytes > 0) {
     dropped.push(
       `${formatByteCount(truncation.truncatedToolOutputBytes)} bytes of tool output`,
-    );
-  }
-  if (truncation.truncatedOutputBytes > 0) {
-    dropped.push(
-      `${formatByteCount(truncation.truncatedOutputBytes)} bytes of the final output`,
     );
   }
   return dropped.length > 0
@@ -283,8 +269,9 @@ export function runCard(source: RunCardSource): RunCard {
   );
   const links = omitWhenEmpty(result.links.map(formatResultLinkLine));
   const truncation = formatTruncation(result);
-  const outputTruncation = formatOutputTruncation(
-    result.truncation.truncatedOutputBytes,
+  const finalOutput = finalOutputSection(
+    interpretFinalOutput(result),
+    resultFinalOutputFraming(result),
   );
   // Status and duration through the completion view, which is the same value
   // the widget's settled row and the notice header read.
@@ -307,8 +294,7 @@ export function runCard(source: RunCardSource): RunCard {
     ...(diagnostics === undefined ? {} : { diagnostics }),
     ...(links === undefined ? {} : { links }),
     ...(truncation === undefined ? {} : { truncation }),
-    ...(outputTruncation === undefined ? {} : { outputTruncation }),
-    output: formatResultBody(result),
+    finalOutput,
   };
 }
 
@@ -357,12 +343,10 @@ export function runCardLines(card: RunCard): readonly string[] {
     ...section("Links", card.links),
     ...(card.truncation === undefined ? [] : ["", card.truncation]),
   ];
-  if (card.output === undefined) return lines;
+  if (card.finalOutput === undefined) return lines;
   return [
     ...lines,
-    ...(card.outputTruncation === undefined ? [] : ["", card.outputTruncation]),
-    "",
-    card.output,
+    ...finalOutputSectionLines(card.finalOutput).flatMap((line) => ["", line]),
   ];
 }
 
