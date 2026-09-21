@@ -35,12 +35,7 @@
  */
 
 import { Effect, Fiber, type Scope } from "effect";
-import {
-  answeredEnding,
-  failedEnding,
-  type RunObservation,
-  type TerminalReconciliation,
-} from "../../domain/index.ts";
+import { failedEnding } from "../../domain/index.ts";
 import type { ExecutionIO, RunInput, TerminalBundle } from "../contract.ts";
 import {
   type ClaudeInput,
@@ -50,9 +45,13 @@ import {
 import type { ClaudeProbeCounters } from "./probe.ts";
 import type { ClaudeQuery, ClaudeQueryStream, Options } from "./query.ts";
 import {
-  type ClaudeTranslator,
+  CLAUDE_ATTACHMENT_FAILED_MESSAGE,
+  type ClaudeRunReport,
+  type ClaudeRunStep,
+  createClaudeRunEvidence,
+} from "./run-evidence.ts";
+import {
   confined,
-  confinedControl,
   createClaudeTranslator,
   isClaudeIdentity,
   readClaudeFrame,
@@ -62,41 +61,12 @@ import {
 export const CLOSED_BEFORE_EXECUTION_MESSAGE =
   "the Claude BackendAgent was closed before this Run could start";
 
-/**
- * What a Run says when the conversation identity could not be attached.
- *
- * One fixed message for every way a resumed Query goes wrong — a boundary
- * frame with no identity, a malformed one, one that differs from the retained
- * one, or a Query that could not be started at all — because they mean the
- * same thing to a reader: this Run could not be tied to the conversation it
- * was supposed to continue.
- *
- * Fixed rather than provider-authored, because the provider's own text about a
- * failed attachment is exactly the free-form string ADR-0024 keeps local.
- */
-export const CLAUDE_ATTACHMENT_FAILED_MESSAGE =
-  "the retained Claude conversation could not be attached to this Run";
-
 /** What a fresh Run says when its init frame carries no usable identity. */
 export const CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE =
   "the Claude query reported no usable conversation identity";
 
-/** What a Run says when the Query ended without ever reporting a result. */
-export const MISSING_CLAUDE_RESULT_MESSAGE =
-  "the Claude query ended without a terminal result";
-
-/** What a result frame the provider marked as an error reports. */
-export const RESULT_ERROR_CATEGORY = "Claude query reported an error";
-
 /** What a Query that could not be started reports. */
 export const QUERY_START_CATEGORY = "Claude query could not be started";
-
-/** What a Query that ended in an exception reports. */
-export const QUERY_FAILED_CATEGORY = "Claude query failed";
-
-/** What guidance the input stream would not take reports. */
-export const CONTROL_NOT_DELIVERED_CATEGORY =
-  "Claude guidance was not delivered";
 
 /**
  * How long silence may follow a Turn boundary with guidance outstanding.
@@ -137,14 +107,6 @@ export interface ClaudeExecutionContext {
   readonly probe: ClaudeProbeCounters;
 }
 
-/** One admitted Control, and what the provider has said about it. */
-interface PendingControl {
-  readonly text: string;
-  readonly uuid: string;
-  confirmed: boolean;
-  discarded: boolean;
-}
-
 export function runClaudeExecution(
   context: ClaudeExecutionContext,
   input: RunInput,
@@ -158,20 +120,12 @@ export function runClaudeExecution(
 
     const resumed = conversation.retained();
     const translator = createClaudeTranslator();
-    /** Input uuids this Run owns, so a correlation can be recognized. */
-    const owned = new Set<string>();
-    /** Woken when the one provider-visible Control slot frees. */
+    /** Woken when the fold says the one provider-visible Control slot freed. */
     const slotWaiters: (() => void)[] = [];
 
     let identity = resumed;
     let attached = resumed === undefined;
-    let visible: PendingControl | undefined;
-    let accepting = true;
-    let semanticComplete = false;
-    let awaitingTurnBoundary = false;
-    let successfulResult = false;
     let sawStderr = false;
-    let fatal: TerminalBundle | undefined;
 
     /* ---- the input stream, and the Query, as scoped resources ---- */
 
@@ -188,7 +142,11 @@ export function runClaudeExecution(
     );
 
     const promptUuid = globalThis.crypto.randomUUID();
-    owned.add(promptUuid);
+    const evidence = createClaudeRunEvidence({
+      promptUuid,
+      resumed: resumed !== undefined,
+      translator,
+    });
     stream.push(claudeInputMessage(input.prompt, promptUuid));
 
     // The execution owns the controller, which is what makes "the Query cannot
@@ -274,86 +232,102 @@ export function runClaudeExecution(
         return bundle;
       });
 
+    /**
+     * The one shutdown ritual for the client-owned input. The fold has already
+     * stopped acceptance, discarded outstanding guidance, and freed its slot
+     * before it reports `inputClosed`; execution only performs the resource
+     * effects and wakes the consumer that may be waiting on that slot.
+     */
+    const shutdownInput = (): void => {
+      for (const wake of slotWaiters.splice(0)) wake();
+      stream.close();
+    };
+
+    /** Publish one synchronous fold report in its declared order. */
+    const applyReport = (report: ClaudeRunReport): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        for (const observation of report.observations) {
+          yield* io.emit(observation);
+        }
+        if (evidence.controlSlotFree()) {
+          for (const wake of slotWaiters.splice(0)) wake();
+        }
+        if (!report.inputClosed) return;
+        shutdownInput();
+        if (report.next.step === "decided") {
+          yield* io.recordDecision(report.next.bundle);
+        }
+      });
+
+    /**
+     * Execution feeds terminal facts only at terminal call sites. Keep that
+     * fold/driver invariant and its defensive assertion in one place.
+     */
+    const terminalBundleFrom = (report: ClaudeRunReport): TerminalBundle => {
+      if (report.next.step === "decided" || report.next.step === "fatal") {
+        return report.next.bundle;
+      }
+      throw new Error(
+        `Claude Run evidence returned '${report.next.step}' for a terminal reading`,
+      );
+    };
+
+    const applyTerminalReport = (
+      report: ClaudeRunReport,
+    ): Effect.Effect<TerminalBundle> =>
+      Effect.gen(function* () {
+        yield* applyReport(report);
+        return terminalBundleFrom(report);
+      });
+
+    /** Identity remains execution evidence in this ticket's slice. */
+    const failIdentity = (): Effect.Effect<TerminalBundle> => {
+      conversation.lose();
+      return applyTerminalReport(
+        evidence.read({
+          kind: "external-fatal",
+          bundle: {
+            ending: failedEnding(
+              resumed === undefined
+                ? CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE
+                : CLAUDE_ATTACHMENT_FAILED_MESSAGE,
+            ),
+          },
+        }),
+      );
+    };
+
     if (started.outcome !== "started") {
       if (resumed !== undefined) conversation.lose();
       const diagnostic = confined(QUERY_START_CATEGORY);
-      yield* io.emit({ kind: "diagnostic", diagnostic });
-      return yield* withStderr({
-        ending: failedEnding(
-          resumed === undefined
-            ? diagnostic.message
-            : CLAUDE_ATTACHMENT_FAILED_MESSAGE,
-        ),
+      const report = evidence.read({
+        kind: "external-fatal",
+        observations: [{ kind: "diagnostic", diagnostic }],
+        bundle: {
+          ending: failedEnding(
+            resumed === undefined
+              ? diagnostic.message
+              : CLAUDE_ATTACHMENT_FAILED_MESSAGE,
+          ),
+        },
       });
+      const bundle = yield* applyTerminalReport(report);
+      return yield* withStderr(bundle);
     }
 
     /* ---- steering: one Control provider-visible at a time ---- */
 
-    const notDelivered: RunObservation = {
-      kind: "diagnostic",
-      diagnostic: confinedControl(CONTROL_NOT_DELIVERED_CATEGORY),
-    };
-
-    /** Free the one provider-visible slot and let a waiting consumer try. */
-    const freeSlot = (): void => {
-      visible = undefined;
-      for (const wake of slotWaiters.splice(0)) wake();
-    };
-
-    const discardOutstanding = (): void => {
-      if (visible !== undefined && !visible.confirmed) {
-        visible.discarded = true;
-        freeSlot();
-      }
-    };
-
-    const hasOutstanding = (): boolean =>
-      visible !== undefined && !visible.confirmed && !visible.discarded;
-
-    /**
-     * Take the provider's word that guidance was seen.
-     *
-     * The only two kinds of evidence there are: a user frame echoing the uuid
-     * the client pushed, and a result frame naming it as the input its turn
-     * answered. Neither is inferred from admission or from timing.
-     */
-    const confirm = (uuid: unknown): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const control = visible;
-        if (
-          typeof uuid !== "string" ||
-          control === undefined ||
-          control.uuid !== uuid ||
-          control.confirmed ||
-          control.discarded
-        ) {
-          return;
-        }
-        control.confirmed = true;
-        owned.add(control.uuid);
-        yield* io.emit({
-          kind: "message",
-          role: "user",
-          parts: [{ kind: "text", text: control.text }],
-        });
-        freeSlot();
-      });
-
     /**
      * Take one Control at a time, and only when one can actually be pushed.
-     *
-     * The consumer is deliberately **not eager**. It could drain the Control
-     * mailbox into an array of its own and push from there, and that would be
-     * worse in a way that matters: ADR-0026's mailbox is where pending
-     * guidance is bounded and where a caller learns at once that there is no
-     * room, and an adapter that emptied it into an unbounded array would have
-     * moved the queue somewhere with no bound and no answer for the caller. So
-     * a Control the provider is not ready for stays in the mailbox, which is
-     * where the bound is.
+     * The mailbox remains the one bounded queue; the fold owns only the single
+     * provider-visible slot.
      */
     const steerLoop = Effect.gen(function* () {
       for (;;) {
-        while (visible !== undefined && accepting && !semanticComplete) {
+        while (
+          !evidence.controlSlotFree() &&
+          evidence.takenControlProducesAnything()
+        ) {
           yield* Effect.promise(
             () =>
               new Promise<void>((resolve) => {
@@ -363,29 +337,26 @@ export function runClaudeExecution(
         }
         const control = yield* io.controls.take;
         if (control === undefined) return;
-        if (!accepting || semanticComplete || conversation.isClosed()) {
-          // The Run is settling. A Control taken now produces nothing at all:
-          // no push, no observation, no diagnostic. Admission already told the
-          // caller it was accepted, and nothing else about it is true.
+        if (
+          !evidence.takenControlProducesAnything() ||
+          conversation.isClosed()
+        ) {
+          // The Run is settling. A Control taken now produces nothing at all.
           continue;
         }
-        const pending: PendingControl = {
-          text: control.text,
-          uuid: globalThis.crypto.randomUUID(),
-          confirmed: false,
-          discarded: false,
-        };
-        visible = pending;
-        // `later` rather than `now`: the provider should finish the turn it
-        // is on and take this as guidance for the next one, which is what
-        // ADR-0018 means by ordered.
-        if (
-          !stream.push(claudeInputMessage(pending.text, pending.uuid, "later"))
-        ) {
-          pending.discarded = true;
-          freeSlot();
-          yield* io.emit(notDelivered);
+        const uuid = globalThis.crypto.randomUUID();
+        // `later` lets the provider finish its current turn before guidance.
+        if (!stream.push(claudeInputMessage(control.text, uuid, "later"))) {
+          yield* applyReport(evidence.read({ kind: "control-refused" }));
+          continue;
         }
+        yield* applyReport(
+          evidence.read({
+            kind: "control-visible",
+            text: control.text,
+            uuid,
+          }),
+        );
       }
     });
 
@@ -409,187 +380,82 @@ export function runClaudeExecution(
         ),
     );
 
-    /** Fail the Run for an identity that cannot establish its conversation. */
-    const failIdentity = (): void => {
-      conversation.lose();
-      fatal = {
-        ending: failedEnding(
-          resumed === undefined
-            ? CLAUDE_FRESH_IDENTITY_FAILED_MESSAGE
-            : CLAUDE_ATTACHMENT_FAILED_MESSAGE,
-        ),
-      };
-      accepting = false;
-      discardOutstanding();
-      freeSlot();
-      stream.close();
-    };
-
-    /** The successful bundle, read from the translator at the call boundary. */
-    const answeredBundle = (): TerminalBundle => ({
-      ending: answeredEnding(),
-      reconciliation: reconcile(translator),
-    });
-
-    /** Freeze the successful result at the boundary that made it final. */
-    const recordAnsweredDecision = (): Effect.Effect<void> =>
-      io.recordDecision(answeredBundle());
-
     const body = Effect.gen(function* () {
       const steering = yield* Effect.forkChild(steerLoop);
-      for (;;) {
-        const step = awaitingTurnBoundary
-          ? yield* Effect.timeout(nextFrame, TURN_BOUNDARY_WAIT_MILLIS).pipe(
-              Effect.match({
-                onFailure: () => ({ step: "timeout" }) as const,
-                onSuccess: (next) => next,
-              }),
-            )
-          : yield* nextFrame;
-        if (step.step === "timeout") {
-          discardOutstanding();
-          yield* io.emit(notDelivered);
-          semanticComplete = true;
-          yield* recordAnsweredDecision();
-          accepting = false;
-          freeSlot();
-          stream.close();
-          break;
-        }
-        // The Turn-boundary obligation is one bounded wait. A frame arriving
-        // within it is provider cooperation; later waits are governed by the
-        // state that frame establishes.
-        awaitingTurnBoundary = false;
-        if (step.step === "done") break;
-        if (step.step === "threw") {
-          if (!semanticComplete) {
-            if (resumed !== undefined) {
-              // A resumed Query that died is a failed attachment however far
-              // it got, so the conversation is lost. Losing it only at the
-              // boundary check would leave a Subagent whose next Run resumed
-              // an identity this one could not reach.
+      const drive = Effect.gen(function* () {
+        let next: ClaudeRunStep = { step: "continue" };
+        for (;;) {
+          const frame =
+            next.step === "await-turn-boundary"
+              ? yield* Effect.timeout(
+                  nextFrame,
+                  TURN_BOUNDARY_WAIT_MILLIS,
+                ).pipe(
+                  Effect.match({
+                    onFailure: () => ({ step: "timeout" }) as const,
+                    onSuccess: (read) => read,
+                  }),
+                )
+              : yield* nextFrame;
+
+          if (frame.step === "timeout") {
+            return yield* applyTerminalReport(
+              evidence.read({ kind: "turn-boundary-timeout" }),
+            );
+          }
+          if (frame.step === "done") {
+            return yield* applyTerminalReport(
+              evidence.read({ kind: "query-ended" }),
+            );
+          }
+          if (frame.step === "threw") {
+            if (next.step !== "decided" && resumed !== undefined) {
+              // A resumed Query that died before deciding is a failed
+              // attachment however far it got.
               conversation.lose();
             }
-            fatal = {
-              ending: failedEnding(
-                resumed === undefined
-                  ? confined(QUERY_FAILED_CATEGORY).message
-                  : CLAUDE_ATTACHMENT_FAILED_MESSAGE,
-              ),
-            };
-            yield* io.emit({
-              kind: "diagnostic",
-              diagnostic: confined(QUERY_FAILED_CATEGORY),
-            });
+            return yield* applyTerminalReport(
+              evidence.read({ kind: "query-threw" }),
+            );
           }
-          break;
-        }
 
-        // The Run is semantically over and the input is closed; what is left
-        // is letting the Query wind itself down. Reading to the end is how a
-        // Query shuts down gracefully rather than being aborted from under a
-        // subprocess that was about to finish anyway — and it is what leaves
-        // the window in which a terminal answer already observed survives a
-        // cancel that arrives afterwards.
-        if (semanticComplete) continue;
+          // Once decided, only drain the Query so it can wind down gracefully.
+          if (next.step === "decided") continue;
 
-        const reading = readClaudeFrame(step.frame);
-        // Replayed history is not this Run's work, whichever Run it belonged
-        // to. The provider says so on the frame; it is taken at its word.
-        if (reading.isReplay) continue;
-        // A resumed Query may replay user, assistant, and system history
-        // before its attachment boundary. None of it is an observation or an
-        // accounting input for this Run.
-        if (!attached && !reading.isIdentityBoundary) continue;
+          const reading = readClaudeFrame(frame.frame);
+          // Identity attachment and replay dropping remain execution evidence
+          // in this slice; the fold receives only frames this Run owns.
+          if (reading.isReplay) continue;
+          if (!attached && !reading.isIdentityBoundary) continue;
 
-        if (reading.isIdentityBoundary) {
-          if (
-            !isClaudeIdentity(reading.identity) ||
-            (identity !== undefined && reading.identity !== identity)
+          if (reading.isIdentityBoundary) {
+            if (
+              !isClaudeIdentity(reading.identity) ||
+              (identity !== undefined && reading.identity !== identity)
+            ) {
+              return yield* failIdentity();
+            }
+            identity ??= reading.identity;
+            attached = true;
+            conversation.retain(reading.identity);
+          } else if (
+            reading.identity !== undefined &&
+            (!isClaudeIdentity(reading.identity) ||
+              (identity !== undefined && reading.identity !== identity))
           ) {
-            failIdentity();
-            break;
+            return yield* failIdentity();
           }
-          identity ??= reading.identity;
-          attached = true;
-          conversation.retain(reading.identity);
-        } else if (reading.identity !== undefined) {
-          if (
-            !isClaudeIdentity(reading.identity) ||
-            (identity !== undefined && reading.identity !== identity)
-          ) {
-            failIdentity();
-            break;
-          }
-        }
 
-        if (reading.kind === "user") {
-          yield* confirm(reading.uuid);
-          // A steering echo is confirmation and nothing else: translating it
-          // would put the same guidance in the transcript twice.
-          if (!reading.isToolResult) continue;
+          const report = evidence.read({ kind: "frame", frame: reading });
+          yield* applyReport(report);
+          next = report.next;
+          if (next.step === "fatal") return next.bundle;
         }
-        if (reading.kind === "result") yield* confirm(reading.correlation);
-
-        for (const observation of translator.frame(reading).observations) {
-          yield* io.emit(observation);
-        }
-
-        if (reading.kind !== "result") continue;
-
-        if (reading.isError) {
-          const diagnostic = confined(RESULT_ERROR_CATEGORY);
-          yield* io.emit({ kind: "diagnostic", diagnostic });
-          fatal = { ending: failedEnding(diagnostic.message) };
-          accepting = false;
-          discardOutstanding();
-          freeSlot();
-          stream.close();
-          break;
-        }
-
-        successfulResult = true;
-        const correlated =
-          typeof reading.correlation === "string" &&
-          owned.has(reading.correlation);
-        if (hasOutstanding() && !correlated) {
-          // A valid result the provider could not tie to an input this Run
-          // owns cannot prove that outstanding guidance belongs to a later
-          // turn. Keep the answer, fabricate no user observation, and stop
-          // holding a Query open for input that may never be taken.
-          //
-          // A discarded Control produces nothing from here on, and that is the
-          // decision rather than an oversight: if the provider echoes it after
-          // this point the echo is ignored, because the alternative is a Run
-          // that either never settles or grows a user message *after* its
-          // answer depending on how the race went. Admission told the caller
-          // the Control was accepted, which was true; nothing else about it is.
-          discardOutstanding();
-        }
-        if (hasOutstanding()) {
-          // An adapter-local Turn boundary. The Run stays active until the
-          // guidance the provider has already been given has been answered,
-          // but silence after this boundary is bounded on the runtime clock.
-          awaitingTurnBoundary = true;
-          continue;
-        }
-        semanticComplete = true;
-        yield* recordAnsweredDecision();
-        accepting = false;
-        freeSlot();
-        stream.close();
-      }
-
-      accepting = false;
-      freeSlot();
-      yield* Fiber.interrupt(steering);
-      if (fatal !== undefined) return yield* withStderr(fatal);
-      if (successfulResult) {
-        return yield* withStderr(answeredBundle());
-      }
-      return yield* withStderr({
-        ending: failedEnding(MISSING_CLAUDE_RESULT_MESSAGE),
       });
+
+      const bundle = yield* drive;
+      yield* Fiber.interrupt(steering);
+      return yield* withStderr(bundle);
     });
 
     // The decision was frozen synchronously at the Turn boundary. Interruption
@@ -598,26 +464,4 @@ export function runClaudeExecution(
     // the stop request.
     return yield* Effect.onInterrupt(body, () => emitStderrOnce());
   });
-}
-
-/**
- * What a Claude Run's terminal snapshot can honestly replace.
- *
- * Complete successful result text, turns, and the model, and **never a
- * transcript**. There is no authoritative
- * message list to read at the end of a Query — the frames were the transcript,
- * and they have already been reported — so a snapshot claiming one would be a
- * snapshot the adapter had made up. That is why the Claude BackendAgent
- * declares `terminalTranscriptSnapshot: false`. It costs no coverage: no
- * shared conformance scenario is gated on that capability, and the Claude rig
- * skips none of them.
- */
-function reconcile(translator: ClaudeTranslator): TerminalReconciliation {
-  const model = translator.primaryModel();
-  const finalOutput = translator.finalOutput();
-  return {
-    turns: translator.turns(),
-    ...(model === undefined ? {} : { model }),
-    ...(finalOutput === undefined ? {} : { finalOutput }),
-  };
 }
