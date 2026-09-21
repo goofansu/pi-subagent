@@ -72,6 +72,25 @@ export type FakeStep =
    * was asked.
    */
   | { readonly step: "echo-prompt"; readonly prefix?: string }
+  /**
+   * Record a decision without finishing, so later cleanup or cancellation can
+   * race the already-decided bundle through the real execution I/O seam.
+   */
+  | {
+      readonly step: "decide";
+      readonly ending?: RunEnding;
+      readonly reconciliation?: TerminalReconciliation;
+    }
+  /**
+   * Wait uninterruptibly on a test-owned gate, then decide. The test records
+   * stop before opening the gate, proving stop-before-decision without a race.
+   */
+  | {
+      readonly step: "decide-after-stop";
+      readonly gate: string;
+      readonly ending?: RunEnding;
+      readonly reconciliation?: TerminalReconciliation;
+    }
   /** Finish with an ending, and a terminal snapshot if this backend has one. */
   | {
       readonly step: "complete";

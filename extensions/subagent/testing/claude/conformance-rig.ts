@@ -348,6 +348,24 @@ export function claudeConformanceRig(): BackendConformanceRig {
             },
           });
 
+        case "a decided bundle survives a later cancel":
+          // The adapter still uses its compatibility in-stream ending path in
+          // this ticket; the core keeps that path until Claude records decisions.
+          return claudeFixture({
+            scripts: [
+              [
+                { step: "init" },
+                { step: "assistant", messageId: "msg_1", text: "the answer" },
+                { step: "result", text: "the answer" },
+                { step: "hang" },
+              ],
+            ],
+            plans: [{ cancel: true }],
+            expected: {
+              runs: [{ status: "completed", finalOutput: "the answer" }],
+            },
+          });
+
         case "result-follows-scope-closure":
           return claudeFixture({
             scripts: [ORDINARY],

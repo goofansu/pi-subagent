@@ -41,6 +41,7 @@ test("the counters two endings racing produce are expected, not defects", () => 
   // both of these, and a Session that reported `attention needed` for them
   // would say something is wrong every time anybody cancels anything.
   const expected: readonly SupervisorCounter[] = [
+    "duplicateDecisions",
     "duplicateSettlements",
     "lateEndings",
   ];

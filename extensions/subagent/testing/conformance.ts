@@ -87,6 +87,7 @@ export const RUN_CONFORMANCE_SCENARIOS = [
   "observations-reduce-in-accepted-order",
   "exactly-one-ending-wins",
   "cancellation-terminates-with-partial-output",
+  "a decided bundle survives a later cancel",
   "result-follows-scope-closure",
   "late-events-cannot-mutate-a-terminal-run",
   "a-failing-sink-cannot-strand-the-execution",
@@ -169,6 +170,8 @@ export interface ConformanceRunPlan {
   readonly floodControls?: number;
   /** Cancel this Run once its execution has actually started. */
   readonly cancel?: boolean;
+  /** For a decision-recording fixture, wait until its trace proves the call. */
+  readonly cancelAfterDecision?: boolean;
   /** Steer once after the cancel is admitted, to see the mailbox closed. */
   readonly steerAfterCancel?: boolean;
   /** Wait on this Run only after it has already settled. */
@@ -223,6 +226,8 @@ export interface BackendConformanceExpectation {
    * must be able to say the honest answer is zero.
    */
   readonly reconciliationDifferences?: number;
+  /** How many duplicate decision recordings the fixture deliberately causes. */
+  readonly duplicateDecisions?: number;
 }
 
 export interface BackendConformanceFixture {
@@ -489,6 +494,17 @@ function runFixture(
         let steerAfterCancel: string | undefined;
         let cancelReturnedBeforeClockAdvance: boolean | undefined;
         if (plan.cancel) {
+          if (plan.cancelAfterDecision) {
+            yield* until(
+              "the execution to record its decision",
+              Effect.sync(
+                () =>
+                  fixture.trace?.some((entry) =>
+                    entry.startsWith("decision-recorded:"),
+                  ) ?? false,
+              ),
+            );
+          }
           const cancellation = yield* issueCancelBeforeClockMoves(
             supervisor.cancel([runId]),
           );
@@ -884,6 +900,17 @@ const SCENARIO_CHECKS: {
       assert.equal(run.result.status, "cancelled");
     }
     assertNoLeaks(fixture, outcome);
+  },
+  "a decided bundle survives a later cancel": (fixture, outcome) => {
+    assert.equal(outcome.runs.length, 1, "the scenario drove one Run");
+    assert.equal(outcome.runs[0].result.status, "completed");
+    assert.equal(outcome.runs[0].result.cancellationReason, undefined);
+    if (fixture.expected.duplicateDecisions !== undefined) {
+      assert.equal(
+        outcome.counters.duplicateDecisions,
+        fixture.expected.duplicateDecisions,
+      );
+    }
   },
   "result-follows-scope-closure": (_fixture, outcome) => {
     const closed = stageIndex(outcome, RUN_STAGES.executionScopeClosed);

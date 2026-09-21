@@ -49,6 +49,7 @@ test("normal failure survives interruption during delivery reporting and still c
               prompt: "go",
             },
             {
+              recordDecision: () => Effect.void,
               controls: { take: Queue.take(controls) },
               emit: (observation) =>
                 Effect.gen(function* () {
@@ -137,6 +138,7 @@ test("queued SDK guidance is cleared and diagnosed once on completion", async ()
   const observations: RunObservation[] = [];
   let drainBlocked = false;
   const io: ExecutionIO = {
+    recordDecision: () => Effect.void,
     emit: (observation) => {
       if (!drainBlocked && observation.kind !== "diagnostic") {
         drainBlocked = true;

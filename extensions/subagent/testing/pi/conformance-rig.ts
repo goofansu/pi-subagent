@@ -131,6 +131,7 @@ function gateLateControlDrain(
             const firstEmitted = createGate();
             let heldFirst = false;
             const gatedIO: ExecutionIO = {
+              recordDecision: io.recordDecision,
               controls: io.controls,
               emit: (observation) => {
                 if (!heldFirst && observation.kind !== "diagnostic") {
@@ -383,6 +384,23 @@ export function piConformanceRig(): BackendConformanceRig {
                   toolStatuses: ["cancelled"],
                 },
               ],
+            },
+          });
+
+        case "a decided bundle survives a later cancel":
+          // The adapter still uses its compatibility in-stream ending path in
+          // this ticket; the core keeps that path until Pi records decisions.
+          return piFixture({
+            scripts: [
+              [
+                { step: "assistant", text: "the answer" },
+                { step: "terminal" },
+                { step: "hang" },
+              ],
+            ],
+            plans: [{ cancel: true }],
+            expected: {
+              runs: [{ status: "completed", finalOutput: "the answer" }],
             },
           });
 

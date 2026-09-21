@@ -19,6 +19,8 @@
 
 /** Things that happened and were counted rather than reported. */
 export interface SupervisorCounters {
+  /** A second decision was recorded after the execution's first one stood. */
+  readonly duplicateDecisions: number;
   /** A second terminal candidate arrived for a Run that already had one. */
   readonly duplicateSettlements: number;
   /**
@@ -129,6 +131,7 @@ export const COUNTER_CLASSES: Readonly<
   settlementDefects: "defect",
   cleanupEscalations: "incident",
   deliveryFailures: "incident",
+  duplicateDecisions: "expected",
   duplicateSettlements: "expected",
   lateEvents: "expected",
   lateObservations: "expected",
@@ -138,6 +141,7 @@ export const COUNTER_CLASSES: Readonly<
 };
 
 const ZERO_COUNTERS: SupervisorCounters = {
+  duplicateDecisions: 0,
   duplicateSettlements: 0,
   lateEvents: 0,
   lateObservations: 0,

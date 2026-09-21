@@ -141,6 +141,14 @@ export interface RunInput {
 /** Where an execution reports to, and where it takes guidance from. */
 export interface ExecutionIO {
   /**
+   * Record the Terminal bundle this execution has decided.
+   *
+   * The first decision stands. Later calls are accepted as counted no-ops.
+   * Recording neither seals observation intake nor ends the Run: the execution
+   * still returns or is interrupted, and the core performs settlement.
+   */
+  readonly recordDecision: (bundle: TerminalBundle) => Effect.Effect<void>;
+  /**
    * Report one observation. Ordered and lossless within the Run.
    *
    * After the Run's terminal candidate is captured and its intake is sealed,
@@ -263,7 +271,11 @@ export const BACKEND_CAPABILITY_MEMBERS = [
 
 export const RUN_INPUT_MEMBERS = ["runId", "description", "prompt"] as const;
 
-export const EXECUTION_IO_MEMBERS = ["emit", "controls"] as const;
+export const EXECUTION_IO_MEMBERS = [
+  "recordDecision",
+  "emit",
+  "controls",
+] as const;
 
 export const CONTROL_FEED_MEMBERS = ["take"] as const;
 

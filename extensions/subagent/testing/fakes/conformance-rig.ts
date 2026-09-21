@@ -312,6 +312,33 @@ export function fakeConformanceRig(kind: FakeKind): BackendConformanceRig {
             },
           );
 
+        case "a decided bundle survives a later cancel":
+          return fixtureOf(
+            kind,
+            scripts([
+              {
+                step: "decide",
+                reconciliation: { finalOutput: "the decided answer" },
+              },
+              { step: "await-gate", gate: "hold" },
+            ]),
+            {
+              plans: [{ cancel: true, cancelAfterDecision: true }],
+              trace: [],
+              expected: {
+                runs: [
+                  {
+                    status: "completed",
+                    finalOutput: "the decided answer",
+                    diagnosticCategories: ["reconciliation-difference"],
+                  },
+                ],
+                reconciliationDifferences: 1,
+                duplicateDecisions: 0,
+              },
+            },
+          );
+
         case "result-follows-scope-closure":
           return fixtureOf(kind, scripts(ORDINARY), {
             plans: [{}],

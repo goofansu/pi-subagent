@@ -205,6 +205,39 @@ function makeExecutionStop(): Effect.Effect<ExecutionStop> {
   });
 }
 
+type RecordedDecision = Extract<
+  SettlementCandidate,
+  { readonly source: "recorded-decision" }
+>;
+
+/** The once-only decision slot handed to one execution. */
+interface DecisionRecorder {
+  readonly record: (bundle: TerminalBundle) => Effect.Effect<void>;
+  readonly recorded: () => RecordedDecision | undefined;
+}
+
+function makeDecisionRecorder(
+  stop: ExecutionStop,
+  counters: RuntimeCounters,
+): DecisionRecorder {
+  let recorded: RecordedDecision | undefined;
+  return {
+    record: (bundle) =>
+      Effect.sync(() => {
+        if (recorded !== undefined) {
+          counters.count("duplicateDecisions");
+          return;
+        }
+        recorded = {
+          source: "recorded-decision",
+          bundle,
+          beforeStop: !Deferred.isDoneUnsafe(stop.requested),
+        };
+      }),
+    recorded: () => recorded,
+  };
+}
+
 /** Everything one Run's settlement loop drives, private to this module. */
 interface RunResources {
   readonly coordinator: SettlementCoordinator;
@@ -213,6 +246,7 @@ interface RunResources {
   readonly intake: ObservationIntake;
   readonly mailbox: ControlMailbox;
   readonly stop: ExecutionStop;
+  readonly decisions: DecisionRecorder;
   /** Everything held for this Run, already nested under its Subagent. */
   readonly runScope: Scope.Closeable;
   /** The native child that settlement closes independently first. */
@@ -353,7 +387,7 @@ function reconciliationDiffered(report: AppliedReport): boolean {
 function candidateOf(
   exit: Exit.Exit<TerminalBundle, never>,
 ): SettlementCandidate {
-  if (Exit.isSuccess(exit)) return { source: "bundle", bundle: exit.value };
+  if (Exit.isSuccess(exit)) return { source: "execution-return" };
   if (Cause.hasInterrupts(exit.cause)) {
     // The reason is a fallback. A cancel that was admitted recorded its own
     // reason, and arbitration prefers that one.
@@ -376,6 +410,7 @@ export interface SettledRun {
  * returning an Effect fails admission rather than stranding a start waiter.
  */
 type PrepareExecution<E> = (io: {
+  readonly recordDecision: DecisionRecorder["record"];
   readonly emit: ObservationIntake["emit"];
   readonly controls: ControlMailbox["feed"];
 }) => Effect.Effect<RunExecution, E>;
@@ -403,12 +438,18 @@ function buildRunHandle<E>(
       const projection = yield* Ref.make(createRunProjection());
       const reports: AppliedReport[] = [];
       const stop = yield* makeExecutionStop();
+      const decisions = makeDecisionRecorder(stop, counters);
 
       const executionScope = yield* Scope.fork(runScope);
-      const execution = yield* prepareExecution({
+      const prepared = yield* prepareExecution({
+        recordDecision: decisions.record,
         emit: intake.emit,
         controls: mailbox.feed,
       });
+      // Returning a bundle is the same decision at the instant of return. If
+      // the adapter recorded earlier, this is the counted duplicate and the
+      // first bundle remains authoritative.
+      const execution = Effect.tap(prepared, decisions.record);
 
       const resources: RunResources = {
         coordinator,
@@ -416,6 +457,7 @@ function buildRunHandle<E>(
         intake,
         mailbox,
         stop,
+        decisions,
         runScope,
         executionScope,
         activation,
@@ -512,8 +554,15 @@ function runToSettlement(
   let settlementStarted = false;
 
   const settlement = Effect.gen(function* () {
-    const { activation, coordinator, execution, intake, mailbox, stop } =
-      resources;
+    const {
+      activation,
+      coordinator,
+      decisions,
+      execution,
+      intake,
+      mailbox,
+      stop,
+    } = resources;
 
     yield* Deferred.await(activation);
     const reducer = yield* Effect.acquireRelease(
@@ -613,8 +662,10 @@ function runToSettlement(
     //    rules rather than a second implementation of them.
     const snapshot = yield* repository.get(identity.runId);
     const announced = (yield* Ref.get(projection)).ending;
+    const decision = decisions.recorded();
     const decided = arbitrate({
       candidate,
+      ...(decision === undefined ? {} : { decision }),
       ...(announced === undefined ? {} : { announced }),
       ...(snapshot?.cancellation === undefined
         ? {}
@@ -627,10 +678,13 @@ function runToSettlement(
     if (decided.diagnostic) {
       extra.push({ kind: "diagnostic", diagnostic: decided.diagnostic });
     }
+    // A decided bundle's snapshot still belongs immediately before the
+    // arbitrated ending when a stop or defect wins. The one exception is the
+    // temporary old-adapter path: an in-stream ending means that adapter has
+    // already emitted its reconciliation, and replaying the recorded return's
+    // snapshot after that terminal observation would be both late and twice.
     const reconciliation =
-      candidate.source === "bundle"
-        ? candidate.bundle.reconciliation
-        : undefined;
+      announced === undefined ? decision?.bundle.reconciliation : undefined;
     if (reconciliation) {
       extra.push({ kind: "reconciliation", reconciliation });
     }

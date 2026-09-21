@@ -147,6 +147,19 @@ function difference(
   };
 }
 
+/** Build the one bundle shape shared by the fake's decision and return steps. */
+function bundleOf(step: {
+  readonly ending?: TerminalBundle["ending"];
+  readonly reconciliation?: TerminalBundle["reconciliation"];
+}): TerminalBundle {
+  return {
+    ending: step.ending ?? answeredEnding(),
+    ...(step.reconciliation === undefined
+      ? {}
+      : { reconciliation: step.reconciliation }),
+  };
+}
+
 function createFakeBackend(
   capabilities: BackendCapabilities,
   options: FakeBackendOptions,
@@ -250,6 +263,7 @@ function createFakeBackend(
         };
 
         let bundle: TerminalBundle | undefined;
+        let decisionRecorded = false;
         for (const step of script.steps) {
           switch (step.step) {
             case "emit": {
@@ -354,13 +368,29 @@ function createFakeBackend(
               }
               break;
             }
+            case "decide": {
+              bundle = bundleOf(step);
+              yield* io.recordDecision(bundle);
+              decisionRecorded = true;
+              trace.push(`decision-recorded:${input.runId}`);
+              break;
+            }
+            case "decide-after-stop": {
+              const decided = bundleOf(step);
+              bundle = decided;
+              trace.push(`decision-awaiting-stop:${input.runId}`);
+              yield* Effect.uninterruptible(
+                Effect.gen(function* () {
+                  yield* Deferred.await(gate(step.gate));
+                  yield* io.recordDecision(decided);
+                  decisionRecorded = true;
+                  trace.push(`decision-recorded:${input.runId}`);
+                }),
+              );
+              break;
+            }
             case "complete": {
-              bundle = {
-                ending: step.ending ?? answeredEnding(),
-                ...(step.reconciliation === undefined
-                  ? {}
-                  : { reconciliation: step.reconciliation }),
-              };
+              bundle = bundleOf(step);
               break;
             }
             case "fail": {
@@ -430,8 +460,12 @@ function createFakeBackend(
           }
         }
         // A script that named no ending answered: the observations are what it
-        // had to say, and it said them all.
-        return bundle ?? { ending: answeredEnding() };
+        // had to say, and it said them all. Fake adapters record their normal
+        // decision before returning it, exercising the same seam as a real
+        // adapter; the core then counts the return as the duplicate decision.
+        const decided = bundle ?? { ending: answeredEnding() };
+        if (!decisionRecorded) yield* io.recordDecision(decided);
+        return decided;
       }).pipe(
         Effect.ensuring(Effect.sync(() => counters.executionFiberReleased())),
       );

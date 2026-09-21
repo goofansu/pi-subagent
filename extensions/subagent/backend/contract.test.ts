@@ -132,7 +132,10 @@ test("the three interfaces and the terminal bundle have exactly these members", 
     ["resume", "steer", "terminalTranscriptSnapshot"],
   );
   assert.deepEqual([...TERMINAL_BUNDLE_MEMBERS], ["ending", "reconciliation"]);
-  assert.deepEqual([...EXECUTION_IO_MEMBERS], ["emit", "controls"]);
+  assert.deepEqual(
+    [...EXECUTION_IO_MEMBERS],
+    ["recordDecision", "emit", "controls"],
+  );
   assert.deepEqual([...CONTROL_FEED_MEMBERS], ["take"]);
   assert.deepEqual([...RUN_INPUT_MEMBERS], ["runId", "description", "prompt"]);
   assert.deepEqual([...BACKEND_OPEN_FAILURE_MEMBERS], ["diagnostic"]);
@@ -249,6 +252,7 @@ function standInBackend(log: string[]): Backend {
 }
 
 const io: ExecutionIO = {
+  recordDecision: () => Effect.void,
   emit: () => Effect.void,
   controls: { take: Effect.succeed(undefined) },
 };

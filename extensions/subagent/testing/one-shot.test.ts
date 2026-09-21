@@ -83,6 +83,7 @@ function executeOnce(
     const observations: RunObservation[] = [];
     let projection = createRunProjection();
     const io: ExecutionIO = {
+      recordDecision: () => Effect.void,
       emit: (observation) =>
         Effect.sync(() => {
           observations.push(observation);
