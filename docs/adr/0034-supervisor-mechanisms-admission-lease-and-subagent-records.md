@@ -259,3 +259,15 @@ activation gate, execution scope, Run Scope, and completion barrier; shutdown
 awaits that barrier, and the Run fiber's finalizer detaches the handle. This
 replaces the earlier sketch's `attachFiber` member without changing the
 one-active-Run invariant the records module owns.
+
+## Amendment — 2026-09-21
+
+Cleanup escalation is the third supervisor mechanism delegated to a plain
+runtime module, beside admission and Subagent records. Its two operations own
+both cleanup-budget outcomes: a native execution-scope overrun is counted and
+reported once per Run while closing the BackendAgent and marking Conversation
+loss; a post-settlement BackendAgent close overrun is counted without a Run
+diagnostic. The supervisor constructs the module once and sequences calls to
+it. As with the earlier extractions, the counter, diagnostic, and idempotence
+rule are asserted where they are decided rather than re-derived at each call
+site. The module is not a Layer and changes no scope ownership.

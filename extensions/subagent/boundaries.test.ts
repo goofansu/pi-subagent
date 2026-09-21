@@ -509,6 +509,15 @@ function withoutLinkTargets(source: string): string {
  */
 const STATE_CONSTRUCTIONS = ["Ref.make", "new Map", "new Set"] as const;
 
+/** Decisions owned by `runtime/cleanup-escalation.ts`, never by the supervisor. */
+const CLEANUP_ESCALATION_DECISIONS = [
+  "cleanupEscalations",
+  '"cleanup-escalation"',
+  "finishesWithinCleanupBudget",
+  "countAndCloseCleanup",
+  "recordSubagentCloseEscalation",
+] as const;
+
 /**
  * The only files that may name a backend or a fake.
  *
@@ -1215,19 +1224,23 @@ export function findBoundaryViolations(
     }
   }
 
-  // 19. The supervisor holds no state of its own. Admission, the Subagent
-  //     records, and the waiter ledger each own the state whose invariant they
-  //     carry, and what is left in the supervisor is the order the operations
-  //     happen in. A reference, a map, or a set constructed there would be a
-  //     fourth owner with no invariant and no test, and it would read as local
-  //     to whichever operation added it. The `stages` trace array is the
-  //     documented exception: it is a test hook nothing reads back.
+  // 19. The supervisor holds no mechanism of its own. Admission, Subagent
+  //     records, the waiter ledger, and cleanup escalation each own the state
+  //     and decisions whose invariant they carry; the supervisor sequences
+  //     calls to those modules. The `stages` trace array is the documented
+  //     exception: it is a test hook nothing reads back.
   if (fs.existsSync(graph.supervisorFile)) {
     const source = fs.readFileSync(graph.supervisorFile, "utf8");
     for (const construction of STATE_CONSTRUCTIONS) {
       if (!source.includes(construction)) continue;
       violations.add(
         `${describe(graph.supervisorFile)} constructs ${construction}, and the supervisor holds no state of its own`,
+      );
+    }
+    for (const decision of CLEANUP_ESCALATION_DECISIONS) {
+      if (!source.includes(decision)) continue;
+      violations.add(
+        `${describe(graph.supervisorFile)} contains ${decision}, and cleanup escalation is confined to its runtime module`,
       );
     }
   }
@@ -2683,6 +2696,25 @@ test("a supervisor constructing a reference, a map, or a set is rejected", (t) =
     `${describe(path.join(graph.runtimeRoot, "supervisor.ts"))} constructs Ref.make, and the supervisor holds no state of its own`,
     `${describe(path.join(graph.runtimeRoot, "supervisor.ts"))} constructs new Map, and the supervisor holds no state of its own`,
     `${describe(path.join(graph.runtimeRoot, "supervisor.ts"))} constructs new Set, and the supervisor holds no state of its own`,
+  ]);
+});
+
+test("cleanup-budget decisions in the supervisor are rejected", (t) => {
+  const { graph, write } = fixtureGraph(t, "cleanup-escalation-confinement");
+  write("extensions/subagent/index.ts", "export const entry = 1;\n");
+  write(
+    "extensions/subagent/runtime/supervisor.ts",
+    [
+      'const diagnostic = runDiagnostic("cleanup-escalation", "late");',
+      'counters.count("cleanupEscalations");',
+      "void diagnostic;",
+      "",
+    ].join("\n"),
+  );
+
+  assert.deepEqual(findBoundaryViolations(graph), [
+    `${describe(path.join(graph.runtimeRoot, "supervisor.ts"))} contains "cleanup-escalation", and cleanup escalation is confined to its runtime module`,
+    `${describe(path.join(graph.runtimeRoot, "supervisor.ts"))} contains cleanupEscalations, and cleanup escalation is confined to its runtime module`,
   ]);
 });
 

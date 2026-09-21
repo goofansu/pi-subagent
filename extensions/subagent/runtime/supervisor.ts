@@ -2,7 +2,7 @@
  * `SubagentSupervisor`: the six public operations, in order.
  *
  * This module sequences a lifecycle; it does not own the state that lifecycle
- * moves through. Three modules do, each carrying one invariant
+ * moves through. Four modules do, each carrying one invariant
  * ([ADR-0034](../../../docs/adr/0034-supervisor-mechanisms-admission-lease-and-subagent-records.md)):
  *
  * - [`admission.ts`](admission.ts) — the shutting-down flag, capacity, the
@@ -12,11 +12,13 @@
  *   Subagent, and the only writer of it. Invariant 2.
  * - [`waiters.ts`](waiters.ts) — how many callers registered at a settlement
  *   have yet to read it, and the pin held for them. Invariant 13.
+ * - [`cleanup-escalation.ts`](cleanup-escalation.ts) — both cleanup-budget
+ *   outcomes, including the per-Run idempotence record.
  *
- * What is left here is the order things happen in, and boundary rule 21 keeps
- * it that way: no reference, map, or set is constructed in this file, so a
- * fourth mechanism cannot quietly move in. The `stages` trace array is the
- * documented exception, and it is a test hook nothing reads back.
+ * What is left here is the order things happen in, and the boundary test keeps
+ * it that way: no mechanism state or cleanup decision is owned in this file.
+ * The `stages` trace array is the documented exception, and it is a test hook
+ * nothing reads back.
  *
  * Start is three steps, and the middle one is the only one that talks to a
  * provider:
@@ -49,6 +51,7 @@
 
 import {
   Cause,
+  Clock,
   Context,
   Deferred,
   Effect,
@@ -83,6 +86,7 @@ import {
 } from "../domain/index.ts";
 import { type AdmissionLease, makeAdmission } from "./admission.ts";
 import { BackendCatalog } from "./backend-catalog.ts";
+import { makeCleanupEscalation } from "./cleanup-escalation.ts";
 import type {
   RuntimeCounters,
   RuntimeProbe,
@@ -396,33 +400,15 @@ const makeSupervisor = (settings: SessionSettings) =>
     );
     /** Hooks the conformance suite reads instead of the deleted driver's log. */
     const stages: string[] = [];
+    const clock = yield* Clock.Clock;
+    const cleanup = makeCleanupEscalation(
+      counters,
+      clock,
+      policy.cleanupBudgetMillis,
+      records,
+    );
 
-    const now = Effect.clockWith((clock) => clock.currentTimeMillis);
-
-    /**
-     * Run cleanup detached and report whether it finished inside the budget.
-     *
-     * Timing out a `Scope.close` directly would interrupt the close and wait
-     * for that interruption. An uninterruptible finalizer could therefore
-     * defeat the timeout. The detached close instead reports through a
-     * Deferred; timing out that interruptible await never waits for the close.
-     */
-    const finishesWithinCleanupBudget = (
-      cleanup: Effect.Effect<void>,
-    ): Effect.Effect<boolean> =>
-      Effect.gen(function* () {
-        const finished = yield* Deferred.make<boolean>();
-        yield* Effect.forkDetach(
-          Effect.flatMap(Effect.exit(cleanup), (exit) =>
-            Deferred.succeed(finished, Exit.isSuccess(exit)),
-          ),
-        );
-        const withinBudget = yield* Effect.timeoutOption(
-          Deferred.await(finished),
-          policy.cleanupBudgetMillis,
-        );
-        return withinBudget._tag === "Some" && withinBudget.value;
-      });
+    const now = clock.currentTimeMillis;
 
     /* ------------------------------------------------------------ */
     /* Running a Run                                                 */
@@ -494,59 +480,6 @@ const makeSupervisor = (settings: SessionSettings) =>
         );
       });
 
-    /** Count one cleanup overrun and bound any stronger close it can attempt. */
-    const countAndCloseCleanup = (
-      close: Effect.Effect<void>,
-    ): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        counters.count("cleanupEscalations");
-        yield* finishesWithinCleanupBudget(close);
-      });
-
-    /**
-     * Build one idempotent escalation for one Run.
-     *
-     * Both the cancelled-execution wait and execution-scope close use this
-     * same Effect. If both overrun, the Run still owns one incident: one
-     * counter increment, one BackendAgent close, and one diagnostic.
-     */
-    const escalateRunCleanup = (
-      agent: SubagentRecord["agent"],
-      subagentId: SubagentId,
-    ): Effect.Effect<RunDiagnostic> => {
-      const diagnostic = runDiagnostic(
-        "cleanup-escalation",
-        `native cleanup did not finish within ${policy.cleanupBudgetMillis}ms; the BackendAgent was closed and its conversation is lost`,
-      );
-      let escalated = false;
-      return Effect.suspend(() => {
-        if (escalated) return Effect.succeed(diagnostic);
-        escalated = true;
-        return Effect.as(
-          Effect.gen(function* () {
-            yield* countAndCloseCleanup(agent.close());
-            records.markConversationLost(subagentId);
-          }),
-          diagnostic,
-        );
-      });
-    };
-
-    /** Record a Subagent close overrun after its Run no longer owns it. */
-    const recordSubagentCloseEscalation = (): Effect.Effect<void> =>
-      countAndCloseCleanup(Effect.void);
-
-    /** Close the native execution scope, or apply this Run's escalation. */
-    const closeUnderCleanupBudget =
-      (escalate: Effect.Effect<RunDiagnostic>) =>
-      (scope: Scope.Closeable): Effect.Effect<RunDiagnostic | undefined> =>
-        Effect.gen(function* () {
-          const closed = yield* finishesWithinCleanupBudget(
-            Scope.close(scope, Exit.void),
-          );
-          return closed ? undefined : yield* escalate;
-        });
-
     const runContextFor = ({
       identity,
       prompt,
@@ -558,7 +491,6 @@ const makeSupervisor = (settings: SessionSettings) =>
       readonly agent: SubagentRecord["agent"];
       readonly startedAt: number;
     }): RunContext => {
-      const escalation = escalateRunCleanup(agent, identity.subagentId);
       return {
         identity,
         input: {
@@ -576,9 +508,8 @@ const makeSupervisor = (settings: SessionSettings) =>
         startedAt,
         now,
         trace: (stage) => stages.push(`${identity.runId}:${stage}`),
-        closeExecutionScope: closeUnderCleanupBudget(escalation),
+        cleanupEscalation: cleanup,
         cleanupBudgetMillis: policy.cleanupBudgetMillis,
-        escalateRunCleanup: escalation,
         onSettled: () => settled(identity.runId),
       };
     };
@@ -1144,16 +1075,7 @@ const makeSupervisor = (settings: SessionSettings) =>
           // retained or joined by the records module.
           yield* Deferred.await(handle.completion);
         }
-        const closed = yield* finishesWithinCleanupBudget(
-          Scope.close(record.scope, Exit.void),
-        );
-        if (!closed) {
-          // Unlike execution cleanup escalation, there is no stronger close
-          // to try here: this Scope close is already running the BackendAgent
-          // finalizer, and the record is permanently closed, so no later
-          // resume needs a conversation-loss marker.
-          yield* recordSubagentCloseEscalation();
-        }
+        yield* cleanup.closeBackendAgent(record.agent, record.id);
       });
 
     const shutdown = (): Effect.Effect<void> =>

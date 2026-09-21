@@ -347,16 +347,17 @@ captured. Everything emitted afterwards is a counted late event and a no-op, so
 the contract's "emit never fails" holds for an adapter emitting from its own
 finalizer.
 
-**Cleanup escalation** — what happens when cleanup outlives its budget. For a
-native execution scope, the Run gets a `cleanup-escalation` diagnostic, the core
-closes the BackendAgent, marks its Conversation lost, and continues settlement.
-The same happens when a cancelled native execution does not stop within the
-budget: its fiber is abandoned, its partial output is retained, and the Run
-settles cancelled with its recorded reason. For a Subagent Scope / BackendAgent
-close overrun after its Run has settled, there is no Run to carry a diagnostic:
-the escalation is recorded by the `cleanupEscalations` counter alone. A hung
-execution or finalizer must not leave a Run in `running` or `finalizing` forever
-or prevent Session closure.
+**Cleanup escalation** — what happens when cleanup outlives its budget, decided
+and counted in `runtime/cleanup-escalation.ts` for both cases. For a native
+execution scope, the Run gets a `cleanup-escalation` diagnostic, the core
+closes the BackendAgent, marks its Conversation lost, and continues settlement. The same happens when a
+cancelled native execution does not stop within the budget: its fiber is
+abandoned, its partial output is retained, and the Run settles cancelled with
+its recorded reason. For a Subagent Scope / BackendAgent close overrun after its
+Run has settled, there is no Run to carry a diagnostic: the escalation is
+recorded by the `cleanupEscalations` counter alone. A hung execution or
+finalizer must not leave a Run in `running` or `finalizing` forever or prevent
+Session closure.
 
 **Subagent records** — what the supervisor knows about each Subagent it owns,
 and the only writer of any of it: the fixed facts (id, Profile, context,

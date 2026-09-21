@@ -93,12 +93,16 @@ function withRunHandle<A>(
       startedAt,
       now: Effect.clockWith((clock) => clock.currentTimeMillis),
       trace: () => {},
-      closeExecutionScope: (scope) =>
-        Effect.as(Scope.close(scope, Exit.void), undefined),
+      cleanupEscalation: {
+        closeExecutionScope: ({ scope, alreadyOverran }) =>
+          alreadyOverran
+            ? Effect.succeed(
+                runDiagnostic("other", "cleanup outlived its budget"),
+              )
+            : Effect.as(Scope.close(scope, Exit.void), undefined),
+        closeBackendAgent: () => Effect.void,
+      },
       cleanupBudgetMillis: DEFAULT_RUNTIME_POLICY.cleanupBudgetMillis,
-      escalateRunCleanup: Effect.succeed(
-        runDiagnostic("other", "cleanup outlived its budget"),
-      ),
       onSettled: () => Effect.void,
     };
 

@@ -62,6 +62,7 @@ import {
   arbitrate,
   type SettlementCandidate,
 } from "./arbitration.ts";
+import type { CleanupEscalation } from "./cleanup-escalation.ts";
 import type { RuntimeCounters } from "./counters.ts";
 import {
   type ControlMailbox,
@@ -140,20 +141,10 @@ export interface RunContext {
   readonly now: Effect.Effect<number>;
   /** Appended to by every stage, so ordering is assertable. */
   readonly trace: (stage: RunStage) => void;
-  /**
-   * Close the native execution scope, bounded however the caller bounds it.
-   *
-   * Returns a diagnostic when the close did not finish inside its budget and
-   * the caller escalated past it. Passing this in keeps the settlement order
-   * in one place and the cleanup policy in another.
-   */
-  readonly closeExecutionScope: (
-    scope: Scope.Closeable,
-  ) => Effect.Effect<RunDiagnostic | undefined>;
+  /** The module that owns cleanup-budget decisions and escalation. */
+  readonly cleanupEscalation: CleanupEscalation;
   /** How long a cancelled execution may take to leave its fiber. */
   readonly cleanupBudgetMillis: number;
-  /** Apply this Run's one escalation, shared with native-scope cleanup. */
-  readonly escalateRunCleanup: Effect.Effect<RunDiagnostic>;
   /** Called after the terminal snapshot is published. Delivery hooks in here. */
   readonly onSettled: (result: RunResult) => Effect.Effect<void>;
 }
@@ -556,7 +547,7 @@ function runToSettlement(
       Effect.as(Fiber.await(running), false),
       Effect.as(Deferred.await(stop.requested), true),
     );
-    let executionEscalation: RunDiagnostic | undefined;
+    let executionOverran = false;
     let executionCandidate: SettlementCandidate;
     if (!stopWon) {
       executionCandidate = candidateOf(yield* Fiber.await(running));
@@ -572,7 +563,10 @@ function runToSettlement(
         // Arbitration applies the recorded Cancellation reason from the
         // snapshot it already reads below; this is only the fallback.
         executionCandidate = { source: "interruption", reason: "requested" };
-        executionEscalation = yield* context.escalateRunCleanup;
+        // Disposal still begins at settlement step 4, after candidate capture,
+        // sealing, and finalizing publication. This flag tells that one close
+        // not to charge a second execution-wait budget before escalating.
+        executionOverran = true;
       }
     }
     settlementStarted = true;
@@ -596,12 +590,16 @@ function runToSettlement(
     yield* repository.transition(identity.runId, "execution-ended");
     context.trace(RUN_STAGES.finalizingPublished);
 
-    // 4. Close the native execution scope, bounded by whatever the caller
-    //    bounds it by. A close that outlived its budget hands back the
-    //    diagnostic saying so, and settlement carries on with what it has —
-    //    a hung finalizer must not leave a Run in `finalizing` forever.
-    const scopeEscalation = yield* context.closeExecutionScope(executionScope);
-    const escalation = executionEscalation ?? scopeEscalation;
+    // 4. Close the native execution scope. If the execution wait already
+    //    overran, disposal starts here but escalation is immediate; otherwise
+    //    the module bounds the close. Either way, an uncooperative finalizer
+    //    cannot leave a Run in `finalizing` forever.
+    const escalation = yield* context.cleanupEscalation.closeExecutionScope({
+      subagentId: identity.subagentId,
+      agent: context.agent,
+      scope: executionScope,
+      ...(executionOverran ? { alreadyOverran: true } : {}),
+    });
     context.trace(RUN_STAGES.executionScopeClosed);
 
     // 5. Drain and reduce every accepted observation. Sealing ended the queue,
@@ -776,7 +774,13 @@ function runToSettlement(
         // The fallback commit is best-effort, but terminality is not.
         yield* repository.transition(identity.runId, "execution-ended");
         yield* repository.recordProjection(identity.runId, ended.projection);
-        yield* Effect.exit(context.closeExecutionScope(executionScope));
+        yield* Effect.exit(
+          context.cleanupEscalation.closeExecutionScope({
+            subagentId: identity.subagentId,
+            agent: context.agent,
+            scope: executionScope,
+          }),
+        );
         yield* Effect.exit(Scope.close(runScope, Exit.void));
 
         const clock = yield* Effect.exit(context.now);
