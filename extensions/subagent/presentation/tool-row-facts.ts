@@ -24,7 +24,6 @@ import {
   type WaitOutcome,
 } from "../domain/index.ts";
 import {
-  type CompactFinalOutputSummary,
   compactFinalOutputSummaryPhrase,
   finalOutputSummary,
 } from "./final-output-section.ts";
@@ -501,17 +500,10 @@ const SteerToolRowFactsSchema = Schema.Struct({
 });
 export type SteerToolRowFacts = typeof SteerToolRowFactsSchema.Type;
 
-const CompactFinalOutputSummarySchema = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("none") }),
-  Schema.Struct({ kind: Schema.Literal("removed") }),
-  Schema.Struct({ kind: Schema.Literal("visible"), characters: Count }),
-]);
-
 const ResultRunSummarySchema = Schema.Struct({
   runId: IdentifierText,
   agent: Schema.String,
   status: TerminalRunPhase,
-  output: CompactFinalOutputSummarySchema,
 });
 type ResultRunSummary = typeof ResultRunSummarySchema.Type;
 
@@ -898,14 +890,10 @@ export function toolRowPresentation(facts: ToolRowFacts): ToolRowPresentation {
 }
 
 function resultRunSummaryOf(result: RunResult): ResultRunSummary {
-  const output: CompactFinalOutputSummary = finalOutputSummary(
-    interpretFinalOutput(result),
-  );
   return {
     runId: result.runId,
     agent: result.agent,
     status: result.status,
-    output,
   };
 }
 

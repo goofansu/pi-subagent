@@ -289,40 +289,7 @@ test("named aggregate facts construction round-trips", () => {
   );
 });
 
-test("Result Tool-row facts summarize final-output interpretation without carrying output", () => {
-  const cases = [
-    [fixtureResult(), { kind: "none" }],
-    [fixtureResult({ finalOutput: " \n\t " }), { kind: "none" }],
-    [
-      fixtureResult({
-        finalOutput: "",
-        truncation: { truncatedOutputBytes: 23 },
-      }),
-      { kind: "removed" },
-    ],
-    [
-      fixtureResult({ finalOutput: "answer" }),
-      { kind: "visible", characters: 6 },
-    ],
-    [
-      fixtureResult({
-        finalOutput: "prefix",
-        truncation: { truncatedOutputBytes: 23 },
-      }),
-      { kind: "visible", characters: 6 },
-    ],
-  ] as const;
-
-  for (const [fixture, output] of cases) {
-    const facts = resultToolRowFacts({ outcome: "result", result: fixture });
-    assert.equal(facts.outcome, "available");
-    if (facts.outcome === "available") {
-      assert.deepEqual(facts.run.output, output);
-    }
-  }
-});
-
-test("schema-backed facts reject extra keys at every depth and wrong field types", () => {
+test("schema-backed facts reject extra keys at every depth, including the old output field", () => {
   const collection = waitToolRowFacts(waitOutcomes);
   const cancellation = cancelToolRowFacts(cancelOutcomes);
   const available = resultToolRowFacts({ outcome: "result", result });
@@ -335,9 +302,7 @@ test("schema-backed facts reject extra keys at every depth and wrong field types
     readonly outcomes: readonly Record<string, unknown>[];
   };
   const encodedAvailable = encodeToolRowFacts(available) as {
-    readonly run: {
-      readonly output: Record<string, unknown>;
-    };
+    readonly run: Record<string, unknown>;
   };
 
   assert.equal(
@@ -356,17 +321,7 @@ test("schema-backed facts reject extra keys at every depth and wrong field types
       ...encodedAvailable,
       run: {
         ...encodedAvailable.run,
-        output: { ...encodedAvailable.run.output, extra: true },
-      },
-    }),
-    undefined,
-  );
-  assert.equal(
-    decodeToolRowFacts({
-      ...encodedAvailable,
-      run: {
-        ...encodedAvailable.run,
-        output: { kind: "visible", characters: "6" },
+        output: { kind: "visible", characters: 6 },
       },
     }),
     undefined,
@@ -393,7 +348,6 @@ test("the Tool-row facts decoder accepts all terminal phases and nested cancella
         runId: result.runId,
         agent: "explore",
         status: "completed",
-        output: { kind: "visible", characters: 6 },
       },
     },
   );
@@ -485,37 +439,12 @@ test("the Tool-row facts decoder returns absence and never throws for malformed,
           runId: rid,
           agent: "explore",
           status: "running",
-          output: { kind: "visible", characters: 1 },
         },
       ],
       stillRunning: 0,
       unknown: 0,
       unavailable: 0,
       noActiveRuns: false,
-    },
-    {
-      kind: "result",
-      outcome: "available",
-      rowPhrase: "invalid character count",
-      tone: "toolOutput",
-      run: {
-        runId: rid,
-        agent: "explore",
-        status: "completed",
-        output: { kind: "visible", characters: Infinity },
-      },
-    },
-    {
-      kind: "result",
-      outcome: "available",
-      rowPhrase: "output removed",
-      tone: "toolOutput",
-      run: {
-        runId: rid,
-        agent: "explore",
-        status: "completed",
-        output: { kind: "removed", characters: 1 },
-      },
     },
     {
       kind: "result",

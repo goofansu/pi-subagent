@@ -393,7 +393,6 @@ test("golden: every operation keeps its collapsed row text and styling", () => {
       runId: run,
       agent: "explore",
       status: "completed" as const,
-      output: { kind: "visible" as const, characters: 12_345 },
     },
   };
   const cases = [
@@ -462,7 +461,6 @@ test("Result rows retain fact-provided text and tone in each outcome layout", ()
         runId: "run-1",
         agent: "explore",
         status: "completed",
-        output: { kind: "visible", characters: 12_345 },
       },
     },
     {
@@ -474,7 +472,6 @@ test("Result rows retain fact-provided text and tone in each outcome layout", ()
         runId: "run-none",
         agent: "explore",
         status: "completed",
-        output: { kind: "none" },
       },
     },
     {
@@ -486,7 +483,6 @@ test("Result rows retain fact-provided text and tone in each outcome layout", ()
         runId: "run-removed",
         agent: "explore",
         status: "completed",
-        output: { kind: "removed" },
       },
     },
     {
@@ -1020,7 +1016,6 @@ test("collection rendering follows the declared tone and fits whole clauses by p
         runId: "run-1",
         agent: "explore",
         status: "completed" as const,
-        output: { kind: "visible" as const, characters: 6 },
       },
     ],
     stillRunning: 2,
@@ -1098,7 +1093,6 @@ test("result-bearing renderers reuse components and repaint the current theme", 
         runId: "run-1",
         agent: "explore",
         status: "completed" as const,
-        output: { kind: "visible" as const, characters: 17 },
       },
     },
   };
@@ -1127,6 +1121,38 @@ test("result-bearing renderers reuse components and repaint the current theme", 
   assert.equal(reusedResult, firstResult);
   reusedResult.invalidate();
   assert.match(lines(reusedResult, 80).join("\n"), /<toolOutput>/);
+});
+
+test("a pre-change Result fact carrying the old output field falls back to response text", () => {
+  const oldDetails = {
+    kind: "result",
+    outcome: "available",
+    rowPhrase: "6 characters",
+    tone: "toolOutput",
+    run: {
+      runId: "run-old",
+      agent: "explore",
+      status: "completed",
+      output: { kind: "visible", characters: 6 },
+    },
+  };
+  assert.equal(decodeToolRowFacts(oldDetails), undefined);
+
+  const rendered = lines(
+    agentToolRenderers("result").renderResult(
+      {
+        content: [{ type: "text", text: "Readable old response\nmore" }],
+        details: oldDetails,
+      },
+      { expanded: false, isPartial: false },
+      plainTheme,
+      context({}),
+    ),
+    80,
+  ).join("\n");
+
+  assert.match(rendered, /^Readable old response \(.*to expand\)$/);
+  assert.doesNotMatch(rendered, /6 characters|run-old/);
 });
 
 test("a legacy Result fact missing only row presentation fields falls back readably", () => {
