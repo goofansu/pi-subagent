@@ -1,10 +1,11 @@
 /**
  * The child-load discriminator: "is this resource load a child's?"
  *
- * Pi children disable extensions during resource discovery, making their
- * Profile the complete behavioural policy. This discriminator remains defence
- * in depth: if Pi ever evaluates an explicitly supplied extension factory
- * despite that loader policy, this package's entry point still stays inert.
+ * Pi children disable automatic extension discovery during resource loading
+ * and explicitly admit only exe.dev's VM integration, making their Profile the
+ * complete behavioural policy apart from that narrow environment hook. This
+ * discriminator remains defence in depth: if Pi ever evaluates an explicitly
+ * supplied extension factory, this package's entry point still stays inert.
  *
  * The answer is an `AsyncLocalStorage` flag scoped to the asynchronous load
  * chain the adapter owns. Anything evaluated inside

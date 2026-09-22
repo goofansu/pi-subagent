@@ -11,6 +11,19 @@ abstraction and how the product is built now. Everything below is kept
 unedited: the reason a decision was made is part of the record even when its
 subject is gone.
 
+## Amendment: allow the exe.dev VM integration (2026-09-22)
+
+Pi children now explicitly load the global `exe-dev` extension when it is
+installed under the agent directory. Normal extension discovery remains
+disabled. This narrow exception preserves the Profile as child policy while
+making exe.dev's provider routes and injected VM context available to the
+child. Every other extension-defined provider, tool, and startup hook remains
+excluded.
+
+This supersedes the absolute "all extensions" wording in the 2026-09-12
+amendment below. The child-load discriminator still keeps this package inert,
+and the orchestration-tool exclusion still prevents nested delegation.
+
 ## Amendment: child extensions disabled (2026-09-12)
 
 A Pi child's Profile is now its complete behavioural policy, so child resource

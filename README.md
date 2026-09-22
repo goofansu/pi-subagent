@@ -40,13 +40,15 @@ task in that conversation.
 `agent_start` and `agent_resume` return IDs immediately. A completion notice
 contains the result when it fits. Use `agent_result` to read longer output.
 
-Pi-backed subagents do not load extensions. Their Profile controls their model,
-prompt, and tools without extension startup hooks changing them. Models from
-Pi's built-in catalogue, including Radius, remain available; extension-defined
-providers and extension tools do not. Consequently, if a Profile omits its
-model while the parent uses an extension-defined provider, `agent_start` fails
-because that provider is unavailable to the child. Pin a built-in or
-`models.json` model in the Profile instead.
+Pi-backed subagents disable normal extension discovery so their Profile controls
+their model, prompt, and tools without arbitrary startup hooks changing them.
+The global `exe-dev` extension is the sole exception when installed, allowing
+subagents on exe.dev VMs to use the VM's provider routes and injected context.
+Models from Pi's built-in catalogue, including Radius, remain available;
+providers and tools from every other extension do not. Consequently, if a
+Profile omits its model while the parent uses another extension-defined
+provider, `agent_start` fails because that provider is unavailable to the child.
+Pin a built-in, exe.dev-provided, or `models.json` model in the Profile instead.
 
 ## Agent profile format
 

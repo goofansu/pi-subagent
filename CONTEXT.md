@@ -642,10 +642,12 @@ session symbols, its message and event shapes, the resource loader, the
 child-load discriminator, and the depth environment variable all stop there,
 and the boundary test enforces it in both directions: nothing outside names a
 Pi session symbol, and nothing outside the composition root imports the
-directory at all. A Pi child loads no extensions: its Profile remains the
-complete policy for its model, prompt, tools, and behaviour, while providers
-and models from Pi's own catalogue remain available. The adapter does not know
-the runtime, the host, or presentation exist.
+directory at all. A Pi child disables normal extension discovery: its Profile
+remains the complete policy for its model, prompt, tools, and behaviour. The
+one exception is the global `exe-dev` extension, when installed, so the child
+retains the VM's provider routing and context. Providers and models from Pi's
+own catalogue remain available. The adapter does not know the runtime, the
+host, or presentation exist.
 
 **Pi Run evidence** — the in-process, Run-scoped fold inside the Pi adapter
 that accumulates translated Pi readings into the Run meaning Pi alone can
@@ -749,11 +751,11 @@ never read clear. It exists because Claude has no SDK close call to count
 twice, and "close is idempotent" needs a number rather than a claim.
 
 **Child-load discriminator** — the `AsyncLocalStorage` flag that says "this
-resource load belongs to a child". Pi children disable extension discovery;
-the flag remains a backstop around their resource load so this package stays
-inert if Pi evaluates an explicitly supplied factory despite that policy.
-Shared through a global symbol, so whichever entry point a child reaches reads
-a true answer.
+resource load belongs to a child". Pi children disable automatic extension
+discovery and explicitly admit only the global `exe-dev` integration; the flag
+remains a backstop around their resource load so this package stays inert if Pi
+evaluates an explicitly supplied factory. Shared through a global symbol, so
+whichever entry point a child reaches reads a true answer.
 
 **Child depth** — how deep in a delegation chain a process is, carried in the
 `PI_SUBAGENT_DEPTH` environment variable that a Bash spawn's own environment

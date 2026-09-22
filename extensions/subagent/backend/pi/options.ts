@@ -2,16 +2,18 @@
  * The fixed native policy one retained Pi session is constructed with.
  *
  * Trust forwarding, orchestration-tool exclusion, and Bash depth propagation
- * are retained from v1. Disabling extensions is the newer decision that makes
- * the Profile authoritative:
+ * are retained from v1. Extension discovery is disabled except for exe.dev's
+ * VM integration, keeping Profiles authoritative while preserving the VM's
+ * provider routing and context:
  *
  * - **Trust is forwarded, never re-derived.** A child runs non-interactively,
  *   so it can neither prompt for trust nor see a session-only decision; the
  *   delegating Session's answer for this working directory is the answer.
- * - **Extensions are disabled.** A Profile is the complete policy for a Pi
- *   child; user extensions must not replace its model, prompt, tools, or other
- *   behaviour during startup. Providers and models supplied by Pi's catalogue
- *   remain available.
+ * - **Only the exe.dev extension is allowed.** A Profile is the complete policy
+ *   for a Pi child; arbitrary user extensions must not replace its model,
+ *   prompt, tools, or other behaviour during startup. On an exe.dev VM, its
+ *   global integration extension is explicitly loaded so the child can use the
+ *   VM's provider routes and receive the VM context it supplies.
  * - **The orchestration tools are excluded.** Belt and braces with disabled
  *   extensions: even a child that somehow reached the registrations cannot
  *   call them.
@@ -26,6 +28,8 @@
  * the open rather than the first Run.
  */
 
+import { existsSync } from "node:fs";
+import path from "node:path";
 import {
   createAgentSessionServices,
   createBashToolDefinition,
@@ -118,6 +122,12 @@ function modelForReference(
   return runtime.getModels().find((model) => model.id === reference);
 }
 
+/** The one global extension a Pi child may load, when it is installed. */
+function exeDevExtensionPaths(agentDir: string): string[] {
+  const extension = path.join(agentDir, "extensions", "exe-dev");
+  return existsSync(extension) ? [extension] : [];
+}
+
 export interface PiSessionOptionsInput {
   readonly profile: Profile;
   readonly subagent: SubagentContext;
@@ -137,9 +147,9 @@ export async function createPiSessionOptions(
     projectTrusted: subagent.projectTrusted,
   });
   const prompt = profile.systemPrompt;
-  // Extensions are disabled by the resource loader. The discriminator remains
-  // a backstop around discovery so this package stays inert if Pi ever invokes
-  // an explicitly supplied factory despite that policy.
+  // Normal extension discovery stays disabled. The exe.dev VM integration is
+  // an explicit exception so its provider routes and VM context reach children.
+  // The discriminator remains a backstop so this package itself stays inert.
   const services = await withChildResourceLoad(() =>
     createAgentSessionServices({
       cwd: subagent.cwd,
@@ -147,6 +157,7 @@ export async function createPiSessionOptions(
       settingsManager,
       resourceLoaderOptions: {
         noExtensions: true,
+        additionalExtensionPaths: exeDevExtensionPaths(agentDir),
         ...(prompt.trim().length === 0
           ? {}
           : shouldAppendSystemPrompt(profile)

@@ -78,11 +78,12 @@ export interface PiOpenOptions {
  * Tell a child's extensions the session is over, then release the handle.
  *
  * The emit is bounded because a child's extension can hang in its own
- * shutdown, and the one thing a parent must not do is hang with it. The bound
- * is `Effect.timeout` against the runtime clock rather than a timer, so a test
- * can advance it; a timer is the one kind of waiting no clock can replace, and
- * the v2 lane forbids it outright. Disposal happens either way: the extensions
- * were given their chance.
+ * shutdown, and the one thing a parent must not do is hang with it. Normal
+ * child extensions are forbidden, but the explicitly admitted exe.dev
+ * integration still receives lifecycle events. The bound is `Effect.timeout`
+ * against the runtime clock rather than a timer, so a test can advance it; a
+ * timer is the one kind of waiting no clock can replace. Disposal happens
+ * either way: the extension was given its chance.
  */
 function disposeSession(
   session: PiSession,

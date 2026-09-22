@@ -23,8 +23,8 @@ import { validatePiProfile } from "./profile.ts";
  * The fixed native policy one retained session is built with.
  *
  * This keeps v1's forwarded trust, delegation-tool exclusion, and Bash depth
- * propagation. Disabling extensions is the newer policy that makes the Profile
- * authoritative.
+ * propagation. Extension discovery stays disabled except for the exe.dev VM
+ * integration, keeping the Profile authoritative without losing VM routing.
  *
  * The options are built against a temporary agent directory, so nothing here
  * reads the machine's own credentials or reaches a provider.
@@ -138,16 +138,25 @@ test("a Profile's tools list reaches the session, and no list leaves the default
   );
 });
 
-test("extensions are neither initialized nor bound in a Pi child", async (t) => {
+test("only the exe.dev extension is initialized in a Pi child", async (t) => {
   const agentDir = emptyAgentDir(t);
   const extensionsDir = path.join(agentDir, "extensions");
-  const initializedMarker = path.join(agentDir, "extension-initialized.txt");
-  fs.mkdirSync(extensionsDir);
+  const blockedMarker = path.join(agentDir, "blocked-extension.txt");
+  const exeDevMarker = path.join(agentDir, "exe-dev-extension.txt");
+  fs.mkdirSync(path.join(extensionsDir, "exe-dev"), { recursive: true });
   fs.writeFileSync(
     path.join(extensionsDir, "fixture-extension.ts"),
     `import fs from "node:fs";
 export default function fixtureExtension() {
-  fs.writeFileSync(${JSON.stringify(initializedMarker)}, "initialized");
+  fs.writeFileSync(${JSON.stringify(blockedMarker)}, "initialized");
+}
+`,
+  );
+  fs.writeFileSync(
+    path.join(extensionsDir, "exe-dev", "index.ts"),
+    `import fs from "node:fs";
+export default function exeDevExtension() {
+  fs.writeFileSync(${JSON.stringify(exeDevMarker)}, "initialized");
 }
 `,
   );
@@ -158,11 +167,17 @@ export default function fixtureExtension() {
     agentDir,
   });
 
-  assert.equal(fs.existsSync(initializedMarker), false);
-  assert.deepEqual(options.resourceLoader?.getExtensions().extensions, []);
+  assert.equal(fs.existsSync(blockedMarker), false);
+  assert.equal(fs.readFileSync(exeDevMarker, "utf8"), "initialized");
+  const extensions = options.resourceLoader?.getExtensions().extensions ?? [];
+  assert.equal(extensions.length, 1);
+  assert.equal(
+    extensions[0]?.resolvedPath,
+    path.join(extensionsDir, "exe-dev"),
+  );
 });
 
-test("a built-in Radius model remains available with extensions disabled", async (t) => {
+test("a built-in Radius model remains available with normal extensions disabled", async (t) => {
   const agentDir = emptyAgentDir(t);
   const radiusModel = {
     id: "fixture-model",
