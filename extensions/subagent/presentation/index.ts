@@ -29,16 +29,12 @@ export {
   reduceDashboardPage,
 } from "./dashboard-page.ts";
 
-export { compactFinalOutputSummaryPhrase } from "./final-output-section.ts";
-
 export { formatNotificationText } from "./notification-text.ts";
 
 export {
   formatInvalidProfilesWarning,
-  formatNoActiveRuns,
   formatSessionNotReady,
   formatToolInputRejected,
-  formatWaitOutcomes,
   presentCancelOutcomes,
   presentResultOutcome,
   presentResumeOutcome,
@@ -56,21 +52,9 @@ export {
   widgetSummary,
 } from "./rows.ts";
 
-export { formatResult } from "./run-card.ts";
-
 export {
-  cancelToolRowFacts,
-  decodeToolRowFacts,
   encodeToolRowFacts,
-  noActiveWaitAllToolRowFacts,
-  resultToolRowFacts,
-  resumeToolRowFacts,
-  startToolRowFacts,
-  steerToolRowFacts,
   type ToolRowFacts,
-  toolRowPresentation,
-  waitAllToolRowFacts,
-  waitToolRowFacts,
 } from "./tool-row-facts.ts";
 
 export {
