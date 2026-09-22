@@ -1,6 +1,6 @@
 ---
 name: implement-spec
-description: Implement a specification and its ticket graph on one branch using sequential implementers, independent Spec and Standards reviews, and a final whole-spec review. Use when delivering an entire specification rather than one isolated coding change.
+description: Deliver an entire specification rather than an isolated change, using sequential implementers, per-ticket validation, and final whole-spec Spec and Standards reviews.
 disable-model-invocation: true
 ---
 
@@ -8,13 +8,15 @@ disable-model-invocation: true
 
 Deliver the supplied specification on one branch. Use one implementation checkout and one implementation writer at a time. Tickets determine dependency order; they do not require parallel worktrees.
 
-The main agent owns scope, ticket state, Git operations, and completion decisions. Delegate implementation to `implementer` and bounded investigation to `general-purpose`. Invoke `/skill:code-review` from the main agent for independent Spec and Standards reviews. Keep delegation at one level; do not ask an implementer to run the review skill.
+The main agent owns scope, ticket state, Git operations, and completion decisions. Delegate implementation to `implementer` and bounded investigation to `general-purpose`. Invoke `/skill:code-review` from the main agent for independent Spec and Standards reviews after all tickets are implemented; ticket completion uses local validation rather than dual reviews. Keep delegation at one level; do not ask an implementer to run the review skill.
 
 Communicate through source paths, ticket references, commit hashes, and concise decisions. Include enough scope in each handoff to distinguish the current ticket from the whole specification. Do not assume any source template or generating skill.
 
 ## 1. Establish scope and checkout
 
 Read the full specification, associated tickets, repository instructions, and applicable domain documentation. Honor the user's source precedence. Identify every required behavior, constraint, and required check. Verify that tickets collectively cover the specification; report uncovered requirements or contradictory scope instead of silently dropping them. If there are no tickets, treat the specification as one unit.
+
+Before implementation, locate and read `/skill:code-review` and confirm that the `implementer`, `spec-reviewer`, and `standards-reviewer` Profiles are available. If the skill or any required Profile is unavailable, pause before starting tickets and report what is missing. Apply the invocation overrides in §5 when using the review skill.
 
 Build the dependency graph and validate that all blockers exist and there are no cycles. Record each ticket as pending, active, blocked, or complete in a compact progress ledger. Follow the repository's issue-tracker conventions when updating actual tickets. A runnable ticket has all prerequisites complete. No frontier with unfinished tickets is a blocker, not completion.
 
@@ -35,41 +37,43 @@ Choose one unblocked ticket, using ticket order to break ties unless the user sp
 - the ticket's full source and the parent specification;
 - the exact ticket scope and applicable shared constraints;
 - prerequisite commit hashes and relevant investigation pointers;
-- the selected checkout and required checks; and
+- the selected checkout and focused tests to run during implementation, with repository completion checks reserved for the main agent in §4; and
 - an instruction to leave all work uncommitted, including new files.
 
 Keep its Subagent ID for revisions. Resume the same implementer within this ticket; start a fresh implementer for the next ticket with the committed prerequisites as context. If conversation state is unavailable, start a replacement with the sources, current changes, and outstanding findings.
 
 No other agent edits the implementation checkout while this Run is active. A completed Run is only a signal to inspect its report. Unmet criteria, missing evidence, or failing checks go back to the implementer. A requirement decision that cannot be resolved from the sources pauses the workflow with the work preserved.
 
-## 4. Review the uncommitted ticket
+## 4. Validate and commit the ticket
 
-After the implementer stops, invoke `/skill:code-review` with an explicit scope override: review `git diff HEAD` plus the full contents of all in-scope untracked files identified by `git status --short --untracked-files=all`. Supply the checkout, ticket and parent specification sources, prerequisite commits, and implementer's report. State that only this ticket's behavior and applicable shared constraints are required now. On re-review, also supply the prior findings and implementer's responses, separated by axis.
+After the implementer stops, inspect its report, `git diff HEAD`, and the full contents of in-scope untracked files identified by `git status --short --untracked-files=all`. On each validation round, account for every ticket criterion and applicable shared constraint across the entire current ticket scope, using the changes and check evidence. Return missing implementation, unmet criteria, or failing checks to the same implementer. If the same blocker survives two consecutive revision rounds without progress, report the stalemate and preserve the work rather than looping indefinitely.
 
-For this invocation, the supplied scope and requirement sources replace the review skill's default committed-only diff and source-discovery steps. Enumerate the exact additional file paths, state exclusions, and pass this boundary to both reviewers. No new commits is valid for a ticket review; use prerequisite commits for orientation. An empty tracked diff with new files is not empty scope. The review skill still owns standards discovery, its smell baseline, parallel `spec-reviewer` and `standards-reviewer` delegation, and separate reports. Use fresh reviewers each round and pass each only its own axis's prior findings and responses. Keep the checkout stable until it returns; no implementation or Git mutations run concurrently. Missing-input, failed, skipped, or incomplete review results do not satisfy this workflow's two-axis review requirement.
+As the main agent, run the required repository checks on the exact candidate and require them to pass before committing; serialize checks that share mutable fixtures or build outputs. Stage only in-scope files, including new files, inspect the staged diff, and commit the ticket with hooks enabled. If checks or hooks modify code, repeat ticket validation on the changed candidate before marking the ticket complete, even if the commit succeeded. Commit any remaining validated changes with hooks enabled. A failed commit does not complete the ticket.
 
-If the skill reports an empty scope, verify whether the ticket was already satisfied by prerequisite commits. Record that evidence explicitly; do not manufacture a commit or label an empty review clean. Otherwise return the missing implementation to the implementer.
+Record the successful commit hash and confirm the checkout is clean before marking the ticket complete and unlocking dependents. Here, complete means implemented and locally validated; whole-spec acceptance remains pending the final dual review. For an already-satisfied ticket, record its prerequisite evidence instead of an empty commit.
 
-## 5. Resolve findings, validate, and commit
+Repeat from §3. If a blocker prevents further progress, leave the branch and uncommitted work intact and report what is complete and what remains. Do not start another ticket on top of unresolved changes.
 
-Spec blocking findings and Standards hard violations block acceptance. Non-blocking findings and smell judgement calls require a recorded disposition but do not automatically block. Keep the axes separate; neither report cancels the other's findings.
+## 5. Review the entire specification
 
-Resume the implementer with the actionable findings, their axes, and resolution conditions. Pass supported disagreements to `/skill:code-review` for reassessment. After any code revision, invoke it again with the same uncommitted scope override over the entire current ticket scope, not only the latest fix. If the same blocker survives two consecutive revision rounds without progress, report the stalemate and preserve the work rather than looping indefinitely.
+Once every ticket is complete, run the full required integration checks. Route failures through the whole-spec revision sequence below and require checks to pass before review. Require a clean working tree for the initial committed review, then invoke `/skill:code-review`, supplying `git diff <recorded-base-sha> HEAD` as the exact diff command, `git log <recorded-base-sha>..HEAD --oneline` for orientation, and the whole specification and all relevant tickets as the acceptance boundary.
 
-A ticket is accepted when every criterion is accounted for, required checks pass, and neither axis has unresolved blocking findings. Literal `clean` is not required when only accepted non-blocking findings remain. Run required repository checks on the exact candidate before committing; serialize checks that share mutable fixtures or build outputs.
+This review covers every ticket's behavior and shared constraints, cross-ticket interactions, omissions, and scope creep across the final branch. For every invocation, override the review skill's default diff and source discovery with the exact command and requirement sources supplied here, including any enumerated untracked files. Use the `spec-reviewer` and `standards-reviewer` Profiles for its two parallel reviewers. Follow the skill for standards discovery, its smell baseline, and separate reports. Use fresh reviewers each round and pass each only its own axis's prior findings and responses. Keep the checkout stable until review returns. Missing-input, failed, skipped, or incomplete review results do not satisfy the two-axis requirement.
 
-Stage only reviewed files, including reviewed new files, inspect the staged diff, and commit the ticket with hooks enabled. If checks or hooks modify code, re-review that changed candidate. A failed commit does not complete the ticket. Record the successful commit hash and confirm the checkout is clean before marking the ticket complete and unlocking dependents. For an already-satisfied ticket, record its prerequisite evidence instead of an empty commit.
+Ask each axis to report coverage gaps explicitly rather than treating a truncated or partial review as clean. If the aggregate scope exceeds reviewer capacity, pause acceptance and agree a bounded review plan covering all requirements, changed files, and cross-ticket interactions. Keep this review at the whole-spec stage; late findings may require revising already-committed tickets and their dependents.
 
-Repeat from step 3. If a blocker prevents further progress, leave the branch and uncommitted work intact and report what is complete and what remains. Do not start another ticket on top of unresolved changes.
+Spec blocking findings and Standards hard violations block acceptance. Non-blocking findings and smell judgement calls require a recorded disposition but do not automatically block. Keep the axes separate; neither report cancels the other's findings. Literal `clean` is not required when only accepted non-blocking findings remain.
 
-## 6. Review the entire specification
+Do not substitute the last ticket's diff or move the base to HEAD. If the skill reports an empty aggregate scope, explicitly explain whether the specification was already implemented; do not present an empty diff as a successful implementation review.
 
-Once every ticket is complete, run the full required integration checks. Require a clean working tree, then invoke `/skill:code-review`, supplying `git diff <recorded-base-sha> HEAD` as the exact diff command, `git log <recorded-base-sha>..HEAD --oneline` for orientation, and the whole specification and all relevant tickets as the acceptance boundary.
+When both reviews are complete, required checks pass, and all findings are resolved or accepted as non-blocking, proceed directly to §6 if no revisions are needed.
 
-This review covers cross-ticket interactions, omissions, and scope creep across the final branch. Do not substitute the last ticket's diff or move the base to HEAD. If the skill reports an empty aggregate scope, explicitly explain whether the specification was already implemented; do not present an empty diff as a successful implementation review.
+If integration checks fail or review fixes are needed, start one implementer for a bounded whole-spec revision, supplying the specification, relevant tickets, check failures or actionable findings separated by axis, and resolution conditions. Require it to leave changes uncommitted. Resume that same implementer for subsequent revisions, using the replacement procedure in §3 if its Conversation is unavailable. Wait until its Run stops, inspect its report and changes, then run the required checks as the main agent and require them to pass before review.
 
-If fixes are needed, use one implementer for a bounded whole-spec revision. Invoke `/skill:code-review` with an explicit scope override: `git diff <recorded-base-sha>` plus the full contents of in-scope untracked files from `git status --short --untracked-files=all`, with the whole-spec acceptance boundary and prior findings and responses. Pass this boundary to both reviewers instead of the skill's default committed-only diff. This reviews earlier commits together with uncommitted fixes and new files. Run required checks, resolve findings using the same loop, and commit accepted fixes. Invoke the skill again on the committed diff against the unchanged base before declaring completion.
+Then invoke `/skill:code-review` with an explicit scope override: `git diff <recorded-base-sha>` plus the full contents of in-scope untracked files from `git status --short --untracked-files=all`, with the whole-spec acceptance boundary and prior findings and responses. Enumerate the exact additional file paths and exclusions, and pass this boundary to both reviewers instead of the skill's default committed-only diff. This reviews earlier commits together with uncommitted fixes and new files, not only the latest fix. Pass supported disagreements for reassessment, keeping each axis's findings and responses separate. Repeat the revision/check/review sequence until neither axis has unresolved blocking findings. If the same blocker survives two consecutive revision rounds without progress, report the stalemate and preserve the work.
 
-## 7. Deliver
+If the revision sequence produced uncommitted fixes, once both axes have no unresolved blocking findings and required checks pass, stage only reviewed, in-scope files, including new files. Inspect the staged diff and confirm the candidate to be committed matches the reviewed candidate, then commit with hooks enabled. If checks or hooks modify code, validate and re-review the changed candidate. Record the successful commit hash and confirm the checkout is clean; an unchanged reviewed candidate needs no duplicate review merely because it was committed. Unexpected out-of-scope changes are a blocker to resolve or preserve separately, not a reason to include them in the commit. After accepted revisions are committed and the checkout is clean, proceed to §6.
+
+## 6. Deliver
 
 Report completed tickets and commits, required checks, both review outcomes, accepted non-blocking risks, and any unresolved work. Report the branch and checkout location. If a PR is part of the user's request, create or update it and mark it ready only after final checks and review pass. Otherwise hand back the reviewed branch. Preserve any checkout containing unresolved work; clean up temporary resources only when their useful work is safely retained.
