@@ -527,7 +527,8 @@ module's interface — what the host, the application façade, and the entry poi
 may read. Every other name in the module is implementation, reachable by
 siblings and colocated tests and by nothing outside. The barrel is a seam by
 rule: the boundary test rejects an import of a presentation file by path from
-outside the module.
+outside the module. The barrel exports only what production reads, and the
+boundary test enforces it.
 
 **Session handle** — the one process-level variable holding the current
 Session's managed runtime, or none. Pi registers tools, commands, and renderers

@@ -636,6 +636,76 @@ function constructedTerminalObservationKinds(source: string): string[] {
   return kinds;
 }
 
+/** The public names explicitly exported by a barrel. */
+function namedBarrelExports(source: string): string[] {
+  const sourceFile = ts.createSourceFile(
+    "presentation-barrel.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const names = new Set<string>();
+  const exported = (node: ts.Node): boolean =>
+    Boolean(
+      ts.canHaveModifiers(node) &&
+        ts
+          .getModifiers(node)
+          ?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword),
+    );
+  const defaulted = (node: ts.Node): boolean =>
+    Boolean(
+      ts.canHaveModifiers(node) &&
+        ts
+          .getModifiers(node)
+          ?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword),
+    );
+  const addBinding = (name: ts.BindingName): void => {
+    if (ts.isIdentifier(name)) {
+      names.add(name.text);
+      return;
+    }
+    for (const element of name.elements) {
+      if (!ts.isOmittedExpression(element)) addBinding(element.name);
+    }
+  };
+
+  for (const statement of sourceFile.statements) {
+    if (ts.isExportDeclaration(statement)) {
+      const clause = statement.exportClause;
+      if (!clause) continue;
+      if (ts.isNamespaceExport(clause)) {
+        names.add(clause.name.text);
+        continue;
+      }
+      for (const element of clause.elements) {
+        if (element.name.text !== "default") names.add(element.name.text);
+      }
+      continue;
+    }
+    if (!exported(statement) || defaulted(statement)) continue;
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        addBinding(declaration.name);
+      }
+      continue;
+    }
+    if (
+      (ts.isFunctionDeclaration(statement) ||
+        ts.isClassDeclaration(statement) ||
+        ts.isInterfaceDeclaration(statement) ||
+        ts.isTypeAliasDeclaration(statement) ||
+        ts.isEnumDeclaration(statement) ||
+        ts.isModuleDeclaration(statement) ||
+        ts.isImportEqualsDeclaration(statement)) &&
+      statement.name
+    ) {
+      names.add(statement.name.text);
+    }
+  }
+  return [...names].sort();
+}
+
 /**
  * The runtime files allowed to import `Layer`.
  *
@@ -1373,7 +1443,34 @@ export function findBoundaryViolations(
     }
   }
 
-  // 24. An edge this checker cannot see is an edge no rule above can hold.
+  // 24. Every name on the presentation interface has a production reader.
+  //     The inverse rule above keeps outsiders on the barrel; this rule keeps
+  //     tests and implementation from widening that barrel for themselves.
+  //     Type-only and aliased imports count because the named-import reader
+  //     reports the public binding named at the module edge.
+  if (fs.existsSync(barrel)) {
+    const imported = new Set<string>();
+    for (const file of listSourceFiles(treeRoot, { includeTests: false })) {
+      if (
+        isInside(file, graph.presentationRoot) ||
+        isInside(file, graph.testingRoot)
+      ) {
+        continue;
+      }
+      for (const edge of readNamedImports(fs.readFileSync(file, "utf8"))) {
+        if (resolveRelativeSource(file, edge.specifier) !== barrel) continue;
+        for (const name of edge.names) imported.add(name);
+      }
+    }
+    for (const name of namedBarrelExports(fs.readFileSync(barrel, "utf8"))) {
+      if (imported.has(name)) continue;
+      violations.add(
+        `${describe(barrel)} exports ${name}, but no production file outside the presentation module imports it`,
+      );
+    }
+  }
+
+  // 25. An edge this checker cannot see is an edge no rule above can hold.
   //     Every rule here is a rule about specifiers, so one `await import(url)`
   //     with a computed argument would let any of them be broken without
   //     failing anything — a presentation file could reach the runtime, an
@@ -1397,7 +1494,7 @@ export function findBoundaryViolations(
  *
  * Empty, and entries are tree-relative paths when it is not. Each one would be
  * a rule this suite has stopped being able to enforce for that file, so each
- * would need a reason at rule 22 above.
+ * would need a reason at rule 25 above.
  */
 const COMPUTED_IMPORT_ALLOWED: ReadonlySet<string> = new Set<string>([]);
 
@@ -2791,6 +2888,60 @@ test("a colocated presentation test may import its subject by path", (t) => {
   write(
     "extensions/subagent/presentation/rows.test.ts",
     'import "./rows.ts";\n',
+  );
+
+  assert.deepEqual(findBoundaryViolations(graph), []);
+});
+
+test("every presentation barrel export needs an outside production importer", (t) => {
+  const { graph, write } = fixtureGraph(t, "presentation-barrel-readers");
+  write("extensions/subagent/index.ts", "export {};\n");
+  write(
+    "extensions/subagent/presentation/index.ts",
+    [
+      'export { unused } from "./unused.ts";',
+      'export { testOnly as PublicTestOnly } from "./test-only.ts";',
+      'export type { InternalOnly as PublicInternalOnly } from "./internal-only.ts";',
+      "",
+    ].join("\n"),
+  );
+  write(
+    "extensions/subagent/presentation/unused.ts",
+    "export const unused = 1;\n",
+  );
+  write(
+    "extensions/subagent/presentation/test-only.ts",
+    "export const testOnly = 1;\n",
+  );
+  write(
+    "extensions/subagent/presentation/internal-only.ts",
+    "export interface InternalOnly {}\n",
+  );
+  write(
+    "extensions/subagent/presentation/internal-reader.ts",
+    'import type { PublicInternalOnly } from "./index.ts";\nexport type Held = PublicInternalOnly;\n',
+  );
+  write(
+    "extensions/subagent/host/widget.test.ts",
+    'import { PublicTestOnly } from "../presentation/index.ts";\nvoid PublicTestOnly;\n',
+  );
+
+  assert.deepEqual(findBoundaryViolations(graph), [
+    `${describe(graph.presentationBarrelFile)} exports PublicInternalOnly, but no production file outside the presentation module imports it`,
+    `${describe(graph.presentationBarrelFile)} exports PublicTestOnly, but no production file outside the presentation module imports it`,
+    `${describe(graph.presentationBarrelFile)} exports unused, but no production file outside the presentation module imports it`,
+  ]);
+
+  write(
+    "extensions/subagent/host/widget.ts",
+    [
+      'import { unused, PublicTestOnly as UsedTestOnly } from "../presentation/index.ts";',
+      'import type { PublicInternalOnly as UsedInternalOnly } from "../presentation/index.ts";',
+      "void unused;",
+      "void UsedTestOnly;",
+      "export type Held = UsedInternalOnly;",
+      "",
+    ].join("\n"),
   );
 
   assert.deepEqual(findBoundaryViolations(graph), []);
