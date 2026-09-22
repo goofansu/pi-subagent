@@ -2,10 +2,16 @@
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
-## Before exploring, read these
+## Before exploring, read selectively
 
-- **`CONTEXT.md`** at the repo root
-- **`docs/adr/`** — read ADRs that touch the area you're about to work in.
+`CONTEXT.md` is the vocabulary and architecture source of truth, not ambient context that must always be loaded in full.
+
+1. Read its opening explanation and the definitions for the concepts named by the task.
+2. Search for those concepts and read the surrounding product or architecture sections.
+3. Read ADRs in `docs/adr/` that touch the affected boundary or decision.
+4. Read all of `CONTEXT.md` only for cross-cutting design work, vocabulary audits, or work whose boundary is still unknown after targeted exploration.
+
+For a narrow presentation, script, profile, or documentation change, stop once the relevant definitions, integration boundary, and decisions are clear. If a search exposes an unfamiliar project term, follow its definition before continuing rather than loading unrelated sections.
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
