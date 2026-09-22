@@ -1,5 +1,5 @@
 ---
-description: Reviews a caller-scoped diff against supplied requirement sources without editing. Use for the Spec axis of code review and re-review: omissions, wrong behavior, scope creep, and acceptance-test gaps.
+description: Reviews a caller-scoped diff against supplied requirement sources without editing. Use for the Spec axis of code review and re-review.
 backend: claude
 model: opus
 effort: high
