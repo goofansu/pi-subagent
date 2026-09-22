@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Clock, Deferred, Effect, Fiber } from "effect";
-import { answeredEnding } from "../domain/index.ts";
+import {
+  answeredEnding,
+  backendId,
+  runId as makeRunId,
+  subagentId,
+} from "../domain/index.ts";
 import type { RunInspection } from "../domain/inspection.ts";
 import { emitText, emitToolCall } from "../testing/fakes/script.ts";
 import { fixtureResult } from "../testing/presentation-fixtures.ts";
@@ -77,6 +82,42 @@ test("unreadable inspection discovers the same one-time defect as later parent a
   assert.deepEqual(observed.value, baseline.value);
   assert.equal(baseline.noLeaks, true);
   assert.equal(observed.noLeaks, true);
+});
+
+test("inspection explains and counts a terminal Run with no Result store entry", async () => {
+  const outcome = await withSession({}, (rig) =>
+    Effect.gen(function* () {
+      const runId = makeRunId("run-missing-inspection-result");
+      yield* rig.repository.publish(
+        {
+          runId,
+          subagentId: subagentId("subagent-missing-inspection-result"),
+          backendId: backendId("fake-resumable"),
+          agent: "explore",
+          description: "missing inspection output",
+        },
+        0,
+        "missing-result prompt",
+      );
+      yield* rig.repository.transition(runId, "execution-ended");
+      yield* rig.repository.transition(runId, "settled-failed", 1);
+
+      const first = yield* rig.supervisor.inspectRun(runId);
+      const second = yield* rig.supervisor.inspectRun(runId);
+      return { first, second, counters: rig.supervisor.counters() };
+    }),
+  );
+
+  assert.equal(outcome.value.first.outcome, "unavailable");
+  if (outcome.value.first.outcome === "unavailable") {
+    assert.match(
+      outcome.value.first.diagnostic?.message ?? "",
+      /no entry for terminal Run run-missing-inspection-result/,
+    );
+  }
+  assert.deepEqual(outcome.value.second, outcome.value.first);
+  assert.equal(outcome.value.counters.unreadableResults, 1);
+  assert.equal(outcome.noLeaks, true);
 });
 
 function assertPlainFrozen(value: unknown): void {

@@ -29,7 +29,11 @@ test("eviction leaves the input state and its shared entries untouched", () => {
     [newest.runId, newest],
   ]);
   const reservations = new Map([["run-reserved" as RunId, 5]]);
-  const input: StoreState = { entries, reservations };
+  const input: StoreState = {
+    entries,
+    reservations,
+    missingObserved: new Set(),
+  };
   // Independent value snapshot detects mutation of Maps, entries, or pin Sets.
   const before = structuredClone(input);
   const counters = createRuntimeCounters();

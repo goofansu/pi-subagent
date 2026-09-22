@@ -27,6 +27,8 @@ import { Context, Effect, Layer, Ref, Schema } from "effect";
 import {
   boundResultToBytes,
   byteLength,
+  type CancellationReason,
+  type CancellationRequest,
   EXACT_KEYS,
   type RunDiagnostic,
   type RunId,
@@ -73,6 +75,31 @@ export type ResultRead =
       readonly diagnostic: RunDiagnostic;
     };
 
+export interface TerminalResultFacts {
+  readonly subagentId: SubagentId;
+  readonly terminalStatus?: TerminalRunPhase;
+  readonly cancellation?: CancellationRequest;
+}
+
+export type TerminalResultRead =
+  | { readonly outcome: "result"; readonly result: RunResult }
+  | {
+      readonly outcome: "expired";
+      readonly runId: RunId;
+      readonly subagentId: SubagentId;
+      readonly status: TerminalRunPhase;
+      readonly cancellationReason?: CancellationReason;
+    }
+  | {
+      readonly outcome: "unreadable";
+      readonly runId: RunId;
+      readonly subagentId: SubagentId;
+      readonly status: TerminalRunPhase;
+      readonly cancellationReason?: CancellationReason;
+      readonly cause: "missing" | "defect";
+      readonly diagnostic: RunDiagnostic;
+    };
+
 export interface ResultStoreEncodingFailure {
   readonly _tag: "ResultStoreEncodingFailure";
   readonly diagnostic: RunDiagnostic;
@@ -101,6 +128,7 @@ export type CommitOutcome =
 const EMPTY_STATE: StoreState = {
   entries: new Map(),
   reservations: new Map(),
+  missingObserved: new Set(),
 };
 
 const makeStore = (
@@ -345,6 +373,97 @@ const makeStore = (
         return observed.read;
       });
 
+    /**
+     * Answer the one question all terminal-Run readers share.
+     *
+     * The repository has already established terminality. This fold combines
+     * its few facts with the authoritative entry, and owns both unreadable
+     * causes and their once-per-Run count.
+     */
+    const readTerminal = (
+      runId: RunId,
+      facts: TerminalResultFacts,
+    ): Effect.Effect<TerminalResultRead> =>
+      Effect.gen(function* () {
+        const observed = yield* Ref.modify(state, (current) => {
+          const entry = current.entries.get(runId);
+          const status = entry?.status ?? facts.terminalStatus ?? "failed";
+          const identity = {
+            runId,
+            subagentId: entry?.subagentId ?? facts.subagentId,
+            status,
+            ...(status === "cancelled" && facts.cancellation !== undefined
+              ? { cancellationReason: facts.cancellation.reason }
+              : {}),
+          };
+          if (!entry) {
+            const read: TerminalResultRead = {
+              outcome: "unreadable",
+              ...identity,
+              cause: "missing",
+              diagnostic: runDiagnostic(
+                "other",
+                `the Result store has no entry for terminal Run ${runId}`,
+              ),
+            };
+            if (current.missingObserved.has(runId)) {
+              return [{ read, countUnreadable: false }, current];
+            }
+            const missingObserved = new Set(current.missingObserved);
+            missingObserved.add(runId);
+            return [
+              { read, countUnreadable: true },
+              { ...current, missingObserved },
+            ];
+          }
+          if (entry.encoded === undefined) {
+            return [
+              {
+                read: {
+                  outcome: "expired",
+                  ...identity,
+                } as TerminalResultRead,
+                countUnreadable: false,
+              },
+              current,
+            ];
+          }
+          const decoded = readEntry(entry);
+          if (decoded) {
+            return [
+              {
+                read: {
+                  outcome: "result",
+                  result: decoded,
+                } as TerminalResultRead,
+                countUnreadable: false,
+              },
+              current,
+            ];
+          }
+          const read: TerminalResultRead = {
+            outcome: "unreadable",
+            ...identity,
+            cause: "defect",
+            diagnostic: runDiagnostic(
+              "other",
+              `the stored result for ${runId} does not decode`,
+            ),
+          };
+          if (entry.unreadableObserved) {
+            return [{ read, countUnreadable: false }, current];
+          }
+          const entries = new Map(current.entries);
+          entries.set(runId, { ...entry, unreadableObserved: true });
+          return [
+            { read, countUnreadable: true },
+            { ...current, entries },
+          ];
+        });
+        if (observed.countUnreadable) counters.count("unreadableResults");
+        return observed.read;
+      });
+
     return {
       reserve,
       release,
@@ -352,6 +471,7 @@ const makeStore = (
       recordOutputGone,
       releasePin,
       read,
+      readTerminal,
 
       /** Whether an id has an entry at all, evicted or not. */
       has: (runId: RunId): Effect.Effect<boolean> =>

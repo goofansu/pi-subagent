@@ -38,6 +38,8 @@ export interface StoredEntry {
 export interface StoreState {
   readonly entries: ReadonlyMap<RunId, StoredEntry>;
   readonly reservations: ReadonlyMap<RunId, number>;
+  /** Terminal Runs whose absent entry has already counted as unreadable. */
+  readonly missingObserved: ReadonlySet<RunId>;
 }
 
 /** Reserved plus stored, which is what the budget is measured against. */

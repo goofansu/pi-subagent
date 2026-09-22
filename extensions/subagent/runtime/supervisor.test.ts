@@ -642,11 +642,46 @@ test("a terminal Run with no Result store entry counts once", async () => {
       yield* rig.repository.transition(id, "settled-failed", 1);
 
       const result = yield* rig.supervisor.result(id);
-      return { result, counters: rig.supervisor.counters() };
+      const again = yield* rig.supervisor.result(id);
+      return { result, again, counters: rig.supervisor.counters() };
     }),
   );
 
   assert.equal(value.result.outcome, "ResultExpired");
+  assert.deepEqual(value.again, value.result);
+  assert.equal(value.counters.unreadableResults, 1);
+});
+
+test("a wait on a terminal Run with no Result store entry counts one unreadable Result", async () => {
+  const { value } = await withSession({}, (rig) =>
+    Effect.gen(function* () {
+      const runId = makeRunId("run-missing-wait-result");
+      yield* rig.repository.publish(
+        {
+          runId,
+          subagentId: subagentId("subagent-missing-wait-result"),
+          backendId: backendId("fake-resumable"),
+          agent: "explore",
+          description: "missing wait output",
+        },
+        0,
+        "missing-result prompt",
+      );
+      yield* rig.repository.transition(runId, "execution-ended");
+      yield* rig.repository.transition(runId, "settled-failed", 1);
+
+      const [first] = yield* rig.supervisor.wait([runId]);
+      const [second] = yield* rig.supervisor.wait([runId]);
+      return { first, second, counters: rig.supervisor.counters() };
+    }),
+  );
+
+  assert.deepEqual(value.first, {
+    outcome: "terminal",
+    runId: "run-missing-wait-result",
+    status: "failed",
+  });
+  assert.deepEqual(value.second, value.first);
   assert.equal(value.counters.unreadableResults, 1);
 });
 

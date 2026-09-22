@@ -311,11 +311,9 @@ function runIdentityFor(
 /**
  * What a waiter answers about a Run it has seen settle.
  *
- * The status comes from the **store**, so a waiter and `agent_result` cannot
- * disagree about one Run: they read the same value, and a Run whose output was
- * evicted still carries its status in the entry that stayed. The repository's
- * snapshot is the fallback for the moment between publication and a store that
- * has not been asked yet.
+ * The terminal Result fold belongs to the store, so a waiter and
+ * `agent_result` cannot disagree about one Run. It combines the stored entry
+ * with the repository facts needed when output is absent.
  *
  * The Result itself rides on the outcome when the store still holds it
  * ([ADR-0036](../../../docs/adr/0036-a-wait-delivers-the-result-it-waited-for.md)):
@@ -329,31 +327,33 @@ function terminalOutcomeOf(
   runId: RunId,
   snapshot: RunSnapshot,
 ): Effect.Effect<WaitOutcome> {
-  return Effect.map(store.read(runId), (stored) => {
-    const status =
+  return Effect.map(
+    store.readTerminal(runId, {
+      subagentId: snapshot.identity.subagentId,
+      terminalStatus: snapshot.terminalStatus,
+      cancellation: snapshot.cancellation,
+    }),
+    (stored) =>
       stored.outcome === "result"
-        ? stored.result.status
-        : stored.outcome === "ResultExpired"
-          ? stored.status
-          : (snapshot.terminalStatus ?? "failed");
-    // The reason comes from the stored Result where there is one and from
-    // the snapshot's recorded request otherwise, so an evicted Run still
-    // says why it stopped. A Run that was not cancelled has no reason, and
-    // reporting one would be inventing it.
-    const reason =
-      stored.outcome === "result"
-        ? stored.result.cancellationReason
-        : snapshot.cancellation?.reason;
-    return {
-      outcome: "terminal",
-      runId,
-      status,
-      ...(status === "cancelled" && reason !== undefined
-        ? { cancellationReason: reason }
-        : {}),
-      ...(stored.outcome === "result" ? { result: stored.result } : {}),
-    } as const;
-  });
+        ? ({
+            outcome: "terminal",
+            runId,
+            status: stored.result.status,
+            ...(stored.result.status === "cancelled" &&
+            stored.result.cancellationReason !== undefined
+              ? { cancellationReason: stored.result.cancellationReason }
+              : {}),
+            result: stored.result,
+          } as const)
+        : ({
+            outcome: "terminal",
+            runId,
+            status: stored.status,
+            ...(stored.cancellationReason === undefined
+              ? {}
+              : { cancellationReason: stored.cancellationReason }),
+          } as const),
+  );
 }
 
 const makeSupervisor = (settings: SessionSettings) =>
@@ -1128,23 +1128,19 @@ const makeSupervisor = (settings: SessionSettings) =>
         if (known.state === "active") {
           return { outcome: "RunNotTerminal", runId } as const;
         }
-        const stored = yield* store.read(runId);
+        const stored = yield* store.readTerminal(runId, {
+          subagentId: known.snapshot.identity.subagentId,
+          terminalStatus: known.snapshot.terminalStatus,
+          cancellation: known.snapshot.cancellation,
+        });
         if (stored.outcome === "result") {
           return { outcome: "result", result: stored.result } as const;
         }
-        if (stored.outcome === "ResultExpired") return stored;
-        // The store owns decode defects: it is the seam that knows an entry
-        // existed but did not decode, and has already counted that read. The
-        // supervisor owns the one case the store cannot know — its missing
-        // entry belongs to a Run the repository says is terminal.
-        if (stored.outcome === "unknown Run") {
-          counters.count("unreadableResults");
-        }
         return {
           outcome: "ResultExpired",
-          runId,
-          subagentId: known.snapshot.identity.subagentId,
-          status: known.snapshot.terminalStatus ?? "failed",
+          runId: stored.runId,
+          subagentId: stored.subagentId,
+          status: stored.status,
         } as const;
       });
 

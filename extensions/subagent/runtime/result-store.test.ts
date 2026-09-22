@@ -362,6 +362,155 @@ test("an unencodable terminal Result can be recorded by id with output gone", as
   assert.equal(outcome.unreadable, 1);
 });
 
+test("terminal reads return a stored Result and an evicted Result's cancellation facts", async () => {
+  const completed = resultOf("run-completed", "x".repeat(400));
+  const cancelled = {
+    ...resultOf("run-cancelled", "y".repeat(400), "cancelled"),
+    cancellationReason: "requested" as const,
+  };
+  const policy: RuntimePolicy = {
+    ...DEFAULT_RUNTIME_POLICY,
+    maxResultBytes: 4_000,
+    resultStoreBytes: encodedResultBytes(completed) + 10,
+  };
+
+  const outcome = await withStore(policy, (store, counters) =>
+    Effect.gen(function* () {
+      yield* store.commit(cancelled);
+      yield* unpin(store, cancelled.runId);
+      yield* store.commit(completed);
+
+      const cancelledFacts = {
+        subagentId: cancelled.subagentId,
+        terminalStatus: "cancelled" as const,
+        cancellation: { reason: "requested" as const },
+      };
+      const completedFacts = {
+        subagentId: completed.subagentId,
+        terminalStatus: "completed" as const,
+      };
+      const expired = yield* store.readTerminal(
+        cancelled.runId,
+        cancelledFacts,
+      );
+      const expiredAgain = yield* store.readTerminal(
+        cancelled.runId,
+        cancelledFacts,
+      );
+      const result = yield* store.readTerminal(completed.runId, completedFacts);
+      const resultAgain = yield* store.readTerminal(
+        completed.runId,
+        completedFacts,
+      );
+      return {
+        expired,
+        expiredAgain,
+        result,
+        resultAgain,
+        unreadable: counters.counters().unreadableResults,
+      };
+    }),
+  );
+
+  assert.deepEqual(outcome.expired, {
+    outcome: "expired",
+    runId: "run-cancelled",
+    subagentId: "subagent-1",
+    status: "cancelled",
+    cancellationReason: "requested",
+  });
+  assert.deepEqual(outcome.expiredAgain, outcome.expired);
+  assert.deepEqual(outcome.result, {
+    outcome: "result",
+    result: completed,
+  });
+  assert.deepEqual(outcome.resultAgain, outcome.result);
+  assert.equal(outcome.unreadable, 0);
+});
+
+test("terminal reads count a missing entry once and clear forgets that memory", async () => {
+  const runId = makeRunId("run-missing");
+  const outcome = await withStore(DEFAULT_RUNTIME_POLICY, (store, counters) =>
+    Effect.gen(function* () {
+      const facts = {
+        subagentId: subagentId("subagent-missing"),
+        terminalStatus: "failed" as const,
+      };
+      const first = yield* store.readTerminal(runId, facts);
+      const second = yield* store.readTerminal(runId, facts);
+      const beforeClear = counters.counters().unreadableResults;
+      yield* store.clear();
+      const afterClear = yield* store.readTerminal(runId, facts);
+      return {
+        first,
+        second,
+        afterClear,
+        beforeClear,
+        finalCount: counters.counters().unreadableResults,
+        raw: yield* store.read(runId),
+      };
+    }),
+  );
+
+  for (const read of [outcome.first, outcome.second, outcome.afterClear]) {
+    assert.equal(read.outcome, "unreadable");
+    if (read.outcome === "unreadable") {
+      assert.equal(read.cause, "missing");
+      assert.equal(read.runId, "run-missing");
+      assert.equal(read.subagentId, "subagent-missing");
+      assert.equal(read.status, "failed");
+      assert.match(
+        read.diagnostic.message,
+        /no entry for terminal Run run-missing/,
+      );
+    }
+  }
+  assert.equal(outcome.beforeClear, 1);
+  assert.equal(outcome.finalCount, 2);
+  assert.deepEqual(outcome.raw, {
+    outcome: "unknown Run",
+    runId: "run-missing",
+  });
+});
+
+test("terminal reads count an undecodable stored form once", async () => {
+  const outcome = await withStore(
+    DEFAULT_RUNTIME_POLICY,
+    (store, counters) =>
+      Effect.gen(function* () {
+        const result = resultOf("run-defect", "the answer");
+        yield* store.commit(result);
+        const facts = {
+          subagentId: result.subagentId,
+          terminalStatus: "completed" as const,
+        };
+        const first = yield* store.readTerminal(result.runId, facts);
+        const second = yield* store.readTerminal(result.runId, facts);
+        return {
+          first,
+          second,
+          unreadable: counters.counters().unreadableResults,
+        };
+      }),
+    (result, encode) => ({
+      ...(encode(result) as Record<string, unknown>),
+      unexpected: true,
+    }),
+  );
+
+  for (const read of [outcome.first, outcome.second]) {
+    assert.equal(read.outcome, "unreadable");
+    if (read.outcome === "unreadable") {
+      assert.equal(read.cause, "defect");
+      assert.equal(read.runId, "run-defect");
+      assert.equal(read.subagentId, "subagent-1");
+      assert.equal(read.status, "completed");
+      assert.match(read.diagnostic.message, /does not decode/);
+    }
+  }
+  assert.equal(outcome.unreadable, 1);
+});
+
 test("an unknown id and an evicted id get different answers", async () => {
   const one = resultOf("run-1", "x".repeat(400));
   const two = resultOf("run-2", "y".repeat(400));

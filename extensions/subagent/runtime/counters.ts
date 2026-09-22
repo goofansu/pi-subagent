@@ -61,11 +61,11 @@ export interface SupervisorCounters {
   /**
    * A terminal Run's stored result could not be read back.
    *
-   * Either the entry is missing when the repository says the Run settled, or
-   * the stored form does not decode. Both are defects in the runtime rather
-   * than in a backend, and `agent_result` has no outcome that says so — it can
-   * only report that the output is gone — so the counter is what makes the
-   * difference visible.
+   * The Result store owns this count: once per Run per cause, when a terminal
+   * entry is missing or its stored form does not decode. Both are defects in
+   * the runtime rather than in a backend, and `agent_result` has no outcome
+   * that says so — it can only report that the output is gone — so the counter
+   * is what makes the difference visible.
    */
   readonly unreadableResults: number;
   /** The same result was committed twice for one Run. */

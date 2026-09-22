@@ -79,14 +79,23 @@ export function captureRunInspection(
       },
     );
     if (captured.outcome !== "terminal") return captured;
-    const stored = yield* store.read(id);
+    const stored = yield* store.readTerminal(id, {
+      subagentId: captured.summary.subagentId,
+      terminalStatus: isTerminalRunPhase(captured.summary.phase)
+        ? captured.summary.phase
+        : undefined,
+      ...(captured.summary.cancellationReason === undefined
+        ? {}
+        : { cancellation: { reason: captured.summary.cancellationReason } }),
+    });
     if (stored.outcome === "result")
       return freeze({ ...captured, outcome: "result", result: stored.result });
+    if (stored.outcome === "expired")
+      return freeze({ ...captured, outcome: "ResultExpired" });
     return freeze({
       ...captured,
-      outcome:
-        stored.outcome === "ResultExpired" ? "ResultExpired" : "unavailable",
-      ...(stored.outcome === "defect" ? { diagnostic: stored.diagnostic } : {}),
+      outcome: "unavailable",
+      diagnostic: stored.diagnostic,
     });
   });
 }

@@ -179,7 +179,9 @@ addressable by id from the moment the Run settles. Reading observes a stored
 Result without consuming it. Results are scoped to the Session that asked, so
 shutdown clears the store. Outputs are held only up to a byte budget; past it
 the oldest unpinned output is evicted, and an evicted Run still answers by id,
-saying its output is gone.
+saying its output is gone. A terminal Run whose stored output is missing or
+does not decode answers the model as output gone, is explained in inspection,
+and is counted once as an `unreadableResults` defect by the store.
 
 **Depth** — delegation is one level deep. A Subagent cannot start Subagents,
 whichever backend runs it. Admission decides a child's depth and each adapter
