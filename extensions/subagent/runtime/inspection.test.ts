@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Clock, Deferred, Effect, Fiber } from "effect";
+import { TestClock } from "effect/testing";
 import {
   answeredEnding,
   backendId,
@@ -85,7 +86,7 @@ test("unreadable inspection discovers the same one-time defect as later parent a
 });
 
 test("inspection explains and counts a terminal Run with no Result store entry", async () => {
-  const outcome = await withSession({}, (rig) =>
+  const outcome = await withSession({ testClock: true }, (rig) =>
     Effect.gen(function* () {
       const runId = makeRunId("run-missing-inspection-result");
       yield* rig.repository.publish(
@@ -103,6 +104,7 @@ test("inspection explains and counts a terminal Run with no Result store entry",
       yield* rig.repository.transition(runId, "settled-failed", 1);
 
       const first = yield* rig.supervisor.inspectRun(runId);
+      yield* TestClock.adjust(1);
       const second = yield* rig.supervisor.inspectRun(runId);
       return { first, second, counters: rig.supervisor.counters() };
     }),
@@ -115,7 +117,14 @@ test("inspection explains and counts a terminal Run with no Result store entry",
       /no entry for terminal Run run-missing-inspection-result/,
     );
   }
-  assert.deepEqual(outcome.value.second, outcome.value.first);
+  assert.equal(
+    outcome.value.second.capturedAt,
+    outcome.value.first.capturedAt + 1,
+  );
+  assert.deepEqual(
+    { ...outcome.value.second, capturedAt: outcome.value.first.capturedAt },
+    outcome.value.first,
+  );
   assert.equal(outcome.value.counters.unreadableResults, 1);
   assert.equal(outcome.noLeaks, true);
 });
