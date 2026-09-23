@@ -573,9 +573,12 @@ navigation-owned *observation lease* mean by it. The strict noun belongs to the
 backend seam; on the host side the word names the act of watching.
 
 **Backend set** — the value a Session is built from: a name, the backends that
-exist, the Profiles they ship, and two host facts only a backend can answer —
-whether this process is loading as one of its own children, and how deep in a
-delegation chain it is. A Session is built from exactly one.
+exist, the Profiles they ship, and host facts only a backend can answer —
+whether this process is loading as one of its own children, how deep in a
+delegation chain it is, and how to label a Profile's model in `/subagent`.
+A Session is built from exactly one. A Profile without a pinned model shows
+`inherit` for Pi (the parent's model) or `default` for Claude (the SDK's
+choice); an empty or whitespace-only model is not pinned.
 
 Three sets exist, and only one ships. The **demo backend set** is M3's: the two
 fake backends and one **demo Profile** per fake, so launching Pi with only the

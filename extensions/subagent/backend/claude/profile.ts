@@ -73,6 +73,15 @@ export function validateClaudeProfile(
   });
 }
 
+function configuredModel(profile: Profile): string | undefined {
+  return stringField(profile, "model")?.toLowerCase();
+}
+
+/** The configured family alias, or the SDK's default when none is pinned. */
+export function claudeProfileModelLabel(profile: Profile): string {
+  return configuredModel(profile) ?? "default";
+}
+
 /** The family alias and effort one Subagent's Queries are built with. */
 export interface ClaudeModelChoice {
   /** The alias, lowercased and unresolved. The SDK resolves the family. */
@@ -91,7 +100,7 @@ export interface ClaudeModelChoice {
  * default — which is v1's behaviour and the only honest one.
  */
 export function resolveClaudeModel(profile: Profile): ClaudeModelChoice {
-  const pinned = stringField(profile, "model")?.toLowerCase();
+  const pinned = configuredModel(profile);
   const effort = effortField(profile, EFFORTS);
   return {
     ...(pinned === undefined ? {} : { model: pinned }),

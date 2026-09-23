@@ -92,6 +92,11 @@ export function validatePiProfile(
   });
 }
 
+/** The configured model, or the parent's model when none is pinned. */
+export function piProfileModelLabel(profile: Profile): string {
+  return stringField(profile, "model") ?? "inherit";
+}
+
 /** The model and thinking level one Subagent's session is built with. */
 export interface PiModelChoice {
   readonly model?: string;

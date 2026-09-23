@@ -11,7 +11,7 @@
  * Bundled Markdown Profiles are package resources. The ProfileCatalog reads
  * and validates them at Session start, beneath whole-Profile user overrides.
  *
- * **The host facts come from Pi, and only Pi.** Whether this process is a
+ * **The child host facts come from Pi, and only Pi.** Whether this process is a
  * child's resource load and how deep in a delegation chain it is are questions
  * only the backend that spawns children in-process can answer. Claude's
  * children are subprocesses that never load this extension, so it has no
@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import {
   CLAUDE_BACKEND_ID,
   type ClaudeBackendOptions,
+  claudeProfileModelLabel,
   createClaudeBackend,
 } from "../backend/claude/index.ts";
 import {
@@ -35,6 +36,7 @@ import {
   isChildResourceLoad,
   PI_BACKEND_ID,
   type PiBackendOptions,
+  piProfileModelLabel,
   readChildDepth,
 } from "../backend/pi/index.ts";
 import type { BackendSet } from "../runtime/composition.ts";
@@ -67,6 +69,10 @@ export function createProductionBackendSet(
     set: {
       backends: [pi.backend, claude.backend],
       profiles: [],
+      profileModelLabel: (profile) =>
+        profile.backend === CLAUDE_BACKEND_ID
+          ? claudeProfileModelLabel(profile)
+          : piProfileModelLabel(profile),
       bundledProfilesDir: fileURLToPath(
         new URL("../../../agents/", import.meta.url),
       ),

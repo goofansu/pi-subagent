@@ -311,6 +311,7 @@ export function hostRig(
   const backendSet = (): BackendSet => ({
     backends: [resumable.backend, oneShot.backend],
     profiles: options.profiles ?? defaultProfiles(RIG_ONE_SHOT_BACKEND),
+    profileModelLabel: () => "default",
     // A fake spawns no child, so the guard is a test's to control: a rig can
     // say the process looks like a child, or that it is nested, and assert
     // that the entry point registers nothing.

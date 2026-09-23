@@ -45,6 +45,7 @@ export {
   modelProblem,
   PI_DISPLAY_NAME,
   type PiModelChoice,
+  piProfileModelLabel,
   resolvePiModel,
   validatePiProfile,
 } from "./profile.ts";

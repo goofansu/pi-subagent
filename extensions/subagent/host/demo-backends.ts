@@ -132,6 +132,7 @@ export function createDemoBackendSet(): BackendSet {
   return {
     backends: [resumable.backend, oneShot.backend],
     profiles,
+    profileModelLabel: () => "default",
     // A fake spawns nothing, so no process it started can be loading this
     // extension and no environment it set can report a depth. Saying so is
     // what keeps the entry point's guard a property of the *set* rather than

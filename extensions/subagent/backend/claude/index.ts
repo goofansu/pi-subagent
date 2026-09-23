@@ -46,6 +46,7 @@ export {
 export {
   CLAUDE_DISPLAY_NAME,
   CLAUDE_MODEL_ALIASES,
+  claudeProfileModelLabel,
   isClaudeModelAlias,
   modelProblem,
   resolveClaudeModel,

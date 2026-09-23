@@ -32,6 +32,7 @@ test("a process the backend set calls a child registers nothing at all", () => {
     backendSet: () => ({
       backends: [],
       profiles: [],
+      profileModelLabel: () => "default",
       isChildLoad: () => true,
       childDepth: () => 0,
     }),
@@ -53,6 +54,7 @@ test("a process the backend set reports as nested registers nothing at all", () 
     backendSet: () => ({
       backends: [],
       profiles: [],
+      profileModelLabel: () => "default",
       isChildLoad: () => false,
       childDepth: () => 1,
     }),
@@ -70,6 +72,7 @@ test("a parent process registers everything", () => {
     backendSet: () => ({
       backends: [],
       profiles: [],
+      profileModelLabel: () => "default",
       isChildLoad: () => false,
       childDepth: () => 0,
     }),

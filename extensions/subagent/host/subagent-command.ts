@@ -160,6 +160,7 @@ export interface SubagentStatus {
   /** Absent when no Session runtime is live. */
   readonly session?: LiveSessionStatus;
   readonly profiles: readonly Profile[];
+  readonly profileModelLabel: (profile: Profile) => string;
   /** Where a Profile goes, for the Session that has none. */
   readonly agentsDir: string;
 }
@@ -255,14 +256,18 @@ function profileCount(profiles: readonly Profile[]): string {
   return `${profiles.length} ${profiles.length === 1 ? "Profile" : "Profiles"}`;
 }
 
-/** One line per Profile: its name and the backend it names. */
-function profileLines(profiles: readonly Profile[]): readonly string[] {
-  const width = profiles.reduce(
-    (widest, profile) => Math.max(widest, profile.name.length),
-    0,
+/** One line per Profile: its name, backend, and backend-owned model label. */
+function profileLines(
+  profiles: readonly Profile[],
+  modelLabel: (profile: Profile) => string,
+): readonly string[] {
+  const nameWidth = Math.max(...profiles.map((profile) => profile.name.length));
+  const backendWidth = Math.max(
+    ...profiles.map((profile) => profile.backend.length),
   );
   return profiles.map(
-    (profile) => `  ${profile.name.padEnd(width)}  ${profile.backend}`,
+    (profile) =>
+      `  ${profile.name.padEnd(nameWidth)}  ${profile.backend.padEnd(backendWidth)}  ${modelLabel(profile)}`,
   );
 }
 
@@ -301,7 +306,7 @@ export function formatSubagentStatus(status: SubagentStatus): string {
   sections.push(
     profiles.length === 0
       ? formatNoProfilesMessage(status.agentsDir)
-      : profileLines(profiles).join("\n"),
+      : profileLines(profiles, status.profileModelLabel).join("\n"),
   );
   sections.push(subcommandLines().join("\n"));
   return sections.join("\n\n");
@@ -340,6 +345,7 @@ export function registerSubagentCommand(
    */
   handoffCounts: () => CountBlock,
   profiles: () => readonly Profile[],
+  profileModelLabel: (profile: Profile) => string,
   agentsDir: string,
   handoff: Pick<CompletionHandoffView, "status">,
 ): void {
@@ -358,6 +364,7 @@ export function registerSubagentCommand(
             formatSubagentStatus({
               ...(session === undefined ? {} : { session }),
               profiles: profiles(),
+              profileModelLabel,
               agentsDir,
             }),
             "info",

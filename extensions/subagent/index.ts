@@ -117,7 +117,7 @@ export function installSubagentV2(
 ): SubagentV2Installation {
   const handle = createSessionHandle();
   const sink = createSessionPushSink();
-  // The two host facts the backend set answers, read once, before anything is
+  // The host facts the backend set answers, read once, before anything is
   // registered. A set is cheap to build and performs no provider work, so
   // asking one and discarding it costs nothing; each Session gets its own.
   const hostFacts = options.backendSet();
@@ -178,6 +178,7 @@ export function installSubagentV2(
     // function and the widget gets a read model.
     () => ({ ...sink.counts() }),
     () => profiles,
+    hostFacts.profileModelLabel,
     agentsDir,
     { status: (id) => sink.status(id) },
   );

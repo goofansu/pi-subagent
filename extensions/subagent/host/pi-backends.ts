@@ -15,7 +15,7 @@
  * Inventing one here would put a specialist nobody wrote into every Session's
  * `/agents` list.
  *
- * The set also carries the two host facts only this adapter knows — whether
+ * The set also carries host facts only this adapter knows — whether
  * this process is a Pi child's load, and how deep in a delegation chain it is
  * — so the entry point can be inert inside a child and admission can enforce
  * the real depth, neither of which requires the host to know what Pi is.
@@ -30,6 +30,7 @@ import {
   isChildResourceLoad,
   type PiBackendOptions,
   type PiNativeProbe,
+  piProfileModelLabel,
   readChildDepth,
 } from "../backend/pi/index.ts";
 import type { BackendSet } from "../runtime/composition.ts";
@@ -49,6 +50,7 @@ export function createPiBackendSet(
     set: {
       backends: [handle.backend],
       profiles: [],
+      profileModelLabel: piProfileModelLabel,
       isChildLoad: isChildResourceLoad,
       childDepth: () => readChildDepth(),
     },

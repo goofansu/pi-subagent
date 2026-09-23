@@ -223,6 +223,7 @@ test("an invalid user replacement disables a built-in name at lookup and admissi
           backendSet: {
             backends: [backend.backend],
             profiles: [profile],
+            profileModelLabel: () => "default",
             isChildLoad: () => false,
             childDepth: () => 0,
           },

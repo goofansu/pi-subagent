@@ -6,6 +6,7 @@ import { backendId } from "../domain/index.ts";
 import { createRuntimeCounters } from "../runtime/counters.ts";
 import { hostRig, subagentCommandText } from "../testing/host-rig.ts";
 import { fixtureRow } from "../testing/presentation-fixtures.ts";
+import { createProductionBackendSet } from "./production-backends.ts";
 import { createSessionPushSink } from "./push-sink.ts";
 import {
   formatRuntimeHealth,
@@ -183,7 +184,7 @@ test("C-1: bare /subagent prints the shallow status and no counters", async (t) 
   }
 });
 
-test("C-1: the status names every Profile with the backend it names", () => {
+test("C-1: the status aligns Profiles and distinguishes Pi inheritance from Claude's default", () => {
   assert.equal(
     formatSubagentStatus({
       session: { runs: [], counters: {}, probe: {} },
@@ -192,25 +193,42 @@ test("C-1: the status names every Profile with the backend it names", () => {
           name: "explore",
           description: "The explore specialist",
           backend: backendId("pi"),
-          fields: {},
+          fields: { model: "openai/gpt-5" },
           systemPrompt: "Explore.",
         },
         {
           name: "reviewer",
           description: "The reviewer",
           backend: backendId("claude"),
-          fields: {},
+          fields: { model: "" },
           systemPrompt: "Review.",
+        },
+        {
+          name: "helper",
+          description: "The helper",
+          backend: backendId("pi"),
+          fields: { model: "   " },
+          systemPrompt: "Help.",
+        },
+        {
+          name: "writer",
+          description: "The writer",
+          backend: backendId("claude"),
+          fields: { model: "Sonnet" },
+          systemPrompt: "Write.",
         },
       ],
       agentsDir: "/agents",
+      profileModelLabel: createProductionBackendSet().set.profileModelLabel,
     }),
     [
-      "Subagents: 2 Profiles · no Runs",
+      "Subagents: 4 Profiles · no Runs",
       "Runtime: healthy · 0 held",
       "",
-      "  explore   pi",
-      "  reviewer  claude",
+      "  explore   pi      openai/gpt-5",
+      "  reviewer  claude  default",
+      "  helper    pi      inherit",
+      "  writer    claude  sonnet",
       "",
       "/subagent dashboard — open Subagent dashboard",
       "/subagent doctor    — runtime counters and cleanup probes",
@@ -231,6 +249,7 @@ test("C-1: the status counts Runs in the shared phase vocabulary", () => {
       probe: {},
     },
     profiles: [],
+    profileModelLabel: createProductionBackendSet().set.profileModelLabel,
     agentsDir: "/agents",
   });
 
@@ -242,6 +261,7 @@ test("a Session with no Profiles still says where to put one", () => {
     formatSubagentStatus({
       session: { runs: [], counters: {}, probe: {} },
       profiles: [],
+      profileModelLabel: createProductionBackendSet().set.profileModelLabel,
       agentsDir: "/home/someone/.pi/agents",
     }),
     /Subagents: no Profiles · no Runs[\s\S]*Add a Profile to \/home\/someone\/\.pi\/agents\./,

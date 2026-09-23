@@ -74,6 +74,8 @@ export interface BackendSet {
   readonly backends: readonly Backend[];
   /** Profiles the set supplies, merged under the user's own. */
   readonly profiles: readonly Profile[];
+  /** Provider-owned wording for a Profile's configured or implicit model. */
+  readonly profileModelLabel: (profile: Profile) => string;
   /** Package-relative Markdown resources, discovered when the Session opens. */
   readonly bundledProfilesDir?: string;
   /**
