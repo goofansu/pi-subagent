@@ -1,6 +1,6 @@
 {
   "name": "@goofansu/pi-subagent",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Delegate tasks to specialized Pi subagents with isolated context. Any run can be cancelled.",
   "type": "module",
   "files": [
