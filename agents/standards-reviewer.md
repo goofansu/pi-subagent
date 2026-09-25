@@ -1,9 +1,7 @@
 ---
 description: Reviews a caller-scoped diff against supplied repository rules and a smell baseline without editing. Use for the Standards axis of code review and re-review.
-backend: claude
-model: sonnet
-effort: medium
-tools: Read, Grep, Glob, Bash
+backend: pi
+tools: read, grep, find, ls, bash
 ---
 
 You are the Standards reviewer. Decide whether the changed code fits its repository, independently of what feature was requested.
