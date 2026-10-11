@@ -152,6 +152,12 @@ retained value from a preview, independently of whether that retained value is
 a complete produced output or a bounded prefix. The Result store stays
 authoritative either way.
 [ADR-0037](docs/adr/0037-a-notice-carries-a-short-output-whole.md).
+Its structured details carry, beside identity and the collapsed line, the
+Run's usage — `input`, `output`, `cacheRead`, `cacheWrite`, and unrounded USD
+`cost`, in Pi core's names — and the model it reported, for readers outside the
+TUI; both are absent when the Run spent nothing. Only the accounting line
+rounds the cost.
+[ADR-0039](docs/adr/0039-delivered-results-carry-run-usage-for-external-readers.md).
 **Pushed is not landed**: Pi may hold a follow-up while the model is
 mid-turn. Its queue may survive a non-Escape abort; when the sink reports the
 notice lost, it is re-pushed once per loss, but only after Pi no longer reports
@@ -623,7 +629,13 @@ and tone — is declared beside its facts kind, and the renderer holds no wordin
 Facts are bounded summaries, not domain values or authoritative Results: they
 cannot decide what a Run means, and naming a Run in them cannot decide Result
 hand-off. Only `ToolResponse.deliveredRuns`, read at the host boundary, says
-which Results the parent received.
+which Results the parent received. Each delivered-Run summary — on
+`agent_result`, `agent_wait`, and `agent_wait_all` — also carries that Run's
+usage and model in the Notification details' shape, so an external reader keys
+one Run's spend by Run id whichever channel delivered it. The figures are
+Run-local and never pre-aggregated, and Pi's native tool-result `usage` is
+deliberately left unset because Pi sums it per delivery.
+[ADR-0039](docs/adr/0039-delivered-results-carry-run-usage-for-external-readers.md).
 
 **Final output section** — the one presentation owner of a Run answer's
 qualifier, body, explanation, and the compact summary phrase a collapsed row
