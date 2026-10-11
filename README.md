@@ -11,8 +11,8 @@ conversation.
 pi install npm:@goofansu/pi-subagent
 ```
 
-The package includes profiles for general work, implementation, specification
-review, and standards review.
+The package bundles one `general-purpose` Profile. Add your own under
+`~/.pi/agent/agents/`; see [Agent profile format](#agent-profile-format).
 
 ## Commands
 

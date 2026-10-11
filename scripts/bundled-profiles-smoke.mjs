@@ -17,12 +17,7 @@ const temporary = fs.mkdtempSync(
 const previousCwd = process.cwd();
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 const previousDepth = process.env.PI_SUBAGENT_DEPTH;
-const names = [
-  "general-purpose",
-  "implementer",
-  "spec-reviewer",
-  "standards-reviewer",
-];
+const names = ["general-purpose"];
 try {
   const packed = JSON.parse(
     execFileSync("npm", ["pack", "--json", "--pack-destination", temporary], {

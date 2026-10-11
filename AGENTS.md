@@ -26,7 +26,7 @@ Read the repository instructions, nearby code, and existing tests before editing
 | `extensions/subagent/application/`, `extensions/subagent/host/` | Application boundaries, session ownership, tool schemas, and end-to-end host tests. |
 | `extensions/subagent/presentation/` | Presentation facts and the corresponding surface, golden, width, and rendering tests. Do not recreate domain decisions in view code. |
 | `agents/`, `extensions/subagent/profiles/` | Profile format rules, discovery tests, and the packed-profile smoke path. |
-| `skills/`, `.pi/skills/` | Read the skill's orchestration ownership, delegation depth, source precedence, and handoff contract. Registered package skills are end-user facing; repository development skills belong in `.pi/skills/`. |
+| `.pi/skills/` | Repository development skills only; the package registers no end-user skills. Read the skill's ownership, source precedence, and handoff contract. |
 | `.scratch/` | `docs/agents/issue-tracker.md`; preserve its map, ticket, status, and dependency conventions. |
 
 Keep changing architectural facts in `CONTEXT.md` or an ADR rather than duplicating them in this router.

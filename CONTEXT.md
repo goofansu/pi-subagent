@@ -585,8 +585,9 @@ fake backends and one **demo Profile** per fake, so launching Pi with only the
 entry point gave a working extension with nothing to configure; it stays in the
 tree because a host test needs a deterministic backend. The **Pi set** is
 M4's, and stays for Pi's own live lane and its tests. The **production backend
-set** is what the entry point uses: Pi and Claude, five bundled specialist
-Profiles, the host facts from Pi, and one native probe per backend. A Profile's
+set** is what the entry point uses: Pi and Claude, the one bundled
+`general-purpose` Profile, the host facts from Pi, and one native probe per
+backend. A Profile's
 `backend:` field is what picks one of the two.
 
 **Session push sink** — the `NotificationSink` implementation that pushes a
