@@ -552,7 +552,7 @@ test("N-9: a Run with nothing to account for carries no accounting at all", () =
   );
 });
 
-test("N-9: the accounting a notice carries is only what the line prints", () => {
+test("N-9: the accounting a notice carries is the line's figures plus the cache counters", () => {
   const notice = fixtureNotification({
     finalOutput: "done",
     usage: fixtureUsage({
@@ -566,13 +566,39 @@ test("N-9: the accounting a notice carries is only what the line prints", () => 
     model: "claude-sonnet-4-6",
   });
 
+  // The cache counters are for the Notification's details, not the line; the
+  // context gauge is on neither.
   assert.deepEqual(notice.accounting, {
     inputTokens: 12_300,
     outputTokens: 4_500,
+    cacheRead: 40_000,
+    cacheWrite: 0,
     cost: 0.1242,
     turns: 3,
     model: "claude-sonnet-4-6",
   });
+});
+
+test("N-9: the accounting carries the cost unrounded and only the line rounds it", () => {
+  // External readers sum Runs, so the notice keeps the provider's figure; the
+  // line prints four places, as it always has.
+  const notice = fixtureNotification({
+    finalOutput: "done",
+    usage: fixtureUsage({ input: 10, cost: 0.123456789, turns: 1 }),
+  });
+
+  assert.equal(notice.accounting?.cost, 0.123456789);
+  assert.match(formatNotificationText(notice), /\n\ncost \$0\.1235 · /);
+});
+
+test("N-9: a cost that rounds to zero is not printed beside real tokens", () => {
+  const notice = fixtureNotification({
+    finalOutput: "done",
+    usage: fixtureUsage({ input: 10, cost: 0.00004, turns: 1 }),
+  });
+
+  assert.equal(notice.accounting?.cost, 0.00004);
+  assert.match(formatNotificationText(notice), /\n\n10 in · 1 turn$/);
 });
 
 test("N-9: an accounting line can never read as nothing but a model name", () => {
@@ -583,6 +609,8 @@ test("N-9: an accounting line can never read as nothing but a model name", () =>
     formatNotificationAccounting({
       inputTokens: 0,
       outputTokens: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
       cost: 0,
       turns: 1,
       model: "baseline-model",

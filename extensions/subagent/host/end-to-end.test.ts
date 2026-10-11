@@ -324,6 +324,9 @@ test("a settled Run sends exactly one follow-up notice that triggers a turn", as
       label: "look around",
       status: "completed",
       durationMillis: 0,
+      // The rig's reported usage reaches the details, as an external reader
+      // sees it.
+      usage: { input: 12, output: 8, cacheRead: 0, cacheWrite: 0, cost: 0 },
     },
   );
 });
@@ -538,7 +541,14 @@ test("the message the sink sends is the one the renderer can parse", async (t) =
     // The Run's real duration, which is wall-clock: the round trip is about
     // the two shapes agreeing, not about what the clock said.
     durationMillis: (sent.details as { durationMillis: number }).durationMillis,
-    accounting: { inputTokens: 12, outputTokens: 8, cost: 0, turns: 1 },
+    accounting: {
+      inputTokens: 12,
+      outputTokens: 8,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      turns: 1,
+    },
     retrieveWith: "agent_result",
   });
 

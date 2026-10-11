@@ -24,6 +24,27 @@ import { STRESS_POLICY } from "../testing/stress-policy.ts";
 import { createSessionHandle, type SessionHandle } from "./session-handle.ts";
 import { registerSubagentTools } from "./tools.ts";
 
+/**
+ * What every rig Run reports spending, as each delivered-Run summary carries
+ * it for external readers.
+ */
+const RIG_RUN_USAGE = {
+  input: 12,
+  output: 8,
+  cacheRead: 0,
+  cacheWrite: 0,
+  cost: 0,
+} as const;
+
+/** What a scripted Run that reports no usage carries: zeros, not absence. */
+const NO_RUN_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  cost: 0,
+} as const;
+
 const WAIT_RETURNED =
   "This wait has returned: every Run it covered is terminal, nothing outstanding.";
 
@@ -1087,6 +1108,7 @@ test("agent_wait crosses registration with discriminated collection details and 
         runId: started.runId,
         agent: "explore",
         status: "completed",
+        usage: RIG_RUN_USAGE,
       },
     ],
     stillRunning: 0,
@@ -1152,6 +1174,7 @@ test("agent_wait renders partial mixed-Agent delivery without presenting timeout
         runId: delivered.runId,
         agent: "explore",
         status: "completed",
+        usage: RIG_RUN_USAGE,
       },
     ],
     stillRunning: 1,
@@ -1229,11 +1252,13 @@ test("agent_wait_all delivers every active Run's result and consumes each", asyn
         runId: first.runId,
         agent: "explore",
         status: "completed",
+        usage: NO_RUN_USAGE,
       },
       {
         runId: second.runId,
         agent: "once",
         status: "completed",
+        usage: NO_RUN_USAGE,
       },
     ],
     stillRunning: 0,
@@ -1444,6 +1469,7 @@ test("agent_result returns the full stored output with its Run identity", async 
       runId: started.runId,
       agent: "explore",
       status: "completed",
+      usage: RIG_RUN_USAGE,
     },
   });
   const collapsed = renderRegisteredRow(

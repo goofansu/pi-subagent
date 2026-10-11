@@ -15,15 +15,23 @@
  * to the renderer registered for its `customType`, which is what makes that
  * possible.
  *
- * The details carry what the collapsed line needs and nothing the text
- * already says. Identity — Run id, Subagent id — because that is what a
- * later tool call and the landing key are addressed by; agent, label, status
- * and duration because those *are* the collapsed line, and a renderer that
- * had to parse them back out of the content would be a second reader of
- * prose. The text itself is not in the details: it is the message's content,
- * and a copy of it here could disagree with it. Nor is the cost: the line
- * does not show one, and a payload field nothing reads is the same mistake
- * the notice made when it carried a backend id.
+ * The details carry what the collapsed line needs and what an external reader
+ * needs, and nothing the text already says in prose. Identity — Run id,
+ * Subagent id — because that is what a later tool call and the landing key
+ * are addressed by; agent, label, status and duration because those *are* the
+ * collapsed line, and a renderer that had to parse them back out of the
+ * content would be a second reader of prose. The Run's usage and model,
+ * because a reader outside the TUI — Piano, over RPC — accounts Subagent
+ * spend per Profile from structured details, and a Run nobody waited for is
+ * announced only here. They are the same figures `agent_result` and the waits
+ * carry, so a reader can key them by Run id across both channels. The text
+ * itself is not in the details: it is the message's content, and a copy of it
+ * here could disagree with it.
+ *
+ * Pi's native tool-result `usage` is deliberately not the channel: Pi sums it
+ * per delivery, a custom message has no such field, and it names neither Run
+ * nor Profile
+ * ([ADR-0039](../../../docs/adr/0039-delivered-results-carry-run-usage-for-external-readers.md)).
  *
  * The payload is **host-shaped**. The notice's own fields can be renamed or
  * regrouped without touching the renderer, because the renderer reads this
@@ -35,6 +43,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import { Box, Markdown, Spacer } from "@earendil-works/pi-tui";
 import { Result, Schema } from "effect";
 import {
+  type NotificationAccounting,
   RunId,
   type RunNotification,
   SubagentId,
@@ -64,6 +73,22 @@ export const NotificationDetails = Schema.Struct({
   label: Schema.String,
   status: TerminalRunPhase,
   durationMillis: Schema.Number,
+  /**
+   * What the Run spent, in Pi core's field names; cost is USD, unrounded.
+   * Absent when the Run spent nothing, and on a notice from an older
+   * extension.
+   */
+  usage: Schema.optionalKey(
+    Schema.Struct({
+      input: Schema.Number,
+      output: Schema.Number,
+      cacheRead: Schema.Number,
+      cacheWrite: Schema.Number,
+      cost: Schema.Number,
+    }),
+  ),
+  /** The model the Run reported, when it reported one. */
+  model: Schema.optionalKey(Schema.String),
 });
 
 export type NotificationDetails = typeof NotificationDetails.Type;
@@ -95,7 +120,24 @@ export function buildNotificationMessage(
       label: notice.label,
       status: notice.status,
       durationMillis: notice.durationMillis,
+      ...usageDetailsOf(notice.accounting),
     },
+  };
+}
+
+function usageDetailsOf(
+  accounting: NotificationAccounting | undefined,
+): Pick<NotificationDetails, "usage" | "model"> {
+  if (accounting === undefined) return {};
+  return {
+    usage: {
+      input: accounting.inputTokens,
+      output: accounting.outputTokens,
+      cacheRead: accounting.cacheRead,
+      cacheWrite: accounting.cacheWrite,
+      cost: accounting.cost,
+    },
+    ...(accounting.model === undefined ? {} : { model: accounting.model }),
   };
 }
 

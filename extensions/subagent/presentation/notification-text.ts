@@ -43,9 +43,10 @@
  * runtime.
  */
 
-import type {
-  NotificationAccounting,
-  RunNotification,
+import {
+  type NotificationAccounting,
+  type RunNotification,
+  roundAccountingCost,
 } from "../domain/index.ts";
 import { completionViewOfNotification } from "./completion-view.ts";
 import {
@@ -102,7 +103,8 @@ function formatNotificationIdentity(notice: RunNotification): string {
  * the four figures read.
  *
  * Cache figures and the context gauge are absent because they are not fields
- * of this line and are not on the value it is given. A model identifies
+ * of this line; the cache counters are on the value only for the
+ * Notification's details. A model identifies
  * accounting and is not accounting by itself; it cannot appear alone here,
  * because a notice with an accounting value has at least one non-zero figure.
  */
@@ -110,7 +112,10 @@ export function formatNotificationAccounting(
   accounting: NotificationAccounting,
 ): string {
   const parts: string[] = [];
-  if (accounting.cost !== 0) parts.push(`cost $${accounting.cost.toFixed(4)}`);
+  // The accounting carries the cost unrounded for external sums; this line is
+  // the one place it is rounded, to the places the notice decided on.
+  const cost = roundAccountingCost(accounting.cost);
+  if (cost !== 0) parts.push(`cost $${cost.toFixed(4)}`);
   if (accounting.inputTokens !== 0 || accounting.outputTokens !== 0) {
     const tokens: string[] = [];
     if (accounting.inputTokens !== 0) {

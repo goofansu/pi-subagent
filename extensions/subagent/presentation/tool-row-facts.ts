@@ -9,9 +9,11 @@
 
 import { Schema } from "effect";
 import {
+  boundOneLine,
   type CancelOutcome,
   EXACT_KEYS,
   interpretFinalOutput,
+  NOTIFICATION_MODEL_MAX_BYTES,
   type ProfileDiagnostic,
   type ResultOutcome,
   type ResumeOutcome,
@@ -500,10 +502,30 @@ const SteerToolRowFactsSchema = Schema.Struct({
 });
 export type SteerToolRowFacts = typeof SteerToolRowFactsSchema.Type;
 
+/**
+ * What one delivered Run spent, for readers outside this extension.
+ *
+ * Pi core's field names, so an external reader such as Piano can reuse its
+ * own usage rows; cost is USD and unrounded, so a reader summing Runs does not
+ * drift. Run-local, never pre-aggregated: summing Runs is the reader's job.
+ */
+const RunUsageFactsSchema = Schema.Struct({
+  input: Schema.Number,
+  output: Schema.Number,
+  cacheRead: Schema.Number,
+  cacheWrite: Schema.Number,
+  cost: Schema.Number,
+});
+
 const ResultRunSummarySchema = Schema.Struct({
   runId: IdentifierText,
   agent: Schema.String,
   status: TerminalRunPhase,
+  // Optional on read so a session persisted before the field existed still
+  // decodes under `EXACT_KEYS`; every summary built here carries it.
+  usage: Schema.optionalKey(RunUsageFactsSchema),
+  /** The model the Run reported, when it reported one. */
+  model: Schema.optionalKey(Schema.String),
 });
 type ResultRunSummary = typeof ResultRunSummarySchema.Type;
 
@@ -890,10 +912,15 @@ export function toolRowPresentation(facts: ToolRowFacts): ToolRowPresentation {
 }
 
 function resultRunSummaryOf(result: RunResult): ResultRunSummary {
+  const { input, output, cacheRead, cacheWrite, cost } = result.usage.totals;
   return {
     runId: result.runId,
     agent: result.agent,
     status: result.status,
+    usage: { input, output, cacheRead, cacheWrite, cost },
+    ...(result.model === undefined || result.model === ""
+      ? {}
+      : { model: boundOneLine(result.model, NOTIFICATION_MODEL_MAX_BYTES) }),
   };
 }
 

@@ -9,7 +9,10 @@ import type {
   WaitOutcome,
 } from "../domain/index.ts";
 import { runId, subagentId } from "../domain/index.ts";
-import { fixtureResult } from "../testing/presentation-fixtures.ts";
+import {
+  fixtureResult,
+  fixtureUsage,
+} from "../testing/presentation-fixtures.ts";
 import {
   CANCEL_PRESENTATION,
   COLLECTION_PRESENTATION,
@@ -348,8 +351,87 @@ test("the Tool-row facts decoder accepts all terminal phases and nested cancella
         runId: result.runId,
         agent: "explore",
         status: "completed",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
       },
     },
+  );
+});
+
+test("every delivered Run summary carries the Run's own usage and model, cost unrounded", () => {
+  const spent = fixtureResult({
+    finalOutput: "answer",
+    usage: fixtureUsage({
+      input: 12_300,
+      output: 4_500,
+      cacheRead: 40_000,
+      cacheWrite: 1_200,
+      cost: 0.123456789,
+      turns: 3,
+      context: { tokens: 90_000 },
+    }),
+    model: "anthropic/claude-sonnet-4-6",
+  });
+  // Pi core's names and nothing else: no turns, no gauge, no total.
+  const expected = {
+    runId: spent.runId,
+    agent: "explore",
+    status: "completed",
+    usage: {
+      input: 12_300,
+      output: 4_500,
+      cacheRead: 40_000,
+      cacheWrite: 1_200,
+      cost: 0.123456789,
+    },
+    model: "anthropic/claude-sonnet-4-6",
+  } as const;
+  const delivered: WaitOutcome = {
+    outcome: "terminal",
+    runId: spent.runId,
+    status: "completed",
+    result: spent,
+  };
+
+  const available = resultToolRowFacts({ outcome: "result", result: spent });
+  assert.equal(available.outcome, "available");
+  assert.deepEqual("run" in available ? available.run : undefined, expected);
+  for (const collection of [
+    waitToolRowFacts([delivered]),
+    waitAllToolRowFacts([delivered]),
+  ]) {
+    assert.deepEqual(collection.runs, [expected]);
+    assert.deepEqual(
+      decodeToolRowFacts(encodeToolRowFacts(collection)),
+      collection,
+    );
+  }
+});
+
+test("a delivered Run summary persisted before usage existed still decodes", () => {
+  const legacy = {
+    kind: "result",
+    rowPhrase: "6 characters",
+    tone: "toolOutput",
+    outcome: "available",
+    run: { runId: result.runId, agent: "explore", status: "completed" },
+  };
+  assert.deepEqual(decodeToolRowFacts(legacy), legacy);
+  assert.equal(
+    decodeToolRowFacts({
+      ...legacy,
+      run: {
+        ...legacy.run,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          turns: 1,
+        },
+      },
+    }),
+    undefined,
   );
 });
 

@@ -135,21 +135,25 @@ export function resultAvailabilityOf(
 export const NOTIFICATION_MODEL_MAX_BYTES = 100;
 
 /**
- * What a Run spent, in the four figures the accounting line prints.
+ * What a Run spent: the figures the accounting line prints, plus the cache
+ * counters the Notification's details carry for external readers.
  *
  * A presentation-shaped value rather than a copy of the Result's usage: the
- * line reads tokens, cost, turns, and the model, and knows nothing about cache
- * figures or the context gauge. Carrying the whole `UsageSnapshot` made the
- * formatter depend on a schema it read four fields of, so a change to the
- * gauge was a change that reached the notice.
+ * line reads tokens, cost, turns, and the model; the details add the two cache
+ * counters; nothing reads the context gauge. Carrying the whole
+ * `UsageSnapshot` made the formatter depend on a schema it read a few fields
+ * of, so a change to the gauge was a change that reached the notice.
  *
- * The cost is already rounded to the four places the line prints, because the
- * rounding decides something the domain owns: whether there was anything to
- * account for at all.
+ * The cost is carried unrounded, so a reader summing Runs does not drift, and
+ * is rounded only where it is printed. Whether there was anything to account
+ * for at all is still decided here, on the cost as the line would print it.
  */
 export const NotificationAccounting = Schema.Struct({
   inputTokens: Schema.Number,
   outputTokens: Schema.Number,
+  cacheRead: Schema.Number,
+  cacheWrite: Schema.Number,
+  /** USD, unrounded. */
   cost: Schema.Number,
   turns: Schema.Number,
   /** The model the Run reported, when it reported one. */
@@ -177,19 +181,30 @@ export function toNotificationAccounting(
   model?: string,
 ): NotificationAccounting | undefined {
   const { totals, turns } = usage;
-  const cost = Math.round(totals.cost * 10_000) / 10_000;
-  if (cost === 0 && totals.input === 0 && totals.output === 0 && turns === 0) {
+  if (
+    roundAccountingCost(totals.cost) === 0 &&
+    totals.input === 0 &&
+    totals.output === 0 &&
+    turns === 0
+  ) {
     return undefined;
   }
   return {
     inputTokens: totals.input,
     outputTokens: totals.output,
-    cost,
+    cacheRead: totals.cacheRead,
+    cacheWrite: totals.cacheWrite,
+    cost: totals.cost,
     turns,
     ...(model === undefined || model === ""
       ? {}
       : { model: boundOneLine(model, NOTIFICATION_MODEL_MAX_BYTES) }),
   };
+}
+
+/** A cost rounded to the four places the accounting line prints. */
+export function roundAccountingCost(cost: number): number {
+  return Math.round(cost * 10_000) / 10_000;
 }
 
 export const RunNotification = Schema.Struct({

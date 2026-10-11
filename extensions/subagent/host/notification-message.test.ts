@@ -83,6 +83,7 @@ test("build then parse round-trips every terminal status", () => {
 });
 
 test("the details carry the collapsed line and the ids, never the text", () => {
+  // A Run that spent nothing: usage and model are covered separately below.
   const message = buildNotificationMessage(
     fixtureNotification({ finalOutput: "the whole answer" }),
   );
@@ -96,6 +97,49 @@ test("the details carry the collapsed line and the ids, never the text", () => {
     "subagentId",
   ]);
   assert.doesNotMatch(JSON.stringify(message.details), /the whole answer/);
+});
+
+test("the details carry the Run's usage and model for external readers, cost unrounded", () => {
+  const notice = fixtureNotification({
+    finalOutput: "done",
+    usage: fixtureUsage({
+      input: 12_300,
+      output: 4_500,
+      cacheRead: 40_000,
+      cacheWrite: 1_200,
+      cost: 0.123456789,
+      turns: 3,
+      context: { tokens: 90_000 },
+    }),
+    model: "anthropic/claude-sonnet-4-6",
+  });
+  const message = buildNotificationMessage(notice);
+
+  // Pi core's names and nothing else: no turns, no gauge, no total.
+  assert.deepEqual(message.details.usage, {
+    input: 12_300,
+    output: 4_500,
+    cacheRead: 40_000,
+    cacheWrite: 1_200,
+    cost: 0.123456789,
+  });
+  assert.equal(message.details.model, "anthropic/claude-sonnet-4-6");
+  assert.deepEqual(parseNotificationMessage(landed(message)), message.details);
+  // The text still rounds, and is the only place that does.
+  assert.match(message.content, /cost \$0\.1235 · /);
+});
+
+test("a Run that spent nothing has no usage or model in its details", () => {
+  const message = buildNotificationMessage(
+    fixtureNotification({
+      finalOutput: "done",
+      usage: fixtureUsage({ cacheRead: 40_000 }),
+      model: "a-model",
+    }),
+  );
+
+  assert.equal("usage" in message.details, false);
+  assert.equal("model" in message.details, false);
 });
 
 test("a message missing a field the collapsed line needs is rejected", () => {
