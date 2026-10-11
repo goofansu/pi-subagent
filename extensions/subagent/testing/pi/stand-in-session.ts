@@ -551,7 +551,7 @@ export function createStandInPiSession(
         releaseIdle();
       }
     },
-    async steer(text: string) {
+    async steer(text: string): Promise<"queued"> {
       steers.push(text);
       if (activeRun !== undefined) {
         const forRun = steersByRun.get(activeRun) ?? [];
@@ -564,7 +564,7 @@ export function createStandInPiSession(
         if (inFlight === 0 || options.steerDelivery === "queued") {
           steeringQueue.push(text);
           for (const wake of steerWaiters.splice(0)) wake();
-          return;
+          return "queued";
         }
         const rejected = await new Promise<boolean>((resolve) => {
           pendingSteers.push({ text, settle: resolve });
@@ -573,6 +573,9 @@ export function createStandInPiSession(
         if (rejected) {
           throw new Error("the stand-in Pi session refused a steer");
         }
+        // Pi answers "handled" only when an input handler swallowed the text;
+        // the stand-in has no handlers, so every accepted steer is queued.
+        return "queued";
       } finally {
         concurrentSteers -= 1;
       }
