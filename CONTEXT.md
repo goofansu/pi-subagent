@@ -158,6 +158,13 @@ Run's usage — `input`, `output`, `cacheRead`, `cacheWrite`, and unrounded USD
 TUI; both are absent when the Run spent nothing. Only the accounting line
 rounds the cost.
 [ADR-0039](docs/adr/0039-delivered-results-carry-run-usage-for-external-readers.md).
+The same details carry the Run's **final-output facts**: Final output retention
+by kind, with the retained value under `text` when the notice inlines it and
+the bounded preview under `preview` when it does not, transcript evidence where
+no output remains, and the failure or cancellation reason beside the status.
+They are the values the content prints, built from the same notice, so a
+reader outside the TUI need not parse the prose.
+[ADR-0040](docs/adr/0040-delivered-results-carry-the-final-output-for-external-readers.md).
 **Pushed is not landed**: Pi may hold a follow-up while the model is
 mid-turn. Its queue may survive a non-Escape abort; when the sink reports the
 notice lost, it is re-pushed once per loss, but only after Pi no longer reports
@@ -636,6 +643,11 @@ one Run's spend by Run id whichever channel delivered it. The figures are
 Run-local and never pre-aggregated, and Pi's native tool-result `usage` is
 deliberately left unset because Pi sums it per delivery.
 [ADR-0039](docs/adr/0039-delivered-results-carry-run-usage-for-external-readers.md).
+Each summary also carries the Run's final-output facts — the whole retained
+answer under `text`, its retention kind, and the failure or cancellation
+reason — in the Notification details' shape, from one shared declaration both
+payloads spread in.
+[ADR-0040](docs/adr/0040-delivered-results-carry-the-final-output-for-external-readers.md).
 
 **Final output section** — the one presentation owner of a Run answer's
 qualifier, body, explanation, and the compact summary phrase a collapsed row
