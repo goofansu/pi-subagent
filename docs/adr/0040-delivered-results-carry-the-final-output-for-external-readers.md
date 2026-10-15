@@ -165,3 +165,15 @@ If a fact and the prose beside it ever disagreed, `final-output-surfaces.test.ts
 is where it would show: it asserts, for every retention kind and ending, that
 the fact on both channels is the text the Result card prints and the notice
 fences.
+
+## Amendment — 2026-10-15
+
+`ResultRunSummary` also carries `subagentId` and `label`, both optional on
+read and written on every delivery, under the same compatibility rule. The
+Notification details had carried both from ADR-0033; the tool channel's
+summary had not, so a reader that keys Runs to their Subagent could do so
+only by having seen the Run's `agent_start` result at the top level. A start
+made inside a codemode call is nested where such a reader does not look, and
+a multi-Run `agent_wait_all` then showed Run ids without Subagent ids while a
+single Run showed both. The values are the stored Result's `subagentId` and
+bounded `description`, so both channels agree byte for byte.

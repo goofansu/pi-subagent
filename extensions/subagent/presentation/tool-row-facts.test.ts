@@ -354,7 +354,9 @@ test("the Tool-row facts decoder accepts all terminal phases and nested cancella
       outcome: "available",
       run: {
         runId: result.runId,
+        subagentId: result.subagentId,
         agent: "explore",
+        label: "look around",
         status: "completed",
         durationMillis: 12_400,
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
@@ -381,7 +383,9 @@ test("every delivered Run summary carries the Run's own usage and model, cost un
   // Pi core's names and nothing else: no turns, no gauge, no total.
   const expected = {
     runId: spent.runId,
+    subagentId: spent.subagentId,
     agent: "explore",
+    label: "look around",
     status: "completed",
     durationMillis: 12_400,
     usage: {
@@ -424,7 +428,9 @@ test("every delivered Run summary carries the whole retained answer and how the 
   });
   const expected = {
     runId: failed.runId,
+    subagentId: failed.subagentId,
     agent: "explore",
+    label: "look around",
     status: "failed",
     durationMillis: 12_400,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },

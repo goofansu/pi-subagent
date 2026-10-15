@@ -1133,7 +1133,9 @@ test("agent_wait crosses registration with discriminated collection details and 
     runs: [
       {
         runId: started.runId,
+        subagentId: started.subagentId,
         agent: "explore",
+        label: "look around",
         status: "completed",
         durationMillis: 0,
         usage: RIG_RUN_USAGE,
@@ -1201,7 +1203,9 @@ test("agent_wait renders partial mixed-Agent delivery without presenting timeout
     runs: [
       {
         runId: delivered.runId,
+        subagentId: delivered.subagentId,
         agent: "explore",
+        label: "look around",
         status: "completed",
         durationMillis: 0,
         usage: RIG_RUN_USAGE,
@@ -1281,7 +1285,9 @@ test("agent_wait_all delivers every active Run's result and consumes each", asyn
     runs: [
       {
         runId: first.runId,
+        subagentId: first.subagentId,
         agent: "explore",
+        label: "look around",
         status: "completed",
         durationMillis: 0,
         usage: NO_RUN_USAGE,
@@ -1289,7 +1295,9 @@ test("agent_wait_all delivers every active Run's result and consumes each", asyn
       },
       {
         runId: second.runId,
+        subagentId: second.subagentId,
         agent: "once",
+        label: "look around",
         status: "completed",
         durationMillis: 0,
         usage: NO_RUN_USAGE,
@@ -1499,7 +1507,9 @@ test("agent_result returns the full stored output with its Run identity", async 
     tone: "toolOutput",
     run: {
       runId: started.runId,
+      subagentId: started.subagentId,
       agent: "explore",
+      label: "look around",
       status: "completed",
       durationMillis: 0,
       usage: RIG_RUN_USAGE,

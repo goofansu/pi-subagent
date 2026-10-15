@@ -524,7 +524,17 @@ const RunUsageFactsSchema = Schema.Struct({
 
 const ResultRunSummarySchema = Schema.Struct({
   runId: IdentifierText,
+  /**
+   * The owning Subagent, which is how a reader groups a Subagent's Runs
+   * without having seen its `agent_start` — a start made inside a codemode
+   * call is nested where a top-level reader does not look. The Notification
+   * details carried it from the first; the tool channel's summary did not.
+   * Optional on read for the same reason as `usage`.
+   */
+  subagentId: Schema.optionalKey(IdentifierText),
   agent: Schema.String,
+  /** The Run's bounded Label, the same value the Notification details carry. */
+  label: Schema.optionalKey(Schema.String),
   status: TerminalRunPhase,
   // Optional on read so a session persisted before the field existed still
   // decodes under `EXACT_KEYS`; every summary built here carries it.
@@ -930,7 +940,9 @@ function resultRunSummaryOf(result: RunResult): ResultRunSummary {
   const { input, output, cacheRead, cacheWrite, cost } = result.usage.totals;
   return {
     runId: result.runId,
+    subagentId: result.subagentId,
     agent: result.agent,
+    label: result.description,
     status: result.status,
     // Through the completion view, which is the one reading of a Run's
     // duration the notice header, the widget row and the card share.
