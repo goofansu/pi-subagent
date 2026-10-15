@@ -14,17 +14,20 @@
  *
  * 1. **push** sends the built message as a follow-up that triggers a turn, and
  *    records the notice as *unlanded*, retaining the bounded notification
- *    value.
+ *    value — unless the parent is mid-turn, in which case the notice is
+ *    **deferred** here until the parent settles (see below).
  * 2. **message-start** carrying a notice we parsed marks it *landed* and
  *    forgets it. That is the terminal state: a landed notice is never pushed
  *    again.
  * 3. **turn end** whose stop reason was aborted, or whose signal was aborted,
  *    marks every unlanded notice *lost*. Neutral evidence rather than a guess:
  *    the sink does not decide what an interrupt is, it is told.
- * 4. **agent settled** pushes every lost notice again unless Pi still reports
- *    pending messages. A deferred notice is pushed at the next non-aborted
- *    turn end. Each dispatch clears the lost state before sending — because a
- *    re-push may land synchronously — and a later loss may be re-pushed again.
+ * 4. **agent settled** hands every deferred notice over and pushes every lost
+ *    notice again, unless Pi still reports pending messages; a lost notice
+ *    kept back by pending messages is tried again at the next non-aborted
+ *    turn end, where a mid-turn parent defers it. Each dispatch clears the
+ *    lost state before sending — because a re-push may land synchronously —
+ *    and a later loss may be re-pushed again.
  *
  * Exactly one landing per notification is this module's contract, and it is
  * tested through those four events rather than through delivery.
@@ -58,13 +61,36 @@
  * reason, and it reads `consumedBeforeLanding` rather than adding a state to
  * produce it.
  *
- * The third is not a gap that was overlooked. While the parent is streaming,
- * the follow-up is in Pi's own queue and the extension API exposes nothing
- * that removes one queued message, so a handed-off notice lands whatever the
- * parent does. The count is the evidence Phase D's hold-while-active envelope
- * waits for.
+ * The third is not a gap that was overlooked. Once a follow-up is in Pi's own
+ * queue the extension API exposes nothing that removes it, so a handed-off
+ * notice lands whatever the parent does. It is now the rare case: a notice is
+ * handed over only while the parent is idle, and an idle parent's follow-up
+ * starts a turn at once rather than waiting in a queue.
  * [ADR-0035](../../../docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)
  * is the decision.
+ *
+ * ## Deferring, and why a mid-turn push is not handed over either
+ *
+ * A Run that settles while the parent is mid-turn used to have its notice
+ * handed to Pi at once, where it waited in the follow-up queue for the turn to
+ * end. If the parent read the Result with `agent_result` before then — which
+ * it does whenever a wait timed out and the Run finished a moment later — the
+ * Result and the notice both landed, and nothing could take the queued one
+ * back. So a push while the parent is mid-turn is **accepted and deferred
+ * here**, and the deferred notices are handed over when the parent settles
+ * ([ADR-0042](../../../docs/adr/0042-a-notice-waits-for-the-parents-turn-to-end.md)).
+ * The landing is when it always was — Pi, too, delivered a follow-up only once
+ * the turn had ended — and in between, a consumption drops the notice as
+ * *answered while deferred* instead of being counted after the fact.
+ *
+ * Whether the parent is mid-turn is Pi's answer, read through the `isIdle`
+ * function the host binds, at the moment of the push. The settle is the one
+ * event that hands deferred notices over: a non-aborted turn end does not,
+ * because a turn ends many times inside one agent run and the next turn may
+ * be the one that reads the Result. At settle the hand-over bypasses the idle
+ * check — the sink has been told the run settled, and that evidence outranks
+ * a compaction Pi may be running at the same instant — but it still yields
+ * to pending messages, exactly as a lost notice's re-push does.
  *
  * ## Holding, and why a wait is the one time a push is not handed over
  *
@@ -88,9 +114,9 @@
  *
  * ## What the widget is told, and what it is not
  *
- * Seven states live here — handed-off, lost, landed, exhausted, unannounceable,
- * consumed, held — and the widget sees four: `pending`, `resolved`, `exhausted`,
- * `unannounceable`. It never learns
+ * Eight states live here — handed-off, lost, landed, exhausted,
+ * unannounceable, consumed, held, deferred — and the widget sees four:
+ * `pending`, `resolved`, `exhausted`, `unannounceable`. It never learns
  * whether *resolved* was a landing or a retrieval, because a row that stays
  * and a row that goes is the whole of what it is deciding, and a component
  * that knew more would eventually act on more.
@@ -124,6 +150,9 @@ export type SendNotification = (message: NotificationMessage) => void;
 /** Whether Pi still holds messages that can carry a lost notice forward. */
 export type HasPendingMessages = () => boolean;
 
+/** Whether the parent is between turns, so a follow-up starts one at once. */
+export type IsIdle = () => boolean;
+
 /** What a completed host turn says about itself, as neutral evidence. */
 export interface HostTurnEvidence {
   readonly stopReason?: string;
@@ -138,7 +167,8 @@ export interface HostTurnEvidence {
  * exist to answer. The first three count delivery's push calls; the next three
  * track notices between the host and the conversation; the next two count
  * delivery's terminal reports; `consumedBeforeLanding` records retrieval
- * racing a landing; and the final two track waits.
+ * racing a landing; the next two track waits; and the final two track
+ * notices deferred for the parent's turn.
  *
  * `pushesAttempted` is `handOffsAccepted` plus `handOffsRefused`: a re-push is
  * the sink's own doing and is counted as a `rePushes` rather than as a second
@@ -179,6 +209,17 @@ export interface HandoffCounts {
    * aborted with the Run still going.
    */
   readonly answeredByWait: number;
+  /** Pushes kept here because the parent was mid-turn. */
+  readonly deferredForTurn: number;
+  /**
+   * Deferred notices dropped because the parent read the Result before its
+   * turn ended.
+   *
+   * The duplicate that used to be counted as `consumedBeforeLanding`.
+   * `deferredForTurn` minus this is how many deferrals were handed over at
+   * settle after all.
+   */
+  readonly answeredWhileDeferred: number;
 }
 
 const ZERO_COUNTS: HandoffCounts = {
@@ -193,13 +234,22 @@ const ZERO_COUNTS: HandoffCounts = {
   consumedBeforeLanding: 0,
   heldForWait: 0,
   answeredByWait: 0,
+  deferredForTurn: 0,
+  answeredWhileDeferred: 0,
 };
 
 export interface SessionPushSink extends NotificationSink {
-  /** Point the sink at a live Session's message surface, and start its counts. */
+  /**
+   * Point the sink at a live Session's message surface, and start its counts.
+   *
+   * The two predicates are Pi's own answers, read live. A sink bound without
+   * them treats the parent as idle with nothing pending, which is what a test
+   * that is not about turns wants.
+   */
   readonly bind: (
     send: SendNotification,
     hasPendingMessages?: HasPendingMessages,
+    isIdle?: IsIdle,
   ) => void;
   /**
    * Stop sending, and forget every Run this Session knew about.
@@ -214,7 +264,10 @@ export interface SessionPushSink extends NotificationSink {
   readonly messageStarted: (message: unknown) => void;
   /** Mark notices lost on abort, or re-dispatch prior losses after a clean turn. */
   readonly turnEnded: (evidence: HostTurnEvidence) => void;
-  /** Re-dispatch lost notices unless Pi still reports pending messages. */
+  /**
+   * The parent settled: hand over every deferred notice and re-dispatch every
+   * lost one, unless Pi still reports pending messages.
+   */
   readonly agentSettled: () => void;
   /**
    * The parent has this Run's Result: `agent_result` returned it, or a wait
@@ -270,6 +323,7 @@ type NoticeState =
   | "handed-off"
   | "lost"
   | "held"
+  | "deferred"
   | "landed"
   | "consumed"
   | "exhausted"
@@ -292,6 +346,7 @@ interface Hold {
 export function createSessionPushSink(): SessionPushSink {
   let send: SendNotification | undefined;
   let hasPendingMessages: HasPendingMessages = () => false;
+  let isIdle: IsIdle = () => true;
   let generation = 0;
   const records = new Map<RunId, NoticeRecord>();
   const holds = new Set<Hold>();
@@ -337,23 +392,39 @@ export function createSessionPushSink(): SessionPushSink {
   /**
    * Decide in one place whether to send, keep, or drop a notice.
    *
+   * Kept for two reasons, checked in this order: a wait covers the Run, or
+   * the parent is mid-turn. `atSettle` is the agent-settled hand-over, which
+   * skips the second check — the settle is the evidence — and not the first,
+   * because a wait in flight at settle still owns its Runs' notices.
+   *
    * The handed-off transition precedes `send`: Pi may report the message
    * starting synchronously, and recording it afterwards would resurrect a
    * notice that had already landed.
    */
-  const dispatch = (notification: RunNotification): DispatchResult => {
+  const dispatch = (
+    notification: RunNotification,
+    atSettle = false,
+  ): DispatchResult => {
     const current = records.get(notification.runId);
     if (current && isTerminal(current.state)) return "dropped";
 
     const target = send;
     if (!target) {
-      if (current?.state === "held") records.delete(notification.runId);
+      if (current?.state === "held" || current?.state === "deferred") {
+        records.delete(notification.runId);
+      }
       return "dropped";
     }
 
     if (isHeld(notification.runId)) {
       records.set(notification.runId, { notification, state: "held" });
       count("heldForWait");
+      return "kept";
+    }
+
+    if (!atSettle && !isIdle()) {
+      records.set(notification.runId, { notification, state: "deferred" });
+      count("deferredForTurn");
       return "kept";
     }
 
@@ -381,6 +452,15 @@ export function createSessionPushSink(): SessionPushSink {
     for (const record of lost) {
       if (dispatch(record.notification) === "sent") count("rePushes");
     }
+  };
+
+  /** Hand over what the parent's turn kept back, in the order it was kept. */
+  const handOverDeferred = (): void => {
+    const deferred = [...records.values()].filter(
+      (record): record is NoticeRecord & { notification: RunNotification } =>
+        record.state === "deferred" && record.notification !== undefined,
+    );
+    for (const record of deferred) dispatch(record.notification, true);
   };
 
   return {
@@ -421,9 +501,10 @@ export function createSessionPushSink(): SessionPushSink {
         announce();
       }),
 
-    bind: (target, pendingMessages = () => false) => {
+    bind: (target, pendingMessages = () => false, idle = () => true) => {
       send = target;
       hasPendingMessages = pendingMessages;
+      isIdle = idle;
       // The counts are one Session's, so a report read during the next Session
       // is about the next Session.
       counts = ZERO_COUNTS;
@@ -432,6 +513,7 @@ export function createSessionPushSink(): SessionPushSink {
     unbind: () => {
       send = undefined;
       hasPendingMessages = () => false;
+      isIdle = () => true;
       generation += 1;
       holds.clear();
       records.clear();
@@ -470,7 +552,9 @@ export function createSessionPushSink(): SessionPushSink {
     },
 
     agentSettled: () => {
-      if (!hasPendingMessages()) reDispatchLost();
+      if (hasPendingMessages()) return;
+      handOverDeferred();
+      reDispatchLost();
     },
 
     consumed: (runId) => {
@@ -485,6 +569,9 @@ export function createSessionPushSink(): SessionPushSink {
 
       if (current?.state === "held") {
         count("answeredByWait");
+        records.set(runId, { state: "consumed" });
+      } else if (current?.state === "deferred") {
+        count("answeredWhileDeferred");
         records.set(runId, { state: "consumed" });
       } else if (
         current?.state === "handed-off" &&

@@ -1,13 +1,24 @@
 /**
  * `RunCard`: one Run, presented, from a snapshot or from a stored Result.
  *
- * The card is where Run presentation grows, and M4 is where it grew: identity,
- * status, duration, and accounting were M3's, and the recent transcript, the
- * tools with their statuses, the context gauge, the diagnostics, the links,
- * and the final output are this milestone's. Having one place for all of it
- * means the tool-result renderer, the notification renderer, and anything a
- * later adapter adds read the same card rather than each assembling their own
- * lines from the same fields in slightly different orders.
+ * The card is where Run presentation grows: identity, status, duration, and
+ * accounting were M3's, and the context gauge, the diagnostics, the links, and
+ * the final output are M4's. Having one place for all of it means the
+ * tool-result renderer, the notification renderer, and anything a later
+ * adapter adds read the same card rather than each assembling their own lines
+ * from the same fields in slightly different orders.
+ *
+ * The card is **the answer, not the Run's record**
+ * ([ADR-0041](../../../docs/adr/0041-delivered-results-carry-the-answer-not-the-run-record.md)).
+ * A stored Result also holds the transcript and every tool entry with its
+ * bounded output, and the card used to print the last few of the one and all
+ * of the other. Both are read by the parent model, and the tool section alone
+ * reached seventy thousand characters for one Run whose answer was a few
+ * thousand. The parent asked what the Run found; how it got there is the
+ * operator's question, and the dashboard's inspection answers it from the same
+ * Result. The one exception is a Run with **no answer left**: there the last
+ * few transcript items are the only evidence of what it did, the notice has
+ * promised they are here, and so they are — see {@link RECENT_TRANSCRIPT_ITEMS}.
  *
  * There are exactly two sources, and the distinction is the point. A **live**
  * card comes from the published Run index and knows nothing about output,
@@ -18,12 +29,12 @@
  * layer is forbidden to do.
  *
  * Every expanded section is **omitted when it is empty** rather than printed
- * as a heading with nothing under it. A Run that used no tools did not use
- * zero tools; it has nothing to say about tools, and a reader scanning a card
- * should see only what happened.
+ * as a heading with nothing under it. A Run with no diagnostics did not have
+ * zero problems; it has nothing to say about problems, and a reader scanning
+ * a card should see only what happened.
  */
 
-import type { RunResult, ToolEntry, TranscriptItem } from "../domain/index.ts";
+import type { RunResult, TranscriptItem } from "../domain/index.ts";
 import {
   interpretFinalOutput,
   type NotificationAccounting,
@@ -54,12 +65,13 @@ import {
 import type { RunRowView } from "./views.ts";
 
 /**
- * How many transcript items the expanded card shows.
+ * How many transcript items stand in for a missing answer.
  *
- * The projection holds up to five hundred, and a card that printed them all
- * would bury the answer it is supposed to be presenting. The most recent few
- * are what tell a reader how the Run got where it did; the rest is what
- * `agent_result`'s output and the Run's own tools already say.
+ * Shown only when the Result holds no visible final output — none was
+ * produced, or retention removed all of it — and the transcript has something
+ * in it. The projection holds up to five hundred items; the most recent few
+ * are what tell a reader how the Run ended up with nothing to say, and the
+ * dashboard's inspection has the rest.
  *
  * A presentation number, decided here, because it is about what is readable
  * rather than about what is bounded — the projection's own bound is the
@@ -94,12 +106,11 @@ interface RunCard {
    */
   readonly context?: string;
   /**
-   * The last few transcript items, oldest first, present only when there are
-   * any. See {@link RECENT_TRANSCRIPT_ITEMS}.
+   * The last few transcript items, oldest first, present only when no final
+   * output remains and the transcript is the evidence. See
+   * {@link RECENT_TRANSCRIPT_ITEMS}.
    */
   readonly transcript?: readonly string[];
-  /** One line per tool the Run used, with the status it ended in. */
-  readonly tools?: readonly string[];
   /** What went wrong that was not the Run's ending, by category. */
   readonly diagnostics?: readonly string[];
   /** Pointers a backend produced: a native session file, a log, a URL. */
@@ -125,19 +136,6 @@ function formatTranscriptItem(item: TranscriptItem): string {
   const said =
     text || (calls.length > 0 ? `calls ${calls.join(", ")}` : "(no text)");
   return `${item.role}: ${said}`;
-}
-
-/** Tool identity and outcome for the compact RunCard entry. */
-function formatToolStatus(entry: ToolEntry): string {
-  return `${entry.name ?? "(unnamed tool)"} — ${entry.status}`;
-}
-
-/** One tool entry as a line: what it was, how it went, what it said. */
-export function formatToolEntry(entry: ToolEntry): string {
-  const summary = entry.outputSummary?.trim();
-  return [formatToolStatus(entry), ...(summary ? [`: ${summary}`] : [])].join(
-    "",
-  );
 }
 
 /** The context gauge, with its window when the backend reported one. */
@@ -213,15 +211,20 @@ export function runCard(source: RunCardSource): RunCard {
     toNotificationAccounting(result.usage, result.model),
   );
   const context = formatContextGauge(result.usage.context);
-  const transcript = omitWhenEmpty(recentTranscript(result.transcript));
-  const tools = omitWhenEmpty(result.tools.map(formatToolEntry));
+  const interpretation = interpretFinalOutput(result);
+  // The evidence that stands in for a missing answer, and nothing more: a Run
+  // with an answer delivers the answer.
+  const transcript =
+    "output" in interpretation || !interpretation.hasTranscriptEvidence
+      ? undefined
+      : omitWhenEmpty(recentTranscript(result.transcript));
   const diagnostics = omitWhenEmpty(
     result.diagnostics.map(formatDiagnosticLine),
   );
   const links = omitWhenEmpty(result.links.map(formatResultLinkLine));
   const truncation = formatTruncation(result);
   const finalOutput = finalOutputSection(
-    interpretFinalOutput(result),
+    interpretation,
     resultFinalOutputFraming(result),
   );
   // Status and duration through the completion view, which is the same value
@@ -241,7 +244,6 @@ export function runCard(source: RunCardSource): RunCard {
     ...(accounting === undefined ? {} : { accounting }),
     ...(context === undefined ? {} : { context }),
     ...(transcript === undefined ? {} : { transcript }),
-    ...(tools === undefined ? {} : { tools }),
     ...(diagnostics === undefined ? {} : { diagnostics }),
     ...(links === undefined ? {} : { links }),
     ...(truncation === undefined ? {} : { truncation }),
@@ -274,9 +276,8 @@ function section(
  * The card as plain lines, for an expanded view.
  *
  * The order is what a reader wants in the order they want it: who and how it
- * went, then what it spent, then how it got there, then what went wrong, then
- * where to look next — and the answer last, because the answer is the part
- * they will keep reading.
+ * went, then what it spent, then what went wrong, then where to look next —
+ * and the answer last, because the answer is the part they will keep reading.
  *
  * One blank line separates each block, and the body is separated the same way,
  * because the body is agent-authored Markdown and two adjacent paragraphs of
@@ -289,7 +290,6 @@ export function runCardLines(card: RunCard): readonly string[] {
     ...(card.accounting === undefined ? [] : [card.accounting]),
     ...(card.context === undefined ? [] : [card.context]),
     ...section("Recent transcript", card.transcript),
-    ...section("Tools", card.tools),
     ...section("Diagnostics", card.diagnostics),
     ...section("Links", card.links),
     ...(card.truncation === undefined ? [] : ["", card.truncation]),
@@ -302,13 +302,15 @@ export function runCardLines(card: RunCard): readonly string[] {
 }
 
 /**
- * The complete `agent_result` text: everything the card knows about the Run.
+ * The complete `agent_result` text, which is also what each wait delivers.
  *
  * Built from the card rather than from the Result directly, which is what
  * makes the card the one place Run presentation grows. M3's text was v1's —
  * the identity line and the body, and nothing else — and M4's is the expanded
  * body, reached by widening the card rather than by a second assembly of the
- * same fields somewhere else.
+ * same fields somewhere else. What the card leaves out is left out here too:
+ * this is the text that lands in the parent's context, and it carries the
+ * answer rather than the Run's record.
  */
 export function formatResult(result: RunResult): string {
   const [identity, ...rest] = runCardLines(runCard({ from: "result", result }));

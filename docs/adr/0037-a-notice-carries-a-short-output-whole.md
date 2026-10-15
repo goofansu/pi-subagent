@@ -6,6 +6,13 @@ Date: 2026-09-05
 
 Accepted.
 
+**Amended in one respect by
+[ADR-0041](0041-delivered-results-carry-the-answer-not-the-run-record.md).**
+The inlined pointer's sentence no longer ends *re-reads it with the
+transcript*, because `agent_result` no longer prints a transcript for a Run
+that has an answer; it ends *re-reads it*. The text below quotes the sentence
+as decided here.
+
 **Amends [ADR-0006](0006-completion-notifications-and-result-store.md)** in
 one respect: a completion notice carries the Run's output whole when the
 output fits a size bound, and previews it — as ADR-0006 decided — only when it

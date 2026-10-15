@@ -34,6 +34,14 @@ the widget reads one three-state read model [qualified by the 2026-09-06
 amendment below, which adds a fourth value], that delivery reports exhaustion,
 and that consumption is recorded at the host boundary — stands.
 
+**Amended in one respect by
+[ADR-0042](0042-a-notice-waits-for-the-parents-turn-to-end.md).** The case
+this entry could only count — a Result consumed before its queued notice
+landed — is now suppressed: a push while the parent is mid-turn is deferred
+in the sink rather than handed to Pi, and consumption drops it. The
+`consumedBeforeLanding` count stays and should read near zero. The reasoning
+under *What Pi allows* still holds for a notice Pi already has.
+
 **Amended 2026-09-06.** Delivery also reports an **unannounceable** Run to the
 Session push sink when the Result store has no Result from which to build a
 notice. The sink owns that terminal hand-off state, its count, and the widget's

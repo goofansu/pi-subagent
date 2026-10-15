@@ -889,7 +889,8 @@ test("agent_wait delivers each terminal Run's full result, as agent_result would
       `\nonce \\(subagent ${second.subagentId}\\), run ${second.runId}:`,
     ),
   );
-  assert.equal(text.match(new RegExp(RIG_ANSWER, "g"))?.length, 4);
+  // Once per Run: the answer, and no transcript echoing it.
+  assert.equal(text.match(new RegExp(RIG_ANSWER, "g"))?.length, 2);
 });
 
 test("agent_wait says why a cancelled Run was cancelled", async (t) => {
@@ -1479,17 +1480,14 @@ test("agent_result returns the full stored output with its Run identity", async 
   const args = { id: started.runId };
   const result = await rig.call("agent_result", args);
   const text = result.content.map((part) => part.text ?? "").join("");
-  // The expanded body: identity, how it went and what it spent, the recent
-  // transcript, and then the answer.
+  // The expanded body: identity, how it went and what it spent, and then the
+  // answer. The Run's transcript is in the stored Result and not here.
   assert.equal(
     text,
     [
       `explore (subagent ${started.subagentId}), run ${started.runId}:`,
       `look around · pi · completed in 0.0s`,
       `12 in / 8 out · 1 turn`,
-      "",
-      "Recent transcript:",
-      `  assistant: ${RIG_ANSWER}`,
       "",
       RIG_ANSWER,
     ].join("\n"),
@@ -2128,4 +2126,95 @@ test("agent_resume renders an empty-label refusal semantically and leaves the Su
     prompt: "carry on",
   });
   assert.match(resumed, /^Resumed subagent /);
+});
+
+test("a Result read mid-turn, after a wait gave up, leaves no notice to land", async (t) => {
+  // The shape this was measured on: the wait timed out, the Run finished a
+  // moment later while the parent was still mid-turn, and the parent fetched
+  // the Result itself. The notice used to be in Pi's queue by then, and landed
+  // on top of the fetched Result.
+  const rig = hostRig(t, {
+    resumableSteps: [
+      [
+        { step: "await-gate", gate: "late" },
+        emitText(RIG_ANSWER),
+        { step: "complete" },
+      ],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const started = await startedRun(rig);
+  const controller = new AbortController();
+  const waiting = rig.text(
+    "agent_wait",
+    { ids: [started.runId] },
+    { signal: controller.signal },
+  );
+  controller.abort();
+  await waiting;
+
+  // The parent's turn goes on; the Run settles inside it.
+  rig.host.setStreaming(true);
+  await rig.release("late");
+  await rig.settled(started.runId);
+  await rig.pump();
+
+  assert.deepEqual(rig.host.sent(), []);
+  assert.equal(rig.installation.sink.status(runId(started.runId)), "pending");
+  assert.equal(rig.installation.sink.counts().deferredForTurn, 1);
+
+  assert.match(
+    await rig.text("agent_result", { id: started.runId }),
+    new RegExp(RIG_ANSWER),
+  );
+  await rig.host.turnEnd({ stopReason: "stop" });
+  await rig.host.agentSettled();
+
+  // Delivered once, by `agent_result`, and the settle hands nothing over.
+  assert.deepEqual(rig.host.sent(), []);
+  assert.equal(rig.installation.sink.status(runId(started.runId)), "resolved");
+  const counts = rig.installation.sink.counts();
+  assert.equal(counts.answeredWhileDeferred, 1);
+  assert.equal(counts.consumedBeforeLanding, 0);
+  assert.equal(counts.landings, 0);
+});
+
+test("a Run that settles mid-turn is announced when the parent settles", async (t) => {
+  const rig = hostRig(t, {
+    resumableSteps: [
+      [
+        { step: "await-gate", gate: "late" },
+        emitText(RIG_ANSWER),
+        { step: "complete" },
+      ],
+    ],
+  });
+  await rig.host.sessionStart();
+  t.after(() => rig.installation.handle.release());
+
+  const started = await startedRun(rig);
+  rig.host.setStreaming(true);
+  await rig.release("late");
+  await rig.settled(started.runId);
+  await rig.pump();
+  assert.deepEqual(rig.host.sent(), []);
+
+  // The parent never asked; the settle hands the notice over, and it lands
+  // once with the answer in it.
+  await rig.host.turnEnd({ stopReason: "stop" });
+  await rig.host.agentSettled();
+
+  assert.equal(rig.host.sent().length, 1);
+  assert.deepEqual(rig.installation.sink.unlanded(), [started.runId]);
+  await rig.host.messageStart({
+    role: "custom",
+    ...rig.host.sent()[0].message,
+  });
+  assert.deepEqual(rig.installation.sink.landed(), [started.runId]);
+  assert.match(
+    JSON.stringify(rig.host.sent()[0].message),
+    new RegExp(RIG_ANSWER),
+  );
 });

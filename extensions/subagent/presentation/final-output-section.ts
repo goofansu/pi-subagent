@@ -238,13 +238,13 @@ function noticeRetainedSection(
     prefixRemovedBytes === undefined
       ? inlined
         ? framing.status === "completed"
-          ? `This is the complete output; nothing further to fetch. ${call} re-reads it with the transcript.`
-          : `This is all the output the Run produced. ${call} re-reads it with the transcript.`
+          ? `This is the complete output; nothing further to fetch. ${call} re-reads it.`
+          : `This is all the output the Run produced. ${call} re-reads it.`
         : framing.status === "completed"
           ? `The result is available. Call ${call}.`
           : `Partial output is available. Call ${call}.`
       : inlined
-        ? `This is the retained output prefix; ${formatByteCount(prefixRemovedBytes)} bytes were removed by retention bounds. ${call} re-reads it with the transcript.`
+        ? `This is the retained output prefix; ${formatByteCount(prefixRemovedBytes)} bytes were removed by retention bounds. ${call} re-reads it.`
         : `A retained output prefix is available; ${formatByteCount(prefixRemovedBytes)} bytes were removed by retention bounds. Call ${call}.`;
   return { ...(body === undefined ? {} : { body }), explanation };
 }

@@ -113,6 +113,15 @@ export interface StandInHostOptions {
   readonly sendFails?: () => boolean;
   /** Whether Pi reports that it still holds pending messages. */
   readonly hasPendingMessages?: boolean;
+  /**
+   * Whether the parent is mid-turn between tool calls.
+   *
+   * Idle by default, which is what a test that is not about turns wants: a
+   * notice pushed into an idle Session is sent at once. During any tool call
+   * the host reports streaming whatever this says, because Pi never executes
+   * a tool while idle; `setStreaming` changes the answer between calls.
+   */
+  readonly streaming?: boolean;
   /** Make a widget install throw, the way a stale Session's host does. */
   readonly widgetInstallFails?: () => boolean;
   /**
@@ -196,6 +205,8 @@ export interface StandInHost {
     readonly signalAborted?: boolean;
   }) => Promise<void>;
   readonly agentSettled: () => Promise<void>;
+  /** Say whether the parent is mid-turn between tool calls. See `streaming`. */
+  readonly setStreaming: (streaming: boolean) => void;
 
   /* The widget, as the host currently holds it. */
   readonly hasWidget: () => boolean;
@@ -318,8 +329,11 @@ export function createStandInHost(
     isProjectTrusted: () => options.projectTrusted ?? false,
     modelRegistry: { getAll: () => [...(options.models ?? [])] },
     hasPendingMessages: () => options.hasPendingMessages ?? false,
+    isIdle: () => !streaming && toolCallsInFlight === 0,
     signal: undefined as AbortSignal | undefined,
   };
+  let streaming = options.streaming ?? false;
+  let toolCallsInFlight = 0;
 
   const emit = async (event: string, payload: unknown): Promise<unknown> => {
     const handler = handlers.get(event);
@@ -380,14 +394,22 @@ export function createStandInHost(
     pi,
     tools: () => [...tools],
     tool,
-    call: (name, params, callOptions) =>
-      tool(name).execute(
-        `call-${name}`,
-        params,
-        callOptions?.signal,
-        undefined,
-        ctx,
-      ),
+    call: async (name, params, callOptions) => {
+      // A tool runs inside the parent's turn, so the parent is streaming for
+      // exactly as long as the call lasts, whatever `setStreaming` said.
+      toolCallsInFlight += 1;
+      try {
+        return await tool(name).execute(
+          `call-${name}`,
+          params,
+          callOptions?.signal,
+          undefined,
+          ctx,
+        );
+      } finally {
+        toolCallsInFlight -= 1;
+      }
+    },
     commands: () => [...commands],
     command: async (name, args = "") => {
       const command = commands.find((entry) => entry.name === name);
@@ -461,7 +483,12 @@ export function createStandInHost(
       }
     },
     agentSettled: async () => {
+      // Pi marks the run inactive before it emits the event.
+      streaming = false;
       await emit("agent_settled", { type: "agent_settled" });
+    },
+    setStreaming: (next) => {
+      streaming = next;
     },
 
     hasWidget: () => widget !== undefined,

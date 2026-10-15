@@ -165,16 +165,28 @@ no output remains, and the failure or cancellation reason beside the status.
 They are the values the content prints, built from the same notice, so a
 reader outside the TUI need not parse the prose.
 [ADR-0040](docs/adr/0040-delivered-results-carry-the-final-output-for-external-readers.md).
-**Pushed is not landed**: Pi may hold a follow-up while the model is
-mid-turn. Its queue may survive a non-Escape abort; when the sink reports the
-notice lost, it is re-pushed once per loss, but only after Pi no longer reports
-pending messages. One landing per Notification is the invariant. The seven states
-a notice can be in — **handed off**, **landed**, **lost after hand-off**,
-**exhausted**, **unannounceable**, **consumed**, **held** — are defined under
-**Delivery sweep**, each with the one component that decides it.
+**Pushed is not landed**: a notice is handed to Pi only while the parent is
+idle, where its follow-up starts a turn at once. While the parent is mid-turn
+the Session push sink **defers** the notice and hands it over when the parent
+settles, so a Result the parent reads in the meantime drops its notice rather
+than meeting it again at the end of the turn.
+[ADR-0042](docs/adr/0042-a-notice-waits-for-the-parents-turn-to-end.md).
+Pi's queue may survive a non-Escape abort; when the sink reports the notice
+lost, it is re-pushed once per loss, but only after Pi no longer reports
+pending messages. One landing per Notification is the invariant. The eight
+states a notice can be in — **handed off**, **landed**, **lost after
+hand-off**, **exhausted**, **unannounceable**, **consumed**, **held**,
+**deferred** — are defined under **Delivery sweep**, each with the one
+component that decides it.
 
 **Wait** — `agent_wait` blocks until the named Runs are terminal and
-delivers each one's Result, rendered exactly as `agent_result` renders it;
+delivers each one's Result, rendered exactly as `agent_result` renders it:
+the **answer** — identity, status, accounting, diagnostics, truncation, and
+the final output — and not the Run's transcript or tool record, which stay in
+the Result store and are read in inspection. A Run with no final output left
+delivers its last few transcript items instead, as the evidence the notice
+promised.
+[ADR-0041](docs/adr/0041-delivered-results-carry-the-answer-not-the-run-record.md).
 `agent_wait_all` does the same for every Run that is active when it is called,
 and names none. A delivered Result is **consumed** (see below), so no
 Notification follows it: while a wait covers a Run the Session push sink
@@ -434,7 +446,7 @@ succeeded or exhausted its budget.
 been announced, delivering anything missed. It is why a lost wake-up costs one
 extra pass rather than a Notification.
 
-The seven words for where a Notification has got to. Each is decided by exactly
+The eight words for where a Notification has got to. Each is decided by exactly
 one component, and no component may use a word for a state it cannot observe.
 [ADR-0033](docs/adr/0033-notification-vocabulary-pointer-and-label-bound.md)
 and [ADR-0035](docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md)
@@ -471,19 +483,30 @@ can explain its continued visibility; `agent_result` honestly says the output is
 or a wait delivered it. Decided by the **Session push sink**, told by those
 tool handlers and by nothing else: not a rejection or an expired Result, and
 not any internal store read. A push for a consumed Run is accepted and not
-sent, and a consumed notice lost after hand-off is not re-pushed — but a notice
-Pi already holds lands anyway, because the extension API has no call that
-removes a queued message, and that case is counted as *consumed before
-landing*.
+sent, a consumed notice lost after hand-off is not re-pushed, and a consumed
+notice that was held or deferred is dropped — but a notice Pi already holds
+lands anyway, because the extension API has no call that removes a queued
+message, and that case is counted as *consumed before landing*. Since
+notices are handed over only while the parent is idle, it is now the rare
+case.
 [ADR-0035](docs/adr/0035-completion-hand-off-resolves-on-landing-or-consumption.md).
 
 **Held** — a push for a Run that an active wait covers, accepted by the
 Session push sink and kept there rather than handed to Pi. Told by the wait
 tool handlers, which place the hold before they start waiting and release it
 however the wait ends. At release a held notice is dropped as **answered by
-the wait** if its Result was delivered, and handed over otherwise. Unresolved
-while held.
+the wait** if its Result was delivered, and handed over otherwise — into the
+deferral below when the parent is still mid-turn. Unresolved while held.
 [ADR-0036](docs/adr/0036-a-wait-delivers-the-result-it-waited-for.md).
+
+**Deferred** — a push while the parent is mid-turn, accepted by the Session
+push sink and kept there until the parent settles. Decided by the sink from
+Pi's live `isIdle()` at the moment of the push, and handed over on
+`agent_settled` — the one hand-over event, because a turn ends many times
+inside one run — unless Pi still reports pending messages. A deferred notice
+whose Run is consumed first is dropped as **answered while deferred**.
+Unresolved while deferred.
+[ADR-0042](docs/adr/0042-a-notice-waits-for-the-parents-turn-to-end.md).
 
 **Completion hand-off** — the whole business of getting one notice to the
 parent, from the first push to whatever ends it. It **resolves** when the notice

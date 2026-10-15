@@ -35,7 +35,7 @@ task in that conversation.
 | `agent_wait_all` | Waits for all Runs active at the time of the call. |
 | `agent_cancel` | Requests cancellation and keeps partial output. |
 | `agent_steer` | Sends guidance to an active Run. |
-| `agent_result` | Returns a finished Run's full result. |
+| `agent_result` | Returns a finished Run's full output. |
 
 `agent_start` and `agent_resume` return IDs immediately. A completion notice
 contains the result when it fits. Use `agent_result` to read longer output.

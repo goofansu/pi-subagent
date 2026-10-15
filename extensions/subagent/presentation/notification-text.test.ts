@@ -32,7 +32,7 @@ test("N-1: a completed notice carries a short output whole, and says nothing fur
       "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
       'Output from the subagent:\n"""\ndone\n"""\n\n' +
       "This is the complete output; nothing further to fetch. agent_result " +
-      'with {"id":"run-1"} re-reads it with the transcript.',
+      'with {"id":"run-1"} re-reads it.',
   );
 });
 
@@ -90,7 +90,7 @@ test("N-8: the notice is identical whichever backend ran the Run", () => {
       "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
       'Output from the subagent:\n"""\ndone\n"""\n\n' +
       "This is the complete output; nothing further to fetch. agent_result " +
-      'with {"id":"run-1"} re-reads it with the transcript.',
+      'with {"id":"run-1"} re-reads it.',
   );
 });
 
@@ -232,7 +232,7 @@ test("N-4: a failed notice states its reason, then the short partial output whol
       "Reason: the backend refused\n\n" +
       'Output produced before failure:\n"""\nhalf an answer\n"""\n\n' +
       "This is all the output the Run produced. agent_result with " +
-      '{"id":"run-1"} re-reads it with the transcript.',
+      '{"id":"run-1"} re-reads it.',
   );
 });
 
@@ -292,7 +292,7 @@ test("N-7: a cancelled notice names its reason and carries a short partial outpu
       "Agent: explore\nRun: run-1\nSubagent: subagent-1\n\n" +
       'Output produced before cancellation:\n"""\nhalf an answer\n"""\n\n' +
       "This is all the output the Run produced. agent_result with " +
-      '{"id":"run-1"} re-reads it with the transcript.',
+      '{"id":"run-1"} re-reads it.',
   );
 });
 
@@ -338,7 +338,7 @@ test("every terminal status ends with the availability sentence and the exact ca
     assert.equal(notice.retrieveWith, "agent_result");
     assert.match(
       formatNotificationText(notice),
-      /agent_result with \{"id":"run-1"\} re-reads it with the transcript\.$/,
+      /agent_result with \{"id":"run-1"\} re-reads it\.$/,
     );
     const long = fixtureNotification(
       ending === undefined

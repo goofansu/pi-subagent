@@ -122,7 +122,7 @@ function openSession(
  */
 export type SessionStartContext = Pick<
   ExtensionContext,
-  "hasPendingMessages" | "ui"
+  "hasPendingMessages" | "isIdle" | "ui"
 > & {
   readonly modelRegistry?: {
     getAll(): readonly { readonly provider: string; readonly id: string }[];
@@ -219,6 +219,9 @@ export async function startSession(
         triggerTurn: true,
       }),
     () => ctx.hasPendingMessages(),
+    // Read live, on every push: whether the parent is mid-turn decides whether
+    // a notice is handed over now or deferred until the parent settles.
+    () => ctx.isIdle(),
   );
 
   wiring.setProfiles(opened.profiles);

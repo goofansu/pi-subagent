@@ -532,6 +532,8 @@ test("every hand-off outcome is counted separately, and a bind starts them over"
     consumedBeforeLanding: 0,
     heldForWait: 0,
     answeredByWait: 0,
+    deferredForTurn: 0,
+    answeredWhileDeferred: 0,
   });
 
   // The counts are one Session's, so the next Session's report is about the
@@ -549,6 +551,8 @@ test("every hand-off outcome is counted separately, and a bind starts them over"
     consumedBeforeLanding: 0,
     heldForWait: 0,
     answeredByWait: 0,
+    deferredForTurn: 0,
+    answeredWhileDeferred: 0,
   });
 });
 
@@ -698,4 +702,213 @@ test("a stale scoped release is a no-op on the current Session's live hold", asy
   assert.equal(await bound.push(NOTICE), "pushed");
   assert.deepEqual(bound.sent(), []);
   assert.equal(bound.sink.counts().heldForWait, 1);
+});
+
+// -- Deferring for the parent's turn ------------------------------------------
+
+/** A Session whose parent is mid-turn, or not, as the test says. */
+function streamingRig(): Rig & { readonly setIdle: (idle: boolean) => void } {
+  const sink = createSessionPushSink();
+  const sent: NotificationMessage[] = [];
+  let idle = false;
+  sink.bind(
+    (message) => void sent.push(message),
+    () => false,
+    () => idle,
+  );
+  return {
+    sink,
+    sent: () => [...sent],
+    push: (notice) =>
+      Effect.runPromise(
+        Effect.match(sink.push(notice), {
+          onSuccess: () => "pushed" as const,
+          onFailure: () => "refused" as const,
+        }),
+      ),
+    landed: (message) =>
+      sink.messageStarted({
+        role: "custom",
+        customType: message.customType,
+        content: message.content,
+        details: message.details,
+      }),
+    setIdle: (next) => {
+      idle = next;
+    },
+  };
+}
+
+test("a push while the parent is mid-turn is accepted and deferred, not handed to Pi", async () => {
+  const bound = streamingRig();
+
+  assert.equal(await bound.push(NOTICE), "pushed");
+
+  // Delivery saw a hand-off; Pi saw nothing; the row is still pending.
+  assert.deepEqual(bound.sent(), []);
+  assert.deepEqual(bound.sink.unlanded(), []);
+  assert.equal(bound.sink.status(NOTICE.runId), "pending");
+  assert.equal(bound.sink.counts().deferredForTurn, 1);
+  assert.equal(bound.sink.counts().handOffsAccepted, 1);
+});
+
+test("a push while the parent is idle is handed over at once", async () => {
+  const bound = streamingRig();
+  bound.setIdle(true);
+
+  await bound.push(NOTICE);
+
+  assert.equal(bound.sent().length, 1);
+  assert.equal(bound.sink.counts().deferredForTurn, 0);
+});
+
+test("a deferred notice is handed over when the parent settles, and lands once", async () => {
+  const bound = streamingRig();
+  await bound.push(NOTICE);
+
+  // A turn ending normally inside the run hands nothing over: the next turn
+  // may be the one that reads the Result.
+  bound.sink.turnEnded({ stopReason: "stop" });
+  assert.deepEqual(bound.sent(), []);
+
+  bound.setIdle(true);
+  bound.sink.agentSettled();
+
+  assert.equal(bound.sent().length, 1);
+  assert.deepEqual(bound.sink.unlanded(), [NOTICE.runId]);
+  bound.landed(bound.sent()[0]);
+  assert.equal(bound.sink.status(NOTICE.runId), "resolved");
+  assert.equal(bound.sink.counts().landings, 1);
+  bound.sink.agentSettled();
+  assert.equal(bound.sent().length, 1);
+});
+
+test("a deferred notice whose Result the parent read is dropped, not landed later", async () => {
+  const bound = streamingRig();
+  await bound.push(NOTICE);
+
+  // The duplicate this state exists to remove: `agent_result` mid-turn, then
+  // the turn ends.
+  bound.sink.consumed(NOTICE.runId);
+  assert.equal(bound.sink.status(NOTICE.runId), "resolved");
+  bound.setIdle(true);
+  bound.sink.agentSettled();
+
+  assert.deepEqual(bound.sent(), []);
+  assert.equal(bound.sink.counts().answeredWhileDeferred, 1);
+  assert.equal(bound.sink.counts().consumedBeforeLanding, 0);
+  // Nothing left for a later abort to lose or a later settle to re-push.
+  bound.sink.turnEnded({ stopReason: "aborted" });
+  bound.sink.agentSettled();
+  assert.deepEqual(bound.sent(), []);
+});
+
+test("a settle hands a deferred notice over even while Pi still says not idle", async () => {
+  // Pi reports idle only once compaction has finished too; the settle is the
+  // evidence the sink acts on, so a compaction at that instant cannot keep a
+  // notice back until the next run.
+  const bound = streamingRig();
+  await bound.push(NOTICE);
+
+  bound.sink.agentSettled();
+
+  assert.equal(bound.sent().length, 1);
+});
+
+test("a deferred notice waits while Pi reports pending messages at settle", async () => {
+  const sink = createSessionPushSink();
+  const sent: NotificationMessage[] = [];
+  let pending = true;
+  sink.bind(
+    (message) => void sent.push(message),
+    () => pending,
+    () => false,
+  );
+  await Effect.runPromise(sink.push(NOTICE));
+
+  sink.agentSettled();
+  assert.equal(sent.length, 0);
+
+  pending = false;
+  sink.agentSettled();
+  assert.equal(sent.length, 1);
+});
+
+test("an aborted turn does not lose a deferred notice, because Pi never had it", async () => {
+  const bound = streamingRig();
+  await bound.push(NOTICE);
+
+  bound.sink.turnEnded({ stopReason: "aborted" });
+
+  assert.equal(bound.sink.counts().lostAfterHandOff, 0);
+  bound.setIdle(true);
+  bound.sink.agentSettled();
+  assert.equal(bound.sent().length, 1);
+  assert.equal(bound.sink.counts().rePushes, 0);
+});
+
+test("a lost notice re-dispatched mid-turn is deferred rather than queued in Pi", async () => {
+  const bound = streamingRig();
+  bound.setIdle(true);
+  await bound.push(NOTICE);
+  assert.equal(bound.sent().length, 1);
+
+  // The turn that carried it was aborted, Pi still holds other messages, and
+  // the next turn ends normally while the parent is mid-run.
+  bound.sink.turnEnded({ stopReason: "aborted" });
+  bound.setIdle(false);
+  bound.sink.turnEnded({ stopReason: "stop" });
+
+  assert.equal(bound.sent().length, 1);
+  assert.equal(bound.sink.counts().deferredForTurn, 1);
+  bound.sink.consumed(NOTICE.runId);
+  bound.setIdle(true);
+  bound.sink.agentSettled();
+  assert.equal(bound.sent().length, 1);
+});
+
+test("a wait's hold released mid-turn defers the notice it was keeping", async () => {
+  const bound = streamingRig();
+  const release = bound.sink.hold([NOTICE.runId]);
+  await bound.push(NOTICE);
+  assert.equal(bound.sink.counts().heldForWait, 1);
+
+  // The wait timed out inside the parent's turn: the hold goes, the turn is
+  // still running, and the notice now waits for the settle instead of Pi.
+  release();
+
+  assert.deepEqual(bound.sent(), []);
+  assert.equal(bound.sink.counts().deferredForTurn, 1);
+  bound.setIdle(true);
+  bound.sink.agentSettled();
+  assert.equal(bound.sent().length, 1);
+});
+
+test("a deferred notice is kept out of the wait path a later hold opens", async () => {
+  const bound = streamingRig();
+  await bound.push(NOTICE);
+
+  // A wait that then covers the Run delivers the Result itself and consumes
+  // it; the deferred notice is dropped like a held one would be.
+  const release = bound.sink.hold([NOTICE.runId]);
+  bound.sink.consumed(NOTICE.runId);
+  release();
+  bound.setIdle(true);
+  bound.sink.agentSettled();
+
+  assert.deepEqual(bound.sent(), []);
+  assert.equal(bound.sink.status(NOTICE.runId), "resolved");
+});
+
+test("unbinding forgets every deferred notice", async () => {
+  const bound = streamingRig();
+  await bound.push(NOTICE);
+
+  bound.sink.unbind();
+  const next: NotificationMessage[] = [];
+  bound.sink.bind((message) => void next.push(message));
+  bound.sink.agentSettled();
+
+  assert.deepEqual(next, []);
+  assert.equal(bound.sink.status(NOTICE.runId), "pending");
 });

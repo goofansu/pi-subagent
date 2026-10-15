@@ -15,24 +15,10 @@ import {
 } from "../testing/presentation-fixtures.ts";
 import {
   formatResult,
-  formatToolEntry,
   RECENT_TRANSCRIPT_ITEMS,
   runCard,
   runCardLines,
 } from "./run-card.ts";
-
-test("compact tool entry preserves unnamed fallback and output formatting", () => {
-  for (const name of [undefined, "read"]) {
-    const entry = {
-      name,
-      status: "completed",
-      outputSummary: "  first\nsecond  ",
-    } as const;
-    const status = `${name ?? "(unnamed tool)"} — completed`;
-    assert.equal(formatToolEntry(entry), `${status}: first\nsecond`);
-    assert.equal(formatToolEntry({ ...entry, outputSummary: "  " }), status);
-  }
-});
 
 test("a live card comes from a snapshot and carries no output", () => {
   const card = runCard({
@@ -233,24 +219,17 @@ function fullResult() {
   });
 }
 
-test("the expanded card carries every section a Run reported", () => {
+test("the expanded card carries every section a Run reported, and never its record", () => {
   const card = runCard({ from: "result", result: fullResult() });
 
+  // The Result holds a transcript and two tool entries, one with output. None
+  // of it is on the card: this text lands in the parent's context, and the
+  // parent asked for the answer, not for how the Run got there.
   assert.deepEqual(runCardLines(card), [
     "explore (subagent subagent-1), run run-1",
     "look around · pi · completed in 12.4s",
     "cost $0.0125 · 12.3k in / 4.5k out · 3 turns · openai-codex/gpt-5.4-mini",
     "context 18.4k / 200.0k (9%)",
-    "",
-    "Recent transcript:",
-    "  assistant: calls read_file",
-    "  tool: 40 lines",
-    "  user: keep going",
-    "  assistant: the answer",
-    "",
-    "Tools:",
-    "  read_file — completed: 40 lines",
-    "  bash — failed",
     "",
     "Diagnostics:",
     "  control: Pi steering was not delivered",
@@ -283,13 +262,10 @@ test("a retained prefix states its cut exactly once", () => {
 test("a Run that reported nothing shows only what it has", () => {
   const card = runCard({ from: "result", result: fixtureResult({}) });
 
-  // No accounting, no gauge, no transcript, no tools, no diagnostics, no
-  // links, and no truncation record: every section is absent rather than
-  // titled and empty.
+  // No accounting, no gauge, no diagnostics, no links, and no truncation
+  // record: every section is absent rather than titled and empty.
   assert.equal(card.accounting, undefined);
   assert.equal(card.context, undefined);
-  assert.equal(card.transcript, undefined);
-  assert.equal(card.tools, undefined);
   assert.equal(card.diagnostics, undefined);
   assert.equal(card.links, undefined);
   assert.equal(card.truncation, undefined);
@@ -301,26 +277,82 @@ test("a Run that reported nothing shows only what it has", () => {
   ]);
 });
 
-test("the transcript section keeps only the most recent items", () => {
-  const card = runCard({
-    from: "result",
-    result: fixtureResult({
-      transcript: Array.from(
-        { length: RECENT_TRANSCRIPT_ITEMS + 3 },
-        (_unused, index) => ({
-          role: "assistant" as const,
-          parts: [{ kind: "text" as const, text: `message ${index}` }],
-        }),
-      ),
+test("the recent transcript stands in for a missing answer, and only then", () => {
+  const transcript = Array.from(
+    { length: RECENT_TRANSCRIPT_ITEMS + 3 },
+    (_unused, index) => ({
+      role: "assistant" as const,
+      parts: [{ kind: "text" as const, text: `message ${index}` }],
     }),
-  });
+  );
 
-  assert.equal(card.transcript?.length, RECENT_TRANSCRIPT_ITEMS);
-  assert.equal(card.transcript?.[0], "assistant: message 3");
+  // No answer was produced: the last few items are the evidence.
+  const absent = runCard({
+    from: "result",
+    result: fixtureResult({ transcript }),
+  });
+  assert.equal(absent.transcript?.length, RECENT_TRANSCRIPT_ITEMS);
+  assert.equal(absent.transcript?.[0], "assistant: message 3");
   assert.equal(
-    card.transcript?.[RECENT_TRANSCRIPT_ITEMS - 1],
+    absent.transcript?.[RECENT_TRANSCRIPT_ITEMS - 1],
     `assistant: message ${RECENT_TRANSCRIPT_ITEMS + 2}`,
   );
+
+  // The answer was produced and then wholly removed: same evidence.
+  const removed = runCard({
+    from: "result",
+    result: fixtureResult({
+      transcript,
+      truncation: { truncatedOutputBytes: 23 },
+    }),
+  });
+  assert.equal(removed.transcript?.length, RECENT_TRANSCRIPT_ITEMS);
+
+  // An answer remains, whole or as a prefix: the transcript stays in the store.
+  for (const result of [
+    fixtureResult({ transcript, finalOutput: "the answer" }),
+    fixtureResult({
+      transcript,
+      finalOutput: "the ans",
+      truncation: { truncatedOutputBytes: 3 },
+    }),
+  ]) {
+    assert.equal(runCard({ from: "result", result }).transcript, undefined);
+  }
+
+  // No answer and nothing readable in the transcript either: no section.
+  const blank = runCard({
+    from: "result",
+    result: fixtureResult({
+      transcript: [
+        { role: "assistant", parts: [{ kind: "text", text: "  " }] },
+      ],
+    }),
+  });
+  assert.equal(blank.transcript, undefined);
+});
+
+test("a long tool record adds nothing to the delivered text", () => {
+  // The shape the fix was measured on: one Run, many tool entries, each with
+  // a bounded output summary that the card used to print in full.
+  const text = formatResult(
+    fixtureResult({
+      finalOutput: "the answer",
+      tools: Array.from({ length: 40 }, () => ({
+        name: "bash",
+        status: "completed" as const,
+        outputSummary: "x".repeat(2_000),
+      })),
+      transcript: Array.from({ length: 40 }, () => ({
+        role: "tool" as const,
+        parts: [{ kind: "text" as const, text: "y".repeat(2_000) }],
+      })),
+    }),
+  );
+
+  assert.ok(text.length < 200, `delivered ${text.length} characters`);
+  assert.doesNotMatch(text, /Tools:|Recent transcript:/);
+  assert.ok(text.endsWith("\n\nthe answer"));
 });
 
 test("a gauge with no window reported reads as an occupancy alone", () => {

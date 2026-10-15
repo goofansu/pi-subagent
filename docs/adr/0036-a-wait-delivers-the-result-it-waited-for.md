@@ -17,6 +17,17 @@ rejected — the objection was that a wait withheld the answer, and it no longer
 does. ADR-0035 carries a status note pointing here; its text is otherwise
 untouched.
 
+**Amended in two respects by
+[ADR-0041](0041-delivered-results-carry-the-answer-not-the-run-record.md) and
+[ADR-0042](0042-a-notice-waits-for-the-parents-turn-to-end.md).** The text a
+wait delivers is still the text `agent_result` returns, but that text now
+carries the answer rather than the whole RunCard: the transcript and tool
+record stay in the Result and in inspection. And the hold-while-active
+envelope this entry set aside under *Alternatives considered* is taken in its
+narrow form: a push while the parent is mid-turn is deferred in the sink
+until the parent settles, so a hold released by a timed-out wait no longer
+hands the notice to Pi's queue.
+
 **Current presentation note.** The later adaptive ambient widget does not show
 the individual terminal rows named in this decision's historical text. A
 Result-delivering wait still resolves the hand-off, now removing that terminal
