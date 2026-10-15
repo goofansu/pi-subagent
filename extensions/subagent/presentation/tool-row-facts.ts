@@ -26,6 +26,10 @@ import {
   type WaitOutcome,
 } from "../domain/index.ts";
 import {
+  DeliveredRunFactsFields,
+  deliveredRunFactsOfResult,
+} from "./final-output-facts.ts";
+import {
   compactFinalOutputSummaryPhrase,
   finalOutputSummary,
 } from "./final-output-section.ts";
@@ -526,6 +530,9 @@ const ResultRunSummarySchema = Schema.Struct({
   usage: Schema.optionalKey(RunUsageFactsSchema),
   /** The model the Run reported, when it reported one. */
   model: Schema.optionalKey(Schema.String),
+  // The whole retained answer and the Run's ending reasons, the same values
+  // the model-visible prose prints, so an external reader need not parse it.
+  ...DeliveredRunFactsFields,
 });
 type ResultRunSummary = typeof ResultRunSummarySchema.Type;
 
@@ -921,6 +928,7 @@ function resultRunSummaryOf(result: RunResult): ResultRunSummary {
     ...(result.model === undefined || result.model === ""
       ? {}
       : { model: boundOneLine(result.model, NOTIFICATION_MODEL_MAX_BYTES) }),
+    ...deliveredRunFactsOfResult(result),
   };
 }
 

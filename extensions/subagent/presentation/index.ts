@@ -28,9 +28,11 @@ export {
   emptyDashboardPage,
   reduceDashboardPage,
 } from "./dashboard-page.ts";
-
+export {
+  DeliveredRunFactsFields,
+  deliveredRunFactsOfNotification,
+} from "./final-output-facts.ts";
 export { formatNotificationText } from "./notification-text.ts";
-
 export {
   formatInvalidProfilesWarning,
   formatSessionNotReady,
@@ -42,16 +44,13 @@ export {
   presentSteerOutcome,
   presentWait,
 } from "./prose.ts";
-
 export { contentText, formatNotificationSummary } from "./renderers.ts";
-
 export {
   formatRowSummary,
   type RenderableTheme,
   renderRunRows,
   widgetSummary,
 } from "./rows.ts";
-
 export {
   encodeToolRowFacts,
   type ToolRowFacts,

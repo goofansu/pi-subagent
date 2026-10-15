@@ -1109,6 +1109,7 @@ test("agent_wait crosses registration with discriminated collection details and 
         agent: "explore",
         status: "completed",
         usage: RIG_RUN_USAGE,
+        finalOutput: { kind: "retained", text: RIG_ANSWER },
       },
     ],
     stillRunning: 0,
@@ -1175,6 +1176,7 @@ test("agent_wait renders partial mixed-Agent delivery without presenting timeout
         agent: "explore",
         status: "completed",
         usage: RIG_RUN_USAGE,
+        finalOutput: { kind: "retained", text: RIG_ANSWER },
       },
     ],
     stillRunning: 1,
@@ -1253,12 +1255,14 @@ test("agent_wait_all delivers every active Run's result and consumes each", asyn
         agent: "explore",
         status: "completed",
         usage: NO_RUN_USAGE,
+        finalOutput: { kind: "retained", text: "first answer" },
       },
       {
         runId: second.runId,
         agent: "once",
         status: "completed",
         usage: NO_RUN_USAGE,
+        finalOutput: { kind: "retained", text: "second answer" },
       },
     ],
     stillRunning: 0,
@@ -1470,6 +1474,7 @@ test("agent_result returns the full stored output with its Run identity", async 
       agent: "explore",
       status: "completed",
       usage: RIG_RUN_USAGE,
+      finalOutput: { kind: "retained", text: RIG_ANSWER },
     },
   });
   const collapsed = renderRegisteredRow(

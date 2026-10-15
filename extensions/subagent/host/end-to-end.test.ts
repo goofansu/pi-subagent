@@ -327,6 +327,8 @@ test("a settled Run sends exactly one follow-up notice that triggers a turn", as
       // The rig's reported usage reaches the details, as an external reader
       // sees it.
       usage: { input: 12, output: 8, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      // And so does the answer, whole, with nothing around it.
+      finalOutput: { kind: "retained", text: RIG_ANSWER },
     },
   );
 });

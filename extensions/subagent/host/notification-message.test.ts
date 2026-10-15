@@ -62,11 +62,27 @@ function landed(message: ReturnType<typeof buildNotificationMessage>) {
 // -- Build and parse ---------------------------------------------------------
 
 test("build then parse round-trips every terminal status", () => {
-  for (const notice of [
-    fixtureNotification({ finalOutput: "done" }),
-    fixtureNotification({ ending: failedEnding("boom") }),
-    fixtureNotification({ ending: cancelledEnding("requested") }),
-  ]) {
+  const cases = [
+    {
+      notice: fixtureNotification({ finalOutput: "done" }),
+      facts: { finalOutput: { kind: "retained", text: "done" } },
+    },
+    {
+      notice: fixtureNotification({ ending: failedEnding("boom") }),
+      facts: {
+        finalOutput: { kind: "absent", hasTranscriptEvidence: false },
+        failure: "boom",
+      },
+    },
+    {
+      notice: fixtureNotification({ ending: cancelledEnding("requested") }),
+      facts: {
+        finalOutput: { kind: "absent", hasTranscriptEvidence: false },
+        cancellationReason: "requested",
+      },
+    },
+  ] as const;
+  for (const { notice, facts } of cases) {
     const message = buildNotificationMessage(notice);
     assert.equal(message.customType, NOTIFICATION_MESSAGE_TYPE);
     assert.equal(message.display, true);
@@ -78,11 +94,12 @@ test("build then parse round-trips every terminal status", () => {
       label: notice.label,
       status: notice.status,
       durationMillis: notice.durationMillis,
+      ...facts,
     });
   }
 });
 
-test("the details carry the collapsed line and the ids, never the text", () => {
+test("the details carry the collapsed line, the ids, and the answer as a fact; never the prose", () => {
   // A Run that spent nothing: usage and model are covered separately below.
   const message = buildNotificationMessage(
     fixtureNotification({ finalOutput: "the whole answer" }),
@@ -91,12 +108,17 @@ test("the details carry the collapsed line and the ids, never the text", () => {
   assert.deepEqual(Object.keys(message.details).sort(), [
     "agent",
     "durationMillis",
+    "finalOutput",
     "label",
     "runId",
     "status",
     "subagentId",
   ]);
-  assert.doesNotMatch(JSON.stringify(message.details), /the whole answer/);
+  // The answer is there as a value, not as the sentence around it: a reader
+  // that wants only the answer never sees the fence or the pointer.
+  const serialized = JSON.stringify(message.details);
+  assert.match(serialized, /the whole answer/);
+  assert.doesNotMatch(serialized, /Output from the subagent|agent_result/);
 });
 
 test("the details carry the Run's usage and model for external readers, cost unrounded", () => {
@@ -127,6 +149,100 @@ test("the details carry the Run's usage and model for external readers, cost unr
   assert.deepEqual(parseNotificationMessage(landed(message)), message.details);
   // The text still rounds, and is the only place that does.
   assert.match(message.content, /cost \$0\.1235 · /);
+});
+
+test("the details carry the retained answer as a fact, the same text the content fences", () => {
+  const message = buildNotificationMessage(
+    fixtureNotification({ finalOutput: "# Findings\n\nTwo **bold** points." }),
+  );
+
+  assert.deepEqual(message.details.finalOutput, {
+    kind: "retained",
+    text: "# Findings\n\nTwo **bold** points.",
+  });
+  assert.match(
+    message.content,
+    /Output from the subagent:\n"""\n# Findings\n\nTwo \*\*bold\*\* points\.\n"""/,
+  );
+  assert.deepEqual(parseNotificationMessage(landed(message)), message.details);
+});
+
+test("a long answer's details carry the bounded preview and name it as one", () => {
+  const long = `${"x".repeat(NOTIFICATION_INLINE_MAX_BYTES)}y`;
+  const message = buildNotificationMessage(
+    fixtureNotification({ finalOutput: long }),
+  );
+
+  const facts = message.details.finalOutput;
+  assert.equal(facts?.kind, "retained");
+  assert.equal(facts !== undefined && "text" in facts, false);
+  const preview =
+    facts !== undefined && "preview" in facts ? facts.preview : "";
+  assert.notEqual(preview, "");
+  assert.notEqual(preview, long);
+  // The same preview the content quotes.
+  assert.match(
+    message.content,
+    new RegExp(
+      `Preview from the subagent:\\n"${preview.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`,
+    ),
+  );
+  assert.deepEqual(parseNotificationMessage(landed(message)), message.details);
+});
+
+test("every retention kind and both reasons reach the details for a failed and a cancelled Run", () => {
+  const prefix = buildNotificationMessage(
+    fixtureNotification({
+      ending: failedEnding("boom"),
+      finalOutput: "visible prefix",
+      truncation: { truncatedOutputBytes: 7 },
+    }),
+  );
+  assert.deepEqual(prefix.details.finalOutput, {
+    kind: "retained-prefix",
+    removedBytes: 7,
+    text: "visible prefix",
+  });
+  assert.equal(prefix.details.failure, "boom");
+  assert.match(
+    prefix.content,
+    /Reason: boom\n\nOutput produced before failure:\n"""\nvisible prefix\n"""/,
+  );
+
+  const removed = buildNotificationMessage(
+    fixtureNotification({
+      ending: cancelledEnding("timeout"),
+      truncation: { truncatedOutputBytes: 23 },
+      transcript: [
+        {
+          role: "assistant",
+          parts: [{ kind: "text", text: "evidence" }],
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(removed.details.finalOutput, {
+    kind: "removed",
+    removedBytes: 23,
+    hasTranscriptEvidence: true,
+  });
+  assert.equal(removed.details.cancellationReason, "timeout");
+  assert.equal("failure" in removed.details, false);
+  for (const message of [prefix, removed]) {
+    assert.deepEqual(
+      parseNotificationMessage(landed(message)),
+      message.details,
+    );
+  }
+});
+
+test("a failed Run that reported no reason has no failure fact", () => {
+  const message = buildNotificationMessage(
+    fixtureNotification({ ending: failedEnding("") }),
+  );
+
+  assert.equal("failure" in message.details, false);
+  assert.match(message.content, /Reason: none reported\./);
 });
 
 test("a Run that spent nothing has no usage or model in its details", () => {

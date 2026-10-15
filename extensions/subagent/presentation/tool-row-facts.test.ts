@@ -8,7 +8,12 @@ import type {
   SteerOutcome,
   WaitOutcome,
 } from "../domain/index.ts";
-import { runId, subagentId } from "../domain/index.ts";
+import {
+  cancelledEnding,
+  failedEnding,
+  runId,
+  subagentId,
+} from "../domain/index.ts";
 import {
   fixtureResult,
   fixtureUsage,
@@ -352,6 +357,7 @@ test("the Tool-row facts decoder accepts all terminal phases and nested cancella
         agent: "explore",
         status: "completed",
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+        finalOutput: { kind: "retained", text: "answer" },
       },
     },
   );
@@ -384,6 +390,7 @@ test("every delivered Run summary carries the Run's own usage and model, cost un
       cost: 0.123456789,
     },
     model: "anthropic/claude-sonnet-4-6",
+    finalOutput: { kind: "retained", text: "answer" },
   } as const;
   const delivered: WaitOutcome = {
     outcome: "terminal",
@@ -405,6 +412,79 @@ test("every delivered Run summary carries the Run's own usage and model, cost un
       collection,
     );
   }
+});
+
+test("every delivered Run summary carries the whole retained answer and how the Run ended", () => {
+  const failed = fixtureResult({
+    ending: failedEnding("boom"),
+    finalOutput: "# Partial\n\nbefore the crash",
+    truncation: { truncatedOutputBytes: 9 },
+  });
+  const expected = {
+    runId: failed.runId,
+    agent: "explore",
+    status: "failed",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+    finalOutput: {
+      kind: "retained-prefix",
+      removedBytes: 9,
+      text: "# Partial\n\nbefore the crash",
+    },
+    failure: "boom",
+  } as const;
+  const delivered: WaitOutcome = {
+    outcome: "terminal",
+    runId: failed.runId,
+    status: "failed",
+    result: failed,
+  };
+
+  const available = resultToolRowFacts({ outcome: "result", result: failed });
+  assert.equal(available.outcome, "available");
+  assert.deepEqual("run" in available ? available.run : undefined, expected);
+  for (const collection of [
+    waitToolRowFacts([delivered]),
+    waitAllToolRowFacts([delivered]),
+  ]) {
+    assert.deepEqual(collection.runs, [expected]);
+    assert.deepEqual(
+      decodeToolRowFacts(encodeToolRowFacts(collection)),
+      collection,
+    );
+  }
+});
+
+test("a delivered Run summary states absence, removal, and cancellation as facts", () => {
+  const cancelled = resultToolRowFacts({
+    outcome: "result",
+    result: fixtureResult({
+      ending: cancelledEnding("shutdown"),
+      truncation: { truncatedOutputBytes: 4 },
+    }),
+  });
+  assert.equal(cancelled.outcome, "available");
+  const cancelledRun = "run" in cancelled ? cancelled.run : undefined;
+  assert.deepEqual(cancelledRun?.finalOutput, {
+    kind: "removed",
+    removedBytes: 4,
+    hasTranscriptEvidence: false,
+  });
+  assert.equal(cancelledRun?.cancellationReason, "shutdown");
+  assert.equal(cancelledRun !== undefined && "failure" in cancelledRun, false);
+
+  const empty = resultToolRowFacts({
+    outcome: "result",
+    result: fixtureResult(),
+  });
+  const emptyRun = "run" in empty ? empty.run : undefined;
+  assert.deepEqual(emptyRun?.finalOutput, {
+    kind: "absent",
+    hasTranscriptEvidence: false,
+  });
+  assert.equal(
+    emptyRun !== undefined && "cancellationReason" in emptyRun,
+    false,
+  );
 });
 
 test("a delivered Run summary persisted before usage existed still decodes", () => {

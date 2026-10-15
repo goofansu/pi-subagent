@@ -24,9 +24,15 @@
  * because a reader outside the TUI — Piano, over RPC — accounts Subagent
  * spend per Profile from structured details, and a Run nobody waited for is
  * announced only here. They are the same figures `agent_result` and the waits
- * carry, so a reader can key them by Run id across both channels. The text
- * itself is not in the details: it is the message's content, and a copy of it
- * here could disagree with it.
+ * carry, so a reader can key them by Run id across both channels. The Run's
+ * answer and how it ended, for the same reader, which otherwise had to parse
+ * the fence and the status sentence back out of the content: the retained
+ * value — or the preview, when the content previews — its retention, and the
+ * failure or cancellation reason, built from the same notice the content is
+ * built from so the two cannot disagree
+ * ([ADR-0040](../../../docs/adr/0040-delivered-results-carry-the-final-output-for-external-readers.md)).
+ * The prose itself is not in the details: it is the message's content, and a
+ * copy of it here could disagree with it.
  *
  * Pi's native tool-result `usage` is deliberately not the channel: Pi sums it
  * per delivery, a custom message has no such field, and it names neither Run
@@ -51,6 +57,8 @@ import {
 } from "../domain/index.ts";
 import {
   contentText,
+  DeliveredRunFactsFields,
+  deliveredRunFactsOfNotification,
   formatNotificationSummary,
   formatNotificationText,
   type RenderableTheme,
@@ -89,6 +97,12 @@ export const NotificationDetails = Schema.Struct({
   ),
   /** The model the Run reported, when it reported one. */
   model: Schema.optionalKey(Schema.String),
+  /**
+   * What the Run said and how it ended, as facts: the retained answer (or
+   * its preview), its retention, and the failure or cancellation reason.
+   * The same values the content prints, for a reader that must not parse it.
+   */
+  ...DeliveredRunFactsFields,
 });
 
 export type NotificationDetails = typeof NotificationDetails.Type;
@@ -121,6 +135,7 @@ export function buildNotificationMessage(
       status: notice.status,
       durationMillis: notice.durationMillis,
       ...usageDetailsOf(notice.accounting),
+      ...deliveredRunFactsOfNotification(notice),
     },
   };
 }

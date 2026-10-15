@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   backendId,
+  cancelledEnding,
   EMPTY_USAGE_SNAPSHOT,
+  failedEnding,
   interpretFinalOutput,
 } from "../domain/index.ts";
 import type { RunInspection } from "../domain/inspection.ts";
@@ -11,6 +13,7 @@ import {
   fixtureNotification,
   fixtureResult,
 } from "../testing/presentation-fixtures.ts";
+import { deliveredRunFactsOfNotification } from "./final-output-facts.ts";
 import {
   compactFinalOutputSummaryPhrase,
   finalOutputSummary,
@@ -143,6 +146,46 @@ test("removed final output shares Result and inspection lines while preserving i
   assert.match(rendered.notice, /Final output was produced, but none remains/);
   for (const text of Object.values(rendered))
     assert.doesNotMatch(text, /No final output was produced/);
+});
+
+test("the final-output fact on both channels is the text the prose fences, for every retention kind", () => {
+  const cases: readonly FixtureResultOptions[] = [
+    { finalOutput: "# Findings\n\n- one\n- two" },
+    { finalOutput: "prefix", truncation: { truncatedOutputBytes: 5 } },
+    { truncation: { truncatedOutputBytes: 5 } },
+    {},
+    { ending: failedEnding("boom"), finalOutput: "before the crash" },
+    { ending: cancelledEnding("timeout"), finalOutput: "before the stop" },
+  ];
+  for (const options of cases) {
+    const result = fixtureResult(options);
+    const notice = fixtureNotification(options);
+    const fromResult = resultToolRowFacts({ outcome: "result", result });
+    assert.equal(fromResult.outcome, "available");
+    const resultFacts = "run" in fromResult ? fromResult.run : undefined;
+    const noticeFacts = deliveredRunFactsOfNotification(notice);
+
+    // One fact for one Run, whichever channel delivered it: these answers
+    // fit the inline bound, so neither channel previews.
+    assert.deepEqual(noticeFacts.finalOutput, resultFacts?.finalOutput);
+    assert.equal(noticeFacts.failure, resultFacts?.failure);
+    assert.equal(
+      noticeFacts.cancellationReason,
+      resultFacts?.cancellationReason,
+    );
+
+    const facts = noticeFacts.finalOutput;
+    const rendered = surfaces(options);
+    if (facts !== undefined && "text" in facts) {
+      // The fact is the whole value the Result card prints and the notice
+      // fences, byte for byte.
+      assert.equal(rendered.result.includes(facts.text), true);
+      assert.equal(rendered.notice.includes(`"""\n${facts.text}\n"""`), true);
+    } else {
+      assert.equal(facts?.kind === "absent" || facts?.kind === "removed", true);
+      assert.doesNotMatch(rendered.notice, /"""/);
+    }
+  }
 });
 
 test("whitespace-only final output follows the absent path on all three surfaces", () => {
