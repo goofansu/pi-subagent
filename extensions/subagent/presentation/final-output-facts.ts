@@ -27,9 +27,9 @@ import {
   type RunResult,
 } from "../domain/index.ts";
 import {
-  type FinalOutputFraming,
   notificationFinalOutputFraming,
   resultFinalOutputFraming,
+  type TerminalFinalOutputFraming,
 } from "./final-output-section.ts";
 
 /**
@@ -92,6 +92,14 @@ export type DeliveredRunFacts = typeof DeliveredRunFacts.Type;
 
 type CarriedAs = "text" | "preview";
 
+/** The retained value under the one key that says what it is. */
+function carried(
+  value: string,
+  carriedAs: CarriedAs,
+): { readonly text: string } | { readonly preview: string } {
+  return carriedAs === "text" ? { text: value } : { preview: value };
+}
+
 function finalOutputFactsOf(
   output: FinalOutputInterpretation | NotificationFinalOutput,
   carriedAs: CarriedAs,
@@ -109,38 +117,35 @@ function finalOutputFactsOf(
         hasTranscriptEvidence: output.hasTranscriptEvidence,
       };
     case "retained":
-      return carriedAs === "text"
-        ? { kind: "retained", text: output.output }
-        : { kind: "retained", preview: output.output };
+      return { kind: "retained", ...carried(output.output, carriedAs) };
     case "retained-prefix":
-      return carriedAs === "text"
-        ? {
-            kind: "retained-prefix",
-            removedBytes: output.removedBytes,
-            text: output.output,
-          }
-        : {
-            kind: "retained-prefix",
-            removedBytes: output.removedBytes,
-            preview: output.output,
-          };
+      return {
+        kind: "retained-prefix",
+        removedBytes: output.removedBytes,
+        ...carried(output.output, carriedAs),
+      };
   }
 }
 
-/** The reasons the framing prints, as facts; nothing for a completed Run. */
+/**
+ * The reasons the framing prints, as facts; nothing for a completed Run.
+ *
+ * The framing has already dropped an empty reason, so whatever it carries is
+ * what the prose prints after `Reason:` or in parentheses.
+ */
 function endingFacts(
-  framing: FinalOutputFraming,
+  framing: TerminalFinalOutputFraming,
 ): Pick<DeliveredRunFacts, "failure" | "cancellationReason"> {
-  if (framing.capture === "active" || framing.status === "completed") return {};
-  if (framing.status === "failed") {
-    // An empty reason is no reason: the prose says "none reported." for it.
-    return framing.failure === undefined || framing.failure === ""
-      ? {}
-      : { failure: framing.failure };
+  switch (framing.status) {
+    case "completed":
+      return {};
+    case "failed":
+      return framing.failure === undefined ? {} : { failure: framing.failure };
+    case "cancelled":
+      return framing.cancellationReason === undefined
+        ? {}
+        : { cancellationReason: framing.cancellationReason };
   }
-  return framing.cancellationReason === undefined
-    ? {}
-    : { cancellationReason: framing.cancellationReason };
 }
 
 /**

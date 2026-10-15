@@ -59,23 +59,26 @@ type FinalOutputPresentation =
       readonly preview: string;
     };
 
+/** Framing for a settled Run: its status and the reason its prose prints. */
+export type TerminalFinalOutputFraming = {
+  readonly capture: "terminal";
+  readonly presentation: FinalOutputPresentation;
+} & (
+  | { readonly status: "completed" }
+  | { readonly status: "failed"; readonly failure?: string }
+  | {
+      readonly status: "cancelled";
+      readonly cancellationReason?: CancellationReason;
+    }
+);
+
 export type FinalOutputFraming =
   | {
       readonly capture: "active";
       readonly status: "running" | "finalizing";
       readonly presentation: FinalOutputPresentation;
     }
-  | ({
-      readonly capture: "terminal";
-      readonly presentation: FinalOutputPresentation;
-    } & (
-      | { readonly status: "completed" }
-      | { readonly status: "failed"; readonly failure?: string }
-      | {
-          readonly status: "cancelled";
-          readonly cancellationReason?: CancellationReason;
-        }
-    ));
+  | TerminalFinalOutputFraming;
 
 const CANCELLED_WITHOUT_OUTPUT =
   "The Run was cancelled before producing output.";
@@ -439,7 +442,7 @@ export function finalOutputSection(
  */
 export function notificationFinalOutputFraming(
   notice: RunNotification,
-): FinalOutputFraming {
+): TerminalFinalOutputFraming {
   const presentation: FinalOutputPresentation =
     notice.output === undefined
       ? { kind: "notice-preview", runId: notice.runId, preview: notice.preview }
@@ -451,7 +454,7 @@ export function notificationFinalOutputFraming(
           capture: "terminal",
           status: "failed",
           presentation,
-          ...(notice.errorMessage === undefined
+          ...(reported(notice.errorMessage) === undefined
             ? {}
             : { failure: notice.errorMessage }),
         }
@@ -493,20 +496,27 @@ const FAILURE_CATEGORIES: readonly DiagnosticCategory[] = [
   "cleanup-escalation",
 ];
 
+/** A reason with words in it; an empty one is no reason, on every surface. */
+function reported(reason: string | undefined): string | undefined {
+  return reason === undefined || reason === "" ? undefined : reason;
+}
+
 function primaryFailure(result: RunResult): string | undefined {
-  if (result.errorMessage !== undefined && result.errorMessage !== "") {
-    return result.errorMessage;
-  }
-  return result.diagnostics.find((diagnostic) =>
-    FAILURE_CATEGORIES.includes(diagnostic.category),
-  )?.message;
+  return (
+    reported(result.errorMessage) ??
+    reported(
+      result.diagnostics.find((diagnostic) =>
+        FAILURE_CATEGORIES.includes(diagnostic.category),
+      )?.message,
+    )
+  );
 }
 
 /** Build terminal status framing from the authoritative Result. */
 export function resultFinalOutputFraming(
   result: RunResult,
   presentation: FinalOutputPresentation = { kind: "result" },
-): FinalOutputFraming {
+): TerminalFinalOutputFraming {
   switch (result.status) {
     case "completed":
       return { capture: "terminal", status: "completed", presentation };

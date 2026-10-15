@@ -188,6 +188,27 @@ test("the final-output fact on both channels is the text the prose fences, for e
   }
 });
 
+test("an empty failure reason is no reason: no bare Failure line and no failure fact", () => {
+  const options: FixtureResultOptions = {
+    ending: failedEnding(),
+    diagnostics: [{ category: "backend-failure", message: "" }],
+  };
+  const rendered = surfaces(options);
+  assert.doesNotMatch(rendered.result, /Failure:/);
+  assert.match(rendered.notice, /Reason: none reported\./);
+
+  const facts = resultToolRowFacts({
+    outcome: "result",
+    result: fixtureResult(options),
+  });
+  const run = "run" in facts ? facts.run : undefined;
+  assert.equal(run !== undefined && "failure" in run, false);
+  assert.equal(
+    "failure" in deliveredRunFactsOfNotification(fixtureNotification(options)),
+    false,
+  );
+});
+
 test("whitespace-only final output follows the absent path on all three surfaces", () => {
   assertEverySurface({ finalOutput: " \n\t " }, [
     /The Run finished without output\./,
