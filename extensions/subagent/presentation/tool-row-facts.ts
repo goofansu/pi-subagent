@@ -25,6 +25,7 @@ import {
   TerminalRunPhase,
   type WaitOutcome,
 } from "../domain/index.ts";
+import { completionViewOfResult } from "./completion-view.ts";
 import {
   DeliveredRunFactsFields,
   deliveredRunFactsOfResult,
@@ -528,6 +529,13 @@ const ResultRunSummarySchema = Schema.Struct({
   // Optional on read so a session persisted before the field existed still
   // decodes under `EXACT_KEYS`; every summary built here carries it.
   usage: Schema.optionalKey(RunUsageFactsSchema),
+  /**
+   * How long the Run took, settled instant less started instant: the value
+   * the Notification details carry and the prose prints, so a reader shows
+   * one duration whichever channel delivered the Run. Optional on read for
+   * the same reason as `usage`.
+   */
+  durationMillis: Schema.optionalKey(Schema.Number),
   /** The model the Run reported, when it reported one. */
   model: Schema.optionalKey(Schema.String),
   // The whole retained answer and the Run's ending reasons, the same values
@@ -924,6 +932,9 @@ function resultRunSummaryOf(result: RunResult): ResultRunSummary {
     runId: result.runId,
     agent: result.agent,
     status: result.status,
+    // Through the completion view, which is the one reading of a Run's
+    // duration the notice header, the widget row and the card share.
+    durationMillis: completionViewOfResult(result).durationMillis,
     usage: { input, output, cacheRead, cacheWrite, cost },
     ...(result.model === undefined || result.model === ""
       ? {}

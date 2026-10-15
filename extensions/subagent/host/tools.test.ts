@@ -45,6 +45,32 @@ const NO_RUN_USAGE = {
   cost: 0,
 } as const;
 
+/**
+ * Delivered-Run details with their wall-clock duration pinned to zero.
+ *
+ * The duration is the one field a rig test cannot name exactly; it is checked
+ * to be a non-negative number and then zeroed so the rest of the shape can be
+ * compared whole.
+ */
+function settledDetails(details: unknown): unknown {
+  const pin = (run: Record<string, unknown>) => {
+    assert.equal(
+      typeof run.durationMillis === "number" && run.durationMillis >= 0,
+      true,
+      `durationMillis on ${JSON.stringify(run)}`,
+    );
+    return { ...run, durationMillis: 0 };
+  };
+  const value = details as Record<string, unknown>;
+  if (Array.isArray(value.runs)) {
+    return { ...value, runs: value.runs.map(pin) };
+  }
+  if (value.run !== undefined) {
+    return { ...value, run: pin(value.run as Record<string, unknown>) };
+  }
+  return details;
+}
+
 const WAIT_RETURNED =
   "This wait has returned: every Run it covered is terminal, nothing outstanding.";
 
@@ -902,7 +928,7 @@ test("agent_wait renders an unknown id distinctly in both expansion states", asy
       outcomes: [{ outcome: "unknown Run", runId: runId("run-never") }],
     }).text,
   );
-  assert.deepEqual(result.details, {
+  assert.deepEqual(settledDetails(result.details), {
     kind: "collection",
     scope: "named",
     runs: [],
@@ -1100,7 +1126,7 @@ test("agent_wait crosses registration with discriminated collection details and 
   const args = { ids: [started.runId] };
   const result = await rig.call("agent_wait", args);
 
-  assert.deepEqual(result.details, {
+  assert.deepEqual(settledDetails(result.details), {
     kind: "collection",
     scope: "named",
     runs: [
@@ -1108,6 +1134,7 @@ test("agent_wait crosses registration with discriminated collection details and 
         runId: started.runId,
         agent: "explore",
         status: "completed",
+        durationMillis: 0,
         usage: RIG_RUN_USAGE,
         finalOutput: { kind: "retained", text: RIG_ANSWER },
       },
@@ -1167,7 +1194,7 @@ test("agent_wait renders partial mixed-Agent delivery without presenting timeout
   };
   const result = await rig.call("agent_wait", args);
 
-  assert.deepEqual(result.details, {
+  assert.deepEqual(settledDetails(result.details), {
     kind: "collection",
     scope: "named",
     runs: [
@@ -1175,6 +1202,7 @@ test("agent_wait renders partial mixed-Agent delivery without presenting timeout
         runId: delivered.runId,
         agent: "explore",
         status: "completed",
+        durationMillis: 0,
         usage: RIG_RUN_USAGE,
         finalOutput: { kind: "retained", text: RIG_ANSWER },
       },
@@ -1246,7 +1274,7 @@ test("agent_wait_all delivers every active Run's result and consumes each", asyn
   const text = result.content.map((part) => part.text ?? "").join("");
   assert.match(text, /first answer/);
   assert.match(text, /second answer/);
-  assert.deepEqual(result.details, {
+  assert.deepEqual(settledDetails(result.details), {
     kind: "collection",
     scope: "all-active",
     runs: [
@@ -1254,6 +1282,7 @@ test("agent_wait_all delivers every active Run's result and consumes each", asyn
         runId: first.runId,
         agent: "explore",
         status: "completed",
+        durationMillis: 0,
         usage: NO_RUN_USAGE,
         finalOutput: { kind: "retained", text: "first answer" },
       },
@@ -1261,6 +1290,7 @@ test("agent_wait_all delivers every active Run's result and consumes each", asyn
         runId: second.runId,
         agent: "once",
         status: "completed",
+        durationMillis: 0,
         usage: NO_RUN_USAGE,
         finalOutput: { kind: "retained", text: "second answer" },
       },
@@ -1314,7 +1344,7 @@ test("agent_wait_all covers only the Runs that were active when it was called", 
     text,
     presentWait({ scope: "all-active", noActiveRuns: true }).text,
   );
-  assert.deepEqual(result.details, {
+  assert.deepEqual(settledDetails(result.details), {
     kind: "collection",
     scope: "all-active",
     runs: [],
@@ -1361,7 +1391,7 @@ test("agent_wait_all honours its timeout and reports unfinished Runs", async (t)
   const text = result.content.map((part) => part.text ?? "").join("");
 
   assert.match(text, new RegExp(started.runId));
-  assert.deepEqual(result.details, {
+  assert.deepEqual(settledDetails(result.details), {
     kind: "collection",
     scope: "all-active",
     runs: [],
@@ -1464,7 +1494,7 @@ test("agent_result returns the full stored output with its Run identity", async 
       RIG_ANSWER,
     ].join("\n"),
   );
-  assert.deepEqual(result.details, {
+  assert.deepEqual(settledDetails(result.details), {
     kind: "result",
     outcome: "available",
     rowPhrase: "16 characters",
@@ -1473,6 +1503,7 @@ test("agent_result returns the full stored output with its Run identity", async 
       runId: started.runId,
       agent: "explore",
       status: "completed",
+      durationMillis: 0,
       usage: RIG_RUN_USAGE,
       finalOutput: { kind: "retained", text: RIG_ANSWER },
     },

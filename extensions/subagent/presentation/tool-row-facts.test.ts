@@ -356,6 +356,7 @@ test("the Tool-row facts decoder accepts all terminal phases and nested cancella
         runId: result.runId,
         agent: "explore",
         status: "completed",
+        durationMillis: 12_400,
         usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
         finalOutput: { kind: "retained", text: "answer" },
       },
@@ -382,6 +383,7 @@ test("every delivered Run summary carries the Run's own usage and model, cost un
     runId: spent.runId,
     agent: "explore",
     status: "completed",
+    durationMillis: 12_400,
     usage: {
       input: 12_300,
       output: 4_500,
@@ -424,6 +426,7 @@ test("every delivered Run summary carries the whole retained answer and how the 
     runId: failed.runId,
     agent: "explore",
     status: "failed",
+    durationMillis: 12_400,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
     finalOutput: {
       kind: "retained-prefix",
@@ -485,6 +488,15 @@ test("a delivered Run summary states absence, removal, and cancellation as facts
     emptyRun !== undefined && "cancellationReason" in emptyRun,
     false,
   );
+});
+
+test("a delivered Run summary carries the Run's duration, the value the Notification and the prose print", () => {
+  const facts = resultToolRowFacts({
+    outcome: "result",
+    result: fixtureResult({ finalOutput: "answer", settledAt: 1_000 + 3_100 }),
+  });
+  assert.equal(facts.outcome, "available");
+  assert.equal("run" in facts ? facts.run.durationMillis : undefined, 3_100);
 });
 
 test("a delivered Run summary persisted before usage existed still decodes", () => {
