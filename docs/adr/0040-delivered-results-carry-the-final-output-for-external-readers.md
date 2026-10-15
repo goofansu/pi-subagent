@@ -64,6 +64,12 @@ failure?: string
 cancellationReason?: "requested" | "shutdown" | "timeout"
 ```
 
+And on `ResultRunSummary` alone, because `NotificationDetails` already had it:
+
+```ts
+durationMillis?: number
+```
+
 - **The four kinds are the domain's four words** for Final output retention.
   A reader learns absence, removal and a cut prefix the way the prose says
   them, without a sentence to match.
@@ -88,6 +94,12 @@ cancellationReason?: "requested" | "shutdown" | "timeout"
   the reason the header prints in parentheses. They describe the ending, not
   the output, and a reader looking for the status note looks next to the
   status.
+- **The tool channel's summary also carries `durationMillis`.** The
+  Notification's details carried the Run's duration since ADR-0033's collapsed
+  line needed it; the tool summaries did not, so a reader could show a
+  tool-delivered Run's duration only by parsing "completed in 3.1s" out of
+  the prose. It is the same reading the notice header, the widget row and the
+  card share, through the completion view, so every channel prints one number.
 - **`finalOutput` is optional on read.** A session persisted by an older
   extension still decodes under `EXACT_KEYS`. Every payload built here writes
   it. An older Piano ignores the new keys; a newer one falls back to the raw
@@ -132,8 +144,9 @@ shapes for one fact.
 
 ## What it costs
 
-- Three optional keys on `ResultRunSummary` and on `NotificationDetails`, one
-  new presentation module, and one test file per seam.
+- Three optional keys on `ResultRunSummary` and on `NotificationDetails`, a
+  fourth on `ResultRunSummary` for the duration, one new presentation module,
+  and one test file per seam.
 - The persisted size of each delivered-Run summary grows by the retained
   answer, which the tool result's content already carries once; the
   Notification's details grow by at most the inline bound. A session file

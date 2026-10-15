@@ -646,7 +646,8 @@ deliberately left unset because Pi sums it per delivery.
 Each summary also carries the Run's Final-output facts — the whole retained
 answer under `text`, its retention kind, and the failure or cancellation
 reason — in the Notification details' shape, from one shared declaration both
-payloads spread in.
+payloads spread in, and the Run's `durationMillis`, which the Notification
+details already carried.
 [ADR-0040](docs/adr/0040-delivered-results-carry-the-final-output-for-external-readers.md).
 
 **Final output section** — the one presentation owner of a Run answer's
