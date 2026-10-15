@@ -158,7 +158,7 @@ Run's usage — `input`, `output`, `cacheRead`, `cacheWrite`, and unrounded USD
 TUI; both are absent when the Run spent nothing. Only the accounting line
 rounds the cost.
 [ADR-0039](docs/adr/0039-delivered-results-carry-run-usage-for-external-readers.md).
-The same details carry the Run's **final-output facts**: Final output retention
+The same details carry the Run's Final-output facts: Final output retention
 by kind, with the retained value under `text` when the notice inlines it and
 the bounded preview under `preview` when it does not, transcript evidence where
 no output remains, and the failure or cancellation reason beside the status.
@@ -643,7 +643,7 @@ one Run's spend by Run id whichever channel delivered it. The figures are
 Run-local and never pre-aggregated, and Pi's native tool-result `usage` is
 deliberately left unset because Pi sums it per delivery.
 [ADR-0039](docs/adr/0039-delivered-results-carry-run-usage-for-external-readers.md).
-Each summary also carries the Run's final-output facts — the whole retained
+Each summary also carries the Run's Final-output facts — the whole retained
 answer under `text`, its retention kind, and the failure or cancellation
 reason — in the Notification details' shape, from one shared declaration both
 payloads spread in.
@@ -653,7 +653,21 @@ payloads spread in.
 qualifier, body, explanation, and the compact summary phrase a collapsed row
 shows. It consumes the Final output retention interpretation plus the surface's
 framing; presentation callers of that interpretation consume the section or
-summary rather than switching on its retention kind.
+summary rather than switching on its retention kind. The one other consumer is
+the Final-output facts module, which carries the interpretation structured
+rather than phrasing it.
+
+**Final-output facts** — the Run's answer and ending as values for a reader
+outside the TUI, carried on every delivered-Run summary and on the Notification
+details from one shared declaration. `finalOutput` is Final output retention
+by kind, with the whole retained value under `text` or, on a Notification past
+the inline bound, the bounded preview under `preview`, and transcript evidence
+where no output remains; `failure` and `cancellationReason` sit beside the
+status. Each channel's facts are the values its own prose prints, built from
+the same Result or notice through the same framing, so they cannot disagree
+with it. The module decides nothing: retention comes from the domain's one
+interpretation and the reasons from the Final output section's framing.
+[ADR-0040](docs/adr/0040-delivered-results-carry-the-final-output-for-external-readers.md).
 
 **RunCard** — the pure presentation of one Run, built from a published index row
 (live, and therefore carrying no output) or from an immutable stored Result

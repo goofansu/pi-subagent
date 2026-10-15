@@ -92,11 +92,17 @@ cancellationReason?: "requested" | "shutdown" | "timeout"
   extension still decodes under `EXACT_KEYS`. Every payload built here writes
   it. An older Piano ignores the new keys; a newer one falls back to the raw
   content when they are missing.
-- **Every delivery of one Run carries the same facts**, up to the
-  text-or-preview rule above. The Result is immutable, so a reader keys them by
-  Run id and keeps one entry per Run, whichever channel arrived. When both a
-  tool result and a Notification would describe a Run, only one does
-  (ADR-0036), so there is no second copy to reconcile.
+- **Each channel's facts are its own prose's values**, and the two channels
+  agree up to two rules: the text-or-preview rule above, and the failure rule,
+  under which a Notification carries its bounded `errorMessage` and a tool
+  result carries the Result's primary failure, which falls back to a failure
+  diagnostic when the error message is empty. So a failed Run whose only
+  reason is a diagnostic has `failure` on `agent_result` and none on its
+  Notification. `finalOutput` and `cancellationReason` are identical on both.
+  The Result is immutable, so a reader keys the facts by Run id and keeps one
+  entry per Run, whichever channel arrived; when both a tool result and a
+  Notification would describe a Run, only one does (ADR-0036), so there is no
+  second copy to reconcile.
 
 One presentation module, `final-output-facts.ts`, owns the Schema fragment and
 the two builders. It reshapes the domain's interpretation and the final-output
