@@ -59,7 +59,7 @@ type FinalOutputPresentation =
       readonly preview: string;
     };
 
-type FinalOutputFraming =
+export type FinalOutputFraming =
   | {
       readonly capture: "active";
       readonly status: "running" | "finalizing";
@@ -430,35 +430,49 @@ export function finalOutputSection(
   return dispatchFinalOutput(output, { kind: "section", framing });
 }
 
-/** Build the self-contained answer section carried by a Notification. */
-export function notificationFinalOutputSection(
+/**
+ * Build terminal status framing from a Notification's own bounded fields.
+ *
+ * The notice's twin of {@link resultFinalOutputFraming}: the reasons it
+ * carries are the ones its prose prints, so every consumer of a notice's
+ * ending reads them from here.
+ */
+export function notificationFinalOutputFraming(
   notice: RunNotification,
-): FinalOutputSection {
+): FinalOutputFraming {
   const presentation: FinalOutputPresentation =
     notice.output === undefined
       ? { kind: "notice-preview", runId: notice.runId, preview: notice.preview }
       : { kind: "notice-inline", runId: notice.runId };
-  const framing: FinalOutputFraming =
-    notice.status === "completed"
-      ? { capture: "terminal", status: "completed", presentation }
-      : notice.status === "failed"
-        ? {
-            capture: "terminal",
-            status: "failed",
-            presentation,
-            ...(notice.errorMessage === undefined
-              ? {}
-              : { failure: notice.errorMessage }),
-          }
-        : {
-            capture: "terminal",
-            status: "cancelled",
-            presentation,
-            ...(notice.cancellationReason === undefined
-              ? {}
-              : { cancellationReason: notice.cancellationReason }),
-          };
-  return finalOutputSection(notificationFinalOutputOf(notice), framing);
+  return notice.status === "completed"
+    ? { capture: "terminal", status: "completed", presentation }
+    : notice.status === "failed"
+      ? {
+          capture: "terminal",
+          status: "failed",
+          presentation,
+          ...(notice.errorMessage === undefined
+            ? {}
+            : { failure: notice.errorMessage }),
+        }
+      : {
+          capture: "terminal",
+          status: "cancelled",
+          presentation,
+          ...(notice.cancellationReason === undefined
+            ? {}
+            : { cancellationReason: notice.cancellationReason }),
+        };
+}
+
+/** Build the self-contained answer section carried by a Notification. */
+export function notificationFinalOutputSection(
+  notice: RunNotification,
+): FinalOutputSection {
+  return finalOutputSection(
+    notificationFinalOutputOf(notice),
+    notificationFinalOutputFraming(notice),
+  );
 }
 
 /** Plain lines for callers that do not preserve semantic block kinds. */

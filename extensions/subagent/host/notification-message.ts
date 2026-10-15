@@ -25,11 +25,11 @@
  * spend per Profile from structured details, and a Run nobody waited for is
  * announced only here. They are the same figures `agent_result` and the waits
  * carry, so a reader can key them by Run id across both channels. The Run's
- * answer and how it ended, for the same reader, which otherwise had to parse
- * the fence and the status sentence back out of the content: the retained
- * value — or the preview, when the content previews — its retention, and the
- * failure or cancellation reason, built from the same notice the content is
- * built from so the two cannot disagree
+ * answer and how it ended are carried for the same reader, which otherwise
+ * had to parse the fence and the status sentence back out of the content:
+ * the retained value — or the preview, when the content previews — its
+ * retention, and the failure or cancellation reason. They are built from the
+ * same notice the content is built from, so the two cannot disagree
  * ([ADR-0040](../../../docs/adr/0040-delivered-results-carry-the-final-output-for-external-readers.md)).
  * The prose itself is not in the details: it is the message's content, and a
  * copy of it here could disagree with it.

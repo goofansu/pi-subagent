@@ -11,8 +11,8 @@
  *
  * Nothing here decides retention or status: the retention kind and the
  * transcript-evidence flag come from the domain's one interpretation, and the
- * failure and cancellation reasons are the ones the final-output section
- * already prints. This module only reshapes them, so a fact and the sentence
+ * failure and cancellation reasons come from the same framing the final-output
+ * section prints. This module only reshapes them, so a fact and the sentence
  * beside it cannot disagree.
  */
 
@@ -26,7 +26,11 @@ import {
   type RunNotification,
   type RunResult,
 } from "../domain/index.ts";
-import { resultFinalOutputFraming } from "./final-output-section.ts";
+import {
+  type FinalOutputFraming,
+  notificationFinalOutputFraming,
+  resultFinalOutputFraming,
+} from "./final-output-section.ts";
 
 /**
  * Final output retention, with the retained value where there is one.
@@ -82,7 +86,7 @@ export const DeliveredRunFactsFields = {
   cancellationReason: Schema.optionalKey(CancellationReason),
 } as const;
 
-export const DeliveredRunFacts = Schema.Struct(DeliveredRunFactsFields);
+const DeliveredRunFacts = Schema.Struct(DeliveredRunFactsFields);
 
 export type DeliveredRunFacts = typeof DeliveredRunFacts.Type;
 
@@ -123,19 +127,20 @@ function finalOutputFactsOf(
   }
 }
 
-function endingFacts(ending: {
-  readonly failure?: string;
-  readonly cancellationReason?: CancellationReason;
-}): Pick<DeliveredRunFacts, "failure" | "cancellationReason"> {
-  return {
+/** The reasons the framing prints, as facts; nothing for a completed Run. */
+function endingFacts(
+  framing: FinalOutputFraming,
+): Pick<DeliveredRunFacts, "failure" | "cancellationReason"> {
+  if (framing.capture === "active" || framing.status === "completed") return {};
+  if (framing.status === "failed") {
     // An empty reason is no reason: the prose says "none reported." for it.
-    ...(ending.failure === undefined || ending.failure === ""
+    return framing.failure === undefined || framing.failure === ""
       ? {}
-      : { failure: ending.failure }),
-    ...(ending.cancellationReason === undefined
-      ? {}
-      : { cancellationReason: ending.cancellationReason }),
-  };
+      : { failure: framing.failure };
+  }
+  return framing.cancellationReason === undefined
+    ? {}
+    : { cancellationReason: framing.cancellationReason };
 }
 
 /**
@@ -147,16 +152,9 @@ function endingFacts(ending: {
 export function deliveredRunFactsOfResult(
   result: RunResult,
 ): DeliveredRunFacts {
-  const framing = resultFinalOutputFraming(result);
   return {
     finalOutput: finalOutputFactsOf(interpretFinalOutput(result), "text"),
-    ...endingFacts(
-      framing.status === "failed"
-        ? { failure: framing.failure }
-        : framing.status === "cancelled"
-          ? { cancellationReason: framing.cancellationReason }
-          : {},
-    ),
+    ...endingFacts(resultFinalOutputFraming(result)),
   };
 }
 
@@ -175,9 +173,6 @@ export function deliveredRunFactsOfNotification(
       notificationFinalOutputOf(notice),
       notice.output === undefined ? "preview" : "text",
     ),
-    ...endingFacts({
-      failure: notice.errorMessage,
-      cancellationReason: notice.cancellationReason,
-    }),
+    ...endingFacts(notificationFinalOutputFraming(notice)),
   };
 }
